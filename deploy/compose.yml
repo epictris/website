@@ -1,0 +1,22 @@
+services:
+  copy-paste-server:
+    image: "904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.server.rule=Host(`tris.sh`)"
+      - "traefik.http.routers.server.entrypoints=websecure"
+      - "traefik.http.routers.server.tls=true"
+
+  traefik:
+    image: "traefik:v3.1"
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
