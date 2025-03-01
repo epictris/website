@@ -2,5 +2,5 @@ aws ecr get-login-password --region eu-north-1 | docker login --username AWS --p
 aws ssm send-command \
 	--instance-ids i-0787ef35642f804e9 \
 	--document-name "AWS-RunShellScript" \
-	--parameters '{"commands":["cd /home/ec2-user","aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 904233117897.dkr.ecr.eu-north-1.amazonaws.com","docker compose stop", "docker compose rm -f","docker compose up -d"]}'
+	--parameters '{"commands":["cd /home/ec2-user","aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 904233117897.dkr.ecr.eu-north-1.amazonaws.com","docker compose stop", "docker compose rm -f","docker compose up -d","docker image prune -af"]}'
 
