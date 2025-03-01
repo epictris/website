@@ -6,6 +6,7 @@ services:
       - "traefik.http.routers.server.rule=Host(`tris.sh`)"
       - "traefik.http.routers.server.entrypoints=websecure"
       - "traefik.http.routers.server.tls=true"
+      - "traefik.http.routers.server.loadbalancer.server.port=8080"
 
   traefik:
     image: "traefik:v3.1"
