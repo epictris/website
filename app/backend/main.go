@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"tris.sh/project/app/env"
+
+	"tris.sh/project/app/backend/api"
 	"tris.sh/project/app/backend/database"
 	"tris.sh/project/app/backend/routes"
+	"tris.sh/project/app/env"
 )
 
-func requireLogin(url string, handler func(http.ResponseWriter, *http.Request), db *database.DB) func(http.ResponseWriter, *http.Request) {
-
+func requireLogin(url string, handler func(http.ResponseWriter, *http.Request, *database.DB, int), db *database.DB) func(http.ResponseWriter, *http.Request) {
 	validateLogin := func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("session_token")
 		redirect_url := fmt.Sprintf("/login?origin=%s", url)
@@ -31,38 +32,29 @@ func requireLogin(url string, handler func(http.ResponseWriter, *http.Request), 
 		if err != nil {
 			http.Redirect(w, r, redirect_url, http.StatusFound)
 		}
-		handler(w, r)
+		handler(w, r, db, user_id)
 	}
 	return validateLogin
 
 }
 
-func withDBConnection(handler func(http.ResponseWriter, *http.Request, *database.DB), db *database.DB) func(http.ResponseWriter, *http.Request) {
+func requireDB(handler func(http.ResponseWriter, *http.Request, *database.DB), db *database.DB) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r, db)
 	}
 }
 
-func registerRoute(url string, handler func(http.ResponseWriter, *http.Request, *database.DB), db *database.DB, require_auth bool) {
-	if require_auth {
-		http.HandleFunc(url, requireLogin(url, withDBConnection(handler, db), db))
-	} else {
-		http.HandleFunc(url, withDBConnection(handler, db))
-	}
-}
-
-
 func main() {
-	file_server := http.FileServer(http.Dir("app/static"))
 	db, err := database.New(context.Background(), env.DATA_DIR + "/sqlite.db")
 	if err != nil {
 		log.Fatal(err)
 	}
 	database.Init(db)
-	http.Handle("/", file_server)
-	registerRoute("/login", routes.Login, db, false)
-	registerRoute("/copy", routes.Copy, db, true)
-	registerRoute("/paste", routes.Paste, db, true)
+	http.HandleFunc("/login", requireDB(routes.Login, db))
+	http.HandleFunc("/", routes.Home)
+	http.HandleFunc("/copy", requireLogin("/copy", routes.Copy, db))
+	http.HandleFunc("/paste", requireLogin("/paste", routes.Paste, db))
+	http.HandleFunc("/api/paste", requireLogin("/api/paste", api.Paste, db))
 
 	fmt.Println("Starting server at port 8080")
 
