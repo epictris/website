@@ -1,1 +1,1 @@
-go run server.go
+go run app/backend/main.go
