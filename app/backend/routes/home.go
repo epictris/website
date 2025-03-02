@@ -3,10 +3,9 @@ package routes
 import (
 	"net/http"
 	"os"
-	"tris.sh/project/app/backend/database"
 )
-func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
-	const file_path = "app/static/paste.html"
+func Home(w http.ResponseWriter, r *http.Request) {
+	const file_path = "app/static/home.html"
 	file, err := os.Open(file_path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
