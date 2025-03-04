@@ -71,8 +71,6 @@ const createTableSQL = `
 		clipboard TEXT NOT NULL DEFAULT ''
 	);
 
-	DROP TABLE SESSIONS;
-	
 	CREATE TABLE IF NOT EXISTS sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
