@@ -15,6 +15,7 @@ import (
 func requireLogin(url string, handler func(http.ResponseWriter, *http.Request, *database.DB, int), db *database.DB) func(http.ResponseWriter, *http.Request) {
 	validateLogin := func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("session_token")
+		fmt.Println("validating login to url: ", url)
 		redirect_url := fmt.Sprintf("/login?origin=%s", url)
 		if err != nil {
 			if err == http.ErrNoCookie {
@@ -28,7 +29,7 @@ func requireLogin(url string, handler func(http.ResponseWriter, *http.Request, *
 		}
 		session_token := c.Value
 		var user_id int
-		err = db.Read.QueryRow("SELECT user_id FROM sessions where token = $1 and created_at > DATETIME(CURRENT_TIMESTAMP, '-1 minutes');", session_token).Scan(&user_id)
+		err = db.Read.QueryRow("SELECT user_id FROM sessions where token = $1 and created_at > DATETIME(CURRENT_TIMESTAMP, '-1440 minutes');", session_token).Scan(&user_id)
 		if err != nil {
 			http.Redirect(w, r, redirect_url, http.StatusFound)
 		}
