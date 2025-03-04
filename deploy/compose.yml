@@ -3,10 +3,12 @@ services:
     image: "904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.server.rule=Host(`tris.sh`)"
-      - "traefik.http.routers.server.entrypoints=websecure"
-      - "traefik.http.routers.server.tls=true"
-      - "traefik.http.routers.server.loadbalancer.server.port=8080"
+      - "traefik.http.routers.my-server.rule=Host(`tris.sh`)"
+      - "traefik.http.routers.my-server.entrypoints=websecure"
+      - "traefik.http.routers.my-server.tls.certresolver=myresolver"
+      - "traefik.http.services.my-server.loadbalancer.server.port=8080"
+    volumes:
+      - "/etc/ssl/certs:/etc/ssl/certs"
 
   traefik:
     image: "traefik:v3.1"
@@ -16,8 +18,12 @@ services:
       - "--providers.docker.exposedByDefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email={{EMAIL}}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
       - "443:443"
     volumes:
+      - "./letsencrypt:/letsencrypt"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
