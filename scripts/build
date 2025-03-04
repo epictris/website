@@ -1,0 +1,3 @@
+docker image rm epictris/website:latest
+docker build -t epictris/website .
+docker tag epictris/website:latest 904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest

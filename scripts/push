@@ -1,4 +1,2 @@
 aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 904233117897.dkr.ecr.eu-north-1.amazonaws.com
-docker build -t epictris/website .
-docker tag epictris/website:latest 904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest
-docker push 904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest
+docker push 904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:$(git rev-parse --short HEAD)
