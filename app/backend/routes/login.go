@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
@@ -72,6 +73,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "session_token",
 		Value: session_token,
+		Expires: time.Now().Add(time.Hour * 24),
 	})
 	http.Redirect(w, r, origin, http.StatusFound)
 }
