@@ -3,6 +3,8 @@ package routes
 import (
 	"fmt"
 	"net/http"
+	"strings"
+
 	"tris.sh/project/app/backend/database"
 )
 
@@ -12,7 +14,7 @@ const COPY_PAGE = `
 		<script>
 			document.addEventListener('DOMContentLoaded', async() => {
 				try {
-					await navigator.clipboard.writeText('%s');
+					await navigator.clipboard.writeText(%s);
 					console.log('Copied to clipboard');
 				} catch (err) {
 					console.error('Failed to copy to clipboard');
@@ -26,5 +28,5 @@ const COPY_PAGE = `
 func Copy(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
 	var clipboard string
 	db.Read.QueryRow("SELECT clipboard FROM users WHERE id = ?", user_id).Scan(&clipboard)
-	fmt.Fprintf(w, COPY_PAGE, clipboard)
+	fmt.Fprintf(w, COPY_PAGE, "`" + strings.ReplaceAll(clipboard, "`", "\\`") + "`")
 }
