@@ -17,7 +17,7 @@ const LOGIN_PAGE = `
 		<script src="https://accounts.google.com/gsi/client" async></script>
 		<div id="g_id_onload"
 			 data-client_id="1048620241838-sj7ufqdd7gj1c9egnrcfhjknfonbei09.apps.googleusercontent.com"
-			 data-login_uri="http://localhost:8080/login"
+			 data-login_uri="https://tris.sh/login"
 			 data-context="signin"
 			 data-ux_mode="popup"
 			 data-auto_select="true"
@@ -48,6 +48,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 
 	payload, err := idtoken.Validate(context.Background(), credential, GOOGLE_ID_TOKEN)
 	if err != nil {
+		log.Print(err)
 		fmt.Fprintf(w, LOGIN_PAGE, origin)
 		return 
 	}

