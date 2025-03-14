@@ -3,40 +3,22 @@ package routes
 import (
 	"context"
 	"fmt"
+	"text/template"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
-	"tris.sh/project/app/backend/database"
+	"tris.sh/project/app/client"
+	"tris.sh/project/app/database"
 )
 
-const LOGIN_PAGE = `
-<html>
-	<body style="margin: 0">
-		<script src="https://accounts.google.com/gsi/client" async></script>
-		<div id="g_id_onload"
-			 data-client_id="1048620241838-sj7ufqdd7gj1c9egnrcfhjknfonbei09.apps.googleusercontent.com"
-			 data-login_uri="https://tris.sh/login"
-			 data-context="signin"
-			 data-ux_mode="popup"
-			 data-auto_select="true"
-			 data-itp_support="true"
-			 data-close_on_tap_outside="false"
-			 data-origin="%s">
-		</div>
-	<div class="g_id_signin" style="display:flex; justify-content: center; height: 100vh; align-items: center;"
-				 data-type="standard"
-				 data-shape="rectangular"
-				 data-theme="outline"
-				 data-text="signin_with"
-				 data-size="large"
-				 data-logo_alignment="left">
-			</div>
-	</body>
-</html>
-`
+type LoginPage struct {
+	BaseURL string
+	Origin string
+}
+
 const GOOGLE_ID_TOKEN = "1048620241838-sj7ufqdd7gj1c9egnrcfhjknfonbei09.apps.googleusercontent.com"
 
 func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
@@ -47,10 +29,16 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	origin := r.FormValue("origin")
 	credential := r.FormValue("credential")
 
+
 	payload, err := idtoken.Validate(context.Background(), credential, GOOGLE_ID_TOKEN)
 	if err != nil {
 		log.Print(err)
-		fmt.Fprintf(w, LOGIN_PAGE, origin)
+		t, err := template.ParseFS(client.BuildFS, "templates/login.html")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		t.Execute(w, LoginPage{BaseURL: "http://localhost:8080", Origin: origin})
 		return 
 	}
 

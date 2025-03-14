@@ -7,6 +7,8 @@ services:
       - "traefik.http.routers.my-server.entrypoints=websecure"
       - "traefik.http.routers.my-server.tls.certresolver=myresolver"
       - "traefik.http.services.my-server.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.test-redirectregex.redirectregex.regex=^https://tris.sh/example$"
+      - "traefik.http.middlewares.test-redirectregex.redirectregex.replacement=https://tris.sh/paste"
     volumes:
       - "/etc/ssl/certs:/etc/ssl/certs"
 
@@ -19,7 +21,7 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
-      - "--certificatesresolvers.myresolver.acme.email={{EMAIL}}"
+      - "--certificatesresolvers.myresolver.acme.email=trispebray@gmail.com"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"

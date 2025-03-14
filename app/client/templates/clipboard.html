@@ -1,0 +1,88 @@
+<html>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@200..900&display=swap" rel="stylesheet">
+	<body>
+		<style>
+			* {
+				margin: 0;
+				padding: 0;
+				box-sizing: border-box;
+			}
+			body {
+				font-family: 'Inconsolata', monospace;
+			}
+			body > div {
+				max-width: 400px;
+				margin: auto;
+			}
+			#buttons {
+				display: flex;
+			}
+			#buttons > button {
+				flex: 1;
+				padding: 10px;
+				font-family: 'Inconsolata', monospace;
+				font-size: 18px;
+			}
+			textarea {
+				width: 100%;
+			}
+			#clipboard {
+				border: 1px solid #333333;
+				padding: 10px;
+				color: #333333;
+				background-color: #eeeeee;
+				word-wrap: break-word;
+			}
+
+		</style>
+		<div>
+			<div id="buttons">
+				<button onclick="copyClipboard()">COPY</button>
+				<button onclick="pasteClipboard()">PASTE</button>
+			</div>
+			<div id="clipboard"></div>
+		</div>
+		<script>
+			var b64encodedClipboard = "{{.EncodedClipboard}}";
+
+			async function pasteClipboard() {
+				try {
+					const clipboard = await navigator.clipboard.readText();
+					await fetch("{{.BaseURL}}/api/paste", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json"
+						},
+						body: JSON.stringify({
+							clipboard: clipboard
+						})
+					}).then(_ => {
+						updateClipboard(clipboard);
+					});
+				} catch (err) {
+					console.error(err);
+				}
+			}
+
+			async function copyClipboard() {
+				try {
+					await navigator.clipboard.writeText(window.atob(b64encodedClipboard));
+				} catch (err) {
+					console.error(err);
+				}
+			}
+
+			function updateClipboard(clipboard) {
+				var text_node = document.createTextNode(clipboard);
+				var elem = document.getElementById("clipboard")
+				elem.innerHTML = "";
+				elem.appendChild(text_node);
+			}
+
+			updateClipboard(window.atob(b64encodedClipboard));
+		</script>
+	</body>
+</html>
+

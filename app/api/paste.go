@@ -1,10 +1,11 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 
-	"tris.sh/project/app/backend/database"
+	"tris.sh/project/app/database"
 )
 
 type Request struct {
@@ -19,5 +20,7 @@ func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int)
 		return
 	}
 
-	db.Write.Exec("UPDATE users set clipboard = ? where id = ?", p.Clipboard, user_id)
+	encoded_clipboard := base64.StdEncoding.EncodeToString([]byte(p.Clipboard))
+
+	db.Write.Exec("UPDATE users set clipboard = ? where id = ?", encoded_clipboard, user_id)
 }

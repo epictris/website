@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-
-	"tris.sh/project/app/backend/api"
-	"tris.sh/project/app/backend/database"
-	"tris.sh/project/app/backend/routes"
+	"tris.sh/project/app/api"
+	"tris.sh/project/app/database"
+	"tris.sh/project/app/routes"
 	"tris.sh/project/app/env"
 )
 
@@ -45,6 +44,11 @@ func requireDB(handler func(http.ResponseWriter, *http.Request, *database.DB), d
 	}
 }
 
+type Test struct {
+	Name string
+}
+
+
 func main() {
 	db, err := database.New(context.Background(), env.DATA_DIR + "/sqlite.db")
 	if err != nil {
@@ -52,9 +56,7 @@ func main() {
 	}
 	database.Init(db)
 	http.HandleFunc("/login", requireDB(routes.Login, db))
-	http.HandleFunc("/", routes.Home)
-	http.HandleFunc("/copy", requireLogin("/copy", routes.Copy, db))
-	http.HandleFunc("/paste", requireLogin("/paste", routes.Paste, db))
+	http.HandleFunc("/clipboard", requireLogin("/clipboard", routes.Copy, db))
 	http.HandleFunc("/api/paste", requireLogin("/api/paste", api.Paste, db))
 
 	fmt.Println("Starting server at port 8080")
