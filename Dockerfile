@@ -5,7 +5,7 @@ RUN go mod download
 RUN mkdir /data
 
 COPY app /app/app
-RUN CGO_ENABLED=0 GOOS=linux go build /app/app/backend/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build /app/app/main.go
 
 FROM scratch
 

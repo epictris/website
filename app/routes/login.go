@@ -3,15 +3,16 @@ package routes
 import (
 	"context"
 	"fmt"
-	"text/template"
 	"log"
 	"net/http"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
 	"tris.sh/project/app/client"
 	"tris.sh/project/app/database"
+	"tris.sh/project/app/env"
 )
 
 type LoginPage struct {
@@ -38,7 +39,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		t.Execute(w, LoginPage{BaseURL: "http://localhost:8080", Origin: origin})
+		t.Execute(w, LoginPage{BaseURL: env.DEPLOY_ENV, Origin: origin})
 		return 
 	}
 

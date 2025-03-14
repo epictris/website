@@ -3,12 +3,15 @@ services:
     image: "904233117897.dkr.ecr.eu-north-1.amazonaws.com/epictris/website:latest"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.my-server.rule=Host(`tris.sh`)"
+      - "traefik.http.routers.my-server.rule=Host(`tris.sh`) || Host(`clipboard.tris.sh`)"
       - "traefik.http.routers.my-server.entrypoints=websecure"
       - "traefik.http.routers.my-server.tls.certresolver=myresolver"
       - "traefik.http.services.my-server.loadbalancer.server.port=8080"
-      - "traefik.http.middlewares.test-redirectregex.redirectregex.regex=^https://tris.sh/example$"
-      - "traefik.http.middlewares.test-redirectregex.redirectregex.replacement=https://tris.sh/paste"
+      - "traefik.http.middlewares.clipboard-redirect.redirectregex.regex=^https://clipboard.tris.sh"
+      - "traefik.http.middlewares.clipboard-redirect.redirectregex.replacement=https://tris.sh/clipboard"
+      - "traefik.http.middlewares.trailing-slash-redirect.redirectregex.regex=^https://tris.sh/clipboard/"
+      - "traefik.http.middlewares.trailing-slash-redirect.redirectregex.replacement=https://tris.sh/clipboard"
+      - "traefik.http.routers.my-server.middlewares=clipboard-redirect, trailing-slash-redirect"
     volumes:
       - "/etc/ssl/certs:/etc/ssl/certs"
 
