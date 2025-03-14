@@ -13,4 +13,4 @@ func getEnvWithDefault(key string, defaultValue string) string {
 }
 
 var DATA_DIR = getEnvWithDefault("DATA_DIR", "/data")
-var DEPLOY_ENV = getEnvWithDefault("DEPLOY_ENV", "tris.sh")
+var DEPLOY_ENV = getEnvWithDefault("DEPLOY_ENV", "https://tris.sh")
