@@ -2,7 +2,7 @@ FROM node:22.14.0-alpine3.21 AS frontend
 COPY client /app/client
 WORKDIR /app/client
 RUN npm install
-RUN npm run build
+RUN NODE_ENV='production' npm run build
 
 FROM golang:1.23.6 AS builder
 WORKDIR /app

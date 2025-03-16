@@ -84,7 +84,9 @@ const App: Component = () => {
     console.log(e)
   }
 
-  const ws = createWS("wss://" + window.location.host + "/ws?session_token=" + getCookie("session_token"));
+  const wsUrlBase = import.meta.env.PROD ? "wss://clipboard.tris.sh" : "ws://localhost:8080";
+
+  const ws = createWS(wsUrlBase + "/ws?session_token=" + getCookie("session_token"));
   const onMessage = (ev: MessageEvent) => {
     const update: ClipboardUpdate = JSON.parse(ev.data);
     setClipboards([update.Clipboard, ...clipboards()])
