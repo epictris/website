@@ -21,7 +21,7 @@ func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user
 		SELECT id, clipboard, type 
 		FROM clipboards 
 		WHERE user_id = ? 
-		ORDER BY id ASC
+		ORDER BY id DESC
 		`, user_id);
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
