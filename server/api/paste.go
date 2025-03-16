@@ -2,15 +2,14 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-
 	"tris.sh/project/server/database"
 	"tris.sh/project/server/websockets"
 )
 
 type Request struct {
-	Value string
+	Type websockets.ClipboardType
+	Content string
 }
 
 func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
@@ -21,7 +20,7 @@ func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int)
 		return
 	}
 
-	result, e := db.Write.Exec("INSERT INTO clipboards (user_id, clipboard) VALUES ($1, $2)", user_id, p.Value)
+	result, e := db.Write.Exec("INSERT INTO clipboards (user_id, clipboard, type) VALUES ($1, $2, $3)", user_id, p.Content, p.Type)
 	if e != nil {
 		http.Error(w, e.Error(), http.StatusInternalServerError)
 		return
@@ -32,10 +31,8 @@ func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int)
 		return
 	}
 	
-	fmt.Println(p.Value)
-
 	websockets.Broadcast(websockets.ClipboardUpdate{
-		Clipboard: websockets.Clipboard{Id: insert_id, Content: p.Value},
+		Clipboard: websockets.Clipboard{Id: insert_id, Content: p.Content, Type: p.Type},
 		Type: websockets.Add,
 	}, user_id)
 }

@@ -59,15 +59,22 @@ func disconnect(conn *websocket.Conn, user_id int) {
 }
 
 type UpdateType string
+type ClipboardType string
 
 const (
 	Add UpdateType = "append"
 	Remove UpdateType = "remove"
 )
 
+const (
+	Text ClipboardType = "text/plain"
+	PNG ClipboardType = "image/png"
+)
+
 type Clipboard struct {
 	Id int64
 	Content string
+	Type ClipboardType
 }
 
 type ClipboardUpdate struct {

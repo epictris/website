@@ -87,6 +87,7 @@ const createTableSQL = `
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
 		clipboard TEXT NOT NULL,
+		type TEXT NOT NULL,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
 `

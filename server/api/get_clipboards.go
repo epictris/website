@@ -19,7 +19,7 @@ func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user
 	var clipboards []websockets.Clipboard = []websockets.Clipboard{}
 
 	
-	rows, err := db.Read.Query("SELECT id, clipboard FROM clipboards WHERE user_id = ?", user_id);
+	rows, err := db.Read.Query("SELECT id, clipboard, type FROM clipboards WHERE user_id = ?", user_id);
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -27,12 +27,13 @@ func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user
 	for rows.Next() {
 		var id int64
 		var content string
-		err := rows.Scan(&id, &content)
+		var clipboard_type string
+		err := rows.Scan(&id, &content, &clipboard_type)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		clipboards = append(clipboards, websockets.Clipboard{Id: id, Content: content})
+		clipboards = append(clipboards, websockets.Clipboard{Id: id, Content: content, Type: websockets.ClipboardType(clipboard_type)})
 	}
 
 	fmt.Println(clipboards)
