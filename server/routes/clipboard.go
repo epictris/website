@@ -4,9 +4,9 @@ import (
 	"html/template"
 	"net/http"
 
-	"tris.sh/project/app/client"
-	"tris.sh/project/app/database"
-	"tris.sh/project/app/env"
+	"tris.sh/project/client"
+	"tris.sh/project/server/database"
+	"tris.sh/project/server/env"
 )
 
 type CopyPage struct {

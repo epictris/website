@@ -65,10 +65,14 @@ func New(ctx context.Context, dbPath string) (db *DB, err error) {
 }
 
 const createTableSQL = `
+
+	DROP TABLE IF EXISTS clipboards;
+	DROP TABLE IF EXISTS sessions;
+	DROP TABLE IF EXISTS users;
+
 	CREATE TABLE IF NOT EXISTS users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		google_id TEXT NOT NULL UNIQUE,
-		clipboard TEXT NOT NULL DEFAULT ''
+		google_id TEXT NOT NULL UNIQUE
 	);
 
 	CREATE TABLE IF NOT EXISTS sessions (
@@ -76,6 +80,13 @@ const createTableSQL = `
 		user_id INTEGER NOT NULL,
 		token TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(user_id) REFERENCES users(id)
+	);
+
+	CREATE TABLE IF NOT EXISTS clipboards (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		clipboard TEXT NOT NULL,
 		FOREIGN KEY(user_id) REFERENCES users(id)
 	);
 `

@@ -1,18 +1,14 @@
-package routes
+package api
 
 import (
 	"context"
 	"fmt"
 	"log"
 	"net/http"
-	"text/template"
-	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
-	"tris.sh/project/app/client"
-	"tris.sh/project/app/database"
-	"tris.sh/project/app/env"
+	"tris.sh/project/server/database"
 )
 
 type LoginPage struct {
@@ -27,19 +23,16 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 		fmt.Fprintf(w, "ParseForm() err: %v", err)
 		return
 	}
-	origin := r.FormValue("origin")
 	credential := r.FormValue("credential")
 
 
 	payload, err := idtoken.Validate(context.Background(), credential, GOOGLE_ID_TOKEN)
 	if err != nil {
 		log.Print(err)
-		t, err := template.ParseFS(client.BuildFS, "templates/login.html")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		t.Execute(w, LoginPage{BaseURL: env.DEPLOY_ENV, Origin: origin})
 		return 
 	}
 
@@ -53,6 +46,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	db.Read.QueryRow("SELECT id FROM users where google_id = $1", google_id).Scan(&user_id)
 
 	session_token := uuid.New().String()
+	fmt.Println("generating new session token:", session_token)
 
 	_, err = db.Write.Exec("INSERT INTO sessions (user_id, token) VALUES ($1, $2);", user_id, session_token)
 	if err != nil {
@@ -62,7 +56,8 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "session_token",
 		Value: session_token,
-		Expires: time.Now().Add(time.Hour * 24),
+		HttpOnly: false,
+		Path: "/",
 	})
-	http.Redirect(w, r, origin, http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
