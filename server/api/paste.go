@@ -12,7 +12,7 @@ type Request struct {
 	Content string
 }
 
-func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
+func Paste(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int64) {
 	var p Request
 	err := json.NewDecoder(r.Body).Decode(&p)
 	if err != nil {

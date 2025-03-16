@@ -13,7 +13,7 @@ type response struct {
 	Clipboards []websockets.Clipboard
 }
 
-func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
+func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int64) {
 	fmt.Println("got request")
 
 	var clipboards []websockets.Clipboard = []websockets.Clipboard{}

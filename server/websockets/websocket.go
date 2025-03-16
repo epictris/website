@@ -17,7 +17,7 @@ type ClientsMutex struct {
 
 type MutexMap struct {
 	mu sync.Mutex
-	mutexes map[int]*ClientsMutex
+	mutexes map[int64]*ClientsMutex
 }
 
 var upgrader = websocket.Upgrader{
@@ -26,7 +26,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func (m *MutexMap) GetUserClients(user_id int) *ClientsMutex {
+func (m *MutexMap) GetUserClients(user_id int64) *ClientsMutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -40,10 +40,10 @@ func (m *MutexMap) GetUserClients(user_id int) *ClientsMutex {
 var mutexMap *MutexMap
 
 func Init() {
-	mutexMap = &MutexMap{mu: sync.Mutex{}, mutexes: make(map[int]*ClientsMutex)}
+	mutexMap = &MutexMap{mu: sync.Mutex{}, mutexes: make(map[int64]*ClientsMutex)}
 }
 
-func connect(conn *websocket.Conn, user_id int) {
+func connect(conn *websocket.Conn, user_id int64) {
 	userMutex := mutexMap.GetUserClients(user_id)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
@@ -51,7 +51,7 @@ func connect(conn *websocket.Conn, user_id int) {
 	log.Println("New client connected")
 }
 
-func disconnect(conn *websocket.Conn, user_id int) {
+func disconnect(conn *websocket.Conn, user_id int64) {
 	userMutex := mutexMap.GetUserClients(user_id)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
@@ -83,7 +83,7 @@ type ClipboardUpdate struct {
 }
 
 
-func Broadcast(update ClipboardUpdate, user_id int) {
+func Broadcast(update ClipboardUpdate, user_id int64) {
 	userMutex := mutexMap.GetUserClients(user_id)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
@@ -98,7 +98,7 @@ func Broadcast(update ClipboardUpdate, user_id int) {
 	}
 }
 
-func HandleWebsocket(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int) {
+func HandleWebsocket(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int64) {
 	fmt.Println("New websocket connection")
 	// Upgrade HTTP to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
