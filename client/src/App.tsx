@@ -74,15 +74,10 @@ function getCookie(name: string): string | undefined {
 
 const App: Component = () => {
 
-  const navigate = useNavigate();
-
   const [clipboards, setClipboards] = createSignal<Clipboard[]>([]);
 
   try {
     fetch(window.location.origin + "/api/get_clipboards").then((response) => {
-      if (response.status == 401) {
-        throw navigate("/login");
-      }
       response.json().then((value: {Clipboards: Clipboard[]}) => setClipboards(value.Clipboards));
     });
   } catch (e) {
