@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -81,6 +83,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	err = initUserSession(*user_id, w, r, db)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		log.Fatal(err)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
