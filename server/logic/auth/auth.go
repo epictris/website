@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"tris.sh/project/server/database"
 	"google.golang.org/api/idtoken"
-	"github.com/google/uuid"
 )
 
 const googleIdToken = "1048620241838-sj7ufqdd7gj1c9egnrcfhjknfonbei09.apps.googleusercontent.com"
