@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"tris.sh/project/server/database"
@@ -14,7 +13,6 @@ type response struct {
 }
 
 func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int64) {
-	fmt.Println("got request")
 
 	var clipboards []websockets.Clipboard = []websockets.Clipboard{}
 
@@ -35,8 +33,6 @@ func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user
 		}
 		clipboards = append(clipboards, websockets.Clipboard{Id: id, Content: content, Type: websockets.ClipboardType(clipboard_type)})
 	}
-
-	fmt.Println(clipboards)
 
 	userJson, err := json.Marshal(response{Clipboards: clipboards})
 
