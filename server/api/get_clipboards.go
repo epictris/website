@@ -17,7 +17,12 @@ func GetClipboards(w http.ResponseWriter, r *http.Request, db *database.DB, user
 	var clipboards []websockets.Clipboard = []websockets.Clipboard{}
 
 	
-	rows, err := db.Read.Query("SELECT id, clipboard, type FROM clipboards WHERE user_id = ?", user_id);
+	rows, err := db.Read.Query(`
+		SELECT id, clipboard, type 
+		FROM clipboards 
+		WHERE user_id = ? 
+		ORDER BY id ASC
+		`, user_id);
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
