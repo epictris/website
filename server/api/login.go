@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -39,12 +38,12 @@ func checkGoogleAuth(r *http.Request, db *database.DB) (*int64, error) {
 		return nil, err
 	}
 	google_id := payload.Claims["sub"]
-	result, err := db.Write.Exec("INSERT INTO users (google_id) VALUES ($1) ON CONFLICT DO NOTHING;", google_id)
+	_, err = db.Write.Exec("INSERT INTO users (google_id) VALUES ($1) ON CONFLICT DO NOTHING;", google_id)
 	if err != nil {
 		return nil, err
 	}
 	var user_id int64
-	user_id, err = result.LastInsertId()
+	err = db.Read.QueryRow("SELECT id FROM users WHERE google_id = $1", google_id).Scan(&user_id)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +82,7 @@ func Login(w http.ResponseWriter, r *http.Request, db *database.DB) {
 	err = initUserSession(*user_id, w, r, db)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Fatal(err)
+		log.Println(err)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusFound)
