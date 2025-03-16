@@ -18,10 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build /app/server/main.go
 
 FROM scratch
 
-
 COPY --from=builder /app/main /
 COPY --from=builder /data /data
-COPY --from=builder /app /
-
 
 ENTRYPOINT ["/main"]
