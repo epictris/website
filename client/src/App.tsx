@@ -92,7 +92,7 @@ type ClipboardData = {
   type: ClipboardType
 }
 
-const generateRoomCode = () => Math.random().toString(36).substring(2, 8)
+const generateRoomCode = () => Math.random().toString(36).substring(2, 6)
 
 
 const App: Component = () => {
