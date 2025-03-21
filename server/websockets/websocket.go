@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"tris.sh/project/server/database"
 )
 
 type ClientsMutex struct {
@@ -15,9 +14,9 @@ type ClientsMutex struct {
 	clients map[*websocket.Conn]bool
 }
 
-type MutexMap struct {
+type RoomsMutexMap struct {
 	mu sync.Mutex
-	mutexes map[int64]*ClientsMutex
+	mutexes map[string]*ClientsMutex
 }
 
 var upgrader = websocket.Upgrader{
@@ -26,36 +25,58 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func (m *MutexMap) GetUserClients(user_id int64) *ClientsMutex {
+func (m *RoomsMutexMap) GetRoomClients(room_code string) *ClientsMutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.mutexes[user_id]; !exists {
-		m.mutexes[user_id] = &ClientsMutex{mu: sync.Mutex{}, clients: make(map[*websocket.Conn]bool)}
+	if _, exists := m.mutexes[room_code]; !exists {
+		m.mutexes[room_code] = &ClientsMutex{mu: sync.Mutex{}, clients: make(map[*websocket.Conn]bool)}
 	}
 
-	return m.mutexes[user_id]
+	return m.mutexes[room_code]
 }
 
-var mutexMap *MutexMap
+var roomsMutexMap *RoomsMutexMap
 
 func Init() {
-	mutexMap = &MutexMap{mu: sync.Mutex{}, mutexes: make(map[int64]*ClientsMutex)}
+	roomsMutexMap = &RoomsMutexMap{mu: sync.Mutex{}, mutexes: make(map[string]*ClientsMutex)}
 }
 
-func connect(conn *websocket.Conn, user_id int64) {
-	userMutex := mutexMap.GetUserClients(user_id)
+type StatusMessage struct {
+	Type string
+	Clients int
+}
+
+func sendStatusUpdate(clients map[*websocket.Conn]bool) {
+	for client := range clients {
+		err := client.WriteJSON(StatusMessage{Type: "status", Clients: len(clients)})
+		if err != nil {
+			log.Println("Broadcast failed:", err)
+			client.Close()
+			delete(clients, client)
+		}
+	}
+}
+
+func connect(conn *websocket.Conn, room_code string) {
+	userMutex := roomsMutexMap.GetRoomClients(room_code)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
 	userMutex.clients[conn] = true
+	sendStatusUpdate(userMutex.clients)
 	log.Println("New client connected")
 }
 
-func disconnect(conn *websocket.Conn, user_id int64) {
-	userMutex := mutexMap.GetUserClients(user_id)
+func disconnect(conn *websocket.Conn, room_code string) {
+	userMutex := roomsMutexMap.GetRoomClients(room_code)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
 	delete(userMutex.clients, conn)
+	sendStatusUpdate(userMutex.clients)
+}
+
+func getClientCount(room_code string) int {
+	return len(roomsMutexMap.GetRoomClients(room_code).clients)
 }
 
 type UpdateType string
@@ -82,14 +103,13 @@ type ClipboardUpdate struct {
 	Type UpdateType
 }
 
-
-func Broadcast(update ClipboardUpdate, user_id int64) {
-	userMutex := mutexMap.GetUserClients(user_id)
+func Broadcast(room_code string, messageType int, data []byte) {
+	userMutex := roomsMutexMap.GetRoomClients(room_code)
 	userMutex.mu.Lock()
 	defer userMutex.mu.Unlock()
 
 	for client := range userMutex.clients {
-		err := client.WriteJSON(update)
+		err := client.WriteMessage(messageType, data)
 		if err != nil {
 			log.Println("Broadcast failed:", err)
 			client.Close()
@@ -98,8 +118,13 @@ func Broadcast(update ClipboardUpdate, user_id int64) {
 	}
 }
 
-func HandleWebsocket(w http.ResponseWriter, r *http.Request, db *database.DB, user_id int64) {
-	fmt.Println("New websocket connection")
+func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
+	room := r.FormValue("id")
+	if getClientCount(room) > 1 {
+		http.Error(w, "Room is full", http.StatusForbidden)
+		return
+	}
+	fmt.Println("New websocket connection to room", room)
 	// Upgrade HTTP to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -108,17 +133,19 @@ func HandleWebsocket(w http.ResponseWriter, r *http.Request, db *database.DB, us
 	}
 	defer conn.Close()
 
-	connect(conn, user_id)
+	connect(conn, room)
 
 	// Listen for messages from the client
 	for {
-		_, _, err := conn.ReadMessage()
-		fmt.Println(err)
+		messageType, data, err := conn.ReadMessage()
+
 		if err != nil {
 			log.Println("Client disconnected:", err)
 			break
 		}
+
+		Broadcast(room, messageType, data)
 	}
 
-	disconnect(conn, user_id)
+	disconnect(conn, room)
 }
