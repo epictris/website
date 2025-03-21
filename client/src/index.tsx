@@ -16,6 +16,7 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 render(
 	() => (
 		<Router>
+			<Route path="/:roomCode" component={App} />
 			<Route path="/" component={App} />
 		</Router>
 	),

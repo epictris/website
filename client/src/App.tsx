@@ -3,7 +3,10 @@ import { readClipboard, writeClipboard } from "@solid-primitives/clipboard";
 
 import styles from "./App.module.css";
 import { createWS } from "@solid-primitives/websocket";
-import { useNavigate } from "@solidjs/router";
+import { useNavigate, useParams } from "@solidjs/router";
+import RoomSelect from "./RoomSelect";
+import PendingConnection from "./PendingConnection";
+import RoomError from "./RoomError";
 
 async function blobToDataURL(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -105,12 +108,11 @@ type ClipboardData = {
 	type: ClipboardType;
 };
 
-const generateRoomCode = () => Math.random().toString(36).substring(2, 6);
-
 const App: Component = () => {
 	const [clipboards, setClipboards] = createSignal<ClipboardData[]>([]);
 	const [allowPaste, setAllowPaste] = createSignal<boolean>(false);
-	const [roomCode, setRoomCode] = createSignal<string | null>(null);
+	const [roomCode, setRoomCode] = createSignal<string | undefined>(undefined);
+	const [showError, setShowError] = createSignal<boolean>(false);
 
 	const wsUrlBase = import.meta.env.PROD
 		? "wss://clipboard.tris.sh"
@@ -119,24 +121,31 @@ const App: Component = () => {
 	const navigator = useNavigate();
 
 	const resolveRoomCode = () => {
-		let code = new URLSearchParams(window.location.search).get("id");
-		if (!code) {
-			code = localStorage.getItem("id") || generateRoomCode();
-			localStorage.setItem("id", code);
+		let code: string | undefined | null = useParams().roomCode;
+		if (code) {
+			localStorage.setItem("roomCode", code);
 			setRoomCode(code);
-			navigator("/?id=" + code);
 		} else {
-			localStorage.setItem("id", code);
-			setRoomCode(code);
+			let cachedCode = localStorage.getItem("roomCode");
+			if (cachedCode) {
+				setRoomCode(cachedCode);
+				navigator("/" + cachedCode);
+			}
 		}
 	};
 
-	const joinNewRoom = () => {
-		setRoomCode(generateRoomCode());
-		navigator("/?id=" + roomCode());
-	};
-
 	resolveRoomCode();
+
+	const joinRoom = (roomCode: string | undefined) => {
+		setRoomCode(roomCode);
+		if (roomCode) {
+			localStorage.setItem("roomCode", roomCode);
+			navigator("/" + roomCode);
+		} else {
+			localStorage.removeItem("roomCode");
+			navigator("/");
+		}
+	};
 
 	const onMessage = (ev: MessageEvent) => {
 		console.log(ev.data);
@@ -244,23 +253,28 @@ const App: Component = () => {
 
 	const ws = createWS(wsUrlBase + "/ws?id=" + roomCode());
 	ws.binaryType = "arraybuffer";
-	ws.onerror = joinNewRoom;
 	ws.onmessage = onMessage;
+	ws.onerror = () => setShowError(true);
 
 	return (
 		<div class={styles.App}>
 			<div id="content">
-				{allowPaste() && <Paste handlePaste={handlePaste} />}
-				{!allowPaste() && (
-					<p>
-						Open the following link in another web browser: <br />
+				{showError() ? (
+					<RoomError joinRoom={joinRoom} />
+				) : (
+					<div>
+						{!roomCode() && <RoomSelect joinRoom={joinRoom} />}
+						{roomCode() && allowPaste() && <Paste handlePaste={handlePaste} />}
+						{roomCode() && !allowPaste() && (
+							<PendingConnection joinRoom={joinRoom} roomCode={roomCode()} />
+						)}
 						<br />
-						clipboard.tris.sh?id={roomCode()}
 						<br />
-						<br />
-					</p>
+						{roomCode() && allowPaste() && (
+							<Clipboards entries={clipboards()} />
+						)}
+					</div>
 				)}
-				<Clipboards entries={clipboards()} />
 			</div>
 		</div>
 	);
