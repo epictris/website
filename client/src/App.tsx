@@ -109,6 +109,7 @@ const App: Component = () => {
     let code = new URLSearchParams(window.location.search).get("id")
     if (!code) {
       code = localStorage.getItem("id") || generateRoomCode()
+      localStorage.setItem("id", code)
       setRoomCode(code)
       navigator("/?id=" + code)
     } else {
