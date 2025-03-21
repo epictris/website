@@ -1,92 +1,92 @@
 * {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
 }
 
 body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
-    'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans',
-    'Helvetica Neue', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+	margin: 0;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+		"Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+		sans-serif;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+	font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
+		monospace;
 }
 
 #clipboard-entries {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto;
-  gap: 3px;
-  width: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	margin: 0 auto;
+	gap: 3px;
+	width: 100%;
 }
 
 .clipboard {
-  display: flex;
-  max-height: 80px;
-  overflow: hidden;
-  padding: 12px 12px;
-  box-shadow: inset 0 0 0.4em #666;
-  align-items: center;
-  width: 100%;
-  gap: 5px;
-  border: 1px solid black;
-  background-color: #f4f4f4;
-  position: relative;
-  color: #333;
+	display: flex;
+	max-height: 80px;
+	overflow: hidden;
+	padding: 12px 12px;
+	box-shadow: inset 0 0 0.4em #666;
+	align-items: center;
+	width: 100%;
+	gap: 5px;
+	border: 1px solid black;
+	background-color: #f4f4f4;
+	position: relative;
+	color: #333;
 }
 
 .clipboard p {
-  display: inline-block;
-  word-break: break-all;
-  flex: 1;
-  height: 100%;
+	display: inline-block;
+	word-break: break-all;
+	flex: 1;
+	height: 100%;
 }
 
 .clipboard > i {
-  position: absolute;
-  left: 10px;
-  width: calc(100% - 20px);
-  visibility: hidden;
+	position: absolute;
+	left: 10px;
+	width: calc(100% - 20px);
+	visibility: hidden;
 }
 
 .clipboard:hover {
-  background-color: rgba(0, 0, 0, 0.1);
-  cursor: pointer;
+	background-color: rgba(0, 0, 0, 0.1);
+	cursor: pointer;
 }
 
 .clipboard:focus {
-  background-color: rgba(0, 0, 0, 0.2);
+	background-color: rgba(0, 0, 0, 0.2);
 }
 
 .clipboard:focus > i {
-  visibility: visible;
+	visibility: visible;
 }
 
 #content {
-  max-width: 500px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 20px;
+	max-width: 500px;
+	margin: 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	padding: 20px;
 }
 
 #paste {
-  width: 100%;
-  padding: 10px;
-  font-size: 18px;
-  background-color: #fff;
+	width: 100%;
+	padding: 10px;
+	font-size: 18px;
+	background-color: #fff;
 }
 
 #paste:hover {
-  background-color: rgba(0, 0, 0, 0.1);
-  cursor: pointer;
+	background-color: rgba(0, 0, 0, 0.1);
+	cursor: pointer;
 }
