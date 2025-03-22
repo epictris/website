@@ -33,7 +33,7 @@ const RoomSelect: Component<RoomSelectProps> = (props) => {
 			<div>
 				<input
 					type="button"
-					value="Use clipboard code"
+					value="Use this clipboard code"
 					onClick={() => joinRoom(inputText() || randomRoomCode)}
 				/>
 			</div>
