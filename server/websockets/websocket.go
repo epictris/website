@@ -120,17 +120,20 @@ func Broadcast(room_code string, messageType int, data []byte) {
 
 func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	room := r.FormValue("id")
-	if getClientCount(room) > 1 {
-		http.Error(w, "Room is full", http.StatusForbidden)
-		return
-	}
-	fmt.Println("New websocket connection to room", room)
 	// Upgrade HTTP to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade failed:", err)
 		return
 	}
+	if getClientCount(room) > 1 {
+		fmt.Println("Room is full")
+		msg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Room is full")
+		conn.WriteMessage(websocket.CloseMessage, msg)
+		conn.Close()
+		return
+	}
+	fmt.Println("New websocket connection to room", room)
 	defer conn.Close()
 
 	connect(conn, room)

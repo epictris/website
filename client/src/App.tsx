@@ -1,4 +1,4 @@
-import { createSignal, JSX, type Component } from "solid-js";
+import { createEffect, createSignal, JSX, type Component } from "solid-js";
 import { readClipboard, writeClipboard } from "@solid-primitives/clipboard";
 
 import styles from "./App.module.css";
@@ -7,6 +7,8 @@ import { useNavigate, useParams } from "@solidjs/router";
 import RoomSelect from "./RoomSelect";
 import PendingConnection from "./PendingConnection";
 import RoomError from "./RoomError";
+import { createPageVisibility, usePageVisibility } from "@solid-primitives/page-visibility";
+import { WebSocket } from "vite";
 
 async function blobToDataURL(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -113,6 +115,22 @@ const App: Component = () => {
 	const [allowPaste, setAllowPaste] = createSignal<boolean>(false);
 	const [roomCode, setRoomCode] = createSignal<string | undefined>(undefined);
 	const [showError, setShowError] = createSignal<boolean>(false);
+	const [ws, setWs] = createSignal<globalThis.WebSocket | null>(null);
+
+	const visible = usePageVisibility();
+
+	createEffect(() => {
+		const activeWs = ws();
+		if (!activeWs) {
+			return;
+		}
+		if (visible()) {
+			if (activeWs.readyState == 3) {
+				console.log("reconnecting");
+				setTimeout(initWs, 200);
+			}
+		}
+	})
 
 	const wsUrlBase = import.meta.env.PROD
 		? "wss://clipboard.tris.sh"
@@ -144,25 +162,6 @@ const App: Component = () => {
 		} else {
 			localStorage.removeItem("roomCode");
 			navigator("/");
-		}
-	};
-
-	const onMessage = (ev: MessageEvent) => {
-		console.log(ev.data);
-		if (ev.data instanceof ArrayBuffer) {
-			const payload = decodePayload(ev.data);
-			if (payload.message.Type == MessageType.CLIPBOARD) {
-				decodeClipboard(payload.content, payload.message.ClipboardType).then(
-					(clipboard) => setClipboards([clipboard, ...clipboards()]),
-				);
-			}
-		} else {
-			const message: StatusMessage = JSON.parse(ev.data);
-			if (message.Clients == 2) {
-				setAllowPaste(true);
-			} else {
-				setAllowPaste(false);
-			}
 		}
 	};
 
@@ -219,6 +218,10 @@ const App: Component = () => {
 
 	const sendClipboard = (content: Blob, type: ClipboardType): void => {
 		content.arrayBuffer().then((value) => {
+			const activeWs = ws();
+			if (!activeWs) {
+				return;
+			}
 			const encoder = new TextEncoder();
 			const message: ClipboardMessage = {
 				Type: MessageType.CLIPBOARD,
@@ -233,7 +236,8 @@ const App: Component = () => {
 			sendData.set(new Uint8Array(buf1), 0);
 			sendData.set(new Uint8Array(buf2), buf1.byteLength);
 			sendData.set(new Uint8Array(buf3), buf1.byteLength + buf2.byteLength);
-			ws.send(sendData);
+
+			activeWs.send(sendData);
 		});
 	};
 
@@ -251,10 +255,54 @@ const App: Component = () => {
 		});
 	};
 
-	const ws = createWS(wsUrlBase + "/ws?id=" + roomCode());
-	ws.binaryType = "arraybuffer";
-	ws.onmessage = onMessage;
-	ws.onerror = () => setShowError(true);
+	const onMessage = (ev: MessageEvent) => {
+		console.log(ev.data);
+		if (ev.data instanceof ArrayBuffer) {
+			const payload = decodePayload(ev.data);
+			if (payload.message.Type == MessageType.CLIPBOARD) {
+				decodeClipboard(payload.content, payload.message.ClipboardType).then(
+					(clipboard) => setClipboards([clipboard, ...clipboards()]),
+				);
+			}
+		} else {
+			const message: StatusMessage = JSON.parse(ev.data);
+			if (message.Clients == 2) {
+				setAllowPaste(true);
+			} else {
+				setAllowPaste(false);
+			}
+		}
+	};
+
+	const onClose = (e: CloseEvent) => {
+		if (e.code == 1000) {
+			setShowError(true);
+		}
+		console.log("connection closed", e);
+	};
+
+	const onError = (e: Event) => {
+		console.log("connection error", e);
+	};
+
+	const onOpen = (e: Event) => {
+		setShowError(false)
+	}
+
+	const initWs = () => {
+		if (!roomCode()) {
+			return;
+		}
+		const ws = createWS(wsUrlBase + "/ws?id=" + roomCode());
+		ws.binaryType = "arraybuffer";
+		ws.onmessage = onMessage;
+		ws.onerror = onError;
+		ws.onclose = onClose;
+		ws.onopen = onOpen;
+		setWs(ws);
+	};
+
+	initWs();
 
 	return (
 		<div class={styles.App}>
