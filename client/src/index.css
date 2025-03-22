@@ -31,12 +31,15 @@ code {
 .room-select > div {
 	display: flex;
 	gap: 10px;
+	margin: 0 auto;
 	margin-bottom: 10px;
 }
 .room-select input {
-	flex: 1;
+	text-align: center;
+	margin: 0 auto;
 	padding: 10px;
 	font-size: 16px;
+	width: 50%;
 }
 
 .pending-connection p {

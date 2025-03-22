@@ -1,8 +1,8 @@
-import { Component, createSignal } from "solid-js";
+import { Component } from "solid-js";
 
 interface PendingConnectionProps {
 	joinRoom: (roomCode: string | undefined) => void;
-	roomCode?: string
+	roomCode?: string;
 }
 
 const PendingConnection: Component<PendingConnectionProps> = (props) => {
@@ -11,10 +11,10 @@ const PendingConnection: Component<PendingConnectionProps> = (props) => {
 	return (
 		<div class="pending-connection">
 			<div>
-					<p class="code">{roomCode}</p>
+				<p class="code">{roomCode}</p>
 				<br />
 				<p>
-					Use this code to join from another device.
+					Enter this code on another device.
 					<br />
 					<br />
 					Or navigate to: clipboard.tris.sh/{roomCode}
@@ -26,7 +26,7 @@ const PendingConnection: Component<PendingConnectionProps> = (props) => {
 			<div>
 				<input
 					type="button"
-					value="Join a different room"
+					value="Use a different code"
 					onClick={() => joinRoom(undefined)}
 				/>
 			</div>

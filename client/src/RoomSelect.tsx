@@ -9,25 +9,33 @@ const RoomSelect: Component<RoomSelectProps> = (props) => {
 
 	const [inputText, setInputText] = createSignal<string>("");
 
-	const generateCode = () => {
-		setInputText(Math.random().toString(36).substring(2, 7));
-	};
+	const randomRoomCode = "aaaaaa"
+		.split("")
+		.map((char) =>
+			String.fromCharCode(char.charCodeAt(0) + Math.floor(Math.random() * 26)),
+		)
+		.join("");
 
 	return (
 		<div class="room-select">
 			<div>
 				<input
 					type="text"
-					placeholder="Enter room code"
+					placeholder={randomRoomCode}
 					value={inputText() ?? ""}
-					onInput={e => setInputText(e.currentTarget.value)}
+					onInput={(e) => setInputText(e.currentTarget.value)}
 					autofocus
-					onKeyDown={e => inputText() && e.key === "Enter" && joinRoom(inputText())}
+					onKeyDown={(e) =>
+						e.key === "Enter" && joinRoom(inputText() || randomRoomCode)
+					}
 				/>
 			</div>
 			<div>
-				<input type="button" value="Join room" onClick={() => joinRoom(inputText())} disabled={!inputText()}/>
-				<input type="button" value="Generate code" onClick={generateCode} />
+				<input
+					type="button"
+					value="Use clipboard code"
+					onClick={() => joinRoom(inputText() || randomRoomCode)}
+				/>
 			</div>
 		</div>
 	);

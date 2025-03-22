@@ -7,8 +7,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import RoomSelect from "./RoomSelect";
 import PendingConnection from "./PendingConnection";
 import RoomError from "./RoomError";
-import { createPageVisibility, usePageVisibility } from "@solid-primitives/page-visibility";
-import { WebSocket } from "vite";
+import { usePageVisibility } from "@solid-primitives/page-visibility";
 
 async function blobToDataURL(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -111,9 +110,9 @@ type ClipboardData = {
 };
 
 function getCookie(name: string): string | undefined {
-   const value = `; ${document.cookie}`;
-   const parts = value.split(`; ${name}=`);
-   if (parts.length === 2) return parts.pop()!.split(';').shift();
+	const value = `; ${document.cookie}`;
+	const parts = value.split(`; ${name}=`);
+	if (parts.length === 2) return parts.pop()!.split(";").shift();
 }
 
 const App: Component = () => {
@@ -125,7 +124,7 @@ const App: Component = () => {
 
 	const visible = usePageVisibility();
 
-	const sessionToken = getCookie("session_token")
+	const sessionToken = getCookie("session_token");
 
 	createEffect(() => {
 		const activeWs = ws();
@@ -138,7 +137,7 @@ const App: Component = () => {
 				setTimeout(initWs, 200);
 			}
 		}
-	})
+	});
 
 	const wsUrlBase = import.meta.env.PROD
 		? "wss://clipboard.tris.sh"
@@ -294,14 +293,16 @@ const App: Component = () => {
 	};
 
 	const onOpen = (e: Event) => {
-		setShowError(false)
-	}
+		setShowError(false);
+	};
 
 	const initWs = () => {
 		if (!roomCode()) {
 			return;
 		}
-		const ws = createWS(wsUrlBase + "/ws?id=" + roomCode() + "&session_token=" + sessionToken);
+		const ws = createWS(
+			wsUrlBase + "/ws?id=" + roomCode() + "&session_token=" + sessionToken,
+		);
 		ws.binaryType = "arraybuffer";
 		ws.onmessage = onMessage;
 		ws.onerror = onError;

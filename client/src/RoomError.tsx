@@ -13,7 +13,7 @@ const RoomError: Component<RoomSelectProps> = (props) => {
 			<div>
 				<input
 					type="button"
-					value="Join a different room"
+					value="Use a different clipboard"
 					onClick={() => joinRoom(undefined)}
 				/>
 			</div>
