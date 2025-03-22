@@ -1,4 +1,4 @@
-import { Component, createSignal } from "solid-js";
+import { Component } from "solid-js";
 
 interface RoomSelectProps {
 	joinRoom: (roomCode: string | undefined) => void;
@@ -9,7 +9,9 @@ const RoomError: Component<RoomSelectProps> = (props) => {
 
 	return (
 		<div class="room-error">
-			<p> This room is already in use. <br/> <br/></p>
+			<p>
+				This clipboard is already in use. <br /> <br />
+			</p>
 			<div>
 				<input
 					type="button"
