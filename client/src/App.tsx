@@ -110,6 +110,12 @@ type ClipboardData = {
 	type: ClipboardType;
 };
 
+function getCookie(name: string): string | undefined {
+   const value = `; ${document.cookie}`;
+   const parts = value.split(`; ${name}=`);
+   if (parts.length === 2) return parts.pop()!.split(';').shift();
+}
+
 const App: Component = () => {
 	const [clipboards, setClipboards] = createSignal<ClipboardData[]>([]);
 	const [allowPaste, setAllowPaste] = createSignal<boolean>(false);
@@ -118,6 +124,8 @@ const App: Component = () => {
 	const [ws, setWs] = createSignal<globalThis.WebSocket | null>(null);
 
 	const visible = usePageVisibility();
+
+	const sessionToken = getCookie("session_token")
 
 	createEffect(() => {
 		const activeWs = ws();
@@ -293,7 +301,7 @@ const App: Component = () => {
 		if (!roomCode()) {
 			return;
 		}
-		const ws = createWS(wsUrlBase + "/ws?id=" + roomCode());
+		const ws = createWS(wsUrlBase + "/ws?id=" + roomCode() + "&session_token=" + sessionToken);
 		ws.binaryType = "arraybuffer";
 		ws.onmessage = onMessage;
 		ws.onerror = onError;

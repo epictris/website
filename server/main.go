@@ -6,14 +6,26 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/google/uuid"
 	"tris.sh/project/client"
 	"tris.sh/project/server/websockets"
 )
 func serveSpa(w http.ResponseWriter, r *http.Request) {
 	buildPath := "dist"
 
+	_, err := r.Cookie("session_token")
+
+	if err != nil {
+		http.SetCookie(w, &http.Cookie{
+			Name: "session_token",
+			Value:	uuid.New().String(),
+			HttpOnly: false,
+			Path: "/",
+		})
+	}
+
 	path, err := client.BuildFS.Open(filepath.Join(buildPath, r.URL.Path))
-	fmt.Println(err)
 	if os.IsNotExist(err) {
 		index, err := client.BuildFS.ReadFile(filepath.Join(buildPath, "index.html"))
 		if err != nil {
