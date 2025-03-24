@@ -1,0 +1,32 @@
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body ::-webkit-scrollbar {
+	width: 0px;
+}
+
+.xterm-viewport {
+	overflow: hidden;
+}
+
+.row {
+	font-family: monospace;
+	font-size: 18px;
+	height: 26px;
+}
+
+.row.prompt {
+	display: flex;
+	white-space: pre;
+	flex-direction: row;
+}
+
+.row.prompt input {
+	flex-grow: 1;
+	font-family: monospace;
+	font-size: 18px;
+	border: none;
+}
