@@ -22,6 +22,11 @@ interface TerminalState {
 	pwd: string;
 	stdOut: string;
 	fileSystem: Directory;
+	theme: Theme;
+}
+
+interface Theme {
+	promptPrefix: (state: TerminalState) => string[]
 }
 
 const constructAbsolutePath = (relativePath: string, pwd: string): string => {
@@ -98,7 +103,6 @@ const COMMAND_MAPPING: Record<
 	},
 
 	ls: (args, state) => {
-		let stdOut = "";
 
 		const params = args.filter((arg) => arg.startsWith("-"));
 		const paths = args.filter((arg) => !arg.startsWith("-"));
@@ -108,26 +112,26 @@ const COMMAND_MAPPING: Record<
 				state,
 			);
 			if (!pathObject) {
-				stdOut += `ls: cannot access ${path}: No such file or directory\r\n`;
+				state.stdOut += `ls: cannot access ${path}: No such file or directory\r\n`;
 			} else if (pathObject.type === PathObjectType.FILE) {
-				stdOut += `${path}\r\n`;
+				state.stdOut += `${path}\r\n`;
 			} else if (paths.length === 1) {
-				stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
 			} else {
-				stdOut += `${path}:\r\n`;
-				stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				state.stdOut += `${path}:\r\n`;
+				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
 			}
-			stdOut += "\r\n";
+			state.stdOut += "\r\n";
 		}
 
 		if (!paths.length) {
 			const pathObject = resolvePathObject(state.pwd, state)!;
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
-				stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
 			}
 		}
 
-		return { ...state, stdOut };
+		return { ...state };
 	},
 };
 
@@ -150,9 +154,10 @@ export const execute = (
 	state: TerminalState,
 	command: string,
 ): TerminalState => {
+	state.stdOut = "";
 	const parsedCommand = parseCommand(command);
 	if (!parsedCommand) {
-		return { ...state, history: [...state.history], stdOut: "" };
+		return { ...state, history: [...state.history]};
 	}
 
 	if (!(parsedCommand.command in COMMAND_MAPPING)) {
@@ -196,5 +201,8 @@ export const initState: () => TerminalState = () => {
 				},
 			},
 		},
+		theme: {
+			promptPrefix: (state) => [`${state.pwd}`, "❯"],
+		}
 	};
 };

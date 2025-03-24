@@ -15,7 +15,6 @@ body ::-webkit-scrollbar {
 .row {
 	font-family: monospace;
 	font-size: 18px;
-	height: 26px;
 }
 
 .row.prompt {
