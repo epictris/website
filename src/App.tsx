@@ -1,7 +1,7 @@
 import { createSignal, JSX, type Component } from "solid-js";
 
 import styles from "./App.module.css";
-import * as Terminal from "./Terminal";
+import * as Terminal from "./terminal/Terminal";
 import { render } from "solid-js/web";
 
 const renderToText = (jsx: JSX.Element): string => {
@@ -17,6 +17,7 @@ const App: Component = () => {
 	const [state, setState] = createSignal(Terminal.initState());
 	const [inputBuffer, setInputBuffer] = createSignal("");
 	const [output, setOutput] = createSignal<string>(renderToText(<br />));
+	const [historyOffset, setHistoryOffset] = createSignal(0);
 
 	const executeCommand = (command: string): void => {
 		const frozenPrompt =
@@ -26,7 +27,7 @@ const App: Component = () => {
 		setOutput(
 			output() +
 				frozenPrompt +
-				renderToText(state().stdOut) +
+				state().stdOut +
 				renderToText(
 					<div>
 						<br />
@@ -55,6 +56,35 @@ const App: Component = () => {
 			case "Control":
 			case "Alt":
 			case "Meta":
+				break;
+
+			case "Tab":
+				e.preventDefault()
+				setInputBuffer(Terminal.tabComplete(inputBuffer(), state()))
+				break;
+
+			case "ArrowUp":
+				e.preventDefault();
+				if (historyOffset() < state().history.length) {
+					const historyIndex = state().history.length - (1 + historyOffset());
+					setInputBuffer(state().history[historyIndex]);
+					setHistoryOffset(historyOffset() + 1);
+				}
+				break;
+
+			case "ArrowDown":
+				e.preventDefault();
+				if (historyOffset() > 0) {
+					const historyIndex = state().history.length - (historyOffset() - 1)
+					setInputBuffer(
+						state().history[
+							historyIndex
+						],
+					);
+					setHistoryOffset(historyOffset() - 1);
+					} else {
+						setInputBuffer("")
+					}
 				break;
 
 			case "Enter":
