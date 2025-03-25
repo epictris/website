@@ -21,7 +21,6 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			const fileName = arg.split("/").pop();
 			if (fileName && !dir.children[fileName]) {
 				dir.children[fileName] = {
-					name: fileName,
 					type: PathObjectType.FILE,
 					content: "",
 				};

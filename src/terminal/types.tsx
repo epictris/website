@@ -4,13 +4,11 @@ export enum PathObjectType {
 }
 
 export interface File {
-	name: string;
 	type: PathObjectType.FILE;
 	content: string;
 }
 
 export interface Directory {
-	name: string;
 	type: PathObjectType.DIRECTORY;
 	children: Record<string, PathObject>;
 }
