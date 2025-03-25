@@ -1,6 +1,17 @@
 import { Directory, PathObject, PathObjectType, TerminalState } from "./types";
 
-export const constructAbsolutePath = (relativePath: string, pwd: string): string => {
+export const resolvePath = (
+	relativePath: string,
+	state: TerminalState,
+): PathObject | null => {
+	const absolutePath = constructAbsolutePath(relativePath, state.pwd);
+	return resolvePathObject(absolutePath, state);
+};
+
+export const constructAbsolutePath = (
+	relativePath: string,
+	pwd: string,
+): string => {
 	const relativePathSegments = getPathSegments(relativePath);
 	const basePathSegments = relativePath.startsWith("/")
 		? []

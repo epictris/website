@@ -1,5 +1,7 @@
+import cat from "./commands/cat";
 import cd from "./commands/cd";
 import ls from "./commands/ls";
+import touch from "./commands/touch";
 import {
 	constructAbsolutePath,
 	getPathSegments,
@@ -14,6 +16,8 @@ const COMMAND_MAPPING: Record<
 > = {
 	ls,
 	cd,
+	cat,
+	touch
 };
 
 const parseCommand = (
@@ -114,6 +118,11 @@ export const initState: () => TerminalState = () => {
 					type: PathObjectType.FILE,
 					content: "Hello World!",
 				},
+				"hello_world_2.txt": {
+					name: "hello_world_2.txt",
+					type: PathObjectType.FILE,
+					content: "Hello World (2)!",
+				},
 				example_dir: {
 					name: "example_dir",
 					type: PathObjectType.DIRECTORY,
@@ -121,7 +130,7 @@ export const initState: () => TerminalState = () => {
 						nested_file: {
 							name: "nested_file",
 							type: PathObjectType.FILE,
-							content: "",
+							content: '{"hello": "world"}',
 						},
 					},
 				},
