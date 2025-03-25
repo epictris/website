@@ -1,61 +1,56 @@
-import { createSignal, For, JSX, onMount, type Component } from "solid-js";
+import { createSignal, JSX, type Component } from "solid-js";
 
 import styles from "./App.module.css";
 import * as Terminal from "./Terminal";
+import { render } from "solid-js/web";
 
-interface Prompt {
-	prefixCharacters: () => JSX.Element;
-	prefixLines: () => JSX.Element[];
-	executeCommand: (command: string) => void;
-}
-
-const Prompt: Component<Prompt> = (props) => {
-	const [value, setValue] = createSignal("");
-
-	return (
-		<div>
-			<div class="row">
-				{props.prefixLines().map((line) => (
-					<div class="row">{line}</div>
-				))}
-				<span>{props.prefixCharacters()}</span>
-				<input
-					value={value()}
-					onKeyDown={(e) =>
-						e.key === "Enter" &&
-						(() => {
-							props.executeCommand(e.currentTarget.value);
-							setValue("");
-							console.log("test");
-						})()
-					}
-				/>
-			</div>
-		</div>
-	);
+const renderToText = (jsx: JSX.Element): string => {
+	const div = document.createElement("div");
+	document.body.appendChild(div);
+	render(() => jsx, div);
+	const html = div.innerHTML;
+	div.remove();
+	return html;
 };
 
 const App: Component = () => {
 	const [state, setState] = createSignal(Terminal.initState());
 	const [inputBuffer, setInputBuffer] = createSignal("");
-	const [outputs, setOutputs] = createSignal<string[]>([]);
+	const [output, setOutput] = createSignal<string>(renderToText(<br />));
 
 	const executeCommand = (command: string): void => {
+		const frozenPrompt =
+			renderToText(generatePrompt(state().pwd, inputBuffer())) +
+			renderToText(<br />);
 		setState(Terminal.execute(state(), command));
-		setOutputs((outputs) => [...outputs, state().stdOut]);
+		setOutput(
+			output() +
+				frozenPrompt +
+				renderToText(state().stdOut) +
+				renderToText(
+					<div>
+						<br />
+					</div>,
+				),
+		);
+		setInputBuffer("");
 	};
 
-	const generatePrompt = () => {
-		return `${state().pwd}\r\n❯ `
-	}
+	const generatePrompt = (pwd: string, buffer: string) => {
+		return (
+			<span>
+				<div style="color: #60b8d6">{pwd}</div>
+				<span style="color: #f28779">❯</span> {buffer}
+			</span>
+		);
+	};
 
 	const generateCursor = () => {
-		return `█`
-	}
+		return `█`;
+	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
 		switch (e.key) {
-
 			case "Shift":
 			case "Control":
 			case "Alt":
@@ -63,25 +58,32 @@ const App: Component = () => {
 				break;
 
 			case "Enter":
-				setOutputs([...outputs(), generatePrompt() + inputBuffer()])
-				executeCommand(inputBuffer())
-				setInputBuffer("")
-				break
+				executeCommand(inputBuffer());
+				break;
 
 			case "Backspace":
-				setInputBuffer(inputBuffer().slice(0, -1))
-				break
+				setInputBuffer(inputBuffer().slice(0, -1));
+				break;
+
+			case "l":
+				if (e.ctrlKey) {
+					setOutput("");
+					e.preventDefault();
+					break;
+				}
 
 			default:
-				setInputBuffer(inputBuffer() + e.key)
-			console.log(e.key)
+				setInputBuffer(inputBuffer() + e.key);
+				e.preventDefault();
+				console.log(e.key);
 		}
-	}
+	};
 
 	return (
 		<div autofocus tabindex="0" class={styles.terminal} onKeyDown={onKeyDown}>
-			<For each={outputs()}>{(output) => <div>{output}</div>}</For>
-			{generatePrompt()}{inputBuffer()}{generateCursor()}
+			<div innerHTML={output()} />
+			{generatePrompt(state().pwd, inputBuffer())}
+			{generateCursor()}
 		</div>
 	);
 };

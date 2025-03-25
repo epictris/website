@@ -2,6 +2,7 @@
 	margin: 0;
 	padding: 0;
 	box-sizing: border-box;
+	line-height: 1.3;
 }
 
 .terminal {
@@ -16,4 +17,8 @@
 	backface-visibility: hidden;
 	will-change: transform;
 	transform: translateZ(0);
+}
+
+br {
+	line-height: 1.3;
 }

@@ -1,3 +1,5 @@
+import { JSX } from "solid-js/jsx-runtime";
+
 enum PathObjectType {
 	FILE = "file",
 	DIRECTORY = "directory",
@@ -20,13 +22,13 @@ type PathObject = File | Directory;
 interface TerminalState {
 	history: string[];
 	pwd: string;
-	stdOut: string;
+	stdOut: JSX.Element[];
 	fileSystem: Directory;
 	theme: Theme;
 }
 
 interface Theme {
-	promptPrefix: (state: TerminalState) => string[]
+	promptPrefix: (state: TerminalState) => string[];
 }
 
 const constructAbsolutePath = (relativePath: string, pwd: string): string => {
@@ -95,15 +97,14 @@ const COMMAND_MAPPING: Record<
 		const cdPath = constructAbsolutePath(args[0], state.pwd);
 		const pathObject = resolvePathObject(cdPath, state);
 		if (!pathObject) {
-			return { ...state, stdOut: `cd: ${args[0]} does not exist` };
+			return { ...state, stdOut: [`cd: ${args[0]} does not exist`] };
 		} else if (pathObject.type === PathObjectType.FILE) {
-			return { ...state, stdOut: `cd: ${args[0]} is not a directory` };
+			return { ...state, stdOut: [`cd: ${args[0]} is not a directory`] };
 		}
 		return { ...state, pwd: cdPath };
 	},
 
 	ls: (args, state) => {
-
 		const params = args.filter((arg) => arg.startsWith("-"));
 		const paths = args.filter((arg) => !arg.startsWith("-"));
 		for (let path of paths) {
@@ -112,22 +113,37 @@ const COMMAND_MAPPING: Record<
 				state,
 			);
 			if (!pathObject) {
-				state.stdOut += `ls: cannot access ${path}: No such file or directory\r\n`;
+				state.stdOut.push(
+					`ls: cannot access ${path}: No such file or directory`,
+				);
 			} else if (pathObject.type === PathObjectType.FILE) {
-				state.stdOut += `${path}\r\n`;
+				state.stdOut.push(`${path}\r\n`);
 			} else if (paths.length === 1) {
-				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				for (let [name, child] of Object.entries(pathObject.children)) {
+					if (child.type === PathObjectType.DIRECTORY) {
+						state.stdOut.push(<span style="color:#65bddb">{name} </span>);
+					} else {
+						state.stdOut.push(name);
+					}
+				}
+				state.stdOut.push(`${Object.keys(pathObject.children).join("  ")}\r\n`);
 			} else {
-				state.stdOut += `${path}:\r\n`;
-				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				state.stdOut.push(`${path}:\r\n`);
+				state.stdOut.push(`${Object.keys(pathObject.children).join("  ")}\r\n`);
 			}
-			state.stdOut += "\r\n";
+			state.stdOut.push("\r\n");
 		}
 
 		if (!paths.length) {
 			const pathObject = resolvePathObject(state.pwd, state)!;
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
-				state.stdOut += `${Object.keys(pathObject.children).join("  ")}\r\n`;
+				for (let [name, child] of Object.entries(pathObject.children)) {
+					if (child.type === PathObjectType.DIRECTORY) {
+						state.stdOut.push(<span style="color:#65bddb">{name} </span>);
+					} else {
+						state.stdOut.push(name + "  ");
+					}
+				}
 			}
 		}
 
@@ -154,17 +170,17 @@ export const execute = (
 	state: TerminalState,
 	command: string,
 ): TerminalState => {
-	state.stdOut = "";
+	state.stdOut = [];
 	const parsedCommand = parseCommand(command);
 	if (!parsedCommand) {
-		return { ...state, history: [...state.history]};
+		return { ...state, history: [...state.history] };
 	}
 
 	if (!(parsedCommand.command in COMMAND_MAPPING)) {
 		return {
 			...state,
 			history: [...state.history],
-			stdOut: `command ${parsedCommand.command} not found`,
+			stdOut: [`command not found: ${parsedCommand.command}\r\n`],
 		};
 	}
 
@@ -178,7 +194,7 @@ export const initState: () => TerminalState = () => {
 	return {
 		history: [],
 		pwd: "/",
-		stdOut: "",
+		stdOut: [],
 		fileSystem: {
 			name: "/",
 			type: PathObjectType.DIRECTORY,
@@ -203,6 +219,6 @@ export const initState: () => TerminalState = () => {
 		},
 		theme: {
 			promptPrefix: (state) => [`${state.pwd}`, "❯"],
-		}
+		},
 	};
 };
