@@ -34,6 +34,7 @@ const App: Component = () => {
 					</div>,
 				),
 		);
+		setHistoryOffset(0);
 		setInputBuffer("");
 	};
 
@@ -59,8 +60,8 @@ const App: Component = () => {
 				break;
 
 			case "Tab":
-				e.preventDefault()
-				setInputBuffer(Terminal.tabComplete(inputBuffer(), state()))
+				e.preventDefault();
+				setInputBuffer(Terminal.tabComplete(inputBuffer(), state()));
 				break;
 
 			case "ArrowUp":
@@ -75,16 +76,12 @@ const App: Component = () => {
 			case "ArrowDown":
 				e.preventDefault();
 				if (historyOffset() > 0) {
-					const historyIndex = state().history.length - (historyOffset() - 1)
-					setInputBuffer(
-						state().history[
-							historyIndex
-						],
-					);
+					const historyIndex = state().history.length - (historyOffset() - 1);
+					setInputBuffer(state().history[historyIndex]);
 					setHistoryOffset(historyOffset() - 1);
-					} else {
-						setInputBuffer("")
-					}
+				} else {
+					setInputBuffer("");
+				}
 				break;
 
 			case "Enter":

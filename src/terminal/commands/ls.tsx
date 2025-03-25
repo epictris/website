@@ -10,9 +10,11 @@ const renderPathObject = (
 
 	switch (pathObject.type) {
 		case PathObjectType.FILE:
-			return file_name + "  ";
+			return pathObject.executable
+				? `<span style="color:${theme.green}"><b>${file_name}  </b></span>`
+				: file_name + "  ";
 		case PathObjectType.DIRECTORY:
-			return `<span style="color:${theme.brightBlue}"><b>${file_name} </b></span>`;
+			return `<span style="color:${theme.brightBlue}"><b>${file_name}  </b></span>`;
 	}
 };
 

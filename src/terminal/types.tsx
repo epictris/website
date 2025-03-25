@@ -6,11 +6,13 @@ export enum PathObjectType {
 export interface File {
 	type: PathObjectType.FILE;
 	content: string;
+	executable?: boolean
 }
 
 export interface Directory {
 	type: PathObjectType.DIRECTORY;
 	children: Record<string, PathObject>;
+	executable?: boolean
 }
 
 export type PathObject = File | Directory;

@@ -1,8 +1,4 @@
-import {
-	constructAbsolutePath,
-	resolvePath,
-	resolvePathDirectory,
-} from "../string_util";
+import { constructAbsolutePath, resolvePathDirectory } from "../string_util";
 import { PathObjectType, TerminalState } from "../types";
 
 export default (args: string[], state: TerminalState): TerminalState => {
@@ -16,13 +12,13 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			state,
 		);
 		if (!dir) {
-			state.stdOut += `touch: cannot touch '${arg}': No such file or directory`;
+			state.stdOut += `mkdir: cannot create directory '${arg}': No such file or directory`;
 		} else {
 			const fileName = arg.split("/").pop();
 			if (fileName && !dir.children[fileName]) {
 				dir.children[fileName] = {
-					type: PathObjectType.FILE,
-					content: "",
+					type: PathObjectType.DIRECTORY,
+					children: {},
 				};
 			}
 		}

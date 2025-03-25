@@ -1,6 +1,9 @@
 import cat from "./commands/cat";
 import cd from "./commands/cd";
+import chmod from "./commands/chmod";
 import ls from "./commands/ls";
+import mkdir from "./commands/mkdir";
+import pwd from "./commands/pwd";
 import rm from "./commands/rm";
 import touch from "./commands/touch";
 import {
@@ -20,6 +23,9 @@ const COMMAND_MAPPING: Record<
 	cat,
 	touch,
 	rm,
+	pwd,
+	mkdir,
+	chmod,
 };
 
 const parseCommand = (
