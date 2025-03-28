@@ -6,6 +6,7 @@ import mkdir from "./commands/mkdir";
 import pwd from "./commands/pwd";
 import rm from "./commands/rm";
 import touch from "./commands/touch";
+import whoami from "./commands/whoami";
 import {
 	constructAbsolutePath,
 	getPathSegments,
@@ -26,6 +27,7 @@ const COMMAND_MAPPING: Record<
 	pwd,
 	mkdir,
 	chmod,
+	whoami,
 };
 
 const parseCommand = (
