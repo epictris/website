@@ -8,6 +8,11 @@ export const resolvePath = (
 	return resolvePathObject(absolutePath, state);
 };
 
+export const getHead = (path: string): string => {
+	const pathSegments = getPathSegments(path);
+	return pathSegments[pathSegments.length - 1];
+}
+
 export const constructAbsolutePath = (
 	relativePath: string,
 	pwd: string,
@@ -34,6 +39,29 @@ export const getPathSegments = (path: string) => {
 	const cleanedPath = path.replaceAll(/\/+/gi, "/").replace(/\/$/gi, "");
 	return cleanedPath.split("/").filter((value) => value);
 };
+
+export const resolveParentDirectory = (
+	relativePath: string,
+	state: TerminalState,
+): Directory | null => {
+	const absolutePath = constructAbsolutePath(relativePath, state.pwd);
+	const pathSegments = getPathSegments(absolutePath);
+	if (pathSegments.length === 0) {
+		return null
+	}
+	if (pathSegments.length === 1) {
+		return state.fileSystem
+	}
+	pathSegments.pop();
+	const parentDirectory = resolvePath("/" + pathSegments.join("/"), state);
+	if (!parentDirectory) {
+		return null
+	} else if (parentDirectory.type === PathObjectType.FILE) {
+		return null
+	} else {
+		return parentDirectory
+	}
+}
 
 export const resolvePathDirectory = (
 	absolutePath: string,

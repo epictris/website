@@ -9,7 +9,10 @@ import touch from "./commands/touch";
 import whoami from "./commands/whoami";
 import {
 	constructAbsolutePath,
+	getHead,
 	getPathSegments,
+	resolveParentDirectory,
+	resolvePath,
 	resolvePathDirectory,
 	resolvePathObject,
 } from "./string_util";
@@ -45,49 +48,129 @@ const parseCommand = (
 	};
 };
 
-export const tabComplete = (
-	inputBuffer: string,
-	state: TerminalState,
-): string => {
-	const inputWords = inputBuffer.split(" ").filter((word) => word);
-	if (inputWords.length === 0) {
-		return inputBuffer;
+interface AutocompleteResult {
+	knownCompletion: string;
+	suggestedCompletions: string[];
+}
+
+const resolveMatchingStartCharacters = (strings: string[]): string => {
+	let matchingStartCharacters = "";
+	if (strings.length === 0) {
+		return matchingStartCharacters;
 	}
 
-	const lastWord = inputWords[inputWords.length - 1];
+	while (true) {
+		const nextSuggestedCharacters = strings.map(
+			(name) => name[matchingStartCharacters.length],
+		);
 
-	const pathObject = resolvePathObject(
-		constructAbsolutePath(lastWord, state.pwd),
-		state,
-	);
-	if (pathObject && pathObject.type == PathObjectType.FILE) {
-		return inputBuffer;
-	}
-
-	const pathDirectory = resolvePathDirectory(
-		constructAbsolutePath(lastWord, state.pwd),
-		state,
-	);
-	if (!pathDirectory) {
-		return inputBuffer;
-	}
-
-	const useFirstSuggestion =
-		inputBuffer.endsWith("/") || inputBuffer.endsWith(" ");
-	const partialFileName = useFirstSuggestion
-		? ""
-		: (getPathSegments(lastWord).pop() ?? "");
-	console.log(pathDirectory);
-
-	for (let [name, child] of Object.entries(pathDirectory.children)) {
-		if (!partialFileName || name.startsWith(partialFileName)) {
-			const suggestion = inputBuffer + name.slice(partialFileName.length);
-			return child.type === PathObjectType.FILE
-				? suggestion + " "
-				: suggestion + "/";
+		if (nextSuggestedCharacters.some((c) => c === undefined)) {
+			return matchingStartCharacters;
+		}
+		if (
+			nextSuggestedCharacters.every((c) => c === nextSuggestedCharacters[0])
+		) {
+			matchingStartCharacters += nextSuggestedCharacters[0];
+		} else {
+			return matchingStartCharacters;
 		}
 	}
-	return inputBuffer;
+};
+
+export const autocomplete = (
+	inputBuffer: string,
+	state: TerminalState,
+): AutocompleteResult => {
+	const inputWords = inputBuffer.split(" ");
+	if (inputWords.length === 0) {
+		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
+	}
+
+	let matchString: string | null = null;
+	let completionDirectoryString: string | null = null;
+
+	if (inputWords[inputWords.length - 1] == "") {
+		const inputArgs = inputWords.filter((word) => word !== "");
+
+		if (resolvePath(inputArgs[inputArgs.length - 1], state)) {
+			return { knownCompletion: inputBuffer, suggestedCompletions: [] };
+		}
+		completionDirectoryString = state.pwd == "/" ? "/" : state.pwd + "/";
+		matchString = "";
+	} else {
+		const finalArgument = inputWords[inputWords.length - 1];
+		let completionPath = resolvePath(finalArgument, state);
+		if (!completionPath) {
+			matchString = getHead(finalArgument);
+			completionDirectoryString = finalArgument.slice(
+				0,
+				finalArgument.length - matchString.length,
+			);
+		} else if (
+			completionPath.type === PathObjectType.DIRECTORY &&
+			!finalArgument.endsWith("/")
+		) {
+			return { knownCompletion: inputBuffer + "/", suggestedCompletions: [] };
+		} else if (completionPath.type === PathObjectType.FILE) {
+			return { knownCompletion: inputBuffer + " ", suggestedCompletions: [] };
+		} else {
+			matchString = "";
+			completionDirectoryString = finalArgument;
+		}
+	}
+
+	let completionPath = resolvePath(completionDirectoryString, state);
+
+	if (!completionPath) {
+		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
+	} else if (completionPath.type === PathObjectType.FILE) {
+		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
+	}
+
+	let suggestedCompletions = Object.keys(completionPath.children).filter(
+		(name) => name.startsWith(matchString),
+	);
+
+	if (suggestedCompletions.length === 0) {
+		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
+	}
+
+	const matchingStartCharacters =
+		resolveMatchingStartCharacters(suggestedCompletions);
+
+	if (suggestedCompletions.length === 1) {
+		suggestedCompletions = [];
+	}
+
+	if (matchingStartCharacters === "") {
+		return { knownCompletion: inputBuffer, suggestedCompletions };
+	}
+
+	const resolvedCompletionPath = resolvePath(
+		completionDirectoryString + matchingStartCharacters,
+		state,
+	);
+
+	const completionResult =
+		inputBuffer.slice(0, inputBuffer.length - matchString.length) +
+		matchingStartCharacters;
+
+	if (!resolvedCompletionPath) {
+		return {
+			knownCompletion: completionResult,
+			suggestedCompletions,
+		};
+	} else if (resolvedCompletionPath.type === PathObjectType.DIRECTORY) {
+		return {
+			knownCompletion: completionResult + "/",
+			suggestedCompletions,
+		};
+	} else {
+		return {
+			knownCompletion: completionResult + " ",
+			suggestedCompletions,
+		};
+	}
 };
 
 export const execute = (
