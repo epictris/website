@@ -1,7 +1,7 @@
 import { createSignal, JSX, type Component } from "solid-js";
 
 import styles from "./App.module.css";
-import * as Terminal from "./terminal/Terminal";
+import * as TerminalModule from "./terminal/Terminal";
 import { render } from "solid-js/web";
 
 const renderToText = (jsx: JSX.Element): string => {
@@ -13,17 +13,37 @@ const renderToText = (jsx: JSX.Element): string => {
 	return html;
 };
 
+const AutocompleteSuggestions: Component<{ suggestions: string[] }> = (
+	props,
+) => {
+	return (
+		<div>
+			{props.suggestions.map((suggestion) => (
+				<div>{suggestion}</div>
+			))}
+		</div>
+	);
+};
+
 const App: Component = () => {
-	const [state, setState] = createSignal(Terminal.initState());
+	const terminal = new TerminalModule.Terminal();
+	const [tabCompletion, setTabCompletion] = createSignal(false);
+	const [state, setState] = createSignal(TerminalModule.initState());
 	const [inputBuffer, setInputBuffer] = createSignal("");
 	const [output, setOutput] = createSignal<string>(renderToText(<br />));
 	const [historyOffset, setHistoryOffset] = createSignal(0);
+	const [autocompleteSuggestions, setAutocompleteSuggestions] = createSignal<
+		string[]
+	>([]);
+	const [selectedCompletionIndex, setSelectedCompletionIndex] = createSignal<
+		number | null
+	>(null);
 
 	const executeCommand = (command: string): void => {
 		const frozenPrompt =
 			renderToText(generatePrompt(state().pwd, inputBuffer())) +
 			renderToText(<br />);
-		setState(Terminal.execute(state(), command));
+		setState(TerminalModule.execute(state(), command));
 		setOutput(
 			output() +
 				frozenPrompt +
@@ -61,8 +81,19 @@ const App: Component = () => {
 
 			case "Tab":
 				e.preventDefault();
-				setInputBuffer(Terminal.tabComplete(inputBuffer(), state()));
-				break;
+				if (tabCompletion()) {
+					setInputBuffer(terminal.autoComplete.getNextSuggestion(inputBuffer()));
+				} else {
+					const result = terminal.autoComplete.generate(inputBuffer(), state())
+					setInputBuffer(inputBuffer() + result.unambiguousCompletion);
+					if (result.suggestedCompletions.length > 1) {
+						setAutocompleteSuggestions(result.suggestedCompletions);
+						setTabCompletion(true);
+					} else {
+						setAutocompleteSuggestions([]);
+						setTabCompletion(false);
+					}
+				}
 
 			case "ArrowUp":
 				e.preventDefault();
@@ -104,6 +135,10 @@ const App: Component = () => {
 				e.preventDefault();
 				console.log(e.key);
 		}
+
+		if (!(e.key === "Tab")) {
+			setTabCompletion(false);
+		}
 	};
 
 	return (
@@ -111,6 +146,7 @@ const App: Component = () => {
 			<div innerHTML={output()} />
 			{generatePrompt(state().pwd, inputBuffer())}
 			{generateCursor()}
+			<AutocompleteSuggestions suggestions={autocompleteSuggestions()} />
 		</div>
 	);
 };

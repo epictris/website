@@ -33,25 +33,29 @@ const COMMAND_MAPPING: Record<
 	whoami,
 };
 
-const parseCommand = (
-	commandString: string,
-): { command: string; args: string[] } | null => {
-	const commandSegments = commandString
-		.split(" ")
-		.filter((segment) => segment !== "");
-	if (commandSegments.length === 0) {
-		return null;
+const resolveMatches = (
+	matchString: string,
+	completionDirectoryPath: string,
+	state: TerminalState,
+): string[] => {
+	const completionDirectory = resolvePath(
+		completionDirectoryPath || "/",
+		state,
+	);
+	if (!completionDirectory) {
+		return [];
 	}
-	return {
-		command: commandSegments[0],
-		args: commandSegments.slice(1),
-	};
+	if (completionDirectory.type === PathObjectType.FILE) {
+		return [];
+	}
+	return Object.keys(completionDirectory.children)
+		.filter((name) => name.startsWith(matchString))
+		.map((name) =>
+			completionDirectory.children[name].type === PathObjectType.DIRECTORY
+				? name + "/"
+				: name,
+		);
 };
-
-interface AutocompleteResult {
-	knownCompletion: string;
-	suggestedCompletions: string[];
-}
 
 const resolveMatchingStartCharacters = (strings: string[]): string => {
 	let matchingStartCharacters = "";
@@ -77,101 +81,161 @@ const resolveMatchingStartCharacters = (strings: string[]): string => {
 	}
 };
 
-export const autocomplete = (
-	inputBuffer: string,
-	state: TerminalState,
-): AutocompleteResult => {
-	const inputWords = inputBuffer.split(" ");
-	if (inputWords.length === 0) {
-		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
-	}
-
-	let matchString: string | null = null;
-	let completionDirectoryString: string | null = null;
-
-	if (inputWords[inputWords.length - 1] == "") {
-		const inputArgs = inputWords.filter((word) => word !== "");
-
-		if (resolvePath(inputArgs[inputArgs.length - 1], state)) {
-			return { knownCompletion: inputBuffer, suggestedCompletions: [] };
-		}
-		completionDirectoryString = state.pwd == "/" ? "/" : state.pwd + "/";
-		matchString = "";
-	} else {
-		const finalArgument = inputWords[inputWords.length - 1];
-		let completionPath = resolvePath(finalArgument, state);
-		if (!completionPath) {
-			matchString = getHead(finalArgument);
-			completionDirectoryString = finalArgument.slice(
-				0,
-				finalArgument.length - matchString.length,
-			);
-		} else if (
-			completionPath.type === PathObjectType.DIRECTORY &&
-			!finalArgument.endsWith("/")
-		) {
-			return { knownCompletion: inputBuffer + "/", suggestedCompletions: [] };
-		} else if (completionPath.type === PathObjectType.FILE) {
-			return { knownCompletion: inputBuffer + " ", suggestedCompletions: [] };
-		} else {
-			matchString = "";
-			completionDirectoryString = finalArgument;
-		}
-	}
-
-	let completionPath = resolvePath(completionDirectoryString, state);
-
-	if (!completionPath) {
-		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
-	} else if (completionPath.type === PathObjectType.FILE) {
-		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
-	}
-
-	let suggestedCompletions = Object.keys(completionPath.children).filter(
-		(name) => name.startsWith(matchString),
-	);
-
-	if (suggestedCompletions.length === 0) {
-		return { knownCompletion: inputBuffer, suggestedCompletions: [] };
-	}
-
-	const matchingStartCharacters =
-		resolveMatchingStartCharacters(suggestedCompletions);
-
-	if (suggestedCompletions.length === 1) {
-		suggestedCompletions = [];
-	}
-
-	if (matchingStartCharacters === "") {
-		return { knownCompletion: inputBuffer, suggestedCompletions };
-	}
-
-	const resolvedCompletionPath = resolvePath(
-		completionDirectoryString + matchingStartCharacters,
-		state,
-	);
-
-	const completionResult =
-		inputBuffer.slice(0, inputBuffer.length - matchString.length) +
-		matchingStartCharacters;
-
-	if (!resolvedCompletionPath) {
-		return {
-			knownCompletion: completionResult,
-			suggestedCompletions,
-		};
-	} else if (resolvedCompletionPath.type === PathObjectType.DIRECTORY) {
-		return {
-			knownCompletion: completionResult + "/",
-			suggestedCompletions,
-		};
-	} else {
-		return {
-			knownCompletion: completionResult + " ",
-			suggestedCompletions,
-		};
-	}
+const decapitate = (path: string): [string, string] => {
+	const segments = path.split("/");
+	return [segments.slice(0, -1).join("/"), segments[segments.length - 1]];
 };
+
+class AutoComplete {
+	private suggestedCompletions: string[];
+	private selectedCompletionIndex: number | null;
+	private unambiguousCompletion: string;
+
+	constructor() {
+		this.suggestedCompletions = [];
+		this.selectedCompletionIndex = null;
+		this.unambiguousCompletion = "";
+	}
+
+	getNextSuggestion(inputBuffer: string): string {
+		console.log(this.selectedCompletionIndex)
+		if (this.selectedCompletionIndex === null) {
+			this.selectedCompletionIndex = 0;
+			return (
+				inputBuffer + this.suggestedCompletions[this.selectedCompletionIndex].slice(this.unambiguousCompletion.length)
+			);
+		}
+		const currentSuggestion =
+			this.suggestedCompletions[this.selectedCompletionIndex];
+		if (!inputBuffer.endsWith(currentSuggestion)) {
+			return inputBuffer;
+		}
+
+		console.log({currentSuggestion, inputBuffer})
+
+		this.selectedCompletionIndex =
+			this.selectedCompletionIndex >= this.suggestedCompletions.length - 1
+				? 0
+				: this.selectedCompletionIndex + 1;
+		return (
+			inputBuffer.slice(0, inputBuffer.length - currentSuggestion.length) +
+			this.suggestedCompletions[this.selectedCompletionIndex]
+		);
+	}
+
+	generate(inputBuffer: string, state: TerminalState): AutocompleteResult {
+		this.selectedCompletionIndex = null;
+		this.suggestedCompletions = [];
+		this.unambiguousCompletion = "";
+
+		const finalCharacter = inputBuffer[inputBuffer.length - 1];
+		const finalArgument = inputBuffer
+			.split(" ")
+			.filter((word) => word != "")
+			.pop();
+
+		if (!finalArgument) {
+			return {
+				unambiguousCompletion: this.unambiguousCompletion,
+				suggestedCompletions: this.suggestedCompletions,
+			};
+		}
+
+		if (finalCharacter == " ") {
+			// Don't autocomplete if the last argument is a valid file/directory
+			if (resolvePath(finalArgument, state)) {
+				return {
+					unambiguousCompletion: this.unambiguousCompletion,
+					suggestedCompletions: this.suggestedCompletions,
+				};
+			}
+			const matches = resolveMatches(
+				"",
+				state.pwd == "/" ? "/" : state.pwd + "/",
+				state,
+			);
+			this.suggestedCompletions = matches;
+			this.unambiguousCompletion = resolveMatchingStartCharacters(matches);
+		} else if (finalCharacter == "/") {
+			const matches = resolveMatches("", finalArgument, state);
+			this.suggestedCompletions = matches;
+			this.unambiguousCompletion = resolveMatchingStartCharacters(matches);
+		} else {
+			const completionPath = resolvePath(finalArgument, state);
+			if (!completionPath) {
+				const [directory, head] = decapitate(finalArgument);
+
+				console.log({ directory, head });
+				const matches = resolveMatches(head, directory, state);
+				this.suggestedCompletions = matches;
+				this.unambiguousCompletion = resolveMatchingStartCharacters(
+					matches,
+				).slice(head.length);
+				console.log(this.suggestedCompletions, this.unambiguousCompletion);
+			} else if (completionPath.type === PathObjectType.FILE) {
+				this.unambiguousCompletion = " ";
+			} else if (completionPath.type === PathObjectType.DIRECTORY) {
+				this.unambiguousCompletion = "/";
+			}
+		}
+
+		if (this.suggestedCompletions.length === 1) {
+			if (!this.suggestedCompletions[0].endsWith("/")) {
+				this.unambiguousCompletion += " ";
+			}
+		}
+
+		return {
+			unambiguousCompletion: this.unambiguousCompletion,
+			suggestedCompletions: this.suggestedCompletions,
+		};
+	}
+}
+
+export class Terminal {
+	private state: TerminalState;
+	public autoComplete: AutoComplete;
+
+	constructor() {
+		this.state = initState();
+		this.autoComplete = new AutoComplete();
+	}
+	execute(command: string): void {
+		this.state.stdOut = "";
+		const parsedCommand = parseCommand(command);
+		if (!parsedCommand) {
+			return;
+		}
+		this.state.history.push(command);
+		if (!(parsedCommand.command in COMMAND_MAPPING)) {
+			this.state.stdOut = `command not found: ${parsedCommand.command}\r\n`;
+		}
+		this.state = COMMAND_MAPPING[parsedCommand.command](
+			parsedCommand.args,
+			this.state,
+		);
+	}
+}
+
+const parseCommand = (
+	commandString: string,
+): { command: string; args: string[] } | null => {
+	const commandSegments = commandString
+		.split(" ")
+		.filter((segment) => segment !== "");
+	if (commandSegments.length === 0) {
+		return null;
+	}
+	return {
+		command: commandSegments[0],
+		args: commandSegments.slice(1),
+	};
+};
+
+interface AutocompleteResult {
+	unambiguousCompletion: string;
+	suggestedCompletions: string[];
+}
 
 export const execute = (
 	state: TerminalState,
@@ -219,6 +283,11 @@ export const initState: () => TerminalState = () => {
 						nested_file: {
 							type: PathObjectType.FILE,
 							content: '{"hello": "world"}',
+						},
+						nested_dir: {
+							type: PathObjectType.DIRECTORY,
+							content: '{"hello": "world"}',
+							children: {},
 						},
 					},
 				},
