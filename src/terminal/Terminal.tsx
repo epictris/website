@@ -98,11 +98,13 @@ class AutoComplete {
 	}
 
 	getNextSuggestion(inputBuffer: string): string {
-		console.log(this.selectedCompletionIndex)
 		if (this.selectedCompletionIndex === null) {
 			this.selectedCompletionIndex = 0;
 			return (
-				inputBuffer + this.suggestedCompletions[this.selectedCompletionIndex].slice(this.unambiguousCompletion.length)
+				inputBuffer +
+				this.suggestedCompletions[this.selectedCompletionIndex].slice(
+					this.unambiguousCompletion.length,
+				)
 			);
 		}
 		const currentSuggestion =
@@ -110,8 +112,6 @@ class AutoComplete {
 		if (!inputBuffer.endsWith(currentSuggestion)) {
 			return inputBuffer;
 		}
-
-		console.log({currentSuggestion, inputBuffer})
 
 		this.selectedCompletionIndex =
 			this.selectedCompletionIndex >= this.suggestedCompletions.length - 1
@@ -165,13 +165,11 @@ class AutoComplete {
 			if (!completionPath) {
 				const [directory, head] = decapitate(finalArgument);
 
-				console.log({ directory, head });
 				const matches = resolveMatches(head, directory, state);
 				this.suggestedCompletions = matches;
 				this.unambiguousCompletion = resolveMatchingStartCharacters(
 					matches,
 				).slice(head.length);
-				console.log(this.suggestedCompletions, this.unambiguousCompletion);
 			} else if (completionPath.type === PathObjectType.FILE) {
 				this.unambiguousCompletion = " ";
 			} else if (completionPath.type === PathObjectType.DIRECTORY) {
