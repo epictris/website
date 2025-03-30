@@ -19,7 +19,7 @@ const AutocompleteSuggestions: Component<{ suggestions: string[] }> = (
 	return (
 		<div>
 			{props.suggestions.map((suggestion) => (
-				<div>{suggestion}</div>
+				<span>{suggestion + "  "}</span>
 			))}
 		</div>
 	);
