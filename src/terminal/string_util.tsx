@@ -1,5 +1,10 @@
 import { Directory, PathObject, PathObjectType, TerminalState } from "./types";
 
+export const join = (...paths: string[]): string => {
+	const normalizedPaths = paths.map((path) => path.replace(/\/+$/, ""));
+	return normalizedPaths.join("/");
+};
+
 export const resolvePath = (
 	relativePath: string,
 	state: TerminalState,
@@ -11,7 +16,7 @@ export const resolvePath = (
 export const getHead = (path: string): string => {
 	const pathSegments = getPathSegments(path);
 	return pathSegments[pathSegments.length - 1];
-}
+};
 
 export const constructAbsolutePath = (
 	relativePath: string,
@@ -47,21 +52,21 @@ export const resolveParentDirectory = (
 	const absolutePath = constructAbsolutePath(relativePath, state.pwd);
 	const pathSegments = getPathSegments(absolutePath);
 	if (pathSegments.length === 0) {
-		return null
+		return null;
 	}
 	if (pathSegments.length === 1) {
-		return state.fileSystem
+		return state.fileSystem;
 	}
 	pathSegments.pop();
 	const parentDirectory = resolvePath("/" + pathSegments.join("/"), state);
 	if (!parentDirectory) {
-		return null
+		return null;
 	} else if (parentDirectory.type === PathObjectType.FILE) {
-		return null
+		return null;
 	} else {
-		return parentDirectory
+		return parentDirectory;
 	}
-}
+};
 
 export const resolvePathDirectory = (
 	absolutePath: string,

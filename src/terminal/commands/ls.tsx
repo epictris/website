@@ -1,5 +1,6 @@
-import { constructAbsolutePath, resolvePathObject } from "../string_util";
+import { resolvePath, resolvePathObject } from "../string_util";
 import { PathObject, PathObjectType, TerminalState } from "../types";
+
 
 const renderPathObject = (
 	pathObject: PathObject,
@@ -11,45 +12,105 @@ const renderPathObject = (
 	switch (pathObject.type) {
 		case PathObjectType.FILE:
 			return pathObject.executable
-				? `<span style="color:${theme.green}"><b>${file_name}  </b></span>`
+				? `<a href="https://google.com" style="color:${theme.green};"><b>${file_name}  </b></a>`
 				: file_name + "  ";
 		case PathObjectType.DIRECTORY:
 			return `<span style="color:${theme.brightBlue}"><b>${file_name}  </b></span>`;
 	}
 };
 
+const resolveChildDirectories = (
+	parentPath: string,
+	state: TerminalState,
+): string[] => {
+	const pathObject = resolvePath(parentPath, state);
+	if (!pathObject) {
+		return [];
+	}
+	if (pathObject.type === PathObjectType.FILE) {
+		return [];
+	}
+
+	const childDirectories = Object.keys(pathObject.children).filter(
+		(name) => pathObject.children[name].type === PathObjectType.DIRECTORY,
+	);
+
+	if (!childDirectories.length) {
+		return [];
+	}
+
+	let allPaths: string[] = [];
+
+	for (let directory of childDirectories) {
+		const childPath = join(parentPath, directory);
+		allPaths.push(childPath);
+		allPaths = allPaths.concat(resolveChildDirectories(childPath, state));
+	}
+	console.log(allPaths);
+	return allPaths;
+};
+
 export default (args: string[], state: TerminalState): TerminalState => {
 	const params = args.filter((arg) => arg.startsWith("-"));
 	const paths = args.filter((arg) => !arg.startsWith("-"));
-	for (let path of paths) {
-		const pathObject = resolvePathObject(
-			constructAbsolutePath(path, state.pwd),
-			state,
-		);
-		if (!pathObject) {
-			state.stdOut += `ls: cannot access ${path}: No such file or directory`;
-		} else if (pathObject.type === PathObjectType.FILE) {
-			state.stdOut += renderPathObject(pathObject, path, state);
-		} else if (paths.length === 1) {
-			for (let [name, child] of Object.entries(pathObject.children)) {
-				state.stdOut += renderPathObject(child, name, state);
-			}
+
+	let recursive = false;
+
+	if (params.includes("-R")) {
+		recursive = true;
+	}
+
+	if (!paths.length) {
+		if (recursive) {
+			paths.push(".");
 		} else {
-			state.stdOut += `${path}:\r\n`;
-			for (let [name, child] of Object.entries(pathObject.children)) {
-				state.stdOut += renderPathObject(child, name, state);
+			const pathObject = resolvePathObject(state.pwd, state)!;
+			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
+				for (let [name, child] of Object.entries(pathObject.children)) {
+					state.stdOut += renderPathObject(child, name, state);
+				}
+			}
+			return { ...state };
+		}
+	}
+
+	let validPaths: string[] = [];
+
+	for (let inputPath of paths) {
+		const pathObject = resolvePath(inputPath, state);
+		if (!pathObject) {
+			state.stdOut += `ls: cannot access ${inputPath}: No such file or directory`;
+		} else if (pathObject.type === PathObjectType.FILE) {
+			validPaths.push(inputPath);
+		} else {
+			validPaths.push(inputPath);
+			if (recursive) {
+				validPaths = validPaths.concat(
+					resolveChildDirectories(inputPath, state),
+				);
 			}
 		}
 	}
 
-	if (!paths.length) {
-		const pathObject = resolvePathObject(state.pwd, state)!;
-		if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
+	for (let validPath of validPaths) {
+		const pathObject = resolvePath(validPath, state);
+		if (!pathObject) {
+			state.stdOut += `ls: cannot access ${validPath}: No such file or directory`;
+		} else if (pathObject.type === PathObjectType.FILE) {
+			state.stdOut += renderPathObject(pathObject, validPath, state);
+		} else if (validPaths.length === 1) {
+			for (let [name, child] of Object.entries(pathObject.children)) {
+				state.stdOut += renderPathObject(child, name, state);
+			}
+		} else {
+			state.stdOut += `${validPath}:\r\n`;
 			for (let [name, child] of Object.entries(pathObject.children)) {
 				state.stdOut += renderPathObject(child, name, state);
 			}
 		}
+		state.stdOut += "\r\n\r\n";
 	}
+	state.stdOut = state.stdOut.slice(0, -4);
 
 	return { ...state };
 };
