@@ -39,7 +39,7 @@ const App: Component = () => {
 
 	const executeCommand = (command: string): void => {
 		const frozenPrompt =
-			renderToText(generatePrompt(state().pwd, inputBuffer())) +
+			renderToText(generatePrompt(state().pwd, state().environmentVars["HOME"], inputBuffer())) +
 			renderToText(<br />);
 
 		terminal.execute(command);
@@ -59,10 +59,13 @@ const App: Component = () => {
 		setInputBuffer("");
 	};
 
-	const generatePrompt = (pwd: string, buffer: string) => {
+	const generatePrompt = (pwd: string, home: string | undefined, buffer: string) => {
+
+		const homeString = home && pwd.startsWith(home) ? "~/" + pwd.slice(home.length + 1) : pwd;
+
 		return (
 			<span>
-				<div style="color: #60b8d6">{pwd}</div>
+				<div style="color: #60b8d6">{homeString}</div>
 				<span style="color: #f28779">❯</span> {buffer}
 			</span>
 		);
@@ -151,7 +154,7 @@ const App: Component = () => {
 	return (
 		<div autofocus tabindex="0" class={styles.terminal} onKeyDown={onKeyDown}>
 			<div innerHTML={output()} />
-			{generatePrompt(state().pwd, inputBuffer())}
+			{generatePrompt(state().pwd, state().environmentVars["HOME"], inputBuffer())}
 			{generateCursor()}
 			<AutocompleteSuggestions suggestions={autocompleteSuggestions()} />
 		</div>

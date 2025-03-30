@@ -15,5 +15,6 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	} else if (!pathObject.permissions.execute) {
 		return { ...state, stdOut: `cd: permission denied: ${args[0]}` };
 	}
+	state.environmentVars["PWD"] = cdPath
 	return { ...state, pwd: cdPath };
 };

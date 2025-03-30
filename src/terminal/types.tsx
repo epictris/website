@@ -29,6 +29,7 @@ export interface TerminalState {
 	stdOut: string;
 	fileSystem: Directory;
 	theme: Theme;
+	environmentVars: Record<string, string>;
 }
 
 export interface Theme {

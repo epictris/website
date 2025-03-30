@@ -3,6 +3,7 @@ import cd from "./commands/cd";
 import chmod from "./commands/chmod";
 import ls from "./commands/ls";
 import mkdir from "./commands/mkdir";
+import printenv from "./commands/printenv";
 import pwd from "./commands/pwd";
 import rm from "./commands/rm";
 import touch from "./commands/touch";
@@ -24,6 +25,7 @@ const COMMAND_MAPPING: Record<
 	mkdir,
 	chmod,
 	whoami,
+	printenv,
 };
 
 export class Terminal {
@@ -85,40 +87,58 @@ const parseCommand = (
 export const initState: () => TerminalState = () => {
 	return {
 		history: [],
-		pwd: "/",
+		pwd: "/home/tris",
 		stdOut: "",
+		environmentVars: {
+			USER: "tris",
+			HOSTNAME: "tris.sh",
+			HOME: "/home/tris",
+			PWD: "/home/tris",
+		},
 		fileSystem: {
 			type: PathObjectType.DIRECTORY,
 			permissions: { execute: true, read: true, write: true },
 			children: {
-				"hello_world.txt": {
-					type: PathObjectType.FILE,
-					permissions: { execute: false, read: true, write: true },
-					content: "Hello World!",
-				},
-				"hello_world_2.txt": {
-					type: PathObjectType.FILE,
-					permissions: { execute: false, read: true, write: true },
-					content: "Hello World (2)!",
-				},
-				executable_file: {
-					type: PathObjectType.FILE,
-					permissions: { execute: true, read: true, write: true },
-					content: "https://google.com",
-				},
-				example_dir: {
+				home: {
 					type: PathObjectType.DIRECTORY,
 					permissions: { execute: true, read: true, write: true },
 					children: {
-						nested_file: {
-							type: PathObjectType.FILE,
-							permissions: { execute: false, read: true, write: true },
-							content: '{"hello": "world"}',
-						},
-						nested_dir: {
+						tris: {
 							type: PathObjectType.DIRECTORY,
 							permissions: { execute: true, read: true, write: true },
-							children: {},
+							children: {
+								"hello_world.txt": {
+									type: PathObjectType.FILE,
+									permissions: { execute: false, read: true, write: true },
+									content: "Hello World!",
+								},
+								"hello_world_2.txt": {
+									type: PathObjectType.FILE,
+									permissions: { execute: false, read: true, write: true },
+									content: "Hello World (2)!",
+								},
+								executable_file: {
+									type: PathObjectType.FILE,
+									permissions: { execute: true, read: true, write: true },
+									content: "https://google.com",
+								},
+								example_dir: {
+									type: PathObjectType.DIRECTORY,
+									permissions: { execute: true, read: true, write: true },
+									children: {
+										nested_file: {
+											type: PathObjectType.FILE,
+											permissions: { execute: false, read: true, write: true },
+											content: '{"hello": "world"}',
+										},
+										nested_dir: {
+											type: PathObjectType.DIRECTORY,
+											permissions: { execute: true, read: true, write: true },
+											children: {},
+										},
+									},
+								},
+							},
 						},
 					},
 				},
