@@ -11,7 +11,7 @@ const renderPathObject = (
 	switch (pathObject.type) {
 		case PathObjectType.FILE:
 			return pathObject.executable
-				? `<a href="https://google.com" style="color:${theme.green};"><b>${file_name}  </b></a>`
+				? `<a href="${encodeURI(pathObject.content)}" style="color:${theme.green};"><b>${file_name}  </b></a>`
 				: file_name + "  ";
 		case PathObjectType.DIRECTORY:
 			return `<span style="color:${theme.brightBlue}"><b>${file_name}  </b></span>`;
@@ -109,7 +109,9 @@ export default (args: string[], state: TerminalState): TerminalState => {
 		}
 		state.stdOut += "\r\n\r\n";
 	}
-	state.stdOut = state.stdOut.slice(0, -4);
+	if (state.stdOut.endsWith("\r\n\r\n")) {
+		state.stdOut = state.stdOut.slice(0, -4);
+	}
 
 	return { ...state };
 };
