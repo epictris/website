@@ -7,15 +7,7 @@ import pwd from "./commands/pwd";
 import rm from "./commands/rm";
 import touch from "./commands/touch";
 import whoami from "./commands/whoami";
-import {
-	constructAbsolutePath,
-	getHead,
-	getPathSegments,
-	resolveParentDirectory,
-	resolvePath,
-	resolvePathDirectory,
-	resolvePathObject,
-} from "./string_util";
+import { resolvePath } from "./string_util";
 import { PathObjectType, TerminalState } from "./types";
 
 const COMMAND_MAPPING: Record<
@@ -90,8 +82,10 @@ class AutoComplete {
 	private suggestedCompletions: string[];
 	private selectedCompletionIndex: number | null;
 	private unambiguousCompletion: string;
+	private terminal: Terminal;
 
-	constructor() {
+	constructor(terminal: Terminal) {
+		this.terminal = terminal;
 		this.suggestedCompletions = [];
 		this.selectedCompletionIndex = null;
 		this.unambiguousCompletion = "";
@@ -123,7 +117,9 @@ class AutoComplete {
 		);
 	}
 
-	generate(inputBuffer: string, state: TerminalState): AutocompleteResult {
+	generate(inputBuffer: string): AutocompleteResult {
+		const state = this.terminal.getState();
+
 		this.selectedCompletionIndex = null;
 		this.suggestedCompletions = [];
 		this.unambiguousCompletion = "";
@@ -196,7 +192,7 @@ export class Terminal {
 
 	constructor() {
 		this.state = initState();
-		this.autoComplete = new AutoComplete();
+		this.autoComplete = new AutoComplete(this);
 	}
 	execute(command: string): void {
 		this.state.stdOut = "";
@@ -212,6 +208,10 @@ export class Terminal {
 			parsedCommand.args,
 			this.state,
 		);
+	}
+
+	getState(): TerminalState {
+		return this.state;
 	}
 }
 
@@ -234,30 +234,6 @@ interface AutocompleteResult {
 	unambiguousCompletion: string;
 	suggestedCompletions: string[];
 }
-
-export const execute = (
-	state: TerminalState,
-	command: string,
-): TerminalState => {
-	state.stdOut = "";
-	const parsedCommand = parseCommand(command);
-	if (!parsedCommand) {
-		return { ...state };
-	}
-
-	state.history.push(command);
-
-	if (!(parsedCommand.command in COMMAND_MAPPING)) {
-		return {
-			...state,
-			stdOut: `command not found: ${parsedCommand.command}\r\n`,
-		};
-	}
-
-	return {
-		...COMMAND_MAPPING[parsedCommand.command](parsedCommand.args, state),
-	};
-};
 
 export const initState: () => TerminalState = () => {
 	return {

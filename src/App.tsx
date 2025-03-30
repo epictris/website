@@ -1,7 +1,7 @@
 import { createSignal, JSX, type Component } from "solid-js";
 
 import styles from "./App.module.css";
-import * as TerminalModule from "./terminal/Terminal";
+import { Terminal } from "./terminal/Terminal";
 import { render } from "solid-js/web";
 
 const renderToText = (jsx: JSX.Element): string => {
@@ -26,24 +26,25 @@ const AutocompleteSuggestions: Component<{ suggestions: string[] }> = (
 };
 
 const App: Component = () => {
-	const terminal = new TerminalModule.Terminal();
+	const terminal = new Terminal();
+
 	const [tabCompletion, setTabCompletion] = createSignal(false);
-	const [state, setState] = createSignal(TerminalModule.initState());
-	const [inputBuffer, setInputBuffer] = createSignal("");
-	const [output, setOutput] = createSignal<string>(renderToText(<br />));
-	const [historyOffset, setHistoryOffset] = createSignal(0);
 	const [autocompleteSuggestions, setAutocompleteSuggestions] = createSignal<
 		string[]
 	>([]);
-	const [selectedCompletionIndex, setSelectedCompletionIndex] = createSignal<
-		number | null
-	>(null);
+	const [state, setState] = createSignal(terminal.getState());
+	const [inputBuffer, setInputBuffer] = createSignal("");
+	const [output, setOutput] = createSignal<string>(renderToText(<br />));
+	const [historyOffset, setHistoryOffset] = createSignal(0);
 
 	const executeCommand = (command: string): void => {
 		const frozenPrompt =
 			renderToText(generatePrompt(state().pwd, inputBuffer())) +
 			renderToText(<br />);
-		setState(TerminalModule.execute(state(), command));
+
+		terminal.execute(command);
+		setState(terminal.getState());
+
 		setOutput(
 			output() +
 				frozenPrompt +
@@ -82,9 +83,11 @@ const App: Component = () => {
 			case "Tab":
 				e.preventDefault();
 				if (tabCompletion()) {
-					setInputBuffer(terminal.autoComplete.getNextSuggestion(inputBuffer()));
+					setInputBuffer(
+						terminal.autoComplete.getNextSuggestion(inputBuffer()),
+					);
 				} else {
-					const result = terminal.autoComplete.generate(inputBuffer(), state())
+					const result = terminal.autoComplete.generate(inputBuffer());
 					setInputBuffer(inputBuffer() + result.unambiguousCompletion);
 					if (result.suggestedCompletions.length > 1) {
 						setAutocompleteSuggestions(result.suggestedCompletions);
