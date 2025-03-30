@@ -14,6 +14,8 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			state.stdOut += `cat: ${arg}: No such file or directory`;
 		} else if (path.type === PathObjectType.DIRECTORY) {
 			state.stdOut += `cat: ${arg}: Is a directory`;
+		} else if (!path.permissions.read) {
+			state.stdOut += `cat: ${arg}: Permission denied`;
 		} else {
 			state.stdOut += path.content + "\r\n";
 		}

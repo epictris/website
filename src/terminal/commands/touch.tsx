@@ -1,7 +1,8 @@
 import {
 	constructAbsolutePath,
+	resolveParentDirectory,
 	resolvePath,
-	resolvePathDirectory,
+	resolvePathDirectory as resolvePathDirectory,
 } from "../string_util";
 import { PathObjectType, TerminalState } from "../types";
 
@@ -11,16 +12,15 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	}
 
 	for (let arg of args) {
-		const dir = resolvePathDirectory(
-			constructAbsolutePath(arg, state.pwd),
-			state,
-		);
-		if (!dir) {
+		const targetDir = resolveParentDirectory(arg, state);
+		if (!targetDir) {
 			state.stdOut += `touch: cannot touch '${arg}': No such file or directory`;
+		} else if (!targetDir.permissions.write || !targetDir.permissions.execute) {
+			state.stdOut += `touch: cannot touch '${arg}': Permission denied`;
 		} else {
 			const fileName = arg.split("/").pop();
-			if (fileName && !dir.children[fileName]) {
-				dir.children[fileName] = {
+			if (fileName && !targetDir.children[fileName]) {
+				targetDir.children[fileName] = {
 					type: PathObjectType.FILE,
 					content: "",
 					permissions: { execute: false, read: true, write: true },

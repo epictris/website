@@ -29,6 +29,9 @@ const resolveChildDirectories = (
 	if (pathObject.type === PathObjectType.FILE) {
 		return [];
 	}
+	if (!pathObject.permissions.read) {
+		return [];
+	}
 
 	const childDirectories = Object.keys(pathObject.children).filter(
 		(name) => pathObject.children[name].type === PathObjectType.DIRECTORY,
@@ -64,6 +67,10 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			paths.push(".");
 		} else {
 			const pathObject = stringUtil.resolvePathObject(state.pwd, state)!;
+			if (pathObject && pathObject.type === PathObjectType.DIRECTORY && !pathObject.permissions.read) {
+				state.stdOut += `ls: cannot open directory '.': Permission denied`;
+				return { ...state };
+			}
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
 				for (let [name, child] of Object.entries(pathObject.children)) {
 					state.stdOut += renderPathObject(child, name, state);
@@ -78,9 +85,11 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	for (let inputPath of paths) {
 		const pathObject = stringUtil.resolvePath(inputPath, state);
 		if (!pathObject) {
-			state.stdOut += `ls: cannot access ${inputPath}: No such file or directory`;
+			state.stdOut += `ls: cannot access ${inputPath}: No such file or directory\r\n`;
 		} else if (pathObject.type === PathObjectType.FILE) {
 			validPaths.push(inputPath);
+		} else if (!pathObject.permissions.read) {
+			state.stdOut += `ls: cannot open directory '${inputPath}': Permission denied\r\n`;
 		} else {
 			validPaths.push(inputPath);
 			if (recursive) {
