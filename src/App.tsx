@@ -38,6 +38,10 @@ const App: Component = () => {
 	const [historyOffset, setHistoryOffset] = createSignal(0);
 
 	const executeCommand = (command: string): void => {
+
+		setAutocompleteSuggestions([]);
+		setTabCompletion(false);
+
 		const frozenPrompt =
 			renderToText(generatePrompt(state().pwd, state().environmentVars["HOME"], inputBuffer())) +
 			renderToText(<br />);
@@ -91,7 +95,6 @@ const App: Component = () => {
 					);
 				} else {
 					const result = terminal.autoComplete.generate(inputBuffer());
-					console.log(result);
 					setInputBuffer(inputBuffer() + result.unambiguousCompletion);
 					if (result.suggestedCompletions.length > 1) {
 						setAutocompleteSuggestions(result.suggestedCompletions);
@@ -125,13 +128,18 @@ const App: Component = () => {
 
 			case "Enter":
 				executeCommand(inputBuffer());
-				setAutocompleteSuggestions([]);
-				setTabCompletion(false);
 				break;
 
 			case "Backspace":
 				setInputBuffer(inputBuffer().slice(0, -1));
 				break;
+
+			case "c":
+				if (e.ctrlKey) {
+					e.preventDefault();
+					executeCommand("");
+					break;
+				}
 
 			case "l":
 				if (e.ctrlKey) {
