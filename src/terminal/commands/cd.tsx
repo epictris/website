@@ -1,4 +1,4 @@
-import { constructAbsolutePath, resolvePathObject } from "../string_util";
+import { constructAbsolutePath, resolvePath } from "../string_util";
 import { PathObjectType, TerminalState } from "../types";
 
 export default (args: string[], state: TerminalState): TerminalState => {
@@ -7,11 +7,13 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	}
 
 	const cdPath = constructAbsolutePath(args[0], state.pwd);
-	const pathObject = resolvePathObject(cdPath, state);
+	const pathObject = resolvePath(args[0], state);
 	if (!pathObject) {
 		return { ...state, stdOut: `cd: ${args[0]} does not exist` };
 	} else if (pathObject.type === PathObjectType.FILE) {
 		return { ...state, stdOut: `cd: ${args[0]} is not a directory` };
+	} else if (!pathObject.permissions.execute) {
+		return { ...state, stdOut: `cd: permission denied: ${args[0]}` };
 	}
 	return { ...state, pwd: cdPath };
 };
