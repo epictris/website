@@ -88,6 +88,7 @@ const App: Component = () => {
 					);
 				} else {
 					const result = terminal.autoComplete.generate(inputBuffer());
+					console.log(result);
 					setInputBuffer(inputBuffer() + result.unambiguousCompletion);
 					if (result.suggestedCompletions.length > 1) {
 						setAutocompleteSuggestions(result.suggestedCompletions);
@@ -97,6 +98,7 @@ const App: Component = () => {
 						setTabCompletion(false);
 					}
 				}
+				break;
 
 			case "ArrowUp":
 				e.preventDefault();
