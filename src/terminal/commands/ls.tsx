@@ -1,6 +1,5 @@
-import { resolvePath, resolvePathObject } from "../string_util";
+import * as stringUtil from "../string_util";
 import { PathObject, PathObjectType, TerminalState } from "../types";
-
 
 const renderPathObject = (
 	pathObject: PathObject,
@@ -23,7 +22,7 @@ const resolveChildDirectories = (
 	parentPath: string,
 	state: TerminalState,
 ): string[] => {
-	const pathObject = resolvePath(parentPath, state);
+	const pathObject = stringUtil.resolvePath(parentPath, state);
 	if (!pathObject) {
 		return [];
 	}
@@ -42,7 +41,7 @@ const resolveChildDirectories = (
 	let allPaths: string[] = [];
 
 	for (let directory of childDirectories) {
-		const childPath = join(parentPath, directory);
+		const childPath = stringUtil.join(parentPath, directory);
 		allPaths.push(childPath);
 		allPaths = allPaths.concat(resolveChildDirectories(childPath, state));
 	}
@@ -64,7 +63,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 		if (recursive) {
 			paths.push(".");
 		} else {
-			const pathObject = resolvePathObject(state.pwd, state)!;
+			const pathObject = stringUtil.resolvePathObject(state.pwd, state)!;
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
 				for (let [name, child] of Object.entries(pathObject.children)) {
 					state.stdOut += renderPathObject(child, name, state);
@@ -77,7 +76,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	let validPaths: string[] = [];
 
 	for (let inputPath of paths) {
-		const pathObject = resolvePath(inputPath, state);
+		const pathObject = stringUtil.resolvePath(inputPath, state);
 		if (!pathObject) {
 			state.stdOut += `ls: cannot access ${inputPath}: No such file or directory`;
 		} else if (pathObject.type === PathObjectType.FILE) {
@@ -93,12 +92,12 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	}
 
 	for (let validPath of validPaths) {
-		const pathObject = resolvePath(validPath, state);
+		const pathObject = stringUtil.resolvePath(validPath, state);
 		if (!pathObject) {
 			state.stdOut += `ls: cannot access ${validPath}: No such file or directory`;
 		} else if (pathObject.type === PathObjectType.FILE) {
 			state.stdOut += renderPathObject(pathObject, validPath, state);
-		} else if (validPaths.length === 1) {
+		} else if (validPaths.length === 1 && !recursive) {
 			for (let [name, child] of Object.entries(pathObject.children)) {
 				state.stdOut += renderPathObject(child, name, state);
 			}
