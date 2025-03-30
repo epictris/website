@@ -122,6 +122,8 @@ const App: Component = () => {
 
 			case "Enter":
 				executeCommand(inputBuffer());
+				setAutocompleteSuggestions([]);
+				setTabCompletion(false);
 				break;
 
 			case "Backspace":
