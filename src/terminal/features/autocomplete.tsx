@@ -76,15 +76,8 @@ export default class AutoComplete {
 	}
 
 	getNextSuggestion(inputBuffer: string): string {
-		console.log(this.unambiguousCompletion);
-		console.log(inputBuffer);
 		if (this.selectedCompletionIndex === null) {
 			this.selectedCompletionIndex = 0;
-			console.log(
-				this.suggestedCompletions[this.selectedCompletionIndex].slice(
-					this.unambiguousCompletion.length,
-				),
-			);
 			return (
 				inputBuffer +
 				this.suggestedCompletions[this.selectedCompletionIndex].slice(
@@ -103,7 +96,6 @@ export default class AutoComplete {
 				? 0
 				: this.selectedCompletionIndex + 1;
 
-		console.log(currentSuggestion);
 		return (
 			inputBuffer.slice(0, inputBuffer.length - currentSuggestion.length) +
 			this.suggestedCompletions[this.selectedCompletionIndex]
@@ -167,9 +159,6 @@ export default class AutoComplete {
 				this.unambiguousCompletion = "/";
 			}
 		}
-
-		console.log(this.suggestedCompletions);
-		console.log(this.unambiguousCompletion);
 
 		if (this.suggestedCompletions.length === 1) {
 			if (!this.suggestedCompletions[0].endsWith("/")) {
