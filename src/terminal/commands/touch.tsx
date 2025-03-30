@@ -23,6 +23,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 				dir.children[fileName] = {
 					type: PathObjectType.FILE,
 					content: "",
+					permissions: { execute: false, read: true, write: true },
 				};
 			}
 		}

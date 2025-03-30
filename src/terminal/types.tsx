@@ -3,16 +3,22 @@ export enum PathObjectType {
 	DIRECTORY = "directory",
 }
 
+interface FilePermissions {
+	execute: boolean;
+	read: boolean;
+	write: boolean;
+}
+
 export interface File {
 	type: PathObjectType.FILE;
 	content: string;
-	executable?: boolean
+	permissions: FilePermissions
 }
 
 export interface Directory {
 	type: PathObjectType.DIRECTORY;
 	children: Record<string, PathObject>;
-	executable?: boolean
+	permissions: FilePermissions
 }
 
 export type PathObject = File | Directory;

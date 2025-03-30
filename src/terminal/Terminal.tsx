@@ -8,7 +8,7 @@ import rm from "./commands/rm";
 import touch from "./commands/touch";
 import whoami from "./commands/whoami";
 import AutoComplete from "./features/autocomplete";
-import { resolvePath, resolvePathObject } from "./string_util";
+import { resolvePath } from "./string_util";
 import { PathObjectType, TerminalState } from "./types";
 
 const COMMAND_MAPPING: Record<
@@ -41,13 +41,17 @@ export class Terminal {
 			return;
 		}
 		this.state.history.push(command);
-		if (!(COMMAND_MAPPING[parsedCommand.command])) {
+		if (!COMMAND_MAPPING[parsedCommand.command]) {
 			const executableFile = resolvePath(parsedCommand.command, this.state);
-			if (!executableFile || executableFile.type !== PathObjectType.FILE || !executableFile.executable) {
+			if (
+				!executableFile ||
+				executableFile.type !== PathObjectType.FILE ||
+				!executableFile.permissions.execute
+			) {
 				this.state.stdOut = `command not found: ${parsedCommand.command}\r\n`;
 				return;
 			} else {
-				window.open(encodeURI(executableFile.content), '_blank')
+				window.open(encodeURI(executableFile.content), "_blank");
 				return;
 			}
 		}
@@ -85,30 +89,35 @@ export const initState: () => TerminalState = () => {
 		stdOut: "",
 		fileSystem: {
 			type: PathObjectType.DIRECTORY,
+			permissions: { execute: false, read: true, write: true },
 			children: {
 				"hello_world.txt": {
 					type: PathObjectType.FILE,
+					permissions: { execute: false, read: true, write: true },
 					content: "Hello World!",
 				},
 				"hello_world_2.txt": {
 					type: PathObjectType.FILE,
+					permissions: { execute: false, read: true, write: true },
 					content: "Hello World (2)!",
 				},
-				"executable_file": {
+				executable_file: {
 					type: PathObjectType.FILE,
-					executable: true,
+					permissions: { execute: true, read: true, write: true },
 					content: "https://google.com",
 				},
-				"example_dir": {
+				example_dir: {
 					type: PathObjectType.DIRECTORY,
+					permissions: { execute: false, read: true, write: true },
 					children: {
 						nested_file: {
 							type: PathObjectType.FILE,
+							permissions: { execute: false, read: true, write: true },
 							content: '{"hello": "world"}',
 						},
 						nested_dir: {
 							type: PathObjectType.DIRECTORY,
-							content: '{"hello": "world"}',
+							permissions: { execute: false, read: true, write: true },
 							children: {},
 						},
 					},

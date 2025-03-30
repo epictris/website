@@ -10,7 +10,7 @@ const renderPathObject = (
 
 	switch (pathObject.type) {
 		case PathObjectType.FILE:
-			return pathObject.executable
+			return pathObject.permissions.execute
 				? `<a href="${encodeURI(pathObject.content)}" target="_blank" style="color:${theme.green};"><b>${file_name}  </b></a>`
 				: file_name + "  ";
 		case PathObjectType.DIRECTORY:
