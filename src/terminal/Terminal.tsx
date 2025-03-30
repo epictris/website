@@ -140,6 +140,13 @@ export const initState: () => TerminalState = () => {
 										},
 									},
 								},
+								".config": {
+									type: PathObjectType.DIRECTORY,
+									permissions: { execute: true, read: true, write: true },
+									children: {
+
+									}
+								}
 							},
 						},
 					},

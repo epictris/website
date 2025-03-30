@@ -20,6 +20,7 @@ const renderPathObject = (
 
 const resolveChildDirectories = (
 	parentPath: string,
+	showHidden: boolean,
 	state: TerminalState,
 ): string[] => {
 	const pathObject = stringUtil.resolvePath(parentPath, state);
@@ -33,10 +34,12 @@ const resolveChildDirectories = (
 		return [];
 	}
 
-	const childDirectories = Object.keys(pathObject.children).filter(
+	let childDirectories = Object.keys(pathObject.children).filter(
 		(name) => pathObject.children[name].type === PathObjectType.DIRECTORY,
 	);
-
+	if (!showHidden) {
+		childDirectories = childDirectories.filter((name) => !name.startsWith("."));
+	}
 	if (!childDirectories.length) {
 		return [];
 	}
@@ -46,9 +49,10 @@ const resolveChildDirectories = (
 	for (let directory of childDirectories) {
 		const childPath = stringUtil.join(parentPath, directory);
 		allPaths.push(childPath);
-		allPaths = allPaths.concat(resolveChildDirectories(childPath, state));
+		allPaths = allPaths.concat(
+			resolveChildDirectories(childPath, showHidden, state),
+		);
 	}
-	console.log(allPaths);
 	return allPaths;
 };
 
@@ -56,23 +60,31 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	const params = args.filter((arg) => arg.startsWith("-"));
 	const paths = args.filter((arg) => !arg.startsWith("-"));
 
-	let recursive = false;
-
-	if (params.includes("-R")) {
-		recursive = true;
-	}
+	let recursive = params.includes("-R");
+	let showHidden = params.includes("-a");
 
 	if (!paths.length) {
 		if (recursive) {
 			paths.push(".");
 		} else {
 			const pathObject = stringUtil.resolvePathObject(state.pwd, state)!;
-			if (pathObject && pathObject.type === PathObjectType.DIRECTORY && !pathObject.permissions.read) {
+			if (
+				pathObject &&
+				pathObject.type === PathObjectType.DIRECTORY &&
+				!pathObject.permissions.read
+			) {
 				state.stdOut += `ls: cannot open directory '.': Permission denied`;
 				return { ...state };
 			}
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
-				for (let [name, child] of Object.entries(pathObject.children)) {
+				let children = Object.entries(pathObject.children);
+				if (!showHidden) {
+					children = children.filter(([name, _child]) => !name.startsWith("."));
+				} else {
+					state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>.  </b></span>`;
+					state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>..  </b></span>`;
+				}
+				for (let [name, child] of children) {
 					state.stdOut += renderPathObject(child, name, state);
 				}
 			}
@@ -94,7 +106,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			validPaths.push(inputPath);
 			if (recursive) {
 				validPaths = validPaths.concat(
-					resolveChildDirectories(inputPath, state),
+					resolveChildDirectories(inputPath, showHidden, state),
 				);
 			}
 		}
@@ -106,12 +118,17 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			state.stdOut += `ls: cannot access ${validPath}: No such file or directory`;
 		} else if (pathObject.type === PathObjectType.FILE) {
 			state.stdOut += renderPathObject(pathObject, validPath, state);
-		} else if (validPaths.length === 1 && !recursive) {
-			for (let [name, child] of Object.entries(pathObject.children)) {
-				state.stdOut += renderPathObject(child, name, state);
-			}
 		} else {
-			state.stdOut += `${validPath}:\r\n`;
+			if (validPaths.length > 1 || recursive) {
+				state.stdOut += `${validPath}:\r\n`;
+			}
+			let children = Object.entries(pathObject.children);
+			if (!showHidden) {
+				children = children.filter(([name, _child]) => !name.startsWith("."));
+			} else {
+				state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>.  </b></span>`;
+				state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>..  </b></span>`;
+			}
 			for (let [name, child] of Object.entries(pathObject.children)) {
 				state.stdOut += renderPathObject(child, name, state);
 			}
