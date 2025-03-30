@@ -1,6 +1,7 @@
 import cat from "./commands/cat";
 import cd from "./commands/cd";
 import chmod from "./commands/chmod";
+import hostname from "./commands/hostname";
 import ls from "./commands/ls";
 import mkdir from "./commands/mkdir";
 import printenv from "./commands/printenv";
@@ -19,6 +20,7 @@ const COMMAND_MAPPING: Record<
 	ls,
 	cd,
 	cat,
+	hostname,
 	touch,
 	rm,
 	pwd,
