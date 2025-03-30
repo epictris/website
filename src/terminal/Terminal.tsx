@@ -109,36 +109,65 @@ export const initState: () => TerminalState = () => {
 							type: PathObjectType.DIRECTORY,
 							permissions: { execute: true, read: true, write: true },
 							children: {
-								"hello_world.txt": {
-									type: PathObjectType.FILE,
-									permissions: { execute: false, read: true, write: true },
-									content: "Hello World!",
-								},
-								"hello_world_2.txt": {
-									type: PathObjectType.FILE,
-									permissions: { execute: false, read: true, write: true },
-									content: "Hello World (2)!",
-								},
-								executable_file: {
-									type: PathObjectType.FILE,
-									permissions: { execute: true, read: true, write: true },
-									content: "https://google.com",
-								},
-								example_dir: {
+								projects: {
 									type: PathObjectType.DIRECTORY,
 									permissions: { execute: true, read: true, write: true },
 									children: {
-										nested_file: {
-											type: PathObjectType.FILE,
-											permissions: { execute: false, read: true, write: true },
-											content: '{"hello": "world"}',
-										},
-										nested_dir: {
+										online_clipboard: {
 											type: PathObjectType.DIRECTORY,
 											permissions: { execute: true, read: true, write: true },
-											children: {},
+											children: {
+												try_now: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://clipboard.tris.sh",
+												},
+												GitHub: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://github.com/epictris/clipboard",
+												}
+											}
 										},
-									},
+										pattern_linter_language_server: {
+											type: PathObjectType.DIRECTORY,
+											permissions: { execute: true, read: true, write: true },
+											children: {
+												GitHub: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://github.com/epictris/splints",
+												},
+												PyPI: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://pypi.org/project/splints",
+												}
+											}
+										},
+										personal_website: {
+											type: PathObjectType.DIRECTORY,
+											permissions: { execute: true, read: true, write: true },
+											children: {
+												GitHub: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://github.com/epictris/website",
+												},
+											}
+										},
+										character_sheet_builder: {
+											type: PathObjectType.DIRECTORY,
+											permissions: { execute: true, read: true, write: true },
+											children: {
+												GitHub: {
+													type: PathObjectType.FILE,
+													permissions: { execute: true, read: true, write: true },
+													content: "https://github.com/epictris/canvas-character-sheet",
+												},
+											}
+										}
+									}
 								},
 								".config": {
 									type: PathObjectType.DIRECTORY,
