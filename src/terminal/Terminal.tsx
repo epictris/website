@@ -8,6 +8,7 @@ import rm from "./commands/rm";
 import touch from "./commands/touch";
 import whoami from "./commands/whoami";
 import AutoComplete from "./features/autocomplete";
+import { resolvePath, resolvePathObject } from "./string_util";
 import { PathObjectType, TerminalState } from "./types";
 
 const COMMAND_MAPPING: Record<
@@ -40,9 +41,17 @@ export class Terminal {
 			return;
 		}
 		this.state.history.push(command);
-		if (!(parsedCommand.command in COMMAND_MAPPING)) {
-			this.state.stdOut = `command not found: ${parsedCommand.command}\r\n`;
+		if (!(COMMAND_MAPPING[parsedCommand.command])) {
+			const executableFile = resolvePath(parsedCommand.command, this.state);
+			if (!executableFile || executableFile.type !== PathObjectType.FILE || !executableFile.executable) {
+				this.state.stdOut = `command not found: ${parsedCommand.command}\r\n`;
+				return;
+			} else {
+				window.open(encodeURI(executableFile.content), '_blank')
+				return;
+			}
 		}
+
 		this.state = COMMAND_MAPPING[parsedCommand.command](
 			parsedCommand.args,
 			this.state,
@@ -85,7 +94,12 @@ export const initState: () => TerminalState = () => {
 					type: PathObjectType.FILE,
 					content: "Hello World (2)!",
 				},
-				example_dir: {
+				"executable_file": {
+					type: PathObjectType.FILE,
+					executable: true,
+					content: "https://google.com",
+				},
+				"example_dir": {
 					type: PathObjectType.DIRECTORY,
 					children: {
 						nested_file: {
