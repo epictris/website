@@ -1,16 +1,21 @@
+@font-face {
+	font-family: FantasqueSansMono;
+	src: url(assets/FantasqueSansMNerdFontMono-Regular.ttf);
+}
+
 * {
 	margin: 0;
 	padding: 0;
 	box-sizing: border-box;
-	line-height: 1.2;
+	line-height: 1.1;
 }
 
 .terminal {
 	height: 100vh;
 	outline: none;
 	white-space: pre;
-	font-family: monospace;
-	font-size: 18px;
+	font-family: FantasqueSansMono, monospace;
+	font-size: 20px;
 	background-color: #1f2430;
 	color: #fff;
 	-webkit-font-smoothing: subpixel-antialiased;
