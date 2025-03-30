@@ -89,7 +89,7 @@ export const initState: () => TerminalState = () => {
 		stdOut: "",
 		fileSystem: {
 			type: PathObjectType.DIRECTORY,
-			permissions: { execute: false, read: true, write: true },
+			permissions: { execute: true, read: true, write: true },
 			children: {
 				"hello_world.txt": {
 					type: PathObjectType.FILE,
@@ -108,7 +108,7 @@ export const initState: () => TerminalState = () => {
 				},
 				example_dir: {
 					type: PathObjectType.DIRECTORY,
-					permissions: { execute: false, read: true, write: true },
+					permissions: { execute: true, read: true, write: true },
 					children: {
 						nested_file: {
 							type: PathObjectType.FILE,
@@ -117,7 +117,7 @@ export const initState: () => TerminalState = () => {
 						},
 						nested_dir: {
 							type: PathObjectType.DIRECTORY,
-							permissions: { execute: false, read: true, write: true },
+							permissions: { execute: true, read: true, write: true },
 							children: {},
 						},
 					},
