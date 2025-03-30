@@ -8,7 +8,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 
 	for (let arg of args) {
 		const dir = resolvePathDirectory(
-			constructAbsolutePath(arg, state.pwd),
+			constructAbsolutePath(arg, state),
 			state,
 		);
 		if (!dir) {

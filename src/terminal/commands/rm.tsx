@@ -25,7 +25,7 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			state.stdOut += `rm: cannot remove '${inputPath}': Permission denied\r\n`;
 		} else if (path.type === PathObjectType.FILE) {
 			const parent = resolvePathDirectory(
-				constructAbsolutePath(inputPath, state.pwd),
+				constructAbsolutePath(inputPath, state),
 				state,
 			)!;
 			delete parent.children[inputPath.split("/").pop()!];

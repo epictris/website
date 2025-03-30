@@ -9,7 +9,7 @@ export const resolvePath = (
 	relativePath: string,
 	state: TerminalState,
 ): PathObject | null => {
-	const absolutePath = constructAbsolutePath(relativePath, state.pwd);
+	const absolutePath = constructAbsolutePath(relativePath, state);
 	return resolvePathObject(absolutePath, state);
 };
 
@@ -20,12 +20,21 @@ export const getHead = (path: string): string => {
 
 export const constructAbsolutePath = (
 	relativePath: string,
-	pwd: string,
+	state: TerminalState,
 ): string => {
 	const relativePathSegments = getPathSegments(relativePath);
-	const basePathSegments = relativePath.startsWith("/")
-		? []
-		: getPathSegments(pwd);
+
+	let basePathSegments: string[] = [];
+
+	if (relativePath.startsWith("/")) {
+		basePathSegments = [];
+	} else if (relativePath.startsWith("~")) {
+		basePathSegments = getPathSegments(state.environmentVars["HOME"]);
+		relativePathSegments.shift();
+	} else {
+		basePathSegments = getPathSegments(state.pwd);
+	}
+
 	for (let segment of relativePathSegments) {
 		if (segment === ".") {
 			continue;
@@ -49,7 +58,7 @@ export const resolveParentDirectory = (
 	relativePath: string,
 	state: TerminalState,
 ): Directory | null => {
-	const absolutePath = constructAbsolutePath(relativePath, state.pwd);
+	const absolutePath = constructAbsolutePath(relativePath, state);
 	const pathSegments = getPathSegments(absolutePath);
 	if (pathSegments.length === 0) {
 		return null;
