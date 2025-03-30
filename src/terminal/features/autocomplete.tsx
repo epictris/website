@@ -13,7 +13,7 @@ const resolveMatches = (
 	state: TerminalState,
 ): string[] => {
 	const completionDirectory = resolvePath(
-		completionDirectoryPath || "/",
+		completionDirectoryPath || ".",
 		state,
 	);
 	if (!completionDirectory) {
@@ -62,6 +62,7 @@ const decapitate = (path: string): [string, string] => {
 
 export default class AutoComplete {
 	private suggestedCompletions: string[];
+	private matchString: string;
 	private selectedCompletionIndex: number | null;
 	private unambiguousCompletion: string;
 	private terminal: Terminal;
@@ -71,15 +72,23 @@ export default class AutoComplete {
 		this.suggestedCompletions = [];
 		this.selectedCompletionIndex = null;
 		this.unambiguousCompletion = "";
+		this.matchString = "";
 	}
 
 	getNextSuggestion(inputBuffer: string): string {
+		console.log(this.unambiguousCompletion);
+		console.log(inputBuffer);
 		if (this.selectedCompletionIndex === null) {
 			this.selectedCompletionIndex = 0;
+			console.log(
+				this.suggestedCompletions[this.selectedCompletionIndex].slice(
+					this.unambiguousCompletion.length,
+				),
+			);
 			return (
 				inputBuffer +
 				this.suggestedCompletions[this.selectedCompletionIndex].slice(
-					this.unambiguousCompletion.length,
+					this.unambiguousCompletion.length + this.matchString.length,
 				)
 			);
 		}
@@ -93,6 +102,8 @@ export default class AutoComplete {
 			this.selectedCompletionIndex >= this.suggestedCompletions.length - 1
 				? 0
 				: this.selectedCompletionIndex + 1;
+
+		console.log(currentSuggestion);
 		return (
 			inputBuffer.slice(0, inputBuffer.length - currentSuggestion.length) +
 			this.suggestedCompletions[this.selectedCompletionIndex]
@@ -105,6 +116,7 @@ export default class AutoComplete {
 		this.selectedCompletionIndex = null;
 		this.suggestedCompletions = [];
 		this.unambiguousCompletion = "";
+		this.matchString = "";
 
 		const finalCharacter = inputBuffer[inputBuffer.length - 1];
 		const finalArgument = inputBuffer
@@ -145,6 +157,7 @@ export default class AutoComplete {
 
 				const matches = resolveMatches(head, directory, state);
 				this.suggestedCompletions = matches;
+				this.matchString = head;
 				this.unambiguousCompletion = resolveMatchingStartCharacters(
 					matches,
 				).slice(head.length);
