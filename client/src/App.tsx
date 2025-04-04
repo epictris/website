@@ -4,9 +4,6 @@ import { readClipboard, writeClipboard } from "@solid-primitives/clipboard";
 import styles from "./App.module.css";
 import { createWS } from "@solid-primitives/websocket";
 import { useNavigate, useParams } from "@solidjs/router";
-import RoomSelect from "./RoomSelect";
-import PendingConnection from "./PendingConnection";
-import RoomError from "./RoomError";
 import { usePageVisibility } from "@solid-primitives/page-visibility";
 
 async function blobToDataURL(blob: Blob): Promise<string> {
@@ -38,6 +35,7 @@ type StatusMessage = {
 type ClipboardMessage = {
 	Type: MessageType.CLIPBOARD;
 	ClipboardType: ClipboardType;
+	Id: string;
 };
 
 type Payload = {
@@ -109,22 +107,32 @@ type ClipboardData = {
 	type: ClipboardType;
 };
 
-function getCookie(name: string): string | undefined {
-	const value = `; ${document.cookie}`;
-	const parts = value.split(`; ${name}=`);
-	if (parts.length === 2) return parts.pop()!.split(";").shift();
-}
+const generateNewCode = (): string => {
+	return "aaaaaaa"
+		.split("")
+		.map((char) =>
+			String.fromCharCode(char.charCodeAt(0) + Math.floor(Math.random() * 26)),
+		)
+		.join("");
+};
 
 const App: Component = () => {
-	const [clipboards, setClipboards] = createSignal<ClipboardData[]>([]);
-	const [allowPaste, setAllowPaste] = createSignal<boolean>(false);
-	const [roomCode, setRoomCode] = createSignal<string | undefined>(undefined);
-	const [showError, setShowError] = createSignal<boolean>(false);
+	const getRoomCode = (): string => {
+		return (
+			useParams().roomCode ??
+			localStorage.getItem("roomCode") ??
+			generateNewCode()
+		);
+	};
+
+	const [clipboards, setClipboards] = createSignal<
+		Record<string, ClipboardData>
+	>({});
+	const [connectedClients, setConnectedClients] = createSignal<number>(1);
+	const [roomCode, setRoomCode] = createSignal<string>(getRoomCode());
 	const [ws, setWs] = createSignal<globalThis.WebSocket | null>(null);
 
 	const visible = usePageVisibility();
-
-	const sessionToken = getCookie("session_token");
 
 	createEffect(() => {
 		const activeWs = ws();
@@ -151,26 +159,13 @@ const App: Component = () => {
 			localStorage.setItem("roomCode", code);
 			setRoomCode(code);
 		} else {
-			let cachedCode = localStorage.getItem("roomCode");
-			if (cachedCode) {
-				setRoomCode(cachedCode);
-				navigator("/" + cachedCode);
-			}
+			code = localStorage.getItem("roomCode") ?? generateNewCode();
+			setRoomCode(code);
+			navigator("/" + code);
 		}
 	};
 
 	resolveRoomCode();
-
-	const joinRoom = (roomCode: string | undefined) => {
-		setRoomCode(roomCode);
-		if (roomCode) {
-			localStorage.setItem("roomCode", roomCode);
-			navigator("/" + roomCode);
-		} else {
-			localStorage.removeItem("roomCode");
-			navigator("/");
-		}
-	};
 
 	const cutArrayByDelimiter = (
 		array: ArrayBuffer,
@@ -223,7 +218,11 @@ const App: Component = () => {
 		throw new Error("Failed to decode clipboard");
 	}
 
-	const sendClipboard = (content: Blob, type: ClipboardType): void => {
+	const sendClipboard = (
+		content: Blob,
+		type: ClipboardType,
+		id: string,
+	): void => {
 		content.arrayBuffer().then((value) => {
 			const activeWs = ws();
 			if (!activeWs) {
@@ -233,6 +232,7 @@ const App: Component = () => {
 			const message: ClipboardMessage = {
 				Type: MessageType.CLIPBOARD,
 				ClipboardType: type,
+				Id: id,
 			};
 			const buf1 = encoder.encode(JSON.stringify(message));
 			const buf2 = encoder.encode("\r\n\r\n");
@@ -255,7 +255,13 @@ const App: Component = () => {
 					if (Object.values<string>(ClipboardType).includes(type)) {
 						item
 							.getType(type)
-							.then((blob) => sendClipboard(blob, type as ClipboardType));
+							.then((blob) =>
+								sendClipboard(
+									blob,
+									type as ClipboardType,
+									(Object.keys(clipboards()).length + 1).toString(),
+								),
+							);
 					}
 				}
 			}
@@ -267,24 +273,25 @@ const App: Component = () => {
 		if (ev.data instanceof ArrayBuffer) {
 			const payload = decodePayload(ev.data);
 			if (payload.message.Type == MessageType.CLIPBOARD) {
+				const id = payload.message.Id;
 				decodeClipboard(payload.content, payload.message.ClipboardType).then(
-					(clipboard) => setClipboards([clipboard, ...clipboards()]),
+					(clipboard) => setClipboards({ [id]: clipboard, ...clipboards() }),
 				);
 			}
 		} else {
 			const message: StatusMessage = JSON.parse(ev.data);
-			if (message.Clients == 2) {
-				setAllowPaste(true);
-			} else {
-				setAllowPaste(false);
+			setConnectedClients(message.Clients);
+			for (let [id, clipboard] of Object.entries(clipboards())) {
+				sendClipboard(
+					new Blob([clipboard.raw], { type: clipboard.type }),
+					clipboard.type,
+					id,
+				);
 			}
 		}
 	};
 
 	const onClose = (e: CloseEvent) => {
-		if (e.code == 1000) {
-			setShowError(true);
-		}
 		console.log("connection closed", e);
 	};
 
@@ -292,46 +299,66 @@ const App: Component = () => {
 		console.log("connection error", e);
 	};
 
-	const onOpen = (e: Event) => {
-		setShowError(false);
-	};
-
 	const initWs = () => {
 		if (!roomCode()) {
 			return;
 		}
-		const ws = createWS(
-			wsUrlBase + "/ws?id=" + roomCode() + "&session_token=" + sessionToken,
-		);
+		const ws = createWS(wsUrlBase + "/ws?id=" + roomCode());
 		ws.binaryType = "arraybuffer";
 		ws.onmessage = onMessage;
 		ws.onerror = onError;
 		ws.onclose = onClose;
-		ws.onopen = onOpen;
 		setWs(ws);
 	};
 
 	initWs();
 
+	const interceptKeyEvent = (e: KeyboardEvent) => {
+		console.log(e.key);
+		switch (e.key) {
+			case "v":
+				if (e.ctrlKey || e.metaKey) {
+					handlePaste();
+				}
+		}
+	};
+
 	return (
-		<div class={styles.App}>
+		<div
+			class={styles.App}
+			autofocus
+			tabindex="0"
+			onKeyDown={interceptKeyEvent}
+		>
 			<div id="content">
-				{showError() ? (
-					<RoomError joinRoom={joinRoom} />
-				) : (
+				<div id="banner">
 					<div>
-						{!roomCode() && <RoomSelect joinRoom={joinRoom} />}
-						{roomCode() && allowPaste() && <Paste handlePaste={handlePaste} />}
-						{roomCode() && !allowPaste() && (
-							<PendingConnection joinRoom={joinRoom} roomCode={roomCode()} />
-						)}
+						<h2>Online Clipboard</h2>
 						<br />
-						<br />
-						{roomCode() && allowPaste() && (
-							<Clipboards entries={clipboards()} />
+						{connectedClients() == 1 ? (
+							<p>
+								Open{" "}
+								<a href={"https://clipboard.tris.sh/" + roomCode()}>
+									clipboard.tris.sh/{roomCode()}
+								</a>{" "}
+								on another device to access this clipboard
+							</p>
+						) : (
+							<p>
+								<b>{connectedClients()}</b> devices viewing this clipboard
+							</p>
 						)}
 					</div>
-				)}
+					<div id="icon">
+						<div onClick={(_) => handlePaste()}>
+							<i class="fas fa-2x fa-paste"></i>
+						</div>
+					</div>
+				</div>
+				<div>
+					<br />
+					{roomCode() && <Clipboards entries={Object.values(clipboards())} />}
+				</div>
 			</div>
 		</div>
 	);

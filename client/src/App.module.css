@@ -1,6 +1,8 @@
 .App {
 	text-align: center;
+	outline: none;
 }
+
 
 .logo {
 	animation: logo-spin infinite 20s linear;
