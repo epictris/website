@@ -341,11 +341,11 @@ const App: Component = () => {
 								<a href={"https://clipboard.tris.sh/" + roomCode()}>
 									clipboard.tris.sh/{roomCode()}
 								</a>{" "}
-								on another device to access this clipboard
+								on another device to access this clipboard session.
 							</p>
 						) : (
 							<p>
-								<b>{connectedClients()}</b> devices viewing this clipboard
+								<b>{connectedClients()}</b> devices viewing this clipboard.
 							</p>
 						)}
 					</div>
