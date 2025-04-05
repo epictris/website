@@ -136,6 +136,7 @@ code {
 	background-color: #fff4d6;
 	position: relative;
 	color: #333;
+	-webkit-tap-highlight-color: transparent;
 }
 
 .clipboard p {
@@ -147,18 +148,19 @@ code {
 
 .clipboard > i {
 	position: absolute;
-	left: 10px;
-	width: calc(100% - 20px);
+	right: 10px;
+	width: 20px;
 	visibility: hidden;
+	color: #c28c2f;
 }
 
 .clipboard:hover {
-	background-color: rgba(0, 0, 0, 0.1);
+	background-color: #fff0b8;
 	cursor: pointer;
 }
 
 .clipboard:focus {
-	background-color: rgba(0, 0, 0, 0.2);
+	background-color: #ffe587;
 }
 
 .clipboard:focus > i {
