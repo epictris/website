@@ -23,7 +23,7 @@
 
 #icon,
 #icon * {
-	user-select: none;
+	-webkit-tap-highlight-color: transparent;
 }
 
 #icon > div {

@@ -333,7 +333,7 @@ const App: Component = () => {
 			<div id="content">
 				<div id="banner">
 					<div>
-						<h2>Shared clipboard</h2>
+						<h2>Share your clipboard</h2>
 						<br />
 						{connectedClients() == 1 ? (
 							<p>
