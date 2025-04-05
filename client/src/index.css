@@ -44,14 +44,18 @@
 	padding-top: 4px;
 }
 
-#icon > div:hover {
-	cursor: pointer;
-	background: #008cba;
-	border: 3px solid #008cba;
+@media (hover: hover) {
+	#icon > div:hover {
+		cursor: pointer;
+		background: #008cba;
+		border: 3px solid #008cba;
+	}
 }
 
 #icon > div:active {
 	cursor: pointer;
+	background: #008cba;
+	border: 3px solid #008cba;
 	box-shadow: 0px 0px 0px #005875;
 }
 
