@@ -21,6 +21,11 @@
 	height: 100%;
 }
 
+#icon,
+#icon * {
+	user-select: none;
+}
+
 #icon > div {
 	box-shadow: 0px 4px 0px #006d91;
 	border: 3px solid #29a4cc;
@@ -41,8 +46,8 @@
 
 #icon > div:hover {
 	cursor: pointer;
-	background: #008CBA;
-	border: 3px solid #008CBA;
+	background: #008cba;
+	border: 3px solid #008cba;
 }
 
 #icon > div:active {
