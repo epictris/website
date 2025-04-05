@@ -77,14 +77,14 @@ const Clipboards: Component<ClipboardProps> = (props: ClipboardProps) => {
 			return (
 				<button class="clipboard" onClick={[handleClick, clipboard]}>
 					<p>{clipboard.decoded}</p>
-					<i class="fa fa-clipboard fa-lg"></i>
+					<i class="far fa-copy fa-lg"></i>
 				</button>
 			);
 		} else if (clipboard.type === ClipboardType.PNG) {
 			return (
 				<button class="clipboard" onClick={[handleClick, clipboard]}>
 					<img src={clipboard.decoded} />
-					<i class="fa fa-clipboard fa-lg"></i>
+					<i class="far fa-copy fa-lg"></i>
 				</button>
 			);
 		}
