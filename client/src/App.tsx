@@ -333,7 +333,7 @@ const App: Component = () => {
 			<div id="content">
 				<div id="banner">
 					<div>
-						<h2>Online Clipboard</h2>
+						<h2>Shared clipboard</h2>
 						<br />
 						{connectedClients() == 1 ? (
 							<p>
@@ -341,7 +341,7 @@ const App: Component = () => {
 								<a href={"https://clipboard.tris.sh/" + roomCode()}>
 									clipboard.tris.sh/{roomCode()}
 								</a>{" "}
-								on another device to access this clipboard session.
+								on another device to access this clipboard.
 							</p>
 						) : (
 							<p>
