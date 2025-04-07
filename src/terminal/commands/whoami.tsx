@@ -3,6 +3,6 @@ import { PathObjectType, TerminalState } from "../types";
 
 export default (args: string[], state: TerminalState): TerminalState => {
 	const newState = { ...state };
-	newState.stdOut += "tris";
+	newState.stdOut.writeLine("tris");
 	return newState;
 };

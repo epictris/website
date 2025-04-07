@@ -17,7 +17,8 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	const [permissionsArg, pathArg] = args;
 
 	if (!pathArg || !permissionsArg) {
-		return { ...state, stdOut: "chmod: missing operand" };
+		state.stdOut.writeLine("chmod: missing operand");
+		return state;
 	}
 
 	const modifier = permissionsArg[0];
@@ -27,22 +28,24 @@ export default (args: string[], state: TerminalState): TerminalState => {
 		!Object.values<string>(PermissionModifier).includes(modifier) ||
 		permissionTypes.length === 0
 	) {
-		return { ...state, stdOut: "chmod: invalid operand" };
+		state.stdOut.writeLine("chmod: invalid operand");
+		return state;
 	}
 
 	for (let type of permissionTypes) {
 		if (!Object.values<string>(PermissionType).includes(type)) {
-			return { ...state, stdOut: "chmod: invalid operand" };
+			state.stdOut.writeLine("chmod: invalid operand");
+			return state;
 		}
 	}
 
 	const path = resolvePath(pathArg, state);
 
 	if (!path) {
-		return {
-			...state,
-			stdOut: `chmod: cannot access '${pathArg}': No such file or directory`,
-		};
+		state.stdOut.writeLine(
+			`chmod: cannot access '${pathArg}': No such file or directory`,
+		);
+		return state;
 	}
 
 	if (modifier === PermissionModifier.ADD) {

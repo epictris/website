@@ -1,20 +1,30 @@
 import * as stringUtil from "../string_util";
-import { PathObject, PathObjectType, TerminalState } from "../types";
+import {
+	PathObject,
+	PathObjectType,
+	STDOutEntry,
+	STDOutType,
+	TerminalState,
+} from "../types";
 
-const renderPathObject = (
-	pathObject: PathObject,
-	file_name: string,
-	state: TerminalState,
-) => {
-	const { theme } = state;
-
-	switch (pathObject.type) {
-		case PathObjectType.FILE:
-			return pathObject.permissions.execute
-				? `<a href="${encodeURI(pathObject.content)}" target="_blank" style="color:${theme.green};"><b>${file_name}  </b></a>`
-				: file_name + "  ";
-		case PathObjectType.DIRECTORY:
-			return `<span style="color:${theme.brightBlue}"><b>${file_name}  </b></span>`;
+const renderPathObject = (pathObject: PathObject): STDOutEntry => {
+	if (pathObject.type === PathObjectType.DIRECTORY) {
+		return {
+			type: STDOutType.DIRECTORY,
+			absolutePath: pathObject.path,
+		};
+	} else if (pathObject.permissions.execute) {
+		return {
+			type: STDOutType.FILE,
+			absolutePath: pathObject.path,
+			executable: true,
+		};
+	} else {
+		return {
+			type: STDOutType.FILE,
+			absolutePath: pathObject.path,
+			executable: false,
+		};
 	}
 };
 
@@ -73,7 +83,9 @@ export default (args: string[], state: TerminalState): TerminalState => {
 				pathObject.type === PathObjectType.DIRECTORY &&
 				!pathObject.permissions.read
 			) {
-				state.stdOut += `ls: cannot open directory '.': Permission denied`;
+				state.stdOut.writeLine(
+					`ls: cannot open directory '.': Permission denied`,
+				);
 				return { ...state };
 			}
 			if (pathObject && pathObject.type == PathObjectType.DIRECTORY) {
@@ -81,11 +93,17 @@ export default (args: string[], state: TerminalState): TerminalState => {
 				if (!showHidden) {
 					children = children.filter(([name, _child]) => !name.startsWith("."));
 				} else {
-					state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>.  </b></span>`;
-					state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>..  </b></span>`;
+					state.stdOut.writeLine({
+						type: STDOutType.DIRECTORY,
+						absolutePath: stringUtil.constructAbsolutePath(".", state),
+					});
+					state.stdOut.writeLine({
+						type: STDOutType.DIRECTORY,
+						absolutePath: stringUtil.constructAbsolutePath("..", state),
+					});
 				}
 				for (let [name, child] of children) {
-					state.stdOut += renderPathObject(child, name, state);
+					state.stdOut.writeLine(renderPathObject(child));
 				}
 			}
 			return { ...state };
@@ -97,11 +115,15 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	for (let inputPath of paths) {
 		const pathObject = stringUtil.resolvePath(inputPath, state);
 		if (!pathObject) {
-			state.stdOut += `ls: cannot access ${inputPath}: No such file or directory\r\n`;
+			state.stdOut.writeLine(
+				`ls: cannot access ${inputPath}: No such file or directory`,
+			);
 		} else if (pathObject.type === PathObjectType.FILE) {
 			validPaths.push(inputPath);
 		} else if (!pathObject.permissions.read) {
-			state.stdOut += `ls: cannot open directory '${inputPath}': Permission denied\r\n`;
+			state.stdOut.writeLine(
+				`ls: cannot open directory '${inputPath}': Permission denied\r\n`,
+			);
 		} else {
 			validPaths.push(inputPath);
 			if (recursive) {
@@ -115,28 +137,34 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	for (let validPath of validPaths) {
 		const pathObject = stringUtil.resolvePath(validPath, state);
 		if (!pathObject) {
-			state.stdOut += `ls: cannot access ${validPath}: No such file or directory`;
+			state.stdOut.writeLine(
+				`ls: cannot access ${validPath}: No such file or directory`,
+			);
 		} else if (pathObject.type === PathObjectType.FILE) {
-			state.stdOut += renderPathObject(pathObject, validPath, state);
+			state.stdOut.writeLine(renderPathObject(pathObject));
 		} else {
 			if (validPaths.length > 1 || recursive) {
-				state.stdOut += `${validPath}:\r\n`;
+				state.stdOut.writeLine(validPath);
 			}
 			let children = Object.entries(pathObject.children);
 			if (!showHidden) {
 				children = children.filter(([name, _child]) => !name.startsWith("."));
 			} else {
-				state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>.  </b></span>`;
-				state.stdOut += `<span style="color:${state.theme.brightBlue}"><b>..  </b></span>`;
+				state.stdOut.writeLine({
+					type: STDOutType.DIRECTORY,
+					absolutePath: stringUtil.constructAbsolutePath(".", state),
+				});
+				state.stdOut.writeLine({
+					type: STDOutType.DIRECTORY,
+					absolutePath: stringUtil.constructAbsolutePath("..", state),
+				});
 			}
 			for (let [name, child] of Object.entries(pathObject.children)) {
-				state.stdOut += renderPathObject(child, name, state);
+				state.stdOut.writeLine(renderPathObject(child));
 			}
 		}
-		state.stdOut += "\r\n\r\n";
-	}
-	if (state.stdOut.endsWith("\r\n\r\n")) {
-		state.stdOut = state.stdOut.slice(0, -4);
+		state.stdOut.writeLine();
+		state.stdOut.writeLine();
 	}
 
 	return { ...state };

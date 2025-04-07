@@ -15,11 +15,13 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	const cdPath = constructAbsolutePath(pathString, state);
 	const pathObject = resolvePath(pathString, state);
 	if (!pathObject) {
-		return { ...state, stdOut: `cd: ${pathString} does not exist` };
+		state.stdOut.writeLine(`cd: ${pathString}: does not exist`);
+		return state;
 	} else if (pathObject.type === PathObjectType.FILE) {
-		return { ...state, stdOut: `cd: ${pathString} is not a directory` };
+		state.stdOut.writeLine(`cd: ${pathString}: is not a directory`);
+		return state;
 	} else if (!pathObject.permissions.execute) {
-		return { ...state, stdOut: `cd: permission denied: ${pathString}` };
+		state.stdOut.writeLine(`cd: permission denied: ${pathString}`);
 	}
 	state.environmentVars["OLDPWD"] = state.pwd;
 	state.environmentVars["PWD"] = cdPath;

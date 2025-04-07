@@ -20,9 +20,13 @@ export default (args: string[], state: TerminalState): TerminalState => {
 	for (let inputPath of paths) {
 		const path = resolvePath(inputPath, state);
 		if (!path) {
-			state.stdOut += `rm: cannot remove '${inputPath}': No such file or directory\r\n`;
+			state.stdOut.writeLine(
+				`rm: cannot remove '${inputPath}': No such file or directory\r\n`,
+			);
 		} else if (!path.permissions.write && path.type === PathObjectType.FILE) {
-			state.stdOut += `rm: cannot remove '${inputPath}': Permission denied\r\n`;
+			state.stdOut.writeLine(
+				`rm: cannot remove '${inputPath}': Permission denied\r\n`,
+			);
 		} else if (path.type === PathObjectType.FILE) {
 			const parent = resolvePathDirectory(
 				constructAbsolutePath(inputPath, state),
@@ -30,16 +34,20 @@ export default (args: string[], state: TerminalState): TerminalState => {
 			)!;
 			delete parent.children[inputPath.split("/").pop()!];
 		} else if (!recursive) {
-			state.stdOut += `rm: cannot remove '${inputPath}': Is a directory\r\n`;
+			state.stdOut.writeLine(
+				`rm: cannot remove '${inputPath}': Is a directory\r\n`,
+			);
 		} else if (
 			!path.permissions.write &&
 			path.type === PathObjectType.DIRECTORY
 		) {
-			state.stdOut += `rm: cannot remove '${inputPath}': Permission denied\r\n`;
+			state.stdOut.writeLine(
+				`rm: cannot remove '${inputPath}': Permission denied\r\n`,
+			);
 		} else {
 			const parent = resolveParentDirectory(inputPath, state);
 			if (!parent) {
-				state.stdOut += `rm: cannot remove root directory\r\n`;
+				state.stdOut.writeLine(`rm: cannot remove root directory\r\n`);
 			}
 			if (parent) {
 				delete parent.children[getHead(inputPath)];

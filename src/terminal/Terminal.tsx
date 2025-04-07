@@ -11,11 +11,15 @@ import touch from "./commands/touch";
 import whoami from "./commands/whoami";
 import AutoComplete from "./features/autocomplete";
 import { resolvePath } from "./string_util";
-import { PathObjectType, TerminalState } from "./types";
+import { PathObjectType, STDOut, TerminalState } from "./types";
 
 const COMMAND_MAPPING: Record<
 	string,
-	(args: string[], state: TerminalState) => TerminalState
+	(
+		args: string[],
+		state: TerminalState,
+		enqueueCommand: (command: string) => void,
+	) => TerminalState
 > = {
 	ls,
 	cd,
@@ -33,13 +37,15 @@ const COMMAND_MAPPING: Record<
 export class Terminal {
 	private state: TerminalState;
 	public autoComplete: AutoComplete;
+	private enqueueCommand: (command: string) => void;
 
-	constructor() {
+	constructor(enqueueCommand: (command: string) => void) {
 		this.state = initState();
 		this.autoComplete = new AutoComplete(this);
+		this.enqueueCommand = enqueueCommand;
 	}
 	execute(command: string): void {
-		this.state.stdOut = "";
+		this.state.stdOut.clear();
 		const parsedCommand = parseCommand(command);
 		if (!parsedCommand) {
 			return;
@@ -52,7 +58,9 @@ export class Terminal {
 				executableFile.type !== PathObjectType.FILE ||
 				!executableFile.permissions.execute
 			) {
-				this.state.stdOut = `command not found: ${parsedCommand.command}\r\n`;
+				this.state.stdOut.writeLine(
+					`command not found: ${parsedCommand.command}`,
+				);
 				return;
 			} else {
 				window.open(encodeURI(executableFile.content), "_blank");
@@ -63,6 +71,7 @@ export class Terminal {
 		this.state = COMMAND_MAPPING[parsedCommand.command](
 			parsedCommand.args,
 			this.state,
+			this.enqueueCommand,
 		);
 	}
 
@@ -90,7 +99,7 @@ export const initState: () => TerminalState = () => {
 	return {
 		history: [],
 		pwd: "/home/tris",
-		stdOut: "",
+		stdOut: new STDOut(),
 		environmentVars: {
 			USER: "tris",
 			HOSTNAME: "tris.sh",
@@ -99,83 +108,122 @@ export const initState: () => TerminalState = () => {
 		},
 		fileSystem: {
 			type: PathObjectType.DIRECTORY,
+			path: "/",
 			permissions: { execute: true, read: true, write: true },
 			children: {
 				home: {
 					type: PathObjectType.DIRECTORY,
+					path: "/home",
 					permissions: { execute: true, read: true, write: true },
 					children: {
 						tris: {
 							type: PathObjectType.DIRECTORY,
+							path: "/home/tris",
 							permissions: { execute: true, read: true, write: true },
 							children: {
 								projects: {
 									type: PathObjectType.DIRECTORY,
+									path: "/home/tris/projects",
 									permissions: { execute: true, read: true, write: true },
 									children: {
 										online_clipboard: {
 											type: PathObjectType.DIRECTORY,
+											path: "/home/tris/projects/online_clipboard",
 											permissions: { execute: true, read: true, write: true },
 											children: {
 												try_now: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
+													path: "/home/tris/projects/online_clipboard/try_now",
+													permissions: {
+														execute: true,
+														read: true,
+														write: true,
+													},
 													content: "https://clipboard.tris.sh",
 												},
 												GitHub: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
+													path: "/home/tris/projects/online_clipboard/GitHub",
+													permissions: {
+
+														execute: true,
+														read: true,
+														write: true,
+													},
 													content: "https://github.com/epictris/clipboard",
-												}
-											}
+												},
+											},
 										},
 										pattern_linter_language_server: {
 											type: PathObjectType.DIRECTORY,
+											path: "/home/tris/projects/pattern_linter_language_server",
 											permissions: { execute: true, read: true, write: true },
 											children: {
 												GitHub: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
+													path: "/home/tris/projects/pattern_linter_language_server/GitHub",
+													permissions: {
+														execute: true,
+														read: true,
+														write: true,
+													},
 													content: "https://github.com/epictris/splints",
 												},
 												PyPI: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
+													path: "/home/tris/projects/pattern_linter_language_server/PyPI",
+													permissions: {
+														execute: true,
+														read: true,
+														write: true,
+													},
 													content: "https://pypi.org/project/splints",
-												}
-											}
+												},
+											},
 										},
 										personal_website: {
 											type: PathObjectType.DIRECTORY,
+											path: "/home/tris/projects/personal_website",
 											permissions: { execute: true, read: true, write: true },
 											children: {
 												GitHub: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
+													path: "/home/tris/projects/personal_website/GitHub",
+													permissions: {
+														execute: true,
+														read: true,
+														write: true,
+													},
 													content: "https://github.com/epictris/website",
 												},
-											}
+											},
 										},
 										character_sheet_builder: {
 											type: PathObjectType.DIRECTORY,
+											path: "/home/tris/projects/character_sheet_builder",
 											permissions: { execute: true, read: true, write: true },
 											children: {
 												GitHub: {
 													type: PathObjectType.FILE,
-													permissions: { execute: true, read: true, write: true },
-													content: "https://github.com/epictris/canvas-character-sheet",
+													path: "/home/tris/projects/character_sheet_builder/GitHub",
+													permissions: {
+														execute: true,
+														read: true,
+														write: true,
+													},
+													content:
+														"https://github.com/epictris/canvas-character-sheet",
 												},
-											}
-										}
-									}
+											},
+										},
+									},
 								},
 								".config": {
 									type: PathObjectType.DIRECTORY,
+									path: "/home/tris/.config",
 									permissions: { execute: true, read: true, write: true },
-									children: {
-
-									}
-								}
+									children: {},
+								},
 							},
 						},
 					},

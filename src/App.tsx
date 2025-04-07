@@ -1,17 +1,8 @@
-import { createSignal, JSX, type Component } from "solid-js";
+import { createSignal, For, JSX, JSXElement, type Component } from "solid-js";
 
 import styles from "./App.module.css";
 import { Terminal } from "./terminal/Terminal";
-import { render } from "solid-js/web";
-
-const renderToText = (jsx: JSX.Element): string => {
-	const div = document.createElement("div");
-	document.body.appendChild(div);
-	render(() => jsx, div);
-	const html = div.innerHTML;
-	div.remove();
-	return html;
-};
+import { STDOutEntry, STDOutType } from "./terminal/types";
 
 const AutocompleteSuggestions: Component<{ suggestions: string[] }> = (
 	props,
@@ -25,52 +16,68 @@ const AutocompleteSuggestions: Component<{ suggestions: string[] }> = (
 	);
 };
 
+const sleep = (delay: number) =>
+	new Promise((resolve) => setTimeout(resolve, delay));
+
 const App: Component = () => {
-	const terminal = new Terminal();
+	async function enqueueCommand(characters: string): Promise<void> {
+		await sleep(100)
+		for (let i = 0; i < characters.length; i++) {
+			onKeyDown(new KeyboardEvent("keydown", { key: characters[i] }));
+			await sleep(20);
+		}
+		onKeyDown(new KeyboardEvent("keydown", { key: "Enter" }));
+	}
+
+	const terminal = new Terminal(enqueueCommand);
 
 	const [tabCompletion, setTabCompletion] = createSignal(false);
 	const [autocompleteSuggestions, setAutocompleteSuggestions] = createSignal<
 		string[]
 	>([]);
+
 	const [state, setState] = createSignal(terminal.getState());
 	const [inputBuffer, setInputBuffer] = createSignal("");
-	const [output, setOutput] = createSignal<string>(renderToText(<br />));
+	const [output, setOutput] = createSignal<(JSXElement)[]>([<br />]);
 	const [historyOffset, setHistoryOffset] = createSignal(0);
 
 	const executeCommand = (command: string): void => {
-
 		setAutocompleteSuggestions([]);
 		setTabCompletion(false);
 
-		const frozenPrompt =
-			renderToText(generatePrompt(state().pwd, state().environmentVars["HOME"], inputBuffer())) +
-			renderToText(<br />);
+		const frozenPrompt = generatePrompt(
+			state().pwd,
+			state().environmentVars["HOME"],
+			inputBuffer(),
+		);
 
 		terminal.execute(command);
 		setState(terminal.getState());
 
-		setOutput(
-			output() +
-				frozenPrompt +
-				state().stdOut +
-				renderToText(
-					<div>
-						<br />
-					</div>,
-				),
-		);
+		setOutput([
+			...output(),
+			frozenPrompt,
+			...state().stdOut.read().map(line => line.map(entry => renderEntry(entry))),
+			<div>
+				<br />
+			</div>,
+		]);
 		setHistoryOffset(0);
 		setInputBuffer("");
 	};
 
-	const generatePrompt = (pwd: string, home: string | undefined, buffer: string) => {
-
-		const homeString = home && pwd.startsWith(home) ? "~/" + pwd.slice(home.length + 1) : pwd;
+	const generatePrompt = (
+		pwd: string,
+		home: string | undefined,
+		buffer: string,
+	) => {
+		const homeString =
+			home && pwd.startsWith(home) ? "~/" + pwd.slice(home.length + 1) : pwd;
 
 		return (
 			<span>
-				<div style="color: #60b8d6">{homeString}</div>
-				<span style="color: #f28779">❯</span> {buffer}
+				<div onClick={() => enqueueCommand("cd " + homeString)} style="color: #60b8d6; cursor: pointer;">{homeString}</div>
+				<span onClick={() => enqueueCommand(buffer)} style="cursor: pointer"><span style="color: #f28779">❯</span> {buffer}</span>
 			</span>
 		);
 	};
@@ -126,6 +133,10 @@ const App: Component = () => {
 				}
 				break;
 
+			case "ArrowRight":
+				e.preventDefault();
+				break;
+
 			case "Enter":
 				executeCommand(inputBuffer());
 				break;
@@ -143,7 +154,7 @@ const App: Component = () => {
 
 			case "l":
 				if (e.ctrlKey) {
-					setOutput("");
+					setOutput([""]);
 					e.preventDefault();
 					break;
 				}
@@ -159,12 +170,43 @@ const App: Component = () => {
 		}
 	};
 
+	enqueueCommand("whoami")
+		.then(() => {
+			return enqueueCommand("ls projects");
+		})
+		.then(() => {
+			return enqueueCommand("pwd");
+		})
+		.then(() => {
+			return enqueueCommand("cat projects/online_clipboard/try_now");
+		});
+
+	const renderEntry = (output: STDOutEntry): JSXElement => {
+		if (typeof output === "string") {
+			return <span>{output}</span>
+		} else if (output.type === STDOutType.DIRECTORY) {
+			return <span onClick={() => enqueueCommand("ls " + output.absolutePath)} style="color: #60b8d6; cursor: pointer;"><b>{output.absolutePath.split("/").pop()}</b></span>
+		} else if (output.executable) {
+			return <span onClick={() => enqueueCommand(output.absolutePath)} style="color: #f28779; cursor: pointer"><b>{output.absolutePath.split("/").pop()}</b></span>
+		} else {
+			return <span onClick={() => enqueueCommand("cat " + output.absolutePath)}>{output.absolutePath.split("/").pop()}</span>
+		}
+	}
+
 	return (
-		<div autofocus tabindex="0" class={styles.terminal} onKeyDown={onKeyDown}>
-			<div innerHTML={output()} />
-			{generatePrompt(state().pwd, state().environmentVars["HOME"], inputBuffer())}
-			{generateCursor()}
-			<AutocompleteSuggestions suggestions={autocompleteSuggestions()} />
+		<div autofocus tabindex="0" onKeyDown={onKeyDown}>
+			<div class={styles.terminal}>
+				<div>
+					<For each={output()}>{(line) => <div>{line}</div>}</For>
+					{generatePrompt(
+						state().pwd,
+						state().environmentVars["HOME"],
+						inputBuffer(),
+					)}
+					{generateCursor()}
+					<AutocompleteSuggestions suggestions={autocompleteSuggestions()} />
+				</div>
+			</div>
 		</div>
 	);
 };

@@ -1,4 +1,4 @@
-import { Directory, PathObject, PathObjectType, TerminalState } from "./types";
+import { PathObject, PathObjectType, TerminalState, Directory } from "./types";
 
 export const join = (...paths: string[]): string => {
 	const normalizedPaths = paths.map((path) => path.replace(/\/+$/, ""));
