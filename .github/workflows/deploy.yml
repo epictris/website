@@ -36,15 +36,15 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Sync compose file
         run: |
           rsync -az -e "ssh -i ~/.ssh/deploy_key" \
-            compose.yml ubuntu@${{ secrets.SSH_HOST }}:/opt/website/
+            compose.yml ubuntu@${{ vars.SSH_HOST }}:/opt/website/
 
       - name: Pull and restart
         run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.SSH_HOST }} \
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} \
             "WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }} \
              docker compose -f /opt/website/compose.yml up -d --pull always"
