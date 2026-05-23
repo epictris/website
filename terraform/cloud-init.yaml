@@ -1,0 +1,27 @@
+#cloud-config
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-plugin
+  - netfilter-persistent
+  - iptables-persistent
+
+runcmd:
+  # Add ubuntu user to docker group
+  - usermod -aG docker ubuntu
+
+  # Open ports in the host firewall (OCI blocks these by default on the VM itself)
+  - iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+  - netfilter-persistent save
+
+  # Create app directory
+  - mkdir -p /opt/website
+  - chown ubuntu:ubuntu /opt/website
+
+  # Enable and start Docker
+  - systemctl enable docker
+  - systemctl start docker

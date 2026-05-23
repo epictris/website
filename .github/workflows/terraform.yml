@@ -1,0 +1,51 @@
+name: Terraform
+
+on:
+  push:
+    branches: [main]
+    paths: [terraform/**]
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+      TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+      TF_VAR_private_key_path: /tmp/oci_api_key.pem
+      TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_ssh_public_key_path: /tmp/deploy_key.pub
+      TF_VAR_deploy_ssh_public_key_path: /tmp/deploy_key.pub
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write credentials
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > /tmp/oci_api_key.pem
+          chmod 600 /tmp/oci_api_key.pem
+          echo "${{ vars.SSH_PUBLIC_KEY }}" > /tmp/deploy_key.pub
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        timeout-minutes: 60
+        run: |
+          until terraform apply -auto-approve; do
+            echo "Apply failed (possibly out of capacity), retrying in 60s..."
+            sleep 60
+          done

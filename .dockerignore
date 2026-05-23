@@ -1,0 +1,6 @@
+.git
+.github
+app/node_modules
+app/.output
+terraform
+*.md
