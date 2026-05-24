@@ -5,6 +5,7 @@
 @import '@webtui/css/components/view.css';
 @import '@webtui/css/components/input.css';
 @import '@webtui/css/components/badge.css';
+@import '@webtui/css/components/button.css';
 @import '@webtui/plugin-nf';
 
 @font-face {

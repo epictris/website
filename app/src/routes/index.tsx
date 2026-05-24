@@ -73,15 +73,31 @@ function fuzzyScore(query: string, text: string): number | null {
   return qi === q.length ? score : null;
 }
 
+const allTags = [...new Set(posts.flatMap((post) => post.tags))];
+
+const banner = String.raw` _        _              _
+| |_ _ __(_)___      ___| |__
+| __| '__| / __|    / __| '_ \
+| |_| |  | \__ \ _  \__ \ | | |
+ \__|_|  |_|___/(_) |___/_| |_|`;
+
 export default function Home() {
   const [query, setQuery] = createSignal("");
+  const [selectedTags, setSelectedTags] = createSignal<string[]>([]);
   let searchInput: HTMLInputElement | undefined;
 
   onMount(() => searchInput?.focus());
 
+  const toggleTag = (tag: string) =>
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
+
   const filtered = createMemo(() => {
     const q = query();
+    const tags = selectedTags();
     return posts
+      .filter((post) => tags.length === 0 || post.tags.some((t) => tags.includes(t)))
       .map((post) => {
         const haystackScore = fuzzyScore(q, `${post.title} ${post.desc}`);
         if (haystackScore === null) return null;
@@ -106,6 +122,8 @@ export default function Home() {
         </a>
       </nav>
 
+      <div class="banner" aria-hidden="true">{banner}</div>
+
       <header box-="square" class="site-header">
         <input
           ref={searchInput}
@@ -117,6 +135,27 @@ export default function Home() {
           onInput={(e) => setQuery(e.currentTarget.value)}
         />
       </header>
+
+      <div class="tag-filters">
+        <For each={allTags}>
+          {(tag) => (
+            <button
+              type="button"
+              is-="button"
+              size-="small"
+              class="tag-filter"
+              classList={{ active: selectedTags().includes(tag) }}
+              style={{
+                "--button-primary": tagColors[tag] ?? "#cbccc6",
+                "--tag-color": tagColors[tag] ?? "#cbccc6",
+              }}
+              onClick={() => toggleTag(tag)}
+            >
+              {tag}
+            </button>
+          )}
+        </For>
+      </div>
 
       <div class="content-section">
         <div class="post-list">
