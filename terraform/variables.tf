@@ -28,12 +28,6 @@ variable "region" {
   type        = string
 }
 
-variable "ssh_public_key_path" {
-  description = "Path to your personal SSH public key"
-  type        = string
-  default     = "~/.ssh/id_ed25519.pub"
-}
-
 variable "deploy_ssh_public_key_path" {
   description = "Path to the deploy SSH public key used by GitHub Actions"
   type        = string

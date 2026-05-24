@@ -17,7 +17,6 @@ jobs:
       TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
       TF_VAR_private_key_path: /tmp/oci_api_key.pem
       TF_VAR_region: ${{ vars.OCI_REGION }}
-      TF_VAR_ssh_public_key_path: /tmp/deploy_key.pub
       TF_VAR_deploy_ssh_public_key_path: /tmp/deploy_key.pub
 
     defaults:

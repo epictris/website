@@ -49,7 +49,12 @@ resource "oci_core_instance" "website" {
   }
 
   metadata = {
-    ssh_authorized_keys = "${file(var.ssh_public_key_path)}${file(var.deploy_ssh_public_key_path)}"
+    ssh_authorized_keys = file(var.deploy_ssh_public_key_path)
     user_data           = base64encode(file("${path.module}/cloud-init.yaml"))
+  }
+
+  lifecycle {
+    # Keys are set at creation; ignore drift so re-applies never rebuild the box.
+    ignore_changes = [metadata["ssh_authorized_keys"]]
   }
 }
