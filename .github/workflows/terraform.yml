@@ -36,7 +36,18 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: |
+          cat > backend.hcl <<EOF
+          bucket           = "${{ vars.TF_STATE_BUCKET }}"
+          namespace        = "${{ vars.OCI_NAMESPACE }}"
+          key              = "website/terraform.tfstate"
+          region           = "${{ vars.OCI_REGION }}"
+          tenancy_ocid     = "${{ secrets.OCI_TENANCY_OCID }}"
+          user_ocid        = "${{ secrets.OCI_USER_OCID }}"
+          fingerprint      = "${{ secrets.OCI_FINGERPRINT }}"
+          private_key_path = "/tmp/oci_api_key.pem"
+          EOF
+          terraform init -backend-config=backend.hcl
 
       - name: Terraform Plan
         run: terraform plan

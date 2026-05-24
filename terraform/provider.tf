@@ -5,6 +5,13 @@ terraform {
       version = "~> 6.0"
     }
   }
+
+  # Partial config: bucket, namespace, key, region and credentials are
+  # supplied at `terraform init` time via -backend-config (see backend.hcl
+  # locally and the Terraform workflow for CI).
+  backend "oci" {
+    auth = "APIKey"
+  }
 }
 
 provider "oci" {
