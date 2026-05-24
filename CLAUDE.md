@@ -6,6 +6,8 @@ A personal website designed to emulate a terminal UI in the browser using [WebTU
 
 The site uses WebTUI's CSS utilities and components to make the interface feel like a genuine terminal UI — character-grid-based spacing (`ch`/`lh` units), box-drawing borders, and a monospace font throughout. Layout decisions should respect character columns: gaps, padding, and element widths should be expressed in `ch` units where possible.
 
+All text must use the same font size and font family — never set `font-size` or `font-family` on any element. Both are controlled via the `--font-size` and `--font-family` CSS variables set on `body` in `app.css`; WebTUI and all custom elements inherit from there.
+
 ## Stack
 
 - **Framework**: SolidStart (SolidJS + Vinxi)

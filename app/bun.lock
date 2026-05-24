@@ -9,6 +9,7 @@
         "@solidjs/router": "^0.15.0",
         "@solidjs/start": "^1.3.2",
         "@webtui/css": "^0.1.7",
+        "@webtui/plugin-nf": "^0.1.2",
         "solid-js": "^1.9.5",
         "vinxi": "^0.5.7",
       },
@@ -324,6 +325,8 @@
     "@vinxi/server-components": ["@vinxi/server-components@0.5.1", "", { "dependencies": { "@vinxi/plugin-directives": "0.5.1", "acorn": "^8.10.0", "acorn-loose": "^8.3.0", "acorn-typescript": "^1.4.3", "astring": "^1.8.6", "magicast": "^0.2.10", "recast": "^0.23.4" }, "peerDependencies": { "vinxi": "^0.5.5" } }, "sha512-0BsG95qac3dkhfdRZxqzqYWJE4NvPL7ILlV43B6K6ho1etXWB2e5b0IxsUAUbyqpqiXM7mSRivojuXjb2G4OsQ=="],
 
     "@webtui/css": ["@webtui/css@0.1.7", "", {}, "sha512-iPK/gRM0EPBSa1tyJINm2pRPuKoT1GryN0Qljar+gDaKHJPNExKvOmnVKk91JpsTUb8qXZd+ggSJJjns1fXLNg=="],
+
+    "@webtui/plugin-nf": ["@webtui/plugin-nf@0.1.2", "", {}, "sha512-jLvg6ay1T6oXgaVR2qqBUNFIRxgajY0CruGfYww9d1a7myDnCbkKgUjKlOD7NDnrlQhTvl/ul0J45AUHNC3UDg=="],
 
     "abbrev": ["abbrev@3.0.1", "", {}, "sha512-AO2ac6pjRB3SJmGJo+v5/aK6Omggp6fsLrs6wN9bd35ulu4cCwaAU9+7ZhXjeqHVkaHThLuzH0nZr0YpCDhygg=="],
 

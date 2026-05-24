@@ -1,4 +1,6 @@
 import { Title } from "@solidjs/meta";
+import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import { A } from "@solidjs/router";
 import "./index.css";
 
 const GitHubIcon = () => (
@@ -13,30 +15,141 @@ const LinkedInIcon = () => (
   </svg>
 );
 
-const YouTubeIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-  </svg>
-);
+type Post = {
+  slug: string;
+  title: string;
+  desc: string;
+  tags: string[];
+};
+
+const tagColors: Record<string, string> = {
+  meta: "#95e6cb",
+  tooling: "#ffd580",
+  lsp: "#73d0ff",
+  networking: "#bae67e",
+  web: "#d4bfff",
+};
+
+const posts: Post[] = [
+  {
+    slug: "hello-world",
+    title: "Hello, world",
+    desc: "An introduction to this site and what I plan to write about.",
+    tags: ["meta"],
+  },
+  {
+    slug: "pattern-matching-lsp",
+    title: "Building a pattern-matching LSP",
+    desc: "How I built a language-agnostic linter using regex pattern matching and the Language Server Protocol.",
+    tags: ["lsp", "tooling"],
+  },
+  {
+    slug: "online-clipboard",
+    title: "Sharing your clipboard across devices",
+    desc: "A walkthrough of building a minimal clipboard sync service that works over the open internet.",
+    tags: ["networking", "web"],
+  },
+];
+
+// Subsequence fuzzy score: returns null if not every query char appears in
+// order, otherwise a relevancy score that rewards contiguous runs and matches
+// at word boundaries.
+function fuzzyScore(query: string, text: string): number | null {
+  const q = query.toLowerCase().replace(/\s+/g, "");
+  if (q === "") return 0;
+  const t = text.toLowerCase();
+  let score = 0;
+  let qi = 0;
+  let prevMatch = -2;
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] !== q[qi]) continue;
+    let pts = 1;
+    if (prevMatch === i - 1) pts += 5; // consecutive char
+    if (i === 0 || /\W/.test(t[i - 1])) pts += 3; // start of a word
+    score += pts;
+    prevMatch = i;
+    qi++;
+  }
+  return qi === q.length ? score : null;
+}
 
 export default function Home() {
+  const [query, setQuery] = createSignal("");
+  let searchInput: HTMLInputElement | undefined;
+
+  onMount(() => searchInput?.focus());
+
+  const filtered = createMemo(() => {
+    const q = query();
+    return posts
+      .map((post) => {
+        const haystackScore = fuzzyScore(q, `${post.title} ${post.desc}`);
+        if (haystackScore === null) return null;
+        const titleScore = fuzzyScore(q, post.title) ?? 0;
+        return { post, score: haystackScore + titleScore * 3 };
+      })
+      .filter((m): m is { post: Post; score: number } => m !== null)
+      .sort((a, b) => b.score - a.score)
+      .map((m) => m.post);
+  });
+
   return (
     <main class="page">
       <Title>tris.sh</Title>
+
+      <nav class="site-nav" aria-label="Social links">
+        <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+          <GitHubIcon />
+        </a>
+        <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+          <LinkedInIcon />
+        </a>
+      </nav>
+
       <header box-="square" class="site-header">
-        <span class="site-title">tris.sh</span>
-        <nav class="site-nav" aria-label="Social links">
-          <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
-            <GitHubIcon />
-          </a>
-          <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
-            <LinkedInIcon />
-          </a>
-          {/* <a href="https://youtube.com/@trisbray" target="_blank" rel="noopener noreferrer" aria-label="YouTube"> */}
-          {/*   <YouTubeIcon /> */}
-          {/* </a> */}
-        </nav>
+        <input
+          ref={searchInput}
+          type="text"
+          class="site-search"
+          placeholder={"\uF002"}
+          aria-label="Search posts"
+          value={query()}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+        />
       </header>
+
+      <div class="content-section">
+        <div class="post-list">
+          <For each={filtered()}>
+            {(post) => (
+              <A href={`/blog/${post.slug}`} class="post-card" box-="square">
+                <span class="post-title">{post.title}</span>
+                <span class="post-desc">{post.desc}</span>
+                <span class="post-tags">
+                  <For each={post.tags}>
+                    {(tag) => (
+                      <span
+                        is-="badge"
+                        cap-="round"
+                        class="post-tag"
+                        style={{
+                          "--badge-color": tagColors[tag] ?? "#cbccc6",
+                          "--badge-text": "#1f2430",
+                        }}
+                      >
+                        {tag}
+                      </span>
+                    )}
+                  </For>
+                </span>
+              </A>
+            )}
+          </For>
+          <Show when={filtered().length === 0}>
+            <p class="no-results">no posts match "{query()}"</p>
+          </Show>
+        </div>
+      </div>
     </main>
   );
 }

@@ -1,8 +1,11 @@
 .page {
-  padding: 0 0.5ch;
+  position: relative;
+  padding: 0 0.5ch 2lh;
 }
 
 .site-header {
+  max-width: 110ch;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -10,15 +13,27 @@
   padding-right: 2.5ch;
 }
 
-.site-title {
-  font-weight: bold;
-  color: #65bddb;
+.site-search {
+  flex: 1;
+  background-color: transparent;
+  color: #cbccc6;
+  caret-color: #65bddb;
+  padding: 0;
+}
+
+.site-search::placeholder {
+  color: #cbccc6;
+  opacity: 0.5;
 }
 
 .site-nav {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 2ch;
+  padding: 1lh 2ch;
 }
 
 .site-nav a {
@@ -38,4 +53,59 @@
 
 .site-nav a:hover {
   opacity: 1;
+}
+
+.content-section {
+  max-width: 110ch;
+  margin: 0 auto;
+}
+
+.post-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.post-card {
+  display: block;
+  padding-inline: 1.5ch;
+  text-decoration: none;
+  color: inherit;
+}
+
+.post-card:hover {
+  --box-border-color: #65bddb;
+}
+
+.post-title {
+  position: absolute;
+  top: 0.5lh;
+  left: 1ch;
+  transform: translateY(-50%);
+  background: #1f2430;
+  padding: 0 0.5ch;
+  font-weight: bold;
+  color: #65bddb;
+}
+
+.post-desc {
+  color: #cbccc6;
+  opacity: 0.8;
+}
+
+.post-tags {
+  position: absolute;
+  bottom: 0.5lh;
+  right: 2ch;
+  transform: translateY(50%);
+  display: flex;
+  gap: 1ch;
+}
+
+.post-tag {
+  font-weight: bold;
+}
+
+.no-results {
+  padding-inline: 1.5ch;
+  opacity: 0.6;
 }
