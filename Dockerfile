@@ -3,7 +3,7 @@ WORKDIR /app
 COPY app/package.json app/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY app/ .
-RUN NITRO_PRESET=bun bun run build
+RUN bun run build
 
 FROM oven/bun:1-slim AS runner
 WORKDIR /app
