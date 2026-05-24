@@ -25,7 +25,7 @@ jobs:
         working-directory: terraform
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Write credentials
         run: |
@@ -33,7 +33,7 @@ jobs:
           chmod 600 /tmp/oci_api_key.pem
           echo "${{ vars.SSH_PUBLIC_KEY }}" > /tmp/deploy_key.pub
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
 
       - name: Terraform Init
         run: |
