@@ -38,10 +38,10 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Sync compose file
+      - name: Sync compose and Caddy config
         run: |
           rsync -az -e "ssh -i ~/.ssh/deploy_key" \
-            compose.yml ubuntu@${{ vars.SSH_HOST }}:/opt/website/
+            compose.yml Caddyfile ubuntu@${{ vars.SSH_HOST }}:/opt/website/
 
       - name: Pull and restart
         run: |

@@ -1,8 +1,23 @@
 services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - website
+
   website:
     image: ${WEBSITE_IMAGE}
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
     environment:
       - PORT=3000
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,7 @@
+{
+	email trispebray@gmail.com
+}
+
+tris.sh {
+	reverse_proxy website:3000
+}
