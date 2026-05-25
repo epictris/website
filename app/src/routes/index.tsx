@@ -34,13 +34,13 @@ const posts: Post[] = [
   {
     slug: "hello-world",
     title: "Hello, world",
-    desc: "An introduction to this site and what I plan to write about.",
+    desc: "An introduction to this site and what I plan to write about",
     tags: ["meta"],
   },
   {
     slug: "pattern-matching-lsp",
     title: "Pattern-matching LSP",
-    desc: "A language-agnostic LSP implementation based on regex pattern matching.",
+    desc: "A language-agnostic LSP implementation based on regex pattern matching",
     tags: ["lsp", "tooling"],
   },
   {
@@ -48,6 +48,54 @@ const posts: Post[] = [
     title: "Websocket clipboard",
     desc: "An online clipboard sharing application leveraging shared websocket sessions",
     tags: ["networking", "web"],
+  },
+  {
+    slug: "clocks",
+    title: "Text clocks",
+    desc: "Designing and manufacturing clocks that use natural-language to display time",
+    tags: [],
+  },
+  {
+    slug: "grappling-hook-game",
+    title: "2D grappling hook game",
+    desc: "My custom implementation of 2D grappling hook physics",
+    tags: [],
+  },
+  {
+    slug: "python-orm",
+    title: "Type-safe Python query builder",
+    desc: "A fully type-safe interface for dynamically building & validating complex query payloads",
+    tags: ["tooling"],
+  },
+  {
+    slug: "dnd-character-sheet",
+    title: "Obsidian canvas character sheet template",
+    desc: "A character sheet I made using Obsidian's Canvas feature.",
+    tags: [],
+  },
+  {
+    slug: "garmin-watch-face",
+    title: "Garmin watch face",
+    desc: "A custom watch face I developed for my garmin watch",
+    tags: [],
+  },
+  {
+    slug: "8ball-pool",
+    title: "8-ball pool",
+    desc: "A realtime 8-ball pool game I made",
+    tags: ["networking", "web"],
+  },
+  {
+    slug: "keyboard-layout",
+    title: "Custom keyboard layout",
+    desc: "How I designed my own keyboard layout",
+    tags: ["tooling"],
+  },
+  {
+    slug: "nvim-config",
+    title: "My neovim config",
+    desc: "Thoughts on the design and implementation of my neovim config",
+    tags: ["tooling", "lsp"],
   },
 ];
 
