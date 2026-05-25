@@ -9,17 +9,17 @@ export default function HelloWorld() {
       <article box-="square" class="post-body">
         <h1># Learning to love the CLI</h1>
         <p>
-          For most people, navigating a command line interface (CLI) is tantamount to black magic. Even among developers, CLIs are often seen as a necessary evil.
+          For most people, navigating a command line interface (CLI) is tantamount to black magic. Even among developers, CLIs are often treated as a necessary evil. A few years ago, I would only ever open a terminal if there was no other option. Today, I work almost exclusively from the terminal. This article documents that transition.
         </p>
         <br/>
-        <h2>## What's the point?</h2>
+        <h2>## Why would anyone use a CLI?</h2>
         <p>
-           I came across the phrase "terminal-based text editor" when I was in high school, at a time when my experience with command line interfaces essentially amounted to triggering the Sticky Keys root access exploit on Windows 7 machines, and trying (sometimes succeeding) to compile/run java code. I couldn't fathom why anyone would prefer to edit documents or search their file system with a tool as cumbersome and error-prone as a CLI. I already had VS Code for editing text, and File Explorer for navigating my file system - why would I need anything else?
+           I was in high school when I first encountered the phrase "terminal-based text editor". At the time my experience with command line interfaces essentially amounted to triggering the Sticky Keys root access exploit on Windows 7 machines, and trying (sometimes succeeding) to compile/run java code. I couldn't fathom why anyone would prefer to edit documents or search their file system with a tool as cumbersome and esoteric as a CLI. I had VS Code for text editing and File Explorer for navigating my file system - why would I need anything else?
         </p>
         <br/>
         <h2>## Forcing function</h2>
         <p>
-          In 2023 I started my first full-time software engineering role. Engineers were expected to merge 15 PRs into production each week, and though I wasn't expected to hit those KPIs immediately, it was obvious that the coding workflow I'd grown comfortable with in the preceding years wasn't going to cut it. The codebase was several orders of magnitude larger than any in which I'd previously worked, and every new ticket found me in new unfamiliar terrain.
+          In 2023 I started my first full-time software engineering role. Engineers were expected to merge 15 PRs into production each week, and though I wasn't expected to hit those KPIs immediately, it was obvious that the coding workflow I'd grown comfortable with in the preceding years wasn't going to cut it. The codebase was several orders of magnitude larger than any in which I'd previously worked, and every new ticket found me in unfamiliar terrain.
         </p>
         <br/>
         <h2>## The problem</h2>
@@ -27,13 +27,24 @@ export default function HelloWorld() {
           When given a task, I was perfectly capable of finding the relevant code, figuring out what change needed to be made, then implementing the feature/fixing the bug. 
           <br/>
           <br/>
-          But I wasn't fast.
+          But I was slow.
           <br/>
           <br/>
-          To create a file, I'd click through the file tree until I found the appropriate directory. To look for relevant code, I'd use VS Code's full text search and click through all the results until I found one that seemed relevant. To find a function or type definition, I'd use whatever language server extension I'd installed and hope that it would work when I needed it to. I'd open up so many tabs that I'd lose track of which were relevant to the current task and end up wasting time closing/reordering tabs and repeating searches I'd already made. I'd follow a code path that jumped around multiple files then struggle to find the file I was originally editing. I'd log in every morning and struggle to find what I'd been working on the previous evening. I'd waste time debugging my local dev environment after it had broken (or appeared to have broken) due to some simple misunderstanding.
+          Opening a file meant waiting 5-10 seconds for VS Code to boot and initialize. Creating a file meant clicking through a deeply nested file tree to find the target directory. Searching for relevant code meant running a full text search and clicking through all the results until I found one that seemed relevant. Finding a function or type definition meant using whatever language server extension I'd installed and hoping to get a result in a reasonable amount of time. I'd open up so many tabs that I'd lose track of the relevant files and end up wasting time closing/reordering tabs and repeating searches. I'd follow a code path that jumped across multiple files and lose track of which file I was editing. I'd log in every morning and struggle to locate everything I'd been working on the previous evening. I'd waste time debugging my local dev environment after it had broken (or appeared to have broken) due to a simple misunderstanding.
           <br/>
           <br/>
-          I felt like I was fighting against my own tools, but I also knew that the problems I was facing were solvable.
+          I felt like I was fighting against my tools, but I also knew that the problems I was facing were solvable.
+        </p>
+        <br/>
+        <h2>## The solution</h2>
+        <p>
+          I set some goals for my optimal workflow. I don't think I laid these out explicitly at the time, but in retrospect this is what I wanted:
+          <br/>
+          <br/>
+          <ul>
+            <li>At any time, regardless of what I am currently doing on my computer, I should be able to open any file from any workspace in less than 5 seconds.</li>
+            <li>Whenever I need to context switch, I should be able to instantly pick up wherever I left off once I'm able to refocus on the task.</li>
+          </ul>
         </p>
       </article>
     </main>

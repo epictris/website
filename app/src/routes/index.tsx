@@ -37,7 +37,7 @@ const posts: Post[] = [
   {
     slug: "learning-to-love-the-cli",
     title: "Learning to love the CLI",
-    desc: "How learning to love command line interfaces improved my ability to focus and write good code",
+    desc: "How embracing command line interfaces helps me focus and write better code",
     tags:  [Tag.tooling, Tag.workflow],
   },
   // {
