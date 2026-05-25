@@ -3,16 +3,6 @@
   padding: 0 0.5ch 2lh;
 }
 
-.banner {
-  white-space: pre;
-  max-width: 110ch;
-  margin: 0 auto 0ch;
-  padding-left: 0.5ch;
-  color: #65bddb;
-  font-weight: bold;
-  line-height: 1.1;
-}
-
 .search-wrapper {
   position: relative;
   max-width: 110ch;
@@ -70,35 +60,6 @@
 .site-search::placeholder {
   color: #cbccc6;
   opacity: 0.5;
-}
-
-.site-nav {
-  position: fixed;
-  bottom: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 2ch;
-  padding: 1lh 2ch;
-}
-
-.site-nav a {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1ch;
-  color: inherit;
-  text-decoration: none;
-  opacity: 0.7;
-  transition: opacity 0.1s;
-}
-
-.site-nav a svg {
-  flex-shrink: 0;
-}
-
-.site-nav a:hover {
-  opacity: 1;
 }
 
 .filter-btn {
@@ -217,7 +178,7 @@
   background: #1f2430;
   padding: 0 0.5ch;
   font-weight: bold;
-  color: #65bddb;
+  color: var(--foreground1);
 }
 
 .post-desc {

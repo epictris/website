@@ -3,100 +3,103 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { A } from "@solidjs/router";
 import "./index.css";
 
-const GitHubIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-  </svg>
-);
-
-const LinkedInIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-  </svg>
-);
-
 type Post = {
   slug: string;
   title: string;
   desc: string;
-  tags: string[];
+  tags: Tag[];
 };
 
-const tagColors: Record<string, string> = {
-  meta: "#95e6cb",
-  tooling: "#ffd580",
-  lsp: "#73d0ff",
-  networking: "#bae67e",
-  web: "#d4bfff",
+const GetTagColor: (tag: Tag) => string = (tag: Tag) => {
+  switch (tag) {
+    case Tag.tooling:
+      return "#ffd580";
+    case Tag.project:
+      return "#bae67e";
+    case Tag.web:
+      return "#d4bfff";
+    case Tag.game:
+      return "#ff9f94";
+    case Tag.workflow:
+      return "#dcabff";
+  }
+}
+
+const enum Tag {
+  tooling = "tooling",
+  project = "project",
+  web = "web",
+  game = "game",
+  workflow = "workflow",
 };
 
 const posts: Post[] = [
   {
-    slug: "hello-world",
-    title: "Hello, world",
-    desc: "An introduction to this site and what I plan to write about",
-    tags: ["meta"],
+    slug: "learning-to-love-the-cli",
+    title: "Learning to love the CLI",
+    desc: "How learning to love command line interfaces made me a more productive developer",
+    tags:  [Tag.tooling, Tag.workflow],
   },
-  {
-    slug: "pattern-matching-lsp",
-    title: "Pattern-matching LSP",
-    desc: "A language-agnostic LSP implementation based on regex pattern matching",
-    tags: ["lsp", "tooling"],
-  },
-  {
-    slug: "online-clipboard",
-    title: "Websocket clipboard",
-    desc: "An online clipboard sharing application leveraging shared websocket sessions",
-    tags: ["networking", "web"],
-  },
-  {
-    slug: "clocks",
-    title: "Text clocks",
-    desc: "Designing and manufacturing clocks that use natural-language to display time",
-    tags: [],
-  },
-  {
-    slug: "grappling-hook-game",
-    title: "2D grappling hook game",
-    desc: "My custom implementation of 2D grappling hook physics",
-    tags: [],
-  },
-  {
-    slug: "python-orm",
-    title: "Type-safe Python query builder",
-    desc: "A fully type-safe interface for dynamically building & validating complex query payloads",
-    tags: ["tooling"],
-  },
-  {
-    slug: "dnd-character-sheet",
-    title: "Obsidian canvas character sheet",
-    desc: "A character sheet I made using Obsidian's Canvas feature.",
-    tags: [],
-  },
-  {
-    slug: "garmin-watch-face",
-    title: "Garmin watch face",
-    desc: "A custom watch face I developed for my garmin watch",
-    tags: [],
-  },
-  {
-    slug: "8ball-pool",
-    title: "8-ball pool",
-    desc: "A realtime 8-ball pool game I made",
-    tags: ["networking", "web"],
-  },
-  {
-    slug: "keyboard-layout",
-    title: "Custom keyboard layout",
-    desc: "How I designed my own keyboard layout",
-    tags: ["tooling"],
-  },
-  {
-    slug: "nvim-config",
-    title: "My neovim config",
-    desc: "Thoughts on the design and implementation of my neovim config",
-    tags: ["tooling", "lsp"],
-  },
+  // {
+  //   slug: "pattern-matching-lsp",
+  //   title: "Pattern-matching LSP",
+  //   desc: "A language-agnostic LSP implementation based on regex pattern matching",
+  //   tags: [Tag.tooling, Tag.project],
+  // },
+  // {
+  //   slug: "online-clipboard",
+  //   title: "Websocket clipboard",
+  //   desc: "An online clipboard sharing application leveraging shared websocket sessions",
+  //   tags: [Tag.web, Tag.project],
+  // },
+  // {
+  //   slug: "clocks",
+  //   title: "Text clocks",
+  //   desc: "Designing and manufacturing clocks that use natural-language to display time",
+  //   tags: [Tag.project],
+  // },
+  // {
+  //   slug: "grappling-hook-game",
+  //   title: "2D grappling hook game",
+  //   desc: "My custom implementation of 2D grappling hook physics",
+  //   tags: [Tag.game, Tag.project],
+  // },
+  // {
+  //   slug: "python-orm",
+  //   title: "Python query builder",
+  //   desc: "A type-safe interface for building & validating complex query payloads",
+  //   tags: [Tag.tooling, Tag.project],
+  // },
+  // {
+  //   slug: "dnd-character-sheet",
+  //   title: "Obsidian canvas character sheet",
+  //   desc: "A character sheet I made using Obsidian's Canvas feature.",
+  //   tags: [Tag.project],
+  // },
+  // {
+  //   slug: "garmin-watch-face",
+  //   title: "Garmin watch face",
+  //   desc: "A custom watch face I developed for my garmin watch",
+  //   tags: [Tag.project],
+  // },
+  // {
+  //   slug: "8ball-pool",
+  //   title: "8-ball pool",
+  //   desc: "A realtime 8-ball pool game I made",
+  //   tags: [ Tag.web, Tag.game],
+  // },
+  // {
+  //   slug: "keyboard-layout",
+  //   title: "Custom keyboard layout",
+  //   desc: "How I designed my own keyboard layout",
+  //   tags: [Tag.tooling],
+  // },
+  // {
+  //   slug: "nvim-config",
+  //   title: "My neovim config",
+  //   desc: "Thoughts on the design and implementation of my neovim config",
+  //   tags: [  Tag.tooling],
+  // },
 ];
 
 function fuzzyScore(query: string, text: string): number | null {
@@ -120,16 +123,9 @@ function fuzzyScore(query: string, text: string): number | null {
 
 const allTags = [...new Set(posts.flatMap((post) => post.tags))];
 
-const banner = String.raw` ╭─╮     ╭─╮           ╭─╮
-╭╯ ╰─┬─┬─┼─┼───╮   ╭───┤ └──╮
-╰╮ ╭─┤ ╭─┤ │ ──┤   │ ──┤ ╭╮ │
- │ │ │ │ │ ├── │╭─╮├── │ ││ │
- ╰─╯ ╰─╯ ╰─┴───╯╰─╯╰───┴─╯╰─╯
-`;
-
 export default function Home() {
   const [query, setQuery] = createSignal("");
-  const [selectedTags, setSelectedTags] = createSignal<string[]>([]);
+  const [selectedTags, setSelectedTags] = createSignal<Tag[]>([]);
   const [filterOpen, setFilterOpen] = createSignal(false);
   const [focused, setFocused] = createSignal(false);
   let searchInput: HTMLInputElement | undefined;
@@ -146,10 +142,10 @@ export default function Home() {
     onCleanup(() => document.removeEventListener("click", handleClick));
   });
 
-  const addTag = (tag: string) =>
+  const addTag = (tag: Tag) =>
     setSelectedTags((prev) => [...prev, tag]);
 
-  const removeTag = (tag: string) =>
+  const removeTag = (tag: Tag) =>
     setSelectedTags((prev) => prev.filter((t) => t !== tag));
 
   const availableTags = createMemo(() =>
@@ -176,18 +172,7 @@ export default function Home() {
     <main class="page">
       <Title>tris.sh</Title>
 
-      <nav class="site-nav" aria-label="Social links">
-        <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
-          <GitHubIcon />
-        </a>
-        <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
-          <LinkedInIcon />
-        </a>
-      </nav>
-
-      <div class="banner" aria-hidden="true">{banner}</div>
-
-      <div class="search-wrapper" ref={wrapperEl}>
+<div class="search-wrapper" ref={wrapperEl}>
         <header box-="square" class="site-header">
           <div class="search-row">
             <span class="search-prompt" aria-hidden="true">❯</span>
@@ -232,7 +217,7 @@ export default function Home() {
                     role="button"
                     tabindex="0"
                     class="active-tag"
-                    style={{ "--badge-color": tagColors[tag] ?? "#cbccc6", "--badge-text": "#1f2430" }}
+                    style={{ "--badge-color": GetTagColor(tag) ?? "#cbccc6", "--badge-text": "#1f2430" }}
                     onClick={() => removeTag(tag)}
                     onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && removeTag(tag)}
                     aria-label={`Remove ${tag} filter`}
@@ -252,7 +237,7 @@ export default function Home() {
                 <button
                   type="button"
                   class="available-tag"
-                  style={{ "--tag-color": tagColors[tag] ?? "#cbccc6" }}
+                  style={{ "--tag-color": GetTagColor(tag) ?? "#cbccc6" }}
                   onClick={() => addTag(tag)}
                 >
                   {tag}
@@ -270,7 +255,7 @@ export default function Home() {
         <div class="post-list">
           <For each={filtered()}>
             {(post) => (
-              <A href={`/blog/${post.slug}`} class="post-card" box-="square">
+              <A href={`/p/${post.slug}`} class="post-card" box-="square">
                 <span class="post-title">{post.title}</span>
                 <span class="post-desc">{post.desc}</span>
                 <span class="post-tags">
@@ -281,7 +266,7 @@ export default function Home() {
                         cap-="round"
                         class="post-tag"
                         style={{
-                          "--badge-color": tagColors[tag] ?? "#cbccc6",
+                          "--badge-color": GetTagColor(tag) ?? "#cbccc6",
                           "--badge-text": "#1f2430",
                         }}
                       >

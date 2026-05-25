@@ -1,0 +1,9 @@
+.post-page {
+  padding: 0 0.5ch 2lh;
+}
+
+.post-body {
+  max-width: 110ch;
+  margin: 0 auto;
+  padding-inline: 1.5ch;
+}
