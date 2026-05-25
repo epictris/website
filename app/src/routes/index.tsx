@@ -75,11 +75,12 @@ function fuzzyScore(query: string, text: string): number | null {
 
 const allTags = [...new Set(posts.flatMap((post) => post.tags))];
 
-const banner = String.raw` _        _              _
-| |_ _ __(_)___      ___| |__
-| __| '__| / __|    / __| '_ \
-| |_| |  | \__ \ _  \__ \ | | |
- \__|_|  |_|___/(_) |___/_| |_|`;
+const banner = String.raw` ╭─╮      ╭─╮           ╭─╮
+╭╯ ╰─┬─┬──┼─┼───╮   ╭───┤ └──╮
+╰╮ ╭─┤ ╭──┤ │ ──┤   │ ──┤ ╭╮ │
+ │ │ │ │  │ ├── │╭─╮├── │ ││ │
+ ╰─╯ ╰─╯  ╰─┴───╯╰─╯╰───┴─╯╰─╯
+`;
 
 export default function Home() {
   const [query, setQuery] = createSignal("");
