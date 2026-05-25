@@ -148,7 +148,8 @@
 }
 
 .filter-dropdown {
-  padding-bottom: 0;
+  padding-top: 2lh;
+  padding-bottom: 1lh;
   margin-top: calc(-1lh - 2px);
   display: flex;
   flex-wrap: wrap;
