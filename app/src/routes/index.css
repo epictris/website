@@ -6,7 +6,7 @@
 .banner {
   white-space: pre;
   max-width: 110ch;
-  margin: 0 auto 1ch;
+  margin: 0 auto 0ch;
   padding-left: 0.5ch;
   color: #65bddb;
   font-weight: bold;
@@ -22,7 +22,7 @@
 .site-header {
   display: flex;
   flex-direction: column;
-  padding-inline: 2.5ch;
+  padding-inline: 1.5ch;
   position: relative;
   z-index: 1;
 }
@@ -30,7 +30,7 @@
 .search-row {
   display: flex;
   align-items: center;
-  gap: 2ch;
+  gap: 1ch;
 }
 
 .search-prompt {
@@ -193,8 +193,8 @@
 
 .post-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0 2ch;
+  grid-template-columns: repeat(auto-fill, minmax(34.5ch, 1fr));
+  gap: 0 1ch;
 }
 
 .post-card {

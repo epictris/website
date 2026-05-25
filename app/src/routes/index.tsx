@@ -69,7 +69,7 @@ const posts: Post[] = [
   },
   {
     slug: "dnd-character-sheet",
-    title: "Obsidian canvas character sheet template",
+    title: "Obsidian canvas character sheet",
     desc: "A character sheet I made using Obsidian's Canvas feature.",
     tags: [],
   },
