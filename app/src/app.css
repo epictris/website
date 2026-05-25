@@ -43,10 +43,14 @@
 }
 
 :root {
-  --foreground0: #ed7979;
+  --foreground0: #cbccc6;
   --foreground1: #cbccc6;
+  h1 { color: #ed7979; }
   h2 {
     color: #dec06f;
+  }
+  h3 {
+    color: #c5a3d9;
   }
 }
 
