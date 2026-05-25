@@ -1,5 +1,5 @@
 import { Title } from "@solidjs/meta";
-import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { A } from "@solidjs/router";
 import "./index.css";
 
@@ -39,21 +39,18 @@ const posts: Post[] = [
   },
   {
     slug: "pattern-matching-lsp",
-    title: "Building a pattern-matching LSP",
-    desc: "How I built a language-agnostic linter using regex pattern matching and the Language Server Protocol.",
+    title: "Pattern-matching LSP",
+    desc: "A language-agnostic LSP implementation based on regex pattern matching.",
     tags: ["lsp", "tooling"],
   },
   {
     slug: "online-clipboard",
-    title: "Sharing your clipboard across devices",
-    desc: "A walkthrough of building a minimal clipboard sync service that works over the open internet.",
+    title: "Websocket clipboard",
+    desc: "An online clipboard sharing application leveraging shared websocket sessions",
     tags: ["networking", "web"],
   },
 ];
 
-// Subsequence fuzzy score: returns null if not every query char appears in
-// order, otherwise a relevancy score that rewards contiguous runs and matches
-// at word boundaries.
 function fuzzyScore(query: string, text: string): number | null {
   const q = query.toLowerCase().replace(/\s+/g, "");
   if (q === "") return 0;
@@ -64,8 +61,8 @@ function fuzzyScore(query: string, text: string): number | null {
   for (let i = 0; i < t.length && qi < q.length; i++) {
     if (t[i] !== q[qi]) continue;
     let pts = 1;
-    if (prevMatch === i - 1) pts += 5; // consecutive char
-    if (i === 0 || /\W/.test(t[i - 1])) pts += 3; // start of a word
+    if (prevMatch === i - 1) pts += 5;
+    if (i === 0 || /\W/.test(t[i - 1])) pts += 3;
     score += pts;
     prevMatch = i;
     qi++;
@@ -85,20 +82,37 @@ const banner = String.raw` ╭─╮      ╭─╮           ╭─╮
 export default function Home() {
   const [query, setQuery] = createSignal("");
   const [selectedTags, setSelectedTags] = createSignal<string[]>([]);
+  const [filterOpen, setFilterOpen] = createSignal(false);
+  const [focused, setFocused] = createSignal(false);
   let searchInput: HTMLInputElement | undefined;
+  let wrapperEl: HTMLDivElement | undefined;
 
-  onMount(() => searchInput?.focus());
+  onMount(() => {
+    searchInput?.focus();
+    const handleClick = (e: MouseEvent) => {
+      if (!e.composedPath().includes(wrapperEl!)) {
+        setFilterOpen(false);
+      }
+    };
+    document.addEventListener("click", handleClick);
+    onCleanup(() => document.removeEventListener("click", handleClick));
+  });
 
-  const toggleTag = (tag: string) =>
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
-    );
+  const addTag = (tag: string) =>
+    setSelectedTags((prev) => [...prev, tag]);
+
+  const removeTag = (tag: string) =>
+    setSelectedTags((prev) => prev.filter((t) => t !== tag));
+
+  const availableTags = createMemo(() =>
+    allTags.filter((t) => !selectedTags().includes(t)),
+  );
 
   const filtered = createMemo(() => {
     const q = query();
     const tags = selectedTags();
     return posts
-      .filter((post) => tags.length === 0 || post.tags.some((t) => tags.includes(t)))
+      .filter((post) => tags.length === 0 || tags.every((t) => post.tags.includes(t)))
       .map((post) => {
         const haystackScore = fuzzyScore(q, `${post.title} ${post.desc}`);
         if (haystackScore === null) return null;
@@ -125,37 +139,83 @@ export default function Home() {
 
       <div class="banner" aria-hidden="true">{banner}</div>
 
-      <header box-="square" class="site-header">
-        <input
-          ref={searchInput}
-          type="text"
-          class="site-search"
-          placeholder={"\uF002"}
-          aria-label="Search posts"
-          value={query()}
-          onInput={(e) => setQuery(e.currentTarget.value)}
-        />
-      </header>
-
-      <div class="tag-filters">
-        <For each={allTags}>
-          {(tag) => (
+      <div class="search-wrapper" ref={wrapperEl}>
+        <header box-="square" class="site-header">
+          <div class="search-row">
+            <span class="search-prompt" aria-hidden="true">❯</span>
+            <div class="search-input-area">
+              <input
+                ref={searchInput}
+                type="text"
+                class="site-search"
+                placeholder={""}
+                aria-label="Search posts"
+                value={query()}
+                onInput={(e) => setQuery(e.currentTarget.value)}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+              />
+              <span
+                class="block-cursor"
+                classList={{ active: focused() }}
+                style={{ left: `${query().length}ch` }}
+                aria-hidden="true"
+              >█</span>
+            </div>
             <button
               type="button"
-              is-="button"
-              size-="small"
-              class="tag-filter"
-              classList={{ active: selectedTags().includes(tag) }}
-              style={{
-                "--button-primary": tagColors[tag] ?? "#cbccc6",
-                "--tag-color": tagColors[tag] ?? "#cbccc6",
-              }}
-              onClick={() => toggleTag(tag)}
+              class="filter-btn"
+              classList={{ active: selectedTags().length > 0 }}
+              onClick={() => setFilterOpen((p) => !p)}
+              aria-expanded={filterOpen()}
+              aria-label="Filter by tag"
             >
-              {tag}
+              [tags]
             </button>
-          )}
-        </For>
+          </div>
+
+          <Show when={selectedTags().length > 0}>
+            <div class="selected-tags-bar">
+              <For each={selectedTags()}>
+                {(tag) => (
+                  <span
+                    is-="badge"
+                    cap-="round"
+                    role="button"
+                    tabindex="0"
+                    class="active-tag"
+                    style={{ "--badge-color": tagColors[tag] ?? "#cbccc6", "--badge-text": "#1f2430" }}
+                    onClick={() => removeTag(tag)}
+                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && removeTag(tag)}
+                    aria-label={`Remove ${tag} filter`}
+                  >
+                    {tag}
+                  </span>
+                )}
+              </For>
+            </div>
+          </Show>
+        </header>
+
+        <Show when={filterOpen()}>
+          <div class="filter-dropdown" box-="square">
+            <For each={availableTags()}>
+              {(tag) => (
+                <button
+                  type="button"
+                  class="available-tag"
+                  style={{ "--tag-color": tagColors[tag] ?? "#cbccc6" }}
+                  onClick={() => addTag(tag)}
+                >
+                  {tag}
+                </button>
+              )}
+            </For>
+            <Show when={availableTags().length === 0}>
+              <span class="no-available-tags">all tags selected</span>
+            </Show>
+          </div>
+        </Show>
       </div>
 
       <div class="content-section">
@@ -186,7 +246,7 @@ export default function Home() {
             )}
           </For>
           <Show when={filtered().length === 0}>
-            <p class="no-results">no posts match "{query()}"</p>
+            <p class="no-results">no matching posts found</p>
           </Show>
         </div>
       </div>
