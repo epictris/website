@@ -39,13 +39,11 @@ export default function HelloWorld() {
         <h2>## The solution</h2>
         <p>
           I set some goals for my optimal workflow. I don't think I laid these out explicitly at the time, but in retrospect this is what I wanted:
-          <br/>
-          <br/>
-          <ul>
-            <li>At any time, regardless of what I am currently doing on my computer, I should be able to open any file from any workspace in less than 5 seconds.</li>
-            <li>Whenever I need to context switch, I should be able to instantly pick up wherever I left off once I'm able to refocus on the task.</li>
-          </ul>
         </p>
+        <ul>
+          <li>At any time, regardless of what I am currently doing on my computer, I should be able to open any file in any workspace in less than 5 seconds.</li>
+          <li>Whenever I need to context switch, I should be able to instantly pick up wherever I left off once I'm able to refocus on the task.</li>
+        </ul>
       </article>
     </main>
   );
