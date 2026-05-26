@@ -1,4 +1,4 @@
-import { MetaProvider, Title } from "@solidjs/meta";
+import { Link, MetaProvider, Title } from "@solidjs/meta";
 import { A, Router } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { Suspense } from "solid-js";
@@ -29,6 +29,8 @@ export default function App() {
       root={props => (
         <MetaProvider>
           <Title>tris.sh</Title>
+          <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
+          <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Bold.woff2" as="font" type="font/woff2" crossorigin="" />
           <div is-="view">
             <A href="/" class="banner" aria-label="Home">{banner}</A>
             <div is-="view-content">
