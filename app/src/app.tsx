@@ -1,7 +1,7 @@
 import { Link, MetaProvider, Title } from "@solidjs/meta";
-import { A, Router } from "@solidjs/router";
+import { A, Router, useLocation } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
-import { Suspense } from "solid-js";
+import { Show, Suspense, type ParentProps } from "solid-js";
 import "./app.css";
 
 const GitHubIcon = () => (
@@ -23,31 +23,40 @@ const banner = ` ╭─╮     ╭─╮           ╭─╮
  ╰─╯ ╰─╯ ╰─┴───╯╰─╯╰───┴─╯╰─╯
 `;
 
+function AppShell(props: ParentProps) {
+  const location = useLocation();
+  const isHome = () => location.pathname === "/";
+
+  return (
+    <MetaProvider>
+      <Title>tris.sh</Title>
+      <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
+      <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Bold.woff2" as="font" type="font/woff2" crossorigin="" />
+      <div is-="view">
+        <Show when={!isHome()}>
+          <A href="/" class="banner" aria-label="Home">{banner}</A>
+        </Show>
+        <div is-="view-content">
+          <Suspense>{props.children}</Suspense>
+        </div>
+        <Show when={!isHome()}>
+          <nav class="site-nav" aria-label="Social links">
+            <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+              <GitHubIcon />
+            </a>
+            <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+              <LinkedInIcon />
+            </a>
+          </nav>
+        </Show>
+      </div>
+    </MetaProvider>
+  );
+}
+
 export default function App() {
   return (
-    <Router
-      root={props => (
-        <MetaProvider>
-          <Title>tris.sh</Title>
-          <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
-          <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Bold.woff2" as="font" type="font/woff2" crossorigin="" />
-          <div is-="view">
-            <A href="/" class="banner" aria-label="Home">{banner}</A>
-            <div is-="view-content">
-              <Suspense>{props.children}</Suspense>
-            </div>
-            <nav class="site-nav" aria-label="Social links">
-              <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
-                <GitHubIcon />
-              </a>
-              <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
-                <LinkedInIcon />
-              </a>
-            </nav>
-          </div>
-        </MetaProvider>
-      )}
-    >
+    <Router root={props => <AppShell>{props.children}</AppShell>}>
       <FileRoutes />
     </Router>
   );

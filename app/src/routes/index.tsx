@@ -1,6 +1,6 @@
 import { Title } from "@solidjs/meta";
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { A } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { A, useNavigate } from "@solidjs/router";
 import "./index.css";
 
 type Post = {
@@ -8,98 +8,40 @@ type Post = {
   title: string;
   desc: string;
   tags: Tag[];
+  date: string;
+  reading: number;
 };
 
-const GetTagColor: (tag: Tag) => string = (tag: Tag) => {
+const GetTagColor = (tag: Tag): string => {
   switch (tag) {
-    case Tag.tooling:
-      return "#ffd580";
-    case Tag.project:
-      return "#bae67e";
-    case Tag.web:
-      return "#d4bfff";
-    case Tag.game:
-      return "#ff9f94";
-    case Tag.workflow:
-      return "#dcabff";
+    case Tag.tooling:  return "#ffd580";
+    case Tag.project:  return "#bae67e";
+    case Tag.web:      return "#d4bfff";
+    case Tag.game:     return "#ff9f94";
+    case Tag.workflow: return "#dcabff";
   }
-}
+};
 
 const enum Tag {
-  tooling = "tooling",
-  project = "project",
-  web = "web",
-  game = "game",
+  tooling  = "tooling",
+  project  = "project",
+  web      = "web",
+  game     = "game",
   workflow = "workflow",
-};
+}
 
 const posts: Post[] = [
-  {
-    slug: "learning-to-love-the-cli",
-    title: "Learning to love the CLI",
-    desc: "How embracing command line interfaces helps me focus and write better code",
-    tags:  [Tag.tooling, Tag.workflow],
-  },
-  // {
-  //   slug: "pattern-matching-lsp",
-  //   title: "Pattern-matching LSP",
-  //   desc: "A language-agnostic LSP implementation based on regex pattern matching",
-  //   tags: [Tag.tooling, Tag.project],
-  // },
-  // {
-  //   slug: "online-clipboard",
-  //   title: "Websocket clipboard",
-  //   desc: "An online clipboard sharing application leveraging shared websocket sessions",
-  //   tags: [Tag.web, Tag.project],
-  // },
-  // {
-  //   slug: "clocks",
-  //   title: "Text clocks",
-  //   desc: "Designing and manufacturing clocks that use natural-language to display time",
-  //   tags: [Tag.project],
-  // },
-  // {
-  //   slug: "grappling-hook-game",
-  //   title: "2D grappling hook game",
-  //   desc: "My custom implementation of 2D grappling hook physics",
-  //   tags: [Tag.game, Tag.project],
-  // },
-  // {
-  //   slug: "python-orm",
-  //   title: "Python query builder",
-  //   desc: "A type-safe interface for building & validating complex query payloads",
-  //   tags: [Tag.tooling, Tag.project],
-  // },
-  // {
-  //   slug: "dnd-character-sheet",
-  //   title: "Obsidian canvas character sheet",
-  //   desc: "A character sheet I made using Obsidian's Canvas feature.",
-  //   tags: [Tag.project],
-  // },
-  // {
-  //   slug: "garmin-watch-face",
-  //   title: "Garmin watch face",
-  //   desc: "A custom watch face I developed for my garmin watch",
-  //   tags: [Tag.project],
-  // },
-  // {
-  //   slug: "8ball-pool",
-  //   title: "8-ball pool",
-  //   desc: "A realtime 8-ball pool game I made",
-  //   tags: [ Tag.web, Tag.game],
-  // },
-  // {
-  //   slug: "keyboard-layout",
-  //   title: "Custom keyboard layout",
-  //   desc: "How I designed my own keyboard layout",
-  //   tags: [Tag.tooling],
-  // },
-  // {
-  //   slug: "nvim-config",
-  //   title: "My neovim config",
-  //   desc: "Thoughts on the design and implementation of my neovim config",
-  //   tags: [  Tag.tooling],
-  // },
+  { slug: "nvim-config",                   title: "My neovim config",                   desc: "Thoughts on the design and implementation of my neovim config",                   tags: [Tag.tooling],               date: "2025-11-18", reading: 10 },
+  { slug: "keyboard-layout",              title: "Custom keyboard layout",              desc: "How I designed my own keyboard layout",                                           tags: [Tag.tooling],               date: "2025-12-02", reading: 8  },
+  { slug: "8ball-pool",                    title: "8-ball pool",                        desc: "A realtime 8-ball pool game I made",                                              tags: [Tag.web, Tag.game],         date: "2025-12-20", reading: 6  },
+  { slug: "garmin-watch-face",             title: "Garmin watch face",                  desc: "A custom watch face I developed for my Garmin watch",                             tags: [Tag.project],               date: "2026-01-15", reading: 5  },
+  { slug: "dnd-character-sheet",           title: "Obsidian canvas character sheet",    desc: "A character sheet I made using Obsidian's Canvas feature",                        tags: [Tag.project],               date: "2026-02-01", reading: 4  },
+  { slug: "python-orm",                    title: "Python query builder",               desc: "A type-safe interface for building & validating complex query payloads",           tags: [Tag.tooling, Tag.project],  date: "2026-02-18", reading: 6  },
+  { slug: "grappling-hook-game",           title: "2D grappling hook game",             desc: "My custom implementation of 2D grappling hook physics",                           tags: [Tag.game, Tag.project],     date: "2026-03-05", reading: 5  },
+  { slug: "clocks",                        title: "Text clocks",                         desc: "Designing and manufacturing clocks that use natural-language to display time",     tags: [Tag.project],               date: "2026-03-22", reading: 7  },
+  { slug: "online-clipboard",              title: "Websocket clipboard",                 desc: "An online clipboard sharing application leveraging shared websocket sessions",     tags: [Tag.web, Tag.project],      date: "2026-04-10", reading: 5  },
+  { slug: "pattern-matching-lsp",          title: "Pattern-matching LSP",               desc: "A language-agnostic LSP implementation based on regex pattern matching",           tags: [Tag.tooling, Tag.project],  date: "2026-04-28", reading: 8  },
+  { slug: "learning-to-love-the-cli",      title: "Learning to love the CLI",           desc: "How embracing command line interfaces helps me focus and write better code",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-12", reading: 6  },
 ];
 
 function fuzzyScore(query: string, text: string): number | null {
@@ -121,165 +63,157 @@ function fuzzyScore(query: string, text: string): number | null {
   return qi === q.length ? score : null;
 }
 
-const allTags = [...new Set(posts.flatMap((post) => post.tags))];
-
 export default function Home() {
   const [query, setQuery] = createSignal("");
-  const [selectedTags, setSelectedTags] = createSignal<Tag[]>([]);
-  const [filterOpen, setFilterOpen] = createSignal(false);
+  const [selectedIndex, setSelectedIndex] = createSignal(0);
   const [focused, setFocused] = createSignal(false);
+
   let searchInput: HTMLInputElement | undefined;
-  let wrapperEl: HTMLDivElement | undefined;
+  let listPanel: HTMLDivElement | undefined;
+  const navigate = useNavigate();
 
   onMount(() => {
     searchInput?.focus();
-    const handleClick = (e: MouseEvent) => {
-      if (!e.composedPath().includes(wrapperEl!)) {
-        setFilterOpen(false);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex(i => Math.min(i + 1, filtered().length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex(i => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        const post = filtered()[selectedIndex()];
+        if (post) navigate(`/p/${post.slug}`);
       }
     };
-    document.addEventListener("click", handleClick);
-    onCleanup(() => document.removeEventListener("click", handleClick));
+    document.addEventListener("keydown", handleKeyDown);
+    onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
   });
-
-  const addTag = (tag: Tag) =>
-    setSelectedTags((prev) => [...prev, tag]);
-
-  const removeTag = (tag: Tag) =>
-    setSelectedTags((prev) => prev.filter((t) => t !== tag));
-
-  const availableTags = createMemo(() =>
-    allTags.filter((t) => !selectedTags().includes(t)),
-  );
 
   const filtered = createMemo(() => {
     const q = query();
-    const tags = selectedTags();
+    if (q === "") {
+      return [...posts].sort((a, b) => b.date.localeCompare(a.date));
+    }
     return posts
-      .filter((post) => tags.length === 0 || tags.every((t) => post.tags.includes(t)))
-      .map((post) => {
-        const haystackScore = fuzzyScore(q, `${post.title} ${post.desc}`);
+      .map(post => {
+        const haystack = `${post.title} ${post.desc} ${post.tags.join(" ")}`;
+        const haystackScore = fuzzyScore(q, haystack);
         if (haystackScore === null) return null;
         const titleScore = fuzzyScore(q, post.title) ?? 0;
         return { post, score: haystackScore + titleScore * 3 };
       })
       .filter((m): m is { post: Post; score: number } => m !== null)
       .sort((a, b) => b.score - a.score)
-      .map((m) => m.post);
+      .map(m => m.post);
   });
+
+  createEffect(() => {
+    filtered();
+    setSelectedIndex(0);
+  });
+
+  createEffect(() => {
+    const idx  = selectedIndex();
+    const rows = listPanel?.querySelectorAll<HTMLElement>(".post-row");
+    rows?.[idx]?.scrollIntoView({ block: "nearest" });
+  });
+
+  const selectedPost = createMemo(() => filtered()[selectedIndex()]);
 
   return (
     <main class="page">
       <Title>tris.sh</Title>
 
-<div class="search-wrapper" ref={wrapperEl}>
-        <header box-="square" class="site-header">
-          <div class="search-row">
-            <span class="search-prompt" aria-hidden="true">❯</span>
-            <div class="search-input-area">
-              <input
-                ref={searchInput}
-                type="text"
-                class="site-search"
-                placeholder={""}
-                aria-label="Search posts"
-                value={query()}
-                onInput={(e) => setQuery(e.currentTarget.value)}
-                onFocus={() => setFocused(true)}
-                onBlur={() => setFocused(false)}
-              />
-              <span
-                class="block-cursor"
-                classList={{ active: focused() }}
-                style={{ left: `${query().length}ch` }}
-                aria-hidden="true"
-              >█</span>
+      <div class="h-sep" aria-hidden="true" />
+      <A href="/" class="site-title-bar">tris.sh</A>
+      <div class="h-sep" aria-hidden="true" />
+
+      <div class="split-view">
+        <div class="left-column">
+          <div class="top-bar">
+            <div class="top-bar-left">
+              <span class="top-prompt" aria-hidden="true">❯</span>
+              <span class="top-number-spacer" aria-hidden="true" />
+              <div class="search-input-area">
+                <input
+                  ref={searchInput}
+                  type="text"
+                  class="site-search"
+                  aria-label="Search posts"
+                  value={query()}
+                  onInput={e => setQuery(e.currentTarget.value)}
+                  onFocus={() => setFocused(true)}
+                  onBlur={() => setFocused(false)}
+                />
+                <span
+                  class="block-cursor"
+                  classList={{ active: focused() }}
+                  style={{ left: `${query().length}ch` }}
+                  aria-hidden="true"
+                >█</span>
+              </div>
             </div>
-            <button
-              type="button"
-              class="filter-btn"
-              classList={{ active: selectedTags().length > 0 }}
-              onClick={() => setFilterOpen((p) => !p)}
-              aria-expanded={filterOpen()}
-              aria-label="Filter by tag"
-            >
-              [tags]
-            </button>
+            <div class="top-bar-right">
+              <span class="post-count">{filtered().length}/{posts.length}</span>
+            </div>
           </div>
-
-          <Show when={selectedTags().length > 0}>
-            <div class="selected-tags-bar">
-              <For each={selectedTags()}>
-                {(tag) => (
-                  <span
-                    is-="badge"
-                    cap-="round"
-                    role="button"
-                    tabindex="0"
-                    class="active-tag"
-                    style={{ "--badge-color": GetTagColor(tag) ?? "#cbccc6", "--badge-text": "#1f2430" }}
-                    onClick={() => removeTag(tag)}
-                    onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && removeTag(tag)}
-                    aria-label={`Remove ${tag} filter`}
-                  >
-                    {tag}
-                  </span>
-                )}
-              </For>
-            </div>
-          </Show>
-        </header>
-
-        <Show when={filterOpen()}>
-          <div class="filter-dropdown" box-="square">
-            <For each={availableTags()}>
-              {(tag) => (
-                <button
-                  type="button"
-                  class="available-tag"
-                  style={{ "--tag-color": GetTagColor(tag) ?? "#cbccc6" }}
-                  onClick={() => addTag(tag)}
+          <div class="h-sep" aria-hidden="true" />
+          <div class="post-list-panel" ref={listPanel}>
+            <For each={filtered()}>
+              {(post, i) => (
+                <A
+                  href={`/p/${post.slug}`}
+                  class="post-row"
+                  classList={{ selected: i() === selectedIndex() }}
+                  onMouseEnter={() => setSelectedIndex(i())}
                 >
-                  {tag}
-                </button>
+                  <span class="row-indicator" aria-hidden="true">{i() === selectedIndex() ? "❯" : ""}</span>
+                  <span class="row-number">{(i() + 1).toString().padStart(2, "0")}</span>
+                  <span class="row-title">{post.title}</span>
+                  <span class="row-tags">
+                    <For each={post.tags}>
+                      {tag => <span class="row-tag" style={{ color: GetTagColor(tag) }}>#{tag}</span>}
+                    </For>
+                  </span>
+                  <span class="row-date">{post.date}</span>
+                </A>
               )}
             </For>
-            <Show when={availableTags().length === 0}>
-              <span class="no-available-tags">all tags selected</span>
+            <Show when={filtered().length === 0}>
+              <p class="no-results">no matching posts found</p>
             </Show>
           </div>
-        </Show>
-      </div>
+        </div>
 
-      <div class="content-section">
-        <div class="post-list">
-          <For each={filtered()}>
-            {(post) => (
-              <A href={`/p/${post.slug}`} class="post-card" box-="square">
-                <span class="post-title">{post.title}</span>
-                <span class="post-desc">{post.desc}</span>
-                <span class="post-tags">
-                  <For each={post.tags}>
-                    {(tag) => (
+        <div class="preview-panel">
+          <Show when={selectedPost()}>
+            {post => (
+              <div class="preview-content">
+                <p class="preview-title">{post().title}</p>
+                <div class="preview-tags">
+                  <For each={post().tags}>
+                    {tag => (
                       <span
                         is-="badge"
                         cap-="round"
-                        class="post-tag"
-                        style={{
-                          "--badge-color": GetTagColor(tag) ?? "#cbccc6",
-                          "--badge-text": "#1f2430",
-                        }}
+                        style={{ "--badge-color": GetTagColor(tag), "--badge-text": "#1f2430" }}
                       >
                         {tag}
                       </span>
                     )}
                   </For>
-                </span>
-              </A>
+                </div>
+                <p class="preview-desc">{post().desc}.</p>
+                <div class="preview-meta">
+                  <span class="meta-key">date</span>    <span class="meta-val">{post().date}</span>
+                  <span class="meta-key">kind</span>    <span class="meta-val">post</span>
+                  <span class="meta-key">reading</span> <span class="meta-val">{post().reading} min</span>
+                  <span class="meta-key">slug</span>    <span class="meta-val">~/posts/{post().slug}</span>
+                </div>
+              </div>
             )}
-          </For>
-          <Show when={filtered().length === 0}>
-            <p class="no-results">no matching posts found</p>
           </Show>
         </div>
       </div>
