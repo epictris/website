@@ -41,7 +41,7 @@ const posts: Post[] = [
   { slug: "clocks",                        title: "Text clocks",                         desc: "Designing and manufacturing clocks that use natural-language to display time",     tags: [Tag.project],               date: "2026-03-22", reading: 7  },
   { slug: "online-clipboard",              title: "Websocket clipboard",                 desc: "An online clipboard sharing application leveraging shared websocket sessions",     tags: [Tag.web, Tag.project],      date: "2026-04-10", reading: 5  },
   { slug: "pattern-matching-lsp",          title: "Pattern-matching LSP",               desc: "A language-agnostic LSP implementation based on regex pattern matching",           tags: [Tag.tooling, Tag.project],  date: "2026-04-28", reading: 8  },
-  { slug: "learning-to-love-the-cli",      title: "Learning to love the CLI",           desc: "How embracing command line interfaces helps me focus and write better code",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-12", reading: 6  },
+  { slug: "my-terminal-addiction",      title: "My terminal addiction",           desc: "I tried fzf one time and it took over my life",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6  },
 ];
 
 function fuzzyScore(query: string, text: string): number | null {
@@ -84,7 +84,7 @@ export default function Home() {
         setSelectedIndex(i => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         const post = filtered()[selectedIndex()];
-        if (post) navigate(`/p/${post.slug}`);
+        if (post) navigate(`/post/${post.slug}`);
       }
     };
     document.addEventListener("keydown", handleKeyDown);
@@ -164,7 +164,7 @@ export default function Home() {
             <For each={filtered()}>
               {(post, i) => (
                 <A
-                  href={`/p/${post.slug}`}
+                  href={`/post/${post.slug}`}
                   class="post-row"
                   classList={{ selected: i() === selectedIndex() }}
                   onMouseEnter={() => setSelectedIndex(i())}
@@ -210,7 +210,7 @@ export default function Home() {
                   <span class="meta-key">date</span>    <span class="meta-val">{post().date}</span>
                   <span class="meta-key">kind</span>    <span class="meta-val">post</span>
                   <span class="meta-key">reading</span> <span class="meta-val">{post().reading} min</span>
-                  <span class="meta-key">slug</span>    <span class="meta-val">~/posts/{post().slug}</span>
+                  <span class="meta-key">slug</span>    <span class="meta-val">~/post/{post().slug}</span>
                 </div>
               </div>
             )}

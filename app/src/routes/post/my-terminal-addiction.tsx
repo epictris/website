@@ -7,10 +7,18 @@ export default function HelloWorld() {
       <Title>Learning to love the CLI — tris.sh</Title>
 
       <article box-="square" class="post-body">
-        <h1># Learning to love the CLI</h1>
+        <h1># My terminal addiction</h1>
         <p>
-          For most people, navigating a command line interface (CLI) is tantamount to black magic. Even among developers, CLIs are often treated as a necessary evil. A few years ago, I would only ever open a terminal if there was no other option. Today, I work almost exclusively from the terminal. This article documents that transition.
+          When I first heard about fzf, I didn't really understand why anyone would use it. I had a vague notion about what it did, but at the time I guess I just didn't really feel like I needed it. That all changed when I moved halfway across the world for a software engineering role in 2023. I was struggling to hit my performance targets and I started looking for a fix.
         </p>
+        <br/>
+
+        <h2>## What is fzf?</h2>
+        <p>
+          Fzf is a command-line fuzzy finder. It's a tool that lets you search through a list of items and select one of them. It's similar to how you might use the search bar in a web browser to find a specific website. Fzf is a powerful tool that can be used in many different ways, but for the purposes of this post I'll focus on its use as a fuzzy finder.
+        </p>
+
+
         <br/>
         <h2>## Why would anyone use a CLI?</h2>
         <p>
