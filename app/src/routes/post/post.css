@@ -1,9 +1,45 @@
 .post-page {
-  padding: 0 0.5ch 2lh;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.post-page .post-body {
+  flex: 1;
+}
+
+.post-preview {
+  max-width: 110ch;
+  margin: 0 auto;
+  padding: 0lh 1.5ch;
+  width: 100%;
 }
 
 .post-body {
   max-width: 110ch;
   margin: 0 auto;
-  padding-inline: 1.5ch;
+  padding: 0lh 1.5ch 2lh;
+}
+
+.post-body code {
+  background: #161b22;
+  border: 1px solid #313244;
+  border-radius: 3px;
+  padding: 0 0.5ch;
+}
+
+.post-body pre {
+  background: #161b22;
+  border: 1px solid #313244;
+  border-radius: 3px;
+  padding: 0.5lh 1ch;
+  margin: 0.5lh 0;
+  overflow-x: auto;
+}
+
+.post-body pre code {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }

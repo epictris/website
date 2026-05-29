@@ -16,12 +16,6 @@ const LinkedInIcon = () => (
   </svg>
 );
 
-const banner = ` ╭─╮     ╭─╮           ╭─╮
-╭╯ ╰─┬─┬─┼─┼───╮   ╭───┤ └──╮
-╰╮ ╭─┤ ╭─┤ │ ──┤   │ ──┤ ╭╮ │
- │ │ │ │ │ ├── │╭─╮├── │ ││ │
- ╰─╯ ╰─╯ ╰─┴───╯╰─╯╰───┴─╯╰─╯
-`;
 
 function AppShell(props: ParentProps) {
   const location = useLocation();
@@ -33,9 +27,6 @@ function AppShell(props: ParentProps) {
       <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
       <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Bold.woff2" as="font" type="font/woff2" crossorigin="" />
       <div is-="view">
-        <Show when={!isHome()}>
-          <A href="/" class="banner" aria-label="Home">{banner}</A>
-        </Show>
         <div is-="view-content">
           <Suspense>{props.children}</Suspense>
         </div>

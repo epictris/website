@@ -47,7 +47,7 @@
   --foreground1: #cbccc6;
   h1 { color: #ed7979; }
   h2 {
-    color: #dec06f;
+    color: #cbccc6;
   }
   h3 {
     color: #c5a3d9;
@@ -62,6 +62,82 @@ body {
   background-color: #1f2430;
   --box-border-color: #313244;
   min-height: 100dvh;
+}
+
+/* ── Site header ────────────────────────────────────────── */
+
+.h-sep {
+  height: 1lh;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.h-sep::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #313244;
+}
+
+.site-title-bar {
+  display: flex;
+  align-items: center;
+  height: 1lh;
+  flex-shrink: 0;
+  padding: 0 1ch;
+  color: #65bddb;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.site-title-bar:hover {
+  color: #cbccc6;
+}
+
+/* ── Preview content ────────────────────────────────────── */
+
+.preview-content {
+  margin-top: 1lh;
+  display: flex;
+  flex-direction: column;
+  gap: 1lh;
+}
+
+.preview-title {
+  font-weight: bold;
+  color: #cbccc6;
+}
+
+.preview-title-hash {
+  color: #65bddb;
+}
+
+.preview-tags {
+  display: flex;
+  gap: 1ch;
+  flex-wrap: wrap;
+}
+
+.preview-desc {
+  color: #cbccc6;
+  opacity: 0.75;
+}
+
+.preview-meta {
+  display: grid;
+  grid-template-columns: 9ch 1fr;
+}
+
+.meta-key {
+  color: #cbccc6;
+  opacity: 0.4;
+}
+
+.meta-val {
+  color: #cbccc6;
 }
 
 .banner {

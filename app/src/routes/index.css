@@ -7,38 +7,15 @@
   background: #1f2430;
 }
 
-/* ── Site title bar ─────────────────────────────────────── */
+/* ── Column-split separator ──────────────────────────────── */
 
-.site-title-bar {
-  display: flex;
-  align-items: center;
-  height: 1lh;
-  flex-shrink: 0;
-  padding: 0 1ch;
-  color: #65bddb;
-  font-weight: bold;
-  text-decoration: none;
-}
-
-.site-title-bar:hover {
-  color: #cbccc6;
-}
-
-/* ── Separators ─────────────────────────────────────────── */
-
-.h-sep {
-  height: 1lh;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.h-sep::after {
+.h-sep-vline::before {
   content: "";
   position: absolute;
+  left: calc(50% - 1px);
   top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
+  bottom: 0;
+  width: 1px;
   background: #313244;
 }
 
@@ -229,41 +206,8 @@
 }
 
 
-.preview-content {
-  display: flex;
-  flex-direction: column;
-  gap: 1lh;
-}
-
-.preview-title {
+.preview-panel .preview-title {
   margin-top: 1lh;
-  font-weight: bold;
-  color: #cbccc6;
-}
-
-.preview-tags {
-  display: flex;
-  gap: 1ch;
-  flex-wrap: wrap;
-}
-
-.preview-desc {
-  color: #cbccc6;
-  opacity: 0.75;
-}
-
-.preview-meta {
-  display: grid;
-  grid-template-columns: 9ch 1fr;
-}
-
-.meta-key {
-  color: #cbccc6;
-  opacity: 0.4;
-}
-
-.meta-val {
-  color: #cbccc6;
 }
 
 

@@ -1,34 +1,8 @@
 import { Title } from "@solidjs/meta";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
+import { PostPreview, Tag, getTagColor, type Post } from "../components/PostPreview";
 import "./index.css";
-
-type Post = {
-  slug: string;
-  title: string;
-  desc: string;
-  tags: Tag[];
-  date: string;
-  reading: number;
-};
-
-const GetTagColor = (tag: Tag): string => {
-  switch (tag) {
-    case Tag.tooling:  return "#ffd580";
-    case Tag.project:  return "#bae67e";
-    case Tag.web:      return "#d4bfff";
-    case Tag.game:     return "#ff9f94";
-    case Tag.workflow: return "#dcabff";
-  }
-};
-
-const enum Tag {
-  tooling  = "tooling",
-  project  = "project",
-  web      = "web",
-  game     = "game",
-  workflow = "workflow",
-}
 
 const posts: Post[] = [
   { slug: "nvim-config",                   title: "My neovim config",                   desc: "Thoughts on the design and implementation of my neovim config",                   tags: [Tag.tooling],               date: "2025-11-18", reading: 10 },
@@ -128,7 +102,7 @@ export default function Home() {
 
       <div class="h-sep" aria-hidden="true" />
       <A href="/" class="site-title-bar">tris.sh</A>
-      <div class="h-sep" aria-hidden="true" />
+      <div class="h-sep h-sep-vline" aria-hidden="true" />
 
       <div class="split-view">
         <div class="left-column">
@@ -174,7 +148,7 @@ export default function Home() {
                   <span class="row-title">{post.title}</span>
                   <span class="row-tags">
                     <For each={post.tags}>
-                      {tag => <span class="row-tag" style={{ color: GetTagColor(tag) }}>#{tag}</span>}
+                      {tag => <span class="row-tag" style={{ color: getTagColor(tag) }}>#{tag}</span>}
                     </For>
                   </span>
                   <span class="row-date">{post.date}</span>
@@ -189,31 +163,7 @@ export default function Home() {
 
         <div class="preview-panel">
           <Show when={selectedPost()}>
-            {post => (
-              <div class="preview-content">
-                <p class="preview-title">{post().title}</p>
-                <div class="preview-tags">
-                  <For each={post().tags}>
-                    {tag => (
-                      <span
-                        is-="badge"
-                        cap-="round"
-                        style={{ "--badge-color": GetTagColor(tag), "--badge-text": "#1f2430" }}
-                      >
-                        {tag}
-                      </span>
-                    )}
-                  </For>
-                </div>
-                <p class="preview-desc">{post().desc}.</p>
-                <div class="preview-meta">
-                  <span class="meta-key">date</span>    <span class="meta-val">{post().date}</span>
-                  <span class="meta-key">kind</span>    <span class="meta-val">post</span>
-                  <span class="meta-key">reading</span> <span class="meta-val">{post().reading} min</span>
-                  <span class="meta-key">slug</span>    <span class="meta-val">~/post/{post().slug}</span>
-                </div>
-              </div>
-            )}
+            {post => <PostPreview post={post()} />}
           </Show>
         </div>
       </div>
