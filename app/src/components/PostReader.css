@@ -1,61 +1,61 @@
 /* ── Reader: snapshot header + full post body ─────────────── */
 
 .reader {
-  display: block;
+	display: block;
 }
 
 .post-preview {
-  max-width: 110ch;
-  margin: 0 auto;
-  padding: 0 1.5ch;
-  width: 100%;
-  min-width: 0;
+	max-width: 110ch;
+	margin: 0 auto;
+	padding: 0 1.5ch;
+	width: 100%;
+	min-width: 0;
 }
 
 .post-body {
-  max-width: 110ch;
-  margin: 0 auto;
-  padding: 0 1.5ch;
-  padding-bottom: 2lh;
-  /* Flex/grid item: without an explicit width it sizes to the widest child (a
+	max-width: 110ch;
+	margin: 0 auto;
+	padding: 0 1.5ch;
+	padding-bottom: 2lh;
+	/* Flex/grid item: without an explicit width it sizes to the widest child (a
      code block), blowing past the viewport. width:100% pins it to the parent so
      prose wraps and code blocks scroll within their own box. */
-  width: 100%;
-  min-width: 0;
+	width: 100%;
+	min-width: 0;
 }
 
 .post-body p {
-  overflow-wrap: break-word;
+	overflow-wrap: break-word;
 }
 
 .post-body code {
-  background: #161b22;
-  border: 1px solid #313244;
-  border-radius: 3px;
-  padding: 0 0.5ch;
+	background: #161b22;
+	border: 1px solid #313244;
+	border-radius: 3px;
+	padding: 0 0.5ch;
 }
 
 .post-body pre {
-  background: #161b22;
-  border: 1px solid #313244;
-  border-radius: 3px;
-  padding: 0.5lh 1ch;
-  margin: 0.5lh 0;
-  max-width: 100%;
-  overflow-x: auto;
+	background: #161b22;
+	border: 1px solid #313244;
+	border-radius: 3px;
+	padding: 0.5lh 1ch;
+	margin: 0.5lh 0;
+	max-width: 100%;
+	overflow-x: auto;
 }
 
 .post-body pre code {
-  background: none;
-  border: none;
-  border-radius: 0;
-  padding: 0;
+	background: none;
+	border: none;
+	border-radius: 0;
+	padding: 0;
 }
 
 .post-body .code-block {
-  margin: 0.5lh 0;
+	margin: 0.5lh 0;
 }
 
 .post-body .code-block pre {
-  margin: 0;
+	margin: 0;
 }

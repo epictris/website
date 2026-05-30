@@ -3,11 +3,12 @@ import { PostReader } from "../components/PostReader";
 import { getPost, mostRecentSlug } from "../content/posts";
 
 export default function Home() {
-  const post = getPost(mostRecentSlug())!;
-  return (
-    <>
-      <Title>tris.sh</Title>
-      <PostReader post={post} />
-    </>
-  );
+	const post = getPost(mostRecentSlug());
+	if (!post) throw new Error("No posts found");
+	return (
+		<>
+			<Title>tris.sh</Title>
+			<PostReader post={post} />
+		</>
+	);
 }

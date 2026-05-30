@@ -1,210 +1,214 @@
 @layer base, utils, components;
-@import '@webtui/css/base.css';
-@import '@webtui/css/utils/box.css';
-@import '@webtui/css/components/typography.css';
-@import '@webtui/css/components/view.css';
-@import '@webtui/css/components/input.css';
-@import '@webtui/css/components/badge.css';
-@import '@webtui/css/components/button.css';
-@import '@webtui/plugin-nf';
+@import "@webtui/css/base.css";
+@import "@webtui/css/utils/box.css";
+@import "@webtui/css/components/typography.css";
+@import "@webtui/css/components/view.css";
+@import "@webtui/css/components/input.css";
+@import "@webtui/css/components/badge.css";
+@import "@webtui/css/components/button.css";
+@import "@webtui/plugin-nf";
 
 @font-face {
-  font-family: 'FantasqueSansM Nerd Font';
-  src: url('/fonts/FantasqueSansMNerdFont-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+	font-family: "FantasqueSansM Nerd Font";
+	src: url("/fonts/FantasqueSansMNerdFont-Regular.woff2") format("woff2");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
 }
 
 @font-face {
-  font-family: 'FantasqueSansM Nerd Font';
-  src: url('/fonts/FantasqueSansMNerdFont-Bold.woff2') format('woff2');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
+	font-family: "FantasqueSansM Nerd Font";
+	src: url("/fonts/FantasqueSansMNerdFont-Bold.woff2") format("woff2");
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
 }
 
 * {
-  box-sizing: border-box;
+	box-sizing: border-box;
 }
 
 /* Hide the document's vertical scrollbar (kept scrollable) */
 html {
-  scrollbar-width: none;
+	scrollbar-width: none;
 }
 
 html::-webkit-scrollbar {
-  display: none;
+	display: none;
 }
 
-[is-~=view] {
-  width: 100%;
-  min-height: 100dvh;
+[is-~="view"] {
+	width: 100%;
+	min-height: 100dvh;
 }
 
-[is-~=view-content] {
-  position: static;
-  transform: none;
-  width: 100%;
-  height: auto;
-  overflow: visible;
-  word-break: normal;
+[is-~="view-content"] {
+	position: static;
+	transform: none;
+	width: 100%;
+	height: auto;
+	overflow: visible;
+	word-break: normal;
 }
 
 :root {
-  --foreground0: #cbccc6;
-  --foreground1: #cbccc6;
-  h1 { color: #ed7979; }
-  h2 {
-    color: #cbccc6;
-  }
-  h3 {
-    color: #c5a3d9;
-  }
+	--foreground0: #cbccc6;
+	--foreground1: #cbccc6;
+	h1 {
+		color: #ed7979;
+	}
+	h2 {
+		color: #cbccc6;
+	}
+	h3 {
+		color: #c5a3d9;
+	}
 }
 
 body {
-  margin: 0;
-  padding: 0;
-  --font-family: 'FantasqueSansM Nerd Font', 'Fantasque Sans Mono', monospace, "Symbols Nerd Font";
-  --font-size: 1.3rem;
-  background-color: #1f2430;
-  --box-border-color: #313244;
-  min-height: 100dvh;
+	margin: 0;
+	padding: 0;
+	--font-family:
+		"FantasqueSansM Nerd Font", "Fantasque Sans Mono", monospace,
+		"Symbols Nerd Font";
+	--font-size: 1.3rem;
+	background-color: #1f2430;
+	--box-border-color: #313244;
+	min-height: 100dvh;
 }
 
 /* ── Site header ────────────────────────────────────────── */
 
 .h-sep {
-  height: 1lh;
-  position: relative;
-  flex-shrink: 0;
+	height: 1lh;
+	position: relative;
+	flex-shrink: 0;
 }
 
 .h-sep::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: #313244;
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 0;
+	right: 0;
+	height: 1px;
+	background: #313244;
 }
 
 /* ── Preview content ────────────────────────────────────── */
 
 .preview-content {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
+	display: flex;
+	flex-direction: row;
+	align-items: flex-start;
 }
 
 .preview-title {
-  font-weight: bold;
-  color: #cbccc6;
+	font-weight: bold;
+	color: #cbccc6;
 }
 
 .preview-title-hash {
-  color: #65bddb;
+	color: #65bddb;
 }
 
 .preview-tags {
-  display: flex;
-  gap: 1ch;
-  flex-wrap: wrap;
+	display: flex;
+	gap: 1ch;
+	flex-wrap: wrap;
 }
 
 .preview-desc {
-  color: #cbccc6;
-  opacity: 0.75;
-  margin: 0;
+	color: #cbccc6;
+	opacity: 0.75;
+	margin: 0;
 }
 
 .preview-meta {
-  /* Sized to its content and pushed to the right edge of the container. */
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: 9ch max-content;
-  align-content: start;
+	/* Sized to its content and pushed to the right edge of the container. */
+	flex: 0 0 auto;
+	display: grid;
+	grid-template-columns: 9ch max-content;
+	align-content: start;
 }
 
 .preview-right {
-  /* Grows to fill the space up to the metadata column. */
-  flex: 1;
-  min-width: 0;
-  padding-right: 4ch;
-  display: flex;
-  flex-direction: column;
-  gap: 1lh;
+	/* Grows to fill the space up to the metadata column. */
+	flex: 1;
+	min-width: 0;
+	padding-right: 4ch;
+	display: flex;
+	flex-direction: column;
+	gap: 1lh;
 }
 
 /* Narrow (< 800px): stack the preview, metadata above the title */
 @media (max-width: 800px) {
-  .preview-content {
-    flex-direction: column;
-    gap: 1lh;
-  }
+	.preview-content {
+		flex-direction: column;
+		gap: 1lh;
+	}
 
-  .preview-meta {
-    flex: none;
-    width: 100%;
-    order: 0;
-  }
+	.preview-meta {
+		flex: none;
+		width: 100%;
+		order: 0;
+	}
 
-  .preview-right {
-    flex: none;
-    width: 100%;
-    padding-right: 0;
-    order: 1;
-  }
+	.preview-right {
+		flex: none;
+		width: 100%;
+		padding-right: 0;
+		order: 1;
+	}
 }
 
 .meta-key {
-  color: #cbccc6;
-  opacity: 0.4;
+	color: #cbccc6;
+	opacity: 0.4;
 }
 
 .meta-val {
-  color: #cbccc6;
+	color: #cbccc6;
 }
 
 .banner {
-  display: block;
-  white-space: pre;
-  max-width: 110ch;
-  margin: 0 auto 0ch;
-  padding-left: 0.5ch;
-  color: #65bddb;
-  font-weight: bold;
-  line-height: 1.1;
-  text-decoration: none;
+	display: block;
+	white-space: pre;
+	max-width: 110ch;
+	margin: 0 auto 0ch;
+	padding-left: 0.5ch;
+	color: #65bddb;
+	font-weight: bold;
+	line-height: 1.1;
+	text-decoration: none;
 }
 
 .site-nav {
-  position: fixed;
-  bottom: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 2ch;
-  padding: 1lh 2ch;
+	position: fixed;
+	bottom: 0;
+	right: 0;
+	display: flex;
+	align-items: center;
+	gap: 2ch;
+	padding: 1lh 2ch;
 }
 
 .site-nav a {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1ch;
-  color: inherit;
-  text-decoration: none;
-  opacity: 0.7;
-  transition: opacity 0.1s;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1ch;
+	color: inherit;
+	text-decoration: none;
+	opacity: 0.7;
+	transition: opacity 0.1s;
 }
 
 .site-nav a svg {
-  flex-shrink: 0;
+	flex-shrink: 0;
 }
 
 .site-nav a:hover {
-  opacity: 1;
+	opacity: 1;
 }

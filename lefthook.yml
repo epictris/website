@@ -1,0 +1,18 @@
+# Git hooks for tris.sh. The app (and its tooling) lives in app/, so every
+# command sets `root: app/` — lefthook then filters {staged_files} to that dir
+# and runs the command from inside it.
+pre-commit:
+  parallel: true
+  commands:
+    # Biome lint + format on the staged files only, auto-fixing what it safely
+    # can and re-staging the result. Unfixable errors block the commit.
+    biome:
+      root: "app/"
+      glob: "*.{ts,tsx,js,jsx,css,json,jsonc}"
+      run: bunx biome check --write --error-on-warnings --no-errors-on-unmatched {staged_files}
+      stage_fixed: true
+    # Type-check the whole project (tsc can't sensibly run per-file here).
+    typecheck:
+      root: "app/"
+      glob: "*.{ts,tsx}"
+      run: bunx tsc --noEmit
