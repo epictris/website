@@ -218,7 +218,7 @@ export function PostShell(props: ParentProps) {
         // Reading at the very top: a downward drag may pull the search pane in.
         mode = "pending-open";
         startHeight = 0;
-        openHeight = sidepanel.parentElement ? sidepanel.parentElement.clientHeight * 0.4 : 0;
+        openHeight = sidepanel.parentElement ? sidepanel.parentElement.clientHeight * 0.5 : 0;
       } else {
         mode = null;
       }
@@ -237,7 +237,10 @@ export function PostShell(props: ParentProps) {
         setSelectedIndex(idx === -1 ? 0 : idx);
       }
       if (mode === "close") {
-        const desired = startHeight + dy; // dy is negative while dragging up
+        // Dragging up collapses the list (its top edge tracks the finger);
+        // dragging down is ignored — the list never grows past its open height,
+        // so the preview's top edge can't slide down below it.
+        const desired = startHeight + Math.min(dy, 0);
         if (desired > 0) {
           setDragHeight(desired); // collapsing the list, top edge tracks the finger
         } else {
@@ -265,16 +268,30 @@ export function PostShell(props: ParentProps) {
       setDragging(false); // enable the transition
       animating = true;
       if (m === "close") {
-        if ((dragHeight() ?? 0) <= 0) {
+        const h = dragHeight() ?? startHeight;
+        if (h <= 0) {
           closePalette(); // already collapsed into the content — finish now
           animating = false;
-        } else {
+        } else if (h < startHeight * 0.75) {
+          // Dragged up at least a quarter of the way — commit to closing.
           requestAnimationFrame(() => setDragHeight(0));
           window.setTimeout(() => { closePalette(); animating = false; }, ANIM_MS);
+        } else {
+          // Didn't drag up far enough, or dragged back down — snap open again.
+          requestAnimationFrame(() => setDragHeight(startHeight));
+          window.setTimeout(() => { setDragHeight(null); animating = false; }, ANIM_MS);
         }
       } else {
-        requestAnimationFrame(() => setDragHeight(openHeight));
-        window.setTimeout(() => { setOpen(true); setDragHeight(null); animating = false; }, ANIM_MS);
+        const h = dragHeight() ?? 0;
+        if (h >= openHeight * 0.25) {
+          // Dragged down at least a quarter of the way — commit to opening.
+          requestAnimationFrame(() => setDragHeight(openHeight));
+          window.setTimeout(() => { setOpen(true); setDragHeight(null); animating = false; }, ANIM_MS);
+        } else {
+          // Didn't drag down far enough, or dragged back up — snap closed again.
+          requestAnimationFrame(() => setDragHeight(0));
+          window.setTimeout(() => { setDragHeight(null); animating = false; }, ANIM_MS);
+        }
       }
     };
 
