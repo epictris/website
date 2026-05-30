@@ -48,13 +48,13 @@ export default function Home() {
   const navigate = useNavigate();
 
   onMount(() => {
-    searchInput?.focus();
-
     const mq = window.matchMedia("(max-width: 768px)");
     setIsNarrow(mq.matches);
     const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches);
     mq.addEventListener("change", onChange);
     onCleanup(() => mq.removeEventListener("change", onChange));
+
+    if (!mq.matches) searchInput?.focus();
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
