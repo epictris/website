@@ -40,6 +40,9 @@ export function PostShell(props: ParentProps) {
   // Open from the very first render on the home page, so the palette is already
   // shown on load — no open-flicker (desktop) or opening animation (mobile).
   const [open, setOpen] = createSignal(location.pathname === "/");
+  // Whether the search input genuinely holds focus — drives the blinking
+  // cursor, which should only flash while you're actually typing into it.
+  const [focused, setFocused] = createSignal(false);
   const [isNarrow, setIsNarrow] = createSignal(false);
   // Mobile drag-to-open/close: the live list-pane height in px while the user
   // drags (null = use the CSS height), and whether a finger drag is actively
@@ -328,16 +331,17 @@ export function PostShell(props: ParentProps) {
             aria-label="search"
             value={query()}
             onInput={e => setQuery(e.currentTarget.value)}
-            onFocus={() => setOpen(true)}
+            onFocus={() => { setFocused(true); setOpen(true); }}
+            onBlur={() => setFocused(false)}
           />
-          <Show when={open()}>
+          <Show when={focused()}>
             <span
               class="block-cursor active"
               style={{ left: `${query().length}ch` }}
               aria-hidden="true"
             >█</span>
           </Show>
-          <Show when={!open() && query() === ""}>
+          <Show when={!focused() && query() === ""}>
             <span class="search-hint" aria-hidden="true">
               search <span class="search-hint-key">/</span>
             </span>
