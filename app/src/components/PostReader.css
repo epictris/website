@@ -5,7 +5,7 @@
 }
 
 .post-preview {
-	max-width: 110ch;
+	max-width: 90ch;
 	margin: 0 auto;
 	padding: 0 1.5ch;
 	width: 100%;
@@ -13,7 +13,7 @@
 }
 
 .post-body {
-	max-width: 110ch;
+	max-width: 90ch;
 	margin: 0 auto;
 	padding: 0 1.5ch;
 	padding-bottom: 2lh;
