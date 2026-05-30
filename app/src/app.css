@@ -28,6 +28,15 @@
   box-sizing: border-box;
 }
 
+/* Hide the document's vertical scrollbar (kept scrollable) */
+html {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
 [is-~=view] {
   width: 100%;
   min-height: 100dvh;

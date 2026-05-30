@@ -7,7 +7,7 @@ import "./post.css";
 const post = {
   slug: "my-terminal-addiction",
   title: "My terminal addiction",
-  desc: "I tried fzf one time and it took over my life",
+  desc: "I tried fzf one time and I've been chasing that high ever since",
   tags: [Tag.tooling, Tag.workflow],
   date: "2026-05-29",
   reading: 6,

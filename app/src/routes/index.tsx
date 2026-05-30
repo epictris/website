@@ -15,7 +15,7 @@ const posts: Post[] = [
   { slug: "clocks",                        title: "Text clocks",                         desc: "Designing and manufacturing clocks that use natural-language to display time",     tags: [Tag.project],               date: "2026-03-22", reading: 7  },
   { slug: "online-clipboard",              title: "Websocket clipboard",                 desc: "An online clipboard sharing application leveraging shared websocket sessions",     tags: [Tag.web, Tag.project],      date: "2026-04-10", reading: 5  },
   { slug: "pattern-matching-lsp",          title: "Pattern-matching LSP",               desc: "A language-agnostic LSP implementation based on regex pattern matching",           tags: [Tag.tooling, Tag.project],  date: "2026-04-28", reading: 8  },
-  { slug: "my-terminal-addiction",      title: "My terminal addiction",           desc: "I tried fzf one time and it took over my life",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6  },
+  { slug: "my-terminal-addiction",      title: "My terminal addiction",           desc: "I tried fzf one time and I've been chasing that high ever since",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6  },
 ];
 
 function fuzzyScore(query: string, text: string): number | null {
@@ -41,6 +41,7 @@ export default function Home() {
   const [query, setQuery] = createSignal("");
   const [selectedIndex, setSelectedIndex] = createSignal(0);
   const [focused, setFocused] = createSignal(false);
+  const [isNarrow, setIsNarrow] = createSignal(false);
 
   let searchInput: HTMLInputElement | undefined;
   let listPanel: HTMLDivElement | undefined;
@@ -48,6 +49,12 @@ export default function Home() {
 
   onMount(() => {
     searchInput?.focus();
+
+    const mq = window.matchMedia("(max-width: 768px)");
+    setIsNarrow(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches);
+    mq.addEventListener("change", onChange);
+    onCleanup(() => mq.removeEventListener("change", onChange));
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
@@ -141,9 +148,17 @@ export default function Home() {
                   href={`/post/${post.slug}`}
                   class="post-row"
                   classList={{ selected: i() === selectedIndex() }}
-                  onMouseEnter={() => setSelectedIndex(i())}
+                  onMouseEnter={() => { if (!isNarrow()) setSelectedIndex(i()); }}
+                  onClick={e => {
+                    // On mobile, tapping a row reveals its inline preview; the
+                    // open icon (below) is the only way to navigate to the post
+                    if (isNarrow()) {
+                      e.preventDefault();
+                      setSelectedIndex(i());
+                    }
+                  }}
                 >
-                  <span class="row-indicator" aria-hidden="true">{i() === selectedIndex() ? "❯" : ""}</span>
+                  <span class="row-indicator" aria-hidden="true">{i() === selectedIndex() ? "▌" : ""}</span>
                   <span class="row-number">{(i() + 1).toString().padStart(2, "0")}</span>
                   <span class="row-title">{post.title}</span>
                   <span class="row-tags">
@@ -152,6 +167,25 @@ export default function Home() {
                     </For>
                   </span>
                   <span class="row-date">{post.date}</span>
+                  <span
+                    class="row-open"
+                    role="button"
+                    aria-label={`Open ${post.title}`}
+                    onClick={e => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      navigate(`/post/${post.slug}`);
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="9 6 15 12 9 18" />
+                    </svg>
+                  </span>
+                  <div class="row-preview">
+                    <Show when={i() === selectedIndex()}>
+                      <PostPreview post={post} />
+                    </Show>
+                  </div>
                 </A>
               )}
             </For>
