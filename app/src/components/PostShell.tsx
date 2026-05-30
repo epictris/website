@@ -205,10 +205,15 @@ export function PostShell(props: ParentProps) {
     let openHeight = 0;
     let mode: "close" | "pending-open" | "open" | null = null;
     let animating = false;
+    // Whether the finger travelled far enough to count as a drag rather than a
+    // tap. A tap on the preview while the list is open dismisses it.
+    let moved = false;
+    const TAP_SLOP = 8;
 
     const onReaderTouchStart = (e: TouchEvent) => {
       if (!isNarrow() || animating || !sidepanel) return;
       startY = lastY = e.touches[0].clientY;
+      moved = false;
       if (open()) {
         mode = "close";
         startHeight = sidepanel.offsetHeight;
@@ -228,6 +233,7 @@ export function PostShell(props: ParentProps) {
       if (mode === null) return;
       const y = e.touches[0].clientY;
       const dy = y - startY; // down is positive
+      if (Math.abs(dy) > TAP_SLOP) moved = true;
       if (mode === "pending-open") {
         if (dy <= 0) { mode = null; return; } // scrolling the post up — let it scroll
         if (dy < 8) return; // wait for a deliberate downward drag
@@ -272,8 +278,8 @@ export function PostShell(props: ParentProps) {
         if (h <= 0) {
           closePalette(); // already collapsed into the content — finish now
           animating = false;
-        } else if (h < startHeight * 0.75) {
-          // Dragged up at least a quarter of the way — commit to closing.
+        } else if (!moved || h < startHeight * 0.75) {
+          // A tap, or dragged up at least a quarter of the way — close.
           requestAnimationFrame(() => setDragHeight(0));
           window.setTimeout(() => { closePalette(); animating = false; }, ANIM_MS);
         } else {
