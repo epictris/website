@@ -78,6 +78,17 @@ export function PostShell(props: ParentProps) {
 
   const selectedPost = createMemo(() => filtered()[selectedIndex()]);
 
+  // Desktop client-side preview: show the highlighted row's post in the reader
+  // without navigating. Only when it differs from the active route — otherwise
+  // we render `props.children` directly, so the reader doesn't remount (and
+  // flicker) when `isNarrow` resolves on mount or the selection lands on the
+  // post you're already reading.
+  const preview = createMemo(() => {
+    if (isNarrow() || !open()) return undefined;
+    const post = selectedPost();
+    return post && post.slug !== activeSlug() ? post : undefined;
+  });
+
   // Reset selection to the top whenever the result set changes.
   createEffect(() => {
     filtered();
@@ -366,9 +377,9 @@ export function PostShell(props: ParentProps) {
         </div>
 
         <div class="reader-pane" ref={readerPane}>
-          {/* Desktop previews the highlighted row client-side; otherwise (and on
-              mobile, where previewing navigates) we show the loaded route. */}
-          <Show when={open() && !isNarrow() && selectedPost()} fallback={props.children}>
+          {/* Desktop previews the highlighted row client-side when it differs
+              from the active route; otherwise we show the loaded route. */}
+          <Show when={preview()} fallback={props.children}>
             {post => <PostReader post={post()} />}
           </Show>
         </div>
