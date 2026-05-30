@@ -1,0 +1,252 @@
+/* ── Shell: top search bar + reveal-on-focus switcher + reader ─ */
+
+.shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #1f2430;
+}
+
+/* ── Top search bar (always visible) ──────────────────────── */
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  height: 1lh;
+  flex-shrink: 0;
+  padding-right: 1ch;
+  gap: 2ch;
+  cursor: text;
+}
+
+.top-prompt {
+  width: 2ch;
+  text-align: center;
+  color: #f08778;
+  flex-shrink: 0;
+}
+
+.search-input-area {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.site-search {
+  width: 100%;
+  background: transparent;
+  color: #cbccc6;
+  caret-color: transparent;
+  padding: 0;
+  border: none;
+  outline: none;
+}
+
+.search-hint {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: #cbccc6;
+  opacity: 0.3;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.search-hint-key {
+  border: 1px solid #313244;
+  border-radius: 3px;
+  padding: 0 0.5ch;
+}
+
+.block-cursor {
+  position: absolute;
+  top: 0;
+  height: calc(1lh - 3px);
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+  box-shadow: inset 0 0 0 1px #cbccc6;
+}
+
+.block-cursor.active {
+  color: #cbccc6;
+  box-shadow: none;
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.post-count {
+  color: #cbccc6;
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+/* ── Body: collapsible sidepanel beside the reader ────────── */
+
+.shell-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+.sidepanel {
+  width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid transparent;
+}
+
+.sidepanel.open {
+  width: 50%;
+  border-right-color: #313244;
+}
+
+.post-list-panel {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.post-list-panel::-webkit-scrollbar {
+  display: none;
+}
+
+.post-row {
+  display: flex;
+  align-items: center;
+  height: 1lh;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: #cbccc6;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.post-row.selected {
+  background: rgba(101, 189, 219, 0.07);
+}
+
+.post-row.selected .row-title {
+  color: #65bddb;
+}
+
+/* Marks the post currently open in the reader. */
+.post-row.active .row-number {
+  color: #65bddb;
+  opacity: 0.8;
+}
+
+.row-indicator {
+  width: 2ch;
+  text-align: center;
+  color: #f08778;
+  flex-shrink: 0;
+}
+
+.row-number {
+  width: 3ch;
+  text-align: right;
+  color: #cbccc6;
+  opacity: 0.35;
+  flex-shrink: 0;
+  padding-right: 1ch;
+}
+
+.row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-tags {
+  display: flex;
+  gap: 1ch;
+  flex-shrink: 0;
+  padding: 0 2ch;
+}
+
+.row-date {
+  width: 12ch;
+  text-align: right;
+  color: #cbccc6;
+  opacity: 0.35;
+  flex-shrink: 0;
+  padding-right: 1ch;
+  margin-right: 1ch;
+}
+
+.no-results {
+  padding: 0 3ch;
+  color: #cbccc6;
+  opacity: 0.4;
+  height: 1lh;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Reader pane ──────────────────────────────────────────── */
+
+.reader-pane {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+  padding: 1lh 0 2lh;
+  scrollbar-width: none;
+}
+
+.reader-pane::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Narrow (< 1400px): stack the list above the preview ──── */
+
+@media (max-width: 1400px) {
+  .shell-body {
+    flex-direction: column;
+  }
+
+  /* Collapse by height now that the panel stacks vertically. */
+  .sidepanel {
+    width: 100%;
+    height: 0;
+    border-right: none;
+  }
+
+  .sidepanel.open {
+    width: 100%;
+    height: 40%;
+    border-bottom: 1px solid #313244;
+  }
+}
+
+/* ── Mobile: row tweaks for very narrow screens ───────────── */
+
+@media (max-width: 768px) {
+  /* Rows wrap their tags/date below the title on narrow screens */
+  .post-row {
+    height: auto;
+    white-space: normal;
+    padding: 0.5lh 0;
+  }
+
+  .row-tags {
+    padding: 0 1ch;
+  }
+}

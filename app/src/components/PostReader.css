@@ -1,12 +1,7 @@
-.post-page {
-  display: flex;
-  flex-direction: column;
-  min-height: 100dvh;
-  overflow-x: hidden;
-}
+/* ── Reader: snapshot header + full post body ─────────────── */
 
-.post-page .post-body {
-  flex: 1;
+.reader {
+  display: block;
 }
 
 .post-preview {
@@ -21,8 +16,8 @@
   max-width: 110ch;
   margin: 0 auto;
   padding: 0lh 1.5ch 2lh;
-  /* Flex item: without an explicit width it sizes to the widest child (a code
-     block), blowing past the viewport. width:100% pins it to the parent so
+  /* Flex/grid item: without an explicit width it sizes to the widest child (a
+     code block), blowing past the viewport. width:100% pins it to the parent so
      prose wraps and code blocks scroll within their own box. */
   width: 100%;
   min-width: 0;

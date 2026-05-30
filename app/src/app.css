@@ -91,28 +91,12 @@ body {
   background: #313244;
 }
 
-.site-title-bar {
-  display: flex;
-  align-items: center;
-  height: 1lh;
-  flex-shrink: 0;
-  padding: 0 1ch;
-  color: #65bddb;
-  font-weight: bold;
-  text-decoration: none;
-}
-
-.site-title-bar:hover {
-  color: #cbccc6;
-}
-
 /* ── Preview content ────────────────────────────────────── */
 
 .preview-content {
-  margin-top: 1lh;
   display: flex;
-  flex-direction: column;
-  gap: 1lh;
+  flex-direction: row;
+  align-items: flex-start;
 }
 
 .preview-title {
@@ -133,11 +117,25 @@ body {
 .preview-desc {
   color: #cbccc6;
   opacity: 0.75;
+  margin: 0;
 }
 
 .preview-meta {
+  /* Always exactly half the container, left-aligned, so the metadata field
+     names line up at the same x position across every post. */
+  flex: 0 0 50%;
   display: grid;
-  grid-template-columns: 9ch 1fr;
+  grid-template-columns: 9ch max-content;
+  align-content: start;
+}
+
+.preview-right {
+  flex: 0 0 50%;
+  min-width: 0;
+  padding-right: 4ch;
+  display: flex;
+  flex-direction: column;
+  gap: 1lh;
 }
 
 .meta-key {
