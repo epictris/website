@@ -78,15 +78,6 @@ export const posts: Post[] = [
   { slug: "online-clipboard",              title: "Websocket clipboard",                 desc: "An online clipboard sharing application leveraging shared websocket sessions",     tags: [Tag.web, Tag.project],      date: "2026-04-10", reading: 5  },
   { slug: "pattern-matching-lsp",          title: "Pattern-matching LSP",               desc: "A language-agnostic LSP implementation based on regex pattern matching",           tags: [Tag.tooling, Tag.project],  date: "2026-04-28", reading: 8  },
   { slug: "my-terminal-addiction",      title: "My terminal addiction",           desc: "I tried fzf one time and I've been chasing that high ever since",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6, body: MyTerminalAddictionBody },
-  { slug: "example-post-1",      title: "example post 1",           desc: "example post description 1",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-2",      title: "example post 2",           desc: "example post description 2",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-3",      title: "example post 3",           desc: "example post description 3",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-4",      title: "example post 4",           desc: "example post description 4",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-5",      title: "example post 5",           desc: "example post description 5",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-6",      title: "example post 6",           desc: "example post description 6",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-7",      title: "example post 7",           desc: "example post description 7",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-8",      title: "example post 8",           desc: "example post description 8",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
-  { slug: "example-post-9",      title: "example post 9",           desc: "example post description 9",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6 },
 ];
 
 /** Posts sorted newest-first. */
