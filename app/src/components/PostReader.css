@@ -4,24 +4,20 @@
 	display: block;
 }
 
-.post-preview {
+.post-preview,
+.post-body {
 	max-width: 90ch;
 	margin: 0 auto;
 	padding: 0 1.5ch;
+	/* Flex/grid item: without an explicit width it sizes to the widest child (a
+	   code block), blowing past the viewport. width:100% pins it to the parent so
+	   prose wraps and code blocks scroll within their own box. */
 	width: 100%;
 	min-width: 0;
 }
 
 .post-body {
-	max-width: 90ch;
-	margin: 0 auto;
-	padding: 0 1.5ch;
 	padding-bottom: 2lh;
-	/* Flex/grid item: without an explicit width it sizes to the widest child (a
-     code block), blowing past the viewport. width:100% pins it to the parent so
-     prose wraps and code blocks scroll within their own box. */
-	width: 100%;
-	min-width: 0;
 }
 
 .post-body p {
@@ -29,15 +25,15 @@
 }
 
 .post-body code {
-	background: #161b22;
-	border: 1px solid #313244;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
 	border-radius: 3px;
 	padding: 0 0.5ch;
 }
 
 .post-body pre {
-	background: #161b22;
-	border: 1px solid #313244;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
 	border-radius: 3px;
 	padding: 0.5lh 1ch;
 	margin: 0.5lh 0;

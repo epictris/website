@@ -23,23 +23,33 @@
 	box-sizing: border-box;
 }
 
-/* Hide the document's vertical scrollbar (kept scrollable) */
-html {
+/* Hide scrollbars (elements stay scrollable) */
+:where(html, .post-list-panel, .reader-pane) {
 	scrollbar-width: none;
 }
 
-html::-webkit-scrollbar {
+:where(html, .post-list-panel, .reader-pane)::-webkit-scrollbar {
 	display: none;
 }
 
 :root {
-	--foreground0: #cbccc6;
-	--foreground1: #cbccc6;
+	/* Palette (see CLAUDE.md) */
+	--foreground: #cbccc6;
+	--background: #1f2430;
+	--border: #313244;
+	--accent: #65bddb;
+	--accent-red: #f08778;
+	--code-bg: #161b22;
+
+	/* WebTUI theme variables (consumed by base/typography/badge) */
+	--foreground0: var(--foreground);
+	--foreground1: var(--foreground);
+
 	h1 {
 		color: #ed7979;
 	}
 	h2 {
-		color: #cbccc6;
+		color: var(--foreground);
 	}
 }
 
@@ -50,26 +60,28 @@ body {
 		"FantasqueSansM Nerd Font", "Fantasque Sans Mono", monospace,
 		"Symbols Nerd Font";
 	--font-size: 1.3rem;
-	background-color: #1f2430;
+	background-color: var(--background);
 	min-height: 100dvh;
 }
 
-/* ── Site header ────────────────────────────────────────── */
+/* ── Horizontal separators ──────────────────────────────── */
 
-.h-sep {
+.h-sep,
+.shell-divider {
 	height: 1lh;
 	position: relative;
 	flex-shrink: 0;
 }
 
-.h-sep::after {
+.h-sep::after,
+.shell-divider::after {
 	content: "";
 	position: absolute;
 	top: 50%;
 	left: 0;
 	right: 0;
 	height: 1px;
-	background: #313244;
+	background: var(--border);
 }
 
 /* ── Preview content ────────────────────────────────────── */
@@ -82,11 +94,11 @@ body {
 
 .preview-title {
 	font-weight: bold;
-	color: #cbccc6;
+	color: var(--foreground);
 }
 
 .preview-title-hash {
-	color: #65bddb;
+	color: var(--accent);
 }
 
 .preview-tags {
@@ -96,7 +108,7 @@ body {
 }
 
 .preview-desc {
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.75;
 	margin: 0;
 }
@@ -141,12 +153,12 @@ body {
 }
 
 .meta-key {
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.4;
 }
 
 .meta-val {
-	color: #cbccc6;
+	color: var(--foreground);
 }
 
 .site-nav {
@@ -176,4 +188,17 @@ body {
 
 .site-nav a:hover {
 	opacity: 1;
+}
+
+/* Visually hidden, but readable by screen readers. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
 }

@@ -19,19 +19,16 @@ export enum Tag {
 	workflow = "workflow",
 }
 
+const tagColors: Record<Tag, string> = {
+	[Tag.tooling]: "#ffd580",
+	[Tag.project]: "#bae67e",
+	[Tag.web]: "#d4bfff",
+	[Tag.game]: "#ff9f94",
+	[Tag.workflow]: "#dcabff",
+};
+
 export function getTagColor(tag: Tag): string {
-	switch (tag) {
-		case Tag.tooling:
-			return "#ffd580";
-		case Tag.project:
-			return "#bae67e";
-		case Tag.web:
-			return "#d4bfff";
-		case Tag.game:
-			return "#ff9f94";
-		case Tag.workflow:
-			return "#dcabff";
-	}
+	return tagColors[tag];
 }
 
 export function PostPreview(props: { post: Post }) {
@@ -60,13 +57,21 @@ export function PostPreview(props: { post: Post }) {
 				<p class="preview-desc">{props.post.desc}.</p>
 			</div>
 			<div class="preview-meta">
-				<span class="meta-key">date</span>{" "}
-				<span class="meta-val">{props.post.date}</span>
-				<span class="meta-key">kind</span> <span class="meta-val">post</span>
-				<span class="meta-key">reading</span>{" "}
-				<span class="meta-val">{props.post.reading} min</span>
-				<span class="meta-key">author</span>{" "}
-				<span class="meta-val">Tristan Bray</span>
+				<For
+					each={[
+						["date", props.post.date],
+						["kind", "post"],
+						["reading", `${props.post.reading} min`],
+						["author", "Tristan Bray"],
+					]}
+				>
+					{([key, value]) => (
+						<>
+							<span class="meta-key">{key}</span>
+							<span class="meta-val">{value}</span>
+						</>
+					)}
+				</For>
 			</div>
 		</div>
 	);

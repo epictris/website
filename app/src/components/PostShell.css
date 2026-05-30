@@ -10,7 +10,7 @@
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	background: #1f2430;
+	background: var(--background);
 }
 
 /* ── Top search bar (always visible) ──────────────────────── */
@@ -28,7 +28,7 @@
 .top-prompt {
 	width: 2ch;
 	text-align: center;
-	color: #f08778;
+	color: var(--accent-red);
 	flex-shrink: 0;
 }
 
@@ -41,7 +41,7 @@
 .site-search {
 	width: 100%;
 	background: transparent;
-	color: #cbccc6;
+	color: var(--foreground);
 	caret-color: transparent;
 	padding: 0;
 	border: none;
@@ -52,14 +52,14 @@
 	position: absolute;
 	top: 0;
 	left: 0;
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.3;
 	pointer-events: none;
 	white-space: nowrap;
 }
 
 .search-hint-key {
-	border: 1px solid #313244;
+	border: 1px solid var(--border);
 	border-radius: 3px;
 	padding: 0 0.5ch;
 }
@@ -71,11 +71,11 @@
 	overflow: hidden;
 	pointer-events: none;
 	color: transparent;
-	box-shadow: inset 0 0 0 1px #cbccc6;
+	box-shadow: inset 0 0 0 1px var(--foreground);
 }
 
 .block-cursor.active {
-	color: #cbccc6;
+	color: var(--foreground);
 	box-shadow: none;
 	animation: cursor-blink 1s step-end infinite;
 }
@@ -91,7 +91,7 @@
 }
 
 .post-count {
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.4;
 	flex-shrink: 0;
 }
@@ -118,10 +118,11 @@
 
 .sidepanel.open {
 	width: 50%;
-	border-right-color: #313244;
+	border-right-color: var(--border);
 }
 
-/* Shown only in the stacked layout while the list is open (see media query). */
+/* Shown only in the stacked layout while the list is open (see media query);
+   its geometry comes from the shared separator rule in app.css. */
 .shell-divider {
 	display: none;
 }
@@ -135,7 +136,7 @@
 	top: 50%;
 	bottom: 0;
 	width: 1px;
-	background: #313244;
+	background: var(--border);
 }
 
 .post-list-panel {
@@ -145,11 +146,6 @@
 	flex-direction: column;
 	min-height: 0;
 	min-width: 0;
-	scrollbar-width: none;
-}
-
-.post-list-panel::-webkit-scrollbar {
-	display: none;
 }
 
 .post-row {
@@ -158,7 +154,7 @@
 	height: 1lh;
 	flex-shrink: 0;
 	text-decoration: none;
-	color: #cbccc6;
+	color: var(--foreground);
 	white-space: nowrap;
 	overflow: hidden;
 	cursor: pointer;
@@ -171,14 +167,14 @@
 .row-indicator {
 	width: 2ch;
 	text-align: center;
-	color: #f08778;
+	color: var(--accent-red);
 	flex-shrink: 0;
 }
 
 .row-number {
 	width: 3ch;
 	text-align: right;
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.35;
 	flex-shrink: 0;
 	padding-right: 1ch;
@@ -192,12 +188,12 @@
 }
 
 .post-row.selected .row-title {
-	color: #65bddb;
+	color: var(--accent);
 }
 
 /* Marks the post currently open in the reader. */
 .post-row.active .row-number {
-	color: #65bddb;
+	color: var(--accent);
 	opacity: 0.8;
 }
 
@@ -211,7 +207,7 @@
 .row-date {
 	width: 12ch;
 	text-align: right;
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.35;
 	flex-shrink: 0;
 	padding-right: 1ch;
@@ -220,7 +216,7 @@
 
 .no-results {
 	padding: 0 3ch;
-	color: #cbccc6;
+	color: var(--foreground);
 	opacity: 0.4;
 	height: 1lh;
 	display: flex;
@@ -233,11 +229,6 @@
 	flex: 1;
 	overflow-y: auto;
 	min-width: 0;
-	scrollbar-width: none;
-}
-
-.reader-pane::-webkit-scrollbar {
-	display: none;
 }
 
 /* ── Narrow (< 1400px): stack the list above the preview ──── */
@@ -265,23 +256,10 @@
 	}
 
 	/* Full 1lh separator at the bottom of the list pane (matching the separators
-     around the search input). It lives inside the pane, so it collapses and
-     animates together with it — and is clipped away when the pane closes. */
+	   around the search input). It lives inside the pane, so it collapses and
+	   animates together with it — and is clipped away when the pane closes. */
 	.shell-divider {
 		display: block;
-		height: 1lh;
-		position: relative;
-		flex-shrink: 0;
-	}
-
-	.shell-divider::after {
-		content: "";
-		position: absolute;
-		top: 50%;
-		left: 0;
-		right: 0;
-		height: 1px;
-		background: #313244;
 	}
 }
 
@@ -289,7 +267,7 @@
 
 @media (max-width: 800px) {
 	/* The list pane animates open/closed by height. While a finger is actively
-     dragging it, the transition is disabled so it tracks the touch 1:1. */
+	   dragging it, the transition is disabled so it tracks the touch 1:1. */
 	.sidepanel {
 		transition: height 0.2s ease;
 	}
@@ -299,7 +277,7 @@
 	}
 
 	/* Title on the top line; tags + date on the bottom line. The indicator forms
-     a left gutter spanning both lines; the row number is dropped on mobile. */
+	   a left gutter spanning both lines; the row number is dropped on mobile. */
 	.post-row {
 		display: grid;
 		grid-template-columns: auto 1fr auto;
