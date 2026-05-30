@@ -9,14 +9,13 @@ function MyTerminalAddictionBody() {
 	return (
 		<>
 			<p>
-				I never really understood why anyone would prefer to use a command line
-				interface (CLI) over a graphical user interface (GUI). How could typing
-				out a command be more convenient than just clicking a button? Memorizing
-				commands and debugging syntax errors felt like a chore, and even
-				performing simple operations felt cumbersome and archaic. I always
-				struggled to build a mental model of the file system I was working with,
-				and I wondered if my aphantasia was to blame. Perhaps using a CLI
-				required visualisation abilities I simply did not possess.
+				I never understood people who favoured command line interfaces (CLIs)
+				over graphical user interfaces (GUIs). Command line syntax felt to me
+				like an archaic artifact of legacy technology where even simple
+				operations were cumbersome and error-prone. In my limited experience,
+				I'd always struggled to build a mental model of the file system I was
+				working with - perhaps the CLI required mental visualisation abilities I
+				simply did not possess.
 				<br />
 				<br />
 			</p>
@@ -24,37 +23,33 @@ function MyTerminalAddictionBody() {
 				<span class="preview-title-hash">##</span> A catalyst for change
 			</h2>
 			<p>
-				In my first software engineering job I was working across multiple repos
-				and I'd often find myself needing to context switch to quickly
-				debug/test/check something in a different repo. Every time, this meant
-				closing VS Code, opening a file browser, clicking through to the target
-				directory, waiting for VS Code to boot/initialize in that new directory,
-				then searching for the files I needed. Once I'd finished, I'd repeat the
-				whole process and hope I still remembered what I'd been working on
-				originally. 15-20 seconds of downtime doesn't sound like a lot, but if I
-				just need to check some value or jot down a quick note, 15-20 seconds
-				feels like an eternity - and for a guy like me it's plenty of time to
-				forget the reason I was context switching in the first place.
+				My first software engineering role had me frequently context switching
+				between multiple codebases. Each time I'd need to open the file browser,
+				click through to the target directory, then wait for my IDE to switch
+				workspaces and reinitialize extensions in the new directory before
+				continuing my work. Then I'd switch back to my original task and hope I
+				still remembered what I'd been working on. Maybe 15-20 seconds of
+				downtime doesn't sound like a lot - but if I'm just checking some value
+				or jotting down a quick note, it feels like an eternity. I hated feeling
+				constrained by my tools so I started looking for solutions.
 				<br />
 				<br />
-				The frustrating part was that I knew it didn't have to be this slow. I'd
-				seen some crazy workflows online where people were flying around their
-				terminal environment - using vim to search files and edit text, and
-				running commands so quickly I could barely keep track of what was
-				happening. But whenever I tried to use vim for some quick text editing,
-				I'd end up fighting against the CLI and waste more time than if I'd just
-				done things the normal way.
+				I'd seen some crazy workflows online with people flying around their
+				terminal environment, searching/editing files and running commands so
+				quickly I'd lose track of what was happening. I wanted this speed and
+				precision, but every time I tried to use vim for some quick text
+				editing, I'd end up fighting against the CLI and waste more time than if
+				I'd just done things the normal way.
 			</p>
 			<br />
 			<h2>
 				<span class="preview-title-hash">##</span> A breakthrough
 			</h2>
 			<p>
-				While searching for solutions, I came across fzf - a command-line fuzzy
-				finder. It basically lets you run a fuzzy search over any input data,
-				then prints the selected result to the command line. Not very useful on
-				its own, but I realised that I could combine it with other commands to
-				solve my two biggest pain points:
+				I came across fzf - a command-line fuzzy finder. It lets you run a fuzzy
+				search over any input data, then prints the selected result. Not
+				particularly useful in isolation, but I realised that I could combine it
+				with other commands to solve my two biggest pain points:
 			</p>
 			<br />
 			<ol>
@@ -65,14 +60,20 @@ function MyTerminalAddictionBody() {
 			<h2>
 				<span class="preview-title-hash">###</span> Rapid directory navigation
 			</h2>
+			<ul>
+				<li>Define a list of all frequented directories</li>
+				<li>
+					Pipe the list to <code>fzf</code>
+				</li>
+				<li>
+					<code>cd</code> to the selected directory
+				</li>
+			</ul>
+			<br />
 			<p>
-				I realised that I could define a list of all the directories I
-				frequently accessed, use fzf to search through them, then{" "}
-				<code>cd</code> to the selected directory. If I wrap this logic into a
-				terminal alias,{" "}
 				<i>
-					I can navigate to any of these directories in less than a second with
-					just a few keystrokes
+					With this terminal alias, I can navigate to any of these directories
+					in less than a second with just a few keystrokes
 				</i>
 				.
 				<CodeBlock
@@ -89,27 +90,31 @@ function MyTerminalAddictionBody() {
 alias d='dir=$(echo $DIRS | fzf) && eval cd $dir'`}
 				/>
 			</p>
-			<p>
-				If you're not sure what I mean, try this out for yourself (assuming
-				you're on a Unix-like system)
-			</p>
 			<br />
 			<h2>
 				<span class="preview-title-hash">###</span> Rapid file search
 			</h2>
+			<ul>
+				<li>
+					Use <code>rg</code> (ripgrep) to list all file paths in the current
+					directory
+				</li>
+				<li>
+					Pipe the list to <code>fzf</code>
+				</li>
+				<li>
+					Open the selected file in <code>nvim</code>
+				</li>
+			</ul>
+			<br />
 			<p>
-				I also realised that I could use a similar approach to pipe a list of
-				all the files in the current directory to <code>fzf</code>, then open
-				the selected file in <code>nvim</code>. When combined with the directory
-				navigation alias,{" "}
 				<i>
-					this allows me to open any file in any target directory in less than 3
-					seconds with only 5-10 keystrokes
-				</i>{" "}
-				(assuming I know roughly where the file is located)
+					With this terminal alias, I can open any file in seconds with just a
+					few keystrokes
+				</i>
 			</p>
 			<CodeBlock
-				code={`alias s='file=$(find . -type f | colrm 1 2 | fzf) && nvim $file'`}
+				code={`alias s='file=$(rg --files | colrm 1 2 | fzf) && nvim $file'`}
 			/>
 			<br />
 		</>
