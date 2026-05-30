@@ -1,7 +1,8 @@
 import { Link, MetaProvider, Title } from "@solidjs/meta";
-import { A, Router, useLocation } from "@solidjs/router";
+import { Router, useLocation } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { Show, Suspense, type ParentProps } from "solid-js";
+import { PostShell } from "./components/PostShell";
 import "./app.css";
 
 const GitHubIcon = () => (
@@ -26,21 +27,19 @@ function AppShell(props: ParentProps) {
       <Title>tris.sh</Title>
       <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
       <Link rel="preload" href="/fonts/FantasqueSansMNerdFont-Bold.woff2" as="font" type="font/woff2" crossorigin="" />
-      <div is-="view">
-        <div is-="view-content">
-          <Suspense>{props.children}</Suspense>
-        </div>
-        <Show when={!isHome()}>
-          <nav class="site-nav" aria-label="Social links">
-            <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
-              <GitHubIcon />
-            </a>
-            <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
-              <LinkedInIcon />
-            </a>
-          </nav>
-        </Show>
-      </div>
+      <PostShell>
+        <Suspense>{props.children}</Suspense>
+      </PostShell>
+      <Show when={!isHome()}>
+        <nav class="site-nav" aria-label="Social links">
+          <a href="https://github.com/epictris" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+            <GitHubIcon />
+          </a>
+          <a href="https://www.linkedin.com/in/tristan-bray-638b89214/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+            <LinkedInIcon />
+          </a>
+        </nav>
+      </Show>
     </MetaProvider>
   );
 }

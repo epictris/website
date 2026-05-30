@@ -1,6 +1,5 @@
 import { Show } from "solid-js";
 import { PostPreview, type Post } from "./PostPreview";
-import "./PostReader.css";
 
 /**
  * Renders a single post: the snapshot header (title / tags / desc / meta)

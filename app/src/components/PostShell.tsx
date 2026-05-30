@@ -1,8 +1,8 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { A, useNavigate } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type ParentProps } from "solid-js";
+import { A, useLocation, useNavigate } from "@solidjs/router";
 import { getTagColor, type Post } from "./PostPreview";
 import { PostReader } from "./PostReader";
-import { posts, postsByDate, getPost } from "../content/posts";
+import { posts, postsByDate, getPost, mostRecentSlug } from "../content/posts";
 import "./PostShell.css";
 
 function fuzzyScore(query: string, text: string): number | null {
@@ -25,34 +25,39 @@ function fuzzyScore(query: string, text: string): number | null {
 }
 
 /**
- * The site frame: a search bar pinned to the top on every page, a
- * reveal-on-focus sidepanel that lists every post for rapid switching, and the
- * full content of `activeSlug` as the main reader. Selecting a post navigates
- * client-side (instant) and collapses the palette.
+ * The persistent site frame, rendered once at the router root so it survives
+ * navigation: a search bar pinned to the top, a reveal-on-focus sidepanel
+ * listing every post, and the current route's content as the reader.
+ *
+ * Selecting a post navigates to it (loading the real page) — on mobile the
+ * search pane stays open so you can keep flipping through posts; on desktop the
+ * highlighted row is previewed client-side and a click commits + closes.
  */
-export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) {
+export function PostShell(props: ParentProps) {
+  const location = useLocation();
   const [query, setQuery] = createSignal("");
   const [selectedIndex, setSelectedIndex] = createSignal(0);
-  const [open, setOpen] = createSignal(false);
+  // Open from the very first render on the home page, so the palette is already
+  // shown on load — no open-flicker (desktop) or opening animation (mobile).
+  const [open, setOpen] = createSignal(location.pathname === "/");
   const [isNarrow, setIsNarrow] = createSignal(false);
+  // Mobile drag-to-open/close: the live list-pane height in px while the user
+  // drags (null = use the CSS height), and whether a finger drag is actively
+  // tracking (which disables the height transition so it follows 1:1).
+  const [dragHeight, setDragHeight] = createSignal<number | null>(null);
+  const [dragging, setDragging] = createSignal(false);
 
   let searchInput: HTMLInputElement | undefined;
   let listPanel: HTMLDivElement | undefined;
   let topBar: HTMLDivElement | undefined;
   let sidepanel: HTMLDivElement | undefined;
+  let readerPane: HTMLDivElement | undefined;
   const navigate = useNavigate();
 
-  const activePost = createMemo(() => getPost(props.activeSlug));
-
-  // While the palette is open the reader previews the highlighted row, so
-  // arrowing/hovering through the list live-updates the content. Closed, it
-  // shows the post for the current route.
-  const displayedPost = createMemo(() => {
-    if (open()) {
-      const selected = filtered()[selectedIndex()];
-      if (selected) return selected;
-    }
-    return activePost();
+  // The post backing the current route (the home page shows the newest post).
+  const activeSlug = createMemo(() => {
+    const m = location.pathname.match(/^\/post\/(.+)$/);
+    return m ? decodeURIComponent(m[1]) : mostRecentSlug();
   });
 
   const filtered = createMemo<Post[]>(() => {
@@ -71,6 +76,8 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
       .map(m => m.post);
   });
 
+  const selectedPost = createMemo(() => filtered()[selectedIndex()]);
+
   // Reset selection to the top whenever the result set changes.
   createEffect(() => {
     filtered();
@@ -84,11 +91,20 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
     rows?.[idx]?.scrollIntoView({ block: "nearest" });
   });
 
+  // Scroll the reader back to the top when the shown post changes — on
+  // navigation, or (desktop) as the previewed selection moves. Deliberately
+  // not tied to open(), so collapsing the pane on mobile keeps your scroll.
+  createEffect(() => {
+    activeSlug();
+    if (!isNarrow()) selectedIndex();
+    if (readerPane) readerPane.scrollTop = 0;
+  });
+
   function openPalette() {
     setOpen(true);
     searchInput?.focus();
     // Start the selection on the post currently being read, if it's listed.
-    const idx = filtered().findIndex(p => p.slug === props.activeSlug);
+    const idx = filtered().findIndex(p => p.slug === activeSlug());
     setSelectedIndex(idx === -1 ? 0 : idx);
   }
 
@@ -96,25 +112,28 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
     setOpen(false);
     setQuery("");
     searchInput?.blur();
+    setDragHeight(null);
+    setDragging(false);
   }
 
+  // Desktop: open the post and close the palette in one step.
   function select(slug: string) {
     closePalette();
     navigate(`/post/${slug}`);
   }
 
   onMount(() => {
-    const mq = window.matchMedia("(max-width: 768px)");
+    const mq = window.matchMedia("(max-width: 800px)");
     setIsNarrow(mq.matches);
     const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches);
     mq.addEventListener("change", onChange);
     onCleanup(() => mq.removeEventListener("change", onChange));
 
-    // Land with the palette already open (the home/search experience). On
-    // mobile we reveal it without focusing the input, to avoid the keyboard.
-    if (props.defaultOpen) {
-      setOpen(true);
-      const idx = filtered().findIndex(p => p.slug === props.activeSlug);
+    // The home page renders with the palette already open (see the `open`
+    // signal). Start the selection on the shown post and, on desktop, focus the
+    // input — on mobile we skip focus to avoid popping the keyboard.
+    if (location.pathname === "/") {
+      const idx = filtered().findIndex(p => p.slug === activeSlug());
       setSelectedIndex(idx === -1 ? 0 : idx);
       if (!mq.matches) searchInput?.focus();
     }
@@ -150,15 +169,112 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
     document.addEventListener("keydown", handleKeyDown);
     onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
 
-    // Clicking outside the search bar / list dismisses the palette.
+    // Desktop: a press outside the search bar / list dismisses the palette.
+    // Mobile is handled by the preview-pane drag/tap gesture below instead.
     const handlePointerDown = (e: PointerEvent) => {
-      if (!open()) return;
+      if (!open() || isNarrow()) return;
       const target = e.target as Node;
       if (topBar?.contains(target) || sidepanel?.contains(target)) return;
       closePalette();
     };
     document.addEventListener("pointerdown", handlePointerDown);
     onCleanup(() => document.removeEventListener("pointerdown", handlePointerDown));
+
+    // Mobile gestures on the preview pane:
+    //  • when the search pane is open, drag up (or tap) to close it;
+    //  • when reading a post scrolled to the top, drag down to open it.
+    // While dragging, the list pane's height tracks the finger 1:1 (transition
+    // off); on release a CSS transition finishes the open/close animation. The
+    // shown post is already loaded, so closing never navigates.
+    const ANIM_MS = 200;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    let startY = 0;
+    let lastY = 0;
+    let startHeight = 0;
+    let openHeight = 0;
+    let mode: "close" | "pending-open" | "open" | null = null;
+    let animating = false;
+
+    const onReaderTouchStart = (e: TouchEvent) => {
+      if (!isNarrow() || animating || !sidepanel) return;
+      startY = lastY = e.touches[0].clientY;
+      if (open()) {
+        mode = "close";
+        startHeight = sidepanel.offsetHeight;
+        setDragging(true);
+        setDragHeight(startHeight); // freeze for 1:1 tracking
+      } else if ((readerPane?.scrollTop ?? 0) <= 0) {
+        // Reading at the very top: a downward drag may pull the search pane in.
+        mode = "pending-open";
+        startHeight = 0;
+        openHeight = sidepanel.parentElement ? sidepanel.parentElement.clientHeight * 0.4 : 0;
+      } else {
+        mode = null;
+      }
+    };
+
+    const onReaderTouchMove = (e: TouchEvent) => {
+      if (mode === null) return;
+      const y = e.touches[0].clientY;
+      const dy = y - startY; // down is positive
+      if (mode === "pending-open") {
+        if (dy <= 0) { mode = null; return; } // scrolling the post up — let it scroll
+        if (dy < 8) return; // wait for a deliberate downward drag
+        mode = "open";
+        setDragging(true);
+        const idx = filtered().findIndex(p => p.slug === activeSlug());
+        setSelectedIndex(idx === -1 ? 0 : idx);
+      }
+      if (mode === "close") {
+        const desired = startHeight + dy; // dy is negative while dragging up
+        if (desired > 0) {
+          setDragHeight(desired); // collapsing the list, top edge tracks the finger
+        } else {
+          // List fully collapsed: hand the remaining drag to the preview's own
+          // scroll so the page keeps moving naturally under the finger.
+          if (dragHeight() !== 0) setDragHeight(0);
+          if (readerPane) readerPane.scrollTop += lastY - y;
+        }
+      } else {
+        setDragHeight(clamp(dy, 0, openHeight));
+      }
+      lastY = y;
+      e.preventDefault(); // we own the gesture (page scroll is driven manually)
+    };
+
+    const onReaderTouchEnd = (e: TouchEvent) => {
+      const m = mode;
+      mode = null;
+      if (m === null || m === "pending-open") {
+        setDragHeight(null);
+        setDragging(false);
+        return;
+      }
+      e.preventDefault(); // suppress the synthesized click (e.g. links in preview)
+      setDragging(false); // enable the transition
+      animating = true;
+      if (m === "close") {
+        if ((dragHeight() ?? 0) <= 0) {
+          closePalette(); // already collapsed into the content — finish now
+          animating = false;
+        } else {
+          requestAnimationFrame(() => setDragHeight(0));
+          window.setTimeout(() => { closePalette(); animating = false; }, ANIM_MS);
+        }
+      } else {
+        requestAnimationFrame(() => setDragHeight(openHeight));
+        window.setTimeout(() => { setOpen(true); setDragHeight(null); animating = false; }, ANIM_MS);
+      }
+    };
+
+    readerPane?.addEventListener("touchstart", onReaderTouchStart, { passive: true });
+    readerPane?.addEventListener("touchmove", onReaderTouchMove, { passive: false });
+    readerPane?.addEventListener("touchend", onReaderTouchEnd, { passive: false });
+    onCleanup(() => {
+      readerPane?.removeEventListener("touchstart", onReaderTouchStart);
+      readerPane?.removeEventListener("touchmove", onReaderTouchMove);
+      readerPane?.removeEventListener("touchend", onReaderTouchEnd);
+    });
   });
 
   return (
@@ -198,10 +314,15 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
         </Show>
       </div>
 
-      <div class="h-sep" aria-hidden="true" />
+      <div class="h-sep h-sep-split" classList={{ open: open() }} aria-hidden="true" />
 
       <div class="shell-body">
-        <div class="sidepanel" classList={{ open: open() }} ref={sidepanel}>
+        <div
+          class="sidepanel"
+          classList={{ open: open(), dragging: dragging() }}
+          style={dragHeight() !== null ? { height: `${dragHeight()}px` } : undefined}
+          ref={sidepanel}
+        >
           <div class="post-list-panel" ref={listPanel}>
             <For each={filtered()}>
               {(post, i) => (
@@ -210,13 +331,19 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
                   class="post-row"
                   classList={{
                     selected: i() === selectedIndex(),
-                    active: post.slug === props.activeSlug,
+                    active: post.slug === activeSlug(),
                   }}
                   onMouseMove={() => { if (!isNarrow()) setSelectedIndex(i()); }}
                   onClick={e => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey) return;
                     e.preventDefault();
-                    select(post.slug);
+                    if (isNarrow()) {
+                      // Mobile: load the page but keep the search pane open.
+                      setSelectedIndex(i());
+                      navigate(`/post/${post.slug}`);
+                    } else {
+                      select(post.slug); // desktop: open the post and close
+                    }
                   }}
                 >
                   <span class="row-indicator" aria-hidden="true">{i() === selectedIndex() ? "▌" : ""}</span>
@@ -235,10 +362,13 @@ export function PostShell(props: { activeSlug: string; defaultOpen?: boolean }) 
               <p class="no-results">no matching posts found</p>
             </Show>
           </div>
+          <div class="shell-divider" aria-hidden="true" />
         </div>
 
-        <div class="reader-pane">
-          <Show when={displayedPost()}>
+        <div class="reader-pane" ref={readerPane}>
+          {/* Desktop previews the highlighted row client-side; otherwise (and on
+              mobile, where previewing navigates) we show the loaded route. */}
+          <Show when={open() && !isNarrow() && selectedPost()} fallback={props.children}>
             {post => <PostReader post={post()} />}
           </Show>
         </div>

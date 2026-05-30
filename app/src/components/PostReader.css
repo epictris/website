@@ -7,7 +7,7 @@
 .post-preview {
   max-width: 110ch;
   margin: 0 auto;
-  padding: 0lh 1.5ch;
+  padding: 0 1.5ch;
   width: 100%;
   min-width: 0;
 }
@@ -15,7 +15,8 @@
 .post-body {
   max-width: 110ch;
   margin: 0 auto;
-  padding: 0lh 1.5ch 2lh;
+  padding: 0 1.5ch;
+  padding-bottom: 2lh;
   /* Flex/grid item: without an explicit width it sizes to the widest child (a
      code block), blowing past the viewport. width:100% pins it to the parent so
      prose wraps and code blocks scroll within their own box. */

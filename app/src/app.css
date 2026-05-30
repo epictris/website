@@ -121,21 +121,42 @@ body {
 }
 
 .preview-meta {
-  /* Always exactly half the container, left-aligned, so the metadata field
-     names line up at the same x position across every post. */
-  flex: 0 0 50%;
+  /* Sized to its content and pushed to the right edge of the container. */
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 9ch max-content;
   align-content: start;
 }
 
 .preview-right {
-  flex: 0 0 50%;
+  /* Grows to fill the space up to the metadata column. */
+  flex: 1;
   min-width: 0;
   padding-right: 4ch;
   display: flex;
   flex-direction: column;
   gap: 1lh;
+}
+
+/* Narrow (< 800px): stack the preview, metadata above the title */
+@media (max-width: 800px) {
+  .preview-content {
+    flex-direction: column;
+    gap: 1lh;
+  }
+
+  .preview-meta {
+    flex: none;
+    width: 100%;
+    order: 0;
+  }
+
+  .preview-right {
+    flex: none;
+    width: 100%;
+    padding-right: 0;
+    order: 1;
+  }
 }
 
 .meta-key {

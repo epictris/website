@@ -2,7 +2,7 @@ import { Title } from "@solidjs/meta";
 import { A, useParams } from "@solidjs/router";
 import { HttpStatusCode } from "@solidjs/start";
 import { Show } from "solid-js";
-import { PostShell } from "../../components/PostShell";
+import { PostReader } from "../../components/PostReader";
 import { getPost } from "../../content/posts";
 
 export default function PostPage() {
@@ -13,19 +13,19 @@ export default function PostPage() {
     <Show
       when={post()}
       fallback={
-        <main class="shell">
+        <>
           <Title>Not found — tris.sh</Title>
           <HttpStatusCode code={404} />
           <p class="no-results">
             no post named "{params.slug}" — <A href="/">go home</A>
           </p>
-        </main>
+        </>
       }
     >
       {p => (
         <>
           <Title>{p().title} — tris.sh</Title>
-          <PostShell activeSlug={p().slug} />
+          <PostReader post={p()} />
         </>
       )}
     </Show>

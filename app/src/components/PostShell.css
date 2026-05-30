@@ -1,3 +1,7 @@
+/* Reader/preview styles live here (the always-loaded shell stylesheet) so they
+   apply even when PostShell renders a post directly, not only via a route. */
+@import "./PostReader.css";
+
 /* ── Shell: top search bar + reveal-on-focus switcher + reader ─ */
 
 .shell {
@@ -112,6 +116,23 @@
   border-right-color: #313244;
 }
 
+/* Shown only in the stacked layout while the list is open (see media query). */
+.shell-divider {
+  display: none;
+}
+
+/* Desktop: drop the column divider down from the input's bottom separator so it
+   meets the sidepanel's right border (which starts at the shell-body top). */
+.h-sep-split.open::before {
+  content: "";
+  position: absolute;
+  left: calc(50% - 1px);
+  top: 50%;
+  bottom: 0;
+  width: 1px;
+  background: #313244;
+}
+
 .post-list-panel {
   flex: 1;
   overflow-y: auto;
@@ -207,7 +228,6 @@
   flex: 1;
   overflow-y: auto;
   min-width: 0;
-  padding: 1lh 0 2lh;
   scrollbar-width: none;
 }
 
@@ -222,6 +242,11 @@
     flex-direction: column;
   }
 
+  /* No side-by-side columns here, so no vertical divider to connect. */
+  .h-sep-split.open::before {
+    display: none;
+  }
+
   /* Collapse by height now that the panel stacks vertically. */
   .sidepanel {
     width: 100%;
@@ -232,21 +257,76 @@
   .sidepanel.open {
     width: 100%;
     height: 40%;
-    border-bottom: 1px solid #313244;
+  }
+
+  /* Full 1lh separator at the bottom of the list pane (matching the separators
+     around the search input). It lives inside the pane, so it collapses and
+     animates together with it — and is clipped away when the pane closes. */
+  .shell-divider {
+    display: block;
+    height: 1lh;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .shell-divider::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #313244;
   }
 }
 
-/* ── Mobile: row tweaks for very narrow screens ───────────── */
+/* ── Narrow (< 800px): two-line entries ───────────────────── */
 
-@media (max-width: 768px) {
-  /* Rows wrap their tags/date below the title on narrow screens */
+@media (max-width: 800px) {
+  /* The list pane animates open/closed by height. While a finger is actively
+     dragging it, the transition is disabled so it tracks the touch 1:1. */
+  .sidepanel {
+    transition: height 0.2s ease;
+  }
+
+  .sidepanel.dragging {
+    transition: none;
+  }
+
+  /* Title on the top line; tags + date on the bottom line. The indicator forms
+     a left gutter spanning both lines; the row number is dropped on mobile. */
   .post-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "ind title title"
+      "ind tags  date";
+    align-items: start;
     height: auto;
     white-space: normal;
     padding: 0.5lh 0;
   }
 
+  .row-indicator { grid-area: ind; }
+  .row-number    { display: none; }
+
+  .row-title {
+    grid-area: title;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .row-tags {
-    padding: 0 1ch;
+    grid-area: tags;
+    padding: 0;
+  }
+
+  .row-date {
+    grid-area: date;
+    width: auto;
+    margin: 0;
+    padding-right: 1ch;
   }
 }
