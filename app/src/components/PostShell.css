@@ -21,7 +21,7 @@
   height: 1lh;
   flex-shrink: 0;
   padding-right: 1ch;
-  gap: 2ch;
+  gap: 3ch;
   cursor: text;
 }
 
@@ -256,7 +256,7 @@
 
   .sidepanel.open {
     width: 100%;
-    height: 40%;
+    height: 50%;
   }
 
   /* Full 1lh separator at the bottom of the list pane (matching the separators
