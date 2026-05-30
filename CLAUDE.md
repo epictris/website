@@ -18,10 +18,12 @@ All text must use the same font size and font family — never set `font-size` o
 
 | Path | Purpose |
 |------|---------|
-| `app/src/app.tsx` | App shell — router, meta provider, global view wrapper |
+| `app/src/app.tsx` | App shell — router, meta provider, social-links nav |
 | `app/src/app.css` | Global styles — font, colours, WebTUI layer imports |
-| `app/src/routes/index.tsx` | Home page |
-| `app/src/routes/index.css` | Home page styles |
+| `app/src/routes/index.tsx` | Home page (renders the most recent post) |
+| `app/src/components/PostShell.tsx` | Persistent frame — search bar, post switcher, reader pane |
+| `app/src/components/PostReader.tsx` | Renders a single post (snapshot header + body) |
+| `app/src/content/posts.tsx` | Post registry + bodies |
 | `app/public/fonts/` | Self-hosted Fantasque Sans Mono Nerd Font (Regular + Bold) |
 
 ## Colours
