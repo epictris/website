@@ -9,57 +9,59 @@ function MyTerminalAddictionBody() {
   return (
     <>
       <p>
-        When I first heard about fzf, I didn't understand why anyone would use it. I had a vague idea of what it did, but I didn't feel like I needed it at the time. That all changed when I moved halfway across the world for a software engineering role in 2023. I was struggling at my new job and started looking for a fix.
+        I never really understood why anyone would prefer to use a command line interface (CLI) over a graphical user interface (GUI). How could typing out a command be more convenient than just clicking a button? Memorizing commands and debugging syntax errors felt like a chore, and even performing simple operations felt cumbersome and archaic. I always struggled to build a mental model of the file system I was working with, and I wondered if my aphantasia was to blame. Perhaps using a CLI required visualisation abilities I simply did not possess.
+
+
+        <br/>
+        <br/>
+        </p>
+      <h2><span class="preview-title-hash">##</span> A catalyst for change</h2>
+      <p>
+
+        In my first software engineering job I was working across multiple repos and I'd often find myself needing to context switch to quickly debug/test/check something in a different repo. Every time, this meant closing VS Code, opening a file browser, clicking through to the target directory, waiting for VS Code to boot/initialize in that new directory, then searching for the files I needed. Once I'd finished, I'd repeat the whole process and hope I still remembered what I'd been working on originally. 15-20 seconds of downtime doesn't sound like a lot, but if I just need to check some value or jot down a quick note, 15-20 seconds feels like an eternity - and for a guy like me it's plenty of time to forget the reason I was context switching in the first place.
+
+        <br/>
+        <br/>
+
+        The frustrating part was that I knew it didn't have to be this slow. I'd seen some crazy workflows online where people were flying around their terminal environment - using vim to search files and edit text, and running commands so quickly I could barely keep track of what was happening. But whenever I tried to use vim for some quick text editing, I'd end up fighting against the CLI and waste more time than if I'd just done things the normal way.
       </p>
       <br/>
-
-      <h2><span class="preview-title-hash">##</span> What is fzf?</h2>
+      <h2><span class="preview-title-hash">##</span> A breakthrough</h2>
       <p>
-        fzf is a command-line fuzzy finder. Opening a terminal and typing <code>fzf</code> will launch a fuzzy search over the names of all files in the current directory. As you type, the results will be filtered, and pressing Enter will print the name of the selected file.
+        While searching for solutions, I came across fzf - a command-line fuzzy finder. It basically lets you run a fuzzy search over any input data, then prints the selected result to the command line. Not very useful on its own, but I realised that I could combine it with other commands to solve my two biggest pain points:
       </p>
-      <CodeBlock code="$ fzf" />
-      <CodeBlock code={`▌ hello_world.txt
-▌ hello.txt
-> hlo
-`} lang="text" />
-      <CodeBlock code="hello.txt" lang="text" />
-      <p>
-        If you aren't familiar with the CLI, there's a good chance you're struggling to imagine a practical application for this. On its own, fzf is mostly useless - the magic happens when you leverage its fuzzy searching to supercharge other CLI tools.
-      </p>
-
       <br/>
-      <h2><span class="preview-title-hash">##</span> fzf + nvim</h2>
-      <p>
-        To open a file in nvim (neovim), you need to pass the relative path to the file as the first argument.
-      </p>
-      <CodeBlock code="$ nvim filename.txt" />
-      <p>
-        This quickly starts to feel cumbersome when you can't remember the exact name of the file, or it's buried in a deeply nested directory - if only there was a way to quickly search through all the files in the current directory...
-      </p>
-      <CodeBlock code="$ nvim $(fzf)" />
-      <p>
-        This is called a "command substitution". It allows the <code>nvim</code> command to receive the output of the <code>fzf</code> command as its first argument. When you run this command, you'll launch a fuzzy search over all the files in the current directory, but when you press Enter, the selected file will immediately be opened in <code>nvim</code>. I use the following terminal alias daily - it's just a more robust version of the previous command.
-      </p>
-      <CodeBlock code={`alias s='file=$(find . -type f | colrm 1 2 | fzf) && nvim $file'`} />
-
+      <ol>
+        <li>Navigating to a specific directory (quickly)</li>
+        <li>Opening a specific file somewhere in that directory (quickly)</li>
+      </ol>
       <br/>
-      <h2><span class="preview-title-hash">##</span> fzf + cd</h2>
+      <h2><span class="preview-title-hash">###</span> Rapid directory navigation</h2>
       <p>
-        <code>cd</code> has the same constraint as <code>nvim</code> - it requires a relative path as its first argument. The main difference is that when I run <code>cd</code>, I'm usually moving to a completely different directory - not going more deeply into the current directory - so how does fzf help out here if it only fuzzy finds over files in the current directory? Simple - if you pass data to fzf over STDIN, it will fuzzy-find over your input text instead. I have the following alias to quickly switch between my projects or other commonly-accessed directories:
-      </p>
+        I realised that I could define a list of all the directories I frequently accessed, use fzf to search through them, then <code>cd</code> to the selected directory. If I wrap this logic into a terminal alias, <i>I can navigate to any of these directories in less than a second with just a few keystrokes</i>.
       <CodeBlock code={`DIRS=$(cat << ---
 ~/.config/nvim
 ~/.config/tmux
-~/projects/website
-~/projects/command-reference
-~/projects/sddm-theme
 ~/.dotfiles
+~/Downloads
+~/projects/command-reference
+~/projects/website
+~/repos/example
 ---
 )
 alias d='dir=$(echo $DIRS | fzf) && eval cd $dir'`} />
-      <p>
-        This allows me to run the command <code>d</code>, type a couple of characters to narrow down to a single directory, and press Enter to immediately switch to that directory. I use this multiple times per day.
       </p>
+      <p>
+        If you're not sure what I mean, try this out for yourself (assuming you're on a Unix-like system)
+      </p>
+      <br/>
+      <h2><span class="preview-title-hash">###</span> Rapid file search</h2>
+      <p>
+        I also realised that I could use a similar approach to pipe a list of all the files in the current directory to <code>fzf</code>, then open the selected file in <code>nvim</code>. When combined with the directory navigation alias, <i>this allows me to open any file in any target directory in less than 3 seconds with only 5-10 keystrokes</i> (assuming I know roughly where the file is located)
+      </p>
+      <CodeBlock code={`alias s='file=$(find . -type f | colrm 1 2 | fzf) && nvim $file'`} />
+      <br/>
+
     </>
   );
 }
@@ -77,7 +79,7 @@ export const posts: Post[] = [
   { slug: "clocks",                        title: "Text clocks",                         desc: "Designing and manufacturing clocks that use natural-language to display time",     tags: [Tag.project],               date: "2026-03-22", reading: 7  },
   { slug: "online-clipboard",              title: "Websocket clipboard",                 desc: "An online clipboard sharing application leveraging shared websocket sessions",     tags: [Tag.web, Tag.project],      date: "2026-04-10", reading: 5  },
   { slug: "pattern-matching-lsp",          title: "Pattern-matching LSP",               desc: "A language-agnostic LSP implementation based on regex pattern matching",           tags: [Tag.tooling, Tag.project],  date: "2026-04-28", reading: 8  },
-  { slug: "my-terminal-addiction",      title: "My terminal addiction",           desc: "I tried fzf one time and I've been chasing that high ever since",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6, body: MyTerminalAddictionBody },
+  { slug: "my-terminal-addiction",      title: "Terminal addiction",           desc: "I tried fzf one time and now I can't stop myself",        tags: [Tag.tooling, Tag.workflow], date: "2026-05-29", reading: 6, body: MyTerminalAddictionBody },
 ];
 
 /** Posts sorted newest-first. */

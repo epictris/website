@@ -55,6 +55,7 @@ export function PostPreview(props: { post: Post }) {
         <span class="meta-key">date</span>    <span class="meta-val">{props.post.date}</span>
         <span class="meta-key">kind</span>    <span class="meta-val">post</span>
         <span class="meta-key">reading</span> <span class="meta-val">{props.post.reading} min</span>
+        <span class="meta-key">author</span> <span class="meta-val">Tristan Bray</span>
       </div>
     </div>
   );
