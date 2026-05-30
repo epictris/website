@@ -172,18 +172,6 @@ body {
 	color: #cbccc6;
 }
 
-.banner {
-	display: block;
-	white-space: pre;
-	max-width: 110ch;
-	margin: 0 auto 0ch;
-	padding-left: 0.5ch;
-	color: #65bddb;
-	font-weight: bold;
-	line-height: 1.1;
-	text-decoration: none;
-}
-
 .site-nav {
 	position: fixed;
 	bottom: 0;
