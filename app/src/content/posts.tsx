@@ -24,14 +24,13 @@ function MyTerminalAddictionBody() {
 			</h2>
 			<p>
 				My first software engineering role had me frequently context switching
-				between multiple codebases. Each time I'd need to open the file browser,
-				click through to the target directory, then wait for my IDE to switch
-				workspaces and reinitialize extensions in the new directory before
-				continuing my work. Then I'd switch back to my original task and hope I
-				still remembered what I'd been working on. Maybe 15-20 seconds of
-				downtime doesn't sound like a lot - but if I'm just checking some value
-				or jotting down a quick note, it feels like an eternity. I hated feeling
-				constrained by my tools so I started looking for solutions.
+				between multiple codebases. I'd open the file browser, click through to
+				the target directory, wait for my IDE to switch workspaces and
+				reinitialize extensions in the new directory, then continue my work.
+				Then I'd switch back to my original task and hope I still remembered
+				what I'd been working on. ~15 seconds of downtime doesn't sound like a
+				lot - but if I'm just checking a value or jotting down a quick note, it
+				feels like an eternity. I hated feeling constrained by my tools.
 				<br />
 				<br />
 				I'd seen some crazy workflows online with people flying around their
@@ -212,6 +211,14 @@ export const posts: Post[] = [
 		date: "2026-05-29",
 		reading: 6,
 		body: MyTerminalAddictionBody,
+	},
+	{
+		slug: "vim-vs-emacs",
+		title: "Vim vs Emacs",
+		desc: "(The answer is actually Neovim)",
+		tags: [Tag.tooling, Tag.workflow],
+		date: "2026-05-30",
+		reading: 6,
 	},
 ];
 
