@@ -46,6 +46,9 @@
 	padding: 0;
 	border: none;
 	outline: none;
+	/* Form controls don't inherit the page font by default — pull in the
+	   global family/size so the input matches everything else. */
+	font: inherit;
 }
 
 .search-hint {
