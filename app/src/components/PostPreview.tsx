@@ -54,7 +54,7 @@ export function PostPreview(props: { post: Post }) {
 						)}
 					</For>
 				</div>
-				<p class="preview-desc">{props.post.desc}.</p>
+				<p class="preview-desc">{props.post.desc}</p>
 			</div>
 			<div class="preview-meta">
 				<For
