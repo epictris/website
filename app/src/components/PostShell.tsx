@@ -10,10 +10,108 @@ import {
 	Show,
 } from "solid-js";
 import { mostRecentSlug, posts, postsByDate } from "../content/posts";
-import { getTagColor, type Post } from "./PostPreview";
+import { getTagColor, type Post, TagClickContext } from "./PostPreview";
 import { PostReader } from "./PostReader";
 import "./PostShell.css";
 
+// ── fzf-style query parsing ──────────────────────────────────────────
+
+type Term = {
+	negate: boolean;
+	value: string;
+	prefix: boolean; // ^
+	suffix: boolean; // $
+	exact: boolean; // quoted → substring match, not fuzzy
+	boundary: boolean; // quoted both ends → word-boundary match
+};
+
+function parseQuery(query: string): Term[] {
+	const terms: Term[] = [];
+	let i = 0;
+	while (i < query.length) {
+		if (/\s/.test(query[i])) {
+			i++;
+			continue;
+		}
+
+		let negate = false;
+		if (query[i] === "!") {
+			negate = true;
+			i++;
+			if (i >= query.length) break;
+		}
+
+		let value: string;
+		let exact = false;
+		let boundary = false;
+
+		if (query[i] === "'") {
+			i++; // skip opening quote
+			const start = i;
+			while (i < query.length && query[i] !== "'") i++;
+			value = query.slice(start, i);
+			exact = true;
+			if (i < query.length && query[i] === "'") {
+				boundary = true;
+				i++; // skip closing quote
+			}
+		} else {
+			const start = i;
+			while (i < query.length && !/\s/.test(query[i]) && query[i] !== "'") i++;
+			value = query.slice(start, i);
+		}
+
+		if (value === "") continue;
+
+		let prefix = false;
+		let suffix = false;
+		if (!exact) {
+			if (value.startsWith("^")) {
+				prefix = true;
+				value = value.slice(1);
+			}
+			if (value.endsWith("$")) {
+				suffix = true;
+				value = value.slice(0, -1);
+			}
+		}
+
+		if (value === "") continue;
+
+		terms.push({ negate, value, prefix, suffix, exact, boundary });
+	}
+	return terms;
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Returns true when the term matches the haystack. */
+function matchTerm(term: Term, haystack: string): boolean {
+	const h = haystack.toLowerCase();
+	const v = term.value.toLowerCase();
+	let matched: boolean;
+	if (term.prefix && term.suffix) {
+		matched = h === v;
+	} else if (term.prefix) {
+		matched = h.startsWith(v);
+	} else if (term.suffix) {
+		matched = h.endsWith(v);
+	} else if (term.boundary) {
+		matched = new RegExp(`(?<=^|\\W)${escapeRegex(v)}(?=\\W|$)`, "i").test(h);
+	} else if (term.exact) {
+		matched = h.includes(v);
+	} else {
+		matched = fuzzyScore(v, haystack) !== null;
+	}
+	return term.negate ? !matched : matched;
+}
+
+/**
+ * All fuzzy terms (non-exact, non-negated) contribute to the sort score.
+ * Exact / negated terms are hard filters — they don't affect ranking.
+ */
 function fuzzyScore(query: string, text: string): number | null {
 	const q = query.toLowerCase().replace(/\s+/g, "");
 	if (q === "") return 0;
@@ -32,6 +130,8 @@ function fuzzyScore(query: string, text: string): number | null {
 	}
 	return qi === q.length ? score : null;
 }
+
+// ── component ────────────────────────────────────────────────────────
 
 /**
  * The persistent site frame, rendered once at the router root so it survives
@@ -52,6 +152,7 @@ export function PostShell(props: ParentProps) {
 	// Whether the search input genuinely holds focus — drives the blinking
 	// cursor, which should only flash while you're actually typing into it.
 	const [focused, setFocused] = createSignal(false);
+	const [cursorPos, setCursorPos] = createSignal(0);
 	const [isNarrow, setIsNarrow] = createSignal(false);
 	// Mobile drag-to-open/close: the live list-pane height in px while the user
 	// drags (null = use the CSS height), and whether a finger drag is actively
@@ -60,6 +161,7 @@ export function PostShell(props: ParentProps) {
 	const [dragging, setDragging] = createSignal(false);
 
 	let searchInput: HTMLInputElement | undefined;
+	let cursorEl: HTMLSpanElement | undefined;
 	let listPanel: HTMLDivElement | undefined;
 	let topBar: HTMLLabelElement | undefined;
 	let sidepanel: HTMLDivElement | undefined;
@@ -75,13 +177,34 @@ export function PostShell(props: ParentProps) {
 	const filtered = createMemo<Post[]>(() => {
 		const q = query();
 		if (q === "") return postsByDate();
+
+		const terms = parseQuery(q);
+		if (terms.length === 0) return postsByDate();
+
+		// Split terms: fuzzy terms drive scoring; exact/negated terms are hard filters.
+		const fuzzyTerms = terms.filter((t) => !t.exact && !t.negate);
+		const hardTerms = terms.filter((t) => t.exact || t.negate);
+
 		return posts
+			.filter((post) => {
+				const haystack = `${post.title} ${post.tags.map((t) => `#${t}`).join(" ")} ${post.date}`;
+				return hardTerms.every((t) => matchTerm(t, haystack));
+			})
 			.map((post) => {
 				const haystack = `${post.title} ${post.tags.map((t) => `#${t}`).join(" ")} ${post.date}`;
-				const haystackScore = fuzzyScore(q, haystack);
-				if (haystackScore === null) return null;
-				const titleScore = fuzzyScore(q, post.title) ?? 0;
-				return { post, score: haystackScore + titleScore * 3 };
+				// Every fuzzy term must match; sum their scores for ranking.
+				let score = 0;
+				for (const t of fuzzyTerms) {
+					const s = fuzzyScore(t.value, haystack);
+					if (s === null) return null;
+					score += s;
+				}
+				// Title bonus: fuzzy terms matched against the title get 3x weight.
+				let titleBonus = 0;
+				for (const t of fuzzyTerms) {
+					titleBonus += fuzzyScore(t.value, post.title) ?? 0;
+				}
+				return { post, score: score + titleBonus * 3 };
 			})
 			.filter((m): m is { post: Post; score: number } => m !== null)
 			.sort((a, b) => b.score - a.score)
@@ -101,17 +224,21 @@ export function PostShell(props: ParentProps) {
 		return post && post.slug !== activeSlug() ? post : undefined;
 	});
 
-	// Reset selection to the top whenever the result set changes.
-	createEffect(() => {
-		filtered();
-		setSelectedIndex(0);
-	});
-
 	// Keep the highlighted row in view as the selection moves.
 	createEffect(() => {
 		const idx = selectedIndex();
 		const rows = listPanel?.querySelectorAll<HTMLElement>(".post-row");
 		rows?.[idx]?.scrollIntoView({ block: "nearest" });
+	});
+
+	// Reset the blinking cursor animation whenever it moves, so it starts
+	// visible instead of mid-blink.
+	createEffect(() => {
+		cursorPos();
+		if (!cursorEl) return;
+		cursorEl.style.animation = "none";
+		void cursorEl.offsetHeight; // force reflow
+		cursorEl.style.animation = "";
 	});
 
 	// Scroll the reader back to the top when the shown post changes — on
@@ -197,8 +324,18 @@ export function PostShell(props: ParentProps) {
 		// Mobile is handled by the preview-pane drag/tap gesture below instead.
 		const handlePointerDown = (e: PointerEvent) => {
 			if (!open() || isNarrow()) return;
-			const target = e.target as Node;
+			const target = e.target as HTMLElement;
 			if (topBar?.contains(target) || sidepanel?.contains(target)) return;
+			// Tag badges in the reader pane toggle search filters — don't dismiss.
+			if (
+				e
+					.composedPath()
+					.some(
+						(el) =>
+							el instanceof HTMLElement && el.hasAttribute("data-tag-badge"),
+					)
+			)
+				return;
 			closePalette();
 		};
 		document.addEventListener("pointerdown", handlePointerDown);
@@ -351,129 +488,167 @@ export function PostShell(props: ParentProps) {
 		});
 	});
 
+	const onTagClick = (tag: string) => {
+		const tagFilter = `'#${tag}'`;
+		setQuery((prev) => {
+			let next: string;
+			if (prev.includes(tagFilter)) {
+				// Toggle off: remove the tag filter and clean up whitespace.
+				next = prev.replace(tagFilter, "").replace(/\s+/g, " ").trim();
+				if (next !== "") next += " ";
+			} else {
+				// Toggle on: prepend with trailing space for visual separation.
+				next = prev === "" ? `${tagFilter} ` : `${tagFilter} ${prev}`;
+			}
+			setCursorPos(next.length);
+			return next;
+		});
+		// Keep preview on the active post, not the top filtered result.
+		const idx = filtered().findIndex((p) => p.slug === activeSlug());
+		setSelectedIndex(idx === -1 ? 0 : idx);
+		searchInput?.focus();
+	};
+
 	return (
-		<main class="shell">
-			<div class="h-sep" aria-hidden="true" />
-			{/* A <label> natively focuses its nested input on click — no JS or
+		<TagClickContext.Provider value={onTagClick}>
+			<main class="shell">
+				<div class="h-sep" aria-hidden="true" />
+				{/* A <label> natively focuses its nested input on click — no JS or
           keyboard handler needed, and it stays fully accessible. */}
-			<label class="top-bar" ref={topBar}>
-				<span class="top-prompt" aria-hidden="true">
-					❯
-				</span>
-				<div class="search-input-area">
-					<input
-						ref={searchInput}
-						type="text"
-						class="site-search"
-						aria-label="search"
-						value={query()}
-						onInput={(e) => setQuery(e.currentTarget.value)}
-						onFocus={() => {
-							setFocused(true);
-							setOpen(true);
-						}}
-						onBlur={() => setFocused(false)}
-					/>
-					<Show when={focused()}>
-						<span
-							class="block-cursor active"
-							style={{ left: `${query().length}ch` }}
-							aria-hidden="true"
-						>
-							█
-						</span>
-					</Show>
-					<Show when={!focused() && query() === ""}>
-						<span class="search-hint" aria-hidden="true">
-							search <span class="search-hint-key">/</span>
-						</span>
-					</Show>
-				</div>
-				<Show when={open()}>
-					<span class="post-count">
-						{filtered().length}/{posts.length}
+				<label class="top-bar" ref={topBar}>
+					<span class="top-prompt" aria-hidden="true">
+						❯
 					</span>
-				</Show>
-			</label>
-
-			<div
-				class="h-sep h-sep-split"
-				classList={{ open: open() }}
-				aria-hidden="true"
-			/>
-
-			<div class="shell-body">
-				<div
-					class="sidepanel"
-					classList={{ open: open(), dragging: dragging() }}
-					style={
-						dragHeight() !== null ? { height: `${dragHeight()}px` } : undefined
-					}
-					ref={sidepanel}
-				>
-					<div class="post-list-panel" ref={listPanel}>
-						<For each={filtered()}>
-							{(post, i) => (
-								<A
-									href={`/post/${post.slug}`}
-									class="post-row"
-									classList={{
-										selected: i() === selectedIndex(),
-										active: post.slug === activeSlug(),
-									}}
-									onMouseMove={() => {
-										if (!isNarrow()) setSelectedIndex(i());
-									}}
-									onClick={(e) => {
-										if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-										e.preventDefault();
-										if (isNarrow()) {
-											// Mobile: load the page but keep the search pane open.
-											setSelectedIndex(i());
-											navigate(`/post/${post.slug}`);
-										} else {
-											select(post.slug); // desktop: open the post and close
-										}
-									}}
-								>
-									<span class="row-indicator" aria-hidden="true">
-										{i() === selectedIndex() ? "▌" : ""}
-									</span>
-									<span class="row-number">
-										{(i() + 1).toString().padStart(2, "0")}
-									</span>
-									<span class="row-title">{post.title}</span>
-									<span class="row-tags">
-										<For each={post.tags}>
-											{(tag) => (
-												<span
-													class="row-tag"
-													style={{ color: getTagColor(tag) }}
-												>
-													#{tag}
-												</span>
-											)}
-										</For>
-									</span>
-									<span class="row-date">{post.date}</span>
-								</A>
-							)}
-						</For>
-						<Show when={filtered().length === 0}>
-							<p class="no-results">no matching posts found</p>
+					<div class="search-input-area">
+						<input
+							ref={searchInput}
+							type="text"
+							class="site-search"
+							aria-label="search"
+							value={query()}
+							onInput={(e) => {
+								setQuery(e.currentTarget.value);
+								setCursorPos(e.currentTarget.selectionStart ?? 0);
+								setSelectedIndex(0);
+							}}
+							onClick={(e) => setCursorPos(e.currentTarget.selectionStart ?? 0)}
+							onKeyUp={(e) => setCursorPos(e.currentTarget.selectionStart ?? 0)}
+							onFocus={() => {
+								setFocused(true);
+								setOpen(true);
+							}}
+							onBlur={() => setFocused(false)}
+						/>
+						<Show when={focused()}>
+							<span
+								ref={cursorEl}
+								class="block-cursor active"
+								style={{ left: `${cursorPos()}ch` }}
+								aria-hidden="true"
+							>
+								█
+							</span>
+						</Show>
+						<Show when={!focused() && query() === ""}>
+							<span class="search-hint" aria-hidden="true">
+								search <span class="search-hint-key">/</span>
+							</span>
 						</Show>
 					</div>
-					<div class="shell-divider" aria-hidden="true" />
-				</div>
-
-				<div class="reader-pane" ref={readerPane}>
-					{/* Desktop previews the highlighted row client-side when it differs
-              from the active route; otherwise we show the loaded route. */}
-					<Show when={preview()} fallback={props.children}>
-						{(post) => <PostReader post={post()} />}
+					<Show when={open()}>
+						<span class="post-count">
+							{filtered().length}/{posts.length}
+						</span>
 					</Show>
+				</label>
+
+				<div
+					class="h-sep h-sep-split"
+					classList={{ open: open() }}
+					aria-hidden="true"
+				/>
+
+				<div class="shell-body">
+					<div
+						class="sidepanel"
+						classList={{ open: open(), dragging: dragging() }}
+						style={
+							dragHeight() !== null
+								? { height: `${dragHeight()}px` }
+								: undefined
+						}
+						ref={sidepanel}
+					>
+						<div class="post-list-panel" ref={listPanel}>
+							<For each={filtered()}>
+								{(post, i) => (
+									<A
+										href={`/post/${post.slug}`}
+										class="post-row"
+										classList={{
+											selected: i() === selectedIndex(),
+											active: post.slug === activeSlug(),
+										}}
+										onMouseMove={() => {
+											if (!isNarrow()) setSelectedIndex(i());
+										}}
+										onClick={(e) => {
+											if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+											e.preventDefault();
+											if (isNarrow()) {
+												// Mobile: load the page but keep the search pane open.
+												setSelectedIndex(i());
+												navigate(`/post/${post.slug}`);
+											} else {
+												select(post.slug); // desktop: open the post and close
+											}
+										}}
+									>
+										<span class="row-indicator" aria-hidden="true">
+											{i() === selectedIndex() ? "▌" : ""}
+										</span>
+										<span class="row-number">
+											{(i() + 1).toString().padStart(2, "0")}
+										</span>
+										<span class="row-title">{post.title}</span>
+										<span class="row-tags">
+											<For each={post.tags}>
+												{(tag) => (
+													<button
+														type="button"
+														class="row-tag"
+														style={{ color: getTagColor(tag) }}
+														onClick={(e) => {
+															e.stopPropagation();
+															e.preventDefault();
+															onTagClick(tag);
+														}}
+													>
+														#{tag}
+													</button>
+												)}
+											</For>
+										</span>
+										<span class="row-date">{post.date}</span>
+									</A>
+								)}
+							</For>
+							<Show when={filtered().length === 0}>
+								<p class="no-results">no matching posts found</p>
+							</Show>
+						</div>
+						<div class="shell-divider" aria-hidden="true" />
+					</div>
+
+					<div class="reader-pane" ref={readerPane}>
+						{/* Desktop previews the highlighted row client-side when it differs
+              from the active route; otherwise we show the loaded route. */}
+						<Show when={preview()} fallback={props.children}>
+							{(post) => <PostReader post={post()} />}
+						</Show>
+					</div>
 				</div>
-			</div>
-		</main>
+			</main>
+		</TagClickContext.Provider>
 	);
 }

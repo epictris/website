@@ -1,4 +1,4 @@
-import { For, type JSX } from "solid-js";
+import { createContext, For, type JSX, useContext } from "solid-js";
 
 export type Post = {
 	slug: string;
@@ -20,6 +20,8 @@ export enum Tag {
 	life = "life",
 }
 
+export const TagClickContext = createContext<(tag: string) => void>();
+
 const tagColors: Record<Tag, string> = {
 	[Tag.tooling]: "#ffd580",
 	[Tag.project]: "#bae67e",
@@ -34,6 +36,7 @@ export function getTagColor(tag: Tag): string {
 }
 
 export function PostPreview(props: { post: Post }) {
+	const onTagClick = useContext(TagClickContext);
 	return (
 		<div class="preview-content">
 			<div class="preview-right">
@@ -43,12 +46,24 @@ export function PostPreview(props: { post: Post }) {
 				<div class="preview-tags">
 					<For each={props.post.tags}>
 						{(tag) => (
+							// biome-ignore lint/a11y/useSemanticElements: WebTUI badge, must be span
 							<span
 								is-="badge"
 								cap-="round"
+								data-tag-badge
+								role="button"
+								tabIndex="0"
 								style={{
 									"--badge-color": getTagColor(tag),
 									"--badge-text": "#1f2430",
+									cursor: "pointer",
+								}}
+								onClick={() => onTagClick?.(tag)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
+										onTagClick?.(tag);
+									}
 								}}
 							>
 								{tag}
