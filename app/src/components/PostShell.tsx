@@ -614,18 +614,21 @@ export function PostShell(props: ParentProps) {
 										<span class="row-tags">
 											<For each={post.tags}>
 												{(tag) => (
-													<button
-														type="button"
-														class="row-tag"
-														style={{ color: getTagColor(tag) }}
-														onClick={(e) => {
-															e.stopPropagation();
-															e.preventDefault();
-															onTagClick(tag);
-														}}
-													>
-														#{tag}
-													</button>
+													<>
+														{/* biome-ignore lint/a11y/noStaticElementInteractions: tag fits inline in result row */}
+														{/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard nav via search input */}
+														<span
+															class="row-tag"
+															style={{ color: getTagColor(tag) }}
+															onClick={(e) => {
+																e.stopPropagation();
+																e.preventDefault();
+																onTagClick(tag);
+															}}
+														>
+															#{tag}
+														</span>
+													</>
 												)}
 											</For>
 										</span>
