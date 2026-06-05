@@ -17,6 +17,7 @@ export enum Tag {
 	web = "web",
 	game = "game",
 	workflow = "workflow",
+	life = "life",
 }
 
 const tagColors: Record<Tag, string> = {
@@ -25,6 +26,7 @@ const tagColors: Record<Tag, string> = {
 	[Tag.web]: "#d4bfff",
 	[Tag.game]: "#ff9f94",
 	[Tag.workflow]: "#dcabff",
+	[Tag.life]: "#ffd4f2",
 };
 
 export function getTagColor(tag: Tag): string {
