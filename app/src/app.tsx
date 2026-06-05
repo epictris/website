@@ -30,14 +30,12 @@ function AppShell(props: ParentProps) {
         href="/fonts/FantasqueSansMNerdFont-Regular.woff2"
         as="font"
         type="font/woff2"
-        crossorigin=""
       />
       <Link
         rel="preload"
         href="/fonts/FantasqueSansMNerdFont-Bold.woff2"
         as="font"
         type="font/woff2"
-        crossorigin=""
       />
       <PostShell>
         <Suspense>{props.children}</Suspense>
