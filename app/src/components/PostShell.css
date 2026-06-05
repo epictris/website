@@ -25,11 +25,19 @@
   cursor: text;
 }
 
+.top-hostname {
+  color: var(--foreground);
+  flex-shrink: 0;
+  margin-right: -3ch;
+  padding: 0 1ch;
+}
+
 .top-prompt {
-  width: 2ch;
+  width: 1ch;
   text-align: center;
   color: var(--accent-red);
   flex-shrink: 0;
+  margin-right: -2ch;
 }
 
 .search-input-area {

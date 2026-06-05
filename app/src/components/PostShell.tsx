@@ -518,6 +518,7 @@ export function PostShell(props: ParentProps) {
         {/* A <label> natively focuses its nested input on click — no JS or
           keyboard handler needed, and it stays fully accessible. */}
         <label class="top-bar" ref={topBar}>
+          <span class="top-hostname">tris.sh</span>
           <span class="top-prompt" aria-hidden="true">
             ❯
           </span>
