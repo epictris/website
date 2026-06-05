@@ -5,318 +5,318 @@
 /* ── Shell: top search bar + reveal-on-focus switcher + reader ─ */
 
 .shell {
-	position: fixed;
-	inset: 0;
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	background: var(--background);
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background);
 }
 
 /* ── Top search bar (always visible) ──────────────────────── */
 
 .top-bar {
-	display: flex;
-	align-items: center;
-	height: 1lh;
-	flex-shrink: 0;
-	padding-right: 1ch;
-	gap: 3ch;
-	cursor: text;
+  display: flex;
+  align-items: center;
+  height: 1lh;
+  flex-shrink: 0;
+  padding-right: 1ch;
+  gap: 3ch;
+  cursor: text;
 }
 
 .top-prompt {
-	width: 2ch;
-	text-align: center;
-	color: var(--accent-red);
-	flex-shrink: 0;
+  width: 2ch;
+  text-align: center;
+  color: var(--accent-red);
+  flex-shrink: 0;
 }
 
 .search-input-area {
-	flex: 1;
-	min-width: 0;
-	position: relative;
+  flex: 1;
+  min-width: 0;
+  position: relative;
 }
 
 .site-search {
-	width: 100%;
-	background: transparent;
-	color: var(--foreground);
-	caret-color: transparent;
-	padding: 0;
-	border: none;
-	outline: none;
-	/* Form controls don't inherit the page font by default — pull in the
+  width: 100%;
+  background: transparent;
+  color: var(--foreground);
+  caret-color: transparent;
+  padding: 0;
+  border: none;
+  outline: none;
+  /* Form controls don't inherit the page font by default — pull in the
 	   global family/size so the input matches everything else. */
-	font: inherit;
+  font: inherit;
 }
 
 .search-hint {
-	position: absolute;
-	top: 0;
-	left: 0;
-	color: var(--foreground);
-	opacity: 0.3;
-	pointer-events: none;
-	white-space: nowrap;
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: var(--foreground);
+  opacity: 0.3;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .search-hint-key {
-	border: 1px solid var(--border);
-	border-radius: 3px;
-	padding: 0 0.5ch;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.5ch;
 }
 
 .block-cursor {
-	position: absolute;
-	top: 0;
-	height: calc(1lh - 3px);
-	overflow: hidden;
-	pointer-events: none;
-	color: transparent;
-	box-shadow: inset 0 0 0 1px var(--foreground);
+  position: absolute;
+  top: 0;
+  height: calc(1lh - 3px);
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+  box-shadow: inset 0 0 0 1px var(--foreground);
 }
 
 .block-cursor.active {
-	color: var(--foreground);
-	box-shadow: none;
-	animation: cursor-blink 1s step-end infinite;
+  color: var(--foreground);
+  box-shadow: none;
+  animation: cursor-blink 1s step-end infinite;
 }
 
 @keyframes cursor-blink {
-	0%,
-	100% {
-		opacity: 1;
-	}
-	50% {
-		opacity: 0;
-	}
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 
 .post-count {
-	color: var(--foreground);
-	opacity: 0.4;
-	flex-shrink: 0;
+  color: var(--foreground);
+  opacity: 0.4;
+  flex-shrink: 0;
 }
 
 /* ── Body: collapsible sidepanel beside the reader ────────── */
 
 .shell-body {
-	flex: 1;
-	display: flex;
-	overflow: hidden;
-	min-height: 0;
-	position: relative;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
 }
 
 .sidepanel {
-	width: 0;
-	flex-shrink: 0;
-	overflow: hidden;
-	display: flex;
-	flex-direction: column;
-	min-height: 0;
-	border-right: 1px solid transparent;
+  width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid transparent;
 }
 
 .sidepanel.open {
-	width: 50%;
-	border-right-color: var(--border);
+  width: 50%;
+  border-right-color: var(--border);
 }
 
 /* Shown only in the stacked layout while the list is open (see media query);
    its geometry comes from the shared separator rule in app.css. */
 .shell-divider {
-	display: none;
+  display: none;
 }
 
 /* Desktop: drop the column divider down from the input's bottom separator so it
    meets the sidepanel's right border (which starts at the shell-body top). */
 .h-sep-split.open::before {
-	content: "";
-	position: absolute;
-	left: calc(50% - 1px);
-	top: 50%;
-	bottom: 0;
-	width: 1px;
-	background: var(--border);
+  content: "";
+  position: absolute;
+  left: calc(50% - 1px);
+  top: 50%;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
 }
 
 .post-list-panel {
-	flex: 1;
-	overflow-y: auto;
-	display: flex;
-	flex-direction: column;
-	min-height: 0;
-	min-width: 0;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
 }
 
 .post-row {
-	display: flex;
-	align-items: center;
-	height: 1lh;
-	flex-shrink: 0;
-	text-decoration: none;
-	color: var(--foreground);
-	white-space: nowrap;
-	overflow: hidden;
-	cursor: pointer;
+  display: flex;
+  align-items: center;
+  height: 1lh;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 .post-row.selected {
-	background: rgba(101, 189, 219, 0.07);
+  background: rgba(101, 189, 219, 0.07);
 }
 
 .row-indicator {
-	width: 2ch;
-	text-align: center;
-	color: var(--accent-red);
-	flex-shrink: 0;
+  width: 2ch;
+  text-align: center;
+  color: var(--accent-red);
+  flex-shrink: 0;
 }
 
 .row-number {
-	width: 3ch;
-	text-align: right;
-	color: var(--foreground);
-	opacity: 0.35;
-	flex-shrink: 0;
-	padding-right: 1ch;
+  width: 3ch;
+  text-align: right;
+  color: var(--foreground);
+  opacity: 0.35;
+  flex-shrink: 0;
+  padding-right: 1ch;
 }
 
 .row-title {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .post-row.selected .row-title {
-	color: var(--accent);
+  color: var(--accent);
 }
 
 /* Marks the post currently open in the reader. */
 .post-row.active .row-number {
-	color: var(--accent);
-	opacity: 0.8;
+  color: var(--accent);
+  opacity: 0.8;
 }
 
 .row-tags {
-	display: flex;
-	gap: 1ch;
-	flex-shrink: 0;
-	padding: 0 2ch;
+  display: flex;
+  gap: 1ch;
+  flex-shrink: 0;
+  padding: 0 2ch;
 }
 
 .row-date {
-	width: 12ch;
-	text-align: right;
-	color: var(--foreground);
-	opacity: 0.35;
-	flex-shrink: 0;
-	padding-right: 1ch;
-	margin-right: 1ch;
+  width: 12ch;
+  text-align: right;
+  color: var(--foreground);
+  opacity: 0.35;
+  flex-shrink: 0;
+  padding-right: 1ch;
+  margin-right: 1ch;
 }
 
 .no-results {
-	padding: 0 3ch;
-	color: var(--foreground);
-	opacity: 0.4;
-	height: 1lh;
-	display: flex;
-	align-items: center;
+  padding: 0 3ch;
+  color: var(--foreground);
+  opacity: 0.4;
+  height: 1lh;
+  display: flex;
+  align-items: center;
 }
 
 /* ── Reader pane ──────────────────────────────────────────── */
 
 .reader-pane {
-	flex: 1;
-	overflow-y: auto;
-	min-width: 0;
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
 }
 
 /* ── Narrow (< 1400px): stack the list above the preview ──── */
 
 @media (max-width: 1400px) {
-	.shell-body {
-		flex-direction: column;
-	}
+  .shell-body {
+    flex-direction: column;
+  }
 
-	/* No side-by-side columns here, so no vertical divider to connect. */
-	.h-sep-split.open::before {
-		display: none;
-	}
+  /* No side-by-side columns here, so no vertical divider to connect. */
+  .h-sep-split.open::before {
+    display: none;
+  }
 
-	/* Collapse by height now that the panel stacks vertically. */
-	.sidepanel {
-		width: 100%;
-		height: 0;
-		border-right: none;
-	}
+  /* Collapse by height now that the panel stacks vertically. */
+  .sidepanel {
+    width: 100%;
+    height: 0;
+    border-right: none;
+  }
 
-	.sidepanel.open {
-		width: 100%;
-		height: 50%;
-	}
+  .sidepanel.open {
+    width: 100%;
+    height: 50%;
+  }
 
-	/* Full 1lh separator at the bottom of the list pane (matching the separators
+  /* Full 1lh separator at the bottom of the list pane (matching the separators
 	   around the search input). It lives inside the pane, so it collapses and
 	   animates together with it — and is clipped away when the pane closes. */
-	.shell-divider {
-		display: block;
-	}
+  .shell-divider {
+    display: block;
+  }
 }
 
 /* ── Narrow (< 800px): two-line entries ───────────────────── */
 
 @media (max-width: 800px) {
-	/* The list pane animates open/closed by height. While a finger is actively
+  /* The list pane animates open/closed by height. While a finger is actively
 	   dragging it, the transition is disabled so it tracks the touch 1:1. */
-	.sidepanel {
-		transition: height 0.2s ease;
-	}
+  .sidepanel {
+    transition: height 0.2s ease;
+  }
 
-	.sidepanel.dragging {
-		transition: none;
-	}
+  .sidepanel.dragging {
+    transition: none;
+  }
 
-	/* Title on the top line; tags + date on the bottom line. The indicator forms
+  /* Title on the top line; tags + date on the bottom line. The indicator forms
 	   a left gutter spanning both lines; the row number is dropped on mobile. */
-	.post-row {
-		display: grid;
-		grid-template-columns: auto 1fr auto;
-		grid-template-areas:
-			"ind title title"
-			"ind tags  date";
-		align-items: start;
-		height: auto;
-		white-space: normal;
-		padding: 0.5lh 0;
-	}
+  .post-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "ind title title"
+      "ind tags  date";
+    align-items: start;
+    height: auto;
+    white-space: normal;
+    padding: 0.5lh 0;
+  }
 
-	.row-indicator {
-		grid-area: ind;
-	}
-	.row-number {
-		display: none;
-	}
+  .row-indicator {
+    grid-area: ind;
+  }
+  .row-number {
+    display: none;
+  }
 
-	.row-title {
-		grid-area: title;
-		min-width: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
+  .row-title {
+    grid-area: title;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-	.row-tags {
-		grid-area: tags;
-		padding: 0;
-	}
+  .row-tags {
+    grid-area: tags;
+    padding: 0;
+  }
 
-	.row-date {
-		grid-area: date;
-		width: auto;
-		margin: 0;
-		padding-right: 1ch;
-	}
+  .row-date {
+    grid-area: date;
+    width: auto;
+    margin: 0;
+    padding-right: 1ch;
+  }
 }

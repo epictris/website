@@ -6,28 +6,28 @@ import { PostReader } from "../../components/PostReader";
 import { getPost } from "../../content/posts";
 
 export default function PostPage() {
-	const params = useParams();
-	const post = () => (params.slug ? getPost(params.slug) : undefined);
+  const params = useParams();
+  const post = () => (params.slug ? getPost(params.slug) : undefined);
 
-	return (
-		<Show
-			when={post()}
-			fallback={
-				<>
-					<Title>Not found — tris.sh</Title>
-					<HttpStatusCode code={404} />
-					<p class="no-results">
-						no post named "{params.slug}" — <A href="/">go home</A>
-					</p>
-				</>
-			}
-		>
-			{(p) => (
-				<>
-					<Title>{p().title} — tris.sh</Title>
-					<PostReader post={p()} />
-				</>
-			)}
-		</Show>
-	);
+  return (
+    <Show
+      when={post()}
+      fallback={
+        <>
+          <Title>Not found — tris.sh</Title>
+          <HttpStatusCode code={404} />
+          <p class="no-results">
+            no post named "{params.slug}" — <A href="/">go home</A>
+          </p>
+        </>
+      }
+    >
+      {(p) => (
+        <>
+          <Title>{p().title} — tris.sh</Title>
+          <PostReader post={p()} />
+        </>
+      )}
+    </Show>
+  );
 }

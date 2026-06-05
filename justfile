@@ -6,3 +6,9 @@ run:
 
 check:
     cd app && bun run typecheck && bun run lint
+
+fmt:
+    cd app && bun run format
+
+check-all:
+    cd app && bun run format && bun run typecheck && bun run lint
