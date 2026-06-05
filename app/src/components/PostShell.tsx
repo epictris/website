@@ -77,7 +77,7 @@ export function PostShell(props: ParentProps) {
 		if (q === "") return postsByDate();
 		return posts
 			.map((post) => {
-				const haystack = `${post.title} ${post.desc} ${post.tags.join(" ")}`;
+				const haystack = `${post.title} ${post.tags.map((t) => `#${t}`).join(" ")} ${post.date}`;
 				const haystackScore = fuzzyScore(q, haystack);
 				if (haystackScore === null) return null;
 				const titleScore = fuzzyScore(q, post.title) ?? 0;
