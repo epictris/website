@@ -9,46 +9,85 @@ function MyTerminalAddictionBody() {
   return (
     <>
       <p>
-        I never understood people who favoured command line interfaces (CLIs)
-        over graphical user interfaces (GUIs). Command line syntax felt to me
-        like an archaic artifact of legacy technology where even simple
-        operations were cumbersome and error-prone. In my limited experience,
-        I'd always struggled to build a mental model of the file system I was
-        working with - perhaps the CLI required mental visualisation abilities I
-        simply did not possess.
+        Before I started working as a software engineer, I would only ever use a
+        command line interface (CLI) if there was no graphical alternative. Each
+        instance felt like a battle against the archaic syntax of a legacy
+        technology, and I would struggle to build a mental model of the file
+        system I was working in. Today, the CLI is at the core of my development
+        workflow, and I'm constantly looking for ways to replace GUI tools with
+        CLI alternatives.
         <br />
         <br />
       </p>
       <h2>
-        <span class="preview-title-hash">##</span> A catalyst for change
+        <span class="preview-title-hash">##</span> The catalyst
       </h2>
       <p>
-        My first software engineering role had me frequently context switching
-        between multiple codebases. I'd open the file browser, click through to
-        the target directory, wait for my IDE to switch workspaces and
-        reinitialize extensions in the new directory, then continue my work.
-        Then I'd switch back to my original task and hope I still remembered
-        what I'd been working on. ~15 seconds of downtime doesn't sound like a
-        lot - but if I'm just checking a value or jotting down a quick note, it
-        feels like an eternity. I hated feeling constrained by my tools.
+        My comfortable coding workflow went out the window when I started my
+        first software engineering role. I'd never been in an environment with
+        such a high bar for performance - but more significantly, I'd never been
+        surrounded by so many people capable of meeting and exceeding that bar.
+      </p>
+      <br />
+      <p>
+        Trying (and failing) to merge 15 PRs into production per week across
+        millions of lines of code made me realise that something fundamental
+        needed to change about my workflow.
         <br />
         <br />
-        I'd seen some crazy workflows online with people flying around their
+      </p>
+      <h2>
+        <span class="preview-title-hash">##</span> The goal
+      </h2>
+      <p>
+        I'd seen some crazy videos online with people flying around their
         terminal environment, searching/editing files and running commands so
-        quickly I'd lose track of what was happening. I wanted this speed and
-        precision, but every time I tried to use vim for some quick text
-        editing, I'd end up fighting against the CLI and waste more time than if
-        I'd just done things the normal way.
+        quickly I'd lose track of what was happening. I wanted that speed and
+        precision, but every time I dabbled with <code>vim</code> for some quick
+        text editing, I'd end up fighting against the CLI and waste more time
+        than if I'd just done things the normal way.
       </p>
       <br />
       <h2>
-        <span class="preview-title-hash">##</span> A breakthrough
+        <span class="preview-title-hash">##</span> The breakthrough
       </h2>
       <p>
-        I came across fzf - a command-line fuzzy finder. It lets you run a fuzzy
-        search over any input data, then prints the selected result. Not
-        particularly useful in isolation, but I realised that I could combine it
-        with other commands to solve my two biggest pain points:
+        I came across <code>fzf</code> - a command-line fuzzy finder. Invoking{" "}
+        <code>fzf</code> runs a fuzzy search over the files in the current
+        directory and prints the name of the selected file. A year prior I would
+        have dismissed this as a triviality, but my recent exploration had
+        fundamentally shifted my perspective.
+        <br />
+        <br />
+        The CLI is not a set of disparate commands to memorize. It's a system
+        for composing data transformation pipelines with tools that use text as
+        a universal interface. This reflects the Unix philosophy:
+        <br />
+        <br />
+      </p>
+      <ul>
+        <li>Write programs that do one thing and do it well.</li>
+        <li>Write programs to work together</li>
+        <li>
+          Write programs to handle text streams, because that is a universal
+          interface
+        </li>
+      </ul>
+      <p>
+        <br />
+        CLI tools are designed to be used as composable parts of a pipeline -
+        not in isolation.
+        <br />
+        <br />
+        This design philosophy allows a tool like <code>fzf</code> to provide
+        enormous value. It isn't limited to fuzzy searching files - it can
+        search any given text input. Printing the selection is useless in
+        isolation, but incredibly useful when that selection is used as the
+        input to another CLI tool.
+        <br />
+        <br />
+        When I learned about <code>fzf</code>, I realised that it could solve my
+        two biggest pain points:
       </p>
       <br />
       <ol>
@@ -57,7 +96,7 @@ function MyTerminalAddictionBody() {
       </ol>
       <br />
       <h2>
-        <span class="preview-title-hash">###</span> Rapid directory navigation
+        <span class="preview-title-hash">###</span> Directory navigation
       </h2>
       <ul>
         <li>Define a list of all frequented directories</li>
@@ -91,7 +130,7 @@ alias d='dir=$(echo $DIRS | fzf) && eval cd $dir'`}
       </p>
       <br />
       <h2>
-        <span class="preview-title-hash">###</span> Rapid file search
+        <span class="preview-title-hash">###</span> File search
       </h2>
       <ul>
         <li>
@@ -112,9 +151,7 @@ alias d='dir=$(echo $DIRS | fzf) && eval cd $dir'`}
           few keystrokes
         </i>
       </p>
-      <CodeBlock
-        code={`alias s='file=$(rg --files | colrm 1 2 | fzf) && nvim $file'`}
-      />
+      <CodeBlock code={`alias s='file=$(rg --files | fzf) && nvim $file'`} />
       <br />
     </>
   );
