@@ -207,7 +207,9 @@ export function PostShell(props: ParentProps) {
         return { post, score: score + titleBonus * 3 };
       })
       .filter((m): m is { post: Post; score: number } => m !== null)
-      .sort((a, b) => b.score - a.score)
+      .sort(
+        (a, b) => b.score - a.score || b.post.date.localeCompare(a.post.date),
+      )
       .map((m) => m.post);
   });
 
