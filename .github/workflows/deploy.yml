@@ -68,7 +68,7 @@ jobs:
       - name: Pull and restart
         run: |
           ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} \
-            "WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }} \
-             CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:${{ github.sha }} \
-             docker compose -f /opt/website/compose.yml up -d --pull always \
+            "export WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }} \
+             && export CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:${{ github.sha }} \
+             && docker compose -f /opt/website/compose.yml up -d --pull always \
              && docker compose -f /opt/website/compose.yml restart caddy"
