@@ -5,3 +5,7 @@
 tris.sh {
 	reverse_proxy website:3000
 }
+
+clipboard.tris.sh {
+	reverse_proxy clipboard:8080
+}

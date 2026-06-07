@@ -11,12 +11,17 @@ services:
       - caddy_config:/config
     depends_on:
       - website
+      - clipboard
 
   website:
     image: ${WEBSITE_IMAGE}
     restart: unless-stopped
     environment:
       - PORT=3000
+
+  clipboard:
+    image: ${CLIPBOARD_IMAGE}
+    restart: unless-stopped
 
 volumes:
   caddy_data:
