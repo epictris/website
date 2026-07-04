@@ -90,6 +90,67 @@ canvas {
   padding: 12px 16px;
 }
 
+/* Spin ball + cue-angle + hamburger, directly below the table. */
+.aim-controls {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.hamburger {
+  width: 66px;
+  height: 66px;
+  font-size: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Slide-over menu holding status, invite, game buttons, and physics config. */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 10;
+}
+
+.menu-panel {
+  position: fixed;
+  z-index: 11;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(94vw, 720px);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.menu-close {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-size: 18px;
+  padding: 4px 8px;
+}
+
 .control {
   display: flex;
   flex-direction: column;
@@ -221,7 +282,7 @@ input[type="range"] {
   pointer-events: none;
 }
 
-/* Power meter — filled by the click-drag-release pull, not editable directly. */
+/* Power meter — filled by the drag-back pull, not editable directly. */
 .power-meter {
   width: 130px;
   height: 12px;

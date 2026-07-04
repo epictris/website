@@ -196,6 +196,75 @@ export function applyShot(world: World, shot: Shot) {
  * pots that happen are pushed onto `events` (order preserved) for the rules
  * layer. Deterministic: same input -> same output.
  */
+type RailName = "xmin" | "xmax" | "ymin" | "ymax";
+
+/** Elastic normal impulse + friction throw for two touching balls (equal mass). */
+function resolveBallBall(
+  a: Ball,
+  b: Ball,
+  eBall: number,
+  muBall: number,
+  events: ShotEvent[],
+) {
+  const dx = b.p.x - a.p.x;
+  const dy = b.p.y - a.p.y;
+  const dist = len(dx, dy) || 1e-9;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const vn = (b.v.x - a.v.x) * nx + (b.v.y - a.v.y) * ny;
+  if (vn >= 0) return; // separating (shouldn't happen at a TOI contact)
+
+  const jn = (-(1 + eBall) * vn) / 2;
+  a.v.x -= jn * nx;
+  a.v.y -= jn * ny;
+  b.v.x += jn * nx;
+  b.v.y += jn * ny;
+
+  // Collision-induced throw from the tangential surface speeds (incl. English).
+  const tx = -ny;
+  const ty = nx;
+  const surfA = a.v.x * tx + a.v.y * ty + R * a.w.z;
+  const surfB = b.v.x * tx + b.v.y * ty - R * b.w.z;
+  const vt = surfB - surfA;
+  if (Math.abs(vt) > 1e-6) {
+    const jt = Math.max(-muBall * jn, Math.min(muBall * jn, -vt / 2));
+    a.v.x -= jt * tx;
+    a.v.y -= jt * ty;
+    b.v.x += jt * tx;
+    b.v.y += jt * ty;
+    a.w.z -= (2.5 / R) * jt;
+    b.w.z -= (2.5 / R) * jt;
+  }
+  events.push({ type: "ball", a: a.id, b: b.id });
+}
+
+/** Cushion rebound: reflect the normal, apply capped Coulomb friction from spin. */
+function resolveCushion(
+  b: Ball,
+  rail: RailName,
+  eCushion: number,
+  muCushion: number,
+  events: ShotEvent[],
+) {
+  const xRail = rail === "xmin" || rail === "xmax";
+  const vn = Math.abs(xRail ? b.v.x : b.v.y); // incoming normal speed
+  if (xRail) b.v.x = -b.v.x * eCushion;
+  else b.v.y = -b.v.y * eCushion;
+
+  // spinSign makes (spinSign * R * wz) the spin's tangential surface velocity.
+  const spinSign =
+    rail === "xmin" ? -1 : rail === "xmax" ? 1 : rail === "ymin" ? 1 : -1;
+  const tang = xRail ? b.v.y : b.v.x;
+  const jn = (1 + eCushion) * vn;
+  const cap = muCushion * jn;
+  // /3.5 = 7/2 sphere factor so the coupled linear+spin response can't overshoot.
+  const jt = Math.max(-cap, Math.min(cap, -(tang + spinSign * R * b.w.z) / 3.5));
+  if (xRail) b.v.y += jt;
+  else b.v.x += jt;
+  b.w.z += spinSign * (2.5 / R) * jt;
+  events.push({ type: "cushion", ball: b.id });
+}
+
 export function stepFixed(
   world: World,
   events: ShotEvent[],
@@ -268,121 +337,81 @@ export function stepFixed(
     }
   }
 
-  // 2. Integrate positions.
-  for (const b of balls) {
-    if (b.potted) continue;
-    b.p.x += b.v.x * dt;
-    b.p.y += b.v.y * dt;
-  }
+  // 2. Advance with swept (continuous) collision detection. Each iteration
+  //    finds the earliest time-of-impact among all ball-ball pairs and every
+  //    ball-cushion approach, advances every ball to exactly that instant, and
+  //    resolves that one contact. This never tunnels (however fast the balls)
+  //    and always resolves at the true touch point, not after overlap.
+  const D2 = 2 * R;
+  let remaining = dt;
+  for (let iter = 0; iter < 32 && remaining > 1e-9; iter++) {
+    let best = remaining;
+    let hitBall: [Ball, Ball] | null = null;
+    let hitRail: [Ball, RailName] | null = null;
 
-  // 3. Ball-ball collisions (deterministic pair order).
-  for (let i = 0; i < balls.length; i++) {
-    const a = balls[i];
-    if (a.potted) continue;
-    for (let j = i + 1; j < balls.length; j++) {
-      const b = balls[j];
-      if (b.potted) continue;
-      const dx = b.p.x - a.p.x;
-      const dy = b.p.y - a.p.y;
-      const dist = len(dx, dy);
-      if (dist >= 2 * R || dist === 0) continue;
-
-      const nx = dx / dist;
-      const ny = dy / dist;
-      // Separate the overlap equally.
-      const overlap = 2 * R - dist;
-      a.p.x -= nx * overlap * 0.5;
-      a.p.y -= ny * overlap * 0.5;
-      b.p.x += nx * overlap * 0.5;
-      b.p.y += ny * overlap * 0.5;
-
-      // Normal-direction elastic impulse (equal mass).
-      const rvx = b.v.x - a.v.x;
-      const rvy = b.v.y - a.v.y;
-      const vn = rvx * nx + rvy * ny;
-      if (vn < 0) {
-        const jn = (-(1 + eBall) * vn) / 2;
-        a.v.x -= jn * nx;
-        a.v.y -= jn * ny;
-        b.v.x += jn * nx;
-        b.v.y += jn * ny;
-
-        // Collision-induced throw: friction along the tangent from the
-        // surface speeds at the contact point (includes side spin), so English
-        // and cut angle nudge the object ball sideways.
-        const tx = -ny;
-        const ty = nx;
-        // Surface velocity at contact = v + w x (R * n_towards_contact).
-        // For ball a the contact points along +n; for b along -n.
-        const surfA =
-          a.v.x * tx + a.v.y * ty + R * a.w.z; // + (w x Rn) . t = R*w.z
-        const surfB = b.v.x * tx + b.v.y * ty - R * b.w.z;
-        const vt = surfB - surfA;
-        if (Math.abs(vt) > 1e-6) {
-          const jt = Math.max(-muBall * jn, Math.min(muBall * jn, -vt / 2));
-          a.v.x -= jt * tx;
-          a.v.y -= jt * ty;
-          b.v.x += jt * tx;
-          b.v.y += jt * ty;
-          // React on side spin (throw transfers a little English).
-          a.w.z -= (2.5 / R) * jt;
-          b.w.z -= (2.5 / R) * jt;
+    // Earliest ball-ball impact: solve |d + vr*t| = 2R for the first root.
+    for (let i = 0; i < balls.length; i++) {
+      const a = balls[i];
+      if (a.potted) continue;
+      for (let j = i + 1; j < balls.length; j++) {
+        const b = balls[j];
+        if (b.potted) continue;
+        const dx = b.p.x - a.p.x;
+        const dy = b.p.y - a.p.y;
+        const rvx = b.v.x - a.v.x;
+        const rvy = b.v.y - a.v.y;
+        const A = rvx * rvx + rvy * rvy;
+        if (A < 1e-12) continue;
+        const B = dx * rvx + dy * rvy; // half of the usual b coefficient
+        if (B >= 0) continue; // not approaching
+        const C = dx * dx + dy * dy - D2 * D2;
+        const disc = B * B - A * C;
+        if (disc < 0) continue;
+        const t = (-B - Math.sqrt(disc)) / A;
+        if (t < best) {
+          best = Math.max(0, t);
+          hitBall = [a, b];
+          hitRail = null;
         }
-        events.push({ type: "ball", a: a.id, b: b.id });
       }
     }
+
+    // Earliest ball-cushion impact (skip near a pocket mouth so balls fall in).
+    for (const b of balls) {
+      if (b.potted) continue;
+      const tryRail = (t: number, rail: RailName) => {
+        if (t < 0 || t >= best) return;
+        if (nearPocket({ x: b.p.x + b.v.x * t, y: b.p.y + b.v.y * t })) return;
+        best = t;
+        hitRail = [b, rail];
+        hitBall = null;
+      };
+      if (b.v.x < 0) tryRail((R - b.p.x) / b.v.x, "xmin");
+      else if (b.v.x > 0) tryRail((TABLE.w - R - b.p.x) / b.v.x, "xmax");
+      if (b.v.y < 0) tryRail((R - b.p.y) / b.v.y, "ymin");
+      else if (b.v.y > 0) tryRail((TABLE.h - R - b.p.y) / b.v.y, "ymax");
+    }
+
+    // Advance every active ball to the earliest contact instant.
+    for (const b of balls) {
+      if (b.potted) continue;
+      b.p.x += b.v.x * best;
+      b.p.y += b.v.y * best;
+    }
+    remaining -= best;
+
+    if (hitBall) resolveBallBall(hitBall[0], hitBall[1], eBall, muBall, events);
+    else if (hitRail)
+      resolveCushion(hitRail[0], hitRail[1], eCushion, muCushion, events);
+    else break; // no contact this interval — the full remaining time elapsed
   }
 
-  // 4. Cushions. Reflect the normal component; side spin acts through cushion
-  //    friction, capped by the normal impulse — so English bends the rebound
-  //    angle but can never overpower it and reverse the ball.
+  // Safety net: keep any ball that slipped outside (not into a pocket) on the
+  // cloth. Continuous detection makes this rare, but floating point isn't exact.
   for (const b of balls) {
-    if (b.potted) continue;
-    if (nearPocket(b.p)) continue; // let balls fall at the pocket mouths
-
-    // Reflect the normal component with restitution e_c, then apply Coulomb
-    // friction (coefficient μ_c) at the contact. The tangential slip is the
-    // ball's own tangential velocity plus the surface speed from side spin;
-    // the friction impulse is capped at μ_c * normal impulse (kinetic) and
-    // otherwise just kills the slip (static). The /3.5 accounts for the ball
-    // both translating and spinning in response (the 7/2 factor for a sphere),
-    // so it can't overshoot. `spinSign` makes (spinSign * R * wz) the spin's
-    // tangential surface velocity for the rail.
-    const railHit = (
-      vn: number, // incoming normal speed (>0)
-      tang: number, // ball's tangential velocity along the rail
-      spinSign: number,
-      applyNormal: () => void,
-      applyTang: (jt: number) => void,
-    ) => {
-      applyNormal();
-      const jn = (1 + eCushion) * vn; // normal impulse magnitude
-      const slip = tang + spinSign * R * b.w.z; // tangential slip at contact
-      const cap = muCushion * jn;
-      const jt = Math.max(-cap, Math.min(cap, -slip / 3.5));
-      applyTang(jt);
-      b.w.z += spinSign * (2.5 / R) * jt; // spin reacts to the same impulse
-      events.push({ type: "cushion", ball: b.id });
-    };
-
-    if (b.p.x < R && b.v.x < 0) {
-      const vn = -b.v.x;
-      b.p.x = R;
-      railHit(vn, b.v.y, -1, () => (b.v.x = vn * eCushion), (jt) => (b.v.y += jt));
-    } else if (b.p.x > TABLE.w - R && b.v.x > 0) {
-      const vn = b.v.x;
-      b.p.x = TABLE.w - R;
-      railHit(vn, b.v.y, 1, () => (b.v.x = -vn * eCushion), (jt) => (b.v.y += jt));
-    }
-    if (b.p.y < R && b.v.y < 0) {
-      const vn = -b.v.y;
-      b.p.y = R;
-      railHit(vn, b.v.x, 1, () => (b.v.y = vn * eCushion), (jt) => (b.v.x += jt));
-    } else if (b.p.y > TABLE.h - R && b.v.y > 0) {
-      const vn = b.v.y;
-      b.p.y = TABLE.h - R;
-      railHit(vn, b.v.x, -1, () => (b.v.y = -vn * eCushion), (jt) => (b.v.x += jt));
-    }
+    if (b.potted || nearPocket(b.p)) continue;
+    b.p.x = Math.max(R, Math.min(TABLE.w - R, b.p.x));
+    b.p.y = Math.max(R, Math.min(TABLE.h - R, b.p.y));
   }
 
   // 5. Pockets.
@@ -412,6 +441,21 @@ export type Prediction = {
  * the cue ball's FIRST contact with anything — another ball, a cushion, or a
  * pocket — then stops. No rebounds, no object-ball projection.
  */
+/** Point along segment p0->p1 where the cue centre is first 2R from centre c. */
+function contactPoint(p0: Vec, p1: Vec, c: Vec): Vec {
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const fx = p0.x - c.x;
+  const fy = p0.y - c.y;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const cc = fx * fx + fy * fy - (2 * R) * (2 * R);
+  const disc = b * b - 4 * a * cc;
+  if (a < 1e-12 || disc < 0) return { ...p1 };
+  const t = Math.max(0, Math.min(1, (-b - Math.sqrt(disc)) / (2 * a)));
+  return { x: p0.x + dx * t, y: p0.y + dy * t };
+}
+
 export function predictPaths(
   world: World,
   shot: Shot,
@@ -432,17 +476,31 @@ export function predictPaths(
   let stop = false;
 
   for (let i = 0; i < steps && !stop; i++) {
+    const prev = { ...cue.p }; // cue position before this step
+    // Struck-ball centres before this step (resolution moves them; we need the
+    // pre-contact position to locate the exact tangent point).
+    const prevCentres = w.balls.map((b) => ({ id: b.id, x: b.p.x, y: b.p.y }));
     const mark = events.length;
     stepFixed(w, events, cfg);
 
     // Stop the instant the cue ball is involved in any contact.
     for (let k = mark; k < events.length; k++) {
       const e = events[k];
-      const cueHit =
+      if (e.type === "ball" && (e.a === 0 || e.b === 0)) {
+        // Refine to the exact tangent point: the physics step only detects the
+        // hit once the balls overlap, which lands on a coarse grid and makes
+        // the ghost jump. Solve where the cue centre first reaches 2R from the
+        // struck ball along this step's segment so it slides smoothly.
+        const objId = e.a === 0 ? e.b : e.a;
+        const ob = prevCentres.find((b) => b.id === objId);
+        ghost = ob ? contactPoint(prev, cue.p, ob) : { ...cue.p };
+        stop = true;
+        break;
+      }
+      if (
         (e.type === "cushion" && e.ball === 0) ||
-        (e.type === "ball" && (e.a === 0 || e.b === 0)) ||
-        (e.type === "pot" && e.ball === 0);
-      if (cueHit) {
+        (e.type === "pot" && e.ball === 0)
+      ) {
         ghost = { ...cue.p };
         if (e.type === "pot") cuePotted = true;
         stop = true;
@@ -450,7 +508,8 @@ export function predictPaths(
       }
     }
 
-    if (stop || i % sampleEvery === 0) cuePath.push({ ...cue.p });
+    if (stop) cuePath.push(ghost ?? { ...cue.p });
+    else if (i % sampleEvery === 0) cuePath.push({ ...cue.p });
     if (atRest(w)) break;
   }
 

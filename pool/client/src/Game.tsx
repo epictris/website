@@ -47,9 +47,9 @@ const Game: Component = () => {
   let last = 0;
   let pendingPlace: Vec | undefined;
   let draggingCue = false;
-  let charging = false; // pulling the cue back to build power
-  let pressDist = 0; // cursor's distance from the ball at the moment of click
-  const MAX_PULL = 0.5; // extra pull-back distance for full power
+  let charging = false; // dragging on the table to build power
+  let pressDist = 0; // cursor's distance from the cue ball when the pull started
+  const MAX_PULL = 0.5; // extra outward drag distance for full power
   let aimAngle = 0;
   let prediction: Prediction | undefined;
   let breaker: 0 | 1 = 0;
@@ -71,6 +71,7 @@ const Game: Component = () => {
   const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
+  const [menuOpen, setMenuOpen] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
   const [track, bump] = createSignal(0, { equals: false }); // force UI recompute
 
@@ -311,6 +312,13 @@ const Game: Component = () => {
     const rect = canvas.getBoundingClientRect();
     const px = ((e.clientX - rect.left) / rect.width) * layout.W;
     const py = ((e.clientY - rect.top) / rect.height) * layout.H;
+    if (layout.rotated) {
+      // Inverse of the portrait 90° rotation (see toPx in render.ts).
+      return {
+        x: (py - layout.oy) / layout.scale,
+        y: TABLE.h - (px - layout.ox) / layout.scale,
+      };
+    }
     return { x: (px - layout.ox) / layout.scale, y: (py - layout.oy) / layout.scale };
   };
 
@@ -331,17 +339,29 @@ const Game: Component = () => {
     return { x, y };
   };
 
-  // Cursor sits behind the ball: the ball fires away from it (jitter-guarded).
+  // The cue aims AT the cursor: the ball fires toward it (jitter-guarded).
   const aimFromCursor = (cursor: Vec, cue: Vec) => {
-    const dx = cue.x - cursor.x;
-    const dy = cue.y - cursor.y;
+    const dx = cursor.x - cue.x;
+    const dy = cursor.y - cue.y;
     if (Math.hypot(dx, dy) > R * 1.2) aimAngle = Math.atan2(dy, dx);
   };
-  // Power = how much further from the ball the cursor has been pulled since the
-  // click. Moving back toward the ball counts as zero.
-  const setPowerFromCursor = (cursor: Vec, cue: Vec) => {
-    const d = Math.hypot(cue.x - cursor.x, cue.y - cursor.y);
-    setPower(Math.max(0, Math.min(1, (d - pressDist) / MAX_PULL)));
+
+  const sendPresence = (w: Vec, cue: Vec) => {
+    const now = performance.now();
+    if (now - lastPresence <= 25) return;
+    lastPresence = now;
+    send({ t: "cursor", x: w.x, y: w.y } as Msg);
+    send({
+      t: "aim",
+      aim: {
+        angle: aimAngle,
+        power: power(),
+        follow: follow(),
+        side: side(),
+        elevation: elevation(),
+        cue: cue,
+      },
+    } as Msg);
   };
 
   const onPointerMove = (e: PointerEvent) => {
@@ -351,29 +371,17 @@ const Game: Component = () => {
     if (draggingCue) {
       cue.p = clampCue(w);
     } else {
-      // Cursor is the cue tip behind the ball: the ball travels away from it
-      // (aim) and how far back you pull sets power — one continuous gesture.
+      // Aim tracks the cursor the whole time; while charging, power grows as
+      // the cursor is dragged away from the cue ball past the press radius —
+      // dragging back toward the cue ball counts as zero.
       aimFromCursor(w, cue.p);
-      if (charging) setPowerFromCursor(w, cue.p);
+      if (charging) {
+        const d = Math.hypot(w.x - cue.p.x, w.y - cue.p.y);
+        setPower(Math.max(0, Math.min(1, (d - pressDist) / MAX_PULL)));
+      }
     }
     recomputePrediction();
-    // Throttle presence to ~40hz.
-    const now = performance.now();
-    if (now - lastPresence > 25) {
-      lastPresence = now;
-      send({ t: "cursor", x: w.x, y: w.y } as Msg);
-      send({
-        t: "aim",
-        aim: {
-          angle: aimAngle,
-          power: power(),
-          follow: follow(),
-          side: side(),
-          elevation: elevation(),
-          cue: cue.p,
-        },
-      } as Msg);
-    }
+    sendPresence(w, cue.p);
   };
 
   const onPointerDown = (e: PointerEvent) => {
@@ -385,12 +393,13 @@ const Game: Component = () => {
       canvas.setPointerCapture(e.pointerId);
       return;
     }
-    // Grab the cue here: power builds as the cursor is dragged further out.
-    charging = true;
-    pressDist = Math.hypot(cue.p.x - w.x, cue.p.y - w.y);
-    canvas.setPointerCapture(e.pointerId);
+    // Start charging: power is measured outward from the cue ball, starting at
+    // wherever the cursor currently is (so it begins at zero).
     aimFromCursor(w, cue.p);
-    setPowerFromCursor(w, cue.p);
+    charging = true;
+    pressDist = Math.hypot(w.x - cue.p.x, w.y - cue.p.y);
+    setPower(0);
+    canvas.setPointerCapture(e.pointerId);
     recomputePrediction();
   };
 
@@ -498,8 +507,19 @@ const Game: Component = () => {
   onMount(() => {
     ctx = canvas.getContext("2d")!;
     const resize = () => {
-      const playW = Math.min(window.innerWidth - 40, 960);
-      layout = layoutFor(playW);
+      // Portrait phones get the table turned 90° so the long axis runs down
+      // the screen; everything else stays landscape.
+      const portrait =
+        window.innerHeight > window.innerWidth && window.innerWidth < 700;
+      let scale: number;
+      if (portrait) {
+        const availW = Math.min(window.innerWidth - 16, 520);
+        scale = availW / (TABLE.h + 0.18); // short axis + ~2 rails, in world units
+      } else {
+        const playW = Math.min(window.innerWidth - 40, 960);
+        scale = playW / TABLE.w;
+      }
+      layout = layoutFor(scale, portrait);
       const dpr = window.devicePixelRatio || 1;
       canvas.width = layout.W * dpr;
       canvas.height = layout.H * dpr;
@@ -563,37 +583,6 @@ const Game: Component = () => {
 
   return (
     <>
-      <div class="title">
-        pool<span class="dim">.tris.sh</span>
-      </div>
-
-      <div class="link-row">
-        <Show
-          when={peerCount() > 1}
-          fallback={
-            <>
-              Waiting for an opponent —{" "}
-              <button onClick={copyLink}>
-                {copied() ? "link copied!" : "copy invite link"}
-              </button>{" "}
-              and send it to a friend.
-            </>
-          }
-        >
-          <span class="badge you">you: player {myPlayer() + 1}</span>{" "}
-          {peerCount()} connected
-          {isSpectator() && " (spectating)"}
-        </Show>
-      </div>
-
-      <div class="status">
-        {(() => {
-          track(); // subscribe to forced recompute
-          const s = statusLine();
-          return <span class={s.cls}>{s.text}</span>;
-        })()}
-      </div>
-
       <div class="table-wrap">
         <canvas
           ref={canvas}
@@ -603,7 +592,7 @@ const Game: Component = () => {
         />
       </div>
 
-      <div class="controls">
+      <div class="aim-controls">
         <div class="control">
           <span>spin</span>
           <div
@@ -618,13 +607,6 @@ const Game: Component = () => {
             <div class="axis h" />
             <div class="axis v" />
             <div class="dot" style={spinDot()} />
-          </div>
-        </div>
-
-        <div class="control">
-          <span>power {Math.round(power() * 100)}%</span>
-          <div class="power-meter">
-            <div class="power-fill" style={{ width: `${power() * 100}%` }} />
           </div>
         </div>
 
@@ -655,57 +637,115 @@ const Game: Component = () => {
         </div>
 
         <div class="control">
-          <button onClick={() => doRematch(((breaker ^ 1) as 0 | 1), true)}>
-            new game
+          <span>menu</span>
+          <button class="hamburger" onClick={() => setMenuOpen(true)}>
+            ☰
           </button>
         </div>
+      </div>
 
-        <div class="control">
-          <button onClick={saveReplay} disabled={(track(), history.length === 0)}>
-            save replay
-          </button>
-          <label class="badge" style={{ cursor: "pointer" }}>
-            load replay
-            <input
-              type="file"
-              accept="application/json"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.currentTarget.files?.[0];
-                if (f) loadReplay(f);
-                e.currentTarget.value = "";
-              }}
-            />
-          </label>
+      <Show when={menuOpen()}>
+        <div class="menu-backdrop" onClick={() => setMenuOpen(false)} />
+        <div class="menu-panel">
+          <div class="menu-head">
+            <span>menu</span>
+            <button class="menu-close" onClick={() => setMenuOpen(false)}>
+              ✕
+            </button>
+          </div>
+
+          <div class="status">
+            {(() => {
+              track(); // subscribe to forced recompute
+              const s = statusLine();
+              return <span class={s.cls}>{s.text}</span>;
+            })()}
+          </div>
+
+          <div class="link-row">
+            <Show
+              when={peerCount() > 1}
+              fallback={
+                <>
+                  Waiting for an opponent —{" "}
+                  <button onClick={copyLink}>
+                    {copied() ? "link copied!" : "copy invite link"}
+                  </button>{" "}
+                  and send it to a friend.
+                </>
+              }
+            >
+              <span class="badge you">you: player {myPlayer() + 1}</span>{" "}
+              {peerCount()} connected
+              {isSpectator() && " (spectating)"}
+            </Show>
+          </div>
+
+          <div class="controls">
+            <div class="control">
+              <span>power {Math.round(power() * 100)}%</span>
+              <div class="power-meter">
+                <div class="power-fill" style={{ width: `${power() * 100}%` }} />
+              </div>
+            </div>
+
+            <div class="control">
+              <button onClick={() => doRematch(((breaker ^ 1) as 0 | 1), true)}>
+                new game
+              </button>
+            </div>
+
+            <div class="control">
+              <button
+                onClick={saveReplay}
+                disabled={(track(), history.length === 0)}
+              >
+                save replay
+              </button>
+              <label class="badge" style={{ cursor: "pointer" }}>
+                load replay
+                <input
+                  type="file"
+                  accept="application/json"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.currentTarget.files?.[0];
+                    if (f) loadReplay(f);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div class="physics">
+            <div class="physics-title">physics — measured snooker values</div>
+            <div class="physics-grid">
+              {PARAMS.map((p) => (
+                <label class="phys-row">
+                  <span class="phys-label">{p.label}</span>
+                  <input
+                    type="range"
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    value={config()[p.key]}
+                    onInput={(e) => setParam(p.key, Number(e.currentTarget.value))}
+                  />
+                  <span class="phys-val">{config()[p.key].toFixed(3)}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div class="link-row">
+            aim at the cursor and drag away from the cue ball to build power
+            (toward it = zero), release to strike · spin pad for draw/follow +
+            english · drag the cue widget for elevation · drag the white ball on
+            a foul (ball-in-hand)
+          </div>
         </div>
-      </div>
-
-      <div class="physics">
-        <div class="physics-title">physics — measured snooker values</div>
-        <div class="physics-grid">
-          {PARAMS.map((p) => (
-            <label class="phys-row">
-              <span class="phys-label">{p.label}</span>
-              <input
-                type="range"
-                min={p.min}
-                max={p.max}
-                step={p.step}
-                value={config()[p.key]}
-                onInput={(e) => setParam(p.key, Number(e.currentTarget.value))}
-              />
-              <span class="phys-val">{config()[p.key].toFixed(3)}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div class="link-row">
-        the cursor is behind the ball — it fires away from the cursor; pull
-        further back to build power, release to strike · spin pad for
-        draw/follow + english · drag the cue widget for elevation · drag the
-        white ball on a foul (ball-in-hand)
-      </div>
+      </Show>
     </>
   );
 };

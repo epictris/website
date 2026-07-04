@@ -18,28 +18,39 @@ export type Layout = {
   ox: number; // origin x (px) of play area
   oy: number;
   rail: number; // rail thickness (px)
+  rotated: boolean; // portrait: table turned 90° (long axis vertical)
+  pw: number; // play-area pixel width
+  ph: number; // play-area pixel height
   W: number; // full canvas css width
   H: number; // full canvas css height
 };
 
-/** Fit the table (plus rails) into a target play-area width in px. */
-export function layoutFor(playWidthPx: number): Layout {
-  const scale = playWidthPx / TABLE.w;
+/** Build a layout at a given px-per-metre, optionally rotated to portrait. */
+export function layoutFor(scale: number, rotated = false): Layout {
   const rail = Math.max(22, scale * 0.09);
+  const pw = (rotated ? TABLE.h : TABLE.w) * scale;
+  const ph = (rotated ? TABLE.w : TABLE.h) * scale;
   return {
     scale,
     ox: rail,
     oy: rail,
     rail,
-    W: playWidthPx + rail * 2,
-    H: TABLE.h * scale + rail * 2,
+    rotated,
+    pw,
+    ph,
+    W: pw + rail * 2,
+    H: ph + rail * 2,
   };
 }
 
-const toPx = (l: Layout, p: Vec) => ({
-  x: l.ox + p.x * l.scale,
-  y: l.oy + p.y * l.scale,
-});
+// World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
+// rotation (determinant +1, so chirality — and thus the sense of English — is
+// preserved). Glyphs (ball numbers) are drawn at these points but not rotated,
+// so they stay upright.
+const toPx = (l: Layout, p: Vec) =>
+  l.rotated
+    ? { x: l.ox + (TABLE.h - p.y) * l.scale, y: l.oy + p.x * l.scale }
+    : { x: l.ox + p.x * l.scale, y: l.oy + p.y * l.scale };
 
 // Ball hues (standard pool colours). Stripes reuse the solid hue + a band.
 const HUE: Record<number, string> = {
@@ -110,18 +121,18 @@ function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
   roundRect(ctx, 0, 0, w, h, l.rail * 0.5);
   ctx.fill();
 
-  // Felt.
+  // Felt (play-area pixel box already accounts for rotation).
   const px = l.ox;
   const py = l.oy;
-  const pw = TABLE.w * l.scale;
-  const ph = TABLE.h * l.scale;
+  const pw = l.pw;
+  const ph = l.ph;
   const felt = ctx.createRadialGradient(
     px + pw / 2,
     py + ph / 2,
-    ph * 0.1,
+    Math.min(pw, ph) * 0.1,
     px + pw / 2,
     py + ph / 2,
-    pw * 0.7,
+    Math.max(pw, ph) * 0.7,
   );
   felt.addColorStop(0, "#1f7a4d");
   felt.addColorStop(1, "#15603b");
@@ -133,24 +144,28 @@ function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
   ctx.lineWidth = Math.max(2, l.scale * 0.02);
   ctx.strokeRect(px, py, pw, ph);
 
-  // Diamond sights on the rails.
+  // Diamond sights — placed in world space just outside each cushion and run
+  // through toPx, so they follow the rotation automatically. Long rails (along
+  // world x) get 8 divisions, short rails (along world y) get 4.
   ctx.fillStyle = "rgba(240,235,220,0.85)";
-  const diamond = (x: number, y: number) => {
+  const off = (l.rail * 0.5) / l.scale; // half-rail, in world units
+  const diamond = (p: Vec) => {
+    const c = toPx(l, p);
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(1.5, l.scale * 0.012), 0, Math.PI * 2);
+    ctx.arc(c.x, c.y, Math.max(1.5, l.scale * 0.012), 0, Math.PI * 2);
     ctx.fill();
   };
   for (let i = 1; i < 8; i++) {
     if (i === 4) continue; // side pocket, no sight
-    const x = px + (pw * i) / 8;
-    diamond(x, py - l.rail * 0.5);
-    diamond(x, py + ph + l.rail * 0.5);
+    const x = (TABLE.w * i) / 8;
+    diamond({ x, y: -off });
+    diamond({ x, y: TABLE.h + off });
   }
   for (let i = 1; i < 4; i++) {
     if (i === 2) continue;
-    const y = py + (ph * i) / 4;
-    diamond(px - l.rail * 0.5, y);
-    diamond(px + pw + l.rail * 0.5, y);
+    const y = (TABLE.h * i) / 4;
+    diamond({ x: -off, y });
+    diamond({ x: TABLE.w + off, y });
   }
 
   // Pockets.
@@ -307,6 +322,7 @@ function drawGhostAim(
   const cue = world.balls[0];
   if (cue.potted) return;
   const c = toPx(l, cue.p);
+  const ang = aim.angle + (l.rotated ? Math.PI / 2 : 0); // world dir -> screen dir
   const len = R * l.scale * 6 * (0.4 + aim.power);
   ctx.save();
   ctx.strokeStyle = "rgba(120,200,255,0.5)";
@@ -314,7 +330,7 @@ function drawGhostAim(
   ctx.setLineDash([3, 4]);
   ctx.beginPath();
   ctx.moveTo(c.x, c.y);
-  ctx.lineTo(c.x + Math.cos(aim.angle) * len, c.y + Math.sin(aim.angle) * len);
+  ctx.lineTo(c.x + Math.cos(ang) * len, c.y + Math.sin(ang) * len);
   ctx.stroke();
   ctx.restore();
 }
@@ -330,7 +346,8 @@ function drawCueStick(
   const c = toPx(l, cue.p);
   const rpx = R * l.scale;
   // Cue points opposite the travel direction; pull back by power.
-  const back = aim.angle + Math.PI;
+  const ang = aim.angle + (l.rotated ? Math.PI / 2 : 0); // world dir -> screen dir
+  const back = ang + Math.PI;
   const gap = rpx * (1.4 + aim.power * 3);
   const bx = c.x + Math.cos(back) * gap;
   const by = c.y + Math.sin(back) * gap;
