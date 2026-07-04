@@ -96,6 +96,7 @@ canvas {
   gap: 28px;
   align-items: flex-start;
   justify-content: center;
+  flex-wrap: wrap;
 }
 
 .hamburger {

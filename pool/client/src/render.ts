@@ -3,10 +3,11 @@
 // opponent's live ghost cue / cursor. Pure drawing — no game logic.
 
 import {
-  POCKETS,
-  POCKET_R,
+  CUSHIONS,
+  POCKET_LIST,
   R,
   TABLE,
+  type Cushion,
   type Prediction,
   type Vec,
   type World,
@@ -87,6 +88,7 @@ export type Scene = {
   myGroup?: Group | null;
   opponent?: { cursor?: Vec; aim?: Aim };
   animating?: boolean;
+  sinks?: Sink[]; // balls mid-drop into a pocket
 };
 
 export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
@@ -101,6 +103,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
     drawGhostAim(ctx, l, s.world, s.opponent.aim);
 
   drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
+  if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
   // Cue stick for the active player.
   if (s.myAim && s.showCue && !s.animating)
@@ -109,76 +112,193 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   if (s.opponent?.cursor) drawCursor(ctx, l, s.opponent.cursor);
 }
 
+// A cushion drawn as an angled blue block. The nose (felt edge) spans the full
+// collision extent [lo, hi]; the outer (rail) edge is narrower, so the ends
+// come to jaw points aimed at the pockets — the classic cushion facing.
+function cushionPoly(c: Cushion): [Vec, Vec, Vec, Vec] {
+  const D = 0.05; // depth into the rail (blue band width)
+  const F = 0.035; // jaw facing angle
+  switch (c.rail) {
+    case "ymin":
+      return [
+        { x: c.lo, y: 0 }, { x: c.hi, y: 0 },
+        { x: c.hi - F, y: -D }, { x: c.lo + F, y: -D },
+      ];
+    case "ymax":
+      return [
+        { x: c.lo, y: TABLE.h }, { x: c.hi, y: TABLE.h },
+        { x: c.hi - F, y: TABLE.h + D }, { x: c.lo + F, y: TABLE.h + D },
+      ];
+    case "xmin":
+      return [
+        { x: 0, y: c.lo }, { x: 0, y: c.hi },
+        { x: -D, y: c.hi - F }, { x: -D, y: c.lo + F },
+      ];
+    default: // xmax
+      return [
+        { x: TABLE.w, y: c.lo }, { x: TABLE.w, y: c.hi },
+        { x: TABLE.w + D, y: c.hi - F }, { x: TABLE.w + D, y: c.lo + F },
+      ];
+  }
+}
+
 function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
-  const w = l.W;
-  const h = l.H;
-  // Wooden rail frame.
-  const wood = ctx.createLinearGradient(0, 0, 0, h);
-  wood.addColorStop(0, "#5a3a22");
-  wood.addColorStop(0.5, "#7a4e2d");
-  wood.addColorStop(1, "#4a2f1b");
-  ctx.fillStyle = wood;
-  roundRect(ctx, 0, 0, w, h, l.rail * 0.5);
+  // Black rail frame.
+  const frame = ctx.createLinearGradient(0, 0, 0, l.H);
+  frame.addColorStop(0, "#151515");
+  frame.addColorStop(0.5, "#0b0b0b");
+  frame.addColorStop(1, "#050505");
+  ctx.fillStyle = frame;
+  roundRect(ctx, 0, 0, l.W, l.H, l.rail * 0.8);
   ctx.fill();
 
-  // Felt (play-area pixel box already accounts for rotation).
   const px = l.ox;
   const py = l.oy;
   const pw = l.pw;
   const ph = l.ph;
+
+  // Bright blue baize with a lit centre.
   const felt = ctx.createRadialGradient(
-    px + pw / 2,
-    py + ph / 2,
+    px + pw * 0.45,
+    py + ph * 0.4,
     Math.min(pw, ph) * 0.1,
     px + pw / 2,
     py + ph / 2,
-    Math.max(pw, ph) * 0.7,
+    Math.max(pw, ph) * 0.72,
   );
-  felt.addColorStop(0, "#1f7a4d");
-  felt.addColorStop(1, "#15603b");
+  felt.addColorStop(0, "#28abe8");
+  felt.addColorStop(1, "#1487c8");
   ctx.fillStyle = felt;
   ctx.fillRect(px, py, pw, ph);
 
-  // Cushion inner bevel shadow.
-  ctx.strokeStyle = "rgba(0,0,0,0.35)";
-  ctx.lineWidth = Math.max(2, l.scale * 0.02);
-  ctx.strokeRect(px, py, pw, ph);
+  // Blue felt cushions: nose (felt side) shadowed, rail side lit; jaw points
+  // aim at the pockets. A subtle dark crease sits at the nose.
+  for (const c of CUSHIONS) {
+    const poly = cushionPoly(c).map((p) => toPx(l, p));
+    const noseMid = { x: (poly[0].x + poly[1].x) / 2, y: (poly[0].y + poly[1].y) / 2 };
+    const backMid = { x: (poly[2].x + poly[3].x) / 2, y: (poly[2].y + poly[3].y) / 2 };
+    const grad = ctx.createLinearGradient(noseMid.x, noseMid.y, backMid.x, backMid.y);
+    grad.addColorStop(0, "#1a91cf");
+    grad.addColorStop(1, "#2eaee6");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath();
+    ctx.fill();
+    // Nose crease shadow onto the felt.
+    ctx.strokeStyle = "rgba(0,0,0,0.18)";
+    ctx.lineWidth = Math.max(1, l.scale * 0.005);
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    ctx.lineTo(poly[1].x, poly[1].y);
+    ctx.stroke();
+  }
 
-  // Diamond sights — placed in world space just outside each cushion and run
-  // through toPx, so they follow the rotation automatically. Long rails (along
-  // world x) get 8 divisions, short rails (along world y) get 4.
-  ctx.fillStyle = "rgba(240,235,220,0.85)";
-  const off = (l.rail * 0.5) / l.scale; // half-rail, in world units
-  const diamond = (p: Vec) => {
+  // Pocket holes: the SAME circle the physics uses to pot, so visual == capture.
+  for (const pk of POCKET_LIST) {
+    const c = toPx(l, pk.center);
+    const r = pk.hole * l.scale;
+    const g = ctx.createRadialGradient(c.x, c.y, r * 0.2, c.x, c.y, r);
+    g.addColorStop(0, "#000");
+    g.addColorStop(1, "#0a0a0a");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(210,214,222,0.8)";
+    ctx.lineWidth = Math.max(1.4, l.scale * 0.007);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // White sight dots on the black rail.
+  ctx.fillStyle = "#e6e6de";
+  const off = (l.rail * 0.5) / l.scale; // into the rail, in world units
+  const dot = (p: Vec) => {
     const c = toPx(l, p);
     ctx.beginPath();
-    ctx.arc(c.x, c.y, Math.max(1.5, l.scale * 0.012), 0, Math.PI * 2);
+    ctx.arc(c.x, c.y, Math.max(1.4, l.scale * 0.009), 0, Math.PI * 2);
     ctx.fill();
   };
   for (let i = 1; i < 8; i++) {
-    if (i === 4) continue; // side pocket, no sight
+    if (i === 4) continue; // side pocket
     const x = (TABLE.w * i) / 8;
-    diamond({ x, y: -off });
-    diamond({ x, y: TABLE.h + off });
+    dot({ x, y: -off });
+    dot({ x, y: TABLE.h + off });
   }
   for (let i = 1; i < 4; i++) {
     if (i === 2) continue;
     const y = (TABLE.h * i) / 4;
-    diamond({ x: -off, y });
-    diamond({ x: TABLE.w + off, y });
+    dot({ x: -off, y });
+    dot({ x: TABLE.w + off, y });
+  }
+}
+
+/** Draw a single glossy numbered ball at pixel centre c, radius rpx, alpha. */
+function drawBall(
+  ctx: CanvasRenderingContext2D,
+  c: Vec,
+  id: number,
+  rpx: number,
+  alpha: number,
+  shadow = true,
+) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  if (shadow) {
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.ellipse(c.x + rpx * 0.15, c.y + rpx * 0.35, rpx, rpx * 0.9, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
-  // Pockets.
-  for (const pk of POCKETS) {
-    const c = toPx(l, pk);
+  const base = ballColor(id);
+  const g = ctx.createRadialGradient(
+    c.x - rpx * 0.35,
+    c.y - rpx * 0.35,
+    rpx * 0.1,
+    c.x,
+    c.y,
+    rpx,
+  );
+  g.addColorStop(0, lighten(base, 0.5));
+  g.addColorStop(0.7, base);
+  g.addColorStop(1, darken(base, 0.35));
+  ctx.beginPath();
+  ctx.fillStyle = g;
+  ctx.arc(c.x, c.y, rpx, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (id > 8) {
+    ctx.save();
     ctx.beginPath();
-    ctx.fillStyle = "#0a0a0a";
-    ctx.arc(c.x, c.y, POCKET_R * l.scale * 1.15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0,0,0,0.6)";
-    ctx.lineWidth = l.scale * 0.02;
-    ctx.stroke();
+    ctx.arc(c.x, c.y, rpx, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = "#f4f1ea";
+    ctx.fillRect(c.x - rpx, c.y - rpx * 0.45, rpx * 2, rpx * 0.9);
+    ctx.restore();
   }
+
+  if (id !== 0) {
+    ctx.beginPath();
+    ctx.fillStyle = "#f4f1ea";
+    ctx.arc(c.x, c.y, rpx * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#111";
+    ctx.font = `${Math.max(6, rpx * 0.55)}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(id), c.x, c.y + rpx * 0.02);
+  }
+
+  ctx.beginPath();
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.ellipse(c.x - rpx * 0.35, c.y - rpx * 0.4, rpx * 0.28, rpx * 0.18, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawBalls(
@@ -190,74 +310,21 @@ function drawBalls(
   const rpx = R * l.scale;
   for (const b of world.balls) {
     if (b.potted) continue;
-    const c = toPx(l, b.p);
-
-    // Drop shadow.
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.ellipse(c.x + rpx * 0.15, c.y + rpx * 0.35, rpx, rpx * 0.9, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.save();
-    if (b.id === translucentId) ctx.globalAlpha = 0.55;
-
-    // Body with a light source top-left.
-    const base = ballColor(b.id);
-    const g = ctx.createRadialGradient(
-      c.x - rpx * 0.35,
-      c.y - rpx * 0.35,
-      rpx * 0.1,
-      c.x,
-      c.y,
-      rpx,
-    );
-    g.addColorStop(0, lighten(base, 0.5));
-    g.addColorStop(0.7, base);
-    g.addColorStop(1, darken(base, 0.35));
-    ctx.beginPath();
-    ctx.fillStyle = g;
-    ctx.arc(c.x, c.y, rpx, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Stripe band.
-    if (b.id > 8) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, rpx, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.fillStyle = "#f4f1ea";
-      ctx.fillRect(c.x - rpx, c.y - rpx * 0.45, rpx * 2, rpx * 0.9);
-      ctx.restore();
-    }
-
-    // Number pip (skip on the cue ball).
-    if (b.id !== 0) {
-      ctx.beginPath();
-      ctx.fillStyle = "#f4f1ea";
-      ctx.arc(c.x, c.y, rpx * 0.42, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#111";
-      ctx.font = `${Math.max(6, rpx * 0.55)}px monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(b.id), c.x, c.y + rpx * 0.02);
-    }
-
-    // Specular highlight.
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    ctx.ellipse(
-      c.x - rpx * 0.35,
-      c.y - rpx * 0.4,
-      rpx * 0.28,
-      rpx * 0.18,
-      -0.6,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    ctx.restore();
+    drawBall(ctx, toPx(l, b.p), b.id, rpx, b.id === translucentId ? 0.55 : 1);
   }
+}
+
+/** A ball dropping into a pocket: lerps toward the pocket, shrinking + fading. */
+export type Sink = { id: number; from: Vec; pocket: Vec; t: number };
+
+function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
+  const rpx = R * l.scale;
+  const e = sk.t * sk.t; // accelerate into the pocket
+  const c = toPx(l, {
+    x: sk.from.x + (sk.pocket.x - sk.from.x) * e,
+    y: sk.from.y + (sk.pocket.y - sk.from.y) * e,
+  });
+  drawBall(ctx, c, sk.id, Math.max(1, rpx * (1 - 0.82 * sk.t)), 1 - sk.t, false);
 }
 
 function polyline(ctx: CanvasRenderingContext2D, l: Layout, pts: Vec[]) {

@@ -9,11 +9,13 @@ import {
   FIXED_DT,
   MAX_ELEVATION,
   PARAMS,
+  POCKET_LIST,
   predictPaths,
   R,
   rackWorld,
   stepFixed,
   TABLE,
+  type Ball,
   type PhysicsConfig,
   type Prediction,
   type ShotEvent,
@@ -59,6 +61,26 @@ const Game: Component = () => {
   let replayQueue: ReplayShot[] = [];
   let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
+  // Ball-sinking animations (visual only).
+  let sinks: { id: number; from: Vec; pocket: Vec; start: number }[] = [];
+  const pottedSeen = new Set<number>();
+  let nowMs = 0;
+  const SINK_MS = 550;
+  const resetSinks = () => {
+    sinks = [];
+    pottedSeen.clear();
+  };
+  // Nearest pocket hole centre — where a potted ball visually drops to.
+  const nearestHole = (p: Vec): Vec =>
+    POCKET_LIST.reduce((a, b) =>
+      Math.hypot(b.center.x - p.x, b.center.y - p.y) <
+      Math.hypot(a.center.x - p.x, a.center.y - p.y)
+        ? b
+        : a,
+    ).center;
+  const addSink = (b: Ball, start: number) => {
+    sinks.push({ id: b.id, from: { ...b.p }, pocket: nearestHole(b.p), start });
+  };
 
   // --- UI-facing signals --------------------------------------------------
   const [rules, setRules] = createSignal<RulesState>(initRules(0));
@@ -160,6 +182,9 @@ const Game: Component = () => {
           setRules(m.snap.rules as RulesState);
           breaker = m.snap.breaker;
           if (m.snap.config) setConfig(m.snap.config);
+          // Don't replay sink animations for balls already down at join time.
+          resetSinks();
+          world.balls.forEach((b) => b.potted && pottedSeen.add(b.id));
           recomputePrediction();
         }
         break;
@@ -229,9 +254,14 @@ const Game: Component = () => {
       world = rackWorld();
       initialWorld = cloneWorld(world);
       history = [];
+      resetSinks();
     }
-    // Scratch: bring the cue ball back for ball-in-hand.
+    // Scratch: bring the cue ball back for ball-in-hand. The cue is un-potted
+    // here (before the frame loop could see it), so kick off its sink now — but
+    // only if a long shot didn't already start it.
     if (outcome.potted.includes(0) && outcome.next.winner === null) {
+      if (!pottedSeen.has(0)) addSink(world.balls[0], nowMs);
+      pottedSeen.delete(0); // let a future scratch animate again
       world.balls[0].potted = false;
       world.balls[0].p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
     }
@@ -248,6 +278,7 @@ const Game: Component = () => {
     if (!last) last = t;
     let dt = (t - last) / 1000;
     last = t;
+    nowMs = t;
     if (dt > 0.1) dt = 0.1; // clamp after a tab stall
 
     if (animating()) {
@@ -261,6 +292,15 @@ const Game: Component = () => {
       }
       if (atRest(world)) resolveShot();
     }
+
+    // Kick off a sink animation for any ball that just dropped.
+    for (const b of world.balls) {
+      if (b.potted && !pottedSeen.has(b.id)) {
+        pottedSeen.add(b.id);
+        addSink(b, t);
+      }
+    }
+    sinks = sinks.filter((sk) => t - sk.start < SINK_MS);
 
     draw();
     raf = requestAnimationFrame(frame);
@@ -304,6 +344,12 @@ const Game: Component = () => {
       myGroup: r.groups[myPlayer()],
       opponent: opp,
       animating: animating(),
+      sinks: sinks.map((sk) => ({
+        id: sk.id,
+        from: sk.from,
+        pocket: sk.pocket,
+        t: Math.min(1, (nowMs - sk.start) / SINK_MS),
+      })),
     });
   };
 
@@ -445,6 +491,7 @@ const Game: Component = () => {
     setRules(initRules(nextBreaker));
     setReplaying(false);
     pendingPlace = undefined;
+    resetSinks();
     if (local) send({ t: "rematch", breaker: nextBreaker, config: config() } as Msg);
     recomputePrediction();
     bump(0);
@@ -490,6 +537,7 @@ const Game: Component = () => {
     history = [];
     breaker = r.breaker;
     setConfig(r.config);
+    resetSinks();
     setRules(initRules(r.breaker));
     replayQueue = [...r.shots];
     setReplaying(true);
@@ -511,14 +559,17 @@ const Game: Component = () => {
       // the screen; everything else stays landscape.
       const portrait =
         window.innerHeight > window.innerWidth && window.innerWidth < 700;
-      let scale: number;
-      if (portrait) {
-        const availW = Math.min(window.innerWidth - 16, 520);
-        scale = availW / (TABLE.h + 0.18); // short axis + ~2 rails, in world units
-      } else {
-        const playW = Math.min(window.innerWidth - 40, 960);
-        scale = playW / TABLE.w;
-      }
+      // Fit the table into the viewport minus edge padding, rails, and the row
+      // of widgets below it — so everything is always visible on any screen.
+      const PAD = 12;
+      const RAILPX = 28; // rail allowance per side
+      const WIDGETS = 132; // spin / cue-angle / menu row + gaps
+      const widthWorld = portrait ? TABLE.h : TABLE.w;
+      const heightWorld = portrait ? TABLE.w : TABLE.h;
+      const availW = window.innerWidth - PAD * 2 - RAILPX * 2;
+      const availH = window.innerHeight - PAD * 2 - RAILPX * 2 - WIDGETS;
+      let scale = Math.min(availW / widthWorld, availH / heightWorld);
+      scale = Math.max(60, Math.min(scale, 430));
       layout = layoutFor(scale, portrait);
       const dpr = window.devicePixelRatio || 1;
       canvas.width = layout.W * dpr;

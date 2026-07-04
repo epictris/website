@@ -35,10 +35,10 @@ export type World = {
 };
 
 // --- Table geometry ---------------------------------------------------------
-// Playfield in metres (9ft table): 2.24 x 1.12. Origin at the cloth corner.
-export const TABLE = { w: 2.24, h: 1.12 };
-export const R = 0.028575; // ball radius (57.15mm diameter)
-export const POCKET_R = 0.05; // capture radius
+// Arcade / bar-box table: a compact 7ft-ish playfield (2.0 x 1.0 m) with big,
+// forgiving pockets. Origin at the cloth corner.
+export const TABLE = { w: 2.0, h: 1.0 };
+export const R = 0.028575; // 2.25" pool ball (57.15mm diameter)
 
 // Pocket centres: 4 corners + 2 sides.
 export const POCKETS: Vec[] = [
@@ -49,6 +49,46 @@ export const POCKETS: Vec[] = [
   { x: TABLE.w / 2, y: TABLE.h },
   { x: TABLE.w, y: TABLE.h },
 ];
+
+// Cushion mouth gaps (collision) — the ball-centre span with no cushion.
+export const CORNER_MOUTH = 0.07;
+export const SIDE_MOUTH = 0.07;
+
+// The pocket hole is ONE circle used for both the pot test and the drawn hole,
+// so the visual always matches the collision. Centre is pushed out into the
+// corner/rail; a ball drops once its centre is inside the circle (i.e. at least
+// half over the hole's edge). The push keeps a rail-hugger (whose centre sits R
+// off the rail) outside the circle, so side pockets don't vacuum it.
+export type Pocket = { center: Vec; hole: number };
+export const POCKET_LIST: Pocket[] = POCKETS.map((pk) => {
+  const ox = pk.x === 0 ? -1 : pk.x >= TABLE.w - 1e-6 ? 1 : 0;
+  const oy = pk.y === 0 ? -1 : pk.y >= TABLE.h - 1e-6 ? 1 : 0;
+  const corner = ox !== 0 && oy !== 0;
+  const push = corner ? 0.02 : 0.02;
+  const hole = corner ? 0.062 : 0.06;
+  return { center: { x: pk.x + ox * push, y: pk.y + oy * push }, hole };
+});
+// Hard outer walls sit this far beyond the felt edge — a ball that enters a
+// mouth but misses the hole rattles back instead of escaping off the table.
+const POCKET_DEPTH = 0.055;
+
+export type RailName = "xmin" | "xmax" | "ymin" | "ymax";
+/** The ball-centre coordinate of a cushion line. */
+export const railLine = (rail: RailName) =>
+  rail === "xmin" ? R : rail === "xmax" ? TABLE.w - R : rail === "ymin" ? R : TABLE.h - R;
+
+// Cushion segments: straight runs of rail between pocket mouths, given as the
+// ball-centre line plus the tangent-axis extent [lo, hi] the cushion covers.
+export type Cushion = { rail: RailName; lo: number; hi: number };
+export const CUSHIONS: Cushion[] = [
+  { rail: "xmin", lo: CORNER_MOUTH, hi: TABLE.h - CORNER_MOUTH },
+  { rail: "xmax", lo: CORNER_MOUTH, hi: TABLE.h - CORNER_MOUTH },
+  { rail: "ymin", lo: CORNER_MOUTH, hi: TABLE.w / 2 - SIDE_MOUTH },
+  { rail: "ymin", lo: TABLE.w / 2 + SIDE_MOUTH, hi: TABLE.w - CORNER_MOUTH },
+  { rail: "ymax", lo: CORNER_MOUTH, hi: TABLE.w / 2 - SIDE_MOUTH },
+  { rail: "ymax", lo: TABLE.w / 2 + SIDE_MOUTH, hi: TABLE.w - CORNER_MOUTH },
+];
+
 
 // --- Physical constants -----------------------------------------------------
 const G = 9.8;
@@ -196,8 +236,6 @@ export function applyShot(world: World, shot: Shot) {
  * pots that happen are pushed onto `events` (order preserved) for the rules
  * layer. Deterministic: same input -> same output.
  */
-type RailName = "xmin" | "xmax" | "ymin" | "ymax";
-
 /** Elastic normal impulse + friction throw for two touching balls (equal mass). */
 function resolveBallBall(
   a: Ball,
@@ -262,6 +300,13 @@ function resolveCushion(
   if (xRail) b.v.y += jt;
   else b.v.x += jt;
   b.w.z += spinSign * (2.5 / R) * jt;
+  events.push({ type: "cushion", ball: b.id });
+}
+
+/** Reflect off a hard outer pocket wall (contains balls that miss the hole). */
+function resolveWall(b: Ball, axis: "x" | "y", e: number, events: ShotEvent[]) {
+  if (axis === "x") b.v.x = -b.v.x * e;
+  else b.v.y = -b.v.y * e;
   events.push({ type: "cushion", ball: b.id });
 }
 
@@ -348,6 +393,7 @@ export function stepFixed(
     let best = remaining;
     let hitBall: [Ball, Ball] | null = null;
     let hitRail: [Ball, RailName] | null = null;
+    let hitWall: [Ball, "x" | "y"] | null = null;
 
     // Earliest ball-ball impact: solve |d + vr*t| = 2R for the first root.
     for (let i = 0; i < balls.length; i++) {
@@ -372,24 +418,45 @@ export function stepFixed(
           best = Math.max(0, t);
           hitBall = [a, b];
           hitRail = null;
+          hitWall = null;
         }
       }
     }
 
-    // Earliest ball-cushion impact (skip near a pocket mouth so balls fall in).
+    // Earliest ball-cushion impact: only within a segment's extent, so the
+    // pocket mouths are genuine gaps rather than a hacked-out skip zone.
     for (const b of balls) {
       if (b.potted) continue;
-      const tryRail = (t: number, rail: RailName) => {
-        if (t < 0 || t >= best) return;
-        if (nearPocket({ x: b.p.x + b.v.x * t, y: b.p.y + b.v.y * t })) return;
+      for (const c of CUSHIONS) {
+        const xRail = c.rail === "xmin" || c.rail === "xmax";
+        const vel = xRail ? b.v.x : b.v.y;
+        const toward =
+          c.rail === "xmin" || c.rail === "ymin" ? vel < 0 : vel > 0;
+        if (!toward) continue;
+        const line = railLine(c.rail);
+        const t = (line - (xRail ? b.p.x : b.p.y)) / vel;
+        if (t < 0 || t >= best) continue;
+        const tang =
+          (xRail ? b.p.y : b.p.x) + (xRail ? b.v.y : b.v.x) * t;
+        if (tang < c.lo || tang > c.hi) continue;
         best = t;
-        hitRail = [b, rail];
+        hitRail = [b, c.rail];
         hitBall = null;
+        hitWall = null;
+      }
+      // Outer pocket walls (full extent, only reachable through a mouth gap).
+      const OW = POCKET_DEPTH;
+      const tryWall = (t: number, axis: "x" | "y") => {
+        if (t < 0 || t >= best) return;
+        best = t;
+        hitWall = [b, axis];
+        hitBall = null;
+        hitRail = null;
       };
-      if (b.v.x < 0) tryRail((R - b.p.x) / b.v.x, "xmin");
-      else if (b.v.x > 0) tryRail((TABLE.w - R - b.p.x) / b.v.x, "xmax");
-      if (b.v.y < 0) tryRail((R - b.p.y) / b.v.y, "ymin");
-      else if (b.v.y > 0) tryRail((TABLE.h - R - b.p.y) / b.v.y, "ymax");
+      if (b.v.x < 0) tryWall((-OW - b.p.x) / b.v.x, "x");
+      else if (b.v.x > 0) tryWall((TABLE.w + OW - b.p.x) / b.v.x, "x");
+      if (b.v.y < 0) tryWall((-OW - b.p.y) / b.v.y, "y");
+      else if (b.v.y > 0) tryWall((TABLE.h + OW - b.p.y) / b.v.y, "y");
     }
 
     // Advance every active ball to the earliest contact instant.
@@ -403,6 +470,7 @@ export function stepFixed(
     if (hitBall) resolveBallBall(hitBall[0], hitBall[1], eBall, muBall, events);
     else if (hitRail)
       resolveCushion(hitRail[0], hitRail[1], eCushion, muCushion, events);
+    else if (hitWall) resolveWall(hitWall[0], hitWall[1], 0.5, events);
     else break; // no contact this interval — the full remaining time elapsed
   }
 
@@ -414,11 +482,17 @@ export function stepFixed(
     b.p.y = Math.max(R, Math.min(TABLE.h - R, b.p.y));
   }
 
-  // 5. Pockets.
+  // 5. Pockets — a ball drops once its centre is inside a pocket hole AND has
+  //    crossed a cushion line into the mouth. The crossed-line test is what lets
+  //    the hole be a full round circle without a side pocket vacuuming a ball
+  //    that is merely hugging the rail (its centre sits exactly on the line).
   for (const b of balls) {
     if (b.potted) continue;
-    for (const pk of POCKETS) {
-      if (len(b.p.x - pk.x, b.p.y - pk.y) < POCKET_R) {
+    const crossed =
+      b.p.x < R || b.p.x > TABLE.w - R || b.p.y < R || b.p.y > TABLE.h - R;
+    if (!crossed) continue;
+    for (const pk of POCKET_LIST) {
+      if (len(b.p.x - pk.center.x, b.p.y - pk.center.y) < pk.hole) {
         b.potted = true;
         b.v = { x: 0, y: 0 };
         b.w = { x: 0, y: 0, z: 0 };
@@ -516,10 +590,10 @@ export function predictPaths(
   return { cue: cuePath, ghost, cuePotted };
 }
 
-/** A ball whose centre is near a pocket mouth should not bounce off the rail. */
+/** A ball near a pocket mouth is heading in — don't clamp it back onto the cloth. */
 function nearPocket(p: Vec): boolean {
   for (const pk of POCKETS) {
-    if (len(p.x - pk.x, p.y - pk.y) < POCKET_R * 1.6) return true;
+    if (len(p.x - pk.x, p.y - pk.y) < 0.13) return true;
   }
   return false;
 }
