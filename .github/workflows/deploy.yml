@@ -6,6 +6,7 @@ on:
     paths:
       - 'app/**'
       - 'clipboard/**'
+      - 'pool/**'
       - 'Dockerfile'
       - 'compose.yml'
       - 'Caddyfile'
@@ -53,6 +54,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push pool image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./pool
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/pool:latest
+            ghcr.io/${{ github.repository }}/pool:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -70,5 +82,6 @@ jobs:
           ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} \
             "export WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }} \
              && export CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:${{ github.sha }} \
+             && export POOL_IMAGE=ghcr.io/${{ github.repository }}/pool:${{ github.sha }} \
              && docker compose -f /opt/website/compose.yml up -d --pull always \
              && docker compose -f /opt/website/compose.yml restart caddy"

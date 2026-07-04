@@ -1,0 +1,713 @@
+import { createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { useParams } from "@solidjs/router";
+import {
+  applyShot,
+  atRest,
+  cloneWorld,
+  DEFAULT_CONFIG,
+  freeze,
+  FIXED_DT,
+  MAX_ELEVATION,
+  PARAMS,
+  predictPaths,
+  R,
+  rackWorld,
+  stepFixed,
+  TABLE,
+  type PhysicsConfig,
+  type Prediction,
+  type ShotEvent,
+  type Shot,
+  type Vec,
+  type World,
+} from "./physics";
+import { drawScene, layoutFor, type Aim, type Layout } from "./render";
+import { evaluateShot, initRules, type RulesState } from "./rules";
+import { wsUrl, type Msg } from "./net";
+import {
+  buildReplay,
+  downloadReplay,
+  parseReplay,
+  worldFromInitial,
+  type ReplayShot,
+} from "./replay";
+
+const Game: Component = () => {
+  const room = useParams().room ?? "lobby";
+  let canvas!: HTMLCanvasElement;
+  let ctx!: CanvasRenderingContext2D;
+  let layout: Layout;
+
+  // --- High-frequency mutable state (not Solid-reactive) ------------------
+  let world: World = rackWorld();
+  let initialWorld: World = cloneWorld(world);
+  let history: ReplayShot[] = [];
+  let events: ShotEvent[] = [];
+  let acc = 0; // physics time accumulator
+  let last = 0;
+  let pendingPlace: Vec | undefined;
+  let draggingCue = false;
+  let charging = false; // pulling the cue back to build power
+  let pressDist = 0; // cursor's distance from the ball at the moment of click
+  const MAX_PULL = 0.5; // extra pull-back distance for full power
+  let aimAngle = 0;
+  let prediction: Prediction | undefined;
+  let breaker: 0 | 1 = 0;
+  let lastPresence = 0;
+  let worldBefore: World = cloneWorld(world);
+  let ws: WebSocket | null = null;
+  let replayQueue: ReplayShot[] = [];
+  let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
+  let opp: { cursor?: Vec; aim?: Aim } = {};
+
+  // --- UI-facing signals --------------------------------------------------
+  const [rules, setRules] = createSignal<RulesState>(initRules(0));
+  const [mySlot, setMySlot] = createSignal(-1);
+  const [peerCount, setPeerCount] = createSignal(1);
+  const [power, setPower] = createSignal(0);
+  const [follow, setFollow] = createSignal(0);
+  const [side, setSide] = createSignal(0);
+  const [elevation, setElevation] = createSignal(0); // radians
+  const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
+  const [animating, setAnimating] = createSignal(false);
+  const [replaying, setReplaying] = createSignal(false);
+  const [copied, setCopied] = createSignal(false);
+  const [track, bump] = createSignal(0, { equals: false }); // force UI recompute
+
+  const myPlayer = () => (mySlot() < 0 ? 0 : Math.min(mySlot(), 1));
+  const solo = () => peerCount() <= 1;
+  const isSpectator = () => mySlot() > 1;
+  const myTurn = () =>
+    rules().winner === null &&
+    !isSpectator() &&
+    (solo() || rules().turn === myPlayer());
+  const canAct = () => !animating() && !replaying() && myTurn();
+
+  // --- Networking ---------------------------------------------------------
+  const send = (m: Partial<Msg>) => ws?.readyState === 1 && ws.send(JSON.stringify(m));
+
+  const applySnapshotToPeer = (to: number) => {
+    send({
+      t: "sync",
+      to,
+      snap: {
+        balls: world.balls.map((b) => ({
+          id: b.id,
+          x: b.p.x,
+          y: b.p.y,
+          potted: b.potted,
+        })),
+        rules: rules(),
+        breaker,
+        shotCount: history.length,
+        config: config(),
+      },
+    } as Msg);
+  };
+
+  const connect = () => {
+    ws = new WebSocket(wsUrl(room));
+    ws.onmessage = (ev) => {
+      let m: Msg;
+      try {
+        m = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      onMsg(m);
+    };
+    ws.onclose = () => setTimeout(connect, 1000);
+  };
+
+  const onMsg = (m: Msg) => {
+    switch (m.t) {
+      case "hello": {
+        setMySlot(m.slot);
+        setPeerCount(m.peers.length + 1);
+        // A late joiner (not the authority) asks for the current state.
+        if (m.slot > 0) send({ t: "need-sync" } as Msg);
+        recomputePrediction();
+        break;
+      }
+      case "peer-join": {
+        setPeerCount((n) => n + 1);
+        // Any active player answers a new joiner; the joiner keeps the
+        // freshest snapshot (see the shotCount guard in "sync").
+        if (mySlot() === 0 || mySlot() === 1) applySnapshotToPeer(m.slot);
+        break;
+      }
+      case "peer-leave":
+        setPeerCount((n) => Math.max(1, n - 1));
+        break;
+      case "need-sync":
+        if ((mySlot() === 0 || mySlot() === 1) && m.from !== mySlot())
+          applySnapshotToPeer(m.from!);
+        break;
+      case "sync": {
+        // Never accept a snapshot that is staler than our own game.
+        if (m.snap.shotCount < history.length) break;
+        if (m.snap.balls.length) {
+          world.balls.forEach((b) => {
+            const s = m.snap.balls.find((x) => x.id === b.id);
+            if (s) {
+              b.p = { x: s.x, y: s.y };
+              b.potted = s.potted;
+              b.v = { x: 0, y: 0 };
+              b.w = { x: 0, y: 0, z: 0 };
+            }
+          });
+          setRules(m.snap.rules as RulesState);
+          breaker = m.snap.breaker;
+          if (m.snap.config) setConfig(m.snap.config);
+          recomputePrediction();
+        }
+        break;
+      }
+      case "cursor":
+        opp.cursor = { x: m.x, y: m.y };
+        break;
+      case "aim":
+        opp.aim = {
+          angle: m.aim.angle,
+          power: m.aim.power,
+          follow: m.aim.follow,
+          side: m.aim.side,
+          elevation: m.aim.elevation ?? 0,
+        };
+        // Reflect a ball-in-hand drag by the opponent.
+        if (rules().ballInHand && rules().turn !== myPlayer()) {
+          world.balls[0].p = { ...m.aim.cue };
+          world.balls[0].potted = false;
+        }
+        break;
+      case "shot":
+        if (m.config) setConfig(m.config);
+        runShot(m.shot, m.place, false, m.config ?? config());
+        break;
+      case "config":
+        setConfig(m.config);
+        recomputePrediction();
+        break;
+      case "rematch":
+        if (m.config) setConfig(m.config);
+        doRematch(m.breaker, false);
+        break;
+    }
+  };
+
+  // --- Shot execution (shared by local + remote) --------------------------
+  const runShot = (
+    shot: Shot,
+    place: Vec | undefined,
+    local: boolean,
+    cfg: PhysicsConfig,
+  ) => {
+    if (place) {
+      world.balls[0].p = { ...place };
+      world.balls[0].potted = false;
+    }
+    worldBefore = cloneWorld(world);
+    events = [];
+    applyShot(world, shot);
+    // Freeze the config for this shot so live slider changes can't diverge an
+    // in-flight simulation; the same config is sent / recorded with the shot.
+    shotConfig = cfg;
+    history.push({ shot, place, config: cfg });
+    setAnimating(true);
+    acc = 0;
+    bump(0);
+    if (local) send({ t: "shot", shot, place, config: cfg } as Msg);
+  };
+
+  const resolveShot = () => {
+    freeze(world);
+    setAnimating(false);
+    const before = rules();
+    const outcome = evaluateShot(before, worldBefore, events);
+    if (outcome.reRack) {
+      world = rackWorld();
+      initialWorld = cloneWorld(world);
+      history = [];
+    }
+    // Scratch: bring the cue ball back for ball-in-hand.
+    if (outcome.potted.includes(0) && outcome.next.winner === null) {
+      world.balls[0].potted = false;
+      world.balls[0].p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
+    }
+    setRules(outcome.next);
+    pendingPlace = undefined;
+    recomputePrediction();
+    // Advance the replay queue if we are watching one.
+    if (replaying()) queueNextReplayShot();
+    bump(0);
+  };
+
+  // --- Main render / physics loop -----------------------------------------
+  const frame = (t: number) => {
+    if (!last) last = t;
+    let dt = (t - last) / 1000;
+    last = t;
+    if (dt > 0.1) dt = 0.1; // clamp after a tab stall
+
+    if (animating()) {
+      acc += dt;
+      let steps = 0;
+      while (acc >= FIXED_DT && steps < 600) {
+        stepFixed(world, events, shotConfig);
+        acc -= FIXED_DT;
+        steps++;
+        if (atRest(world)) break;
+      }
+      if (atRest(world)) resolveShot();
+    }
+
+    draw();
+    raf = requestAnimationFrame(frame);
+  };
+  let raf = 0;
+
+  // Spin-aware shot preview. Recomputed only when an input changes (below),
+  // never per-frame — it runs a throwaway sim so it factors in draw/follow,
+  // English throw, and rail rebounds.
+  const recomputePrediction = () => {
+    const cue = world.balls[0];
+    if (!canAct() || cue.potted || power() <= 0.01) {
+      prediction = undefined;
+      return;
+    }
+    prediction = predictPaths(world, {
+      angle: aimAngle,
+      power: power(),
+      follow: follow(),
+      side: side(),
+      elevation: elevation(),
+    }, config());
+  };
+
+  const draw = () => {
+    const r = rules();
+    const aim: Aim = {
+      angle: aimAngle,
+      power: power(),
+      follow: follow(),
+      side: side(),
+      elevation: elevation(),
+    };
+    drawScene(ctx, {
+      world,
+      layout,
+      myAim: canAct() ? aim : undefined,
+      prediction: canAct() ? prediction : undefined,
+      showCue: canAct(),
+      ballInHand: canAct() && r.ballInHand,
+      myGroup: r.groups[myPlayer()],
+      opponent: opp,
+      animating: animating(),
+    });
+  };
+
+  // --- Pointer input ------------------------------------------------------
+  const toWorld = (e: PointerEvent): Vec => {
+    const rect = canvas.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * layout.W;
+    const py = ((e.clientY - rect.top) / rect.height) * layout.H;
+    return { x: (px - layout.ox) / layout.scale, y: (py - layout.oy) / layout.scale };
+  };
+
+  const clampCue = (p: Vec): Vec => {
+    let x = Math.max(R, Math.min(TABLE.w - R, p.x));
+    let y = Math.max(R, Math.min(TABLE.h - R, p.y));
+    // Push out of any overlapping object ball.
+    for (const b of world.balls) {
+      if (b.potted || b.id === 0) continue;
+      const dx = x - b.p.x;
+      const dy = y - b.p.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 2 * R && d > 1e-6) {
+        x = b.p.x + (dx / d) * 2 * R;
+        y = b.p.y + (dy / d) * 2 * R;
+      }
+    }
+    return { x, y };
+  };
+
+  // Cursor sits behind the ball: the ball fires away from it (jitter-guarded).
+  const aimFromCursor = (cursor: Vec, cue: Vec) => {
+    const dx = cue.x - cursor.x;
+    const dy = cue.y - cursor.y;
+    if (Math.hypot(dx, dy) > R * 1.2) aimAngle = Math.atan2(dy, dx);
+  };
+  // Power = how much further from the ball the cursor has been pulled since the
+  // click. Moving back toward the ball counts as zero.
+  const setPowerFromCursor = (cursor: Vec, cue: Vec) => {
+    const d = Math.hypot(cue.x - cursor.x, cue.y - cursor.y);
+    setPower(Math.max(0, Math.min(1, (d - pressDist) / MAX_PULL)));
+  };
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (!canAct()) return;
+    const w = toWorld(e);
+    const cue = world.balls[0];
+    if (draggingCue) {
+      cue.p = clampCue(w);
+    } else {
+      // Cursor is the cue tip behind the ball: the ball travels away from it
+      // (aim) and how far back you pull sets power — one continuous gesture.
+      aimFromCursor(w, cue.p);
+      if (charging) setPowerFromCursor(w, cue.p);
+    }
+    recomputePrediction();
+    // Throttle presence to ~40hz.
+    const now = performance.now();
+    if (now - lastPresence > 25) {
+      lastPresence = now;
+      send({ t: "cursor", x: w.x, y: w.y } as Msg);
+      send({
+        t: "aim",
+        aim: {
+          angle: aimAngle,
+          power: power(),
+          follow: follow(),
+          side: side(),
+          elevation: elevation(),
+          cue: cue.p,
+        },
+      } as Msg);
+    }
+  };
+
+  const onPointerDown = (e: PointerEvent) => {
+    if (!canAct()) return;
+    const w = toWorld(e);
+    const cue = world.balls[0];
+    if (rules().ballInHand && Math.hypot(w.x - cue.p.x, w.y - cue.p.y) < R * 2.5) {
+      draggingCue = true;
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+    // Grab the cue here: power builds as the cursor is dragged further out.
+    charging = true;
+    pressDist = Math.hypot(cue.p.x - w.x, cue.p.y - w.y);
+    canvas.setPointerCapture(e.pointerId);
+    aimFromCursor(w, cue.p);
+    setPowerFromCursor(w, cue.p);
+    recomputePrediction();
+  };
+
+  const onPointerUp = () => {
+    if (draggingCue) {
+      draggingCue = false;
+      pendingPlace = { ...world.balls[0].p };
+      recomputePrediction();
+      return;
+    }
+    if (charging) {
+      charging = false;
+      if (power() > 0.05) shoot();
+      else {
+        setPower(0);
+        recomputePrediction();
+      }
+    }
+  };
+
+  // --- Actions ------------------------------------------------------------
+  const shoot = () => {
+    if (!canAct() || power() <= 0.01) return;
+    // On a ball-in-hand turn, lock in wherever the cue currently sits.
+    const place =
+      rules().ballInHand ? pendingPlace ?? { ...world.balls[0].p } : undefined;
+    const shot: Shot = {
+      angle: aimAngle,
+      power: power(),
+      follow: follow(),
+      side: side(),
+      elevation: elevation(),
+    };
+    runShot(shot, place, true, config());
+    setPower(0); // reset for the next pull-back
+  };
+
+  const doRematch = (nextBreaker: 0 | 1, local: boolean) => {
+    world = rackWorld();
+    initialWorld = cloneWorld(world);
+    history = [];
+    breaker = nextBreaker;
+    setRules(initRules(nextBreaker));
+    setReplaying(false);
+    pendingPlace = undefined;
+    if (local) send({ t: "rematch", breaker: nextBreaker, config: config() } as Msg);
+    recomputePrediction();
+    bump(0);
+  };
+
+  // Live-tune a physics coefficient; broadcast so the opponent's table matches.
+  const setParam = (key: keyof PhysicsConfig, value: number) => {
+    const next = { ...config(), [key]: value };
+    setConfig(next);
+    send({ t: "config", config: next } as Msg);
+    recomputePrediction();
+  };
+
+  // --- Replay -------------------------------------------------------------
+  const saveReplay = () => {
+    const r = buildReplay(
+      breaker,
+      initialWorld,
+      history,
+      { w: TABLE.w, h: TABLE.h },
+      config(),
+    );
+    downloadReplay(r);
+  };
+
+  const queueNextReplayShot = () => {
+    const next = replayQueue.shift();
+    if (!next) {
+      setReplaying(false);
+      return;
+    }
+    const cfg = next.config ?? config();
+    setTimeout(() => {
+      setConfig(cfg);
+      runShot(next.shot, next.place, false, cfg);
+    }, 700);
+  };
+
+  const loadReplay = async (file: File) => {
+    const r = parseReplay(await file.text());
+    world = worldFromInitial(r.initial);
+    initialWorld = cloneWorld(world);
+    history = [];
+    breaker = r.breaker;
+    setConfig(r.config);
+    setRules(initRules(r.breaker));
+    replayQueue = [...r.shots];
+    setReplaying(true);
+    bump(0);
+    queueNextReplayShot();
+  };
+
+  const copyLink = () => {
+    navigator.clipboard?.writeText(`${location.origin}/${room}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // --- Lifecycle ----------------------------------------------------------
+  onMount(() => {
+    ctx = canvas.getContext("2d")!;
+    const resize = () => {
+      const playW = Math.min(window.innerWidth - 40, 960);
+      layout = layoutFor(playW);
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = layout.W * dpr;
+      canvas.height = layout.H * dpr;
+      canvas.style.width = `${layout.W}px`;
+      canvas.style.height = `${layout.H}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    connect();
+    raf = requestAnimationFrame(frame);
+
+    onCleanup(() => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      ws?.close();
+    });
+  });
+
+  // --- Spin pad -----------------------------------------------------------
+  let spinEl!: HTMLDivElement;
+  const onSpin = (e: PointerEvent) => {
+    const rect = spinEl.getBoundingClientRect();
+    const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1; // -1..1
+    const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+    setSide(clamp(nx));
+    setFollow(clamp(-ny)); // up = follow (+)
+    recomputePrediction();
+  };
+
+  const spinDot = () => ({
+    left: `${50 + side() * 42}%`,
+    top: `${50 - follow() * 42}%`,
+  });
+
+  // --- Cue elevation widget (side view; drag the cue to set the angle) -----
+  let cueEl!: SVGSVGElement;
+  const PIVOT = { x: 68, y: 50 }; // where the cue tip meets the ball (viewBox)
+  const CUE_LEN = 44;
+  const onCueDrag = (e: PointerEvent) => {
+    const rect = cueEl.getBoundingClientRect();
+    const lx = ((e.clientX - rect.left) / rect.width) * 100;
+    const ly = ((e.clientY - rect.top) / rect.height) * 80;
+    const ang = Math.atan2(PIVOT.y - ly, PIVOT.x - lx);
+    setElevation(Math.max(0, Math.min(MAX_ELEVATION, ang)));
+    recomputePrediction();
+  };
+  const cueEnd = () => ({
+    x: PIVOT.x - CUE_LEN * Math.cos(elevation()),
+    y: PIVOT.y - CUE_LEN * Math.sin(elevation()),
+  });
+
+  const statusLine = () => {
+    const r = rules();
+    if (r.winner !== null)
+      return { text: r.message, cls: "win" };
+    if (r.message.startsWith("Foul")) return { text: r.message, cls: "foul" };
+    return { text: r.message, cls: "" };
+  };
+
+  return (
+    <>
+      <div class="title">
+        pool<span class="dim">.tris.sh</span>
+      </div>
+
+      <div class="link-row">
+        <Show
+          when={peerCount() > 1}
+          fallback={
+            <>
+              Waiting for an opponent —{" "}
+              <button onClick={copyLink}>
+                {copied() ? "link copied!" : "copy invite link"}
+              </button>{" "}
+              and send it to a friend.
+            </>
+          }
+        >
+          <span class="badge you">you: player {myPlayer() + 1}</span>{" "}
+          {peerCount()} connected
+          {isSpectator() && " (spectating)"}
+        </Show>
+      </div>
+
+      <div class="status">
+        {(() => {
+          track(); // subscribe to forced recompute
+          const s = statusLine();
+          return <span class={s.cls}>{s.text}</span>;
+        })()}
+      </div>
+
+      <div class="table-wrap">
+        <canvas
+          ref={canvas}
+          onPointerMove={onPointerMove}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+        />
+      </div>
+
+      <div class="controls">
+        <div class="control">
+          <span>spin</span>
+          <div
+            class="spin"
+            ref={spinEl}
+            onPointerDown={(e) => {
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              onSpin(e);
+            }}
+            onPointerMove={(e) => e.buttons && onSpin(e)}
+          >
+            <div class="axis h" />
+            <div class="axis v" />
+            <div class="dot" style={spinDot()} />
+          </div>
+        </div>
+
+        <div class="control">
+          <span>power {Math.round(power() * 100)}%</span>
+          <div class="power-meter">
+            <div class="power-fill" style={{ width: `${power() * 100}%` }} />
+          </div>
+        </div>
+
+        <div class="control">
+          <span>cue angle {Math.round((elevation() * 180) / Math.PI)}°</span>
+          <svg
+            class="cue-elev"
+            ref={cueEl}
+            viewBox="0 0 100 80"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              onCueDrag(e);
+            }}
+            onPointerMove={(e) => e.buttons && onCueDrag(e)}
+          >
+            <line class="surface" x1="6" y1="60" x2="94" y2="60" />
+            <ellipse class="shadow" cx="70" cy="60" rx="9" ry="2" />
+            <circle class="ball" cx="70" cy="52" r="8" />
+            <line
+              class="cue"
+              x1={cueEnd().x}
+              y1={cueEnd().y}
+              x2={PIVOT.x}
+              y2={PIVOT.y}
+            />
+            <circle class="tip" cx={PIVOT.x} cy={PIVOT.y} r="2.4" />
+          </svg>
+        </div>
+
+        <div class="control">
+          <button onClick={() => doRematch(((breaker ^ 1) as 0 | 1), true)}>
+            new game
+          </button>
+        </div>
+
+        <div class="control">
+          <button onClick={saveReplay} disabled={(track(), history.length === 0)}>
+            save replay
+          </button>
+          <label class="badge" style={{ cursor: "pointer" }}>
+            load replay
+            <input
+              type="file"
+              accept="application/json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0];
+                if (f) loadReplay(f);
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div class="physics">
+        <div class="physics-title">physics — measured snooker values</div>
+        <div class="physics-grid">
+          {PARAMS.map((p) => (
+            <label class="phys-row">
+              <span class="phys-label">{p.label}</span>
+              <input
+                type="range"
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                value={config()[p.key]}
+                onInput={(e) => setParam(p.key, Number(e.currentTarget.value))}
+              />
+              <span class="phys-val">{config()[p.key].toFixed(3)}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div class="link-row">
+        the cursor is behind the ball — it fires away from the cursor; pull
+        further back to build power, release to strike · spin pad for
+        draw/follow + english · drag the cue widget for elevation · drag the
+        white ball on a foul (ball-in-hand)
+      </div>
+    </>
+  );
+};
+
+export default Game;

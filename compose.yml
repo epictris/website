@@ -12,6 +12,7 @@ services:
     depends_on:
       - website
       - clipboard
+      - pool
 
   website:
     image: ${WEBSITE_IMAGE}
@@ -22,6 +23,12 @@ services:
   clipboard:
     image: ${CLIPBOARD_IMAGE}
     restart: unless-stopped
+
+  pool:
+    image: ${POOL_IMAGE}
+    restart: unless-stopped
+    environment:
+      - PORT=8080
 
 volumes:
   caddy_data:

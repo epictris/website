@@ -1,0 +1,295 @@
+:root {
+  --bg: #1f2430;
+  --fg: #cbccc6;
+  --border: #313244;
+  --accent: #65bddb;
+  --accent-red: #f08778;
+  --panel: #232834;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    "Fantasque Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 15px;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+}
+
+.title {
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+.title .dim {
+  color: var(--fg);
+  opacity: 0.5;
+}
+
+.table-wrap {
+  position: relative;
+  line-height: 0;
+}
+
+canvas {
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  touch-action: none;
+}
+
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 940px;
+}
+
+.status {
+  min-height: 1.4em;
+  text-align: center;
+  width: 100%;
+}
+
+.status .foul {
+  color: var(--accent-red);
+}
+
+.status .win {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.controls {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: #2c313d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #10202a;
+  font-weight: 700;
+  border-color: var(--accent);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  width: 130px;
+}
+
+/* Physics parameter sliders. */
+.physics {
+  width: 100%;
+  max-width: 940px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.physics-title {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 10px;
+}
+
+.physics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 8px 28px;
+}
+
+.phys-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 48px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.phys-label {
+  opacity: 0.85;
+}
+
+.phys-row input[type="range"] {
+  width: 100%;
+}
+
+.phys-val {
+  text-align: right;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  .physics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Spin pad: a cue-ball circle you click to set follow/draw + side. */
+.spin {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffffff, #c9ccc6 70%, #9aa09a);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: crosshair;
+}
+
+.spin .axis {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.spin .axis.h {
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 1px;
+}
+
+.spin .axis.v {
+  top: 8%;
+  bottom: 8%;
+  left: 50%;
+  width: 1px;
+}
+
+.spin .dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+/* Power meter — filled by the click-drag-release pull, not editable directly. */
+.power-meter {
+  width: 130px;
+  height: 12px;
+  background: #2c313d;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.power-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-red));
+  transition: width 0.02s linear;
+}
+
+/* Cue elevation: a draggable side view of the cue against the table. */
+.cue-elev {
+  width: 100px;
+  height: 76px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.cue-elev .surface {
+  stroke: #15603b;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.cue-elev .shadow {
+  fill: rgba(0, 0, 0, 0.3);
+}
+
+.cue-elev .ball {
+  fill: #f4f1ea;
+}
+
+.cue-elev .cue {
+  stroke: #c79a5b;
+  stroke-width: 3.6;
+  stroke-linecap: round;
+}
+
+.cue-elev .tip {
+  fill: #3a6ea5;
+}
+
+.badge {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.badge.you {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+a {
+  color: var(--accent);
+}
+
+.link-row {
+  font-size: 12px;
+  opacity: 0.85;
+  text-align: center;
+}
