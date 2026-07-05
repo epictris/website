@@ -205,19 +205,34 @@ canvas {
 }
 
 /* Win / resign banner across the top of the table. */
-.game-over {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  width: 100%;
-  padding: 6px 0;
+/* Transient turn recap — floats over the top of the table, doesn't shift layout
+   or swallow taps. Rides the .rot90 transform so it reads upright when the phone
+   root is quarter-turned. */
+.turn-recap {
+  position: absolute;
+  top: 2ch;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: 90%;
+  padding: 1ch 2ch;
+  text-align: center;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  pointer-events: none;
+  animation: recap-in 180ms ease-out;
 }
 
-.game-over .win {
-  color: var(--accent);
-  font-weight: 700;
+@keyframes recap-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -0.8ch);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* Cue-column widget sizes (the spin ball is also the cue's struck ball).
@@ -239,6 +254,7 @@ canvas {
 .game-root {
   flex: 1;
   align-self: stretch;
+  position: relative; /* anchor for the absolute .turn-recap overlay */
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -68,6 +68,7 @@ const Game: Component = () => {
   let lastPresence = 0;
   let worldBefore: World = cloneWorld(world);
   let ws: WebSocket | null = null;
+  let leaving = false; // set on unmount so a deliberate close doesn't reconnect
   let replayQueue: ReplayShot[] = [];
   let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
@@ -108,6 +109,15 @@ const Game: Component = () => {
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
+  // Transient turn-recap popup: what the last shot did + whose turn it is now.
+  const [announce, setAnnounce] = createSignal<string | null>(null);
+  let announceTimer: ReturnType<typeof setTimeout> | undefined;
+  const showAnnounce = (text: string) => {
+    setAnnounce(text);
+    if (announceTimer) clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => setAnnounce(null), 4500);
+  };
+  onCleanup(() => announceTimer && clearTimeout(announceTimer));
   // Portrait-locked phone held sideways: the whole game root is CSS-rotated 90°
   // (see .game-root.rot90) while the table itself stays laid out landscape.
   const [rot90, setRot90] = createSignal(false);
@@ -166,7 +176,11 @@ const Game: Component = () => {
       }
       onMsg(m);
     };
-    ws.onclose = () => setTimeout(connect, 1000);
+    // Auto-reconnect a dropped socket — but not when we're deliberately leaving
+    // (resign/navigate away), or the ghost rejoin makes the host re-rack.
+    ws.onclose = () => {
+      if (!leaving) setTimeout(connect, 1000);
+    };
   };
 
   const onMsg = (m: Msg) => {
@@ -265,6 +279,7 @@ const Game: Component = () => {
       message: `Player ${winner + 1} wins — opponent resigned.`,
     }));
     setReplaying(false);
+    showAnnounce(`Player ${winner + 1} wins — opponent resigned.`);
     bump(0);
   };
 
@@ -320,6 +335,9 @@ const Game: Component = () => {
       world.balls[0].p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
     }
     setRules(outcome.next);
+    // Pop a recap whenever control changes hands or the game ends.
+    if (outcome.next.winner !== null || outcome.next.turn !== before.turn)
+      showAnnounce(outcome.next.message);
     pendingPlace = undefined;
     recomputePrediction();
     // Advance the replay queue if we are watching one.
@@ -837,6 +855,7 @@ const Game: Component = () => {
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onFsChange);
+      leaving = true;
       ws?.close();
     });
   });
@@ -885,11 +904,8 @@ const Game: Component = () => {
 
   return (
     <div class="game-root" classList={{ rot90: rot90() }}>
-      <Show when={rules().winner !== null}>
-        <div class="game-over">
-          <span class="win">{rules().message}</span>
-          <a href="/">new game</a>
-        </div>
+      <Show when={announce()}>
+        <div class="turn-recap">{announce()}</div>
       </Show>
 
       <div class="play-row">
@@ -1021,13 +1037,22 @@ const Game: Component = () => {
               {fullscreen() ? "exit fullscreen" : "go fullscreen"}
             </button>
           </Show>
-          <button
-            class="pm-done resign"
-            onClick={resign}
-            disabled={isSpectator() || rules().winner !== null}
+          <Show
+            when={rules().winner !== null}
+            fallback={
+              <button
+                class="pm-done resign"
+                onClick={resign}
+                disabled={isSpectator()}
+              >
+                resign
+              </button>
+            }
           >
-            resign
-          </button>
+            <button class="pm-done" onClick={() => navigate("/")}>
+              leave
+            </button>
+          </Show>
         </div>
       </Show>
     </div>

@@ -107,16 +107,20 @@ export function evaluateShot(
     // scratch. Anything else loses the game.
     const legal8 = clearedBefore && !cueScratch;
     const winner = legal8 ? shooter : opp;
+    const loseWhy = cueScratch
+      ? "scratched potting the 8"
+      : !clearedBefore
+        ? "sunk the 8 early"
+        : "potted the 8 illegally";
     return {
       next: {
         ...before,
         phase: "over",
         winner,
         ballInHand: false,
-        message:
-          winner === shooter
-            ? `Player ${shooter + 1} pots the 8 and wins!`
-            : `Player ${shooter + 1} pots the 8 illegally — Player ${opp + 1} wins!`,
+        message: legal8
+          ? `Player ${shooter + 1} sinks the 8 — Player ${shooter + 1} wins!`
+          : `Player ${shooter + 1} ${loseWhy} — Player ${opp + 1} wins!`,
       },
       potted,
       firstContact,
@@ -173,17 +177,25 @@ export function evaluateShot(
   const keepTurn = !foul && pottedOwn;
 
   const nextTurn = keepTurn ? shooter : opp;
+  // Narrate the shot: how many balls the shooter sank, whether they fouled, and
+  // whose turn it is now. Drives the on-table popup as well as the status line.
+  const sank = legalObjectPots.length;
+  const balls = sank === 1 ? "1 ball" : `${sank} balls`;
+  let did: string;
+  if (sank > 0 && foul) did = `sank ${balls} then fouled (${foul})`;
+  else if (foul) did = `fouled (${foul})`;
+  else if (sank > 0) did = `sank ${balls}`;
+  else did = "missed";
+  const message = keepTurn
+    ? `Player ${shooter + 1} ${did} — plays on.`
+    : `Player ${shooter + 1} ${did} — Player ${nextTurn + 1}'s turn.`;
   const next: RulesState = {
     turn: nextTurn,
     groups,
     phase,
     ballInHand: !!foul, // foul -> incoming player gets ball in hand
     winner: null,
-    message: foul
-      ? `Foul (${foul}) — Player ${nextTurn + 1} has ball in hand.`
-      : keepTurn
-        ? `Player ${shooter + 1} continues.`
-        : `Player ${nextTurn + 1}'s turn.`,
+    message,
   };
 
   return { next, potted, firstContact, foul, reRack: false };
