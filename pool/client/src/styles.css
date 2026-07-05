@@ -429,6 +429,7 @@ button.primary {
   border: 1px solid var(--border);
   position: relative;
   cursor: crosshair;
+  touch-action: none;
 }
 
 .spin .axis {
@@ -494,6 +495,19 @@ button.primary {
 
 .cue-elev .tip {
   fill: #3a6ea5;
+}
+
+.cue-elev .arc {
+  fill: none;
+  stroke: var(--accent, #65bddb);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 2.5;
+  opacity: 0.6;
+}
+
+.cue-elev .arc-head {
+  fill: var(--accent, #65bddb);
+  opacity: 0.6;
 }
 
 a {

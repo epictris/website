@@ -202,6 +202,9 @@ const Game: Component = () => {
         // Any active player answers a new joiner with the current (fresh) state;
         // the joiner keeps the freshest snapshot (see the shotCount guard).
         if (mySlot() === 0 || mySlot() === 1) applySnapshotToPeer(m.slot);
+        // Snapshot carries no aim, so a joiner sees no cue until someone moves.
+        // The active shooter pushes its current aim so the cue shows immediately.
+        if (myTurn()) sendAim(world.balls[0].p);
         break;
       }
       case "peer-leave":
@@ -589,11 +592,7 @@ const Game: Component = () => {
     return d;
   };
 
-  const sendPresence = (w: Vec, cue: Vec) => {
-    const now = performance.now();
-    if (now - lastPresence <= 25) return;
-    lastPresence = now;
-    send({ t: "cursor", x: w.x, y: w.y } as Msg);
+  const sendAim = (cue: Vec) => {
     send({
       t: "aim",
       aim: {
@@ -605,6 +604,14 @@ const Game: Component = () => {
         cue: cue,
       },
     } as Msg);
+  };
+
+  const sendPresence = (w: Vec, cue: Vec) => {
+    const now = performance.now();
+    if (now - lastPresence <= 25) return;
+    lastPresence = now;
+    send({ t: "cursor", x: w.x, y: w.y } as Msg);
+    sendAim(cue);
   };
 
   const onPointerDown = (e: PointerEvent) => {
@@ -651,7 +658,12 @@ const Game: Component = () => {
       return;
     }
     // Tap the felt → snap aim there; a drag already fine-tuned the aim.
-    if (!movedFar) aimFromCursor(downWorld, world.balls[0].p);
+    if (!movedFar) {
+      aimFromCursor(downWorld, world.balls[0].p);
+      // A tap never fires onPointerMove, so sync the new aim to the opponent.
+      lastPresence = 0; // bypass the presence throttle for this one-off update
+      sendPresence(downWorld, world.balls[0].p);
+    }
     recomputePrediction();
   };
 
@@ -718,6 +730,9 @@ const Game: Component = () => {
     if (strikeShot) runShot(strikeShot, strikePlace, true, config());
     strikeShot = undefined;
     setPower(0); // reset for the next pull-back
+    setSide(0); // clear english + cue elevation so the next shot starts neutral
+    setFollow(0);
+    setElevation(0);
     lingering = true;
     lingerUntil = nowMs + STRIKE_LINGER_MS;
   };
@@ -864,11 +879,15 @@ const Game: Component = () => {
   let spinEl!: HTMLDivElement;
   const onSpin = (e: PointerEvent) => {
     const p = localPoint(spinEl, e);
-    const nx = (p.x / p.w) * 2 - 1; // -1..1
-    const ny = (p.y / p.h) * 2 - 1;
-    const clamp = (v: number) => Math.max(-1, Math.min(1, v));
-    setSide(clamp(nx));
-    setFollow(clamp(-ny)); // up = follow (+)
+    let nx = (p.x / p.w) * 2 - 1; // -1..1
+    let ny = (p.y / p.h) * 2 - 1;
+    const r = Math.hypot(nx, ny); // clamp radially so the dot stays in the circle
+    if (r > 1) {
+      nx /= r;
+      ny /= r;
+    }
+    setSide(nx);
+    setFollow(-ny); // up = follow (+)
     recomputePrediction();
   };
 
@@ -899,6 +918,31 @@ const Game: Component = () => {
     return {
       tip: { x: EBALL.x + dTip * ux, y: EBALL.y + dTip * uy },
       butt: { x: EBALL.x + (dTip + ECUE_LEN) * ux, y: EBALL.y + (dTip + ECUE_LEN) * uy },
+    };
+  };
+
+  // Drag hint: an arc around the ball spanning the cue's swept elevation range,
+  // arrowhead at each end — you rotate the cue by dragging along it.
+  const ARC_R = 27;
+  const arcPt = (e: number) => ({
+    x: EBALL.x - ARC_R * Math.cos(e),
+    y: EBALL.y - ARC_R * Math.sin(e),
+  });
+  // Small triangle whose apex is `at`, pointing along `dir` (radians).
+  const arcArrow = (at: { x: number; y: number }, dir: number) => {
+    const dx = Math.cos(dir), dy = Math.sin(dir);
+    const bx = at.x - 5 * dx, by = at.y - 5 * dy; // base, 5u back along -dir
+    const px = -dy * 3, py = dx * 3; // half-width perpendicular
+    return `${at.x},${at.y} ${bx + px},${by + py} ${bx - px},${by - py}`;
+  };
+  const cueArc = () => {
+    const a = arcPt(0);
+    const b = arcPt(MAX_ELEVATION);
+    return {
+      d: `M ${a.x} ${a.y} A ${ARC_R} ${ARC_R} 0 0 1 ${b.x} ${b.y}`,
+      // outward tangents: decreasing-elev at the low end, increasing at the high end
+      loArrow: arcArrow(a, Math.PI / 2),
+      hiArrow: arcArrow(b, Math.atan2(-Math.cos(MAX_ELEVATION), Math.sin(MAX_ELEVATION))),
     };
   };
 
@@ -953,13 +997,16 @@ const Game: Component = () => {
             onPointerUp={onPowerUp}
             onPointerCancel={onPowerUp}
           >
-            <image
-              href={CUE_IMG}
-              x={20 - CUE_S / 2}
-              y={cueImgY()}
-              width={CUE_S}
-              height={CUE_S}
-            />
+            {/* Hide the pull-back cue while it isn't this player's turn. */}
+            <Show when={myTurn()}>
+              <image
+                href={CUE_IMG}
+                x={20 - CUE_S / 2}
+                y={cueImgY()}
+                width={CUE_S}
+                height={CUE_S}
+              />
+            </Show>
           </svg>
         </div>
       </div>
@@ -998,6 +1045,9 @@ const Game: Component = () => {
                 <line class="surface" x1="8" y1="74" x2="92" y2="74" />
                 <ellipse class="shadow" cx="60" cy="74" rx="13" ry="3" />
                 <circle class="ball" cx="60" cy="62" r="12" />
+                <path class="arc" d={cueArc().d} />
+                <polygon class="arc-head" points={cueArc().loArrow} />
+                <polygon class="arc-head" points={cueArc().hiArrow} />
                 <line
                   class="cue"
                   x1={cueGeom().butt.x}

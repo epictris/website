@@ -374,7 +374,9 @@ const len = (x: number, y: number) => hyp(x, y);
 
 export type ShotEvent =
   | { type: "cushion"; ball: number }
-  | { type: "ball"; a: number; b: number }
+  // ax/ay, bx/by: the two ball centres at the exact swept time-of-impact, so a
+  // preview can pin its ghost to the true contact instead of re-deriving it.
+  | { type: "ball"; a: number; b: number; ax: number; ay: number; bx: number; by: number }
   | { type: "pot"; ball: number };
 
 /** Standard 8-ball rack: apex on the foot spot, 8 in the centre. */
@@ -503,7 +505,17 @@ function resolveBallBall(
     a.w.z -= (2.5 / R) * jt;
     b.w.z -= (2.5 / R) * jt;
   }
-  events.push({ type: "ball", a: a.id, b: b.id });
+  // a.p/b.p are at the exact contact instant here (stepFixed advanced both to
+  // the swept TOI before resolving), so record them as the true contact centres.
+  events.push({
+    type: "ball",
+    a: a.id,
+    b: b.id,
+    ax: a.p.x,
+    ay: a.p.y,
+    bx: b.p.x,
+    by: b.p.y,
+  });
 }
 
 /**
@@ -862,25 +874,6 @@ function railContactPoint(p0: Vec, v: Vec): Vec | null {
   return { x: p0.x + v.x * best, y: p0.y + v.y * best };
 }
 
-/**
- * Point where a cue centre leaving p0 with velocity v first reaches 2R from a
- * struck centre c. Ray-based (not chord-based): the fixed step resolves the hit
- * and advances into the rebound, so p0->cue.p bends at contact and a chord solve
- * jitters. The incoming leg is straight along v, so this pins the true tangent.
- */
-function ballContactPoint(p0: Vec, v: Vec, c: Vec): Vec | null {
-  const fx = p0.x - c.x;
-  const fy = p0.y - c.y;
-  const a = v.x * v.x + v.y * v.y;
-  const b = 2 * (fx * v.x + fy * v.y);
-  const cc = fx * fx + fy * fy - (2 * R) * (2 * R);
-  const disc = b * b - 4 * a * cc;
-  if (a < 1e-12 || disc < 0) return null;
-  const t = (-b - Math.sqrt(disc)) / (2 * a);
-  if (t < 0) return null;
-  return { x: p0.x + v.x * t, y: p0.y + v.y * t };
-}
-
 export function predictPaths(
   world: World,
   shot: Shot,
@@ -912,9 +905,6 @@ export function predictPaths(
   for (let i = 0; i < steps && !stop; i++) {
     const prev = { ...cue.p }; // cue position before this step
     const prevV = { ...cue.v }; // cue velocity before this step (incoming dir)
-    // Struck-ball centres before this step (resolution moves them; we need the
-    // pre-contact position to locate the exact tangent point).
-    const prevCentres = w.balls.map((b) => ({ id: b.id, x: b.p.x, y: b.p.y }));
     const mark = events.length;
     stepFixed(w, events, cfg);
 
@@ -931,16 +921,15 @@ export function predictPaths(
     for (let k = mark; k < events.length; k++) {
       const e = events[k];
       if (e.type === "ball" && (e.a === 0 || e.b === 0)) {
-        // Refine to the exact tangent point: the physics step only detects the
-        // hit once the balls overlap, which lands on a coarse grid and makes
-        // the ghost jump. Solve where the cue centre first reaches 2R from the
-        // struck ball along this step's segment so it slides smoothly.
+        // Use the exact contact centres the swept step recorded at the true
+        // time-of-impact. Re-deriving them here (straight ray from the step
+        // start) disagreed with the swept solver at grazing aims and on curved
+        // shots, so the ghost — and the drawn line length — jumped as you
+        // scanned across a ball. Reading the real contact makes it slide.
         objId = e.a === 0 ? e.b : e.a;
-        const ob = prevCentres.find((b) => b.id === objId);
-        ghost = (ob && ballContactPoint(prev, prevV, ob)) || { ...cue.p };
-        // Start the struck-ball trace at its current position.
-        const hit = w.balls.find((b) => b.id === objId);
-        if (hit) objPath.push({ ...hit.p });
+        ghost = e.a === 0 ? { x: e.ax, y: e.ay } : { x: e.bx, y: e.by };
+        // Start the struck-ball trace at its centre at contact.
+        objPath.push(e.a === 0 ? { x: e.bx, y: e.by } : { x: e.ax, y: e.ay });
         objTrace = OBJ_TRACE_STEPS;
         break;
       }
