@@ -26,6 +26,15 @@ const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
 // empty transparent background. This is the tight opaque box (measured), used to
 // size the canvas so the visible table fills it and the margin is cropped off.
 const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
+// Width (world metres) of the ball-return track reserved OFF the left short
+// rail. The layout grows the canvas left by this much (scaled) into a blank
+// gutter; the track + potted balls are drawn there in raw pixels, so the felt
+// mapping (toPx) and collision geometry are untouched.
+const RACK_W = 0.09;
+// Constant speed (world metres/sec) a potted ball rolls down the return track.
+// Distance-based, not time-based, so every ball rolls at the same pace whatever
+// its slot.
+const ROLL_MPS = 0.384;
 let tableImg: HTMLImageElement | null = null;
 let tableReady = false;
 function ensureTableImg() {
@@ -80,12 +89,14 @@ export function layoutFor(scale: number, rotated = false): Layout {
   const maxx = Math.max(...cs.map((c) => c.x));
   const miny = Math.min(...cs.map((c) => c.y));
   const maxy = Math.max(...cs.map((c) => c.y));
-  // Shift world (0,0) so the image starts at the canvas origin.
-  const ox = (rotated ? -minx - Hpx : -minx);
+  // Shift world (0,0) so the image starts at the canvas origin, then push
+  // everything right by the rack gutter so a blank strip opens on the far left.
+  const rackPx = RACK_W * scale;
+  const ox = (rotated ? -minx - Hpx : -minx) + rackPx;
   const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
   const ph = (rotated ? TABLE.w : TABLE.h) * scale;
-  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx, H: maxy - miny };
+  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx + rackPx, H: maxy - miny };
 }
 
 // World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
@@ -129,14 +140,22 @@ export type Scene = {
   opponent?: { cursor?: Vec; aim?: Aim };
   animating?: boolean;
   sinks?: Sink[]; // balls mid-drop into a pocket
+  rack?: RackEntry[]; // potted balls collected in the return track, in pot order
+  now?: number; // wall-clock ms, for driving rack roll animations
   debug?: boolean; // overlay the real collision geometry
 };
+
+// One ball resting in (or rolling into) the return track. `rollStart` is the ms
+// at which it emerges at the top of the track; before that it's still "under the
+// table" (mid pocket-drop) and isn't drawn. Order in the array = slot order.
+export type RackEntry = { id: number; rollStart: number };
 
 export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   const l = s.layout;
   ctx.clearRect(0, 0, l.W, l.H);
   ensureTableImg();
   drawTable(ctx, l);
+  drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
   // dialled in (no preview at zero power).
@@ -258,6 +277,106 @@ function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
   ctx.save();
   ctx.transform(m11, m12, m21, m22, dx, dy); // composes onto the dpr transform
   ctx.drawImage(tableImg, 0, 0);
+  ctx.restore();
+}
+
+// Body-frame rotation about the screen-x axis by `a` — a ball rolling straight
+// down the track spins about the horizontal, so its markings tumble instead of
+// sliding rigidly. Feeds drawBall's orientation matrix.
+function rollX(a: number): Mat3 {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [1, 0, 0, 0, c, -s, 0, s, c];
+}
+
+// Spin about the screen-y axis — the ball rolling sideways as it comes out from
+// under the table before it rounds the corner into the vertical channel.
+function rollY(a: number): Mat3 {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [c, 0, s, 0, 1, 0, -s, 0, c];
+}
+
+function mul3(a: Mat3, b: Mat3): Mat3 {
+  const m: number[] = [];
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      m[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[c + 3] + a[r * 3 + 2] * b[c + 6];
+  return m as unknown as Mat3;
+}
+
+// The ball-return track down the LEFT short end: a recessed channel in the
+// gutter layoutFor opened on the far left. Every ball potted so far (the cue is
+// re-spotted, so it never enters) collects here in POT ORDER — each drops into a
+// pocket (the Sink animation), vanishes "under the table", then emerges at the
+// top of the track and rolls down to stack against the ones already resting at
+// the bottom end. Drawn in raw canvas pixels, not world coords, so it lives
+// entirely left of the felt and touches no physics.
+function drawRack(
+  ctx: CanvasRenderingContext2D,
+  l: Layout,
+  rack: RackEntry[],
+  now: number,
+) {
+  const rpx = R * l.scale;
+  const gutter = RACK_W * l.scale;
+  const cx = gutter / 2; // column centre, in the blank left strip
+  const top = l.oy;
+  const bottom = l.oy + l.ph; // felt vertical span == left rail length
+  const half = rpx * 1.35; // channel half-width (a touch wider than a ball)
+
+  // Channel bed: a dark recessed groove with a soft inner edge.
+  ctx.save();
+  ctx.fillStyle = "#12141b";
+  ctx.beginPath();
+  ctx.roundRect(cx - half, top, half * 2, bottom - top, rpx * 0.6);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.5)";
+  ctx.lineWidth = Math.max(1, rpx * 0.12);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255,255,255,0.05)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(cx - half + 1, top + 1, half * 2 - 2, bottom - top - 2, rpx * 0.6);
+  ctx.stroke();
+  ctx.restore();
+
+  const step = rpx * 2.05; // touching, with a hair of daylight
+  const startY = bottom - rpx - rpx * 0.3; // first ball rests at the bottom end
+  const cornerY = top + rpx * 1.05; // where the horizontal lead-in turns downward
+  const leadIn = half + rpx * 1.3; // sideways run from under the table to the corner
+  const speed = (ROLL_MPS * l.scale) / 1000; // px per ms
+  // Path distance travelled: 0..leadIn is the sideways run into the corner (the
+  // start of it is off-channel, so the clip below keeps it hidden "under the
+  // table"); beyond that it's straight down the channel to the slot.
+  const posAt = (s: number) =>
+    s <= leadIn
+      ? { x: cx + (leadIn - s), y: cornerY, down: 0 }
+      : { x: cx, y: cornerY + (s - leadIn), down: s - leadIn };
+
+  // Clip to the channel so a ball is invisible until it rounds the corner into
+  // view — no more sitting at the mouth while it waits.
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(cx - half, top, half * 2, bottom - top, rpx * 0.6);
+  ctx.clip();
+  let prevS = Infinity; // path distance of the ball ahead (further down the track)
+  for (let i = 0; i < rack.length; i++) {
+    const restY = startY - i * step;
+    if (restY - rpx < top) break; // full track — stop rather than overflow the felt
+    const pathLen = leadIn + (restY - cornerY); // total distance to this slot
+    // Constant-speed travel, clamped to the slot AND to one ball-gap behind the
+    // ball ahead (in path distance) — a trailing ball can never overlap or
+    // overtake its leader, even around the corner.
+    let s = now >= rack[i].rollStart ? speed * (now - rack[i].rollStart) : -1;
+    s = Math.min(s, pathLen, prevS - step);
+    prevS = s;
+    if (s < 0) continue; // still under the table (or queued behind) — hidden
+    const p = posAt(s);
+    // Roll without slipping: sideways about y until the corner, then down about x.
+    const o = mul3(rollX(-p.down / rpx), rollY(-Math.min(s, leadIn) / rpx));
+    drawBall(ctx, { x: p.x, y: p.y }, rack[i].id, rpx, 1, o, false, true);
+  }
   ctx.restore();
 }
 

@@ -92,9 +92,25 @@ const Game: Component = () => {
   const pottedSeen = new Set<number>();
   let nowMs = 0;
   const SINK_MS = 550;
+  // Speed (world m/s) a potted ball travels under the table from its pocket to
+  // the return mouth at the top-left corner (world origin).
+  const UNDER_MPS = 1.1;
+  // The left-rail ball-return track: every ball potted this game, in the order it
+  // dropped. Each rolls into the track once its pocket-drop (SINK_MS) finishes.
+  let rackBalls: { id: number; rollStart: number }[] = [];
   const resetSinks = () => {
     sinks = [];
     pottedSeen.clear();
+    rackBalls = [];
+  };
+  // Rebuild the rack from the current world with no roll animation — used when a
+  // late joiner adopts a synced snapshot (which carries no pot-order history, so
+  // fall back to id order and show the balls already settled).
+  const seedRack = () => {
+    rackBalls = world.balls
+      .filter((b) => b.potted && b.id !== 0)
+      .sort((a, b) => a.id - b.id)
+      .map((b) => ({ id: b.id, rollStart: -1e9 }));
   };
   // Nearest pocket hole centre — where a potted ball visually drops to.
   const nearestHole = (p: Vec): Vec =>
@@ -332,6 +348,7 @@ const Game: Component = () => {
           // Don't replay sink animations for balls already down at join time.
           resetSinks();
           world.balls.forEach((b) => b.potted && pottedSeen.add(b.id));
+          seedRack(); // show already-potted balls settled in the return track
           recomputePrediction();
         }
         break;
@@ -521,6 +538,14 @@ const Game: Component = () => {
       if (b.potted && !pottedSeen.has(b.id)) {
         pottedSeen.add(b.id);
         addSink(b, t);
+        // Collect it in the return track (cue re-spots, never racks). After the
+        // pocket-drop it travels UNDER the table to the top-left return mouth —
+        // the farther the pocket, the longer before it rolls out of the top.
+        if (b.id !== 0 && !rackBalls.some((r) => r.id === b.id)) {
+          const hole = nearestHole(b.p);
+          const under = (Math.hypot(hole.x, hole.y) / UNDER_MPS) * 1000;
+          rackBalls.push({ id: b.id, rollStart: t + SINK_MS + under });
+        }
       }
     }
     sinks = sinks.filter((sk) => t - sk.start < SINK_MS);
@@ -598,6 +623,8 @@ const Game: Component = () => {
         pocket: sk.pocket,
         t: Math.min(1, (nowMs - sk.start) / SINK_MS),
       })),
+      rack: rackBalls,
+      now: nowMs,
     });
     updateTableCue();
     updateOppCue();
