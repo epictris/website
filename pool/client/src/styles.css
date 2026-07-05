@@ -135,6 +135,60 @@ canvas {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
 }
 
+/* On-load fullscreen nudge (mobile). */
+.fs-prompt {
+  position: fixed;
+  z-index: 12;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(88vw, 360px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.fs-prompt-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.fs-prompt p {
+  margin: 0;
+  opacity: 0.85;
+}
+
+.fs-prompt-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.fs-prompt-actions button {
+  flex: 1;
+  padding: 12px;
+}
+
+.fs-prompt-actions .ghost {
+  background: transparent;
+}
+
+.ios-share {
+  display: inline-block;
+  border: 1px solid var(--fg);
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--accent);
+  line-height: 1.4;
+}
+
 .menu-head {
   display: flex;
   justify-content: space-between;

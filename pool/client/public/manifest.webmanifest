@@ -1,0 +1,16 @@
+{
+  "name": "pool.tris.sh",
+  "short_name": "pool",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#1f2430",
+  "theme_color": "#1f2430",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
