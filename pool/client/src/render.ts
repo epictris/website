@@ -19,6 +19,10 @@ import {
 // once — the felt box is mapped onto the physics play area so the drawn table,
 // its pockets, and the collision geometry all line up.
 const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
+// The table itself (wooden rails) occupies only part of the image — the rest is
+// empty transparent background. This is the tight opaque box (measured), used to
+// size the canvas so the visible table fills it and the margin is cropped off.
+const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
 let tableImg: HTMLImageElement | null = null;
 let tableReady = false;
 function ensureTableImg() {
@@ -61,7 +65,14 @@ export function layoutFor(scale: number, rotated = false): Layout {
     const b = (iy - IMG.fy) / IMG.fh;
     return { x: a * U.x + b * V.x, y: a * U.y + b * V.y };
   };
-  const cs = [off(0, 0), off(IMG.W, 0), off(0, IMG.H), off(IMG.W, IMG.H)];
+  // Frame the canvas to the table box (CROP), not the whole image, so the
+  // surrounding empty background is pushed off-canvas.
+  const cs = [
+    off(CROP.x, CROP.y),
+    off(CROP.x + CROP.w, CROP.y),
+    off(CROP.x, CROP.y + CROP.h),
+    off(CROP.x + CROP.w, CROP.y + CROP.h),
+  ];
   const minx = Math.min(...cs.map((c) => c.x));
   const maxx = Math.max(...cs.map((c) => c.x));
   const miny = Math.min(...cs.map((c) => c.y));
