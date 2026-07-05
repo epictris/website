@@ -42,6 +42,53 @@ export type World = {
   balls: Ball[];
 };
 
+// --- Cross-engine determinism ----------------------------------------------
+// IEEE-754 mandates correctly-rounded results ONLY for + - * / and sqrt, so
+// those are bit-for-bit identical on every JS engine. The libm transcendentals
+// (Math.sin / Math.cos / Math.hypot / …) are NOT specified to the last bit and
+// diverge between V8 (Android/Chrome) and JavaScriptCore (iOS/Safari). A single
+// such call feeding the synced state drifts the two clients apart over a shot,
+// which compounds into a visible desync. So every trig / magnitude value on the
+// deterministic path below is built from ONLY the correctly-rounded ops.
+
+const TWO_PI = 6.283185307179586; // 2π  (nearest double)
+const HALF_PI = 1.5707963267948966; // π/2
+const SQRT3_2 = Math.sqrt(3) / 2; // sin(π/3) via deterministic sqrt
+
+/** √(x²+y²) without Math.hypot (which is implementation-defined). */
+const hyp = (x: number, y: number) => Math.sqrt(x * x + y * y);
+
+// sin / cos on [0, π/2] via a fixed Taylor series — pure +,-,*, so bit-identical
+// across engines. 6 terms => error < 1e-7 over the range, far under any
+// gameplay tolerance.
+function sinCore(x: number): number {
+  const x2 = x * x;
+  return (
+    x *
+    (1 + x2 * (-1 / 6 + x2 * (1 / 120 + x2 * (-1 / 5040 + x2 * (1 / 362880 - (x2 * 1) / 39916800)))))
+  );
+}
+function cosCore(x: number): number {
+  const x2 = x * x;
+  return 1 + x2 * (-1 / 2 + x2 * (1 / 24 + x2 * (-1 / 720 + x2 * (1 / 40320 - (x2 * 1) / 3628800))));
+}
+/**
+ * Deterministic { sin, cos } of any angle. Range-reduce to a quadrant, evaluate
+ * the [0, π/2] cores, then fix the sign/swap. Drop-in for Math.sin/Math.cos on
+ * the synced path so both clients agree to the bit.
+ */
+function dsincos(a: number): { s: number; c: number } {
+  a = a - TWO_PI * Math.floor(a / TWO_PI); // -> [0, 2π)
+  const q = Math.floor(a / HALF_PI) & 3; // quadrant 0..3
+  const r = a - q * HALF_PI; // -> [0, π/2)
+  const s = sinCore(r);
+  const c = cosCore(r);
+  if (q === 0) return { s, c };
+  if (q === 1) return { s: c, c: -s };
+  if (q === 2) return { s: -s, c: -c };
+  return { s: -c, c: s };
+}
+
 // --- Table geometry ---------------------------------------------------------
 // Arcade / bar-box table: a compact 7ft-ish playfield (2.0 x 1.0 m) with big,
 // forgiving pockets. Origin at the cloth corner.
@@ -186,7 +233,7 @@ function buildCushionSegs(): CushionSeg[] {
   return felt.map(({ a, b, ref }) => {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1e-9;
+    const len = hyp(dx, dy) || 1e-9;
     const tx = dx / len;
     const ty = dy / len;
     let nx = -ty;
@@ -252,7 +299,7 @@ function buildCushionVerts(segs: CushionSeg[]): CushionVert[] {
   return verts;
 }
 function unit(x: number, y: number): Vec {
-  const l = Math.hypot(x, y) || 1e-9;
+  const l = hyp(x, y) || 1e-9;
   return { x: x / l, y: y / l };
 }
 export const CUSHION_VERTS: CushionVert[] = buildCushionVerts(CUSHION_SEGS);
@@ -323,7 +370,7 @@ const REST_V = 5e-3; // linear speed below which a ball is at rest
 const REST_W = 0.15; // angular speed below which spin is ignored
 
 // --- Small vector helpers ---------------------------------------------------
-const len = (x: number, y: number) => Math.hypot(x, y);
+const len = (x: number, y: number) => hyp(x, y);
 
 export type ShotEvent =
   | { type: "cushion"; ball: number }
@@ -348,7 +395,7 @@ export function rackWorld(): World {
   const footX = TABLE.w * 0.72;
   const cy = TABLE.h / 2;
   const d = 2 * R + 0.0002; // touching spacing with a hair of clearance
-  const dx = d * Math.sin(Math.PI / 3);
+  const dx = d * SQRT3_2; // d·sin(π/3), deterministic
 
   // Rack order: corners must be one of each group, 8 in the middle (row 2).
   const order = [1, 9, 2, 8, 10, 3, 11, 4, 12, 13, 5, 14, 6, 15, 7];
@@ -380,10 +427,12 @@ export function applyShot(world: World, shot: Shot) {
   if (cue.potted) return;
   const V = shot.power * MAX_SPEED;
   const el = shot.elevation ?? 0; // cue elevation (radians)
-  const cE = Math.cos(el);
-  const sE = Math.sin(el);
-  const dx = Math.cos(shot.angle);
-  const dy = Math.sin(shot.angle);
+  const e = dsincos(el);
+  const cE = e.c;
+  const sE = e.s;
+  const d = dsincos(shot.angle);
+  const dx = d.c;
+  const dy = d.s;
 
   // Only the horizontal component of the strike drives the ball forward, so a
   // jacked-up cue trades forward momentum for spin.
