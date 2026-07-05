@@ -148,9 +148,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
-  // Cue stick for the active player.
-  if (s.myAim && s.showCue && !s.animating)
-    drawCueStick(ctx, l, s.world, s.myAim);
+  // NB: the active player's cue stick is a DOM <img> overlay in Game.tsx (so it
+  // can extend past the canvas edge), not drawn here.
 
   if (s.opponent?.cursor) drawCursor(ctx, l, s.opponent.cursor);
 
@@ -383,6 +382,13 @@ function drawPrediction(
   polyline(ctx, l, pr.cue);
   ctx.setLineDash([]);
 
+  // Struck ball's initial travel — solid white line from its centre.
+  if (pr.object && pr.object.length > 1) {
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 1.6;
+    polyline(ctx, l, pr.object);
+  }
+
   // Ghost cue ball at first contact.
   if (pr.ghost) {
     const g = toPx(l, pr.ghost);
@@ -428,46 +434,6 @@ function drawGhostAim(
   ctx.lineTo(c.x + Math.cos(ang) * len, c.y + Math.sin(ang) * len);
   ctx.stroke();
   ctx.restore();
-}
-
-function drawCueStick(
-  ctx: CanvasRenderingContext2D,
-  l: Layout,
-  world: World,
-  aim: Aim,
-) {
-  const cue = world.balls[0];
-  if (cue.potted) return;
-  const c = toPx(l, cue.p);
-  const rpx = R * l.scale;
-  // Cue points opposite the travel direction; pull back by power.
-  const ang = aim.angle + (l.rotated ? Math.PI / 2 : 0); // world dir -> screen dir
-  const back = ang + Math.PI;
-  const gap = rpx * (1.4 + aim.power * 3);
-  const bx = c.x + Math.cos(back) * gap;
-  const by = c.y + Math.sin(back) * gap;
-  // A raised cue is foreshortened when viewed top-down.
-  const tipLen = rpx * 18 * (0.25 + 0.75 * Math.cos(aim.elevation ?? 0));
-  const ex = bx + Math.cos(back) * tipLen;
-  const ey = by + Math.sin(back) * tipLen;
-
-  const grad = ctx.createLinearGradient(bx, by, ex, ey);
-  grad.addColorStop(0, "#d9b382");
-  grad.addColorStop(1, "#6e4a24");
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = rpx * 0.4;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(bx, by);
-  ctx.lineTo(ex, ey);
-  ctx.stroke();
-  // Blue tip.
-  ctx.strokeStyle = "#3a6ea5";
-  ctx.lineWidth = rpx * 0.4;
-  ctx.beginPath();
-  ctx.moveTo(bx, by);
-  ctx.lineTo(bx + Math.cos(back) * rpx * 0.6, by + Math.sin(back) * rpx * 0.6);
-  ctx.stroke();
 }
 
 function drawCursor(ctx: CanvasRenderingContext2D, l: Layout, p: Vec) {

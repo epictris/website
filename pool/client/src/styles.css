@@ -20,6 +20,7 @@ body {
   font-family:
     "Fantasque Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 15px;
+  overflow: hidden; /* the on-table cue can overhang; don't scroll the page */
 }
 
 #root {
@@ -50,6 +51,17 @@ canvas {
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   touch-action: none;
+}
+
+/* On-table cue — a DOM overlay so it can extend past the canvas edge. Its tip
+   (50% 5% of the square image) is pinned to the tip point; JS aims + scales it. */
+.table-cue {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 50% 0;
+  pointer-events: none;
+  will-change: transform, left, top;
 }
 
 .hud {
@@ -89,13 +101,152 @@ canvas {
   padding: 12px 16px;
 }
 
-/* Spin ball + cue-angle + hamburger, directly below the table. */
-.aim-controls {
+/* Table with the cue power widget at its left short end. */
+.play-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-evenly; /* equal gaps between AND outside the items */
+  gap: 0;
+}
+
+/* Widget column beside the table: cue angle, spin ball, cue power.
+   Equal gap between the widgets AND above/below them (padding == gap); the
+   power cue flex-grows to absorb the rest. */
+.cue-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+/* Vertical cue you pull back (down) to load power; release to strike.
+   Grows to fill whatever height the fixed widgets leave in the column. */
+.cue-power {
+  width: 76px;
+  flex: 1 1 auto;
+  min-height: 90px;
+  touch-action: none;
+  cursor: grab;
+}
+
+.cue-power:active {
+  cursor: grabbing;
+}
+
+/* White-ball button in the column — opens the spin + cue-angle modal. */
+.tune-ball {
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Combined spin + cue-angle modal. */
+.pick-modal {
+  position: fixed;
+  z-index: 12;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.pick-modal .pm-title {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.pick-modal .pm-done {
+  min-width: 140px;
+  padding: 10px;
+}
+
+.tune-grid {
   display: flex;
   gap: 28px;
   align-items: flex-start;
-  justify-content: center;
   flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tune-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+/* Bigger touch targets inside the modal. */
+.pick-modal .spin {
+  width: 140px;
+  height: 140px;
+}
+
+.pick-modal .spin .dot {
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+}
+
+.pick-modal .cue-elev {
+  width: 150px;
+  height: 150px;
+}
+
+/* Back-to-menu button, left of the table — dropped below the top edge. */
+.back-btn {
+  align-self: flex-start;
+  margin-top: 20px;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  font-size: 26px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Cue-column widget sizes (the spin ball is also the cue's struck ball).
+   flex:none so only the power cue absorbs slack — these keep their size. */
+.cue-col .spin {
+  width: 68px;
+  height: 68px;
+  flex: none;
+}
+
+.cue-col .cue-elev {
+  width: 76px;
+  height: 76px;
+  flex: none;
+}
+
+/* Main menu — full-screen landing, holds start + game/config controls. */
+.main-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 24px clamp(16px, 6vw, 80px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mm-start {
+  padding: 10px 20px;
 }
 
 .hamburger {

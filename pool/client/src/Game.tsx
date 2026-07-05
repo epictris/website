@@ -38,6 +38,7 @@ const Game: Component = () => {
   const room = useParams().room ?? "lobby";
   let canvas!: HTMLCanvasElement;
   let ctx!: CanvasRenderingContext2D;
+  let tableCueEl!: HTMLImageElement; // on-table cue overlay (can exceed canvas)
   let layout: Layout;
 
   // --- High-frequency mutable state (not Solid-reactive) ------------------
@@ -48,10 +49,16 @@ const Game: Component = () => {
   let acc = 0; // physics time accumulator
   let last = 0;
   let pendingPlace: Vec | undefined;
-  let draggingCue = false;
-  let charging = false; // dragging on the table to build power
-  let pressDist = 0; // cursor's distance from the cue ball when the pull started
-  const MAX_PULL = 0.5; // extra outward drag distance for full power
+  // Pointer routing on the table. A gesture is a *tap* (release under TAP_PX of
+  // travel → snap aim / open a modal) or a *drag* (over it → fine aim / place).
+  const TAP_PX = 7;
+  const AIM_GAIN = 0.32; // felt-drag rotates the aim this fraction of the finger
+  let mode: "aim" | "place" | null = null;
+  let downClient = { x: 0, y: 0 }; // pointer-down screen px (tap/drag test)
+  let downWorld: Vec = { x: 0, y: 0 }; // pointer-down world point (aim snap)
+  let downFinger = 0; // angle cue→finger at press (fine-aim reference)
+  let aimStart = 0; // aimAngle at press (fine-aim reference)
+  let movedFar = false; // travelled past TAP_PX this gesture
   let aimAngle = 0;
   let prediction: Prediction | undefined;
   let breaker: 0 | 1 = 0;
@@ -93,7 +100,9 @@ const Game: Component = () => {
   const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
-  const [menuOpen, setMenuOpen] = createSignal(false);
+  const [started, setStarted] = createSignal(false); // main menu vs. table view
+  const [showTune, setShowTune] = createSignal(false); // spin + cue-angle modal
+  const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [copied, setCopied] = createSignal(false);
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
@@ -354,17 +363,31 @@ const Game: Component = () => {
   // English throw, and rail rebounds.
   const recomputePrediction = () => {
     const cue = world.balls[0];
-    if (!canAct() || cue.potted || power() <= 0.01) {
+    if (!canAct() || cue.potted) {
       prediction = undefined;
       return;
     }
-    prediction = predictPaths(world, {
-      angle: aimAngle,
-      power: power(),
-      follow: follow(),
-      side: side(),
-      elevation: elevation(),
-    }, config());
+    // At rest (zero power) show a plain straight aim line to the first contact
+    // point: full power so it reaches, and no spin so it doesn't curve. Once the
+    // cue is pulled back, preview the real spin-aware path at that power.
+    const p = power();
+    if (p > 0.01) {
+      // Powered: trace the whole cue-ball path through cushion rebounds until it
+      // hits another ball or comes to rest.
+      const shot: Shot = {
+        angle: aimAngle,
+        power: p,
+        follow: follow(),
+        side: side(),
+        elevation: elevation(),
+      };
+      prediction = predictPaths(world, shot, config(), 5, false);
+    } else {
+      // At rest: a plain straight aim line to the first contact point (full
+      // power so it reaches, no spin so it doesn't curve).
+      const shot: Shot = { angle: aimAngle, power: 1, follow: 0, side: 0, elevation: 0 };
+      prediction = predictPaths(world, shot, config());
+    }
   };
 
   const draw = () => {
@@ -394,6 +417,39 @@ const Game: Component = () => {
         t: Math.min(1, (nowMs - sk.start) / SINK_MS),
       })),
     });
+    updateTableCue();
+  };
+
+  // Position the on-table cue image (a DOM overlay so it can extend past the
+  // canvas edge). Points opposite the aim, behind the ball, pulled back by power.
+  const updateTableCue = () => {
+    const el = tableCueEl;
+    if (!el) return;
+    const cue = world.balls[0];
+    if (!canAct() || animating() || cue.potted) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "block";
+    const s = layout.scale;
+    const rpx = R * s;
+    // Cue-ball centre in canvas CSS px (mirrors toPx in render.ts).
+    const bx = layout.rotated ? layout.ox + (TABLE.h - cue.p.y) * s : layout.ox + cue.p.x * s;
+    const by = layout.rotated ? layout.oy + cue.p.x * s : layout.oy + cue.p.y * s;
+    const scr = aimAngle + (layout.rotated ? Math.PI / 2 : 0); // world→screen dir
+    const back = scr + Math.PI; // cue lies opposite travel
+    const gap = rpx * (1.4 + power() * 3); // pull back grows the gap
+    const tipX = bx + Math.cos(back) * gap;
+    const tipY = by + Math.sin(back) * gap;
+    const size = rpx * 32; // uniform square — no stretch, keeps aspect
+    const fore = 0.5 + 0.5 * Math.cos(elevation()); // raised cue foreshortens
+    // Image tip is at 50% 0 (top-centre); pin it to the tip point, then aim.
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${tipX}px`;
+    el.style.top = `${tipY}px`;
+    el.style.transform =
+      `translate(-50%, 0) rotate(${back - Math.PI / 2}rad) scale(${fore})`;
   };
 
   // --- Pointer input ------------------------------------------------------
@@ -428,11 +484,17 @@ const Game: Component = () => {
     return { x, y };
   };
 
-  // The cue aims AT the cursor: the ball fires toward it (jitter-guarded).
-  const aimFromCursor = (cursor: Vec, cue: Vec) => {
-    const dx = cursor.x - cue.x;
-    const dy = cursor.y - cue.y;
+  // The cue aims AT the point: the ball fires toward it (jitter-guarded).
+  const aimFromCursor = (target: Vec, cue: Vec) => {
+    const dx = target.x - cue.x;
+    const dy = target.y - cue.y;
     if (Math.hypot(dx, dy) > R * 1.2) aimAngle = Math.atan2(dy, dx);
+  };
+
+  const wrapPi = (d: number) => {
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return d;
   };
 
   const sendPresence = (w: Vec, cue: Vec) => {
@@ -453,61 +515,90 @@ const Game: Component = () => {
     } as Msg);
   };
 
-  const onPointerMove = (e: PointerEvent) => {
+  const onPointerDown = (e: PointerEvent) => {
     if (!canAct()) return;
     const w = toWorld(e);
+    const cue = world.balls[0].p;
+    downClient = { x: e.clientX, y: e.clientY };
+    downWorld = w;
+    aimStart = aimAngle;
+    downFinger = Math.atan2(w.y - cue.y, w.x - cue.x);
+    movedFar = false;
+    const onCueBall = Math.hypot(w.x - cue.x, w.y - cue.y) < R * 1.7;
+    // Ball-in-hand: a press on the cue ball starts a reposition drag.
+    mode = rules().ballInHand && onCueBall ? "place" : "aim";
+    canvas.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (!canAct() || !mode) return;
+    const w = toWorld(e);
     const cue = world.balls[0];
-    if (draggingCue) {
+    if (Math.hypot(e.clientX - downClient.x, e.clientY - downClient.y) > TAP_PX)
+      movedFar = true;
+    if (mode === "place") {
       cue.p = clampCue(w);
-    } else {
-      // Aim tracks the cursor the whole time; while charging, power grows as
-      // the cursor is dragged away from the cue ball past the press radius —
-      // dragging back toward the cue ball counts as zero.
-      aimFromCursor(w, cue.p);
-      if (charging) {
-        const d = Math.hypot(w.x - cue.p.x, w.y - cue.p.y);
-        setPower(Math.max(0, Math.min(1, (d - pressDist) / MAX_PULL)));
-      }
+    } else if (movedFar) {
+      // Fine aim: rotate the shot about the cue ball by a fraction of the
+      // finger's swing (slower than the finger, for precision).
+      const finger = Math.atan2(w.y - cue.p.y, w.x - cue.p.x);
+      if (Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R)
+        aimAngle = aimStart + wrapPi(finger - downFinger) * AIM_GAIN;
     }
     recomputePrediction();
     sendPresence(w, cue.p);
   };
 
-  const onPointerDown = (e: PointerEvent) => {
-    if (!canAct()) return;
-    const w = toWorld(e);
-    const cue = world.balls[0];
-    if (rules().ballInHand && Math.hypot(w.x - cue.p.x, w.y - cue.p.y) < R * 2.5) {
-      draggingCue = true;
-      canvas.setPointerCapture(e.pointerId);
-      return;
-    }
-    // Start charging: power is measured outward from the cue ball, starting at
-    // wherever the cursor currently is (so it begins at zero).
-    aimFromCursor(w, cue.p);
-    charging = true;
-    pressDist = Math.hypot(w.x - cue.p.x, w.y - cue.p.y);
-    setPower(0);
-    canvas.setPointerCapture(e.pointerId);
-    recomputePrediction();
-  };
-
   const onPointerUp = () => {
-    if (draggingCue) {
-      draggingCue = false;
+    if (!mode) return;
+    const wasPlace = mode === "place";
+    mode = null;
+    if (wasPlace) {
       pendingPlace = { ...world.balls[0].p };
       recomputePrediction();
       return;
     }
-    if (charging) {
-      charging = false;
-      if (power() > 0.05) shoot();
-      else {
-        setPower(0);
-        recomputePrediction();
-      }
+    // Tap the felt → snap aim there; a drag already fine-tuned the aim.
+    if (!movedFar) aimFromCursor(downWorld, world.balls[0].p);
+    recomputePrediction();
+  };
+
+  // --- Cue power widget (vertical cue left of the table) ------------------
+  // Drag the cue back (down) to load power; release to strike.
+  let powerEl!: SVGSVGElement;
+  let pulling = false;
+  let pullStartY = 0;
+  const onPowerDown = (e: PointerEvent) => {
+    if (!canAct()) return;
+    powerEl.setPointerCapture(e.pointerId);
+    pulling = true;
+    pullStartY = e.clientY;
+    setPower(0);
+  };
+  const onPowerMove = (e: PointerEvent) => {
+    if (!pulling) return;
+    const rect = powerEl.getBoundingClientRect();
+    const dy = e.clientY - pullStartY; // pull down = load
+    setPower(Math.max(0, Math.min(1, dy / (rect.height * 0.6))));
+    recomputePrediction();
+    sendPresence(world.balls[0].p, world.balls[0].p);
+  };
+  const onPowerUp = () => {
+    if (!pulling) return;
+    pulling = false;
+    if (power() > 0.06) shoot();
+    else {
+      setPower(0);
+      recomputePrediction();
     }
   };
+  // Cue image (tip at very top, butt at bottom), square with transparent margins.
+  const CUE_IMG = "https://iili.io/CaZTlqP.png";
+  const CUE_S = 250; // square draw size in the 40×200 viewBox (bigger = thicker)
+  const CUE_TIP_FRAC = 0; // tip sits at the top edge of the source image
+  // Tip sits just under the spin ball (top) and slides down as power loads.
+  const powerTipY = () => 8 + power() * 110;
+  const cueImgY = () => powerTipY() - CUE_TIP_FRAC * CUE_S;
 
   // --- Actions ------------------------------------------------------------
   const shoot = () => {
@@ -603,13 +694,16 @@ const Game: Component = () => {
       const portrait =
         window.innerHeight > window.innerWidth && window.innerWidth < 700;
       // Fit the whole table PHOTO (felt + wooden rails) into the viewport minus
-      // edge padding and the widget row. The canvas size scales linearly with
+      // the side widgets. No vertical padding — the table fills the full height
+      // so there's no gap above or below it. The canvas size scales linearly with
       // `scale`, so measure it at scale 1 and divide the available space by that.
-      const PAD = 12;
-      const WIDGETS = 132; // spin / cue-angle / menu row + gaps
+      const SIDE_W = 76 + 40; // cue-col + back button widths
+      // Leave slack for 4 even gaps (space-evenly: outside both ends + between
+      // each of the 3 items) so the row breathes uniformly.
+      const GAPS = 14 * 4;
       const unit = layoutFor(1, portrait);
-      const availW = window.innerWidth - PAD * 2;
-      const availH = window.innerHeight - PAD * 2 - WIDGETS;
+      const availW = window.innerWidth - SIDE_W - GAPS;
+      const availH = window.innerHeight;
       let scale = Math.min(availW / unit.W, availH / unit.H);
       scale = Math.max(40, Math.min(scale, 430));
       layout = layoutFor(scale, portrait);
@@ -618,6 +712,7 @@ const Game: Component = () => {
       canvas.height = layout.H * dpr;
       canvas.style.width = `${layout.W}px`;
       canvas.style.height = `${layout.H}px`;
+      setCanvasH(layout.H);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
@@ -667,22 +762,30 @@ const Game: Component = () => {
     top: `${50 - follow() * 42}%`,
   });
 
-  // --- Cue elevation widget (side view; drag the cue to set the angle) -----
+  // --- Cue elevation widget (square side view; drag the cue to set angle) ---
   let cueEl!: SVGSVGElement;
-  const PIVOT = { x: 68, y: 50 }; // where the cue tip meets the ball (viewBox)
-  const CUE_LEN = 44;
+  const EBALL = { x: 60, y: 62 }; // ball centre in the 100×100 viewBox
+  const EBALL_R = 12;
+  const TIP_GAP = 5; // cue tip stops this far short of the ball surface
+  const ECUE_LEN = 40;
   const onCueDrag = (e: PointerEvent) => {
     const rect = cueEl.getBoundingClientRect();
     const lx = ((e.clientX - rect.left) / rect.width) * 100;
-    const ly = ((e.clientY - rect.top) / rect.height) * 80;
-    const ang = Math.atan2(PIVOT.y - ly, PIVOT.x - lx);
+    const ly = ((e.clientY - rect.top) / rect.height) * 100;
+    const ang = Math.atan2(EBALL.y - ly, EBALL.x - lx);
     setElevation(Math.max(0, Math.min(MAX_ELEVATION, ang)));
     recomputePrediction();
   };
-  const cueEnd = () => ({
-    x: PIVOT.x - CUE_LEN * Math.cos(elevation()),
-    y: PIVOT.y - CUE_LEN * Math.sin(elevation()),
-  });
+  // Cue lies up-left of the ball; tip sits TIP_GAP off the surface, butt beyond.
+  const cueGeom = () => {
+    const ux = -Math.cos(elevation());
+    const uy = -Math.sin(elevation());
+    const dTip = EBALL_R + TIP_GAP;
+    return {
+      tip: { x: EBALL.x + dTip * ux, y: EBALL.y + dTip * uy },
+      butt: { x: EBALL.x + (dTip + ECUE_LEN) * ux, y: EBALL.y + (dTip + ECUE_LEN) * uy },
+    };
+  };
 
   const statusLine = () => {
     const r = rules();
@@ -694,66 +797,108 @@ const Game: Component = () => {
 
   return (
     <>
-      <div class="table-wrap">
-        <canvas
-          ref={canvas}
-          onPointerMove={onPointerMove}
-          onPointerDown={onPointerDown}
-          onPointerUp={onPointerUp}
-        />
-      </div>
+      <div class="play-row">
+        <button
+          class="back-btn"
+          title="back to menu"
+          onClick={() => setStarted(false)}
+        >
+          ‹
+        </button>
 
-      <div class="aim-controls">
-        <div class="control">
-          <span>spin</span>
-          <div
-            class="spin"
-            ref={spinEl}
-            onPointerDown={(e) => {
-              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-              onSpin(e);
-            }}
-            onPointerMove={(e) => e.buttons && onSpin(e)}
+        <div class="table-wrap">
+          <canvas
+            ref={canvas}
+            onPointerMove={onPointerMove}
+            onPointerDown={onPointerDown}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+          />
+          <img class="table-cue" ref={tableCueEl} src={CUE_IMG} alt="" />
+        </div>
+
+        <div class="cue-col" style={{ height: `${canvasH()}px` }}>
+          {/* White-ball button — opens the spin + cue-angle modal. Its dot
+              previews the current english. */}
+          <button
+            class="tune-ball spin"
+            title="spin & cue angle"
+            onClick={() => setShowTune(true)}
           >
             <div class="axis h" />
             <div class="axis v" />
             <div class="dot" style={spinDot()} />
-          </div>
-        </div>
+          </button>
 
-        <div class="control">
-          <span>cue angle {Math.round((elevation() * 180) / Math.PI)}°</span>
+          {/* Cue power — fills the remaining height; pull back to strike. */}
           <svg
-            class="cue-elev"
-            ref={cueEl}
-            viewBox="0 0 100 80"
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              onCueDrag(e);
-            }}
-            onPointerMove={(e) => e.buttons && onCueDrag(e)}
+            class="cue-power"
+            ref={powerEl}
+            viewBox="0 0 40 200"
+            preserveAspectRatio="xMidYMid meet"
+            onPointerDown={onPowerDown}
+            onPointerMove={onPowerMove}
+            onPointerUp={onPowerUp}
+            onPointerCancel={onPowerUp}
           >
-            <line class="surface" x1="6" y1="60" x2="94" y2="60" />
-            <ellipse class="shadow" cx="70" cy="60" rx="9" ry="2" />
-            <circle class="ball" cx="70" cy="52" r="8" />
-            <line
-              class="cue"
-              x1={cueEnd().x}
-              y1={cueEnd().y}
-              x2={PIVOT.x}
-              y2={PIVOT.y}
+            <image
+              href={CUE_IMG}
+              x={20 - CUE_S / 2}
+              y={cueImgY()}
+              width={CUE_S}
+              height={CUE_S}
             />
-            <circle class="tip" cx={PIVOT.x} cy={PIVOT.y} r="2.4" />
           </svg>
         </div>
-
-        <div class="control">
-          <span>menu</span>
-          <button class="hamburger" onClick={() => setMenuOpen(true)}>
-            ☰
-          </button>
-        </div>
       </div>
+
+      <Show when={showTune()}>
+        <div class="menu-backdrop" onClick={() => setShowTune(false)} />
+        <div class="pick-modal">
+          <div class="tune-grid">
+            <div class="tune-cell">
+              <div
+                class="spin"
+                ref={spinEl}
+                onPointerDown={(e) => {
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                  onSpin(e);
+                }}
+                onPointerMove={(e) => e.buttons && onSpin(e)}
+              >
+                <div class="axis h" />
+                <div class="axis v" />
+                <div class="dot" style={spinDot()} />
+              </div>
+            </div>
+
+            <div class="tune-cell">
+              <svg
+                class="cue-elev"
+                ref={cueEl}
+                viewBox="0 0 100 100"
+                onPointerDown={(e) => {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  onCueDrag(e);
+                }}
+                onPointerMove={(e) => e.buttons && onCueDrag(e)}
+              >
+                <line class="surface" x1="8" y1="74" x2="92" y2="74" />
+                <ellipse class="shadow" cx="60" cy="74" rx="13" ry="3" />
+                <circle class="ball" cx="60" cy="62" r="12" />
+                <line
+                  class="cue"
+                  x1={cueGeom().butt.x}
+                  y1={cueGeom().butt.y}
+                  x2={cueGeom().tip.x}
+                  y2={cueGeom().tip.y}
+                />
+                <circle class="tip" cx={cueGeom().tip.x} cy={cueGeom().tip.y} r="2.8" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       <Show when={showFsPrompt()}>
         <div class="menu-backdrop" onClick={() => setShowFsPrompt(false)} />
@@ -787,13 +932,14 @@ const Game: Component = () => {
         </div>
       </Show>
 
-      <Show when={menuOpen()}>
-        <div class="menu-backdrop" onClick={() => setMenuOpen(false)} />
-        <div class="menu-panel">
+      <Show when={!started()}>
+        <div class="main-menu">
           <div class="menu-head">
-            <span>menu</span>
-            <button class="menu-close" onClick={() => setMenuOpen(false)}>
-              ✕
+            <span class="title">
+              pool<span class="dim">.tris.sh</span>
+            </span>
+            <button class="primary mm-start" onClick={() => setStarted(true)}>
+              start game
             </button>
           </div>
 
@@ -890,10 +1036,10 @@ const Game: Component = () => {
           </div>
 
           <div class="link-row">
-            aim at the cursor and drag away from the cue ball to build power
-            (toward it = zero), release to strike · spin pad for draw/follow +
-            english · drag the cue widget for elevation · drag the white ball on
-            a foul (ball-in-hand)
+            tap the felt to aim, drag on it to fine-tune · pull the cue widget
+            back and release to strike · spin ball (top) sets draw/follow +
+            english · cue-angle widget sets elevation · drag the white ball on a
+            foul (ball-in-hand)
           </div>
         </div>
       </Show>

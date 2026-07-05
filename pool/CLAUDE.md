@@ -6,6 +6,34 @@ both clients + replays re-simulate to byte-identical rest positions, so the
 physics must stay deterministic (fixed timestep, fixed iteration order, no
 `Math.random`).
 
+## Input & orientation
+
+Designed for **fullscreen + landscape**. The table's long axis runs across the
+screen; a player stands at a **short end** — that's what "next to the table"
+means. The cue power widget lives at the **right** short end. (Portrait phones
+still rotate the table 90° to fit, but landscape is the intended mode.)
+
+The right short end holds a **widget column** (`.cue-col`): a **white-ball
+button** on top, then the **cue power** widget (which flex-grows to fill the rest).
+The on-table cue is a DOM `<img>` overlay (`.table-cue`) so it can extend past the
+canvas edge. Input lives in `Game.tsx` pointer handlers + these widgets:
+
+- **Aim** — *tap* anywhere on the felt snaps the aim to that point. *Drag* on the
+  felt fine-adjusts the aim (rotates about the cue ball at gain < 1, so it moves
+  slower than the finger — for precision). Tap vs. drag is the `TAP_PX`
+  pointer-travel threshold.
+- **Power** — drag the cue widget back (down) and release to strike; pull
+  distance = power. The on-table cue mirrors the pull.
+- **Spin + cue angle** — the white-ball button opens the `showTune` modal
+  (`.pick-modal`) holding the spin pad (draw/follow + english) and the
+  cue-elevation widget. The button's dot previews the current english.
+- **Ball-in-hand** (after a foul) — *drag* the cue ball to reposition it.
+
+**Views** — the `started` signal toggles the **main menu** (`.main-menu`, a
+full-screen landing with a *start game* button plus invite link, new-game,
+fullscreen, replay, and physics controls) and the table. A **back button** just
+left of the table's top-left corner returns to the menu.
+
 ## Table collision geometry
 
 All geometry lives in `client/src/physics.ts`. Two exported sources of truth,

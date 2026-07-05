@@ -363,7 +363,7 @@ export type Shot = {
   elevation: number; // radians, cue raised off the table (0 = level)
 };
 
-export const MAX_SPEED = 9.5; // m/s at power = 1
+export const MAX_SPEED = 7.6; // m/s at power = 1 (80% of the former 9.5 cap)
 export const MAX_ELEVATION = (80 * Math.PI) / 180; // steepest cue we allow
 
 /** Apply a shot's impulse + spin to the cue ball. */
@@ -742,6 +742,8 @@ export type Prediction = {
   cue: Vec[]; // cue-ball path up to its first contact
   ghost: Vec | null; // cue position at that first contact
   cuePotted: boolean; // first "contact" was falling into a pocket
+  object?: Vec[]; // first few frames of the struck ball's travel (if it hits one)
+  objectId?: number; // which ball was struck (for colouring the preview)
 };
 
 /**
@@ -827,6 +829,9 @@ export function predictPaths(
   shot: Shot,
   cfg: PhysicsConfig = DEFAULT_CONFIG,
   maxTime = 1.2,
+  // When false, keep tracing the cue ball through cushion rebounds and only
+  // stop at a ball collision / pot / rest (full-path preview).
+  stopOnCushion = true,
 ): Prediction {
   const w = cloneWorld(world);
   applyShot(w, shot);
@@ -835,11 +840,17 @@ export function predictPaths(
   const cuePath: Vec[] = [{ ...cue.p }];
   let ghost: Vec | null = null;
   let cuePotted = false;
+  // After the cue ball strikes an object ball, follow that ball for a short
+  // burst so the preview shows which way it heads off.
+  let objId: number | null = null;
+  const objPath: Vec[] = [];
+  const OBJ_TRACE_STEPS = 5; // ~0.02s at 240 Hz — a tiny direction hint
 
   const events: ShotEvent[] = [];
   const steps = Math.round(maxTime / FIXED_DT);
   const sampleEvery = 2;
   let stop = false;
+  let objTrace = 0; // steps remaining to follow the struck ball
 
   for (let i = 0; i < steps && !stop; i++) {
     const prev = { ...cue.p }; // cue position before this step
@@ -850,7 +861,16 @@ export function predictPaths(
     const mark = events.length;
     stepFixed(w, events, cfg);
 
-    // Stop the instant the cue ball is involved in any contact.
+    // Already following the struck ball: sample it, then stop when the burst ends.
+    if (objId !== null) {
+      const ob = w.balls.find((b) => b.id === objId);
+      if (ob && objTrace % sampleEvery === 0) objPath.push({ ...ob.p });
+      if (--objTrace <= 0) stop = true;
+      if (atRest(w)) break;
+      continue;
+    }
+
+    // Otherwise watch for the cue ball's first contact.
     for (let k = mark; k < events.length; k++) {
       const e = events[k];
       if (e.type === "ball" && (e.a === 0 || e.b === 0)) {
@@ -858,13 +878,16 @@ export function predictPaths(
         // hit once the balls overlap, which lands on a coarse grid and makes
         // the ghost jump. Solve where the cue centre first reaches 2R from the
         // struck ball along this step's segment so it slides smoothly.
-        const objId = e.a === 0 ? e.b : e.a;
+        objId = e.a === 0 ? e.b : e.a;
         const ob = prevCentres.find((b) => b.id === objId);
         ghost = (ob && ballContactPoint(prev, prevV, ob)) || { ...cue.p };
-        stop = true;
+        // Start the struck-ball trace at its current position.
+        const hit = w.balls.find((b) => b.id === objId);
+        if (hit) objPath.push({ ...hit.p });
+        objTrace = OBJ_TRACE_STEPS;
         break;
       }
-      if (e.type === "cushion" && e.ball === 0) {
+      if (stopOnCushion && e.type === "cushion" && e.ball === 0) {
         // Refine to the exact rail contact: the fixed step resolves the bounce
         // and advances a few cm into the rebound, which jitters on the step
         // grid as you scan a face. Solve the true first-contact point instead.
@@ -880,12 +903,26 @@ export function predictPaths(
       }
     }
 
-    if (stop) cuePath.push(ghost ?? { ...cue.p });
+    // End the cue-ball line at the contact/rail point; otherwise sample it.
+    if (stop || objId !== null) cuePath.push(ghost ?? { ...cue.p });
     else if (i % sampleEvery === 0) cuePath.push({ ...cue.p });
     if (atRest(w)) break;
   }
 
-  return { cue: cuePath, ghost, cuePotted };
+  // No collision/pot along the way → the cue ball simply rolled to a stop; mark
+  // its resting place with the ghost so the preview shows where it ends up.
+  if (!ghost && !cuePotted) {
+    ghost = { ...cue.p };
+    cuePath.push({ ...cue.p });
+  }
+
+  return {
+    cue: cuePath,
+    ghost,
+    cuePotted,
+    object: objPath.length ? objPath : undefined,
+    objectId: objId ?? undefined,
+  };
 }
 
 /** A ball near a pocket mouth is heading in — don't clamp it back onto the cloth. */
