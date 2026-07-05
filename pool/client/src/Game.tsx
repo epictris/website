@@ -102,12 +102,17 @@ const Game: Component = () => {
   const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
-  const [started, setStarted] = createSignal(false); // main menu vs. table view
+  // You land straight on the table (solo practice until an opponent joins); the
+  // menu is reachable via the back button. false only shows the lobby/menu.
+  const [started, setStarted] = createSignal(true);
   const [showTune, setShowTune] = createSignal(false); // spin + cue-angle modal
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [copied, setCopied] = createSignal(false);
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
+  // Portrait-locked phone held sideways: the whole game root is CSS-rotated 90°
+  // (see .game-root.rot90) while the table itself stays laid out landscape.
+  const [rot90, setRot90] = createSignal(false);
   // Fullscreen API is absent on iPhone Safari (iPad/Android/desktop are fine).
   const canFullscreen =
     typeof document !== "undefined" &&
@@ -143,7 +148,7 @@ const Game: Component = () => {
     setShowFsPrompt(false);
     try {
       await document.documentElement.requestFullscreen();
-      await (screen.orientation as any)?.lock?.("landscape");
+      await (screen.orientation as any)?.lock?.("portrait");
     } catch {
       // Fullscreen refused or orientation lock unsupported — ignore.
     }
@@ -207,8 +212,12 @@ const Game: Component = () => {
       }
       case "peer-join": {
         setPeerCount((n) => n + 1);
-        // Any active player answers a new joiner; the joiner keeps the
-        // freshest snapshot (see the shotCount guard in "sync").
+        // Opponent just arrived: the host (slot 0) has been knocking balls
+        // around solo, so reset to a fresh rack — slot 0 breaks — before syncing.
+        // Only on the 1→2 transition; later spectators must not reset the game.
+        if (peerCount() === 2 && mySlot() === 0) doRematch(0, false);
+        // Any active player answers a new joiner with the current (fresh) state;
+        // the joiner keeps the freshest snapshot (see the shotCount guard).
         if (mySlot() === 0 || mySlot() === 1) applySnapshotToPeer(m.slot);
         break;
       }
@@ -483,17 +492,26 @@ const Game: Component = () => {
   };
 
   // --- Pointer input ------------------------------------------------------
-  const toWorld = (e: PointerEvent): Vec => {
-    const rect = canvas.getBoundingClientRect();
-    const px = ((e.clientX - rect.left) / rect.width) * layout.W;
-    const py = ((e.clientY - rect.top) / rect.height) * layout.H;
-    if (layout.rotated) {
-      // Inverse of the portrait 90° rotation (see toPx in render.ts).
-      return {
-        x: (py - layout.oy) / layout.scale,
-        y: TABLE.h - (px - layout.ox) / layout.scale,
-      };
+  // Screen point -> an element's own (un-rotated) local pixel space, plus that
+  // element's local width/height. When the game root is CSS-rotated 90° (a
+  // portrait phone held sideways) we invert the rotation here, so every widget's
+  // math stays in its natural landscape frame. rotate(90deg) maps a local vector
+  // (a,b) to screen (-b, a); inverse: (a,b) = (sy, -sx).
+  const localPoint = (el: Element, e: PointerEvent) => {
+    const r = el.getBoundingClientRect();
+    const sx = e.clientX - (r.left + r.width / 2);
+    const sy = e.clientY - (r.top + r.height / 2);
+    if (rot90()) {
+      const w = r.height, h = r.width; // bbox is the 90°-rotated local box
+      return { x: w / 2 + sy, y: h / 2 - sx, w, h };
     }
+    return { x: r.width / 2 + sx, y: r.height / 2 + sy, w: r.width, h: r.height };
+  };
+
+  const toWorld = (e: PointerEvent): Vec => {
+    const p = localPoint(canvas, e);
+    const px = (p.x / p.w) * layout.W;
+    const py = (p.y / p.h) * layout.H;
     return { x: (px - layout.ox) / layout.scale, y: (py - layout.oy) / layout.scale };
   };
 
@@ -602,14 +620,14 @@ const Game: Component = () => {
     if (!canAct()) return;
     powerEl.setPointerCapture(e.pointerId);
     pulling = true;
-    pullStartY = e.clientY;
+    pullStartY = localPoint(powerEl, e).y; // widget-local, survives 90° rotation
     setPower(0);
   };
   const onPowerMove = (e: PointerEvent) => {
     if (!pulling) return;
-    const rect = powerEl.getBoundingClientRect();
-    const dy = e.clientY - pullStartY; // pull down = load
-    setPower(Math.max(0, Math.min(1, dy / (rect.height * 0.6))));
+    const p = localPoint(powerEl, e);
+    const dy = p.y - pullStartY; // pull down (toward the butt) = load
+    setPower(Math.max(0, Math.min(1, dy / (p.h * 0.6))));
     recomputePrediction();
     sendPresence(world.balls[0].p, world.balls[0].p);
   };
@@ -722,22 +740,27 @@ const Game: Component = () => {
     const resize = () => {
       // Portrait phones get the table turned 90° so the long axis runs down
       // the screen; everything else stays landscape.
-      const portrait =
+      // A portrait phone is played held SIDEWAYS: we lay the table out landscape
+      // and CSS-rotate the whole game root 90°, so measure against the SWAPPED
+      // viewport. Everything else (tablet/desktop) stays upright landscape.
+      const rotate90 =
         window.innerHeight > window.innerWidth && window.innerWidth < 700;
+      setRot90(rotate90);
+      const vw = rotate90 ? window.innerHeight : window.innerWidth;
+      const vh = rotate90 ? window.innerWidth : window.innerHeight;
       // Fit the whole table PHOTO (felt + wooden rails) into the viewport minus
-      // the side widgets. No vertical padding — the table fills the full height
-      // so there's no gap above or below it. The canvas size scales linearly with
-      // `scale`, so measure it at scale 1 and divide the available space by that.
+      // the side widgets. The canvas size scales linearly with `scale`, so
+      // measure it at scale 1 and divide the available space by that.
       const SIDE_W = 76 + 40; // cue-col + back button widths
       // Leave slack for 4 even gaps (space-evenly: outside both ends + between
       // each of the 3 items) so the row breathes uniformly.
       const GAPS = 14 * 4;
-      const unit = layoutFor(1, portrait);
-      const availW = window.innerWidth - SIDE_W - GAPS;
-      const availH = window.innerHeight;
+      const unit = layoutFor(1, false); // always landscape
+      const availW = vw - SIDE_W - GAPS;
+      const availH = vh;
       let scale = Math.min(availW / unit.W, availH / unit.H);
       scale = Math.max(40, Math.min(scale, 430));
-      layout = layoutFor(scale, portrait);
+      layout = layoutFor(scale, false);
       const dpr = window.devicePixelRatio || 1;
       canvas.width = layout.W * dpr;
       canvas.height = layout.H * dpr;
@@ -761,8 +784,9 @@ const Game: Component = () => {
       resize(); // viewport dimensions change entering/leaving fullscreen
     };
     document.addEventListener("fullscreenchange", onFsChange);
+    // Anyone opening a session link is offered fullscreen up front.
     if (isIOSSafari && !isStandalone) setShowA2HS(true);
-    else if (canFullscreen && isMobile && !document.fullscreenElement)
+    else if (canFullscreen && !document.fullscreenElement)
       setShowFsPrompt(true);
     connect();
     raf = requestAnimationFrame(frame);
@@ -779,9 +803,9 @@ const Game: Component = () => {
   // --- Spin pad -----------------------------------------------------------
   let spinEl!: HTMLDivElement;
   const onSpin = (e: PointerEvent) => {
-    const rect = spinEl.getBoundingClientRect();
-    const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1; // -1..1
-    const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    const p = localPoint(spinEl, e);
+    const nx = (p.x / p.w) * 2 - 1; // -1..1
+    const ny = (p.y / p.h) * 2 - 1;
     const clamp = (v: number) => Math.max(-1, Math.min(1, v));
     setSide(clamp(nx));
     setFollow(clamp(-ny)); // up = follow (+)
@@ -800,9 +824,9 @@ const Game: Component = () => {
   const TIP_GAP = 5; // cue tip stops this far short of the ball surface
   const ECUE_LEN = 40;
   const onCueDrag = (e: PointerEvent) => {
-    const rect = cueEl.getBoundingClientRect();
-    const lx = ((e.clientX - rect.left) / rect.width) * 100;
-    const ly = ((e.clientY - rect.top) / rect.height) * 100;
+    const p = localPoint(cueEl, e);
+    const lx = (p.x / p.w) * 100;
+    const ly = (p.y / p.h) * 100;
     const ang = Math.atan2(EBALL.y - ly, EBALL.x - lx);
     setElevation(Math.max(0, Math.min(MAX_ELEVATION, ang)));
     recomputePrediction();
@@ -827,7 +851,16 @@ const Game: Component = () => {
   };
 
   return (
-    <>
+    <div class="game-root" classList={{ rot90: rot90() }}>
+      <Show when={started() && solo()}>
+        <div class="solo-hint">
+          Practising solo — waiting for player 2.{" "}
+          <button onClick={copyLink}>
+            {copied() ? "link copied!" : "copy invite link"}
+          </button>
+        </div>
+      </Show>
+
       <div class="play-row">
         <button
           class="back-btn"
@@ -936,7 +969,11 @@ const Game: Component = () => {
         <div class="menu-backdrop" onClick={() => setShowFsPrompt(false)} />
         <div class="fs-prompt">
           <div class="fs-prompt-title">Play fullscreen?</div>
-          <p>Go fullscreen and lock to landscape for the best game.</p>
+          <p>
+            {isMobile
+              ? "Go fullscreen — then turn your phone sideways to play."
+              : "Go fullscreen for the best game."}
+          </p>
           <div class="fs-prompt-actions">
             <button onClick={enterImmersive}>enter fullscreen</button>
             <button class="ghost" onClick={() => setShowFsPrompt(false)}>
@@ -970,9 +1007,6 @@ const Game: Component = () => {
             <span class="title">
               pool<span class="dim">.tris.sh</span>
             </span>
-            <button class="primary mm-start" onClick={() => setStarted(true)}>
-              start game
-            </button>
           </div>
 
           <div class="status">
@@ -1075,7 +1109,7 @@ const Game: Component = () => {
           </div>
         </div>
       </Show>
-    </>
+    </div>
   );
 };
 

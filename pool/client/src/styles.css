@@ -232,6 +232,25 @@ canvas {
   flex: none;
 }
 
+/* Portrait-locked phone, held SIDEWAYS: the game keeps its landscape layout
+   (table + widget column, unchanged) and the whole root is rotated 90° so it
+   fills the portrait viewport. The box is sized to the SWAPPED viewport
+   (100vh wide × 100vw tall) so after the quarter-turn it covers the screen.
+   Pointer math inverts this rotation in localPoint() (Game.tsx). Position:fixed
+   also makes this the containing block for the fixed modals/menu, so they
+   rotate and centre with it. Matches resize()'s rotate90 test. */
+@media (orientation: portrait) and (max-width: 700px) {
+  .game-root.rot90 {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center;
+  }
+}
+
 /* Main menu — full-screen landing, holds start + game/config controls. */
 .main-menu {
   position: fixed;
@@ -247,6 +266,33 @@ canvas {
 
 .mm-start {
   padding: 10px 20px;
+}
+
+/* Landing: single Multiplayer button — hug its content, don't stretch. */
+.landing .mm-start {
+  align-self: flex-start;
+}
+
+/* Solo-practice banner over the table while waiting for player 2. Non-blocking
+   (taps fall through to the felt) except the copy-link button. position:fixed so
+   it rides the rotated game root in portrait. */
+.solo-hint {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  max-width: 90%;
+  text-align: center;
+  pointer-events: none;
+}
+
+.solo-hint button {
+  pointer-events: auto;
 }
 
 .hamburger {

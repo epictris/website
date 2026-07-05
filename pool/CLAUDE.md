@@ -9,14 +9,30 @@ physics must stay deterministic (fixed timestep, fixed iteration order, no
 ## Input & orientation
 
 Designed for **fullscreen + landscape**. The table's long axis runs across the
-screen; a player stands at a **short end** — that's what "next to the table"
-means. The cue power widget lives at the **right** short end. (Portrait phones
-still rotate the table 90° to fit, but landscape is the intended mode.)
+screen; a player stands at a **short end**. The cue power widget lives at the
+**right** short end in a **widget column** (`.cue-col`): a **white-ball button**
+on top, then the **cue power** widget (which flex-grows to fill the rest).
 
-The right short end holds a **widget column** (`.cue-col`): a **white-ball
-button** on top, then the **cue power** widget (which flex-grows to fill the rest).
-The on-table cue is a DOM `<img>` overlay (`.table-cue`) so it can extend past the
-canvas edge. Input lives in `Game.tsx` pointer handlers + these widgets:
+**Portrait phones are played held SIDEWAYS.** On the immersive nudge the client
+locks `screen.orientation` to **portrait** (`enterImmersive` in `Game.tsx`). The
+layout never changes — the table + widgets are always built landscape. Instead,
+when `resize()`'s `rotate90` test fires
+(`innerHeight > innerWidth && innerWidth < 700`) the entire game root is
+**CSS-rotated 90°** (`.game-root.rot90` in `styles.css`, sized to the swapped
+viewport). So it's identical to landscape, just quarter-turned to fill the
+portrait screen. Two consequences:
+
+- `resize()` measures the table against the **swapped** viewport (`vw`/`vh`) and
+  always calls `layoutFor(scale, false)` — the render-side portrait rotation
+  (`layout.rotated`) is now unused.
+- **Every pointer handler** maps screen coords through `localPoint()`, which
+  inverts the 90° rotation so each widget stays in its natural landscape frame.
+  Add new pointer input via `localPoint(el, e)`, never raw `getBoundingClientRect`
+  math, or it breaks when rotated.
+
+The cue power is a **vertical pull** (drag down = load). The on-table cue is a DOM
+`<img>` overlay (`.table-cue`) so it can extend past the canvas edge. Input lives
+in `Game.tsx` pointer handlers + these widgets:
 
 - **Aim** — *tap* anywhere on the felt snaps the aim to that point. *Drag* on the
   felt fine-adjusts the aim (rotates about the cue ball at gain < 1, so it moves
@@ -29,10 +45,24 @@ canvas edge. Input lives in `Game.tsx` pointer handlers + these widgets:
   cue-elevation widget. The button's dot previews the current english.
 - **Ball-in-hand** (after a foul) — *drag* the cue ball to reposition it.
 
-**Views** — the `started` signal toggles the **main menu** (`.main-menu`, a
-full-screen landing with a *start game* button plus invite link, new-game,
-fullscreen, replay, and physics controls) and the table. A **back button** just
-left of the table's top-left corner returns to the menu.
+**Join flow** — the root route `/` renders the **Landing** menu (`index.tsx`): a
+single **Multiplayer** button that mints a random room code and copies
+`origin/<code>` to the clipboard **without navigating** — the player stays on the
+landing and sees the copied link. Opening that link (yourself or a friend) enters
+`/:room`, where you're offered **fullscreen** (`showFsPrompt`) and land straight
+on a **solo practice table** (`started` defaults to `true`; `solo()` is
+`peerCount <= 1`, so you can shoot freely, turns ignored). A `.solo-hint` banner
+shows the copy-link while waiting.
+
+When a **second** peer joins, the host (**slot 0**) resets to a fresh rack via
+`doRematch(0, false)` on the `peer-join` 1→2 transition (guarded so later
+spectators don't reset) and syncs it; the joiner adopts it via `hello` →
+`need-sync`. The first connector is slot 0 and always **breaks** (`breaker = 0`).
+
+**Views** — the `started` signal toggles the table and the in-room **menu**
+(`.main-menu` — new-game, fullscreen, replay, debug, physics controls),
+reachable via the **back button** left of the table's top-left corner. There is
+no manual *start game*.
 
 ## Table collision geometry
 
