@@ -39,6 +39,7 @@ const Game: Component = () => {
   let canvas!: HTMLCanvasElement;
   let ctx!: CanvasRenderingContext2D;
   let tableCueEl!: HTMLImageElement; // on-table cue overlay (can exceed canvas)
+  let oppCueEl!: HTMLImageElement; // opponent's blue cue overlay (their aim)
   let layout: Layout;
 
   // --- High-frequency mutable state (not Solid-reactive) ------------------
@@ -418,10 +419,40 @@ const Game: Component = () => {
       })),
     });
     updateTableCue();
+    updateOppCue();
   };
 
-  // Position the on-table cue image (a DOM overlay so it can extend past the
+  // Position an on-table cue image (a DOM overlay so it can extend past the
   // canvas edge). Points opposite the aim, behind the ball, pulled back by power.
+  // Shared by the active player's cue and the opponent's mirrored blue cue.
+  const positionCue = (
+    el: HTMLImageElement,
+    angle: number,
+    pwr: number,
+    elev: number,
+  ) => {
+    const cue = world.balls[0];
+    const s = layout.scale;
+    const rpx = R * s;
+    // Cue-ball centre in canvas CSS px (mirrors toPx in render.ts).
+    const bx = layout.rotated ? layout.ox + (TABLE.h - cue.p.y) * s : layout.ox + cue.p.x * s;
+    const by = layout.rotated ? layout.oy + cue.p.x * s : layout.oy + cue.p.y * s;
+    const scr = angle + (layout.rotated ? Math.PI / 2 : 0); // world→screen dir
+    const back = scr + Math.PI; // cue lies opposite travel
+    const gap = rpx * (1.4 + pwr * 3); // pull back grows the gap
+    const tipX = bx + Math.cos(back) * gap;
+    const tipY = by + Math.sin(back) * gap;
+    const size = rpx * 32; // uniform square — no stretch, keeps aspect
+    const fore = 0.5 + 0.5 * Math.cos(elev); // raised cue foreshortens
+    // Image tip is at 50% 0 (top-centre); pin it to the tip point, then aim.
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${tipX}px`;
+    el.style.top = `${tipY}px`;
+    el.style.transform =
+      `translate(-50%, 0) rotate(${back - Math.PI / 2}rad) scale(${fore})`;
+  };
+
   const updateTableCue = () => {
     const el = tableCueEl;
     if (!el) return;
@@ -431,25 +462,22 @@ const Game: Component = () => {
       return;
     }
     el.style.display = "block";
-    const s = layout.scale;
-    const rpx = R * s;
-    // Cue-ball centre in canvas CSS px (mirrors toPx in render.ts).
-    const bx = layout.rotated ? layout.ox + (TABLE.h - cue.p.y) * s : layout.ox + cue.p.x * s;
-    const by = layout.rotated ? layout.oy + cue.p.x * s : layout.oy + cue.p.y * s;
-    const scr = aimAngle + (layout.rotated ? Math.PI / 2 : 0); // world→screen dir
-    const back = scr + Math.PI; // cue lies opposite travel
-    const gap = rpx * (1.4 + power() * 3); // pull back grows the gap
-    const tipX = bx + Math.cos(back) * gap;
-    const tipY = by + Math.sin(back) * gap;
-    const size = rpx * 32; // uniform square — no stretch, keeps aspect
-    const fore = 0.5 + 0.5 * Math.cos(elevation()); // raised cue foreshortens
-    // Image tip is at 50% 0 (top-centre); pin it to the tip point, then aim.
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
-    el.style.left = `${tipX}px`;
-    el.style.top = `${tipY}px`;
-    el.style.transform =
-      `translate(-50%, 0) rotate(${back - Math.PI / 2}rad) scale(${fore})`;
+    positionCue(el, aimAngle, power(), elevation());
+  };
+
+  // The opponent's cue — a blue image mirroring their live aim, in the same
+  // position the active player's cue would be. Shown only during their turn.
+  // (Their raw cursor is intentionally hidden; only this cue is visible.)
+  const updateOppCue = () => {
+    const el = oppCueEl;
+    if (!el) return;
+    const cue = world.balls[0];
+    if (canAct() || animating() || cue.potted || !opp.aim) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "block";
+    positionCue(el, opp.aim.angle, opp.aim.power, opp.aim.elevation);
   };
 
   // --- Pointer input ------------------------------------------------------
@@ -593,7 +621,8 @@ const Game: Component = () => {
     }
   };
   // Cue image (tip at very top, butt at bottom), square with transparent margins.
-  const CUE_IMG = "https://iili.io/CaZTlqP.png";
+  const CUE_IMG = "https://iili.io/CaZTlqP.png"; // active player's own (red) cue
+  const CUE_IMG_BLUE = "https://iili.io/CatLF5v.png"; // opponent's (blue) cue
   const CUE_S = 250; // square draw size in the 40×200 viewBox (bigger = thicker)
   const CUE_TIP_FRAC = 0; // tip sits at the top edge of the source image
   // Tip sits just under the spin ball (top) and slides down as power loads.
@@ -815,6 +844,7 @@ const Game: Component = () => {
             onPointerCancel={onPointerUp}
           />
           <img class="table-cue" ref={tableCueEl} src={CUE_IMG} alt="" />
+          <img class="table-cue" ref={oppCueEl} src={CUE_IMG_BLUE} alt="" />
         </div>
 
         <div class="cue-col" style={{ height: `${canvasH()}px` }}>

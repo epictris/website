@@ -1,6 +1,7 @@
 // Canvas renderer for the table. Draws a realistic-looking felt table, wooden
-// rails, pockets, glossy numbered balls, the cue stick + aim line, and the
-// opponent's live ghost cue / cursor. Pure drawing — no game logic.
+// rails, pockets, glossy numbered balls, and the active player's aim line. Pure
+// drawing — no game logic. (Both cue sticks are DOM <img> overlays in Game.tsx;
+// the opponent's presence shows only as their blue cue, no aim line or cursor.)
 
 import {
   CUSHION_SEGS,
@@ -32,7 +33,7 @@ function ensureTableImg() {
   tableImg.onload = () => (tableReady = true);
   tableImg.src = "https://iili.io/CaPOw1s.png";
 }
-import type { Group } from "./rules";
+import { groupOf, type Group } from "./rules";
 
 export type Layout = {
   scale: number; // px per metre
@@ -141,17 +142,16 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
   // dialled in (no preview at zero power).
-  if (s.myAim && s.prediction && !s.animating) drawPrediction(ctx, l, s.prediction);
-  if (s.opponent?.aim && !s.animating)
-    drawGhostAim(ctx, l, s.world, s.opponent.aim);
+  if (s.myAim && s.prediction && !s.animating)
+    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null);
 
   drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
-  // NB: the active player's cue stick is a DOM <img> overlay in Game.tsx (so it
-  // can extend past the canvas edge), not drawn here.
-
-  if (s.opponent?.cursor) drawCursor(ctx, l, s.opponent.cursor);
+  // NB: both cue sticks are DOM <img> overlays in Game.tsx (so they can extend
+  // past the canvas edge): the active player's own cue, and the opponent's blue
+  // cue mirroring their aim. Neither is drawn here — and the opponent's raw
+  // cursor is deliberately NOT shown (only their cue is).
 
   if (s.debug) drawDebugOverlay(ctx, l, s.world);
 }
@@ -371,6 +371,7 @@ function drawPrediction(
   ctx: CanvasRenderingContext2D,
   l: Layout,
   pr: Prediction,
+  myGroup: Group | null,
 ) {
   const rpx = R * l.scale;
   ctx.save();
@@ -382,25 +383,44 @@ function drawPrediction(
   polyline(ctx, l, pr.cue);
   ctx.setLineDash([]);
 
-  // Struck ball's initial travel — solid white line from its centre.
-  if (pr.object && pr.object.length > 1) {
+  // A predicted foul: cue ball scratches, or first contact is an opponent ball.
+  const oppHit =
+    myGroup !== null &&
+    pr.objectId !== undefined &&
+    groupOf(pr.objectId) !== myGroup &&
+    groupOf(pr.objectId) !== "eight";
+  const foul = pr.cuePotted || oppHit;
+
+  // Struck ball's initial travel — solid white line from its centre. Suppressed
+  // on a predicted foul (the shot is illegal, so its outcome isn't previewed).
+  if (!foul && pr.object && pr.object.length > 1) {
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 1.6;
     polyline(ctx, l, pr.object);
   }
 
-  // Ghost cue ball at first contact.
+  // Ghost cue ball at first contact — red ring when the shot is a predicted foul.
   if (pr.ghost) {
     const g = toPx(l, pr.ghost);
     ctx.beginPath();
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.strokeStyle = foul ? "#f08778" : "rgba(255,255,255,0.7)";
     ctx.arc(g.x, g.y, rpx, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  // Mark it if the cue ball would fall straight into a pocket (a scratch).
-  if (pr.cuePotted && pr.cue.length) {
-    const c = toPx(l, pr.cue[pr.cue.length - 1]);
+  // Foul cross (red X). Drawn where the cue ball ends up:
+  //  - a scratch: cue ball falls straight into a pocket, or
+  //  - first contact is one of the opponent's balls (a wrong-ball-first foul),
+  //    marked in the ghost cue circle at the moment of contact.
+  const crossAt = pr.cuePotted
+    ? pr.cue.length
+      ? pr.cue[pr.cue.length - 1]
+      : null
+    : oppHit
+      ? pr.ghost
+      : null;
+  if (crossAt) {
+    const c = toPx(l, crossAt);
     ctx.strokeStyle = "#f08778";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -411,41 +431,6 @@ function drawPrediction(
     ctx.stroke();
   }
 
-  ctx.restore();
-}
-
-function drawGhostAim(
-  ctx: CanvasRenderingContext2D,
-  l: Layout,
-  world: World,
-  aim: Aim,
-) {
-  const cue = world.balls[0];
-  if (cue.potted) return;
-  const c = toPx(l, cue.p);
-  const ang = aim.angle + (l.rotated ? Math.PI / 2 : 0); // world dir -> screen dir
-  const len = R * l.scale * 6 * (0.4 + aim.power);
-  ctx.save();
-  ctx.strokeStyle = "rgba(120,200,255,0.5)";
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([3, 4]);
-  ctx.beginPath();
-  ctx.moveTo(c.x, c.y);
-  ctx.lineTo(c.x + Math.cos(ang) * len, c.y + Math.sin(ang) * len);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawCursor(ctx: CanvasRenderingContext2D, l: Layout, p: Vec) {
-  const c = toPx(l, p);
-  ctx.save();
-  ctx.fillStyle = "rgba(120,200,255,0.9)";
-  ctx.beginPath();
-  ctx.moveTo(c.x, c.y);
-  ctx.lineTo(c.x + 10, c.y + 4);
-  ctx.lineTo(c.x + 4, c.y + 10);
-  ctx.closePath();
-  ctx.fill();
   ctx.restore();
 }
 
