@@ -13,12 +13,16 @@ export type AimPresence = {
   cue: Vec; // cue ball position (matters during ball-in-hand dragging)
 };
 
+// One recorded shot (matches ReplayShot). The server keeps an ordered log of
+// these per room so a rejoining peer can rebuild the whole game deterministically.
+export type LoggedShot = { shot: Shot; place?: Vec; config?: PhysicsConfig };
+
 export type SyncSnapshot = {
   // Full state a host sends to a peer that just joined.
   balls: { id: number; x: number; y: number; potted: boolean }[];
   rules: unknown; // RulesState, kept opaque here to avoid a cycle
   breaker: 0 | 1;
-  shotCount: number;
+  shotCount: number; // count of *resolved* shots — the receiver adopts only a strictly-newer snapshot
   config: PhysicsConfig;
 };
 
@@ -33,7 +37,26 @@ export type Msg =
   | { t: "shot"; shot: Shot; place?: Vec; config: PhysicsConfig; from?: number }
   | { t: "config"; config: PhysicsConfig; from?: number }
   | { t: "rematch"; breaker: 0 | 1; config: PhysicsConfig; from?: number }
-  | { t: "resign"; winner: 0 | 1; from?: number };
+  | { t: "resign"; winner: 0 | 1; from?: number }
+  // A game just started: the server stores this as the log baseline (initial rack
+  // + breaker + config) and clears the shot log.
+  | {
+      t: "game-init";
+      initial: { id: number; x: number; y: number }[];
+      breaker: 0 | 1;
+      config: PhysicsConfig;
+      from?: number;
+    }
+  // Server → a (re)joining socket: the full game log, so it can rebuild exactly.
+  | {
+      t: "shot-log";
+      initial: { id: number; x: number; y: number }[];
+      breaker: 0 | 1;
+      config: PhysicsConfig;
+      shots: LoggedShot[];
+      to?: number;
+      from?: number;
+    };
 
 export function wsUrl(room: string): string {
   const base = import.meta.env.PROD

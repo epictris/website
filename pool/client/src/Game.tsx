@@ -29,6 +29,7 @@ import { wsUrl, type Msg } from "./net";
 import {
   buildReplay,
   downloadReplay,
+  snapshotInitial,
   takePendingReplay,
   worldFromInitial,
   type Replay,
@@ -48,6 +49,20 @@ const Game: Component = () => {
   let world: World = rackWorld();
   let initialWorld: World = cloneWorld(world);
   let history: ReplayShot[] = [];
+  // Count of fully *resolved* shots (incremented in resolveShot, monotonic across
+  // re-racks). This is the sync-staleness comparator: it advances only once a shot
+  // reaches rest, so a peer that applied a shot but hasn't resolved it yet reads as
+  // behind — exactly when it needs the opponent's sync to learn the turn flipped.
+  let shotCount = 0;
+  // Monotonic shot count for the whole game (never reset by a mid-game re-rack),
+  // so it matches the server's log length; used to decide when a shot-log rebuild
+  // is needed. `rebuilding` suppresses turn-recap popups during that replay.
+  let totalShots = 0;
+  let rebuilding = false;
+  // True once a shared game exists. Gates the host's join-time re-rack so it fires
+  // only for the genuine first opponent — a later reconnect (drop → rejoin) must
+  // resync the game in progress, not wipe it.
+  let gameStarted = false;
   let events: ShotEvent[] = [];
   let acc = 0; // physics time accumulator
   let last = 0;
@@ -159,10 +174,69 @@ const Game: Component = () => {
         })),
         rules: rules(),
         breaker,
-        shotCount: history.length,
+        shotCount,
         config: config(),
       },
     } as Msg);
+  };
+
+  // Tell the server a fresh game started, so it resets its retained log to this
+  // rack. Subsequent shots append to it and are re-sent to any (re)joining peer.
+  const announceGameInit = () =>
+    send({
+      t: "game-init",
+      initial: snapshotInitial(initialWorld),
+      breaker,
+      config: config(),
+    } as Msg);
+
+  // Losslessly rebuild the whole game from the server's retained log. Runs on a
+  // (re)join: a client whose socket was suspended may have missed any number of
+  // shots, and the server keeps no history beyond this log. The engine is
+  // deterministic, so re-applying every shot from the initial rack reproduces the
+  // exact live board, rules, turn, and (via runShot/resolveShot) the replay
+  // history too — which is what keeps saved replays complete across disconnects.
+  const rebuildFromLog = (log: {
+    initial: { id: number; x: number; y: number }[];
+    breaker: 0 | 1;
+    config: PhysicsConfig;
+    shots: ReplayShot[];
+  }) => {
+    // Already at this exact point in the game — nothing to replay.
+    if (log.shots.length === totalShots) return;
+    rebuilding = true;
+    setReplaying(false);
+    replayQueue = [];
+    setAnimating(false);
+    striking = false;
+    lingering = false;
+    strikeShot = undefined;
+    acc = 0;
+    world = worldFromInitial(log.initial);
+    initialWorld = cloneWorld(world);
+    history = [];
+    shotCount = 0;
+    totalShots = 0;
+    breaker = log.breaker;
+    gameStarted = true;
+    pendingPlace = undefined;
+    setConfig(log.config);
+    setRules(initRules(log.breaker));
+    resetSinks();
+    pottedSeen.clear();
+    for (const s of log.shots) {
+      runShot(s.shot, s.place, false, s.config ?? log.config); // no rebroadcast
+      let steps = 0;
+      while (!atRest(world) && steps < 100000) {
+        stepFixed(world, events, shotConfig);
+        integrateSpin(world, FIXED_DT);
+        steps++;
+      }
+      resolveShot();
+    }
+    rebuilding = false;
+    recomputePrediction();
+    bump(0);
   };
 
   const connect = () => {
@@ -188,8 +262,11 @@ const Game: Component = () => {
       case "hello": {
         setMySlot(m.slot);
         setPeerCount(m.peers.length + 1);
-        // A late joiner (not the authority) asks for the current state.
-        if (m.slot > 0) send({ t: "need-sync" } as Msg);
+        // Whenever anyone else is already here, pull the authoritative state —
+        // covers a late joiner AND a reconnect (dropped/suspended socket) where we
+        // may have missed any number of shots. The shotCount guard discards it if
+        // our own game is actually fresher.
+        if (m.peers.length > 0) send({ t: "need-sync" } as Msg);
         recomputePrediction();
         break;
       }
@@ -198,7 +275,10 @@ const Game: Component = () => {
         // Opponent just arrived: the host (slot 0) has been knocking balls
         // around solo, so reset to a fresh rack — slot 0 breaks — before syncing.
         // Only on the 1→2 transition; later spectators must not reset the game.
-        if (peerCount() === 2 && mySlot() === 0) doRematch(0, false);
+        if (peerCount() === 2 && mySlot() === 0 && !gameStarted) {
+          doRematch(0, false);
+          announceGameInit(); // start the server's retained log for this game
+        }
         // Any active player answers a new joiner with the current (fresh) state;
         // the joiner keeps the freshest snapshot (see the shotCount guard).
         if (mySlot() === 0 || mySlot() === 1) applySnapshotToPeer(m.slot);
@@ -215,9 +295,28 @@ const Game: Component = () => {
           applySnapshotToPeer(m.from!);
         break;
       case "sync": {
-        // Never accept a snapshot that is staler than our own game.
-        if (m.snap.shotCount < history.length) break;
+        // shotCount here is *resolved* shots. Adopt any snapshot that has resolved
+        // more than us — this is what tells a backgrounded peer, who applied our
+        // last shot but hasn't resolved it (turn still stale), that the turn
+        // flipped. Reject equal-or-lower once a game is under way: equal means we
+        // agree on resolved state (a still-animating peer of equal resolved count
+        // would only send a mid-flight frame). A brand-new joiner (no game yet)
+        // still adopts an equal (fresh-rack) snapshot to seed its board.
+        if (
+          m.snap.shotCount < shotCount ||
+          (gameStarted && m.snap.shotCount === shotCount)
+        )
+          break;
         if (m.snap.balls.length) {
+          // Abandon any shot we were still simulating — the snapshot is the
+          // authoritative rest state and supersedes it.
+          setAnimating(false);
+          striking = false;
+          lingering = false;
+          strikeShot = undefined;
+          acc = 0;
+          shotCount = m.snap.shotCount;
+          gameStarted = true;
           world.balls.forEach((b) => {
             const s = m.snap.balls.find((x) => x.id === b.id);
             if (s) {
@@ -256,7 +355,14 @@ const Game: Component = () => {
         break;
       case "shot":
         if (m.config) setConfig(m.config);
+        // Finish any prior shot first — a backgrounded tab hasn't animated it to
+        // rest, and applying this shot over a mid-flight world would diverge.
+        settleNow();
         runShot(m.shot, m.place, false, m.config ?? config());
+        break;
+      case "shot-log":
+        // Server handed us the retained game log on (re)join — rebuild exactly.
+        rebuildFromLog(m);
         break;
       case "config":
         setConfig(m.config);
@@ -311,6 +417,8 @@ const Game: Component = () => {
     // in-flight simulation; the same config is sent / recorded with the shot.
     shotConfig = cfg;
     history.push({ shot, place, config: cfg });
+    totalShots++;
+    gameStarted = true;
     setAnimating(true);
     acc = 0;
     bump(0);
@@ -320,6 +428,11 @@ const Game: Component = () => {
   const resolveShot = () => {
     freeze(world);
     setAnimating(false);
+    // Count every *resolved* shot (monotonic — survives a mid-game re-rack). This
+    // is what peers compare in the sync guard: a shot that's been applied but not
+    // yet resolved (opponent's rAF was paused while backgrounded) must NOT read as
+    // caught up, or the stale-turn client rejects the very sync that flips it.
+    shotCount++;
     const before = rules();
     const outcome = evaluateShot(before, worldBefore, events);
     if (outcome.reRack) {
@@ -339,13 +452,34 @@ const Game: Component = () => {
     }
     setRules(outcome.next);
     // Pop a recap whenever control changes hands or the game ends.
-    if (outcome.next.winner !== null || outcome.next.turn !== before.turn)
+    if (
+      !rebuilding &&
+      (outcome.next.winner !== null || outcome.next.turn !== before.turn)
+    )
       showAnnounce(outcome.next.message);
     pendingPlace = undefined;
     recomputePrediction();
     // Advance the replay queue if we are watching one.
     if (replaying()) queueNextReplayShot();
     bump(0);
+  };
+
+  // Fast-forward an in-flight shot to its rest state right now, without waiting
+  // for animation frames. requestAnimationFrame is paused/throttled while the tab
+  // is backgrounded, so a player who looks away during the opponent's turn would
+  // otherwise never advance the sim — and a second incoming shot would stack on a
+  // mid-flight world and diverge the game. The sim is fixed-step deterministic
+  // (step count set by atRest, not wall-clock), so this reaches the same rest
+  // state the animated path would, just instantly and off the render loop.
+  const settleNow = () => {
+    if (!animating()) return;
+    let steps = 0;
+    while (!atRest(world) && steps < 100000) {
+      stepFixed(world, events, shotConfig);
+      integrateSpin(world, FIXED_DT);
+      steps++;
+    }
+    resolveShot();
   };
 
   // --- Main render / physics loop -----------------------------------------
@@ -761,12 +895,18 @@ const Game: Component = () => {
     world = rackWorld();
     initialWorld = cloneWorld(world);
     history = [];
+    shotCount = 0;
+    totalShots = 0;
+    gameStarted = true;
     breaker = nextBreaker;
     setRules(initRules(nextBreaker));
     setReplaying(false);
     pendingPlace = undefined;
     resetSinks();
-    if (local) send({ t: "rematch", breaker: nextBreaker, config: config() } as Msg);
+    if (local) {
+      send({ t: "rematch", breaker: nextBreaker, config: config() } as Msg);
+      announceGameInit(); // seed the server's retained log for the new game
+    }
     recomputePrediction();
     bump(0);
   };
@@ -800,6 +940,8 @@ const Game: Component = () => {
     world = worldFromInitial(r.initial);
     initialWorld = cloneWorld(world);
     history = [];
+    shotCount = 0;
+    totalShots = 0;
     breaker = r.breaker;
     setConfig(r.config);
     resetSinks();
@@ -859,6 +1001,17 @@ const Game: Component = () => {
       resize(); // viewport dimensions change entering/leaving fullscreen
     };
     document.addEventListener("fullscreenchange", onFsChange);
+    // Returning to a backgrounded tab: (1) settle any shot that ran to rest
+    // off-screen so our local state is consistent, then (2) pull the opponent's
+    // authoritative state — shots played while our socket was suspended were never
+    // delivered (the server keeps no history), so a resync is the only way to
+    // reconcile them. The shotCount guard ignores it if we're not actually behind.
+    const onVisible = () => {
+      if (document.hidden) return;
+      settleNow();
+      if (!solo()) send({ t: "need-sync" } as Msg);
+    };
+    document.addEventListener("visibilitychange", onVisible);
     // A replay picked on the Landing menu is stashed and consumed here.
     const pend = takePendingReplay();
     if (pend) playReplay(pend);
@@ -870,6 +1023,7 @@ const Game: Component = () => {
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("visibilitychange", onVisible);
       leaving = true;
       ws?.close();
     });

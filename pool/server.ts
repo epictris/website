@@ -19,12 +19,23 @@ type SocketData = {
   slot: number;
 };
 
+/** Authoritative game log: the initial rack plus every shot since. Because the
+ *  engine is deterministic, replaying this from `init` reproduces the exact live
+ *  state — so a rejoining peer (dropped/suspended socket) can rebuild losslessly,
+ *  and replays stay complete across disconnects. `null` until a game starts. */
+type GameLog = {
+  init: { initial: unknown; breaker: unknown; config: unknown };
+  shots: unknown[];
+};
+
 type Room = {
   sockets: Set<Bun.ServerWebSocket<SocketData>>;
   /** Monotonic counter so a rejoining peer keeps taking the next free slot. */
   nextSlot: number;
   /** When the room was first opened — for sorting the joinable lobby list. */
   created: number;
+  /** Retained shot log, re-sent to any (re)joining socket. */
+  log: GameLog | null;
 };
 
 const rooms = new Map<string, Room>();
@@ -32,7 +43,7 @@ const rooms = new Map<string, Room>();
 function getRoom(code: string): Room {
   let room = rooms.get(code);
   if (!room) {
-    room = { sockets: new Set(), nextSlot: 0, created: Date.now() };
+    room = { sockets: new Set(), nextSlot: 0, created: Date.now(), log: null };
     rooms.set(code, room);
   }
   return room;
@@ -116,6 +127,19 @@ const server = Bun.serve<SocketData, undefined>({
         { t: "peer-join", slot: ws.data.slot, id: ws.data.id },
         ws,
       );
+      // Hand the newcomer the retained game log so it can rebuild losslessly —
+      // this covers a rejoin whose socket was suspended and missed live shots.
+      if (room.log) {
+        ws.send(
+          JSON.stringify({
+            t: "shot-log",
+            initial: room.log.init.initial,
+            breaker: room.log.init.breaker,
+            config: room.log.init.config,
+            shots: room.log.shots,
+          }),
+        );
+      }
     },
     message(ws, message) {
       const room = rooms.get(ws.data.room);
@@ -128,6 +152,19 @@ const server = Bun.serve<SocketData, undefined>({
         return;
       }
       obj.from = ws.data.slot;
+      // Maintain the retained game log off the relayed stream.
+      if (obj.t === "game-init") {
+        // A fresh game (initial rack) resets the log baseline.
+        room.log = {
+          init: { initial: obj.initial, breaker: obj.breaker, config: obj.config },
+          shots: [],
+        };
+      } else if (obj.t === "rematch") {
+        // Rematch starts a new game; drop the old log until its game-init lands.
+        room.log = null;
+      } else if (obj.t === "shot" && room.log) {
+        room.log.shots.push({ shot: obj.shot, place: obj.place, config: obj.config });
+      }
       // Directed messages (obj.to === slot) go to one peer; else broadcast.
       const raw = JSON.stringify(obj);
       for (const s of room.sockets) {
