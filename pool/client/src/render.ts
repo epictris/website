@@ -560,6 +560,22 @@ function polyline(ctx: CanvasRenderingContext2D, l: Layout, pts: Vec[]) {
   ctx.stroke();
 }
 
+const MIN_OBJ_LEN = 0.05; // struck-ball preview floor: ~5cm in table metres.
+
+// Guarantee the struck-ball line spans at least MIN_OBJ_LEN by extending its
+// endpoint along the ball's heading (start→end direction). Short paths get a
+// visible direction hint; longer ones pass through unchanged.
+function liftObjectPath(pts: Vec[]): Vec[] {
+  const a = pts[0];
+  const b = pts[pts.length - 1];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len >= MIN_OBJ_LEN || len < 1e-9) return pts;
+  const f = MIN_OBJ_LEN / len;
+  return [a, { x: a.x + dx * f, y: a.y + dy * f }];
+}
+
 /** Draw the spin-aware predicted paths (from the real engine preview). */
 function drawPrediction(
   ctx: CanvasRenderingContext2D,
@@ -594,7 +610,9 @@ function drawPrediction(
   if (!foul && pr.object && pr.object.length > 1) {
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 1.6;
-    polyline(ctx, l, pr.object);
+    // The trace is only a ~0.02s burst, so a slow struck ball barely moves and
+    // its line vanishes. Lift it to a legible minimum length along its heading.
+    polyline(ctx, l, liftObjectPath(pr.object));
   }
 
   // Ghost cue ball at first contact — red ring when the shot is a predicted foul.
