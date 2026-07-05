@@ -3,6 +3,7 @@ import { Route, Router, useNavigate } from "@solidjs/router";
 import { createSignal, onCleanup, onMount, For, type Component } from "solid-js";
 import Game from "./Game";
 import { fetchRooms, type RoomInfo } from "./net";
+import { parseReplay, setPendingReplay } from "./replay";
 import "./styles.css";
 
 // Generate a short random room code (URL-safe, no lookalike chars).
@@ -38,12 +39,35 @@ const Landing: Component = () => {
           pool<span class="dim">.tris.sh</span>
         </span>
       </div>
-      <button
-        class="primary mm-start"
-        onClick={() => navigate(`/${newCode()}`)}
-      >
-        New Game
-      </button>
+      <div class="mm-actions">
+        <button
+          class="primary mm-start"
+          onClick={() => navigate(`/${newCode()}`)}
+        >
+          New Game
+        </button>
+        {/* Load a saved replay: parse here, stash it, then enter a fresh room
+            that consumes it on mount and plays the shots back. */}
+        <label class="primary mm-start mm-load">
+          Load Replay
+          <input
+            type="file"
+            accept="application/json"
+            style={{ display: "none" }}
+            onChange={async (e) => {
+              const f = e.currentTarget.files?.[0];
+              e.currentTarget.value = "";
+              if (!f) return;
+              try {
+                setPendingReplay(parseReplay(await f.text()));
+                navigate(`/${newCode()}`);
+              } catch {
+                alert("Not a valid pool replay file.");
+              }
+            }}
+          />
+        </label>
+      </div>
       <div class="lobby">
         <div class="lobby-head">Joinable games</div>
         <For

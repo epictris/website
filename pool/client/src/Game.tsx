@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
-import { useParams } from "@solidjs/router";
+import { useNavigate, useParams } from "@solidjs/router";
 import {
   applyShot,
   atRest,
@@ -9,7 +9,6 @@ import {
   FIXED_DT,
   integrateSpin,
   MAX_ELEVATION,
-  PARAMS,
   POCKET_LIST,
   predictPaths,
   R,
@@ -30,13 +29,15 @@ import { wsUrl, type Msg } from "./net";
 import {
   buildReplay,
   downloadReplay,
-  parseReplay,
+  takePendingReplay,
   worldFromInitial,
+  type Replay,
   type ReplayShot,
 } from "./replay";
 
 const Game: Component = () => {
   const room = useParams().room ?? "lobby";
+  const navigate = useNavigate();
   let canvas!: HTMLCanvasElement;
   let ctx!: CanvasRenderingContext2D;
   let tableCueEl!: HTMLImageElement; // on-table cue overlay (can exceed canvas)
@@ -102,12 +103,9 @@ const Game: Component = () => {
   const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
-  // You land straight on the table (solo practice until an opponent joins); the
-  // menu is reachable via the back button. false only shows the lobby/menu.
-  const [started, setStarted] = createSignal(true);
+  const [showMenu, setShowMenu] = createSignal(false); // hamburger menu modal
   const [showTune, setShowTune] = createSignal(false); // spin + cue-angle modal
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
-  const [copied, setCopied] = createSignal(false);
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
   // Portrait-locked phone held sideways: the whole game root is CSS-rotated 90°
@@ -251,7 +249,30 @@ const Game: Component = () => {
         if (m.config) setConfig(m.config);
         doRematch(m.breaker, false);
         break;
+      case "resign":
+        applyResign(m.winner);
+        break;
     }
+  };
+
+  // Forfeit: the resigning player hands the frame to their opponent. Applied
+  // locally and broadcast so both tables show the same winner.
+  const applyResign = (winner: 0 | 1) => {
+    setRules((r) => ({
+      ...r,
+      winner,
+      phase: "over",
+      message: `Player ${winner + 1} wins — opponent resigned.`,
+    }));
+    setReplaying(false);
+    bump(0);
+  };
+
+  const resign = () => {
+    const winner = (myPlayer() ^ 1) as 0 | 1;
+    send({ t: "resign", winner } as Msg); // hand the frame to the opponent
+    setShowMenu(false);
+    navigate("/"); // resigner leaves to the main menu
   };
 
   // --- Shot execution (shared by local + remote) --------------------------
@@ -313,6 +334,19 @@ const Game: Component = () => {
     last = t;
     nowMs = t;
     if (dt > 0.1) dt = 0.1; // clamp after a tab stall
+
+    if (striking) {
+      const t = Math.min(STRIKE_MS, nowMs - strikeStart);
+      // Velocity ramps 0→max over STRIKE_EASE_MS, then holds constant. Distance is
+      // the integral of that profile, normalised so it reaches 1 at STRIKE_MS.
+      const T1 = STRIKE_EASE_MS;
+      const denom = STRIKE_MS - 0.5 * T1;
+      const frac =
+        t <= T1 ? (0.5 * t * t) / T1 / denom : (t - 0.5 * T1) / denom;
+      strikePwr = strikeFromPwr + (STRIKE_POKE - strikeFromPwr) * frac;
+      if (t >= STRIKE_MS) finishStrike();
+    }
+    if (lingering && nowMs >= lingerUntil) lingering = false;
 
     if (animating()) {
       acc += dt;
@@ -388,13 +422,16 @@ const Game: Component = () => {
       side: side(),
       elevation: elevation(),
     };
+    // During the cue-forward strike the DOM cue animates on its own; suppress the
+    // canvas aim line + guide so only the moving cue shows.
+    const live = canAct() && !striking;
     drawScene(ctx, {
       world,
       layout,
-      myAim: canAct() ? aim : undefined,
-      prediction: canAct() ? prediction : undefined,
-      showCue: canAct(),
-      ballInHand: canAct() && r.ballInHand,
+      myAim: live ? aim : undefined,
+      prediction: live ? prediction : undefined,
+      showCue: live,
+      ballInHand: live && r.ballInHand,
       myGroup,
       onEight,
       opponent: opp,
@@ -419,16 +456,17 @@ const Game: Component = () => {
     angle: number,
     pwr: number,
     elev: number,
+    atPos?: Vec, // pin to a frozen cue-ball point (strike linger) instead of live
   ) => {
-    const cue = world.balls[0];
+    const p = atPos ?? world.balls[0].p;
     const s = layout.scale;
     const rpx = R * s;
     // Cue-ball centre in canvas CSS px (mirrors toPx in render.ts).
-    const bx = layout.rotated ? layout.ox + (TABLE.h - cue.p.y) * s : layout.ox + cue.p.x * s;
-    const by = layout.rotated ? layout.oy + cue.p.x * s : layout.oy + cue.p.y * s;
+    const bx = layout.rotated ? layout.ox + (TABLE.h - p.y) * s : layout.ox + p.x * s;
+    const by = layout.rotated ? layout.oy + p.x * s : layout.oy + p.y * s;
     const scr = angle + (layout.rotated ? Math.PI / 2 : 0); // world→screen dir
     const back = scr + Math.PI; // cue lies opposite travel
-    const gap = rpx * (1.4 + pwr * 3); // pull back grows the gap
+    const gap = rpx * (1.4 + pwr * 6); // pull back grows the gap
     const tipX = bx + Math.cos(back) * gap;
     const tipY = by + Math.sin(back) * gap;
     const size = rpx * 32; // uniform square — no stretch, keeps aspect
@@ -446,12 +484,22 @@ const Game: Component = () => {
     const el = tableCueEl;
     if (!el) return;
     const cue = world.balls[0];
-    if (!canAct() || animating() || cue.potted) {
+    // During the strike swing and the post-strike linger the cue stays visible
+    // (frozen at the contact point) even while the shot animates.
+    const active = striking || lingering;
+    const show = active || (canAct() && !animating() && !cue.potted);
+    if (!show) {
       el.style.display = "none";
       return;
     }
     el.style.display = "block";
-    positionCue(el, aimAngle, power(), elevation());
+    positionCue(
+      el,
+      aimAngle,
+      active ? strikePwr : power(),
+      elevation(),
+      active ? strikeCuePos : undefined,
+    );
   };
 
   // The opponent's cue — a blue image mirroring their live aim, in the same
@@ -542,7 +590,7 @@ const Game: Component = () => {
   };
 
   const onPointerDown = (e: PointerEvent) => {
-    if (!canAct()) return;
+    if (!canAct() || striking) return;
     const w = toWorld(e);
     const cue = world.balls[0].p;
     downClient = { x: e.clientX, y: e.clientY };
@@ -595,7 +643,7 @@ const Game: Component = () => {
   let pulling = false;
   let pullStartY = 0;
   const onPowerDown = (e: PointerEvent) => {
-    if (!canAct()) return;
+    if (!canAct() || striking) return;
     powerEl.setPointerCapture(e.pointerId);
     pulling = true;
     pullStartY = localPoint(powerEl, e).y; // widget-local, survives 90° rotation
@@ -612,7 +660,7 @@ const Game: Component = () => {
   const onPowerUp = () => {
     if (!pulling) return;
     pulling = false;
-    if (power() > 0.06) shoot();
+    if (power() > 0) shoot();
     else {
       setPower(0);
       recomputePrediction();
@@ -628,20 +676,52 @@ const Game: Component = () => {
   const cueImgY = () => powerTipY() - CUE_TIP_FRAC * CUE_S;
 
   // --- Actions ------------------------------------------------------------
+  // Cue-forward animation on release: the on-table cue slides from its pulled-
+  // back gap into the ball over STRIKE_MS before the physics fires, so a strike
+  // reads as the cue actually hitting rather than the ball leaping on its own.
+  const STRIKE_MS = 100; // total cue-forward travel time
+  const STRIKE_EASE_MS = 90; // accelerate over this long, then constant velocity
+  const STRIKE_POKE = -0.13; // final "power" the cue drives to (tip pokes the ball)
+  const STRIKE_LINGER_MS = 400; // hold the cue at contact this long after the swing
+  let striking = false;
+  let lingering = false;
+  let lingerUntil = 0;
+  let strikeStart = 0;
+  let strikeFromPwr = 0;
+  let strikePwr = 0;
+  let strikeShot: Shot | undefined;
+  let strikePlace: Vec | undefined;
+  let strikeCuePos: Vec | undefined; // frozen contact point for the linger
+
+  // Swing done: fire the physics, but keep the cue drawn at the contact point
+  // for STRIKE_LINGER_MS so it doesn't blink out the instant the ball leaves.
+  const finishStrike = () => {
+    striking = false;
+    if (strikeShot) runShot(strikeShot, strikePlace, true, config());
+    strikeShot = undefined;
+    setPower(0); // reset for the next pull-back
+    lingering = true;
+    lingerUntil = nowMs + STRIKE_LINGER_MS;
+  };
+
   const shoot = () => {
-    if (!canAct() || power() <= 0.01) return;
+    if (!canAct() || striking || power() <= 0) return;
     // On a ball-in-hand turn, lock in wherever the cue currently sits.
     const place =
       rules().ballInHand ? pendingPlace ?? { ...world.balls[0].p } : undefined;
-    const shot: Shot = {
+    strikeShot = {
       angle: aimAngle,
       power: power(),
       follow: follow(),
       side: side(),
       elevation: elevation(),
     };
-    runShot(shot, place, true, config());
-    setPower(0); // reset for the next pull-back
+    strikePlace = place;
+    strikeCuePos = place ? { ...place } : { ...world.balls[0].p };
+    strikeFromPwr = power(); // strike starts from the live pulled-back cue
+    strikePwr = strikeFromPwr;
+    strikeStart = nowMs;
+    striking = true;
   };
 
   const doRematch = (nextBreaker: 0 | 1, local: boolean) => {
@@ -656,14 +736,6 @@ const Game: Component = () => {
     if (local) send({ t: "rematch", breaker: nextBreaker, config: config() } as Msg);
     recomputePrediction();
     bump(0);
-  };
-
-  // Live-tune a physics coefficient; broadcast so the opponent's table matches.
-  const setParam = (key: keyof PhysicsConfig, value: number) => {
-    const next = { ...config(), [key]: value };
-    setConfig(next);
-    send({ t: "config", config: next } as Msg);
-    recomputePrediction();
   };
 
   // --- Replay -------------------------------------------------------------
@@ -691,8 +763,7 @@ const Game: Component = () => {
     }, 700);
   };
 
-  const loadReplay = async (file: File) => {
-    const r = parseReplay(await file.text());
+  const playReplay = (r: Replay) => {
     world = worldFromInitial(r.initial);
     initialWorld = cloneWorld(world);
     history = [];
@@ -706,11 +777,6 @@ const Game: Component = () => {
     queueNextReplayShot();
   };
 
-  const copyLink = () => {
-    navigator.clipboard?.writeText(`${location.origin}/${room}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
 
   // --- Lifecycle ----------------------------------------------------------
   onMount(() => {
@@ -729,7 +795,7 @@ const Game: Component = () => {
       // Fit the whole table PHOTO (felt + wooden rails) into the viewport minus
       // the side widgets. The canvas size scales linearly with `scale`, so
       // measure it at scale 1 and divide the available space by that.
-      const SIDE_W = 76 + 40; // cue-col + back button widths
+      const SIDE_W = 76 + 30; // cue-col + hamburger button widths
       // Leave slack for 4 even gaps (space-evenly: outside both ends + between
       // each of the 3 items) so the row breathes uniformly.
       const GAPS = 14 * 4;
@@ -760,6 +826,9 @@ const Game: Component = () => {
       resize(); // viewport dimensions change entering/leaving fullscreen
     };
     document.addEventListener("fullscreenchange", onFsChange);
+    // A replay picked on the Landing menu is stashed and consumed here.
+    const pend = takePendingReplay();
+    if (pend) playReplay(pend);
     connect();
     raf = requestAnimationFrame(frame);
 
@@ -814,32 +883,22 @@ const Game: Component = () => {
     };
   };
 
-  const statusLine = () => {
-    const r = rules();
-    if (r.winner !== null)
-      return { text: r.message, cls: "win" };
-    if (r.message.startsWith("Foul")) return { text: r.message, cls: "foul" };
-    return { text: r.message, cls: "" };
-  };
-
   return (
     <div class="game-root" classList={{ rot90: rot90() }}>
-      <Show when={started() && solo()}>
-        <div class="solo-hint">
-          Practising solo — waiting for player 2.{" "}
-          <button onClick={copyLink}>
-            {copied() ? "link copied!" : "copy invite link"}
-          </button>
+      <Show when={rules().winner !== null}>
+        <div class="game-over">
+          <span class="win">{rules().message}</span>
+          <a href="/">new game</a>
         </div>
       </Show>
 
       <div class="play-row">
         <button
-          class="back-btn"
-          title="back to menu"
-          onClick={() => setStarted(false)}
+          class="hamburger"
+          title="menu"
+          onClick={() => setShowMenu(true)}
         >
-          ‹
+          ☰
         </button>
 
         <div class="table-wrap">
@@ -937,112 +996,38 @@ const Game: Component = () => {
         </div>
       </Show>
 
-      <Show when={!started()}>
-        <div class="main-menu">
-          <div class="menu-head">
-            <span class="title">
-              pool<span class="dim">.tris.sh</span>
-            </span>
-          </div>
-
-          <div class="status">
-            {(() => {
-              track(); // subscribe to forced recompute
-              const s = statusLine();
-              return <span class={s.cls}>{s.text}</span>;
-            })()}
-          </div>
-
-          <div class="link-row">
-            <Show
-              when={peerCount() > 1}
-              fallback={
-                <>
-                  Waiting for an opponent —{" "}
-                  <button onClick={copyLink}>
-                    {copied() ? "link copied!" : "copy invite link"}
-                  </button>{" "}
-                  and send it to a friend.
-                </>
-              }
+      <Show when={showMenu()}>
+        <div class="menu-backdrop" onClick={() => setShowMenu(false)} />
+        <div class="pick-modal menu-modal">
+          <div class="pm-title">menu</div>
+          <button
+            class="pm-done"
+            onClick={() => {
+              saveReplay();
+              setShowMenu(false);
+            }}
+            disabled={(track(), history.length === 0)}
+          >
+            save replay
+          </button>
+          <Show when={canFullscreen}>
+            <button
+              class="pm-done"
+              onClick={() => {
+                toggleFullscreen();
+                setShowMenu(false);
+              }}
             >
-              <span class="badge you">you: player {myPlayer() + 1}</span>{" "}
-              {peerCount()} connected
-              {isSpectator() && " (spectating)"}
-            </Show>
-          </div>
-
-          <div class="controls">
-            <div class="control">
-              <span>power {Math.round(power() * 100)}%</span>
-              <div class="power-meter">
-                <div class="power-fill" style={{ width: `${power() * 100}%` }} />
-              </div>
-            </div>
-
-            <div class="control">
-              <button onClick={() => doRematch(((breaker ^ 1) as 0 | 1), true)}>
-                new game
-              </button>
-              <Show when={canFullscreen}>
-                <button onClick={toggleFullscreen}>
-                  {fullscreen() ? "exit fullscreen" : "fullscreen"}
-                </button>
-              </Show>
-              <button onClick={() => setDebug((v) => !v)}>
-                {debug() ? "hide" : "show"} collision debug (d)
-              </button>
-            </div>
-
-            <div class="control">
-              <button
-                onClick={saveReplay}
-                disabled={(track(), history.length === 0)}
-              >
-                save replay
-              </button>
-              <label class="badge" style={{ cursor: "pointer" }}>
-                load replay
-                <input
-                  type="file"
-                  accept="application/json"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const f = e.currentTarget.files?.[0];
-                    if (f) loadReplay(f);
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-
-          <div class="physics">
-            <div class="physics-title">physics — measured snooker values</div>
-            <div class="physics-grid">
-              {PARAMS.map((p) => (
-                <label class="phys-row">
-                  <span class="phys-label">{p.label}</span>
-                  <input
-                    type="range"
-                    min={p.min}
-                    max={p.max}
-                    step={p.step}
-                    value={config()[p.key]}
-                    onInput={(e) => setParam(p.key, Number(e.currentTarget.value))}
-                  />
-                  <span class="phys-val">{config()[p.key].toFixed(3)}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div class="link-row">
-            tap the felt to aim, drag on it to fine-tune · pull the cue widget
-            back and release to strike · spin ball (top) sets draw/follow +
-            english · cue-angle widget sets elevation · drag the white ball on a
-            foul (ball-in-hand)
-          </div>
+              {fullscreen() ? "exit fullscreen" : "go fullscreen"}
+            </button>
+          </Show>
+          <button
+            class="pm-done resign"
+            onClick={resign}
+            disabled={isSpectator() || rules().winner !== null}
+          >
+            resign
+          </button>
         </div>
       </Show>
     </div>

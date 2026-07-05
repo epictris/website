@@ -46,26 +46,31 @@ in `Game.tsx` pointer handlers + these widgets:
 - **Ball-in-hand** (after a foul) — *drag* the cue ball to reposition it.
 
 **Join flow** — the root route `/` renders the **Landing** menu (`index.tsx`): a
-**New Game** button that mints a random room code and navigates to `/:room`, plus
-a live **lobby** below it. The lobby polls `GET /rooms` every 3s (`fetchRooms` in
-`net.ts`) — the server returns every room holding exactly one socket (a single
-waiting player), newest first — and renders a **Join** button per game that
-navigates straight into it. No link-sharing needed; opening a shared `origin/<code>`
-link still works as a direct entry. Landing on `/:room` you're offered
-**fullscreen** (`showFsPrompt`) and land straight
-on a **solo practice table** (`started` defaults to `true`; `solo()` is
-`peerCount <= 1`, so you can shoot freely, turns ignored). A `.solo-hint` banner
-shows the copy-link while waiting.
+**New Game** button that mints a random room code and navigates to `/:room`, a
+**Load Replay** file button beside it, plus a live **lobby** below. The lobby
+polls `GET /rooms` every 3s (`fetchRooms` in `net.ts`) — the server returns every
+room holding exactly one socket (a single waiting player), newest first — and
+renders a **Join** button per game that navigates straight into it. No
+link-sharing needed; opening a shared `origin/<code>` link still works as a
+direct entry. Landing on `/:room` you're offered **fullscreen** (`showFsPrompt`)
+and land straight on a **solo practice table** (`solo()` is `peerCount <= 1`, so
+you can shoot freely, turns ignored). A `.solo-hint` banner shows the copy-link
+while waiting.
 
 When a **second** peer joins, the host (**slot 0**) resets to a fresh rack via
 `doRematch(0, false)` on the `peer-join` 1→2 transition (guarded so later
 spectators don't reset) and syncs it; the joiner adopts it via `hello` →
 `need-sync`. The first connector is slot 0 and always **breaks** (`breaker = 0`).
 
-**Views** — the `started` signal toggles the table and the in-room **menu**
-(`.main-menu` — new-game, fullscreen, replay, debug, physics controls),
-reachable via the **back button** left of the table's top-left corner. There is
-no manual *start game*.
+**In-game menu** — the table is always shown; the **hamburger button**
+(`.hamburger`, left of the table's top-left corner) opens `showMenu`, a modal
+(`.pick-modal.menu-modal`) with three actions: **save replay**, **go
+fullscreen**, and **resign**. Resign broadcasts a `resign` Msg and both tables
+set `rules.winner` to the opponent; a `.game-over` banner shows the result with a
+link back to the Landing menu (there is no in-game *new game* — you rematch by
+starting again from `/`). **Load replay** lives on the **Landing** menu: the file
+is parsed there, stashed via `setPendingReplay` (`replay.ts`), and the freshly
+entered room consumes it on mount (`takePendingReplay` in `Game.onMount`).
 
 ## Table collision geometry
 

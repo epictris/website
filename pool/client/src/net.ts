@@ -32,7 +32,8 @@ export type Msg =
   | { t: "aim"; aim: AimPresence; from?: number }
   | { t: "shot"; shot: Shot; place?: Vec; config: PhysicsConfig; from?: number }
   | { t: "config"; config: PhysicsConfig; from?: number }
-  | { t: "rematch"; breaker: 0 | 1; config: PhysicsConfig; from?: number };
+  | { t: "rematch"; breaker: 0 | 1; config: PhysicsConfig; from?: number }
+  | { t: "resign"; winner: 0 | 1; from?: number };
 
 export function wsUrl(room: string): string {
   const base = import.meta.env.PROD

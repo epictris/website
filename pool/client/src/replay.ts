@@ -69,6 +69,19 @@ export function downloadReplay(replay: Replay) {
   URL.revokeObjectURL(url);
 }
 
+// Hand-off slot for "load replay" on the Landing menu: the file is parsed there,
+// stashed here, then the fresh Game route consumes it on mount (there is no live
+// Game to call loadReplay on from the landing page).
+let pending: Replay | null = null;
+export function setPendingReplay(r: Replay) {
+  pending = r;
+}
+export function takePendingReplay(): Replay | null {
+  const r = pending;
+  pending = null;
+  return r;
+}
+
 export function parseReplay(text: string): Replay {
   const r = JSON.parse(text) as Replay;
   if (r.version !== 1 || !Array.isArray(r.shots) || !Array.isArray(r.initial)) {
