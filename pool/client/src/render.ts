@@ -4,6 +4,7 @@
 
 import {
   CUSHION_SEGS,
+  CUSHION_VERTS,
   POCKET_DEPTH,
   POCKET_LIST,
   R,
@@ -17,7 +18,7 @@ import {
 // its felt playfield (the cushion-nose rectangle) within that image, measured
 // once — the felt box is mapped onto the physics play area so the drawn table,
 // its pockets, and the collision geometry all line up.
-const IMG = { W: 1219, H: 806, fx: 130, fy: 148, fw: 959, fh: 509 };
+const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
 let tableImg: HTMLImageElement | null = null;
 let tableReady = false;
 function ensureTableImg() {
@@ -25,7 +26,7 @@ function ensureTableImg() {
   tableImg = new Image();
   tableImg.crossOrigin = "anonymous";
   tableImg.onload = () => (tableReady = true);
-  tableImg.src = "https://i.imgur.com/hpYbnXk.png";
+  tableImg.src = "https://iili.io/CaPOw1s.png";
 }
 import type { Group } from "./rules";
 
@@ -145,29 +146,26 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   if (s.debug) drawDebugOverlay(ctx, l, s.world);
 }
 
-// Overlay the collision boundaries the physics ACTUALLY uses. The engine works
-// in ball-CENTRE space (a centre reflects at inset R), but a centre locus floats
-// R inside the felt and reads as "wrong". So cushions are drawn on the physical
-// CONTACT SURFACE — each centre face pushed out by R along its normal — which is
-// exactly where a ball's edge touches the rail. Pockets are already a pure
-// centre test whose circle is the drawn hole, so those need no shift.
+// Overlay the collision boundaries the physics ACTUALLY uses. Cushions are the
+// felt-surface polygon a ball's edge strikes (the physics insets by R on the
+// fly, so these lines ARE the collision faces). Convex corners are drawn as
+// R-circles: a ball centre rounds them, which is how it rebounds off a nose/jaw
+// tip at any angle. Pockets are a pure centre test whose circle is the hole.
 function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World) {
   ctx.save();
-  ctx.lineWidth = Math.max(1, l.scale * 0.006);
+  ctx.lineWidth = Math.max(0.5, l.scale * 0.002);
 
-  // Cushion contact surface — the nose + angled jaws a ball's edge strikes. Each
-  // centre-space face is offset out by R onto the felt. Ticks show the normal.
+  // Cushion contact surface — the nose + angled jaws a ball's edge strikes, on
+  // the true felt surface. Salmon ticks show each face's inward normal.
   ctx.strokeStyle = "#ff3b3b";
   for (const s of CUSHION_SEGS) {
-    // Push the face out of the playfield by R (opposite the inward normal).
-    const surf = (p: Vec): Vec => ({ x: p.x - s.nx * R, y: p.y - s.ny * R });
-    const a = toPx(l, surf(s.a));
-    const b = toPx(l, surf(s.b));
+    const a = toPx(l, s.a);
+    const b = toPx(l, s.b);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
-    const mid = surf({ x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 });
+    const mid = { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
     const m = toPx(l, mid);
     const n = toPx(l, { x: mid.x + s.nx * 0.02, y: mid.y + s.ny * 0.02 });
     ctx.strokeStyle = "rgba(255,120,120,0.7)";
@@ -176,6 +174,15 @@ function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World
     ctx.lineTo(n.x, n.y);
     ctx.stroke();
     ctx.strokeStyle = "#ff3b3b";
+  }
+
+  // Rounded convex corners — the ball centre rebounds off these R-circles.
+  ctx.strokeStyle = "rgba(190,120,255,0.9)";
+  for (const vt of CUSHION_VERTS) {
+    const c = toPx(l, { x: vt.x, y: vt.y });
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, R * l.scale, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   // Pocket pot circles — a centre inside this drops the ball.

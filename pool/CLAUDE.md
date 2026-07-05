@@ -11,7 +11,11 @@ physics must stay deterministic (fixed timestep, fixed iteration order, no
 All geometry lives in `client/src/physics.ts`. Two exported sources of truth,
 both consumed by `render.ts` so the drawn table always matches collision:
 
-- `CUSHION_SEGS` — the cushion polygon (rails + jaws) a ball bounces off.
+- `CUSHION_SEGS` — the cushion polygon faces (rails + jaws) a ball bounces off,
+  on the true felt surface.
+- `CUSHION_VERTS` — the convex corners (nose/jaw tips + mouth corners) a ball
+  rounds; it rebounds off each as a point-circle of radius `R`, so it deflects
+  off a corner at whatever angle it arrives.
 - `POCKET_LIST` — the pocket hole circles (one circle = pot test AND drawn hole).
 
 Edit the constants below and rebuild; do **not** hand-edit `CUSHION_SEGS`
@@ -22,9 +26,12 @@ Edit the constants below and rebuild; do **not** hand-edit `CUSHION_SEGS`
 You define felt-surface segments for the **top-left quadrant only**; the build
 mirrors them across both mid-lines into all four quadrants (so the table is
 forced symmetric — asymmetry needs explicit segments outside the mirror loop).
-Collision then insets each felt segment by `R` (ball radius) to get the
-ball-centre locus it reflects off. Coordinates are world metres; origin at the
-cloth corner.
+The faces stay on the felt surface; collision insets each by `R` (ball radius)
+on the fly (a ball touches the felt when its centre is `R` away). Convex corners
+between/at the ends of faces are auto-detected into `CUSHION_VERTS` and rounded
+as `R`-circles, which is what gives realistic corner rebounds — there is no
+miter fudging the flat faces into each other. Coordinates are world metres;
+origin at the cloth corner.
 
 Each face's inward normal auto-orients toward the table centre. A corner **jaw**
 runs along the corner diagonal, where that heuristic is degenerate, so jaw
@@ -93,8 +100,9 @@ Overlay legend:
 
 | Colour | Shows |
 |--------|-------|
-| Red | Cushion contact surface (the face a ball's edge strikes) |
+| Red | Cushion contact surface (the felt face a ball's edge strikes) |
 | Salmon tick | Inward normal at each face midpoint (which way it pushes) |
+| Purple | Convex-corner `R`-circles (`CUSHION_VERTS`) the ball centre rounds |
 | Green | Pocket pot circles (centre inside → ball drops) |
 | Orange | Hard outer pocket walls (rattle backstop) |
 | Yellow | Per-ball edge (radius `R`) |
