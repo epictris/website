@@ -25,7 +25,7 @@ import {
   type World,
 } from "./physics";
 import { drawScene, layoutFor, type Aim, type Layout } from "./render";
-import { evaluateShot, initRules, type RulesState } from "./rules";
+import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
 import { wsUrl, type Msg } from "./net";
 import {
   buildReplay,
@@ -121,38 +121,9 @@ const Game: Component = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen().catch(() => {});
   };
-  // On-load nudge: on a touch device that isn't fullscreen yet, offer to go
-  // immersive + lock rotation. Orientation lock only works while fullscreen,
-  // so both must fire from the one tap.
-  const [showFsPrompt, setShowFsPrompt] = createSignal(false);
-  const isMobile =
-    typeof matchMedia !== "undefined" &&
-    matchMedia("(pointer: coarse)").matches &&
-    window.innerWidth < 900;
-  // iOS has no Fullscreen API — the only route to a chromeless app is
-  // Add-to-Home-Screen. Can't trigger the Share sheet, so we show a hint.
-  const [showA2HS, setShowA2HS] = createSignal(false);
-  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-  const isIOS =
-    /iP(hone|od|ad)/.test(ua) ||
-    // iPadOS 13+ masquerades as a Mac.
-    (navigator?.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  // In-app webviews (Instagram, etc.) can't A2HS; only real Safari can.
-  const isIOSSafari =
-    isIOS && /Safari/.test(ua) && !/(CriOS|FxiOS|EdgiOS|GSA|Instagram|FBAN|FBAV)/.test(ua);
-  const isStandalone =
-    (navigator as any)?.standalone === true ||
-    (typeof matchMedia !== "undefined" &&
-      matchMedia("(display-mode: standalone)").matches);
-  const enterImmersive = async () => {
-    setShowFsPrompt(false);
-    try {
-      await document.documentElement.requestFullscreen();
-      await (screen.orientation as any)?.lock?.("portrait");
-    } catch {
-      // Fullscreen refused or orientation lock unsupported — ignore.
-    }
-  };
+  // Fullscreen play is delivered by installing to the home screen (the web
+  // manifest's `display: fullscreen` + `orientation: landscape`), so there's no
+  // in-app nudge — the desktop menu still exposes a manual fullscreen toggle.
   const [track, bump] = createSignal(0, { equals: false }); // force UI recompute
 
   const myPlayer = () => (mySlot() < 0 ? 0 : Math.min(mySlot(), 1));
@@ -404,6 +375,12 @@ const Game: Component = () => {
 
   const draw = () => {
     const r = rules();
+    const myGroup = r.groups[myPlayer()];
+    // Shooter is "on the 8" once every ball of their group is potted — only then
+    // is the black a legal first target.
+    const onEight =
+      myGroup !== null &&
+      !world.balls.some((b) => !b.potted && groupOf(b.id) === myGroup);
     const aim: Aim = {
       angle: aimAngle,
       power: power(),
@@ -418,7 +395,8 @@ const Game: Component = () => {
       prediction: canAct() ? prediction : undefined,
       showCue: canAct(),
       ballInHand: canAct() && r.ballInHand,
-      myGroup: r.groups[myPlayer()],
+      myGroup,
+      onEight,
       opponent: opp,
       animating: animating(),
       debug: debug(),
@@ -778,16 +756,10 @@ const Game: Component = () => {
     };
     window.addEventListener("keydown", onKey);
     const onFsChange = () => {
-      const fs = !!document.fullscreenElement;
-      setFullscreen(fs);
-      if (fs) setShowFsPrompt(false);
+      setFullscreen(!!document.fullscreenElement);
       resize(); // viewport dimensions change entering/leaving fullscreen
     };
     document.addEventListener("fullscreenchange", onFsChange);
-    // Anyone opening a session link is offered fullscreen up front.
-    if (isIOSSafari && !isStandalone) setShowA2HS(true);
-    else if (canFullscreen && !document.fullscreenElement)
-      setShowFsPrompt(true);
     connect();
     raf = requestAnimationFrame(frame);
 
@@ -961,42 +933,6 @@ const Game: Component = () => {
                 <circle class="tip" cx={cueGeom().tip.x} cy={cueGeom().tip.y} r="2.8" />
               </svg>
             </div>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={showFsPrompt()}>
-        <div class="menu-backdrop" onClick={() => setShowFsPrompt(false)} />
-        <div class="fs-prompt">
-          <div class="fs-prompt-title">Play fullscreen?</div>
-          <p>
-            {isMobile
-              ? "Go fullscreen — then turn your phone sideways to play."
-              : "Go fullscreen for the best game."}
-          </p>
-          <div class="fs-prompt-actions">
-            <button onClick={enterImmersive}>enter fullscreen</button>
-            <button class="ghost" onClick={() => setShowFsPrompt(false)}>
-              not now
-            </button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={showA2HS()}>
-        <div class="menu-backdrop" onClick={() => setShowA2HS(false)} />
-        <div class="fs-prompt">
-          <div class="fs-prompt-title">Add to Home Screen</div>
-          <p>
-            For fullscreen play, tap the Share button{" "}
-            <span class="ios-share" aria-hidden="true">
-              &#x2191;
-            </span>{" "}
-            below, then <strong>Add to Home Screen</strong>. Launch pool from the
-            new icon.
-          </p>
-          <div class="fs-prompt-actions">
-            <button onClick={() => setShowA2HS(false)}>got it</button>
           </div>
         </div>
       </Show>

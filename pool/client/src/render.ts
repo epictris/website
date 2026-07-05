@@ -125,6 +125,7 @@ export type Scene = {
   showCue?: boolean; // draw the physical cue stick behind the ball
   ballInHand?: boolean;
   myGroup?: Group | null;
+  onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
   opponent?: { cursor?: Vec; aim?: Aim };
   animating?: boolean;
   sinks?: Sink[]; // balls mid-drop into a pocket
@@ -140,7 +141,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   // Aim assist — the spin-aware predicted path, shown only once power is being
   // dialled in (no preview at zero power).
   if (s.myAim && s.prediction && !s.animating)
-    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null);
+    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null, s.onEight ?? false);
 
   drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
@@ -565,6 +566,7 @@ function drawPrediction(
   l: Layout,
   pr: Prediction,
   myGroup: Group | null,
+  onEight: boolean,
 ) {
   const rpx = R * l.scale;
   ctx.save();
@@ -582,7 +584,10 @@ function drawPrediction(
     pr.objectId !== undefined &&
     groupOf(pr.objectId) !== myGroup &&
     groupOf(pr.objectId) !== "eight";
-  const foul = pr.cuePotted || oppHit;
+  // Hitting the 8 first is a foul unless the shooter is on the 8 (group cleared).
+  const eightHit =
+    pr.objectId !== undefined && groupOf(pr.objectId) === "eight" && !onEight;
+  const foul = pr.cuePotted || oppHit || eightHit;
 
   // Struck ball's initial travel — solid white line from its centre. Suppressed
   // on a predicted foul (the shot is illegal, so its outcome isn't previewed).
@@ -609,7 +614,7 @@ function drawPrediction(
     ? pr.cue.length
       ? pr.cue[pr.cue.length - 1]
       : null
-    : oppHit
+    : oppHit || eightHit
       ? pr.ghost
       : null;
   if (crossAt) {

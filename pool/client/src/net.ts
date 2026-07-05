@@ -40,3 +40,20 @@ export function wsUrl(room: string): string {
     : "ws://localhost:8080";
   return `${base}/ws?id=${encodeURIComponent(room)}`;
 }
+
+/** HTTP origin of the game server (same host in prod, the relay in dev). */
+function apiBase(): string {
+  return import.meta.env.PROD ? location.origin : "http://localhost:8080";
+}
+
+export type RoomInfo = { code: string; created: number };
+
+/** The lobby: games with a single player waiting for an opponent. */
+export async function fetchRooms(): Promise<RoomInfo[]> {
+  try {
+    const res = await fetch(`${apiBase()}/rooms`);
+    return res.ok ? ((await res.json()) as RoomInfo[]) : [];
+  } catch {
+    return [];
+  }
+}

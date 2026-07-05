@@ -1,7 +1,8 @@
 import { render } from "solid-js/web";
-import { Route, Router } from "@solidjs/router";
-import { createSignal, type Component } from "solid-js";
+import { Route, Router, useNavigate } from "@solidjs/router";
+import { createSignal, onCleanup, onMount, For, type Component } from "solid-js";
 import Game from "./Game";
+import { fetchRooms, type RoomInfo } from "./net";
 import "./styles.css";
 
 // Generate a short random room code (URL-safe, no lookalike chars).
@@ -11,16 +12,25 @@ function newCode(): string {
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 }
 
-// Landing (main menu). For now it's a single Multiplayer button: it mints a new
-// session and copies the invite link to the clipboard — WITHOUT navigating. The
-// player stays here; opening the link (yourself or a friend) enters the game.
+// Landing (main menu): "New Game" mints a room and enters it (you wait there as
+// a solo table until someone joins), and below it a live lobby of every game
+// with a single player waiting — each one joinable in a tap, no link needed.
 const Landing: Component = () => {
-  const [link, setLink] = createSignal("");
-  const startMultiplayer = () => {
-    const url = `${location.origin}/${newCode()}`;
-    navigator.clipboard?.writeText(url).catch(() => {});
-    setLink(url);
+  const navigate = useNavigate();
+  const [rooms, setRooms] = createSignal<RoomInfo[]>([]);
+  const [loaded, setLoaded] = createSignal(false);
+
+  const refresh = async () => {
+    setRooms(await fetchRooms());
+    setLoaded(true);
   };
+
+  onMount(() => {
+    refresh();
+    const t = setInterval(refresh, 3000);
+    onCleanup(() => clearInterval(t));
+  });
+
   return (
     <div class="main-menu landing">
       <div class="menu-head">
@@ -28,19 +38,30 @@ const Landing: Component = () => {
           pool<span class="dim">.tris.sh</span>
         </span>
       </div>
-      <button class="primary mm-start" onClick={startMultiplayer}>
-        Multiplayer
+      <button
+        class="primary mm-start"
+        onClick={() => navigate(`/${newCode()}`)}
+      >
+        New Game
       </button>
-      <div class="link-row">
-        {link()
-          ? "Invite link copied to your clipboard — open it to start, and send it to a friend to play."
-          : "Creates a new game and copies its invite link to your clipboard."}
+      <div class="lobby">
+        <div class="lobby-head">Joinable games</div>
+        <For
+          each={rooms()}
+          fallback={
+            <div class="lobby-empty">
+              {loaded() ? "No open games — start one!" : "Loading…"}
+            </div>
+          }
+        >
+          {(r) => (
+            <div class="lobby-row">
+              <span class="lobby-code">{r.code}</span>
+              <button onClick={() => navigate(`/${r.code}`)}>Join</button>
+            </div>
+          )}
+        </For>
       </div>
-      {link() && (
-        <div class="link-row">
-          <a href={link()}>{link()}</a>
-        </div>
-      )}
     </div>
   );
 };

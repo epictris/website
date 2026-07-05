@@ -23,6 +23,8 @@ type Room = {
   sockets: Set<Bun.ServerWebSocket<SocketData>>;
   /** Monotonic counter so a rejoining peer keeps taking the next free slot. */
   nextSlot: number;
+  /** When the room was first opened — for sorting the joinable lobby list. */
+  created: number;
 };
 
 const rooms = new Map<string, Room>();
@@ -30,7 +32,7 @@ const rooms = new Map<string, Room>();
 function getRoom(code: string): Room {
   let room = rooms.get(code);
   if (!room) {
-    room = { sockets: new Set(), nextSlot: 0 };
+    room = { sockets: new Set(), nextSlot: 0, created: Date.now() };
     rooms.set(code, room);
   }
   return room;
@@ -70,6 +72,18 @@ const server = Bun.serve<SocketData, undefined>({
     }
 
     if (url.pathname === "/healthz") return new Response("ok");
+
+    // Lobby: the joinable games — rooms holding exactly one waiting player.
+    // Newest first. (CORS-open so the dev client on another port can poll it.)
+    if (url.pathname === "/rooms") {
+      const list = [...rooms.entries()]
+        .filter(([, r]) => r.sockets.size === 1)
+        .map(([code, r]) => ({ code, created: r.created }))
+        .sort((a, b) => b.created - a.created);
+      return Response.json(list, {
+        headers: { "access-control-allow-origin": "*" },
+      });
+    }
 
     // Static file serving with SPA fallback to index.html.
     const safe = normalize(url.pathname).replace(/^(\.\.[/\\])+/, "");

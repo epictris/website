@@ -46,10 +46,13 @@ in `Game.tsx` pointer handlers + these widgets:
 - **Ball-in-hand** (after a foul) — *drag* the cue ball to reposition it.
 
 **Join flow** — the root route `/` renders the **Landing** menu (`index.tsx`): a
-single **Multiplayer** button that mints a random room code and copies
-`origin/<code>` to the clipboard **without navigating** — the player stays on the
-landing and sees the copied link. Opening that link (yourself or a friend) enters
-`/:room`, where you're offered **fullscreen** (`showFsPrompt`) and land straight
+**New Game** button that mints a random room code and navigates to `/:room`, plus
+a live **lobby** below it. The lobby polls `GET /rooms` every 3s (`fetchRooms` in
+`net.ts`) — the server returns every room holding exactly one socket (a single
+waiting player), newest first — and renders a **Join** button per game that
+navigates straight into it. No link-sharing needed; opening a shared `origin/<code>`
+link still works as a direct entry. Landing on `/:room` you're offered
+**fullscreen** (`showFsPrompt`) and land straight
 on a **solo practice table** (`started` defaults to `true`; `solo()` is
 `peerCount <= 1`, so you can shoot freely, turns ignored). A `.solo-hint` banner
 shows the copy-link while waiting.
