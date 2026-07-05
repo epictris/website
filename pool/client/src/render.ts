@@ -3,15 +3,30 @@
 // opponent's live ghost cue / cursor. Pure drawing — no game logic.
 
 import {
-  CUSHIONS,
+  CUSHION_SEGS,
+  POCKET_DEPTH,
   POCKET_LIST,
   R,
   TABLE,
-  type Cushion,
   type Prediction,
   type Vec,
   type World,
 } from "./physics";
+
+// The table is a photo (public/table.png). These are the pixel coordinates of
+// its felt playfield (the cushion-nose rectangle) within that image, measured
+// once — the felt box is mapped onto the physics play area so the drawn table,
+// its pockets, and the collision geometry all line up.
+const IMG = { W: 1219, H: 806, fx: 130, fy: 148, fw: 959, fh: 509 };
+let tableImg: HTMLImageElement | null = null;
+let tableReady = false;
+function ensureTableImg() {
+  if (tableImg || typeof Image === "undefined") return;
+  tableImg = new Image();
+  tableImg.crossOrigin = "anonymous";
+  tableImg.onload = () => (tableReady = true);
+  tableImg.src = "https://i.imgur.com/hpYbnXk.png";
+}
 import type { Group } from "./rules";
 
 export type Layout = {
@@ -26,22 +41,36 @@ export type Layout = {
   H: number; // full canvas css height
 };
 
-/** Build a layout at a given px-per-metre, optionally rotated to portrait. */
+/**
+ * Build a layout at a given px-per-metre, optionally rotated to portrait. The
+ * canvas is sized to hold the whole table PHOTO: the felt box maps onto the play
+ * area, and the surrounding wooden rails extend outside it. Rail widths come
+ * straight from the image, so the canvas is bigger than the bare playfield.
+ */
 export function layoutFor(scale: number, rotated = false): Layout {
-  const rail = Math.max(22, scale * 0.09);
+  const Wpx = TABLE.w * scale;
+  const Hpx = TABLE.h * scale;
+  // Screen delta (css px) for a full world width (U) / height (V), matching how
+  // toPx maps world -> screen in each orientation.
+  const U = rotated ? { x: 0, y: Wpx } : { x: Wpx, y: 0 };
+  const V = rotated ? { x: -Hpx, y: 0 } : { x: 0, y: Hpx };
+  // Where each image corner lands relative to world (0,0), via the felt mapping.
+  const off = (ix: number, iy: number) => {
+    const a = (ix - IMG.fx) / IMG.fw;
+    const b = (iy - IMG.fy) / IMG.fh;
+    return { x: a * U.x + b * V.x, y: a * U.y + b * V.y };
+  };
+  const cs = [off(0, 0), off(IMG.W, 0), off(0, IMG.H), off(IMG.W, IMG.H)];
+  const minx = Math.min(...cs.map((c) => c.x));
+  const maxx = Math.max(...cs.map((c) => c.x));
+  const miny = Math.min(...cs.map((c) => c.y));
+  const maxy = Math.max(...cs.map((c) => c.y));
+  // Shift world (0,0) so the image starts at the canvas origin.
+  const ox = (rotated ? -minx - Hpx : -minx);
+  const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
   const ph = (rotated ? TABLE.w : TABLE.h) * scale;
-  return {
-    scale,
-    ox: rail,
-    oy: rail,
-    rail,
-    rotated,
-    pw,
-    ph,
-    W: pw + rail * 2,
-    H: ph + rail * 2,
-  };
+  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx, H: maxy - miny };
 }
 
 // World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
@@ -89,11 +118,13 @@ export type Scene = {
   opponent?: { cursor?: Vec; aim?: Aim };
   animating?: boolean;
   sinks?: Sink[]; // balls mid-drop into a pocket
+  debug?: boolean; // overlay the real collision geometry
 };
 
 export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   const l = s.layout;
   ctx.clearRect(0, 0, l.W, l.H);
+  ensureTableImg();
   drawTable(ctx, l);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
@@ -110,130 +141,109 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
     drawCueStick(ctx, l, s.world, s.myAim);
 
   if (s.opponent?.cursor) drawCursor(ctx, l, s.opponent.cursor);
+
+  if (s.debug) drawDebugOverlay(ctx, l, s.world);
 }
 
-// A cushion drawn as an angled blue block. The nose (felt edge) spans the full
-// collision extent [lo, hi]; the outer (rail) edge is narrower, so the ends
-// come to jaw points aimed at the pockets — the classic cushion facing.
-function cushionPoly(c: Cushion): [Vec, Vec, Vec, Vec] {
-  const D = 0.05; // depth into the rail (blue band width)
-  const F = 0.035; // jaw facing angle
-  switch (c.rail) {
-    case "ymin":
-      return [
-        { x: c.lo, y: 0 }, { x: c.hi, y: 0 },
-        { x: c.hi - F, y: -D }, { x: c.lo + F, y: -D },
-      ];
-    case "ymax":
-      return [
-        { x: c.lo, y: TABLE.h }, { x: c.hi, y: TABLE.h },
-        { x: c.hi - F, y: TABLE.h + D }, { x: c.lo + F, y: TABLE.h + D },
-      ];
-    case "xmin":
-      return [
-        { x: 0, y: c.lo }, { x: 0, y: c.hi },
-        { x: -D, y: c.hi - F }, { x: -D, y: c.lo + F },
-      ];
-    default: // xmax
-      return [
-        { x: TABLE.w, y: c.lo }, { x: TABLE.w, y: c.hi },
-        { x: TABLE.w + D, y: c.hi - F }, { x: TABLE.w + D, y: c.lo + F },
-      ];
-  }
-}
+// Overlay the collision boundaries the physics ACTUALLY uses. The engine works
+// in ball-CENTRE space (a centre reflects at inset R), but a centre locus floats
+// R inside the felt and reads as "wrong". So cushions are drawn on the physical
+// CONTACT SURFACE — each centre face pushed out by R along its normal — which is
+// exactly where a ball's edge touches the rail. Pockets are already a pure
+// centre test whose circle is the drawn hole, so those need no shift.
+function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World) {
+  ctx.save();
+  ctx.lineWidth = Math.max(1, l.scale * 0.006);
 
-function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
-  // Black rail frame.
-  const frame = ctx.createLinearGradient(0, 0, 0, l.H);
-  frame.addColorStop(0, "#151515");
-  frame.addColorStop(0.5, "#0b0b0b");
-  frame.addColorStop(1, "#050505");
-  ctx.fillStyle = frame;
-  roundRect(ctx, 0, 0, l.W, l.H, l.rail * 0.8);
-  ctx.fill();
-
-  const px = l.ox;
-  const py = l.oy;
-  const pw = l.pw;
-  const ph = l.ph;
-
-  // Bright blue baize with a lit centre.
-  const felt = ctx.createRadialGradient(
-    px + pw * 0.45,
-    py + ph * 0.4,
-    Math.min(pw, ph) * 0.1,
-    px + pw / 2,
-    py + ph / 2,
-    Math.max(pw, ph) * 0.72,
-  );
-  felt.addColorStop(0, "#28abe8");
-  felt.addColorStop(1, "#1487c8");
-  ctx.fillStyle = felt;
-  ctx.fillRect(px, py, pw, ph);
-
-  // Blue felt cushions: nose (felt side) shadowed, rail side lit; jaw points
-  // aim at the pockets. A subtle dark crease sits at the nose.
-  for (const c of CUSHIONS) {
-    const poly = cushionPoly(c).map((p) => toPx(l, p));
-    const noseMid = { x: (poly[0].x + poly[1].x) / 2, y: (poly[0].y + poly[1].y) / 2 };
-    const backMid = { x: (poly[2].x + poly[3].x) / 2, y: (poly[2].y + poly[3].y) / 2 };
-    const grad = ctx.createLinearGradient(noseMid.x, noseMid.y, backMid.x, backMid.y);
-    grad.addColorStop(0, "#1a91cf");
-    grad.addColorStop(1, "#2eaee6");
-    ctx.fillStyle = grad;
+  // Cushion contact surface — the nose + angled jaws a ball's edge strikes. Each
+  // centre-space face is offset out by R onto the felt. Ticks show the normal.
+  ctx.strokeStyle = "#ff3b3b";
+  for (const s of CUSHION_SEGS) {
+    // Push the face out of the playfield by R (opposite the inward normal).
+    const surf = (p: Vec): Vec => ({ x: p.x - s.nx * R, y: p.y - s.ny * R });
+    const a = toPx(l, surf(s.a));
+    const b = toPx(l, surf(s.b));
     ctx.beginPath();
-    ctx.moveTo(poly[0].x, poly[0].y);
-    for (let i = 1; i < 4; i++) ctx.lineTo(poly[i].x, poly[i].y);
-    ctx.closePath();
-    ctx.fill();
-    // Nose crease shadow onto the felt.
-    ctx.strokeStyle = "rgba(0,0,0,0.18)";
-    ctx.lineWidth = Math.max(1, l.scale * 0.005);
-    ctx.beginPath();
-    ctx.moveTo(poly[0].x, poly[0].y);
-    ctx.lineTo(poly[1].x, poly[1].y);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
     ctx.stroke();
+    const mid = surf({ x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 });
+    const m = toPx(l, mid);
+    const n = toPx(l, { x: mid.x + s.nx * 0.02, y: mid.y + s.ny * 0.02 });
+    ctx.strokeStyle = "rgba(255,120,120,0.7)";
+    ctx.beginPath();
+    ctx.moveTo(m.x, m.y);
+    ctx.lineTo(n.x, n.y);
+    ctx.stroke();
+    ctx.strokeStyle = "#ff3b3b";
   }
 
-  // Pocket holes: the SAME circle the physics uses to pot, so visual == capture.
+  // Pocket pot circles — a centre inside this drops the ball.
+  ctx.strokeStyle = "#39ff88";
   for (const pk of POCKET_LIST) {
     const c = toPx(l, pk.center);
-    const r = pk.hole * l.scale;
-    const g = ctx.createRadialGradient(c.x, c.y, r * 0.2, c.x, c.y, r);
-    g.addColorStop(0, "#000");
-    g.addColorStop(1, "#0a0a0a");
-    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(210,214,222,0.8)";
-    ctx.lineWidth = Math.max(1.4, l.scale * 0.007);
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.arc(c.x, c.y, pk.hole * l.scale, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  // White sight dots on the black rail.
-  ctx.fillStyle = "#e6e6de";
-  const off = (l.rail * 0.5) / l.scale; // into the rail, in world units
-  const dot = (p: Vec) => {
-    const c = toPx(l, p);
+  // Hard outer pocket walls — where a centre reflects if it misses the hole.
+  ctx.strokeStyle = "rgba(255,170,40,0.8)";
+  const wall = toPx(l, { x: -POCKET_DEPTH, y: -POCKET_DEPTH });
+  const wall2 = toPx(l, { x: TABLE.w + POCKET_DEPTH, y: TABLE.h + POCKET_DEPTH });
+  ctx.strokeRect(
+    Math.min(wall.x, wall2.x),
+    Math.min(wall.y, wall2.y),
+    Math.abs(wall2.x - wall.x),
+    Math.abs(wall2.y - wall.y),
+  );
+
+  // Per-ball loci: R (own edge) and 2R (where another centre first contacts it).
+  for (const b of world.balls) {
+    if (b.potted) continue;
+    const c = toPx(l, b.p);
+    ctx.strokeStyle = "rgba(255,221,51,0.9)";
     ctx.beginPath();
-    ctx.arc(c.x, c.y, Math.max(1.4, l.scale * 0.009), 0, Math.PI * 2);
-    ctx.fill();
-  };
-  for (let i = 1; i < 8; i++) {
-    if (i === 4) continue; // side pocket
-    const x = (TABLE.w * i) / 8;
-    dot({ x, y: -off });
-    dot({ x, y: TABLE.h + off });
+    ctx.arc(c.x, c.y, R * l.scale, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(90,220,255,0.5)";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 2 * R * l.scale, 0, Math.PI * 2);
+    ctx.stroke();
   }
-  for (let i = 1; i < 4; i++) {
-    if (i === 2) continue;
-    const y = (TABLE.h * i) / 4;
-    dot({ x: -off, y });
-    dot({ x: TABLE.w + off, y });
+
+  ctx.restore();
+}
+
+// Draw the table PHOTO. The image's felt box (IMG.f*) is mapped onto the world
+// play area with an affine transform derived from three world corners, so it
+// works in both orientations (portrait just rotates U/V) and keeps the felt,
+// pockets, and collision geometry aligned.
+function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
+  if (!tableImg || !tableReady) {
+    // Until the photo loads, fill the play area with felt colour so balls read.
+    ctx.fillStyle = "#1f9ad6";
+    ctx.fillRect(l.ox, l.oy, l.pw, l.ph);
+    return;
   }
+  const c00 = toPx(l, { x: 0, y: 0 });
+  const c10 = toPx(l, { x: TABLE.w, y: 0 });
+  const c01 = toPx(l, { x: 0, y: TABLE.h });
+  const ux = c10.x - c00.x;
+  const uy = c10.y - c00.y;
+  const vx = c01.x - c00.x;
+  const vy = c01.y - c00.y;
+  // image (ix,iy) -> screen: c00 + ((ix-fx)/fw)U + ((iy-fy)/fh)V.
+  const m11 = ux / IMG.fw;
+  const m12 = uy / IMG.fw;
+  const m21 = vx / IMG.fh;
+  const m22 = vy / IMG.fh;
+  const dx = c00.x - (IMG.fx / IMG.fw) * ux - (IMG.fy / IMG.fh) * vx;
+  const dy = c00.y - (IMG.fx / IMG.fw) * uy - (IMG.fy / IMG.fh) * vy;
+  ctx.save();
+  ctx.transform(m11, m12, m21, m22, dx, dy); // composes onto the dpr transform
+  ctx.drawImage(tableImg, 0, 0);
+  ctx.restore();
 }
 
 /** Draw a single glossy numbered ball at pixel centre c, radius rpx, alpha. */
@@ -470,20 +480,4 @@ function lighten(hex: string, amt: number) {
 function darken(hex: string, amt: number) {
   const { r, g, b } = hexToRgb(hex);
   return `rgb(${clamp(r * (1 - amt))},${clamp(g * (1 - amt))},${clamp(b * (1 - amt))})`;
-}
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
 }

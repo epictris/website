@@ -95,6 +95,7 @@ const Game: Component = () => {
   const [replaying, setReplaying] = createSignal(false);
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
+  const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [track, bump] = createSignal(0, { equals: false }); // force UI recompute
 
   const myPlayer = () => (mySlot() < 0 ? 0 : Math.min(mySlot(), 1));
@@ -344,6 +345,7 @@ const Game: Component = () => {
       myGroup: r.groups[myPlayer()],
       opponent: opp,
       animating: animating(),
+      debug: debug(),
       sinks: sinks.map((sk) => ({
         id: sk.id,
         from: sk.from,
@@ -559,17 +561,16 @@ const Game: Component = () => {
       // the screen; everything else stays landscape.
       const portrait =
         window.innerHeight > window.innerWidth && window.innerWidth < 700;
-      // Fit the table into the viewport minus edge padding, rails, and the row
-      // of widgets below it — so everything is always visible on any screen.
+      // Fit the whole table PHOTO (felt + wooden rails) into the viewport minus
+      // edge padding and the widget row. The canvas size scales linearly with
+      // `scale`, so measure it at scale 1 and divide the available space by that.
       const PAD = 12;
-      const RAILPX = 28; // rail allowance per side
       const WIDGETS = 132; // spin / cue-angle / menu row + gaps
-      const widthWorld = portrait ? TABLE.h : TABLE.w;
-      const heightWorld = portrait ? TABLE.w : TABLE.h;
-      const availW = window.innerWidth - PAD * 2 - RAILPX * 2;
-      const availH = window.innerHeight - PAD * 2 - RAILPX * 2 - WIDGETS;
-      let scale = Math.min(availW / widthWorld, availH / heightWorld);
-      scale = Math.max(60, Math.min(scale, 430));
+      const unit = layoutFor(1, portrait);
+      const availW = window.innerWidth - PAD * 2;
+      const availH = window.innerHeight - PAD * 2 - WIDGETS;
+      let scale = Math.min(availW / unit.W, availH / unit.H);
+      scale = Math.max(40, Math.min(scale, 430));
       layout = layoutFor(scale, portrait);
       const dpr = window.devicePixelRatio || 1;
       canvas.width = layout.W * dpr;
@@ -580,12 +581,19 @@ const Game: Component = () => {
     };
     resize();
     window.addEventListener("resize", resize);
+    // Press "d" to toggle the collision-geometry debug overlay.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey)
+        setDebug((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
     connect();
     raf = requestAnimationFrame(frame);
 
     onCleanup(() => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
+      window.removeEventListener("keydown", onKey);
       ws?.close();
     });
   });
@@ -743,6 +751,9 @@ const Game: Component = () => {
             <div class="control">
               <button onClick={() => doRematch(((breaker ^ 1) as 0 | 1), true)}>
                 new game
+              </button>
+              <button onClick={() => setDebug((v) => !v)}>
+                {debug() ? "hide" : "show"} collision debug (d)
               </button>
             </div>
 
