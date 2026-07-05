@@ -22,12 +22,20 @@
 export type Vec = { x: number; y: number };
 export type Spin = { x: number; y: number; z: number };
 
+// Row-major 3x3 orientation matrix (world = M · body). Purely cosmetic — it
+// tracks how far a ball has physically rolled/spun so the renderer can draw its
+// surface markings turning. It is NOT part of the synced/deterministic state
+// (positions are), so it may be absent; treat a missing `o` as the identity.
+export type Mat3 = [number, number, number, number, number, number, number, number, number];
+export const IDENT3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
 export type Ball = {
   id: number; // 0 = cue, 1..7 solids, 8 = eight, 9..15 stripes
   p: Vec;
   v: Vec;
   w: Spin;
   potted: boolean;
+  o?: Mat3; // surface orientation (cosmetic; identity if absent)
 };
 
 export type World = {
@@ -947,6 +955,51 @@ export function atRest(world: World): boolean {
     if (len(ux, uy) > REST_V) return false;
   }
   return true;
+}
+
+// --- Surface orientation (cosmetic spin visualisation) ----------------------
+/** A · B for two row-major 3x3 matrices. */
+function mul3(a: Mat3, b: Mat3): Mat3 {
+  return [
+    a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+    a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+    a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+    a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+    a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+    a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+    a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+    a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+    a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+  ];
+}
+
+/**
+ * Advance each ball's surface orientation by its angular velocity over `dt`.
+ * Rotation is applied in the WORLD frame (w is a world-frame angular velocity),
+ * so M_new = Rodrigues(w, |w|·dt) · M_old. Exact axis-angle (not small-angle):
+ * a hard shot spins several radians per fixed step. Cosmetic only — call it
+ * alongside stepFixed to keep the drawn markings turning; it never touches
+ * positions/velocities and so can't affect the deterministic simulation.
+ */
+export function integrateSpin(world: World, dt: number) {
+  for (const b of world.balls) {
+    if (b.potted) continue;
+    const wm = Math.hypot(b.w.x, b.w.y, b.w.z);
+    if (wm < 1e-9) continue;
+    const ang = wm * dt;
+    const kx = b.w.x / wm;
+    const ky = b.w.y / wm;
+    const kz = b.w.z / wm;
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const t = 1 - c;
+    const rot: Mat3 = [
+      t * kx * kx + c, t * kx * ky - s * kz, t * kx * kz + s * ky,
+      t * kx * ky + s * kz, t * ky * ky + c, t * ky * kz - s * kx,
+      t * kx * kz - s * ky, t * ky * kz + s * kx, t * kz * kz + c,
+    ];
+    b.o = mul3(rot, b.o ?? IDENT3);
+  }
 }
 
 /** Snap tiny residual motion to zero so rest state is exactly reproducible. */

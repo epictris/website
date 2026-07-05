@@ -7,6 +7,7 @@ import {
   DEFAULT_CONFIG,
   freeze,
   FIXED_DT,
+  integrateSpin,
   MAX_ELEVATION,
   PARAMS,
   POCKET_LIST,
@@ -338,6 +339,7 @@ const Game: Component = () => {
       let steps = 0;
       while (acc >= FIXED_DT && steps < 600) {
         stepFixed(world, events, shotConfig);
+        integrateSpin(world, FIXED_DT); // roll the surface markings with the shot
         acc -= FIXED_DT;
         steps++;
         if (atRest(world)) break;
