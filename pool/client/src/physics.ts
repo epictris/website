@@ -518,7 +518,11 @@ export function applyShot(world: World, shot: Shot) {
 
   // Spin magnitude uses the *full* tip speed (independent of elevation) — that
   // is why a high angle + big backspin gives lots of spin but little travel.
-  const spin = (2.5 * V) / R;
+  // The coefficient is the tip-offset limit: ω = (5/2)(b/R)(V/R). A real chalked
+  // tip miscues past b = R/2, so a full slider (follow/side = ±1) maps to that
+  // miscue offset — coefficient (5/2)·(1/2) = 1.25, NOT 2.5 (which is a
+  // physically impossible edge strike, b = R).
+  const spin = (1.25 * V) / R;
   const wf = spin * shot.follow; // draw(-) / follow(+) about the roll axis
   // Side English. Negated because the world is screen-handed (y points down):
   // left-of-shot English (side < 0) must give wz > 0 so the ball curves and

@@ -1062,21 +1062,30 @@ const Game: Component = () => {
   let spinEl!: HTMLDivElement;
   const onSpin = (e: PointerEvent) => {
     const p = localPoint(spinEl, e);
-    let nx = (p.x / p.w) * 2 - 1; // -1..1
-    let ny = (p.y / p.h) * 2 - 1;
-    const r = Math.hypot(nx, ny); // clamp radially so the dot stays in the circle
+    // Pointer as a fraction of the ball radius (pad edge = the ball's edge).
+    const nx = (p.x / p.w) * 2 - 1;
+    const ny = (p.y / p.h) * 2 - 1;
+    // side/follow are normalised so ±1 == the miscue limit (half the ball
+    // radius — see applyShot's 1.25 coefficient). A ball-fraction of 0.5 is a
+    // full slider, so scale up, then clamp to the unit (miscue) circle: past the
+    // miscue ring the dot pins to it, it can never be placed outside.
+    let sx = nx * 2;
+    let sy = ny * 2;
+    const r = Math.hypot(sx, sy);
     if (r > 1) {
-      nx /= r;
-      ny /= r;
+      sx /= r;
+      sy /= r;
     }
-    setSide(nx);
-    setFollow(-ny); // up = follow (+)
+    setSide(sx);
+    setFollow(-sy); // up = follow (+)
     recomputePrediction();
   };
 
+  // Dot offset: ±1 slider sits at half the ball radius (the miscue ring). The
+  // pad's drawn radius is 50% of its box, so a full slider is 25% off centre.
   const spinDot = () => ({
-    left: `${50 + side() * 42}%`,
-    top: `${50 - follow() * 42}%`,
+    left: `${50 + side() * 25}%`,
+    top: `${50 - follow() * 25}%`,
   });
 
   // --- Cue elevation widget (square side view; drag the cue to set angle) ---
@@ -1210,6 +1219,7 @@ const Game: Component = () => {
               >
                 <div class="axis h" />
                 <div class="axis v" />
+                <div class="miscue" />
                 <div class="dot" style={spinDot()} />
               </div>
             </div>
