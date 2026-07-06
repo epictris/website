@@ -743,6 +743,8 @@ const Game: Component = () => {
   // any aim. Elevation (tf) foreshortens the length and fattens the butt, faking
   // the cue rearing up without any 3D transform to flatten out.
   const CUE_CURVE = 1.0; // how hard the colour rings bow toward the tip when reared
+  const CUE_PULL_TILT = 0.4; // rad of butt-toward-camera lift at full pull on a vertical cue
+  const CUE_PULL_ZOOM = 0.3; // extra scale at full pull on a vertical cue (nearer camera)
   const drawCueRod = (canvas: HTMLCanvasElement, sizeCss: number, elev: number, band: CueBand) => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.max(1, Math.round(sizeCss * dpr));
@@ -752,11 +754,10 @@ const Game: Component = () => {
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     const S = sizeCss;
-    const tf = elev / MAX_ELEVATION; // 0..1 how far the cue is reared up
     const cx = S / 2;
     const tipR = S * 0.0072; // ferrule half-width (thin end)
-    const buttR = S * 0.0168 * (1 + 0.9 * tf); // butt half-width, fattened when reared
-    const len = S * (0.9 - 0.5 * tf); // rears up → foreshortened
+    const buttR = S * 0.0168 * (1 + 0.9 * (1 - Math.cos(elev))); // fattens by cos when reared
+    const len = S * 0.9358 * Math.cos(elev); // rears up → foreshortened by cos (physical)
 
     // Rod silhouette: rounded nose at the top (its cap crown sits at y=0, the
     // pinned tip point) tapering out to a rounded butt.
@@ -799,11 +800,11 @@ const Game: Component = () => {
       ctx.fill();
     };
     fillFromRing(0, "#93685b"); // cue tip
-    fillFromRing(len * 0.011, "#f4efda"); // white part of the tip
-    fillFromRing(len * 0.05, "#e3c3a6"); // wood stem
-    fillFromRing(len * 0.635, "#1d1d1b"); // black grip
-    fillFromRing(len * 0.6675, band.light); // handle (red you / blue opponent)
-    fillFromRing(len * 0.9735, "#1d1d1b"); // black butt
+    fillFromRing(len * 0.0106, "#f4efda"); // white part of the tip
+    fillFromRing(len * 0.0481, "#e3c3a6"); // wood stem
+    fillFromRing(len * 0.6107, "#1d1d1b"); // black grip
+    fillFromRing(len * 0.642, band.light); // handle (red you / blue opponent)
+    fillFromRing(len * 0.9363, "#1d1d1b"); // black butt
 
     // Roundness via cel-shade stripes: solid, flat-alpha vertical bands across the
     // width (dark rims, one bright stripe off-centre) — clean edges, not gradients.
@@ -847,15 +848,24 @@ const Game: Component = () => {
     const tipX = bx + Math.cos(back) * gap;
     const tipY = by + Math.sin(back) * gap;
     const size = rpx * 32; // square canvas; the rod is drawn inside it
-    const pull = pwr * 6 * rpx; // pull-back slides the cue back along the aim line
-    // Tip (rod nose, canvas 50% 0) pinned to the tip point; a plain 2D rotate aims
-    // it. Elevation/roundness live in the drawing, so no 3D transform to flatten.
+    // Pull-back rides the elevated cue axis: the along-table slide shrinks with
+    // cos(elev), and a pull-driven 3D tilt (about the pinned tip, under perspective)
+    // lifts the butt UP OUT OF THE TABLE toward the camera — not up the screen. The
+    // static elevation look is already baked into the drawing; this only adds the
+    // lift while the cue is drawn back (and drives back down on the strike poke).
+    const pull = pwr * 6 * rpx;
+    const slide = pull * Math.cos(elev); // along the aim line
+    const tilt = pwr * Math.sin(elev) * CUE_PULL_TILT; // butt toward camera
+    const zoom = 1 + pwr * Math.sin(elev) * CUE_PULL_ZOOM; // nearer the camera → bigger
+    const persp = size * 2.5;
+    // Tip (rod nose, canvas 50% 0) pinned to the tip point; a plain 2D rotate aims it.
     el.style.width = `${size}px`;
     el.style.height = `${size}px`;
     el.style.left = `${tipX}px`;
     el.style.top = `${tipY}px`;
     el.style.transform =
-      `translate(-50%, 0) rotate(${back - Math.PI / 2}rad) translateY(${pull}px)`;
+      `translate(-50%, 0) scale(${zoom}) rotate(${back - Math.PI / 2}rad) ` +
+      `perspective(${persp}px) rotateX(${tilt}rad) translateY(${slide}px)`;
     drawCueRod(el, size, elev, band);
   };
 
@@ -876,7 +886,7 @@ const Game: Component = () => {
       el,
       aimAngle,
       active ? strikePwr : power(),
-      elevation(),
+      active ? strikeElev : elevation(), // swing/linger replay at the shot's angle
       CUE_RED,
       active ? strikeCuePos : undefined,
     );
@@ -1233,6 +1243,7 @@ const Game: Component = () => {
   let strikeShot: Shot | undefined;
   let strikePlace: Vec | undefined;
   let strikeCuePos: Vec | undefined; // frozen contact point for the linger
+  let strikeElev = 0; // frozen cue angle for the swing/linger (elevation() resets)
 
   // Swing done: fire the physics, but keep the cue drawn at the contact point
   // for STRIKE_LINGER_MS so it doesn't blink out the instant the ball leaves.
@@ -1262,6 +1273,7 @@ const Game: Component = () => {
     };
     strikePlace = place;
     strikeCuePos = place ? { ...place } : { ...world.balls[0].p };
+    strikeElev = elevation(); // hold the angle through the swing + linger
     strikeFromPwr = power(); // strike starts from the live pulled-back cue
     strikePwr = strikeFromPwr;
     strikeStart = nowMs;
