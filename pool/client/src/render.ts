@@ -157,13 +157,14 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   drawTable(ctx, l);
   drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
 
-  // Aim assist — the spin-aware predicted path, shown only once power is being
-  // dialled in (no preview at zero power).
-  if (s.myAim && s.prediction && !s.animating)
-    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null, s.onEight ?? false);
-
   drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
+
+  // Aim assist — the spin-aware predicted path, shown only once power is being
+  // dialled in (no preview at zero power). Drawn AFTER the balls so the lines
+  // (cue path, ghost, struck-ball ray) sit on top of them, not under.
+  if (s.myAim && s.prediction && !s.animating)
+    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null, s.onEight ?? false);
 
   // NB: both cue sticks are DOM <img> overlays in Game.tsx (so they can extend
   // past the canvas edge): the active player's own cue, and the opponent's blue
@@ -679,21 +680,6 @@ function polyline(ctx: CanvasRenderingContext2D, l: Layout, pts: Vec[]) {
   ctx.stroke();
 }
 
-const MIN_OBJ_LEN = 0.05; // struck-ball preview floor: ~5cm in table metres.
-
-// Guarantee the struck-ball line spans at least MIN_OBJ_LEN by extending its
-// endpoint along the ball's heading (start→end direction). Short paths get a
-// visible direction hint; longer ones pass through unchanged.
-function liftObjectPath(pts: Vec[]): Vec[] {
-  const a = pts[0];
-  const b = pts[pts.length - 1];
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.hypot(dx, dy);
-  if (len >= MIN_OBJ_LEN || len < 1e-9) return pts;
-  const f = MIN_OBJ_LEN / len;
-  return [a, { x: a.x + dx * f, y: a.y + dy * f }];
-}
 
 /** Draw the spin-aware predicted paths (from the real engine preview). */
 function drawPrediction(
@@ -704,11 +690,12 @@ function drawPrediction(
   onEight: boolean,
 ) {
   const rpx = R * l.scale;
+  const PRED_LINE_W = 1.6; // one width for both prediction lines (cue + struck)
   ctx.save();
 
   // Cue-ball path up to first contact — dashed white; captures the spin curve.
   ctx.strokeStyle = "rgba(255,255,255,0.82)";
-  ctx.lineWidth = 1.6;
+  ctx.lineWidth = PRED_LINE_W;
   ctx.setLineDash([6, 5]);
   polyline(ctx, l, pr.cue);
   ctx.setLineDash([]);
@@ -727,11 +714,14 @@ function drawPrediction(
   // Struck ball's initial travel — solid white line from its centre. Suppressed
   // on a predicted foul (the shot is illegal, so its outcome isn't previewed).
   if (!foul && pr.object && pr.object.length > 1) {
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
-    ctx.lineWidth = 1.6;
-    // The trace is only a ~0.02s burst, so a slow struck ball barely moves and
-    // its line vanishes. Lift it to a legible minimum length along its heading.
-    polyline(ctx, l, liftObjectPath(pr.object));
+    // Colour the ray like the struck ball, saturated + lifted so it reads
+    // against the felt. Stripes (9..15) reuse their solid's hue. Length encodes hit
+    // fullness (head-on = longest, grazing shrinks to nothing) — draw as-is.
+    const oid = pr.objectId ?? 1;
+    const base = HUE[oid <= 8 ? oid : oid - 8] ?? "#f4f1ea";
+    ctx.strokeStyle = saturate(base, 0.4, 0.06);
+    ctx.lineWidth = PRED_LINE_W;
+    polyline(ctx, l, pr.object);
   }
 
   // Ghost cue ball at first contact — red ring when the shot is a predicted foul.
@@ -784,4 +774,12 @@ function lighten(hex: string, amt: number) {
 function darken(hex: string, amt: number) {
   const { r, g, b } = hexToRgb(hex);
   return `rgb(${clamp(r * (1 - amt))},${clamp(g * (1 - amt))},${clamp(b * (1 - amt))})`;
+}
+// Push channels away from their grey mean (more saturation) with a small
+// lightness lift so the ray stays vivid against the felt.
+function saturate(hex: string, sat: number, light = 0) {
+  const { r, g, b } = hexToRgb(hex);
+  const m = (r + g + b) / 3;
+  const f = (c: number) => clamp(m + (c - m) * (1 + sat) + 255 * light);
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
 }

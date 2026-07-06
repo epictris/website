@@ -376,11 +376,69 @@ export type ShotEvent =
   | { type: "cushion"; ball: number }
   // ax/ay, bx/by: the two ball centres at the exact swept time-of-impact, so a
   // preview can pin its ghost to the true contact instead of re-deriving it.
-  | { type: "ball"; a: number; b: number; ax: number; ay: number; bx: number; by: number }
+  // avx/avy, bvx/bvy: each ball's velocity immediately after the impulse (throw
+  // included), so a preview can show the true launch direction before any later
+  // same-step bounce alters it.
+  | {
+      type: "ball";
+      a: number;
+      b: number;
+      ax: number;
+      ay: number;
+      bx: number;
+      by: number;
+      avx: number;
+      avy: number;
+      bvx: number;
+      bvy: number;
+    }
   | { type: "pot"; ball: number };
 
-/** Standard 8-ball rack: apex on the foot spot, 8 in the centre. */
-export function rackWorld(): World {
+// Seeded PRNG (mulberry32) + string hash (FNV-1a). ENTIRELY integer/bitwise:
+// +,|0,^,>>>, and Math.imul (spec'd to the low 32 bits) — NO floating point,
+// NO Math.random, NO libm. So it is bit-identical on every JS engine, V8
+// (Android/Chrome) and JavaScriptCore (iOS) alike — the same reason the physics
+// stays in sync. Returns a raw uint32; the shuffle reduces it with integer
+// modulo, so not a single float rounding is involved anywhere on this path.
+// Both clients seed the rack from the shared room id, so a "random" mix still
+// lands on the same rack on every table.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return (t ^ (t >>> 14)) >>> 0;
+  };
+}
+
+/** Deterministic uint32 hash of a string (e.g. a room id) for seeding. */
+export function rackSeed(s: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function shuffle<T>(arr: T[], rng: () => number): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = rng() % (i + 1); // integer modulo of a uint32 — no float rounding
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+
+/**
+ * Legal 8-ball rack, randomised by `seed`:
+ *  - the 8 sits dead centre of the third row,
+ *  - the two back-row corners are one solid + one stripe,
+ *  - the apex and every other slot are a seeded random mix.
+ * Same seed -> same rack, so both clients (seeded off the room id) agree.
+ */
+export function rackWorld(seed = 0): World {
   const balls: Ball[] = [];
   const mk = (id: number, p: Vec): Ball => ({
     id,
@@ -399,14 +457,31 @@ export function rackWorld(): World {
   const d = 2 * R + 0.0002; // touching spacing with a hair of clearance
   const dx = d * SQRT3_2; // d·sin(π/3), deterministic
 
-  // Rack order: corners must be one of each group, 8 in the middle (row 2).
-  const order = [1, 9, 2, 8, 10, 3, 11, 4, 12, 13, 5, 14, 6, 15, 7];
+  const rng = mulberry32(seed);
+  const solids = [1, 2, 3, 4, 5, 6, 7];
+  const stripes = [9, 10, 11, 12, 13, 14, 15];
+  shuffle(solids, rng);
+  shuffle(stripes, rng);
+
+  // Slots in row-major order (apex first). Special slots by linear index:
+  //   k=0  apex (row 0)         — any ball (part of the random fill)
+  //   k=4  centre of 3rd row    — the 8
+  //   k=10 back corner (top)    — a solid
+  //   k=14 back corner (bottom) — a stripe
+  const id: number[] = new Array(15);
+  id[4] = 8;
+  id[10] = solids.pop()!;
+  id[14] = stripes.pop()!;
+  const pool = [...solids, ...stripes];
+  shuffle(pool, rng);
+  for (let s = 0; s < 15; s++) if (id[s] === undefined) id[s] = pool.pop()!;
+
   let k = 0;
   for (let row = 0; row < 5; row++) {
     for (let i = 0; i <= row; i++) {
       const x = footX + row * dx;
       const y = cy + (i - row / 2) * d;
-      balls.push(mk(order[k++], { x, y }));
+      balls.push(mk(id[k++], { x, y }));
     }
   }
   return { balls };
@@ -515,6 +590,10 @@ function resolveBallBall(
     ay: a.p.y,
     bx: b.p.x,
     by: b.p.y,
+    avx: a.v.x,
+    avy: a.v.y,
+    bvx: b.v.x,
+    bvy: b.v.y,
   });
 }
 
@@ -890,17 +969,18 @@ export function predictPaths(
   const cuePath: Vec[] = [{ ...cue.p }];
   let ghost: Vec | null = null;
   let cuePotted = false;
-  // After the cue ball strikes an object ball, follow that ball for a short
-  // burst so the preview shows which way it heads off.
+  // When the cue strikes an object ball, hint which way it heads off with a
+  // short straight ray from the exact contact. The ray LENGTH encodes how full
+  // the hit is: the dot of the struck ball's heading with the cue's incoming
+  // heading. Head-on -> 1 -> full length; grazing -> ~0 -> the ray vanishes.
   let objId: number | null = null;
   const objPath: Vec[] = [];
-  const OBJ_TRACE_STEPS = 5; // ~0.02s at 240 Hz — a tiny direction hint
+  const OBJ_MAX_LEN = 0.15; // ray length at a dead-centre (head-on) hit
 
   const events: ShotEvent[] = [];
   const steps = Math.round(maxTime / FIXED_DT);
   const sampleEvery = 2;
   let stop = false;
-  let objTrace = 0; // steps remaining to follow the struck ball
 
   for (let i = 0; i < steps && !stop; i++) {
     const prev = { ...cue.p }; // cue position before this step
@@ -908,16 +988,7 @@ export function predictPaths(
     const mark = events.length;
     stepFixed(w, events, cfg);
 
-    // Already following the struck ball: sample it, then stop when the burst ends.
-    if (objId !== null) {
-      const ob = w.balls.find((b) => b.id === objId);
-      if (ob && objTrace % sampleEvery === 0) objPath.push({ ...ob.p });
-      if (--objTrace <= 0) stop = true;
-      if (atRest(w)) break;
-      continue;
-    }
-
-    // Otherwise watch for the cue ball's first contact.
+    // Watch for the cue ball's first contact.
     for (let k = mark; k < events.length; k++) {
       const e = events[k];
       if (e.type === "ball" && (e.a === 0 || e.b === 0)) {
@@ -927,10 +998,43 @@ export function predictPaths(
         // shots, so the ghost — and the drawn line length — jumped as you
         // scanned across a ball. Reading the real contact makes it slide.
         objId = e.a === 0 ? e.b : e.a;
-        ghost = e.a === 0 ? { x: e.ax, y: e.ay } : { x: e.bx, y: e.by };
-        // Start the struck-ball trace at its centre at contact.
-        objPath.push(e.a === 0 ? { x: e.bx, y: e.by } : { x: e.ax, y: e.ay });
-        objTrace = OBJ_TRACE_STEPS;
+        const cueC = e.a === 0 ? { x: e.ax, y: e.ay } : { x: e.bx, y: e.by };
+        const objC = e.a === 0 ? { x: e.bx, y: e.by } : { x: e.ax, y: e.ay };
+        ghost = cueC;
+        // Struck-ball hint: one straight ray along the ball's launch velocity
+        // (throw included), the instant after the impulse. Use the velocity the
+        // event recorded at the resolve — NOT a later read of the world, which
+        // could already reflect a same-step rail bounce (a ball frozen on a rail
+        // should still show as struck INTO the rail, not the rebound). No
+        // multi-frame trace, so nothing sawtooths as you scan.
+        const ovx = e.a === 0 ? e.bvx : e.avx;
+        const ovy = e.a === 0 ? e.bvy : e.avy;
+        const spd = hyp(ovx, ovy);
+        let dx = ovx;
+        let dy = ovy;
+        if (spd > 1e-6) {
+          dx /= spd;
+          dy /= spd;
+        } else {
+          // Dead graze (zero launch speed): point along the line of centres.
+          dx = objC.x - cueC.x;
+          dy = objC.y - cueC.y;
+          const dl = hyp(dx, dy) || 1;
+          dx /= dl;
+          dy /= dl;
+        }
+        // Fullness of the hit: dot of the struck ball's heading with the cue's
+        // incoming heading (prevV, the velocity going into this step). Head-on
+        // -> 1 -> full length; grazing -> 0 -> the ray shrinks to nothing.
+        const cl = hyp(prevV.x, prevV.y) || 1;
+        const dot = Math.max(0, dx * (prevV.x / cl) + dy * (prevV.y / cl));
+        const L = OBJ_MAX_LEN * dot;
+        // Start at the ball's leading edge (centre + R along the heading), not
+        // its centre, and run the length out from there.
+        const ex = objC.x + dx * R;
+        const ey = objC.y + dy * R;
+        objPath.push({ x: ex, y: ey }, { x: ex + dx * L, y: ey + dy * L });
+        stop = true;
         break;
       }
       if (stopOnCushion && e.type === "cushion" && e.ball === 0) {

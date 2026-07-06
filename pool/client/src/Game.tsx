@@ -13,6 +13,7 @@ import {
   predictPaths,
   R,
   rackWorld,
+  rackSeed,
   stepFixed,
   TABLE,
   type Ball,
@@ -38,6 +39,7 @@ import {
 
 const Game: Component = () => {
   const room = useParams().room ?? "lobby";
+  const seed = rackSeed(room); // shared room id -> both clients rack identically
   const navigate = useNavigate();
   let canvas!: HTMLCanvasElement;
   let ctx!: CanvasRenderingContext2D;
@@ -46,7 +48,7 @@ const Game: Component = () => {
   let layout: Layout;
 
   // --- High-frequency mutable state (not Solid-reactive) ------------------
-  let world: World = rackWorld();
+  let world: World = rackWorld(seed);
   let initialWorld: World = cloneWorld(world);
   let history: ReplayShot[] = [];
   // Count of fully *resolved* shots (incremented in resolveShot, monotonic across
@@ -453,7 +455,7 @@ const Game: Component = () => {
     const before = rules();
     const outcome = evaluateShot(before, worldBefore, events);
     if (outcome.reRack) {
-      world = rackWorld();
+      world = rackWorld(seed);
       initialWorld = cloneWorld(world);
       history = [];
       resetSinks();
@@ -919,7 +921,7 @@ const Game: Component = () => {
   };
 
   const doRematch = (nextBreaker: 0 | 1, local: boolean) => {
-    world = rackWorld();
+    world = rackWorld(seed);
     initialWorld = cloneWorld(world);
     history = [];
     shotCount = 0;
