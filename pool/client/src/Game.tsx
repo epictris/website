@@ -185,6 +185,7 @@ const Game: Component = () => {
   const [showTune, setShowTune] = createSignal(false); // spin + cue-angle modal
   const [showSpinHud, setShowSpinHud] = createSignal(false); // floating spin window
   const [spinHudPos, setSpinHudPos] = createSignal({ x: 0, y: 0 }); // canvas-local px
+  const [spinAim, setSpinAim] = createSignal(0); // aim the spin pad is oriented to
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
@@ -1127,14 +1128,20 @@ const Game: Component = () => {
       if (!movedFar) return; // a still finger might yet become a ball-in-hand grab
       clearTimeout(lpTimer); // committed to a spin swipe — no reposition
       setSpinHudPos(worldToLocal(cue.p)); // centre the window on the cue ball
+      setSpinAim(aimAngle); // orient the pad to the current cue direction
       setShowSpinHud(true);
       const lp = localPoint(canvas, e);
-      let sx = (lp.x - spinDownLocal.x) / SPIN_REACH_PX;
-      let sy = (lp.y - spinDownLocal.y) / SPIN_REACH_PX;
-      const r = Math.hypot(sx, sy); // clamp to the miscue (unit) circle, as onSpin
-      if (r > 1) { sx /= r; sy /= r; }
-      setSide(sx);
-      setFollow(-sy); // up = follow (+)
+      const dx = (lp.x - spinDownLocal.x) / SPIN_REACH_PX;
+      const dy = (lp.y - spinDownLocal.y) / SPIN_REACH_PX;
+      // Decompose the swipe in the CUE's frame: along the aim line = draw/follow,
+      // across it = english. So the pad tracks the cue however it's pointed.
+      const a = aimAngle;
+      let f = dx * Math.cos(a) + dy * Math.sin(a); // toward the aim = follow (+)
+      let s = -dx * Math.sin(a) + dy * Math.cos(a); // perpendicular = side english
+      const r = Math.hypot(f, s); // clamp to the miscue (unit) circle
+      if (r > 1) { f /= r; s /= r; }
+      setFollow(f);
+      setSide(s);
       recomputePrediction();
       return;
     }
@@ -1565,7 +1572,12 @@ const Game: Component = () => {
           <Show when={showSpinHud()}>
             <div
               class="spin-hud"
-              style={{ left: `${spinHudPos().x}px`, top: `${spinHudPos().y}px` }}
+              style={{
+                left: `${spinHudPos().x}px`,
+                top: `${spinHudPos().y}px`,
+                // Spin up (−y) aligns with the cue's aim direction on screen.
+                transform: `translate(-50%, -50%) rotate(${spinAim() + Math.PI / 2}rad)`,
+              }}
             >
               <div class="spin">
                 <div class="axis h" />
