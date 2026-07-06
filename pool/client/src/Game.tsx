@@ -43,6 +43,7 @@ const Game: Component = () => {
   const seed = rackSeed(room); // shared room id -> both clients rack identically
   const navigate = useNavigate();
   let canvas!: HTMLCanvasElement;
+  let hitEl!: HTMLDivElement; // pointer target over the table + cue overhang
   let ctx!: CanvasRenderingContext2D;
   let tableCueEl!: HTMLCanvasElement; // on-table cue overlay (can exceed canvas)
   let oppCueEl!: HTMLCanvasElement; // opponent's blue cue overlay (their aim)
@@ -187,6 +188,9 @@ const Game: Component = () => {
   const [spinHudPos, setSpinHudPos] = createSignal({ x: 0, y: 0 }); // canvas-local px
   const [spinAim, setSpinAim] = createSignal(0); // aim the spin pad is oriented to
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
+  // Extra px the pointer hit-layer extends past the canvas on every side, so the
+  // cue stick can be grabbed where it overhangs the felt (see STICK_FAR).
+  const [hitMargin, setHitMargin] = createSignal(0);
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
   // Communication mode: a tap on the comm button enables freehand annotation AND
@@ -1006,7 +1010,7 @@ const Game: Component = () => {
     annot.strokes.push(annot.cur);
     annot.pointer = w;
     lastDraw = 0;
-    canvas.setPointerCapture(e.pointerId);
+    hitEl.setPointerCapture(e.pointerId);
     send({ t: "draw", phase: "start", x: w.x, y: w.y } as Msg);
   };
   const moveDraw = (e: PointerEvent) => {
@@ -1094,6 +1098,15 @@ const Game: Component = () => {
       !onCueBall &&
       proj > STICK_NEAR && proj < STICK_FAR && Math.abs(perp) < STICK_PERP;
 
+    // The hit-layer reaches past the canvas so an overhanging cue stick is
+    // grabbable — but a press out there that ISN'T on the stick (or ball) is just
+    // empty margin: ignore it so it can't snap the aim to a point off-table.
+    const cr = canvas.getBoundingClientRect();
+    const offCanvas =
+      e.clientX < cr.left || e.clientX > cr.right ||
+      e.clientY < cr.top || e.clientY > cr.bottom;
+    if (offCanvas && !onCueBall && !onCueStick) return;
+
     if (onCueBall) {
       mode = "spin";
       spinDownLocal = localPoint(canvas, e);
@@ -1113,7 +1126,7 @@ const Game: Component = () => {
     } else {
       mode = "aim";
     }
-    canvas.setPointerCapture(e.pointerId);
+    hitEl.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: PointerEvent) => {
@@ -1382,6 +1395,7 @@ const Game: Component = () => {
       canvas.style.width = `${layout.W}px`;
       canvas.style.height = `${layout.H}px`;
       setCanvasH(layout.H);
+      setHitMargin(STICK_FAR * layout.scale); // reach a full cue length past the felt
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
@@ -1556,16 +1570,23 @@ const Game: Component = () => {
         </button>
 
         <div class="table-wrap">
-          <canvas
-            ref={canvas}
+          <canvas ref={canvas} onContextMenu={(e) => e.preventDefault()} />
+          <canvas class="table-cue" ref={tableCueEl} />
+          <canvas class="table-cue" ref={oppCueEl} />
+          {/* Transparent pointer layer over the table, extended by a cue length so
+              the stick is grabbable where it overhangs the felt. Coords still map
+              through the canvas rect; off-canvas presses that miss the stick are
+              ignored in onPointerDown. */}
+          <div
+            class="table-hit"
+            ref={hitEl}
+            style={{ inset: `${-hitMargin()}px` }}
             onPointerMove={onPointerMove}
             onPointerDown={onPointerDown}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
             onContextMenu={(e) => e.preventDefault()}
           />
-          <canvas class="table-cue" ref={tableCueEl} />
-          <canvas class="table-cue" ref={oppCueEl} />
           {/* Floating spin window — pops up at the finger while dragging off the
               cue ball, gone on release. A child of .table-wrap so it rides the
               rot90 transform and shares the canvas-local frame the drag maps in. */}

@@ -51,6 +51,22 @@ body {
   line-height: 0;
 }
 
+/* Transparent pointer layer, inset negative (via JS) so it overhangs the canvas
+   by a cue length — lets the overhanging cue stick be grabbed. Sits above the
+   canvas + cue overlays; the side widgets are lifted above it (below). */
+.table-hit {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+/* Keep the side widgets clickable where the hit layer overhangs into them. */
+.hamburger,
+.cue-col {
+  position: relative;
+  z-index: 3;
+}
+
 canvas {
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
