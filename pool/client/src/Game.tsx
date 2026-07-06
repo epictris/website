@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { Portal } from "solid-js/web";
 import { useNavigate, useParams } from "@solidjs/router";
 import {
   applyShot,
@@ -89,6 +90,35 @@ const Game: Component = () => {
   let replayQueue: ReplayShot[] = [];
   let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
+  // Live table annotation (pointing finger + dotted paths) drawn by whichever
+  // player is *waiting* while the other shoots. Only one side annotates at a time
+  // (it's gated on !myTurn), so a single bucket serves both the local drawer's
+  // own feedback and the incoming remote annotation. `cur` is the in-progress
+  // stroke; strokes linger until `expireAt` (set 5s ahead on release).
+  type Stroke = { pts: Vec[]; expireAt: number };
+  let annot: { pointer?: Vec; strokes: Stroke[]; cur?: Stroke } = { strokes: [] };
+  const DRAW_HOLD_MS = 5000;
+  const DRAW_FADE_MS = 200; // stroke fades out over this long after its hold ends
+  let drawing = false; // a local annotation drag is in progress
+  let lastDraw = 0; // network-send throttle for annotation moves
+  // Emoji stamps dragged onto the table from the comm tray. Each pops in (scale
+  // 0 → 1 with an overshoot), holds, then snaps away. `start` is the local clock.
+  let stamps: { ch: string; pos: Vec; start: number }[] = [];
+  const STAMP_POP_MS = 280; // grow-in with overshoot (20% faster than before)
+  const STAMP_HOLD_MS = 2000; // full size this long
+  const STAMP_GONE_MS = 160; // then rapidly shrink away
+  const STAMP_LIFE = STAMP_POP_MS + STAMP_HOLD_MS + STAMP_GONE_MS;
+  // easeOutBack — overshoots past 1 near the end, then settles back to it.
+  const easeOutBack = (x: number) => {
+    const c1 = 3.40316; // ~2× the standard 1.70158, so double the overshoot
+    const c3 = c1 + 1;
+    return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2;
+  };
+  const stampScale = (age: number) => {
+    if (age < STAMP_POP_MS) return Math.max(0, easeOutBack(age / STAMP_POP_MS));
+    if (age < STAMP_POP_MS + STAMP_HOLD_MS) return 1;
+    return Math.max(0, 1 - (age - STAMP_POP_MS - STAMP_HOLD_MS) / STAMP_GONE_MS);
+  };
   // Ball-sinking animations (visual only).
   let sinks: { id: number; from: Vec; pocket: Vec; start: number }[] = [];
   const pottedSeen = new Set<number>();
@@ -142,6 +172,12 @@ const Game: Component = () => {
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [debug, setDebug] = createSignal(false); // collision-geometry overlay
   const [fullscreen, setFullscreen] = createSignal(false);
+  // Communication mode: a tap on the comm button enables freehand annotation AND
+  // opens the emoji tray; tapping again closes both.
+  const [comm, setComm] = createSignal(false);
+  const EMOJIS = ["🤏", "🗿", "😂", "😅"];
+  let dragEl!: HTMLDivElement; // floating emoji preview that follows a tray drag
+  let dragCh = ""; // emoji currently being dragged out of the tray
   // Transient turn-recap popup: what the last shot did + whose turn it is now.
   const [announce, setAnnounce] = createSignal<string | null>(null);
   let announceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -175,6 +211,11 @@ const Game: Component = () => {
     !isSpectator() &&
     (solo() || rules().turn === myPlayer());
   const canAct = () => !animating() && !replaying() && myTurn();
+  // Freehand annotation is active whenever comm mode is on (and the player is a
+  // live, non-spectator participant). Toggled by the comm button, independent of
+  // whose turn it is — so it takes over the canvas from aiming while enabled.
+  const canPoint = () =>
+    comm() && !isSpectator() && rules().winner === null;
 
   // --- Networking ---------------------------------------------------------
   const send = (m: Partial<Msg>) => ws?.readyState === 1 && ws.send(JSON.stringify(m));
@@ -307,6 +348,8 @@ const Game: Component = () => {
       }
       case "peer-leave":
         setPeerCount((n) => Math.max(1, n - 1));
+        annot.pointer = undefined; // drop a dangling finger if they left mid-draw
+        annot.cur = undefined;
         break;
       case "need-sync":
         if ((mySlot() === 0 || mySlot() === 1) && m.from !== mySlot())
@@ -357,6 +400,26 @@ const Game: Component = () => {
       }
       case "cursor":
         opp.cursor = { x: m.x, y: m.y };
+        break;
+      case "draw": {
+        // The waiting opponent is annotating our table.
+        const p = m.x !== undefined ? { x: m.x, y: m.y! } : undefined;
+        if (m.phase === "start") {
+          annot.cur = { pts: p ? [p] : [], expireAt: Infinity };
+          annot.strokes.push(annot.cur);
+          annot.pointer = p;
+        } else if (m.phase === "move") {
+          annot.pointer = p;
+          if (p && annot.cur) annot.cur.pts.push(p);
+        } else {
+          if (annot.cur) annot.cur.expireAt = nowMs + DRAW_HOLD_MS;
+          annot.cur = undefined;
+          annot.pointer = undefined;
+        }
+        break;
+      }
+      case "emoji":
+        stamps.push({ ch: m.ch, pos: { x: m.x, y: m.y }, start: nowMs });
         break;
       case "aim":
         opp.aim = {
@@ -551,6 +614,9 @@ const Game: Component = () => {
       }
     }
     sinks = sinks.filter((sk) => t - sk.start < SINK_MS);
+    // Drop annotation strokes once their hold + fade-out lifetime elapses.
+    annot.strokes = annot.strokes.filter((s) => t < s.expireAt + DRAW_FADE_MS);
+    stamps = stamps.filter((s) => t - s.start < STAMP_LIFE);
 
     draw();
     raf = requestAnimationFrame(frame);
@@ -617,6 +683,20 @@ const Game: Component = () => {
       myGroup,
       onEight,
       opponent: opp,
+      pointer: annot.pointer,
+      // Full opacity through the hold, then a linear fade over DRAW_FADE_MS.
+      strokes: annot.strokes.map((s) => ({
+        pts: s.pts,
+        alpha:
+          nowMs < s.expireAt
+            ? 1
+            : Math.max(0, 1 - (nowMs - s.expireAt) / DRAW_FADE_MS),
+      })),
+      emojis: stamps.map((s) => ({
+        ch: s.ch,
+        pos: s.pos,
+        scale: stampScale(nowMs - s.start),
+      })),
       animating: animating(),
       debug: debug(),
       sinks: sinks.map((sk) => ({
@@ -777,7 +857,82 @@ const Game: Component = () => {
     sendAim(cue);
   };
 
+  // --- Table annotation (comm mode) ---------------------------------------
+  // With comm mode on, our canvas pointer draws instead of aiming: touch shows a
+  // pointing finger on the other table, drag leaves a dotted path. `draw` msgs.
+  const startDraw = (e: PointerEvent) => {
+    const w = toWorld(e);
+    drawing = true;
+    annot.cur = { pts: [w], expireAt: Infinity };
+    annot.strokes.push(annot.cur);
+    annot.pointer = w;
+    lastDraw = 0;
+    canvas.setPointerCapture(e.pointerId);
+    send({ t: "draw", phase: "start", x: w.x, y: w.y } as Msg);
+  };
+  const moveDraw = (e: PointerEvent) => {
+    const w = toWorld(e);
+    annot.pointer = w;
+    if (annot.cur) annot.cur.pts.push(w); // append locally every move (smooth line)
+    const now = performance.now();
+    if (now - lastDraw <= 30) return; // throttle only the network stream
+    lastDraw = now;
+    send({ t: "draw", phase: "move", x: w.x, y: w.y } as Msg);
+  };
+  const endDraw = () => {
+    if (!drawing) return;
+    drawing = false;
+    if (annot.cur) annot.cur.expireAt = nowMs + DRAW_HOLD_MS;
+    annot.cur = undefined;
+    annot.pointer = undefined;
+    send({ t: "draw", phase: "end" } as Msg);
+  };
+
+  // --- Emoji tray drag ----------------------------------------------------
+  // Press an emoji in the tray and drag it onto the felt; on release it spawns a
+  // temporary animated stamp there (locally + broadcast). A fixed floating preview
+  // follows the finger during the drag (screen space, so it ignores the rot90).
+  const spawnStamp = (ch: string, pos: Vec) => {
+    stamps.push({ ch, pos, start: nowMs });
+    send({ t: "emoji", ch, x: pos.x, y: pos.y } as Msg);
+  };
+  const moveDragEl = (e: PointerEvent) => {
+    dragEl.style.left = `${e.clientX}px`;
+    dragEl.style.top = `${e.clientY}px`;
+  };
+  const onTrayDown = (ch: string, e: PointerEvent) => {
+    e.preventDefault();
+    dragCh = ch;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragEl.textContent = ch;
+    dragEl.style.display = "block";
+    moveDragEl(e);
+  };
+  const onTrayMove = (e: PointerEvent) => {
+    if (dragCh) moveDragEl(e);
+  };
+  const onTrayUp = (e: PointerEvent) => {
+    if (!dragCh) return;
+    const ch = dragCh;
+    dragCh = "";
+    dragEl.style.display = "none";
+    // Dropped over the felt? Spawn the stamp at that world point (clamped so it
+    // sits fully on the table even near an edge).
+    const r = canvas.getBoundingClientRect();
+    if (
+      e.clientX >= r.left && e.clientX <= r.right &&
+      e.clientY >= r.top && e.clientY <= r.bottom
+    ) {
+      const w = toWorld(e);
+      spawnStamp(ch, {
+        x: Math.max(0, Math.min(TABLE.w, w.x)),
+        y: Math.max(0, Math.min(TABLE.h, w.y)),
+      });
+    }
+  };
+
   const onPointerDown = (e: PointerEvent) => {
+    if (canPoint()) return startDraw(e); // waiting: annotate instead of aim
     if (!canAct() || striking) return;
     const w = toWorld(e);
     const cue = world.balls[0].p;
@@ -793,6 +948,7 @@ const Game: Component = () => {
   };
 
   const onPointerMove = (e: PointerEvent) => {
+    if (drawing) return moveDraw(e);
     if (!canAct() || !mode) return;
     const w = toWorld(e);
     const cue = world.balls[0];
@@ -812,6 +968,7 @@ const Game: Component = () => {
   };
 
   const onPointerUp = () => {
+    if (drawing) return endDraw();
     if (!mode) return;
     const wasPlace = mode === "place";
     mode = null;
@@ -1143,6 +1300,41 @@ const Game: Component = () => {
       <Show when={announce()}>
         <div class="turn-recap">{announce()}</div>
       </Show>
+
+      {/* Comm dock, bottom-left below the menu: toggles draw mode + emoji tray. */}
+      <Show when={!isSpectator()}>
+        <div class="comm-dock">
+          {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render once
+              and stay cached — remounting made them pop in / reflow each open. */}
+          <div class="emoji-tray" classList={{ open: comm() }}>
+            {EMOJIS.map((ch) => (
+              <div
+                class="tray-emoji"
+                onPointerDown={(e) => onTrayDown(ch, e)}
+                onPointerMove={onTrayMove}
+                onPointerUp={onTrayUp}
+                onPointerCancel={onTrayUp}
+              >
+                {ch}
+              </div>
+            ))}
+          </div>
+          <button
+            class="comm"
+            classList={{ active: comm() }}
+            title="communicate"
+            onClick={() => setComm((v) => !v)}
+          >
+            💬
+          </button>
+        </div>
+      </Show>
+      {/* Floating emoji preview that follows the finger during a tray drag.
+          Portaled to <body> so it stays in true screen space — inside the
+          rot90-transformed game root, a position:fixed child would be offset. */}
+      <Portal>
+        <div class="emoji-drag" ref={dragEl} />
+      </Portal>
 
       <div class="play-row">
         <button

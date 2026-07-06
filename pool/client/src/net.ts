@@ -34,6 +34,14 @@ export type Msg =
   | { t: "need-sync"; from?: number }
   | { t: "cursor"; x: number; y: number; from?: number }
   | { t: "aim"; aim: AimPresence; from?: number }
+  // Live table annotation by the *waiting* player during the opponent's turn: a
+  // pointing finger + dragged dotted paths shown on the shooter's table. World
+  // coords (m). `start` opens a stroke, `move` extends it, `end` releases it (the
+  // receiver keeps it visible 5s, then drops it). Fire-and-forget presence.
+  | { t: "draw"; phase: "start" | "move" | "end"; x?: number; y?: number; from?: number }
+  // A dragged-out emoji stamp: spawns a temporary animated emoji on the other
+  // table at world (x,y). Fire-and-forget presence.
+  | { t: "emoji"; ch: string; x: number; y: number; from?: number }
   | { t: "shot"; shot: Shot; place?: Vec; config: PhysicsConfig; from?: number }
   | { t: "config"; config: PhysicsConfig; from?: number }
   | { t: "rematch"; breaker: 0 | 1; config: PhysicsConfig; from?: number }

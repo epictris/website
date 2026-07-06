@@ -138,6 +138,9 @@ export type Scene = {
   myGroup?: Group | null;
   onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
   opponent?: { cursor?: Vec; aim?: Aim };
+  pointer?: Vec; // waiting player's live pointing-finger (world coords)
+  strokes?: { pts: Vec[]; alpha: number }[]; // dotted paths (world), per-stroke fade
+  emojis?: { ch: string; pos: Vec; scale: number }[]; // dragged-out emoji stamps
   animating?: boolean;
   sinks?: Sink[]; // balls mid-drop into a pocket
   rack?: RackEntry[]; // potted balls collected in the return track, in pot order
@@ -171,7 +174,70 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   // cue mirroring their aim. Neither is drawn here — and the opponent's raw
   // cursor is deliberately NOT shown (only their cue is).
 
+  // Live annotation from the waiting player: dotted paths under a pointing finger.
+  if (s.strokes && s.strokes.length) drawStrokes(ctx, l, s.strokes);
+  if (s.pointer) drawPointer(ctx, l, s.pointer);
+  if (s.emojis) for (const e of s.emojis) drawEmoji(ctx, l, e);
+
   if (s.debug) drawDebugOverlay(ctx, l, s.world);
+}
+
+// The waiting player's dragged annotation paths — dotted accent lines on the
+// felt. Each stroke carries its own alpha so a released stroke can fade out.
+function drawStrokes(
+  ctx: CanvasRenderingContext2D,
+  l: Layout,
+  strokes: { pts: Vec[]; alpha: number }[],
+) {
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.setLineDash([2, l.scale * 0.026]); // fine dots
+  const under = Math.max(3.5, l.scale * 0.009);
+  const top = Math.max(2.5, l.scale * 0.006);
+  for (const s of strokes) {
+    if (s.alpha <= 0) continue;
+    ctx.globalAlpha = s.alpha;
+    // Dark underlay so the yellow reads on light felt, then bright dots on top.
+    ctx.strokeStyle = "rgba(0,0,0,0.4)";
+    ctx.lineWidth = under;
+    polyline(ctx, l, s.pts);
+    ctx.strokeStyle = "#ffe14d"; // bright yellow
+    ctx.lineWidth = top;
+    polyline(ctx, l, s.pts);
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// The waiting player's live pointing finger, tip pinned to the touched point.
+function drawPointer(ctx: CanvasRenderingContext2D, l: Layout, p: Vec) {
+  const c = toPx(l, p);
+  const size = R * l.scale * 2.6;
+  ctx.save();
+  ctx.font = `${size}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom"; // 👇 tip sits at the glyph's bottom edge, on the point
+  ctx.fillText("👇", c.x, c.y);
+  ctx.restore();
+}
+
+// A dragged-out emoji stamp, centred on its world point and scaled by its
+// spawn/despawn animation (Game.tsx drives the scale).
+function drawEmoji(
+  ctx: CanvasRenderingContext2D,
+  l: Layout,
+  e: { ch: string; pos: Vec; scale: number },
+) {
+  if (e.scale <= 0) return;
+  const c = toPx(l, e.pos);
+  const size = R * l.scale * 3 * e.scale;
+  ctx.save();
+  ctx.font = `${size}px serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(e.ch, c.x, c.y);
+  ctx.restore();
 }
 
 // Overlay the collision boundaries the physics ACTUALLY uses. Cushions are the
