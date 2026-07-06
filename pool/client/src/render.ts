@@ -135,6 +135,7 @@ export type Scene = {
   prediction?: Prediction; // spin-aware predicted paths for my shot
   showCue?: boolean; // draw the physical cue stick behind the ball
   ballInHand?: boolean;
+  growCue?: boolean; // draw the cue ball enlarged (grabbed for ball-in-hand)
   myGroup?: Group | null;
   onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
   opponent?: { cursor?: Vec; aim?: Aim };
@@ -160,7 +161,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   drawTable(ctx, l);
   drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
 
-  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1);
+  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 1.6 : 1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
@@ -713,11 +714,13 @@ function drawBalls(
   l: Layout,
   world: World,
   translucentId: number,
+  cueScale = 1,
 ) {
   const rpx = R * l.scale;
   for (const b of world.balls) {
     if (b.potted) continue;
-    drawBall(ctx, toPx(l, b.p), b.id, rpx, b.id === translucentId ? 0.55 : 1, b.o ?? IDENT3, l.rotated);
+    const r = b.id === 0 ? rpx * cueScale : rpx;
+    drawBall(ctx, toPx(l, b.p), b.id, r, b.id === translucentId ? 0.55 : 1, b.o ?? IDENT3, l.rotated);
   }
 }
 

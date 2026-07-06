@@ -32,18 +32,32 @@ portrait screen. Two consequences:
 
 The cue power is a **vertical pull** (drag down = load). The on-table cue is a DOM
 `<img>` overlay (`.table-cue`) so it can extend past the canvas edge. Input lives
-in `Game.tsx` pointer handlers + these widgets:
+in `Game.tsx` pointer handlers + these widgets. A canvas press is classified by
+**where it lands** (`onPointerDown`): on the cue ball, on the cue stick, or on
+open felt — each starts a different `mode` (`aim`/`place`/`spin`/`elev`).
 
-- **Aim** — *tap* anywhere on the felt snaps the aim to that point. *Drag* on the
-  felt fine-adjusts the aim (rotates about the cue ball at gain < 1, so it moves
-  slower than the finger — for precision). Tap vs. drag is the `TAP_PX`
-  pointer-travel threshold.
+- **Aim** — *tap* open felt snaps the aim to that point. *Drag* open felt
+  fine-adjusts the aim (rotates about the cue ball at gain < 1, so it moves slower
+  than the finger — for precision). Tap vs. drag is the `TAP_PX` pointer-travel
+  threshold.
 - **Power** — drag the cue widget back (down) and release to strike; pull
   distance = power. The on-table cue mirrors the pull.
-- **Spin + cue angle** — the white-ball button opens the `showTune` modal
-  (`.pick-modal`) holding the spin pad (draw/follow + english) and the
-  cue-elevation widget. The button's dot previews the current english.
-- **Ball-in-hand** (after a foul) — *drag* the cue ball to reposition it.
+- **Cue angle (elevation)** — press the **on-table cue stick** (the band behind
+  the ball along the aim axis: `STICK_NEAR..STICK_FAR`, half-width `STICK_PERP`)
+  and drag along it. Away from the ball raises the cue, toward lowers it
+  (`ELEV_GAIN`, clamped to `MAX_ELEVATION`). The live cue foreshortens as feedback.
+- **Spin** — press the **cue ball** and swipe in any direction: a floating
+  `.spin-hud` window pops up at the finger (child of `.table-wrap` so it rides the
+  rot90 transform and shares the drag's canvas-local frame) and the swipe delta
+  sets draw/follow + english (`SPIN_REACH_PX` = full deflection, clamped to the
+  miscue circle). The window vanishes on release.
+- **Ball-in-hand** (after a foul) — press the cue ball and **hold ~1s without
+  swiping** (`LONGPRESS_MS`) to grab it: the ball enlarges (`growCue`) and follows
+  the finger. A swipe before the timer fires goes to **spin** instead. During
+  ball-in-hand, spin's precision fallback is the modal.
+- **Spin + cue angle (fallback)** — the white-ball button still opens the
+  `showTune` modal (`.pick-modal`) with the spin pad + cue-elevation widget; the
+  gestures above are the primary path. The button's dot previews the english.
 
 **Join flow** — the root route `/` renders the **Landing** menu (`index.tsx`): a
 **New Game** button that mints a random room code and navigates to `/:room`, a

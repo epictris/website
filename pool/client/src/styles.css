@@ -55,10 +55,36 @@ canvas {
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   touch-action: none;
+  /* Kill the long-press "Save image / Copy image / Inspect" callout on mobile. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-/* On-table cue — a DOM overlay so it can extend past the canvas edge. Its tip
-   (50% 5% of the square image) is pinned to the tip point; JS aims + scales it. */
+/* Floating spin window — an enlarged cue ball centred over the real one during a
+   swipe. No box: it reads as the cue ball zoomed in so you can place the tip. */
+.spin-hud {
+  position: absolute;
+  z-index: 8;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  line-height: 0;
+}
+
+.spin-hud .spin {
+  width: 110px;
+  height: 110px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.spin-hud .spin .dot {
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+}
+
+/* On-table cue — a <canvas> overlay so it can extend past the table edge. The
+   PNG is pre-warped (bowed) into it; JS pins the tip (50% 0), aims + tilts it. */
 .table-cue {
   position: absolute;
   left: 0;
@@ -66,6 +92,8 @@ canvas {
   transform-origin: 50% 0;
   pointer-events: none;
   will-change: transform, left, top;
+  box-shadow: none; /* override the global canvas drop-shadow (that square halo) */
+  border-radius: 0;
 }
 
 .hud {
