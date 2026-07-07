@@ -54,13 +54,34 @@ body {
 /* Transparent pointer layer, inset negative (via JS) so it overhangs the canvas
    by a cue length — lets the overhanging cue stick be grabbed. Sits above the
    canvas + cue overlays; the side widgets are lifted above it (below). */
+/* Full-screen table canvas: felt, balls, cue stick, aim lines. Sits behind all
+   UI (everything else is z >= 2) and never captures pointers. */
+.table-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  pointer-events: none;
+  box-shadow: none; /* override the global canvas drop-shadow */
+  border-radius: 0;
+}
+
 .table-hit {
   position: absolute;
+  inset: 0; /* covers the whole table area; widgets sit above it */
   z-index: 2;
   touch-action: none;
 }
 
-/* Keep the side widgets clickable where the hit layer overhangs into them. */
+/* Empty spacer reserving the felt's footprint in the flex row; the canvas draws
+   the felt over it. It stays UNpositioned so it isn't the offsetParent used to
+   locate the felt (that must be .game-root). */
+.table-spacer {
+  flex: none;
+}
+
+/* Side widgets sit above the hit layer (z:2) so they stay clickable; .play-row
+   itself stays unpositioned so .table-spacer measures against .game-root. */
 .hamburger,
 .cue-col {
   position: relative;

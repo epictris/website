@@ -108,6 +108,160 @@ const toPx = (l: Layout, p: Vec) =>
     ? { x: l.ox + (TABLE.h - p.y) * l.scale, y: l.oy + p.x * l.scale }
     : { x: l.ox + p.x * l.scale, y: l.oy + p.y * l.scale };
 
+// ── Cue stick ───────────────────────────────────────────────────────────────
+// Drawn straight onto the table canvas (in painter's order with the balls), so
+// over/under the cue ball is just draw order — no DOM overlay, no occluder.
+export type CueBand = { dark: string; light: string };
+export type CueDraw = {
+  at: Vec; // cue-ball centre (or a frozen strike point)
+  angle: number; // world aim angle
+  power: number; // 0..1 pull-back
+  elevation: number; // radians
+  side: number; // english −1..1
+  follow: number; // follow/draw −1..1
+  band: CueBand; // red (you) / blue (opponent)
+};
+const CUE_CURVE = 1.0; // how hard the colour rings bow toward the tip when reared
+const CUE_PULL_TILT = 0.4; // rad of butt-toward-camera lift at full pull, vertical cue
+const CUE_PULL_ZOOM = 0.3; // extra scale at full pull, vertical cue
+
+// Straight rod bitmap (tip at top-centre, pointing down), foreshortened by
+// elevation. Reused offscreen canvas. Ported verbatim from the old DOM cue.
+let rodEl: HTMLCanvasElement | null = null;
+function rodBitmap(sizeCss: number, dpr: number, elev: number, band: CueBand) {
+  const px = Math.max(1, Math.round(sizeCss * dpr));
+  if (!rodEl) rodEl = document.createElement("canvas");
+  const canvas = rodEl;
+  canvas.width = px;
+  canvas.height = px;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const S = sizeCss;
+  const cx = S / 2;
+  const tipR = S * 0.0072;
+  const buttR = S * 0.0168 * (1 + 0.9 * (1 - Math.cos(elev)));
+  const len = S * 0.9358 * Math.cos(elev);
+  ctx.beginPath();
+  ctx.moveTo(cx - tipR, tipR);
+  ctx.lineTo(cx - buttR, len);
+  ctx.arc(cx, len, buttR, Math.PI, 0, true);
+  ctx.lineTo(cx + tipR, tipR);
+  ctx.arc(cx, tipR, tipR, 0, Math.PI, true);
+  ctx.closePath();
+  ctx.save();
+  ctx.clip();
+  const sinE = Math.sin(elev);
+  const localR = (y: number) =>
+    tipR + (buttR - tipR) * Math.max(0, Math.min(1, y / len));
+  const fillFromRing = (yBase: number, color: string) => {
+    const r = localR(yBase);
+    const amp = r * sinE * CUE_CURVE;
+    ctx.beginPath();
+    const N = 26;
+    for (let i = 0; i <= N; i++) {
+      const x = -buttR + 2 * buttR * (i / N);
+      const u = r > 0 ? x / r : 2;
+      const dip = Math.abs(u) < 1 ? amp * Math.sqrt(1 - u * u) : 0;
+      const pt = { x: cx + x, y: yBase - dip };
+      i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.lineTo(cx + buttR, len + buttR);
+    ctx.lineTo(cx - buttR, len + buttR);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  fillFromRing(0, "#93685b");
+  fillFromRing(len * 0.0106, "#f4efda");
+  fillFromRing(len * 0.0481, "#e3c3a6");
+  fillFromRing(len * 0.6107, "#1d1d1b");
+  fillFromRing(len * 0.642, band.light);
+  fillFromRing(len * 0.9363, "#1d1d1b");
+  const stripes: [number, number, string][] = [
+    [0.0, 0.16, "rgba(0,0,0,0.42)"],
+    [0.16, 0.34, "rgba(0,0,0,0.18)"],
+    [0.74, 0.86, "rgba(0,0,0,0.2)"],
+    [0.86, 1.0, "rgba(0,0,0,0.44)"],
+  ];
+  for (const [a, b, color] of stripes) {
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - buttR + a * buttR * 2, 0, (b - a) * buttR * 2, len + buttR);
+  }
+  ctx.restore();
+  return canvas;
+}
+
+// Tip screen position + aim-back direction + whether the tip passes under the
+// ball. Mirrors the old positionCue contact geometry (see its comment).
+export function cueContact(l: Layout, d: CueDraw) {
+  const rpx = R * l.scale;
+  const b = toPx(l, d.at);
+  const scr = d.angle + (l.rotated ? Math.PI / 2 : 0);
+  const back = scr + Math.PI;
+  const kf = 0.5 * d.follow;
+  const ks = 0.5 * d.side;
+  const c = Math.sqrt(Math.max(0, 1 - kf * kf - ks * ks));
+  const reach = rpx * (c * Math.cos(d.elevation) - kf * Math.sin(d.elevation));
+  const perp = back + Math.PI / 2;
+  const across = -rpx * ks;
+  return {
+    back,
+    under: c * Math.sin(d.elevation) + kf * Math.cos(d.elevation) < 0,
+    tipX: b.x + Math.cos(back) * reach + Math.cos(perp) * across,
+    tipY: b.y + Math.sin(back) * reach + Math.sin(perp) * across,
+  };
+}
+
+// Draw the cue onto the main canvas. The pull-back (butt lifting toward the
+// camera on a reared cue) is recreated by blitting the straight rod bitmap in
+// horizontal strips through a per-strip perspective projection — the 2D
+// equivalent of the old CSS perspective/rotateX/scale.
+export function drawCue(ctx: CanvasRenderingContext2D, l: Layout, d: CueDraw) {
+  const { tipX, tipY, back } = cueContact(l, d);
+  const rpx = R * l.scale;
+  const size = rpx * 32;
+  const dpr = ctx.getTransform().a || 1;
+  const rod = rodBitmap(size, dpr, d.elevation, d.band);
+  const len = size * 0.9358 * Math.cos(d.elevation); // drawn rod length (css)
+  const pull = d.power * 6 * rpx;
+  const slide = pull * Math.cos(d.elevation); // pull-back gap along the aim
+  const tilt = d.power * Math.sin(d.elevation) * CUE_PULL_TILT;
+  const zoom = 1 + d.power * Math.sin(d.elevation) * CUE_PULL_ZOOM;
+  const persp = size * 2.5;
+  ctx.save();
+  ctx.translate(tipX, tipY);
+  ctx.rotate(back - Math.PI / 2); // local +y now points down the cue (away from aim)
+  ctx.scale(zoom, zoom);
+  const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+  if (tilt < 1e-3) {
+    // No rear/pull tilt → a plain blit, tip pulled back by `slide`.
+    ctx.drawImage(rod, -size / 2, slide, size, size);
+  } else {
+    // Strip the rod along its length; each strip lifts toward the camera
+    // (depth = v·sinT) and foreshortens (v·cosT), perspective-scaling width.
+    const N = 24;
+    const proj = (v: number) => {
+      const z = v * sinT;
+      const k = persp / (persp - z);
+      return { along: v * cosT * k, k };
+    };
+    for (let j = 0; j < N; j++) {
+      const v0 = slide + (j / N) * len;
+      const v1 = slide + ((j + 1) / N) * len;
+      const p0 = proj(v0);
+      const p1 = proj(v1);
+      const w = size * p0.k;
+      ctx.drawImage(
+        rod,
+        0, (v0 - slide) * dpr, rod.width, (v1 - v0) * dpr, // source strip (device px)
+        -w / 2, p0.along, w, p1.along - p0.along, // dest, perspective-scaled
+      );
+    }
+  }
+  ctx.restore();
+}
+
 // Ball hues (standard pool colours). Stripes reuse the solid hue + a band.
 const HUE: Record<number, string> = {
   1: "#e8b923",
@@ -136,7 +290,7 @@ export type Scene = {
   showCue?: boolean; // draw the physical cue stick behind the ball
   ballInHand?: boolean;
   growCue?: boolean; // draw the cue ball enlarged (grabbed for ball-in-hand)
-  hideCueBall?: boolean; // skip the cue ball here (redrawn by the over/under occluder)
+  cue?: CueDraw; // the on-table cue stick (own aim, opponent's, or strike linger)
   myGroup?: Group | null;
   onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
   opponent?: { cursor?: Vec; aim?: Aim };
@@ -162,7 +316,23 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   drawTable(ctx, l);
   drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
 
-  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 2.88 : 1, s.hideCueBall);
+  // Object balls first; the cue ball + cue stick go down in painter's order so
+  // "tip under/over the ball" is just which one is drawn last — no occluder.
+  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 2.88 : 1, true);
+  const cb = s.world.balls[0];
+  const drawCueBall = () => {
+    if (cb.potted) return;
+    const rpx = R * l.scale * (s.growCue ? 2.88 : 1);
+    drawBall(ctx, toPx(l, cb.p), 0, rpx, s.ballInHand ? 0.55 : 1, cb.o ?? IDENT3, l.rotated);
+  };
+  const under = s.cue ? cueContact(l, s.cue).under : false;
+  if (s.cue && under) {
+    drawCue(ctx, l, s.cue); // tip under the ball → cue first
+    drawCueBall();
+  } else {
+    drawCueBall();
+    if (s.cue) drawCue(ctx, l, s.cue); // tip over the ball → cue last
+  }
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
