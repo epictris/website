@@ -560,44 +560,51 @@ button.primary {
   width: 66px;
   height: 66px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffffff, #c9ccc6 70%, #9aa09a);
+  background: radial-gradient(circle at 38% 32%, #fbf7ea, #f3ecd6 68%, #ded4b4);
   border: 1px solid var(--border);
   position: relative;
   cursor: crosshair;
   touch-action: none;
 }
 
-.spin .axis {
+/* Training-ball face (Jimmy-Reyes-style aim ball): red edge rings, black
+   crosshair circle, HL/HR/LL/LR labels, red centre emblem. */
+.spin-face {
   position: absolute;
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.spin .axis.h {
-  left: 8%;
-  right: 8%;
-  top: 50%;
-  height: 1px;
-}
-
-.spin .axis.v {
-  top: 8%;
-  bottom: 8%;
-  left: 50%;
-  width: 1px;
-}
-
-/* Miscue ring: the tip can't grip past ~half the ball radius, so the dot is
-   clamped inside this circle (see onSpin). */
-.spin .miscue {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 50%;
-  height: 50%;
-  transform: translate(-50%, -50%);
-  border: 1px dashed rgba(0, 0, 0, 0.35);
-  border-radius: 50%;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
+}
+
+.spin-face .sf-red {
+  fill: none;
+  stroke: #c0392b;
+  stroke-width: 0.9;
+}
+
+.spin-face .sf-black {
+  fill: none;
+  stroke: #1a1a1a;
+  stroke-width: 0.9;
+}
+
+.spin-face .sf-cross {
+  stroke: #1a1a1a;
+  stroke-width: 0.9;
+}
+
+.spin-face .sf-emblem {
+  fill: #c0392b;
+  stroke: none;
+}
+
+.spin-face .sf-label {
+  fill: #1a1a1a;
+  font-size: 8px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 
 .spin .dot {

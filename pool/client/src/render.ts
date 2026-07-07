@@ -634,8 +634,15 @@ function drawCueDots(
   o: Mat3,
   rotated: boolean,
 ) {
-  for (const s of [1, -1]) {
-    const w = applyM(o, s, 0, 0);
+  // Six dots on the principal axes (±x, ±y, ±z), like an Aramith Pro cue ball:
+  // one per cube face, so a dot sits on alternating sides as the ball rolls.
+  const AXES: [number, number, number][] = [
+    [1, 0, 0], [-1, 0, 0],
+    [0, 1, 0], [0, -1, 0],
+    [0, 0, 1], [0, 0, -1],
+  ];
+  for (const [ax, ay, az] of AXES) {
+    const w = applyM(o, ax, ay, az);
     // Fade across the horizon so a dot rolls into view instead of popping in.
     const fade = Math.min(1, Math.max(0, (w.z - 0.02) / 0.22));
     if (fade <= 0) continue;
@@ -645,7 +652,7 @@ function drawCueDots(
     ctx.globalAlpha = fade;
     ctx.fillStyle = "#111417";
     ctx.beginPath();
-    ctx.arc(c.x + d.x * rpx, c.y + d.y * rpx, rpx * 0.2 * f, 0, Math.PI * 2);
+    ctx.arc(c.x + d.x * rpx, c.y + d.y * rpx, rpx * 0.16 * f, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }

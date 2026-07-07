@@ -78,6 +78,17 @@ const Game: Component = () => {
   const AIM_GAIN = 0.32; // felt-drag rotates the aim this fraction of the finger
   const LONGPRESS_MS = 300; // hold on the cue ball (no swipe) to grab it in-hand
   const SPIN_REACH_PX = 90; // finger travel (canvas px) that maps to full deflection
+  // Spin-face labels: eight positions (unit dir on screen, up = follow/High).
+  const SPIN_DIRS: [number, number, string][] = [
+    [1, 0, "R"],
+    [Math.SQRT1_2, -Math.SQRT1_2, "HR"],
+    [0, -1, "High"],
+    [-Math.SQRT1_2, -Math.SQRT1_2, "HL"],
+    [-1, 0, "L"],
+    [-Math.SQRT1_2, Math.SQRT1_2, "LL"],
+    [0, 1, "Low"],
+    [Math.SQRT1_2, Math.SQRT1_2, "LR"],
+  ];
   // Cue-stick hit band: behind the ball, along the aim axis, within this half-width.
   const STICK_NEAR = R * 1.2; // starts just off the ball surface
   const STICK_FAR = R * 34; // ...out to the drawn cue length (image is ~32·R long)
@@ -185,7 +196,6 @@ const Game: Component = () => {
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
   const [showMenu, setShowMenu] = createSignal(false); // hamburger menu modal
-  const [showTune, setShowTune] = createSignal(false); // spin + cue-angle modal
   const [showSpinHud, setShowSpinHud] = createSignal(false); // floating spin window
   const [spinHudPos, setSpinHudPos] = createSignal({ x: 0, y: 0 }); // canvas-local px
   const [spinAim, setSpinAim] = createSignal(0); // aim the spin pad is oriented to
@@ -1477,29 +1487,6 @@ const Game: Component = () => {
     });
   });
 
-  // --- Spin pad -----------------------------------------------------------
-  let spinEl!: HTMLDivElement;
-  const onSpin = (e: PointerEvent) => {
-    const p = localPoint(spinEl, e);
-    // Pointer as a fraction of the ball radius (pad edge = the ball's edge).
-    const nx = (p.x / p.w) * 2 - 1;
-    const ny = (p.y / p.h) * 2 - 1;
-    // side/follow are normalised so ±1 == the miscue limit (half the ball
-    // radius — see applyShot's 1.25 coefficient). A ball-fraction of 0.5 is a
-    // full slider, so scale up, then clamp to the unit (miscue) circle: past the
-    // miscue ring the dot pins to it, it can never be placed outside.
-    let sx = nx * 2;
-    let sy = ny * 2;
-    const r = Math.hypot(sx, sy);
-    if (r > 1) {
-      sx /= r;
-      sy /= r;
-    }
-    setSide(sx);
-    setFollow(-sy); // up = follow (+)
-    recomputePrediction();
-  };
-
   // Dot offset: ±1 slider sits at half the ball radius (the miscue ring). The
   // pad's drawn radius is 50% of its box, so a full slider is 25% off centre.
   const spinDot = () => ({
@@ -1507,55 +1494,27 @@ const Game: Component = () => {
     top: `${50 - follow() * 25}%`,
   });
 
-  // --- Cue elevation widget (square side view; drag the cue to set angle) ---
-  let cueEl!: SVGSVGElement;
-  const EBALL = { x: 60, y: 62 }; // ball centre in the 100×100 viewBox
-  const EBALL_R = 12;
-  const TIP_GAP = 5; // cue tip stops this far short of the ball surface
-  const ECUE_LEN = 40;
-  const onCueDrag = (e: PointerEvent) => {
-    const p = localPoint(cueEl, e);
-    const lx = (p.x / p.w) * 100;
-    const ly = (p.y / p.h) * 100;
-    const ang = Math.atan2(EBALL.y - ly, EBALL.x - lx);
-    setElevation(Math.max(0, Math.min(MAX_ELEVATION, ang)));
-    recomputePrediction();
-  };
-  // Cue lies up-left of the ball; tip sits TIP_GAP off the surface, butt beyond.
-  const cueGeom = () => {
-    const ux = -Math.cos(elevation());
-    const uy = -Math.sin(elevation());
-    const dTip = EBALL_R + TIP_GAP;
-    return {
-      tip: { x: EBALL.x + dTip * ux, y: EBALL.y + dTip * uy },
-      butt: { x: EBALL.x + (dTip + ECUE_LEN) * ux, y: EBALL.y + (dTip + ECUE_LEN) * uy },
-    };
-  };
-
-  // Drag hint: an arc around the ball spanning the cue's swept elevation range,
-  // arrowhead at each end — you rotate the cue by dragging along it.
-  const ARC_R = 27;
-  const arcPt = (e: number) => ({
-    x: EBALL.x - ARC_R * Math.cos(e),
-    y: EBALL.y - ARC_R * Math.sin(e),
-  });
-  // Small triangle whose apex is `at`, pointing along `dir` (radians).
-  const arcArrow = (at: { x: number; y: number }, dir: number) => {
-    const dx = Math.cos(dir), dy = Math.sin(dir);
-    const bx = at.x - 5 * dx, by = at.y - 5 * dy; // base, 5u back along -dir
-    const px = -dy * 3, py = dx * 3; // half-width perpendicular
-    return `${at.x},${at.y} ${bx + px},${by + py} ${bx - px},${by - py}`;
-  };
-  const cueArc = () => {
-    const a = arcPt(0);
-    const b = arcPt(MAX_ELEVATION);
-    return {
-      d: `M ${a.x} ${a.y} A ${ARC_R} ${ARC_R} 0 0 1 ${b.x} ${b.y}`,
-      // outward tangents: decreasing-elev at the low end, increasing at the high end
-      loArrow: arcArrow(a, Math.PI / 2),
-      hiArrow: arcArrow(b, Math.atan2(-Math.cos(MAX_ELEVATION), Math.sin(MAX_ELEVATION))),
-    };
-  };
+  // Decorative training-ball face (red edge rings, black crosshair, HL/HR/…
+  // labels, red centre emblem). Shared by every spin widget; the live .dot sits
+  // on top. Labels stay upright — the widget itself rotates to the cue's aim.
+  const SpinFace: Component = () => (
+    <svg class="spin-face" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+      <circle cx="50" cy="50" r="48" class="sf-red" />
+      <circle cx="50" cy="50" r="35" class="sf-black" />
+      <line x1="50" y1="26" x2="50" y2="74" class="sf-cross" />
+      <line x1="26" y1="50" x2="74" y2="50" class="sf-cross" />
+      {SPIN_DIRS.map(([dx, dy, label]) => {
+        const rr = dx && dy ? 26 : 30; // cardinals sit out near the ring
+        return (
+          <text x={50 + dx * rr} y={50 + dy * rr} class="sf-label">
+            {label}
+          </text>
+        );
+      })}
+      <circle cx="50" cy="50" r="7" class="sf-black" />
+      <circle cx="50" cy="50" r="3" class="sf-emblem" />
+    </svg>
+  );
 
   return (
     <div class="game-root" classList={{ rot90: rot90() }}>
@@ -1639,9 +1598,7 @@ const Game: Component = () => {
               }}
             >
               <div class="spin">
-                <div class="axis h" />
-                <div class="axis v" />
-                <div class="miscue" />
+                <SpinFace />
                 <div class="dot" style={spinDot()} />
               </div>
             </div>
@@ -1649,18 +1606,6 @@ const Game: Component = () => {
         </div>
 
         <div class="cue-col" style={{ height: `${canvasH()}px` }}>
-          {/* White-ball button — opens the spin + cue-angle modal. Its dot
-              previews the current english. */}
-          <button
-            class="tune-ball spin"
-            title="spin & cue angle"
-            onClick={() => setShowTune(true)}
-          >
-            <div class="axis h" />
-            <div class="axis v" />
-            <div class="dot" style={spinDot()} />
-          </button>
-
           {/* Cue power — fills the remaining height; pull back to strike. */}
           <svg
             class="cue-power"
@@ -1685,58 +1630,6 @@ const Game: Component = () => {
           </svg>
         </div>
       </div>
-
-      <Show when={showTune()}>
-        <div class="menu-backdrop" onClick={() => setShowTune(false)} />
-        <div class="pick-modal">
-          <div class="tune-grid">
-            <div class="tune-cell">
-              <div
-                class="spin"
-                ref={spinEl}
-                onPointerDown={(e) => {
-                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                  onSpin(e);
-                }}
-                onPointerMove={(e) => e.buttons && onSpin(e)}
-              >
-                <div class="axis h" />
-                <div class="axis v" />
-                <div class="miscue" />
-                <div class="dot" style={spinDot()} />
-              </div>
-            </div>
-
-            <div class="tune-cell">
-              <svg
-                class="cue-elev"
-                ref={cueEl}
-                viewBox="0 0 100 100"
-                onPointerDown={(e) => {
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  onCueDrag(e);
-                }}
-                onPointerMove={(e) => e.buttons && onCueDrag(e)}
-              >
-                <line class="surface" x1="8" y1="74" x2="92" y2="74" />
-                <ellipse class="shadow" cx="60" cy="74" rx="13" ry="3" />
-                <circle class="ball" cx="60" cy="62" r="12" />
-                <path class="arc" d={cueArc().d} />
-                <polygon class="arc-head" points={cueArc().loArrow} />
-                <polygon class="arc-head" points={cueArc().hiArrow} />
-                <line
-                  class="cue"
-                  x1={cueGeom().butt.x}
-                  y1={cueGeom().butt.y}
-                  x2={cueGeom().tip.x}
-                  y2={cueGeom().tip.y}
-                />
-                <circle class="tip" cx={cueGeom().tip.x} cy={cueGeom().tip.y} r="2.8" />
-              </svg>
-            </div>
-          </div>
-        </div>
-      </Show>
 
       <Show when={showMenu()}>
         <div class="menu-backdrop" onClick={() => setShowMenu(false)} />
