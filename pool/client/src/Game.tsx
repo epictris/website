@@ -77,7 +77,6 @@ const Game: Component = () => {
   const AIM_GAIN = 0.32; // felt-drag rotates the aim this fraction of the finger
   const LONGPRESS_MS = 300; // hold on the cue ball (no swipe) to grab it in-hand
   const SPIN_REACH_PX = 90; // finger travel (canvas px) that maps to full deflection
-  const ELEV_GAIN = MAX_ELEVATION / (R * 10); // cue-axis drag (m) → elevation (rad)
   // Cue-stick hit band: behind the ball, along the aim axis, within this half-width.
   const STICK_NEAR = R * 1.2; // starts just off the ball surface
   const STICK_FAR = R * 34; // ...out to the drawn cue length (image is ~32·R long)
@@ -1089,7 +1088,7 @@ const Game: Component = () => {
     aimStart = aimAngle;
     downFinger = Math.atan2(w.y - cue.y, w.x - cue.x);
     movedFar = false;
-    const onCueBall = Math.hypot(w.x - cue.x, w.y - cue.y) < R * 1.7;
+    const onCueBall = Math.hypot(w.x - cue.x, w.y - cue.y) < R * 3.4;
     // Project the press onto the cue axis (the stick lies opposite the aim).
     const back = aimAngle + Math.PI;
     const proj = (w.x - cue.x) * Math.cos(back) + (w.y - cue.y) * Math.sin(back);
@@ -1161,11 +1160,24 @@ const Game: Component = () => {
     if (mode === "place") {
       cue.p = clampCue(w);
     } else if (mode === "elev") {
-      // Drag along the cue axis: toward the ball (proj shrinks) raises the cue.
-      const back = aimStart + Math.PI;
+      // Grabbing the stick both raises the cue AND still swings the aim, so it
+      // never feels locked. Aim tracks the finger 1:1 (unlike felt-drag's slowed
+      // AIM_GAIN), so the handle follows the hand — do this FIRST so elevation
+      // projects onto the freshly-rotated cue axis.
+      const finger = Math.atan2(w.y - cue.p.y, w.x - cue.p.x);
+      if (movedFar && Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R)
+        aimAngle = aimStart + wrapPi(finger - downFinger);
+      // Keep the finger over the same point on the cue as it rears. A cue point
+      // at along-axis distance d foreshortens to d·cos(elev) on the table, so
+      // holding that point under the finger gives cos(elev) = proj·cos(elevStart)
+      // / projStart, where proj is measured along the CURRENT (rotated) cue axis.
+      // Grab near the butt (big projStart) → a longer drag to reach full angle;
+      // grab near the tip (small projStart) → a short one.
+      const back = aimAngle + Math.PI;
       const proj = (w.x - cue.p.x) * Math.cos(back) + (w.y - cue.p.y) * Math.sin(back);
-      const el = elevStart - (proj - projStart) * ELEV_GAIN;
-      setElevation(Math.max(0, Math.min(MAX_ELEVATION, el)));
+      const ratio = projStart > 0 ? (proj * Math.cos(elevStart)) / projStart : 1;
+      const el = Math.acos(Math.max(Math.cos(MAX_ELEVATION), Math.min(1, ratio)));
+      setElevation(el);
     } else if (movedFar) {
       // Fine aim: rotate the shot about the cue ball by a fraction of the
       // finger's swing (slower than the finger, for precision).
