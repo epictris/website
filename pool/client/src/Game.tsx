@@ -8,6 +8,7 @@ import {
   DEFAULT_CONFIG,
   freeze,
   FIXED_DT,
+  IDENT3,
   integrateSpin,
   MAX_ELEVATION,
   POCKET_LIST,
@@ -26,7 +27,7 @@ import {
   type Vec,
   type World,
 } from "./physics";
-import { drawScene, layoutFor, type Aim, type Layout } from "./render";
+import { drawBall, drawScene, layoutFor, type Aim, type Layout } from "./render";
 import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
 import { wsUrl, type Msg } from "./net";
 import {
@@ -48,6 +49,7 @@ const Game: Component = () => {
   let ctx!: CanvasRenderingContext2D;
   let tableCueEl!: HTMLCanvasElement; // on-table cue overlay (can exceed canvas)
   let oppCueEl!: HTMLCanvasElement; // opponent's blue cue overlay (their aim)
+  let cueBallOccEl!: HTMLCanvasElement; // cue-ball redraw over the cue (draw = tip under)
   let layout: Layout;
 
   // --- High-frequency mutable state (not Solid-reactive) ------------------
@@ -713,8 +715,10 @@ const Game: Component = () => {
       myAim: live ? aim : undefined,
       prediction: live ? prediction : undefined,
       showCue: live,
-      ballInHand: live && r.ballInHand,
+      ballInHand: live && r.ballInHand, // cue ball fades to cueBallAlpha() (0.55)
       growCue: placeMode, // enlarge the cue ball while it's grabbed for placement
+      hideCueBall: cueTipUnder(), // occluder redraws it so the tip reads as under
+
       myGroup,
       onEight,
       opponent: opp,
@@ -745,6 +749,7 @@ const Game: Component = () => {
     });
     updateTableCue();
     updateOppCue();
+    updateCueBallOcc();
   };
 
   // Cue colours matching the cue art: a wood shaft, a coloured wrap (red = you,
@@ -848,6 +853,8 @@ const Game: Component = () => {
     pwr: number,
     elev: number,
     band: CueBand, // which cue colour to draw
+    side = 0, // english: shifts the tip across the aim (miscue units, −1..1)
+    follow = 0, // follow/draw: shifts the tip along the aim (top → toward target)
     atPos?: Vec, // pin to a frozen cue-ball point (strike linger) instead of live
   ) => {
     const p = atPos ?? world.balls[0].p;
@@ -858,12 +865,24 @@ const Game: Component = () => {
     const by = layout.rotated ? layout.oy + p.x * s : layout.oy + p.y * s;
     const scr = angle + (layout.rotated ? Math.PI / 2 : 0); // world→screen dir
     const back = scr + Math.PI; // cue lies opposite travel
-    const tf = elev / MAX_ELEVATION; // 0..1 how far the cue is reared up
-    // Resting tip position: a reared cue slides slightly toward the ball so its
-    // foreshortened butt hangs over the cue ball. Power pulls it back along aim.
-    const gap = rpx * 1.4 - rpx * 1 * tf;
-    const tipX = bx + Math.cos(back) * gap;
-    const tipY = by + Math.sin(back) * gap;
+    // Place the tip at the true contact point on the ball. The cue axis is tilted
+    // up by `elev`; the tip strikes the ball on that axis, offset within the strike
+    // face by side (across) and follow/draw (the face's vertical). Projecting the
+    // contact back to the table gives:
+    //   reach  = R·(c·cos e − k_f·sin e)   — distance the tip sits behind centre
+    //   contactUp = c·sin e + k_f·cos e     — >0 tip rides over the ball, <0 under
+    // At a level cue (e=0) reach is the there-and-back arc (edge-kiss at centre,
+    // overlap at the extremes) and draw goes under (occluded). As the cue rears up
+    // the motion straightens to a linear front→back and everything reads as over.
+    const kf = 0.5 * follow; // ±1 spin → ±½R up/down the strike face
+    const ks = 0.5 * side; //  ±1 spin → ±½R across it
+    const c = Math.sqrt(Math.max(0, 1 - kf * kf - ks * ks));
+    // Tip sits exactly on the contact point — fully realistic, no exaggeration.
+    const reach = rpx * (c * Math.cos(elev) - kf * Math.sin(elev));
+    const perp = back + Math.PI / 2;
+    const across = -rpx * ks; // side english, perpendicular to the aim (keeps L/R)
+    const tipX = bx + Math.cos(back) * reach + Math.cos(perp) * across;
+    const tipY = by + Math.sin(back) * reach + Math.sin(perp) * across;
     const size = rpx * 32; // square canvas; the rod is drawn inside it
     // Pull-back rides the elevated cue axis: the along-table slide shrinks with
     // cos(elev), and a pull-driven 3D tilt (about the pinned tip, under perspective)
@@ -905,6 +924,8 @@ const Game: Component = () => {
       active ? strikePwr : power(),
       active ? strikeElev : elevation(), // swing/linger replay at the shot's angle
       CUE_RED,
+      active ? strikeSide : side(),
+      active ? strikeFollow : follow(),
       active ? strikeCuePos : undefined,
     );
   };
@@ -921,7 +942,114 @@ const Game: Component = () => {
       return;
     }
     el.style.display = "block";
-    positionCue(el, opp.aim.angle, opp.aim.power, opp.aim.elevation, CUE_BLUE);
+    positionCue(
+      el,
+      opp.aim.angle,
+      opp.aim.power,
+      opp.aim.elevation,
+      CUE_BLUE,
+      opp.aim.side,
+      opp.aim.follow,
+    );
+  };
+
+  // Single source of the cue ball's draw modifiers, shared by the felt canvas
+  // (drawScene) and the over/under occluder so they can never drift:
+  //   scale — enlarged while grabbed for ball-in-hand placement (growCue)
+  //   alpha — the 0.55 ball-in-hand fade, only while it's the live shooter's turn
+  const cueBallScale = () => (placeMode ? 2.88 : 1);
+  const cueBallAlpha = () =>
+    canAct() && !striking && rules().ballInHand ? 0.55 : 1;
+
+  // Spin + elevation + position of whichever cue is currently drawn (own aim,
+  // opponent's aim, or the frozen strike), or null if no cue is showing.
+  const activeCue = () => {
+    const cue = world.balls[0];
+    if (cue.potted) return null;
+    if (striking || lingering)
+      return { fol: strikeFollow, sid: strikeSide, elv: strikeElev, at: strikeCuePos ?? cue.p };
+    if (canAct() && !animating())
+      return { fol: follow(), sid: side(), elv: elevation(), at: cue.p };
+    if (!canAct() && !animating() && opp.aim)
+      return { fol: opp.aim.follow, sid: opp.aim.side, elv: opp.aim.elevation, at: cue.p };
+    return null;
+  };
+
+  // The tip passes UNDER the ball only when the contact point sits below the
+  // ball's equator: contactUp = c·sin e + k_f·cos e < 0. As the cue rears up this
+  // stops happening, so draw no longer reads as "under". When true the felt-canvas
+  // cue ball is skipped (hideCueBall) and the occluder draws it instead — a single
+  // ball layer, so the ball-in-hand fade doesn't double up.
+  const cueTipUnder = () => {
+    const a = activeCue();
+    if (!a) return false;
+    const kf = 0.5 * a.fol, ks = 0.5 * a.sid;
+    const c = Math.sqrt(Math.max(0, 1 - kf * kf - ks * ks));
+    return c * Math.sin(a.elv) + kf * Math.cos(a.elv) < 0;
+  };
+
+  // Redraw the cue ball ON TOP of the cue when the tip is under it, so the tip
+  // reads as passing behind the ball. The felt canvas skips the ball here, so
+  // this is the ONLY cue-ball layer (correct opacity in ball-in-hand).
+  const updateCueBallOcc = () => {
+    const el = cueBallOccEl;
+    if (!el) return;
+    const cue = world.balls[0];
+    const a = activeCue();
+    if (!a || !cueTipUnder()) {
+      el.style.display = "none";
+      return;
+    }
+    const at = a.at;
+    el.style.display = "block";
+    const s = layout.scale;
+    const rpx = R * s * cueBallScale(); // same grow as the felt ball
+    const bx = layout.rotated ? layout.ox + (TABLE.h - at.y) * s : layout.ox + at.x * s;
+    const by = layout.rotated ? layout.oy + at.x * s : layout.oy + at.y * s;
+    const dpr = window.devicePixelRatio || 1; // match the felt canvas exactly
+    // Pad so the drop shadow isn't clipped. Round the BACKING store, then derive
+    // the CSS size + centre from it, so the backing→CSS scale is exactly 1/dpr and
+    // the ball centre lands precisely on (bx, by) — no sub-pixel drift vs the felt.
+    const pxW = Math.max(1, Math.round(rpx * 3.2 * dpr));
+    const cssW = pxW / dpr;
+    const cssHalf = cssW / 2;
+    el.width = pxW;
+    el.height = pxW;
+    el.style.width = `${cssW}px`;
+    el.style.height = `${cssW}px`;
+    // Position with a transform (sub-pixel, GPU) instead of left/top — CSS left/top
+    // gets snapped to the device grid, which was shifting the ball ~1px vs the felt
+    // canvas. transform matches the canvas rasteriser, so the centre lands on (bx,by).
+    el.style.left = "0";
+    el.style.top = "0";
+    el.style.transform = `translate(${bx - cssHalf}px, ${by - cssHalf}px)`;
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssW);
+    // Draw the ball through the SAME drawBall path as the felt canvas, with the
+    // SAME alpha/scale/shadow — so it's one implementation: any change to the ball
+    // shows up in both. The felt canvas skips this ball (hideCueBall), so this is
+    // the only copy while the tip is under.
+    drawBall(ctx, { x: cssHalf, y: cssHalf }, 0, rpx, cueBallAlpha(), cue.o ?? IDENT3, layout.rotated);
+
+    // The occluder sits above the felt canvas, so it would hide the prediction
+    // line where it leaves the ball. Redraw the cue-ball path segment on top (same
+    // dashed-white style as render.ts drawPrediction) so the line stays visible —
+    // matching the felt, where the line is drawn over the ball.
+    if (prediction && canAct() && !striking && !animating()) {
+      ctx.strokeStyle = "rgba(255,255,255,0.82)";
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      prediction.cue.forEach((p, i) => {
+        const lx = layout.rotated ? cssHalf + (at.y - p.y) * s : cssHalf + (p.x - at.x) * s;
+        const ly = layout.rotated ? cssHalf + (p.x - at.x) * s : cssHalf + (p.y - at.y) * s;
+        i ? ctx.lineTo(lx, ly) : ctx.moveTo(lx, ly);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   };
 
   // --- Pointer input ------------------------------------------------------
@@ -1312,6 +1440,8 @@ const Game: Component = () => {
   let strikePlace: Vec | undefined;
   let strikeCuePos: Vec | undefined; // frozen contact point for the linger
   let strikeElev = 0; // frozen cue angle for the swing/linger (elevation() resets)
+  let strikeSide = 0; // frozen english for the swing/linger (side() resets)
+  let strikeFollow = 0; // frozen follow/draw for the swing/linger
 
   // Swing done: fire the physics, but keep the cue drawn at the contact point
   // for STRIKE_LINGER_MS so it doesn't blink out the instant the ball leaves.
@@ -1342,6 +1472,8 @@ const Game: Component = () => {
     strikePlace = place;
     strikeCuePos = place ? { ...place } : { ...world.balls[0].p };
     strikeElev = elevation(); // hold the angle through the swing + linger
+    strikeSide = side(); // hold the english/draw through the swing + linger
+    strikeFollow = follow();
     strikeFromPwr = power(); // strike starts from the live pulled-back cue
     strikePwr = strikeFromPwr;
     strikeStart = nowMs;
@@ -1570,6 +1702,9 @@ const Game: Component = () => {
           <canvas ref={canvas} onContextMenu={(e) => e.preventDefault()} />
           <canvas class="table-cue" ref={tableCueEl} />
           <canvas class="table-cue" ref={oppCueEl} />
+          {/* Cue-ball redraw painted ABOVE the cue: shown only for draw (back
+              spin) so the overlapping tip reads as passing under the ball. */}
+          <canvas class="table-cue" ref={cueBallOccEl} />
           {/* Transparent pointer layer over the table, extended by a cue length so
               the stick is grabbable where it overhangs the felt. Coords still map
               through the canvas rect; off-canvas presses that miss the stick are
