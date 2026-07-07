@@ -275,6 +275,8 @@ export type Scene = {
   rack?: RackEntry[]; // potted balls collected in the return track, in pot order
   now?: number; // wall-clock ms, for driving rack roll animations
   debug?: boolean; // overlay the real collision geometry
+  debugCursor?: Vec; // world coords under the cursor, shown as a readout (debug)
+  debugCopied?: boolean; // flash "copied" in the readout after a click-to-copy
 };
 
 // One ball resting in (or rolling into) the return track. `rollStart` is the ms
@@ -325,6 +327,47 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   if (s.emojis) for (const e of s.emojis) drawEmoji(ctx, l, e);
 
   if (s.debug) drawDebugOverlay(ctx, l, s.world);
+  if (s.debug && s.debugCursor) drawCursorReadout(ctx, l, s.debugCursor, s.debugCopied);
+}
+
+// Debug: a little popup above the cursor showing its world coordinates, so
+// pocket-polygon points can be read straight off the table. Flashes "copied"
+// after a click-to-copy.
+function drawCursorReadout(
+  ctx: CanvasRenderingContext2D,
+  l: Layout,
+  w: Vec,
+  copied?: boolean,
+) {
+  const c = toPx(l, w);
+  const label = copied
+    ? `✓ ${w.x.toFixed(3)}, ${w.y.toFixed(3)}`
+    : `${w.x.toFixed(3)}, ${w.y.toFixed(3)}`;
+  ctx.save();
+  ctx.font = "12px monospace";
+  ctx.textBaseline = "middle";
+  const padX = 5;
+  const tw = ctx.measureText(label).width;
+  const bx = c.x - tw / 2 - padX;
+  const by = c.y - 26;
+  const accent = copied ? "rgba(57,255,136,0.95)" : "rgba(255,90,220,0.9)";
+  ctx.fillStyle = "rgba(0,0,0,0.8)";
+  ctx.fillRect(bx, by - 9, tw + padX * 2, 18);
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by - 9, tw + padX * 2, 18);
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.fillText(label, c.x, by);
+  // Crosshair at the exact point.
+  ctx.strokeStyle = accent;
+  ctx.beginPath();
+  ctx.moveTo(c.x - 6, c.y);
+  ctx.lineTo(c.x + 6, c.y);
+  ctx.moveTo(c.x, c.y - 6);
+  ctx.lineTo(c.x, c.y + 6);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // The waiting player's dragged annotation paths — dotted accent lines on the
@@ -431,6 +474,28 @@ function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World
     ctx.beginPath();
     ctx.arc(c.x, c.y, pk.hole * l.scale, 0, Math.PI * 2);
     ctx.stroke();
+  }
+
+  // Sink polygons — the hole shape a potted ball rattles inside. Tune
+  // SINK_POLY_CORNER / SINK_POLY_SIDE against these outlines.
+  ctx.strokeStyle = "rgba(255,90,220,0.9)";
+  ctx.fillStyle = "rgba(255,90,220,0.9)";
+  for (const pk of POCKET_LIST) {
+    const poly = sinkPoly(pk.center);
+    ctx.beginPath();
+    poly.forEach((v, i) => {
+      const p = toPx(l, v);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+    for (const v of poly) {
+      const p = toPx(l, v);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); // vertex markers
+      ctx.fill();
+    }
   }
 
   // Hard outer pocket walls — where a centre reflects if it misses the hole.
@@ -877,17 +942,215 @@ function drawBalls(
   }
 }
 
-/** A ball dropping into a pocket: lerps toward the pocket, shrinking + fading. */
-export type Sink = { id: number; from: Vec; pocket: Vec; t: number };
+/** A ball dropping into a pocket. `v` = its world velocity at the pot (m/s),
+ *  `ms` = elapsed since. It keeps that momentum until it hits the pocket back,
+ *  then plunges. */
+export type Sink = { id: number; from: Vec; pocket: Vec; v: Vec; ms: number };
 
+// Rodrigues rotation about an in-plane (world x,y) axis — rolls the ball's
+// markings as it travels. The roll axis is the travel direction turned 90° in
+// the felt plane, so the ball rolls without slipping along its path.
+function rollAlong(vx: number, vy: number, ang: number): Mat3 {
+  const n = Math.hypot(vx, vy) || 1e-9;
+  const kx = -vy / n;
+  const ky = vx / n; // unit axis ⟂ travel, in the felt plane (kz = 0)
+  const c = Math.cos(ang);
+  const s = Math.sin(ang);
+  const t = 1 - c;
+  return [
+    1 - t * ky * ky, t * kx * ky, s * ky,
+    t * kx * ky, 1 - t * kx * kx, -s * kx,
+    -s * ky, s * kx, c,
+  ];
+}
+
+// A potted ball's drop: it keeps the momentum it entered with and rattles inside
+// the pocket, bouncing off the walls and damping the velocity on each bounce,
+// then sinks into shadow and shrinks away. Fully re-integrated from the pot each
+// frame (the Sink carries no live state), so it's deterministic: same ms → pos.
+//
+// The pocket interior is a POLYGON (the hole shape a ball rattles inside). It's
+// defined once per pocket type in a local frame — u = "outward" (table centre →
+// pocket, i.e. deeper into the pocket), w = perpendicular — then rotated onto
+// each pocket. So the mouth (toward the felt) is at negative u, the back at
+// positive u. Edit these 12 points against the debug overlay to match the art;
+// winding doesn't matter (inward normals are found via the centroid).
+type Vec2 = [number, number];
+const SINK_POLY_CORNER: Vec2[] = [
+  [-0.06, 0], [-0.058, 0.023], [-0.042, 0.04], [0.023, 0.029],
+  [0.041, 0.018], [0.049, 0], [0.041, -0.018], [0.023, -0.029],
+  [-0.042, -0.04], [-0.058, -0.023],
+];
+const SINK_POLY_SIDE: Vec2[] = [
+  [-0.06, 0], [-0.052, 0.028], [-0.042, 0.044], [-0.005, 0.036],
+  [0.016, 0.021], [0.02, 0], [0.016, -0.021], [-0.005, -0.036],
+  [-0.042, -0.044], [-0.052, -0.028],
+];
+// Map a pocket's local polygon into world coords, oriented along "outward" (into
+// the pocket). Corners point along the 45° table diagonal (a right-angle corner,
+// regardless of the table's aspect ratio); side pockets point straight out (±y).
+function sinkPoly(pocket: Vec): Vec[] {
+  const isSide = Math.abs(pocket.x - TABLE.w / 2) < 0.01;
+  const local = isSide ? SINK_POLY_SIDE : SINK_POLY_CORNER;
+  const sx = Math.sign(pocket.x - TABLE.w / 2);
+  const sy = Math.sign(pocket.y - TABLE.h / 2);
+  const oux = isSide ? 0 : sx;
+  const ouy = isSide ? sy : sy;
+  const oun = Math.hypot(oux, ouy) || 1e-9;
+  const Ux = oux / oun;
+  const Uy = ouy / oun; // outward (into the pocket): diagonal for corners, ±y for sides
+  const Wx = -Uy;
+  const Wy = Ux; // perpendicular
+  return local.map(([u, w]) => ({
+    x: pocket.x + u * Ux + w * Wx,
+    y: pocket.y + u * Uy + w * Wy,
+  }));
+}
+const SINK_MS = 430; // lifetime of the drop; gone after this
+const SINK_DT = 0.004; // fixed sim step (s) — small enough a fast ball can't tunnel
+const SINK_REST = 0.62; // wall restitution (normal energy kept per bounce — soft liner)
+const SINK_WALL_FRIC = 0.8; // tangential energy kept per bounce (the liner grabs the ball)
+const SINK_DRAG = 1.3; // per-second velocity bleed (rolling friction in the bowl)
+const SINK_G = 1.2; // accel (m/s²) toward the pocket back — tips a slow ball in
+const SINK_DROP = 0.7; // screen-down depth of the fall, in ball radii
 function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   const rpx = R * l.scale;
-  const e = sk.t * sk.t; // accelerate into the pocket
-  const c = toPx(l, {
-    x: sk.from.x + (sk.pocket.x - sk.from.x) * e,
-    y: sk.from.y + (sk.pocket.y - sk.from.y) * e,
+  const prog = sk.ms / SINK_MS;
+  if (prog >= 1) return; // fully sunk — nothing left to draw
+
+  // The pocket polygon + per-edge inward normals (pointing toward the centroid,
+  // so the winding of the point list doesn't matter).
+  const poly = sinkPoly(sk.pocket);
+  const N = poly.length;
+  let cx = 0;
+  let cy = 0;
+  for (const p of poly) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= N;
+  cy /= N;
+  // "Into the pocket" direction (same basis as sinkPoly): corners point along the
+  // 45° diagonal toward the corner, sides straight out. NOT the centroid — the
+  // polygon reaches further toward the mouth than the back, so the centroid sits
+  // on the wrong side and would flip this.
+  const isSideP = Math.abs(sk.pocket.x - TABLE.w / 2) < 0.01;
+  const uox = isSideP ? 0 : Math.sign(sk.pocket.x - TABLE.w / 2);
+  const uoy = Math.sign(sk.pocket.y - TABLE.h / 2);
+  const uon = Math.hypot(uox, uoy) || 1e-9;
+  const Ux = uox / uon;
+  const Uy = uoy / uon;
+  const nrm = poly.map((a, i) => {
+    const b = poly[(i + 1) % N];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const el = Math.hypot(ex, ey) || 1e-9;
+    let nx = -ey / el;
+    let ny = ex / el;
+    // Flip to point inward (toward the centroid) if needed.
+    if ((cx - a.x) * nx + (cy - a.y) * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    // The MOUTH lips face almost straight out the opening (inward normal ≈ +U).
+    // They're ONE-WAY: they contain a ball trying to escape, but let an entering
+    // ball (moving toward the centre) pass — otherwise they'd eject a slow,
+    // rim-caught ball deep into the pocket (a teleport). The angled jaws below
+    // this threshold stay full walls, so a ball never clips out the side.
+    const mouth = nx * Ux + ny * Uy > 0.85;
+    return { nx, ny, ax: a.x, ay: a.y, mouth };
   });
-  drawBall(ctx, c, sk.id, Math.max(1, rpx * (1 - 0.82 * sk.t)), 1 - sk.t, IDENT3, l.rotated, false);
+
+  // The wall constraint is inset by the ball radius so the ball's EDGE — not its
+  // centre — rides the polygon, and never crosses it. MUST be constant across
+  // frames: the whole bounce path re-integrates from the pot each frame, so a
+  // per-frame-varying inset would move the walls and make the chaotic path
+  // re-solve to a different endpoint — the ball visibly jumps ("spazzes").
+  const inset = R;
+
+  // Confine a point so the ball stays inside the inset polygon; returns the
+  // clamped point + the inward normal of the edge it was pushed off (0,0 if
+  // already inside). A few passes settle sharp corners where two edges overlap.
+  // A mouth lip is skipped while the ball moves inward through it (v·n > 0), so
+  // the ball enters freely but is still walled in on its way back out.
+  const confine = (x: number, y: number, vx: number, vy: number) => {
+    let nx = 0;
+    let ny = 0;
+    for (let pass = 0; pass < 3; pass++) {
+      let minD = 0;
+      let hit = -1;
+      for (let i = 0; i < N; i++) {
+        if (nrm[i].mouth && vx * nrm[i].nx + vy * nrm[i].ny > 0) continue; // entering — pass
+        const d = (x - nrm[i].ax) * nrm[i].nx + (y - nrm[i].ay) * nrm[i].ny - inset;
+        if (d < minD) {
+          minD = d;
+          hit = i;
+        }
+      }
+      if (hit < 0) break;
+      x -= minD * nrm[hit].nx;
+      y -= minD * nrm[hit].ny;
+      nx = nrm[hit].nx;
+      ny = nrm[hit].ny;
+    }
+    return { x, y, nx, ny };
+  };
+
+  // Start exactly where physics dropped the ball — no snap. The mouth is narrower
+  // than the ball, so the one-way lips let it roll in under gravity without an
+  // ejecting teleport.
+  let px = sk.from.x;
+  let py = sk.from.y;
+  let vx = sk.v.x;
+  let vy = sk.v.y;
+  let dist = 0; // path length, for rolling the markings
+
+  // Rattle simulation — integrate from the pot (ms 0) to now, bouncing off the
+  // polygon walls. Cheap: ~n = ms/4 steps, one potted ball at a time.
+  const target = sk.ms / 1000;
+  for (let t = 0; t < target; t += SINK_DT) {
+    const step = Math.min(SINK_DT, target - t);
+    // Gravity toward the back of the pocket (a fixed direction, so no swirl):
+    // tips a slow, rim-caught ball over the lip and accelerates it in.
+    vx += Ux * SINK_G * step;
+    vy += Uy * SINK_G * step;
+    px += vx * step;
+    py += vy * step;
+    dist += Math.hypot(vx, vy) * step;
+    const decay = 1 - SINK_DRAG * step;
+    vx *= decay;
+    vy *= decay;
+    const s = confine(px, py, vx, vy);
+    px = s.x;
+    py = s.y;
+    if (s.nx !== 0 || s.ny !== 0) {
+      const vn = vx * s.nx + vy * s.ny; // inward normal: <0 means heading out
+      if (vn < 0) {
+        // Split into normal + tangential and damp each: restitution kills the
+        // bounce, wall friction scrubs the slide — a soft pocket liner deadens
+        // the ball fast, like a real table.
+        const tx = vx - vn * s.nx;
+        const ty = vy - vn * s.ny;
+        vx = tx * SINK_WALL_FRIC - SINK_REST * vn * s.nx;
+        vy = ty * SINK_WALL_FRIC - SINK_REST * vn * s.ny;
+      }
+    }
+  }
+
+  // Sink: shrink to nothing + drop into shadow (screen-down) + darken.
+  const r = rpx * (1 - prog);
+  const scr = toPx(l, { x: px, y: py });
+  const c = { x: scr.x, y: scr.y + rpx * SINK_DROP * prog * prog };
+  const o = rollAlong(vx, vy, dist / R);
+  drawBall(ctx, c, sk.id, r, 1, o, l.rotated, false);
+  // A dark disc grows over it as it sinks below the rim into the pocket.
+  ctx.save();
+  ctx.globalAlpha = 0.8 * prog;
+  ctx.fillStyle = "#05070c";
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function polyline(ctx: CanvasRenderingContext2D, l: Layout, pts: Vec[]) {

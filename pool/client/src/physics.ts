@@ -36,6 +36,7 @@ export type Ball = {
   w: Spin;
   potted: boolean;
   o?: Mat3; // surface orientation (cosmetic; identity if absent)
+  dropV?: Vec; // velocity the instant it was potted (cosmetic; drives the sink anim)
 };
 
 export type World = {
@@ -881,6 +882,7 @@ export function stepFixed(
     for (const pk of POCKET_LIST) {
       if (len(b.p.x - pk.center.x, b.p.y - pk.center.y) < pk.hole) {
         b.potted = true;
+        b.dropV = { x: b.v.x, y: b.v.y }; // keep the impact speed for the sink anim
         b.v = { x: 0, y: 0 };
         b.w = { x: 0, y: 0, z: 0 };
         events.push({ type: "pot", ball: b.id });

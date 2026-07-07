@@ -148,8 +148,10 @@ const Game: Component = () => {
     return Math.max(0, 1 - (age - STAMP_POP_MS - STAMP_HOLD_MS) / STAMP_GONE_MS);
   };
   // Ball-sinking animations (visual only).
-  let sinks: { id: number; from: Vec; pocket: Vec; start: number }[] = [];
+  let sinks: { id: number; from: Vec; pocket: Vec; v: Vec; start: number }[] = [];
   const pottedSeen = new Set<number>();
+  let debugCursor: Vec | undefined; // world coords under the cursor (debug readout)
+  let debugCopiedAt = -1e9; // nowMs of the last debug click-to-copy (for the flash)
   let nowMs = 0;
   const SINK_MS = 550;
   // Speed (world m/s) a potted ball travels under the table from its pocket to
@@ -181,7 +183,8 @@ const Game: Component = () => {
         : a,
     ).center;
   const addSink = (b: Ball, start: number) => {
-    sinks.push({ id: b.id, from: { ...b.p }, pocket: nearestHole(b.p), start });
+    const v = b.dropV ?? { x: 0, y: 0 }; // momentum it carried into the pocket
+    sinks.push({ id: b.id, from: { ...b.p }, pocket: nearestHole(b.p), v, start });
   };
 
   // --- UI-facing signals --------------------------------------------------
@@ -766,10 +769,13 @@ const Game: Component = () => {
         id: sk.id,
         from: sk.from,
         pocket: sk.pocket,
-        t: Math.min(1, (nowMs - sk.start) / SINK_MS),
+        v: sk.v,
+        ms: nowMs - sk.start,
       })),
       rack: rackBalls,
       now: nowMs,
+      debugCursor: debug() ? debugCursor : undefined,
+      debugCopied: debug() && nowMs - debugCopiedAt < 900,
     });
   };
 
@@ -962,6 +968,12 @@ const Game: Component = () => {
   //  - on the cue stick → cue elevation (drag along the axis, toward/away).
   //  - anywhere else     → aim (tap snaps, drag fine-tunes) — unchanged.
   const onPointerDown = (e: PointerEvent) => {
+    if (debug()) {
+      const w = toWorld(e); // copy world coords for tuning pocket polygons
+      const s = `[${w.x.toFixed(3)}, ${w.y.toFixed(3)}]`;
+      navigator.clipboard?.writeText(s);
+      debugCopiedAt = nowMs; // flash "copied" in the readout
+    }
     if (canPoint()) return startDraw(e); // waiting: annotate instead of aim
     if (!canAct() || striking) return;
     const w = toWorld(e);
@@ -1014,6 +1026,7 @@ const Game: Component = () => {
   };
 
   const onPointerMove = (e: PointerEvent) => {
+    if (debug()) debugCursor = toWorld(e); // live world-coord readout
     if (drawing) return moveDraw(e);
     if (!canAct() || !mode) return;
     const w = toWorld(e);
