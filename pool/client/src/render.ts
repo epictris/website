@@ -214,51 +214,24 @@ export function cueContact(l: Layout, d: CueDraw) {
 }
 
 // Draw the cue onto the main canvas. The pull-back (butt lifting toward the
-// camera on a reared cue) is recreated by blitting the straight rod bitmap in
-// horizontal strips through a per-strip perspective projection — the 2D
-// equivalent of the old CSS perspective/rotateX/scale.
+// camera on a reared cue) is faked by foreshortening the rod along its length
+// (butt lifts toward the camera → appears shorter) plus a slight zoom — a single
+// seamless blit, so the rounded butt stays curved and never splits into strips.
 export function drawCue(ctx: CanvasRenderingContext2D, l: Layout, d: CueDraw) {
   const { tipX, tipY, back } = cueContact(l, d);
   const rpx = R * l.scale;
   const size = rpx * 32;
-  const dpr = ctx.getTransform().a || 1;
-  const rod = rodBitmap(size, dpr, d.elevation, d.band);
-  const len = size * 0.9358 * Math.cos(d.elevation); // drawn rod length (css)
+  const rod = rodBitmap(size, ctx.getTransform().a || 1, d.elevation, d.band);
   const pull = d.power * 6 * rpx;
   const slide = pull * Math.cos(d.elevation); // pull-back gap along the aim
   const tilt = d.power * Math.sin(d.elevation) * CUE_PULL_TILT;
   const zoom = 1 + d.power * Math.sin(d.elevation) * CUE_PULL_ZOOM;
-  const persp = size * 2.5;
+  const fore = Math.cos(tilt); // pull-tilt foreshortens the rod toward the camera
   ctx.save();
   ctx.translate(tipX, tipY);
   ctx.rotate(back - Math.PI / 2); // local +y now points down the cue (away from aim)
   ctx.scale(zoom, zoom);
-  const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
-  if (tilt < 1e-3) {
-    // No rear/pull tilt → a plain blit, tip pulled back by `slide`.
-    ctx.drawImage(rod, -size / 2, slide, size, size);
-  } else {
-    // Strip the rod along its length; each strip lifts toward the camera
-    // (depth = v·sinT) and foreshortens (v·cosT), perspective-scaling width.
-    const N = 24;
-    const proj = (v: number) => {
-      const z = v * sinT;
-      const k = persp / (persp - z);
-      return { along: v * cosT * k, k };
-    };
-    for (let j = 0; j < N; j++) {
-      const v0 = slide + (j / N) * len;
-      const v1 = slide + ((j + 1) / N) * len;
-      const p0 = proj(v0);
-      const p1 = proj(v1);
-      const w = size * p0.k;
-      ctx.drawImage(
-        rod,
-        0, (v0 - slide) * dpr, rod.width, (v1 - v0) * dpr, // source strip (device px)
-        -w / 2, p0.along, w, p1.along - p0.along, // dest, perspective-scaled
-      );
-    }
-  }
+  ctx.drawImage(rod, 0, 0, rod.width, rod.height, -size / 2, slide, size, size * fore);
   ctx.restore();
 }
 
