@@ -161,7 +161,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   drawTable(ctx, l);
   drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
 
-  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 1.6 : 1);
+  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 2.88 : 1);
   if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being

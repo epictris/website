@@ -13,6 +13,7 @@ import {
   POCKET_LIST,
   predictPaths,
   R,
+  RAIL_INSET,
   rackWorld,
   rackSeed,
   stepFixed,
@@ -80,13 +81,15 @@ const Game: Component = () => {
   // Cue-stick hit band: behind the ball, along the aim axis, within this half-width.
   const STICK_NEAR = R * 1.2; // starts just off the ball surface
   const STICK_FAR = R * 34; // ...out to the drawn cue length (image is ~32·R long)
-  const STICK_PERP = R * 1.8; // perpendicular reach either side of the stick line
+  const STICK_PERP = R * 2.7; // perpendicular reach either side of the stick line
   // Gesture the current canvas drag is performing. "spin"/"elev" are new direct
   // manipulations; "place" is the ball-in-hand reposition (now long-press-gated).
   let mode: "aim" | "place" | "spin" | "elev" | null = null;
   let downClient = { x: 0, y: 0 }; // pointer-down screen px (tap/drag test)
   let downWorld: Vec = { x: 0, y: 0 }; // pointer-down world point (aim snap)
   let downFinger = 0; // angle cue→finger at press (fine-aim reference)
+  let lastFinger = 0; // finger angle at the previous move (delta integration)
+  let aimAccum = 0; // accumulated finger swing this drag (avoids ±2π wrap snaps)
   let aimStart = 0; // aimAngle at press (fine-aim / elev axis reference)
   let movedFar = false; // travelled past TAP_PX this gesture
   let spinDownLocal = { x: 0, y: 0 }; // spin-drag origin in canvas-local px
@@ -948,8 +951,23 @@ const Game: Component = () => {
   };
 
   const clampCue = (p: Vec): Vec => {
-    let x = Math.max(R, Math.min(TABLE.w - R, p.x));
-    let y = Math.max(R, Math.min(TABLE.h - R, p.y));
+    // Keep the ball on the felt: the playfield is inset from the table edge by
+    // RAIL_INSET, and the ball touches a rail when its centre is R away.
+    const m = RAIL_INSET + R;
+    let x = Math.max(m, Math.min(TABLE.w - m, p.x));
+    let y = Math.max(m, Math.min(TABLE.h - m, p.y));
+    // Keep the ball centre clear of every pocket hole so it can't be placed in
+    // (or half-hanging over) a pocket.
+    for (const pk of POCKET_LIST) {
+      const dx = x - pk.center.x;
+      const dy = y - pk.center.y;
+      const d = Math.hypot(dx, dy);
+      const min = pk.hole + R;
+      if (d < min && d > 1e-6) {
+        x = pk.center.x + (dx / d) * min;
+        y = pk.center.y + (dy / d) * min;
+      }
+    }
     // Push out of any overlapping object ball.
     for (const b of world.balls) {
       if (b.potted || b.id === 0) continue;
@@ -1087,8 +1105,10 @@ const Game: Component = () => {
     downWorld = w;
     aimStart = aimAngle;
     downFinger = Math.atan2(w.y - cue.y, w.x - cue.x);
+    lastFinger = downFinger;
+    aimAccum = 0;
     movedFar = false;
-    const onCueBall = Math.hypot(w.x - cue.x, w.y - cue.y) < R * 3.4;
+    const onCueBall = Math.hypot(w.x - cue.x, w.y - cue.y) < R * 2.55;
     // Project the press onto the cue axis (the stick lies opposite the aim).
     const back = aimAngle + Math.PI;
     const proj = (w.x - cue.x) * Math.cos(back) + (w.y - cue.y) * Math.sin(back);
@@ -1165,8 +1185,11 @@ const Game: Component = () => {
       // AIM_GAIN), so the handle follows the hand — do this FIRST so elevation
       // projects onto the freshly-rotated cue axis.
       const finger = Math.atan2(w.y - cue.p.y, w.x - cue.p.x);
-      if (movedFar && Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R)
-        aimAngle = aimStart + wrapPi(finger - downFinger);
+      if (movedFar && Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R) {
+        aimAccum += wrapPi(finger - lastFinger); // integrate small deltas, no wrap snap
+        lastFinger = finger;
+        aimAngle = aimStart + aimAccum;
+      }
       // Keep the finger over the same point on the cue as it rears. A cue point
       // at along-axis distance d foreshortens to d·cos(elev) on the table, so
       // holding that point under the finger gives cos(elev) = proj·cos(elevStart)
@@ -1182,8 +1205,11 @@ const Game: Component = () => {
       // Fine aim: rotate the shot about the cue ball by a fraction of the
       // finger's swing (slower than the finger, for precision).
       const finger = Math.atan2(w.y - cue.p.y, w.x - cue.p.x);
-      if (Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R)
-        aimAngle = aimStart + wrapPi(finger - downFinger) * AIM_GAIN;
+      if (Math.hypot(w.x - cue.p.x, w.y - cue.p.y) > R) {
+        aimAccum += wrapPi(finger - lastFinger); // integrate small deltas, no wrap snap
+        lastFinger = finger;
+        aimAngle = aimStart + aimAccum * AIM_GAIN;
+      }
     }
     recomputePrediction();
     sendPresence(w, cue.p);
