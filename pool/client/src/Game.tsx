@@ -153,7 +153,7 @@ const Game: Component = () => {
   let debugCursor: Vec | undefined; // world coords under the cursor (debug readout)
   let debugCopiedAt = -1e9; // nowMs of the last debug click-to-copy (for the flash)
   let nowMs = 0;
-  const SINK_MS = 550;
+  const SINK_MS = 1000; // sink-anim lifetime (roll-in can be slow before the drop)
   // Speed (world m/s) a potted ball travels under the table from its pocket to
   // the return mouth at the top-left corner (world origin).
   const UNDER_MPS = 1.1;

@@ -1006,17 +1006,18 @@ function sinkPoly(pocket: Vec): Vec[] {
     y: pocket.y + u * Uy + w * Wy,
   }));
 }
-const SINK_MS = 430; // lifetime of the drop; gone after this
 const SINK_DT = 0.004; // fixed sim step (s) — small enough a fast ball can't tunnel
 const SINK_REST = 0.62; // wall restitution (normal energy kept per bounce — soft liner)
 const SINK_WALL_FRIC = 0.8; // tangential energy kept per bounce (the liner grabs the ball)
 const SINK_DRAG = 1.3; // per-second velocity bleed (rolling friction in the bowl)
-const SINK_G = 1.2; // accel (m/s²) toward the pocket back — tips a slow ball in
+const SINK_G = 0.3; // accel (m/s²) toward the pocket back — tips a slow ball in
+const SINK_INSET_LO = -0.05; // depth where the wall inset starts ramping up from 0
+const SINK_INSET_HI = 0.0; // depth where the inset reaches full ball radius R
+const SINK_ENTER_GATE = -0.03; // depth (m) past which the whole ball has cleared the mouth
+const SINK_FALL_MS = 240; // once past the boundary, how long the shrink/fall takes
 const SINK_DROP = 0.7; // screen-down depth of the fall, in ball radii
 function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   const rpx = R * l.scale;
-  const prog = sk.ms / SINK_MS;
-  if (prog >= 1) return; // fully sunk — nothing left to draw
 
   // The pocket polygon + per-edge inward normals (pointing toward the centroid,
   // so the winding of the point list doesn't matter).
@@ -1061,12 +1062,17 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
     return { nx, ny, ax: a.x, ay: a.y, mouth };
   });
 
-  // The wall constraint is inset by the ball radius so the ball's EDGE — not its
-  // centre — rides the polygon, and never crosses it. MUST be constant across
-  // frames: the whole bounce path re-integrates from the pot each frame, so a
-  // per-frame-varying inset would move the walls and make the chaotic path
-  // re-solve to a different endpoint — the ball visibly jumps ("spazzes").
-  const inset = R;
+  // The wall is inset by the ball radius so the ball's EDGE — not its centre —
+  // rides the polygon. But the inset TAPERS with depth: ~0 at the mouth (where
+  // the gap is narrower than the ball, so a full inset would shove a rim-caught
+  // ball deep — a teleport) up to full R deeper in (where the ball rests, edge
+  // fully contained). Depth-based, NOT time-based, so it's identical every frame
+  // and the path never re-solves differently ("spazzes").
+  const insetAt = (x: number, y: number) => {
+    const depth = (x - sk.pocket.x) * Ux + (y - sk.pocket.y) * Uy;
+    const t = (depth - SINK_INSET_LO) / (SINK_INSET_HI - SINK_INSET_LO);
+    return R * Math.max(0, Math.min(1, t));
+  };
 
   // Confine a point so the ball stays inside the inset polygon; returns the
   // clamped point + the inward normal of the edge it was pushed off (0,0 if
@@ -1077,6 +1083,7 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
     let nx = 0;
     let ny = 0;
     for (let pass = 0; pass < 3; pass++) {
+      const inset = insetAt(x, y);
       let minD = 0;
       let hit = -1;
       for (let i = 0; i < N; i++) {
@@ -1104,6 +1111,7 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   let vx = sk.v.x;
   let vy = sk.v.y;
   let dist = 0; // path length, for rolling the markings
+  let crossMs = -1; // ms at which the ball first fully clears the mouth boundary
 
   // Rattle simulation — integrate from the pot (ms 0) to now, bouncing off the
   // polygon walls. Cheap: ~n = ms/4 steps, one potted ball at a time.
@@ -1135,17 +1143,29 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
         vy = ty * SINK_WALL_FRIC - SINK_REST * vn * s.ny;
       }
     }
+    // Note the moment the whole ball has passed the boundary into the hole — the
+    // shrink/fall only starts then, so a slow ball rolls fully in at full size
+    // before it drops (rather than fading while still at the rim).
+    if (crossMs < 0) {
+      const depth = (px - sk.pocket.x) * Ux + (py - sk.pocket.y) * Uy;
+      if (depth >= SINK_ENTER_GATE) crossMs = t * 1000;
+    }
   }
 
+  // Fall progress: 0 until the ball has fully entered, then ramps over the fall
+  // once it's past the boundary. Full size + no fade while it's still rolling in.
+  const sinkP = crossMs < 0 ? 0 : Math.min(1, (sk.ms - crossMs) / SINK_FALL_MS);
+  if (sinkP >= 1) return; // fully sunk — nothing left to draw
+
   // Sink: shrink to nothing + drop into shadow (screen-down) + darken.
-  const r = rpx * (1 - prog);
+  const r = rpx * (1 - sinkP);
   const scr = toPx(l, { x: px, y: py });
-  const c = { x: scr.x, y: scr.y + rpx * SINK_DROP * prog * prog };
+  const c = { x: scr.x, y: scr.y + rpx * SINK_DROP * sinkP * sinkP };
   const o = rollAlong(vx, vy, dist / R);
   drawBall(ctx, c, sk.id, r, 1, o, l.rotated, false);
   // A dark disc grows over it as it sinks below the rim into the pocket.
   ctx.save();
-  ctx.globalAlpha = 0.8 * prog;
+  ctx.globalAlpha = 0.8 * sinkP;
   ctx.fillStyle = "#05070c";
   ctx.beginPath();
   ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
