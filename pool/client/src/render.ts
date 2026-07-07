@@ -56,6 +56,7 @@ export type Layout = {
   ph: number; // play-area pixel height
   W: number; // full canvas css width
   H: number; // full canvas css height
+  imgLeft: number; // px offset from felt origin (ox) to the table image's opaque left edge (minx, ≤0)
 };
 
 /**
@@ -96,7 +97,7 @@ export function layoutFor(scale: number, rotated = false): Layout {
   const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
   const ph = (rotated ? TABLE.w : TABLE.h) * scale;
-  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx + rackPx, H: maxy - miny };
+  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx + rackPx, H: maxy - miny, imgLeft: minx };
 }
 
 // World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
@@ -596,11 +597,13 @@ function drawRack(
   now: number,
 ) {
   const rpx = R * l.scale;
-  const gutter = RACK_W * l.scale;
-  const cx = gutter / 2; // column centre, in the blank left strip
+  const half = rpx * 1.35; // channel half-width (a touch wider than a ball)
+  // The table image's opaque left edge, in canvas px. The felt origin (ox) moves
+  // with the layout's tableWrap offset, so anchor here rather than at canvas x=0.
+  const tableLeft = l.ox + l.imgLeft;
+  const cx = tableLeft - half; // right edge of the channel touches the table's left side
   const top = l.oy;
   const bottom = l.oy + l.ph; // felt vertical span == left rail length
-  const half = rpx * 1.35; // channel half-width (a touch wider than a ball)
 
   // Channel bed: a dark recessed groove with a soft inner edge.
   ctx.save();

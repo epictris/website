@@ -191,7 +191,7 @@ const Game: Component = () => {
   const [rules, setRules] = createSignal<RulesState>(initRules(0));
   const [mySlot, setMySlot] = createSignal(-1);
   const [peerCount, setPeerCount] = createSignal(1);
-  const [power, setPower] = createSignal(0);
+  const [power, setPower] = createSignal(0); // starts at zero; kept between shots
   const [follow, setFollow] = createSignal(0);
   const [side, setSide] = createSignal(0);
   const [elevation, setElevation] = createSignal(0); // radians
@@ -668,27 +668,23 @@ const Game: Component = () => {
       prediction = undefined;
       return;
     }
-    // At rest (zero power) show a plain straight aim line to the first contact
-    // point: full power so it reaches, and no spin so it doesn't curve. Once the
-    // cue is pulled back, preview the real spin-aware path at that power.
+    // No power loaded → no preview. Otherwise trace the real spin-aware path at
+    // the loaded power.
     const p = power();
-    if (p > 0.01) {
-      // Powered: trace the whole cue-ball path through cushion rebounds until it
-      // hits another ball or comes to rest.
-      const shot: Shot = {
-        angle: aimAngle,
-        power: p,
-        follow: follow(),
-        side: side(),
-        elevation: elevation(),
-      };
-      prediction = predictPaths(world, shot, config(), 5, false);
-    } else {
-      // At rest: a plain straight aim line to the first contact point (full
-      // power so it reaches, no spin so it doesn't curve).
-      const shot: Shot = { angle: aimAngle, power: 1, follow: 0, side: 0, elevation: 0 };
-      prediction = predictPaths(world, shot, config());
+    if (p <= 0.01) {
+      prediction = undefined;
+      return;
     }
+    // Powered: trace the whole cue-ball path through cushion rebounds until it
+    // hits another ball or comes to rest.
+    const shot: Shot = {
+      angle: aimAngle,
+      power: p,
+      follow: follow(),
+      side: side(),
+      elevation: elevation(),
+    };
+    prediction = predictPaths(world, shot, config(), 5, false);
   };
 
   const draw = () => {
@@ -1133,8 +1129,10 @@ const Game: Component = () => {
     if (!canAct() || striking) return;
     powerEl.setPointerCapture(e.pointerId);
     pulling = true;
-    pullStartY = localPoint(powerEl, e).y; // widget-local, survives 90° rotation
-    setPower(0);
+    // Anchor so the current finger maps to the already-loaded power — a redrag
+    // continues from where the last one left off instead of snapping to 0.
+    const lp = localPoint(powerEl, e); // widget-local, survives 90° rotation
+    pullStartY = lp.y - power() * (lp.h * 0.6);
   };
   const onPowerMove = (e: PointerEvent) => {
     if (!pulling) return;
@@ -1147,19 +1145,34 @@ const Game: Component = () => {
   const onPowerUp = () => {
     if (!pulling) return;
     pulling = false;
-    if (power() > 0) shoot();
-    else {
-      setPower(0);
-      recomputePrediction();
-    }
+    // Power stays loaded on release; the shot only fires via the Shoot button.
+    recomputePrediction();
   };
+  // 10-segment power gauge behind the cue (viewBox 40×200). It spans the exact
+  // band the cue tip travels (powerTipY: 8 at rest → 118 at full); each segment
+  // is revealed once the cue is drawn past its level, so the stack of visible
+  // blocks grows top→bottom with power. Colours are a static yellow (soft, top)
+  // → red (hard, bottom) gradient.
+  const POWER_SEG_N = 10;
+  const POWER_SEG_TOP = 2;
+  const POWER_SEG_SPAN = 110;
+  const POWER_SEG_GAP = 2;
+  // N gaps (N-1 between segments + 1 trailing) so there's a segment-sized gap
+  // between the last segment and the max cue-drag distance.
+  const POWER_SEG_H =
+    (POWER_SEG_SPAN - POWER_SEG_N * POWER_SEG_GAP) / POWER_SEG_N;
+  const POWER_SEG_COLORS = Array.from({ length: POWER_SEG_N }, (_, i) => {
+    const t = i / (POWER_SEG_N - 1); // 0 = yellow, 1 = red
+    return `rgb(${Math.round(232 - 8 * t)}, ${Math.round(212 - 140 * t)}, ${Math.round(77 - 19 * t)})`;
+  });
+
   // Cue image (tip at very top, butt at bottom), square with transparent margins.
   const CUE_IMG = "https://iili.io/CaZTlqP.png"; // active player's own (red) cue
   const CUE_IMG_BLUE = "https://iili.io/CatLF5v.png"; // opponent's (blue) cue
   const CUE_S = 250; // square draw size in the 40×200 viewBox (bigger = thicker)
   const CUE_TIP_FRAC = 0; // tip sits at the top edge of the source image
   // Tip sits just under the spin ball (top) and slides down as power loads.
-  const powerTipY = () => 8 + power() * 110;
+  const powerTipY = () => 2 + power() * 110;
   const cueImgY = () => powerTipY() - CUE_TIP_FRAC * CUE_S;
 
   // --- Actions ------------------------------------------------------------
@@ -1189,7 +1202,7 @@ const Game: Component = () => {
     striking = false;
     if (strikeShot) runShot(strikeShot, strikePlace, true, config());
     strikeShot = undefined;
-    setPower(0); // reset for the next pull-back
+    setPower(0); // reset power between shots
     setSide(0); // clear english + cue elevation so the next shot starts neutral
     setFollow(0);
     setElevation(0);
@@ -1486,19 +1499,68 @@ const Game: Component = () => {
         />
 
         <div class="cue-col" style={{ height: `${canvasH()}px` }}>
-          {/* Cue power — fills the remaining height; pull back to strike. */}
+          {/* Fire the loaded shot — a pool-ball button at the top of the column,
+              horizontally centred over the cue. */}
+          <Show when={myTurn()}>
+            <button
+              class="shoot-btn"
+              title="shoot"
+              disabled={!canAct() || striking || power() <= 0}
+              onClick={shoot}
+            >
+              <span class="ball-label">
+                {/* Target reticle — aim & shoot. */}
+                <svg class="shoot-ico" viewBox="0 0 24 24" aria-label="shoot">
+                  <circle
+                    cx={12}
+                    cy={12}
+                    r={7.5}
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width={2}
+                  />
+                  <line x1={12} y1={0.5} x2={12} y2={5} stroke="currentColor" stroke-width={2} />
+                  <line x1={12} y1={19} x2={12} y2={23.5} stroke="currentColor" stroke-width={2} />
+                  <line x1={0.5} y1={12} x2={5} y2={12} stroke="currentColor" stroke-width={2} />
+                  <line x1={19} y1={12} x2={23.5} y2={12} stroke="currentColor" stroke-width={2} />
+                  <circle cx={12} cy={12} r={2.2} fill="currentColor" />
+                </svg>
+              </span>
+            </button>
+          </Show>
+          {/* Cue power — fills the remaining height; pull back to load. The
+              10-segment bar behind the cue reads the loaded power. */}
           <svg
             class="cue-power"
             ref={powerEl}
             viewBox="0 0 40 200"
-            preserveAspectRatio="xMidYMid meet"
+            preserveAspectRatio="xMidYMin meet"
             onPointerDown={onPowerDown}
             onPointerMove={onPowerMove}
             onPointerUp={onPowerUp}
             onPointerCancel={onPowerUp}
           >
-            {/* Hide the pull-back cue while it isn't this player's turn. */}
+            {/* Hide power bar + cue while it isn't this player's turn. */}
             <Show when={myTurn()}>
+              {/* Power gauge behind the cue: yellow (low, top) → red (high,
+                  bottom). Each block shows once the cue is drawn past its
+                  level, so the stack grows with power. */}
+              {POWER_SEG_COLORS.map((col, i) => (
+                <rect
+                  x={17}
+                  width={6}
+                  y={POWER_SEG_TOP + i * (POWER_SEG_H + POWER_SEG_GAP)}
+                  height={POWER_SEG_H}
+                  rx={1.5}
+                  fill={col}
+                  opacity={
+                    power() * POWER_SEG_SPAN >=
+                    i * (POWER_SEG_H + POWER_SEG_GAP) + POWER_SEG_H
+                      ? 1
+                      : 0
+                  }
+                />
+              ))}
               <image
                 href={CUE_IMG}
                 x={20 - CUE_S / 2}
