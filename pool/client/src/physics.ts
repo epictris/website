@@ -503,7 +503,11 @@ export const MAX_ELEVATION = (80 * Math.PI) / 180; // steepest cue we allow
 export function applyShot(world: World, shot: Shot) {
   const cue = world.balls[0];
   if (cue.potted) return;
-  const V = shot.power * MAX_SPEED;
+  // Power ramps up faster as the draw grows: a blend of linear + quadratic so
+  // the first half of the pull gives ~a third of full speed (fine control near,
+  // big hits far). Full draw (power 1) is still MAX_SPEED.
+  const p = shot.power;
+  const V = (p / 3 + (2 / 3) * p * p) * MAX_SPEED;
   const el = shot.elevation ?? 0; // cue elevation (radians)
   const e = dsincos(el);
   const cE = e.c;
