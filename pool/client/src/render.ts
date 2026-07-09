@@ -30,10 +30,8 @@ const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
 // (which reserves the vertical gap for it) and drawRack (which draws it). The
 // channel holds a ball (radius 1) with ~a rail width of clearance to the inner
 // rail on each side; the outer rail is spaced out past that.
-const G_RAIL_W = 0.16; // rail tube width (thin — ~2px)
-const G_RO_OUT = 1 + G_RAIL_W; // outer rail just past the ball edge (peeks around it)
-const G_RO_IN = G_RO_OUT - G_RAIL_W * 3.2; // inner rail (double dark gap to the outer)
-const G_HALF = G_RO_OUT + G_RAIL_W * 0.7; // channel half-height (contains both rails)
+const G_RAIL_W = 0.16; // base rail width unit
+const G_HALF = 1 + G_RAIL_W * 1.5; // channel half-height (ball + the peeking rail)
 const G_DROP = 0.35; // clearance between the table's bottom edge and the gutter
 const G_BELOW = G_DROP + 2 * G_HALF + G_RAIL_W; // total gutter extent below the table (rpx)
 // Constant speed (world metres/sec) a potted ball rolls down the return track.
@@ -617,8 +615,7 @@ function drawRack(
 ) {
   const rpx = R * l.scale;
   const w = Math.max(2, G_RAIL_W * rpx); // rail tube width
-  const roIn = G_RO_IN * rpx; // inner rail offset
-  const roOut = G_RO_OUT * rpx; // outer rail offset
+  const roOut = rpx - 2; // rail centre inset 2px from the ball edge (ball sits on it)
   const half = G_HALF * rpx; // channel half-height
   const drop = G_DROP * rpx - 2; // clearance between the table bottom and the channel
   // The table image's opaque bottom edge, in canvas px. The felt origin (oy)
@@ -637,7 +634,7 @@ function drawRack(
   const gutterW = railLen + 2 * roOut; // chute-left to U-right
   const cornerX = (left + right) / 2 - gutterW / 2 + roOut; // centred
   const uX = cornerX + railLen; // U-bend centre
-  const startX = uX + (roOut - rpx) - 2; // first ball just off the U-bend back (outer rail shows)
+  const startX = uX + (roOut - rpx) + 2; // first ball seated against the U-bend back
   const chuteTop = cy - half - rpx * 3; // entry runs up under the table (drawn first → hidden)
   const clx = cornerX + Lr; // L-turn centre
   const cly = cy - Lr;
@@ -662,19 +659,25 @@ function drawRack(
     p.lineTo(cornerX - ro, chuteTop); // left entry wall, up under the table
     return p;
   };
-  const drawRail = (ro: number) => {
-    const path = railPath(ro);
-    ctx.strokeStyle = "#22262c"; // dark casing / gap
-    ctx.lineWidth = w;
-    ctx.stroke(path);
-    ctx.strokeStyle = "#5b636c"; // steel body, shaded
-    ctx.lineWidth = w * 0.66;
-    ctx.stroke(path);
-    ctx.strokeStyle = "#98a1aa"; // silver sheen (not white)
-    ctx.lineWidth = w * 0.3;
-    ctx.stroke(path);
-  };
-  for (const ro of [roOut, roIn]) drawRail(ro);
+  // A single thick metal rail as a round tube: many concentric strokes from a
+  // dark casing edge up through shaded steel to a silver sheen down the centre
+  // give it a smooth, rounded, lit look.
+  const coats: [string, number][] = [
+    ["#12161d", 1], // dark casing edge
+    ["#262d36", 0.88],
+    ["#3c444d", 0.76],
+    ["#535c65", 0.63],
+    ["#6e777f", 0.5],
+    ["#8b939b", 0.37],
+    ["#aeb6bd", 0.24],
+    ["#d2d8de", 0.12], // silver sheen (not white)
+  ];
+  const rw = w * 2.4; // thick tube
+  for (const [col, f] of coats) {
+    ctx.strokeStyle = col;
+    ctx.lineWidth = rw * f;
+    ctx.stroke(railPath(roOut));
+  }
   ctx.restore();
 
   const speed = (ROLL_MPS * l.scale) / 1000; // px per ms
