@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useNavigate, useParams } from "@solidjs/router";
 import {
@@ -228,6 +228,15 @@ const Game: Component = () => {
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
   const [showMenu, setShowMenu] = createSignal(false); // hamburger menu modal
+  const [showGameOver, setShowGameOver] = createSignal(false); // end-of-game modal
+  const [rematchVotes, setRematchVotes] = createSignal<number[]>([]); // slots that pressed rematch
+  // The game-over modal mirrors the rules: it opens whenever a winner exists —
+  // covering a live finish, an adopted sync snapshot, and a rejoin that rebuilds a
+  // finished game. It's closed only by an action button (never the backdrop);
+  // doRematch/playReplay clear both the winner and this flag for the next game.
+  createEffect(() => {
+    if (rules().winner !== null) setShowGameOver(true);
+  });
   const [showSpinHud, setShowSpinHud] = createSignal(false); // floating spin window
   const [spinHudPos, setSpinHudPos] = createSignal({ x: 0, y: 0 }); // canvas-local px
   const [spinAim, setSpinAim] = createSignal(0); // aim the spin pad is oriented to
@@ -273,15 +282,54 @@ const Game: Component = () => {
     }
     return -1;
   };
-  // Transient turn-recap popup: what the last shot did + whose turn it is now.
+  // Turn-recap popup: what the last shot did + whose turn it is now. Sits in the
+  // middle of the screen and stays until the player touches anywhere — the next
+  // pointerdown clears it (a one-shot window listener), instead of a timeout.
   const [announce, setAnnounce] = createSignal<string | null>(null);
-  let announceTimer: ReturnType<typeof setTimeout> | undefined;
-  const showAnnounce = (text: string) => {
-    setAnnounce(text);
-    if (announceTimer) clearTimeout(announceTimer);
-    announceTimer = setTimeout(() => setAnnounce(null), 4500);
+  let announceDismiss: (() => void) | undefined;
+  // rules.ts builds messages with generic "Player 1"/"Player 2" (it has no access
+  // to identities); swap in each player's chosen name at display time. Falls back
+  // to the generic label when a name isn't known / is blank.
+  const withNames = (msg: string) => {
+    const me = isSpectator() ? -1 : myPlayer(); // my slot (participants only)
+    return (
+      msg
+        // "…Player N's turn." → "…Your turn." when N is me.
+        .replace(/Player (\d)'s turn/g, (m, n) =>
+          Number(n) - 1 === me ? "Your turn" : m,
+        )
+        // Any other "Player N" → "You" if it's me, else that player's name.
+        .replace(/Player (\d)/g, (m, n) =>
+          Number(n) - 1 === me ? "You" : profiles()[Number(n) - 1]?.name || m,
+        )
+        // Verb agreement once the subject became "You".
+        .replace(/\bYou sinks\b/g, "You sink")
+        .replace(/\bYou wins\b/g, "You win")
+    );
   };
-  onCleanup(() => announceTimer && clearTimeout(announceTimer));
+  // Game-over reason line: the message minus its win/lose clause (the modal's
+  // headline already announces the winner), e.g. "You sink the 8 — You win!" →
+  // "You sink the 8"; "You win — opponent resigned." → "Opponent resigned".
+  const gameOverReason = () => {
+    const parts = withNames(rules().message).split(" — ");
+    const kept = parts.filter((s) => !/\bwins?\b/i.test(s));
+    const r = (kept.length ? kept : parts).join(" — ").replace(/[.!]+$/, "");
+    return r.charAt(0).toUpperCase() + r.slice(1);
+  };
+  const showAnnounce = (text: string) => {
+    setAnnounce(withNames(text));
+    announceDismiss?.(); // clear any listener left by a prior, undismissed recap
+    const onDown = () => {
+      setAnnounce(null);
+      announceDismiss?.();
+    };
+    window.addEventListener("pointerdown", onDown);
+    announceDismiss = () => {
+      window.removeEventListener("pointerdown", onDown);
+      announceDismiss = undefined;
+    };
+  };
+  onCleanup(() => announceDismiss?.());
   onCleanup(() => clearTimeout(lpTimer));
   // Portrait-locked phone held sideways: the whole game root is CSS-rotated 90°
   // (see .game-root.rot90) while the table itself stays laid out landscape.
@@ -465,6 +513,7 @@ const Game: Component = () => {
       }
       case "peer-leave":
         setPeerCount((n) => Math.max(1, n - 1));
+        setRematchVotes((v) => v.filter((s) => s !== m.slot)); // drop their rematch vote
         setProfiles((pr) => {
           const n = { ...pr };
           delete n[m.slot];
@@ -591,6 +640,9 @@ const Game: Component = () => {
         if (m.config) setConfig(m.config);
         doRematch(m.breaker, false);
         break;
+      case "rematch-vote":
+        if (m.from !== undefined) addRematchVote(m.from);
+        break;
       case "resign":
         applyResign(m.winner);
         break;
@@ -607,7 +659,6 @@ const Game: Component = () => {
       message: `Player ${winner + 1} wins — opponent resigned.`,
     }));
     setReplaying(false);
-    showAnnounce(`Player ${winner + 1} wins — opponent resigned.`);
     bump(0);
   };
 
@@ -670,11 +721,9 @@ const Game: Component = () => {
       world.balls[0].p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
     }
     setRules(outcome.next);
-    // Pop a recap whenever control changes hands or the game ends.
-    if (
-      !rebuilding &&
-      (outcome.next.winner !== null || outcome.next.turn !== before.turn)
-    )
+    // A plain turn change → the transient recap. (Game end opens the game-over
+    // modal via the winner effect.)
+    if (!rebuilding && outcome.next.winner === null && outcome.next.turn !== before.turn)
       showAnnounce(outcome.next.message);
     pendingPlace = undefined;
     recomputePrediction();
@@ -1411,6 +1460,8 @@ const Game: Component = () => {
     breaker = nextBreaker;
     setRules(initRules(nextBreaker));
     setReplaying(false);
+    setShowGameOver(false);
+    setRematchVotes([]);
     pendingPlace = undefined;
     resetSinks();
     if (local) {
@@ -1419,6 +1470,38 @@ const Game: Component = () => {
     }
     recomputePrediction();
     bump(0);
+  };
+
+  // Actually reset the room to a fresh rack: the loser breaks (solo keeps the same
+  // breaker). Broadcasts `rematch` so both tables reset together. Only run once a
+  // rematch is agreed (both voted, or solo).
+  const rematch = () => {
+    const w = rules().winner;
+    const nextBreaker = (w === null ? breaker : (1 - w)) as 0 | 1;
+    doRematch(nextBreaker, true);
+  };
+
+  // Record a rematch vote (local or from a peer). When both participants have
+  // voted, slot 0 performs the reset — the peer resets on the relayed `rematch`.
+  const addRematchVote = (slot: number) => {
+    const v = rematchVotes().includes(slot) ? rematchVotes() : [...rematchVotes(), slot];
+    setRematchVotes(v);
+    if (v.includes(0) && v.includes(1) && mySlot() === 0) rematch();
+  };
+
+  // The rematch button: solo resets immediately; otherwise cast my vote and wait
+  // for the opponent (button shows the tally until both are in).
+  const voteRematch = () => {
+    if (isSpectator()) return;
+    if (solo()) return rematch();
+    const me = mySlot();
+    if (me < 0 || rematchVotes().includes(me)) return;
+    addRematchVote(me);
+    send({ t: "rematch-vote" } as Msg);
+  };
+  const rematchLabel = () => {
+    const n = rematchVotes().length;
+    return solo() || n === 0 ? "rematch" : `rematch (${n}/2)`;
   };
 
   // --- Replay -------------------------------------------------------------
@@ -1456,6 +1539,7 @@ const Game: Component = () => {
     setConfig(r.config);
     resetSinks();
     setRules(initRules(r.breaker));
+    setShowGameOver(false);
     replayQueue = [...r.shots];
     setReplaying(true);
     bump(0);
@@ -1623,7 +1707,7 @@ const Game: Component = () => {
                 </Show>
                 <div class="pb-chip" style={{ "border-color": pl.color }}>
                   <span class="pb-emoji">{pl.emoji}</span>
-                  <span class="pb-name" style={{ color: pl.color }}>
+                  <span class="pb-name" style={{ color: "var(--fg)" }}>
                     {pl.name}
                   </span>
                 </div>
@@ -1857,6 +1941,47 @@ const Game: Component = () => {
               leave
             </button>
           </Show>
+        </div>
+      </Show>
+
+      <Show when={showGameOver() && rules().winner !== null}>
+        {/* Inert scrim — the game-over modal is dismissed only via its buttons. */}
+        <div class="menu-backdrop" />
+        <div class="pick-modal gameover-modal">
+          <div class="go-title">game over</div>
+          {(() => {
+            const w = rules().winner!;
+            const p = profiles()[w];
+            const mine = !isSpectator() && w === myPlayer();
+            return (
+              <div class="go-winner" style={{ color: "var(--fg)" }}>
+                <Show when={p}>
+                  <span class="go-emoji">{p!.emoji}</span>
+                </Show>
+                <span>
+                  {mine ? "You win" : `${p?.name || `Player ${w + 1}`} wins`}
+                </span>
+              </div>
+            );
+          })()}
+          <div class="go-why">{gameOverReason()}</div>
+          <button
+            class="pm-done"
+            onClick={voteRematch}
+            disabled={isSpectator() || (!solo() && rematchVotes().includes(mySlot()))}
+          >
+            {rematchLabel()}
+          </button>
+          <button
+            class="pm-done"
+            onClick={saveReplay}
+            disabled={(track(), history.length === 0)}
+          >
+            save replay
+          </button>
+          <button class="pm-done" onClick={() => navigate("/")}>
+            leave
+          </button>
         </div>
       </Show>
 

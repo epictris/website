@@ -581,6 +581,42 @@ canvas {
   color: var(--accent-red);
 }
 
+/* End-of-game modal — winner headline + why, then rematch/save/leave. */
+.gameover-modal {
+  min-width: 260px;
+  max-width: 90%;
+}
+
+.gameover-modal .go-title {
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.gameover-modal .go-winner {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  font-weight: 700;
+}
+
+.gameover-modal .go-emoji {
+  font-size: 1.6em;
+  line-height: 1;
+}
+
+.gameover-modal .go-why {
+  max-width: 34ch;
+  text-align: center;
+  opacity: 0.8;
+  line-height: 1.3;
+}
+
+.gameover-modal .pm-done {
+  width: 100%;
+  min-width: 200px;
+}
+
 /* Full emoji picker — a large panel to the right of the quick tray (so the tray
    stays visible for drop-to-swap), not a centred box. */
 /* Hidden while an emoji is being dragged out of the picker, so the drop target
@@ -670,14 +706,14 @@ canvas {
    root is quarter-turned. */
 .turn-recap {
   position: absolute;
-  top: 5.5ch; /* below the player banner pinned at the top */
+  top: 50%; /* centred on the screen; clears on the next touch */
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   z-index: 20;
   max-width: 90%;
   padding: 1ch 2ch;
   text-align: center;
-  color: var(--accent);
+  color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--border);
   pointer-events: none;
@@ -687,11 +723,11 @@ canvas {
 @keyframes recap-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -0.8ch);
+    transform: translate(-50%, calc(-50% - 0.8ch));
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, -50%);
   }
 }
 

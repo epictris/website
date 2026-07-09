@@ -50,6 +50,9 @@ export type Msg =
   | { t: "shot"; shot: Shot; place?: Vec; config: PhysicsConfig; from?: number }
   | { t: "config"; config: PhysicsConfig; from?: number }
   | { t: "rematch"; breaker: 0 | 1; config: PhysicsConfig; from?: number }
+  // A player pressed rematch on the game-over screen. Both participants must vote
+  // before the room resets; fire-and-forget, keyed by the sender's slot.
+  | { t: "rematch-vote"; from?: number }
   | { t: "resign"; winner: 0 | 1; from?: number }
   // A game just started: the server stores this as the log baseline (initial rack
   // + breaker + config) and clears the shot log.
