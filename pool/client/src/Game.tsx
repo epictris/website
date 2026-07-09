@@ -209,6 +209,7 @@ const Game: Component = () => {
   const [side, setSide] = createSignal(0);
   const [elevation, setElevation] = createSignal(0); // radians
   const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
+  const [bannerTop, setBannerTop] = createSignal(24); // banner y (centre of the top gap)
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
   const [showMenu, setShowMenu] = createSignal(false); // hamburger menu modal
@@ -1399,21 +1400,18 @@ const Game: Component = () => {
       const COL_W = 90; // per-side reserve (each 1fr column is at least this wide)
       const unit = layoutFor(1, false); // always landscape
       const availW = vw - COL_W * 2;
-      // Even vertical gap above AND below the table, measured to the TABLE's edge
-      // (not the gutter's): take 80% of the old 48px top gap and mirror it below.
-      // Fit + reserve the table-image height only (unit.H minus the gutter); the
-      // ball-return gutter then overflows the spacer downward into the bottom gap.
-      const V_GAP = Math.round(48 * 0.8); // 38
-      const availH = vh - V_GAP * 2;
-      let scale = Math.min(availW / unit.W, availH / (unit.H - unit.gutter));
+      // Reserve the ball-return gutter's height (unit.gutter) as the BOTTOM gap,
+      // mirrored on top, so the table centres with an equal gap on each side and
+      // the gutter fills the bottom gap. Height-limited: table + 2 gaps = vh.
+      let scale = Math.min(availW / unit.W, vh / (unit.H + 2 * unit.gutter));
       scale = Math.max(40, Math.min(scale, 430));
       layoutBase = layoutFor(scale, false); // the felt box (W/H/ox/oy)
-      // The spacer reserves the TABLE image's footprint (no gutter), so centring
-      // it centres the table itself; the gutter is drawn below it in the gap.
-      const tableImgH = layoutBase.H - layoutBase.gutter;
+      // Spacer = table image only; the gutter overflows the spacer downward into
+      // the bottom gap. Banner sits centred in the (equal) top gap.
       setTableW(layoutBase.W);
-      setTableH(tableImgH);
-      setCanvasH(tableImgH);
+      setTableH(layoutBase.H);
+      setCanvasH(layoutBase.H);
+      setBannerTop((vh - layoutBase.H) / 4);
       // The canvas itself fills the whole game area (vw × vh, the swapped viewport
       // under rot90) so the cue can be drawn wherever it overhangs the felt. The
       // world origin is recentred onto the spacer each frame in draw().
@@ -1532,7 +1530,7 @@ const Game: Component = () => {
       {/* Player banner above the table: emoji + name per connected player, in
           their cue colour. Centred when solo, split by "vs" when two are in. */}
       <Show when={roster().length > 0}>
-        <div class="player-banner">
+        <div class="player-banner" style={{ top: `${bannerTop()}px` }}>
           <For each={roster()}>
             {(pl, i) => (
               <>

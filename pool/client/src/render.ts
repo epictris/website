@@ -26,11 +26,16 @@ const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
 // empty transparent background. This is the tight opaque box (measured), used to
 // size the canvas so the visible table fills it and the margin is cropped off.
 const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
-// Depth (world metres) of the ball-return track reserved BELOW the bottom rail.
-// The layout grows the canvas down by this much (scaled) into a blank gutter; the
-// track + potted balls are drawn there in raw pixels, so the felt mapping (toPx)
-// and collision geometry are untouched.
-const RACK_W = 0.09;
+// Ball-return gutter geometry, expressed in ball radii (rpx). Shared by layoutFor
+// (which reserves the vertical gap for it) and drawRack (which draws it). The
+// channel holds a ball (radius 1) with ~a rail width of clearance to the inner
+// rail on each side; the outer rail is spaced out past that.
+const G_RAIL_W = 0.16; // rail tube width (thin — ~2px)
+const G_RO_OUT = 1 + G_RAIL_W; // outer rail just past the ball edge (peeks around it)
+const G_RO_IN = G_RO_OUT - G_RAIL_W * 3.2; // inner rail (double dark gap to the outer)
+const G_HALF = G_RO_OUT + G_RAIL_W * 0.7; // channel half-height (contains both rails)
+const G_DROP = 0.35; // clearance between the table's bottom edge and the gutter
+const G_BELOW = G_DROP + 2 * G_HALF + G_RAIL_W; // total gutter extent below the table (rpx)
 // Constant speed (world metres/sec) a potted ball rolls down the return track.
 // Distance-based, not time-based, so every ball rolls at the same pace whatever
 // its slot.
@@ -57,6 +62,7 @@ export type Layout = {
   W: number; // full canvas css width
   H: number; // full canvas css height
   imgLeft: number; // px offset from felt origin (ox) to the table image's opaque left edge (minx, ≤0)
+  imgRight: number; // px offset from felt origin (ox) to the table image's opaque right edge (maxx)
   imgBottom: number; // px offset from felt origin (oy) to the table image's opaque bottom edge (maxy)
   gutter: number; // px depth of the ball-return gutter reserved below the table (rackPx)
 };
@@ -92,15 +98,15 @@ export function layoutFor(scale: number, rotated = false): Layout {
   const maxx = Math.max(...cs.map((c) => c.x));
   const miny = Math.min(...cs.map((c) => c.y));
   const maxy = Math.max(...cs.map((c) => c.y));
-  // Shift world (0,0) so the image starts at the canvas origin. The rack gutter
-  // grows the canvas DOWNWARD (a blank strip below the table) for the bottom
-  // ball-return track — the felt mapping is untouched.
-  const rackPx = RACK_W * scale;
+  // Shift world (0,0) so the image starts at the canvas origin. `gutter` is the
+  // pixel extent the ball-return track occupies BELOW the table — reserved by
+  // resize() as the bottom gap; the felt mapping itself is untouched.
+  const gutterPx = G_BELOW * R * scale;
   const ox = rotated ? -minx - Hpx : -minx;
   const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
   const ph = (rotated ? TABLE.w : TABLE.h) * scale;
-  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx, H: maxy - miny + rackPx, imgLeft: minx, imgBottom: maxy, gutter: rackPx };
+  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx, H: maxy - miny, imgLeft: minx, imgRight: maxx, imgBottom: maxy, gutter: gutterPx };
 }
 
 // World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
@@ -300,8 +306,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   const l = s.layout;
   ctx.clearRect(0, 0, l.W, l.H);
   ensureTableImg();
-  drawTable(ctx, l);
+  // Gutter BEFORE the table so the L-bend entry rails tuck up under the table
+  // (the opaque table image drawn next covers them above its bottom edge).
   drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
+  drawTable(ctx, l);
 
   // Object balls first; the cue ball + cue stick go down in painter's order so
   // "tip under/over the ball" is just which one is drawn last — no occluder.
@@ -608,54 +616,94 @@ function drawRack(
   now: number,
 ) {
   const rpx = R * l.scale;
-  const half = rpx * 1.35; // channel half-height (a touch taller than a ball)
+  const w = Math.max(2, G_RAIL_W * rpx); // rail tube width
+  const roIn = G_RO_IN * rpx; // inner rail offset
+  const roOut = G_RO_OUT * rpx; // outer rail offset
+  const half = G_HALF * rpx; // channel half-height
+  const drop = G_DROP * rpx - 2; // clearance between the table bottom and the channel
   // The table image's opaque bottom edge, in canvas px. The felt origin (oy)
   // moves with the layout's tableWrap offset, so anchor here rather than canvas 0.
   const tableBottom = l.oy + l.imgBottom;
-  const cy = tableBottom + half; // top edge of the channel touches the table's bottom
-  const left = l.ox;
-  const right = l.ox + l.pw; // felt horizontal span == bottom rail length
+  const cy = tableBottom + drop + half; // channel centre, just below the table
+  const left = l.ox + l.imgLeft;
+  const right = l.ox + l.imgRight;
 
-  // Channel bed: a dark recessed groove with a soft inner edge.
+  // Gutter holds every object ball (15) — no wider — and is centred under the
+  // table. Balls enter at the left L-bend and stack right at the U-bend.
+  const CAP = 15;
+  const step = rpx * 2.05; // ball pitch along the channel
+  const Lr = roOut + rpx * 0.9; // L-turn centreline radius (soft; > roOut)
+  const railLen = Lr + (CAP - 1) * step + rpx * 0.9; // cornerX → uX
+  const gutterW = railLen + 2 * roOut; // chute-left to U-right
+  const cornerX = (left + right) / 2 - gutterW / 2 + roOut; // centred
+  const uX = cornerX + railLen; // U-bend centre
+  const startX = uX + (roOut - rpx) - 2; // first ball just off the U-bend back (outer rail shows)
+  const chuteTop = cy - half - rpx * 3; // entry runs up under the table (drawn first → hidden)
+  const clx = cornerX + Lr; // L-turn centre
+  const cly = cy - Lr;
+
+  // Silver ball-return rails: an L-bend entry at the left (balls roll out from
+  // under the table and turn right) and a closed U-bend at the right. Each rail
+  // is a tube — concentric strokes dark → steel → silver for a metallic sheen.
+  // The L-turn and U-turn arcs share one centre per turn (radii Lr∓ro / ro), so
+  // the inner and outer rails stay a constant distance apart the whole way.
   ctx.save();
-  ctx.fillStyle = "#12141b";
-  ctx.beginPath();
-  ctx.roundRect(left, cy - half, right - left, half * 2, rpx * 0.6);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(0,0,0,0.5)";
-  ctx.lineWidth = Math.max(1, rpx * 0.12);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(255,255,255,0.05)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(left + 1, cy - half + 1, right - left - 2, half * 2 - 2, rpx * 0.6);
-  ctx.stroke();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const railPath = (ro: number) => {
+    const p = new Path2D();
+    p.moveTo(cornerX + ro, chuteTop); // right entry wall, up under the table
+    p.lineTo(cornerX + ro, cly); // down to the top L-turn
+    p.arc(clx, cly, Lr - ro, Math.PI, Math.PI / 2, true); // top L-turn (inner)
+    p.lineTo(uX, cy - ro); // top rail →
+    p.arc(uX, cy, ro, -Math.PI / 2, Math.PI / 2, false); // U-bend (right)
+    p.lineTo(clx, cy + ro); // ← bottom rail to the bottom L-turn
+    p.arc(clx, cly, Lr + ro, Math.PI / 2, Math.PI, false); // bottom L-turn (outer)
+    p.lineTo(cornerX - ro, chuteTop); // left entry wall, up under the table
+    return p;
+  };
+  const drawRail = (ro: number) => {
+    const path = railPath(ro);
+    ctx.strokeStyle = "#22262c"; // dark casing / gap
+    ctx.lineWidth = w;
+    ctx.stroke(path);
+    ctx.strokeStyle = "#5b636c"; // steel body, shaded
+    ctx.lineWidth = w * 0.66;
+    ctx.stroke(path);
+    ctx.strokeStyle = "#98a1aa"; // silver sheen (not white)
+    ctx.lineWidth = w * 0.3;
+    ctx.stroke(path);
+  };
+  for (const ro of [roOut, roIn]) drawRail(ro);
   ctx.restore();
 
-  const step = rpx * 2.05; // touching, with a hair of daylight
-  const startX = right - rpx - rpx * 0.3; // first ball rests at the right end
-  const cornerX = left + rpx * 1.05; // where the vertical lead-in turns rightward
-  const leadIn = half + rpx * 1.3; // downward run from under the table to the corner
   const speed = (ROLL_MPS * l.scale) / 1000; // px per ms
-  // Path distance travelled: 0..leadIn is the downward run into the corner (the
-  // start of it is off-channel above, so the clip below keeps it hidden "under
-  // the table"); beyond that it's straight along the channel to the slot.
-  const posAt = (s: number) =>
-    s <= leadIn
-      ? { x: cornerX, y: cy - (leadIn - s), across: 0 }
-      : { x: cornerX + (s - leadIn), y: cy, across: s - leadIn };
+  // Ball path: down the vertical chute, around the L-turn ARC (centred on the
+  // channel so the ball stays centred through the bend), then along the channel.
+  const arcLen = (Lr * Math.PI) / 2;
+  const vLen = drop + half + rpx - Lr; // vertical descent before the arc
+  const vTopY = cly - vLen; // start of the descent (up under the table)
+  const posAt = (s: number) => {
+    if (s <= vLen) return { x: cornerX, y: vTopY + s };
+    const sa = s - vLen;
+    if (sa <= arcLen) {
+      const ang = Math.PI - (sa / arcLen) * (Math.PI / 2); // π → π/2
+      return { x: clx + Lr * Math.cos(ang), y: cly + Lr * Math.sin(ang) };
+    }
+    return { x: clx + (sa - arcLen), y: cy };
+  };
 
-  // Clip to the channel so a ball is invisible until it rounds the corner into
-  // view — no more sitting at the mouth while it waits.
+  // Clip so a ball is hidden above the table's bottom edge (it's "under the
+  // table") and appears as it emerges into the gutter.
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(left, cy - half, right - left, half * 2, rpx * 0.6);
+  ctx.rect(left, tableBottom, right - left, cy + half + w - tableBottom);
   ctx.clip();
   let prevS = Infinity; // path distance of the ball ahead (further along the track)
   for (let i = 0; i < rack.length; i++) {
     const restX = startX - i * step;
-    if (restX - rpx < left) break; // full track — stop rather than overflow the felt
-    const pathLen = leadIn + (restX - cornerX); // total distance to this slot
+    if (restX < clx - rpx) break; // gutter full (15 balls + spare) — stop
+    const pathLen = vLen + arcLen + (restX - clx); // total distance to this slot
     // Constant-speed travel, clamped to the slot AND to one ball-gap behind the
     // ball ahead (in path distance) — a trailing ball can never overlap or
     // overtake its leader, even around the corner.
@@ -664,8 +712,8 @@ function drawRack(
     prevS = s;
     if (s < 0) continue; // still under the table (or queued behind) — hidden
     const p = posAt(s);
-    // Roll without slipping: down about x until the corner, then sideways about y.
-    const o = mul3(rollY(p.across / rpx), rollX(-Math.min(s, leadIn) / rpx));
+    // Roll ~without slipping via net displacement: down about x, across about y.
+    const o = mul3(rollY((p.x - cornerX) / rpx), rollX(-(p.y - vTopY) / rpx));
     drawBall(ctx, { x: p.x, y: p.y }, rack[i].id, rpx, 1, o, false, true);
   }
   ctx.restore();
