@@ -42,7 +42,7 @@ import {
 import { EMOJI_DB } from "./emojis";
 import {
   buildReplay,
-  downloadReplay,
+  saveReplayToStore,
   snapshotInitial,
   takePendingReplay,
   worldFromInitial,
@@ -126,7 +126,11 @@ const Game: Component = () => {
   let worldBefore: World = cloneWorld(world);
   let ws: WebSocket | null = null;
   let leaving = false; // set on unmount so a deliberate close doesn't reconnect
-  let replayQueue: ReplayShot[] = [];
+  // Replay playback state (see the "--- Replay ---" section). The board is the
+  // live table; playback drives it via the same runShot/resolveShot path.
+  let replayData: Replay | null = null; // the loaded replay being watched
+  let replayTimer: ReturnType<typeof setTimeout> | undefined; // gap between shots
+  let seeking = false; // suppress auto-advance + popups during an instant seek
   let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
   // Live table annotation (pointing finger + dotted paths). Both players can draw
@@ -237,6 +241,14 @@ const Game: Component = () => {
   const [bannerTop, setBannerTop] = createSignal(24); // banner y (centre of the top gap)
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
+  // Playback controls (only meaningful while replaying()). `replayIdx` is the
+  // playhead: the number of shots applied so far (board is at rest after that
+  // many shots; while a shot animates it's the index of the in-flight shot).
+  const [replayIdx, setReplayIdx] = createSignal(0);
+  const [replayPaused, setReplayPaused] = createSignal(false);
+  const [replaySpeed, setReplaySpeed] = createSignal(1); // 1 = real-time; <1 = slow-mo
+  const REPLAY_SPEEDS = [1, 0.5, 0.25]; // cycle order for the speed button
+  const replayTotal = () => replayData?.shots.length ?? 0;
   const [showMenu, setShowMenu] = createSignal(false); // hamburger menu modal
   const [showGameOver, setShowGameOver] = createSignal(false); // end-of-game modal
   const [rematchVotes, setRematchVotes] = createSignal<number[]>([]); // slots that pressed rematch
@@ -245,7 +257,9 @@ const Game: Component = () => {
   // finished game. It's closed only by an action button (never the backdrop);
   // doRematch/playReplay clear both the winner and this flag for the next game.
   createEffect(() => {
-    if (rules().winner !== null) setShowGameOver(true);
+    // Watching a replay: the playback HUD stands in for the end screen, so the
+    // (rematch/leave) game-over modal would only get in the way — suppress it.
+    if (rules().winner !== null && !replaying()) setShowGameOver(true);
   });
   const [showSpinHud, setShowSpinHud] = createSignal(false); // floating spin window
   const [spinHudPos, setSpinHudPos] = createSignal({ x: 0, y: 0 }); // canvas-local px
@@ -447,7 +461,7 @@ const Game: Component = () => {
     if (log.shots.length === totalShots) return;
     rebuilding = true;
     setReplaying(false);
-    replayQueue = [];
+    clearTimeout(replayTimer);
     setAnimating(false);
     striking = false;
     lingering = false;
@@ -774,12 +788,13 @@ const Game: Component = () => {
     setRules(outcome.next);
     // A plain turn change → the transient recap. (Game end opens the game-over
     // modal via the winner effect.)
-    if (!rebuilding && outcome.next.winner === null && outcome.next.turn !== before.turn)
+    if (!rebuilding && !replaying() && outcome.next.winner === null && outcome.next.turn !== before.turn)
       showAnnounce(outcome.next.message);
     pendingPlace = undefined;
     recomputePrediction();
-    // Advance the replay queue if we are watching one.
-    if (replaying()) queueNextReplayShot();
+    // Advance the playhead when a replay shot finishes (but not during an instant
+    // seek, which drives runShot/resolveShot itself and sets the index directly).
+    if (replaying() && !seeking) onReplayResolved();
     bump(0);
   };
 
@@ -822,8 +837,10 @@ const Game: Component = () => {
     }
     if (lingering && nowMs >= lingerUntil) lingering = false;
 
-    if (animating()) {
-      acc += dt;
+    // Paused replay freezes the sim mid-shot; slow-mo scales sim time so the same
+    // deterministic steps play out over more wall-clock frames.
+    if (animating() && !(replaying() && replayPaused())) {
+      acc += dt * (replaying() ? replaySpeed() : 1);
       let steps = 0;
       while (acc >= FIXED_DT && steps < 600) {
         stepFixed(world, events, shotConfig);
@@ -919,10 +936,27 @@ const Game: Component = () => {
     // it's our turn, or the opponent's mirrored blue cue on theirs.
     const cb = world.balls[0];
     let cue: CueDraw | undefined;
-    if ((striking || lingering) && !cb.potted) {
+    // Replay: between shots, preview the upcoming shot's cue lined up on the ball
+    // (there's no live player, so read the aim straight from the queued shot).
+    const nextReplayShot =
+      replaying() && !striking && !animating() && !cb.potted && replayIdx() < replayTotal()
+        ? replayData?.shots[replayIdx()]
+        : undefined;
+    if (nextReplayShot) {
+      cue = {
+        at: cb.p,
+        angle: nextReplayShot.shot.angle,
+        power: nextReplayShot.shot.power,
+        elevation: nextReplayShot.shot.elevation,
+        side: nextReplayShot.shot.side,
+        follow: nextReplayShot.shot.follow,
+        band: replayBand(),
+      };
+    } else if ((striking || lingering) && !cb.potted) {
       cue = {
         at: strikeCuePos ?? cb.p, angle: aimAngle, power: strikePwr,
-        elevation: strikeElev, side: strikeSide, follow: strikeFollow, band: myBand(),
+        elevation: strikeElev, side: strikeSide, follow: strikeFollow,
+        band: replaying() ? replayBand() : myBand(),
       };
     } else if (canAct() && !animating() && !cb.potted) {
       cue = {
@@ -987,6 +1021,15 @@ const Game: Component = () => {
   // main canvas by render.ts (drawCue). Fall back to a neutral blue for a peer
   // whose profile hasn't arrived yet.
   const CUE_BLUE = { dark: "#1d3f74", light: "#356ac0" };
+  // Fixed per-player cue colours for replay previews (player 0 red / player 1
+  // blue) — a saved replay carries no player profiles to colour the cue from.
+  const CUE_RED = { dark: "#7a2018", light: "#c0392b" };
+  // The on-table cue colour during replay: the shooter's own colour when the
+  // replay carries profiles, else the fixed per-player fallback.
+  const replayBand = () => {
+    const c = profiles()[rules().turn]?.color;
+    return c ? cueBand(c) : rules().turn === 0 ? CUE_RED : CUE_BLUE;
+  };
   const myBand = () => cueBand(myProfile.color);
   const oppBand = () => {
     const p = profiles()[1 - myPlayer()];
@@ -1468,7 +1511,8 @@ const Game: Component = () => {
   // for STRIKE_LINGER_MS so it doesn't blink out the instant the ball leaves.
   const finishStrike = () => {
     striking = false;
-    if (strikeShot) runShot(strikeShot, strikePlace, true, config());
+    // Replay strikes must not rebroadcast (no socket) — fire locally only.
+    if (strikeShot) runShot(strikeShot, strikePlace, !replaying(), config());
     strikeShot = undefined;
     setPower(0); // reset power between shots
     setSide(0); // clear english + cue elevation so the next shot starts neutral
@@ -1557,6 +1601,9 @@ const Game: Component = () => {
   };
 
   // --- Replay -------------------------------------------------------------
+  // "Save replay" now writes to the local library (localStorage); the Landing
+  // menu lists what's saved and can export any of them to a file.
+  const [savedFlash, setSavedFlash] = createSignal(false);
   const saveReplay = () => {
     const r = buildReplay(
       breaker,
@@ -1564,39 +1611,169 @@ const Game: Component = () => {
       history,
       { w: TABLE.w, h: TABLE.h },
       config(),
+      profiles(),
     );
-    downloadReplay(r);
+    saveReplayToStore(r);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1600);
   };
 
-  const queueNextReplayShot = () => {
-    const next = replayQueue.shift();
-    if (!next) {
-      setReplaying(false);
-      return;
+  const REPLAY_GAP_MS = 1000; // lead-up pause before each shot during autoplay (before speed)
+
+  // Play the shot at the current playhead. Runs the cue-forward strike animation
+  // (with the recorded aim/spin/elevation) — finishStrike then fires the physics,
+  // and resolveShot → onReplayResolved advances the playhead + queues the next.
+  const replayPlayShot = (i: number) => {
+    if (!replayData || i < 0 || i >= replayData.shots.length) return;
+    const s = replayData.shots[i];
+    const cfg = s.config ?? replayData.config;
+    setConfig(cfg);
+    // Ball-in-hand: seat the cue ball at its placed spot now so the swing lines up
+    // (finishStrike/runShot would otherwise only move it when the physics fires).
+    if (s.place) {
+      world.balls[0].p = { ...s.place };
+      world.balls[0].potted = false;
     }
-    const cfg = next.config ?? config();
-    setTimeout(() => {
-      setConfig(cfg);
-      runShot(next.shot, next.place, false, cfg);
-    }, 700);
+    strikeShot = s.shot;
+    strikePlace = s.place;
+    strikeCuePos = { ...world.balls[0].p };
+    strikeElev = s.shot.elevation; // cue angle held through swing + linger
+    strikeSide = s.shot.side; // english held through swing + linger
+    strikeFollow = s.shot.follow; // follow/draw held through swing + linger
+    aimAngle = s.shot.angle; // swing aims along the recorded shot
+    strikeFromPwr = s.shot.power; // cue starts pulled back to the shot's power
+    strikePwr = strikeFromPwr;
+    strikeStart = nowMs;
+    striking = true;
   };
 
-  const playReplay = (r: Replay) => {
+  // Autoplay: after a gap, animate the shot the playhead now points at.
+  const replayScheduleNext = () => {
+    clearTimeout(replayTimer);
+    if (replayPaused() || replayIdx() >= replayTotal()) return;
+    replayTimer = setTimeout(
+      () => replayPlayShot(replayIdx()),
+      REPLAY_GAP_MS / replaySpeed(),
+    );
+  };
+
+  const onReplayResolved = () => {
+    setReplayIdx((i) => i + 1);
+    if (!replayPaused()) replayScheduleNext();
+  };
+
+  // Rebuild the board to the rest state after `n` shots, instantly (deterministic
+  // re-sim — same primitive as rebuildFromLog). This is the seek/scrub primitive.
+  const replaySeek = (n: number) => {
+    if (!replayData) return;
+    const r = replayData;
+    n = Math.max(0, Math.min(n, r.shots.length));
+    seeking = true;
+    rebuilding = true; // suppress turn-recap popups during the re-sim
+    clearTimeout(replayTimer);
+    setAnimating(false);
+    striking = false;
+    lingering = false;
+    acc = 0;
     world = worldFromInitial(r.initial);
     initialWorld = cloneWorld(world);
     history = [];
     shotCount = 0;
     totalShots = 0;
     breaker = r.breaker;
+    gameStarted = true;
+    pendingPlace = undefined;
     setConfig(r.config);
-    resetSinks();
     setRules(initRules(r.breaker));
     setShowGameOver(false);
-    replayQueue = [...r.shots];
-    setReplaying(true);
+    resetSinks();
+    for (let i = 0; i < n; i++) {
+      const s = r.shots[i];
+      const cfg = s.config ?? r.config;
+      setConfig(cfg);
+      runShot(s.shot, s.place, false, cfg);
+      let steps = 0;
+      while (!atRest(world) && steps < 100000) {
+        stepFixed(world, events, shotConfig);
+        integrateSpin(world, FIXED_DT);
+        steps++;
+      }
+      resolveShot();
+    }
+    seedRack(); // show already-potted balls settled in the return track
+    setReplayIdx(n);
+    rebuilding = false;
+    seeking = false;
+    recomputePrediction();
     bump(0);
-    queueNextReplayShot();
   };
+
+  const playReplay = (r: Replay) => {
+    replayData = r;
+    // Restore the saved players so the banner + cue colours match the match.
+    const pf: Record<number, PlayerProfile> = {};
+    if (r.players?.[0]) pf[0] = r.players[0]!;
+    if (r.players?.[1]) pf[1] = r.players[1]!;
+    setProfiles(pf);
+    setReplaySpeed(1);
+    setReplayPaused(false);
+    setReplaying(true);
+    replaySeek(0); // board to the initial rack
+    replayScheduleNext(); // begin autoplay
+  };
+
+  // --- Playback controls (replay HUD) -------------------------------------
+  const replayAtEnd = () => replayIdx() >= replayTotal() && !animating();
+
+  const replayTogglePlay = () => {
+    if (replayAtEnd()) {
+      // Finished → restart from the top.
+      replaySeek(0);
+      setReplayPaused(false);
+      replayScheduleNext();
+      return;
+    }
+    const paused = !replayPaused();
+    setReplayPaused(paused);
+    clearTimeout(replayTimer);
+    // Resuming between shots: schedule the next. Mid-shot the frame loop just
+    // un-freezes on its own (it gates on replayPaused()).
+    if (!paused && !animating()) replayScheduleNext();
+  };
+
+  const replayNext = () => {
+    setReplayPaused(true); // manual stepping pauses autoplay
+    clearTimeout(replayTimer);
+    if (animating())
+      settleNow(); // jump the in-flight shot straight to rest
+    else if (replayIdx() < replayTotal()) replaySeek(replayIdx() + 1);
+    clearTimeout(replayTimer);
+  };
+
+  const replayPrev = () => {
+    setReplayPaused(true);
+    clearTimeout(replayTimer);
+    // Mid-shot → restart the current shot; at rest → step back one shot.
+    replaySeek(animating() ? replayIdx() : replayIdx() - 1);
+  };
+
+  const replayRestart = () => {
+    setReplayPaused(true);
+    clearTimeout(replayTimer);
+    replaySeek(0);
+  };
+
+  const replayCycleSpeed = () => {
+    const next =
+      REPLAY_SPEEDS[
+        (REPLAY_SPEEDS.indexOf(replaySpeed()) + 1) % REPLAY_SPEEDS.length
+      ];
+    setReplaySpeed(next);
+    // Reschedule a pending gap so a speed change takes effect immediately.
+    if (!replayPaused() && !animating()) replayScheduleNext();
+  };
+
+  onCleanup(() => clearTimeout(replayTimer));
 
 
   // --- Lifecycle ----------------------------------------------------------
@@ -1667,10 +1844,13 @@ const Game: Component = () => {
       if (started()) send({ t: "need-sync" } as Msg);
     };
     document.addEventListener("visibilitychange", onVisible);
-    // A replay picked on the Landing menu is stashed and consumed here.
+    // A replay picked on the Landing menu is stashed and consumed here. A replay
+    // is a local, self-contained playback — don't open a socket (it needs no
+    // server, would pollute the lobby, and `hello` would overwrite the replay's
+    // saved player identities with our own).
     const pend = takePendingReplay();
     if (pend) playReplay(pend);
-    connect();
+    else connect();
     raf = requestAnimationFrame(frame);
 
     onCleanup(() => {
@@ -1804,14 +1984,17 @@ const Game: Component = () => {
       <div class="play-row">
         {/* Left column: back menu (top) + emoji/comm dock (bottom). */}
         <div class="left-col">
-          <button
-            class="hamburger"
-            title="menu"
-            onPointerDown={cueDragTakeover}
-            onClick={() => setShowMenu(true)}
-          >
-            ☰
-          </button>
+          {/* Hidden during replay — the playback HUD's ✕ handles leaving. */}
+          <Show when={!replaying()}>
+            <button
+              class="hamburger"
+              title="menu"
+              onPointerDown={cueDragTakeover}
+              onClick={() => setShowMenu(true)}
+            >
+              ☰
+            </button>
+          </Show>
         </div>
 
         {/* Empty spacer reserving the felt's footprint so the side widgets lay
@@ -1824,8 +2007,8 @@ const Game: Component = () => {
 
         <div class="cue-col">
           {/* Fire the loaded shot — a pool-ball button at the top of the column,
-              horizontally centred over the cue. */}
-          <Show when={myTurn()}>
+              horizontally centred over the cue. Hidden in replay (no shooting). */}
+          <Show when={myTurn() && !replaying()}>
             <button
               class="shoot-btn"
               title="shoot"
@@ -1865,8 +2048,9 @@ const Game: Component = () => {
             onPointerUp={onPowerUp}
             onPointerCancel={onPowerUp}
           >
-            {/* Hide power bar + cue while it isn't this player's turn. */}
-            <Show when={myTurn()}>
+            {/* Hide power bar + cue while it isn't this player's turn, and always
+                in replay (playback isn't interactive). */}
+            <Show when={myTurn() && !replaying()}>
               {/* Drag target = just the widget column (the viewBox). The cue
                   <image> below is 250 units wide and overflows the box (so it can
                   reach the screen edge), so it's pointer-events:none — otherwise
@@ -1908,7 +2092,7 @@ const Game: Component = () => {
           z-index:3 stacking context would trap it below the z:9 table canvas and
           let the on-table cue paint over the tray). Here it shares the root
           stacking context with the canvas, so its z:10 sits above the cue. */}
-      <Show when={!isSpectator()}>
+      <Show when={!isSpectator() && !replaying()}>
         <div class="comm-dock" classList={{ "dock-raised": showEmojiPicker() }}>
           {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render once
               and stay cached — remounting made them pop in each open. */}
@@ -1969,20 +2153,72 @@ const Game: Component = () => {
         </div>
       </Show>
 
+      {/* Replay playback HUD — skip/step through shots, pause, and slow-mo. Only
+          shown while watching a replay (input is otherwise blocked). */}
+      <Show when={replaying()}>
+        <div class="replay-hud">
+          <button
+            class="rep-btn"
+            title="restart"
+            onClick={replayRestart}
+            disabled={(track(), replayIdx() === 0 && !animating())}
+          >
+            ⏮
+          </button>
+          <button
+            class="rep-btn"
+            title="previous shot"
+            onClick={replayPrev}
+            disabled={(track(), replayIdx() === 0 && !animating())}
+          >
+            ◀◀
+          </button>
+          <button class="rep-btn rep-play" title="play / pause" onClick={replayTogglePlay}>
+            {(track(), replayAtEnd() ? "↻" : replayPaused() ? "▶" : "❚❚")}
+          </button>
+          <button
+            class="rep-btn"
+            title="next shot"
+            onClick={replayNext}
+            disabled={(track(), replayAtEnd())}
+          >
+            ▶▶
+          </button>
+          <button class="rep-btn rep-speed" title="playback speed" onClick={replayCycleSpeed}>
+            {replaySpeed()}×
+          </button>
+          <span class="rep-count">
+            {(track(), Math.min(replayTotal(), replayIdx() + (animating() ? 1 : 0)))}
+            {" / "}
+            {replayTotal()}
+          </span>
+          <button class="rep-btn rep-exit" title="exit replay" onClick={() => navigate("/")}>
+            ✕
+          </button>
+        </div>
+      </Show>
+
+      {/* Brief confirmation that a replay was written to the local library. */}
+      <Show when={savedFlash()}>
+        <div class="replay-saved-toast">replay saved ✓</div>
+      </Show>
+
       <Show when={showMenu()}>
         <div class="menu-backdrop" onClick={() => setShowMenu(false)} />
         <div class="pick-modal menu-modal">
           <div class="pm-title">menu</div>
-          <button
-            class="pm-done"
-            onClick={() => {
-              saveReplay();
-              setShowMenu(false);
-            }}
-            disabled={(track(), history.length === 0)}
-          >
-            save replay
-          </button>
+          <Show when={!replaying()}>
+            <button
+              class="pm-done"
+              onClick={() => {
+                saveReplay();
+                setShowMenu(false);
+              }}
+              disabled={(track(), history.length === 0)}
+            >
+              save replay
+            </button>
+          </Show>
           <Show when={canFullscreen}>
             <button
               class="pm-done"

@@ -5,6 +5,7 @@
 
 import type { Ball, PhysicsConfig, Shot, Vec, World } from "./physics";
 import { cloneWorld, DEFAULT_CONFIG } from "./physics";
+import type { PlayerProfile } from "./profile";
 
 export type ReplayShot = { shot: Shot; place?: Vec; config?: PhysicsConfig };
 
@@ -16,6 +17,10 @@ export type Replay = {
   config: PhysicsConfig;
   initial: { id: number; x: number; y: number }[];
   shots: ReplayShot[];
+  // Each player's identity (name/emoji/cue colour), keyed by slot 0/1. Optional
+  // so replays saved before this field still load (the UI falls back to generic
+  // labels + default cue colours).
+  players?: Partial<Record<0 | 1, PlayerProfile>>;
 };
 
 export function snapshotInitial(world: World): Replay["initial"] {
@@ -39,6 +44,7 @@ export function buildReplay(
   shots: ReplayShot[],
   table: { w: number; h: number },
   config: PhysicsConfig,
+  players?: Partial<Record<0 | 1, PlayerProfile>>,
 ): Replay {
   return {
     version: 1,
@@ -48,6 +54,9 @@ export function buildReplay(
     config,
     initial: snapshotInitial(cloneWorld(initial)),
     shots: [...shots],
+    players: players
+      ? { 0: players[0], 1: players[1] }
+      : undefined,
   };
 }
 
@@ -89,4 +98,73 @@ export function parseReplay(text: string): Replay {
   }
   if (!r.config) r.config = DEFAULT_CONFIG; // tolerate pre-config replays
   return r;
+}
+
+// --- Local replay library ------------------------------------------------
+// "Save replay" now stores into localStorage rather than downloading; the
+// Landing menu lists what's saved, and each entry can still be exported to /
+// imported from a JSON file. One key holds the whole (newest-first) list.
+export type SavedReplay = { id: string; name: string; replay: Replay };
+
+const STORE_KEY = "pool.replays";
+const MAX_SAVED = 50; // cap the library so storage can't grow without bound
+
+export function listReplays(): SavedReplay[] {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return [];
+    const a = JSON.parse(raw);
+    if (!Array.isArray(a)) return [];
+    // Keep only structurally-valid entries (tolerate hand-edited storage).
+    return a.filter(
+      (e): e is SavedReplay =>
+        e &&
+        typeof e.id === "string" &&
+        typeof e.name === "string" &&
+        e.replay &&
+        Array.isArray(e.replay.shots) &&
+        Array.isArray(e.replay.initial),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeReplays(list: SavedReplay[]) {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(list));
+  } catch {
+    /* storage may be unavailable (private mode) — ignore */
+  }
+}
+
+// A readable label from the replay's timestamp, e.g. "9 Jul 2026, 14:32".
+export function defaultReplayName(r: Replay): string {
+  const d = new Date(r.createdAt);
+  if (isNaN(d.getTime())) return "Replay";
+  const date = d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${date}, ${time}`;
+}
+
+// Save newest-first; returns the stored entry.
+export function saveReplayToStore(replay: Replay, name?: string): SavedReplay {
+  const entry: SavedReplay = {
+    id: crypto.randomUUID(),
+    name: name?.trim() || defaultReplayName(replay),
+    replay,
+  };
+  writeReplays([entry, ...listReplays()].slice(0, MAX_SAVED));
+  return entry;
+}
+
+export function deleteReplay(id: string): void {
+  writeReplays(listReplays().filter((e) => e.id !== id));
 }

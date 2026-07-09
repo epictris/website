@@ -1210,3 +1210,143 @@ a {
   opacity: 0.85;
   pointer-events: none;
 }
+
+/* --- Replay playback HUD ------------------------------------------------
+   Fixed control bar centred along the bottom of the game root while a replay
+   plays. position:fixed makes it ride the rotated root in portrait (like the
+   modals), so it stays anchored to the game frame. */
+.replay-hud {
+  position: fixed;
+  z-index: 10; /* above the full-viewport table canvas (z:9); below modals (z:12) */
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.rep-btn {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.rep-play {
+  min-width: 48px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.rep-speed {
+  min-width: 52px;
+  font-weight: 700;
+}
+
+.rep-count {
+  min-width: 5ch;
+  text-align: center;
+  opacity: 0.85;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.rep-exit {
+  color: var(--fg);
+  opacity: 0.8;
+}
+
+/* Brief "replay saved" confirmation toast. */
+.replay-saved-toast {
+  position: fixed;
+  z-index: 13;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #10202a;
+  font-weight: 700;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* --- Replay library modal (Landing) ------------------------------------ */
+.replay-modal {
+  width: min(520px, 92%);
+  max-height: 88%;
+  padding: 14px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.rep-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rep-empty {
+  opacity: 0.5;
+  padding: 16px 2px;
+  text-align: center;
+}
+
+.rep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.rep-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rep-name {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rep-shots {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.rep-btns {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.rep-del {
+  color: #e06c75;
+}
+
+/* Load-from-file button (a <label> wrapping a hidden input), full width. */
+.rep-import {
+  justify-content: center;
+  text-align: center;
+}

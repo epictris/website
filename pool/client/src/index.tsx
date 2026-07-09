@@ -3,7 +3,16 @@ import { Route, Router, useNavigate } from "@solidjs/router";
 import { createSignal, onCleanup, onMount, For, Show, type Component } from "solid-js";
 import Game from "./Game";
 import { fetchRooms, type RoomInfo } from "./net";
-import { parseReplay, setPendingReplay } from "./replay";
+import {
+  defaultReplayName,
+  deleteReplay,
+  downloadReplay,
+  listReplays,
+  parseReplay,
+  setPendingReplay,
+  type Replay,
+  type SavedReplay,
+} from "./replay";
 import {
   COLOR_CHOICES,
   loadProfile,
@@ -55,6 +64,37 @@ const Landing: Component = () => {
     setLoaded(true);
   };
 
+  // Replay library modal — lists locally-saved replays, each playable, exportable
+  // to a file, or deletable. A replay is played by stashing it and entering a
+  // fresh room that consumes it on mount.
+  const [showReplays, setShowReplays] = createSignal(false);
+  const [saved, setSaved] = createSignal<SavedReplay[]>([]);
+  const openReplays = () => {
+    setSaved(listReplays());
+    setShowReplays(true);
+  };
+  const playReplay = (r: Replay) => {
+    setPendingReplay(r);
+    navigate(`/${newCode()}`);
+  };
+  const removeReplay = (id: string) => {
+    deleteReplay(id);
+    setSaved(listReplays());
+  };
+  // "<emoji> <name>" for a replay slot, falling back to a generic label.
+  const playerTag = (r: Replay, slot: 0 | 1) => {
+    const p = r.players?.[slot];
+    const name = p?.name?.trim() || `Player ${slot + 1}`;
+    return p?.emoji ? `${p.emoji} ${name}` : name;
+  };
+  const loadFromFile = async (f: File) => {
+    try {
+      playReplay(parseReplay(await f.text()));
+    } catch {
+      alert("Not a valid pool replay file.");
+    }
+  };
+
   onMount(() => {
     refresh();
     const t = setInterval(refresh, 3000);
@@ -79,27 +119,10 @@ const Landing: Component = () => {
             >
               New Game
             </button>
-            {/* Load a saved replay: parse here, stash it, then enter a fresh room
-                that consumes it on mount and plays the shots back. */}
-            <label class="primary mm-start mm-load">
+            {/* Open the local replay library (list of saved replays + import). */}
+            <button class="primary mm-start" onClick={openReplays}>
               Load Replay
-              <input
-                type="file"
-                accept="application/json"
-                style={{ display: "none" }}
-                onChange={async (e) => {
-                  const f = e.currentTarget.files?.[0];
-                  e.currentTarget.value = "";
-                  if (!f) return;
-                  try {
-                    setPendingReplay(parseReplay(await f.text()));
-                    navigate(`/${newCode()}`);
-                  } catch {
-                    alert("Not a valid pool replay file.");
-                  }
-                }}
-              />
-            </label>
+            </button>
           </div>
           <div class="lobby">
             <div class="lobby-head">Joinable games</div>
@@ -162,6 +185,78 @@ const Landing: Component = () => {
           </div>
         </div>
       </div>
+
+      {/* Replay library: every locally-saved replay, playable / exportable /
+          deletable, plus a load-from-file option. */}
+      <Show when={showReplays()}>
+        <div class="menu-backdrop" onClick={() => setShowReplays(false)} />
+        <div class="pick-modal replay-modal">
+          <div class="emoji-modal-head">
+            <span class="pm-title">replays</span>
+            <button
+              class="emoji-close"
+              title="close"
+              onClick={() => setShowReplays(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div class="rep-list">
+            <For
+              each={saved()}
+              fallback={<div class="rep-empty">No saved replays yet.</div>}
+            >
+              {(s) => (
+                <div class="rep-row">
+                  <div class="rep-meta">
+                    <span class="rep-name">
+                      {playerTag(s.replay, 0)} vs {playerTag(s.replay, 1)}
+                    </span>
+                    <span class="rep-shots">
+                      {defaultReplayName(s.replay)} · {s.replay.shots.length} shots
+                    </span>
+                  </div>
+                  <div class="rep-btns">
+                    <button
+                      class="primary"
+                      title="watch"
+                      onClick={() => playReplay(s.replay)}
+                    >
+                      play
+                    </button>
+                    <button
+                      title="save to file"
+                      onClick={() => downloadReplay(s.replay)}
+                    >
+                      ⭳
+                    </button>
+                    <button
+                      class="rep-del"
+                      title="delete"
+                      onClick={() => removeReplay(s.id)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+          <label class="primary mm-load rep-import">
+            Load from file
+            <input
+              type="file"
+              accept="application/json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0];
+                e.currentTarget.value = "";
+                if (f) loadFromFile(f);
+              }}
+            />
+          </label>
+        </div>
+      </Show>
 
       {/* Searchable emoji picker (shared styles with the in-game modal). Tap an
           emoji to pick it as the profile avatar. */}
