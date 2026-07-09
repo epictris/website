@@ -8,6 +8,7 @@ import {
   DEFAULT_CONFIG,
   freeze,
   FIXED_DT,
+  IDENT3,
   integrateSpin,
   MAX_ELEVATION,
   POCKET_LIST,
@@ -19,6 +20,7 @@ import {
   stepFixed,
   TABLE,
   type Ball,
+  type Mat3,
   type PhysicsConfig,
   type Prediction,
   type ShotEvent,
@@ -149,17 +151,20 @@ const Game: Component = () => {
     return Math.max(0, 1 - (age - STAMP_POP_MS - STAMP_HOLD_MS) / STAMP_GONE_MS);
   };
   // Ball-sinking animations (visual only).
-  let sinks: { id: number; from: Vec; pocket: Vec; v: Vec; start: number }[] = [];
+  let sinks: { id: number; from: Vec; pocket: Vec; v: Vec; start: number; o0: Mat3 }[] = [];
   const pottedSeen = new Set<number>();
   let debugCursor: Vec | undefined; // world coords under the cursor (debug readout)
   let debugCopiedAt = -1e9; // nowMs of the last debug click-to-copy (for the flash)
   let nowMs = 0;
   const SINK_MS = 1000; // sink-anim lifetime (roll-in can be slow before the drop)
   // Speed (world m/s) a potted ball travels under the table from its pocket to
-  // the return mouth at the top-left corner (world origin).
+  // the return-track entrypoint at the bottom-left corner.
   const UNDER_MPS = 1.1;
-  // The left-rail ball-return track: every ball potted this game, in the order it
-  // dropped. Each rolls into the track once its pocket-drop (SINK_MS) finishes.
+  // Gutter entrypoint (world m): the bottom-left corner, where the return track
+  // begins. The under-table delay scales with a pocket's distance from here.
+  const GUTTER_ENTRY: Vec = { x: 0, y: TABLE.h };
+  // The bottom-rail ball-return track: every ball potted this game, in the order
+  // it dropped. Each rolls into the track once its pocket-drop (SINK_MS) finishes.
   let rackBalls: { id: number; rollStart: number }[] = [];
   const resetSinks = () => {
     sinks = [];
@@ -185,7 +190,9 @@ const Game: Component = () => {
     ).center;
   const addSink = (b: Ball, start: number) => {
     const v = b.dropV ?? { x: 0, y: 0 }; // momentum it carried into the pocket
-    sinks.push({ id: b.id, from: { ...b.p }, pocket: nearestHole(b.p), v, start });
+    // Snapshot the ball's field orientation so the sink's roll continues from it
+    // instead of snapping to identity.
+    sinks.push({ id: b.id, from: { ...b.p }, pocket: nearestHole(b.p), v, start, o0: b.o ?? IDENT3 });
   };
 
   // --- UI-facing signals --------------------------------------------------
@@ -676,11 +683,14 @@ const Game: Component = () => {
         pottedSeen.add(b.id);
         addSink(b, t);
         // Collect it in the return track (cue re-spots, never racks). After the
-        // pocket-drop it travels UNDER the table to the top-left return mouth —
-        // the farther the pocket, the longer before it rolls out of the top.
+        // pocket-drop it travels UNDER the table to the bottom-left gutter entry —
+        // the farther that pocket, the longer before it rolls out into the track.
         if (b.id !== 0 && !rackBalls.some((r) => r.id === b.id)) {
           const hole = nearestHole(b.p);
-          const under = (Math.hypot(hole.x, hole.y) / UNDER_MPS) * 1000;
+          const under =
+            (Math.hypot(hole.x - GUTTER_ENTRY.x, hole.y - GUTTER_ENTRY.y) /
+              UNDER_MPS) *
+            1000;
           rackBalls.push({ id: b.id, rollStart: t + SINK_MS + under });
         }
       }
@@ -803,6 +813,7 @@ const Game: Component = () => {
         pocket: sk.pocket,
         v: sk.v,
         ms: nowMs - sk.start,
+        o0: sk.o0,
       })),
       rack: rackBalls,
       now: nowMs,
@@ -972,6 +983,7 @@ const Game: Component = () => {
     dragEl.style.top = `${e.clientY}px`;
   };
   const onTrayDown = (ch: string, e: PointerEvent) => {
+    if (cueDragTakeover(e)) return; // cue overhangs the tray → drag the cue
     e.preventDefault();
     dragCh = ch;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -1063,6 +1075,33 @@ const Game: Component = () => {
       mode = "aim";
     }
     hitEl.setPointerCapture(e.pointerId);
+  };
+
+  // True if a press lands on the cue ball or the overhanging cue stick while it's
+  // ours to aim. UI widgets call this so a cue drag over them wins: they hand the
+  // gesture to the table (onPointerDown captures hitEl) instead of acting.
+  const isOnCueDrag = (e: PointerEvent): boolean => {
+    if (!canAct() || striking) return false;
+    const cb = world.balls[0];
+    if (cb.potted) return false;
+    const w = toWorld(e);
+    const cue = cb.p;
+    if (Math.hypot(w.x - cue.x, w.y - cue.y) < R * 2.55) return true; // cue ball
+    const back = aimAngle + Math.PI;
+    const proj = (w.x - cue.x) * Math.cos(back) + (w.y - cue.y) * Math.sin(back);
+    const perp = -(w.x - cue.x) * Math.sin(back) + (w.y - cue.y) * Math.cos(back);
+    return proj > STICK_NEAR && proj < STICK_FAR && Math.abs(perp) < STICK_PERP;
+  };
+
+  // A UI widget's pointerdown: if the press is really on the cue, redirect the
+  // gesture to the table (the cue always wins over whatever's under it) and
+  // swallow it here so the button/power widget/tray won't also act. Returns true
+  // when it took over. `.preventDefault()` stops the follow-up click on a button.
+  const cueDragTakeover = (e: PointerEvent): boolean => {
+    if (!isOnCueDrag(e)) return false;
+    e.preventDefault();
+    onPointerDown(e); // captures hitEl → subsequent move/up route to the table
+    return true;
   };
 
   const onPointerMove = (e: PointerEvent) => {
@@ -1170,6 +1209,7 @@ const Game: Component = () => {
   let pulling = false;
   let pullStartY = 0;
   const onPowerDown = (e: PointerEvent) => {
+    if (cueDragTakeover(e)) return; // cue overhangs the widget → drag the cue
     if (!canAct() || striking) return;
     powerEl.setPointerCapture(e.pointerId);
     pulling = true;
@@ -1353,27 +1393,27 @@ const Game: Component = () => {
       const vw = rotate90 ? window.innerHeight : window.innerWidth;
       const vh = rotate90 ? window.innerWidth : window.innerHeight;
       // Fit the whole table PHOTO (felt + wooden rails) into the viewport minus
-      // the side widgets. The canvas size scales linearly with `scale`, so
-      // measure it at scale 1 and divide the available space by that.
-      const SIDE_W = 76 + 30; // cue-col + hamburger button widths
-      // Leave slack for 4 even gaps (space-evenly: outside both ends + between
-      // each of the 3 items) so the row breathes uniformly.
-      const GAPS = 14 * 4;
+      // the two side columns. They're equal-width (grid 1fr each) and must hold
+      // their widget (the 78px shoot button / 76px cue) with breathing room, so
+      // reserve that on both sides — the table then centres exactly between them.
+      const COL_W = 90; // per-side reserve (each 1fr column is at least this wide)
       const unit = layoutFor(1, false); // always landscape
-      const availW = vw - SIDE_W - GAPS;
-      // Reserve room at the top for the in-flow player banner (its height + the
-      // game-root column gap). Shrinking the table here also frees space to work
-      // the cue when the ball sits against the top rail.
-      const BANNER_H = 34 + 14;
-      const availH = vh - BANNER_H;
-      let scale = Math.min(availW / unit.W, availH / unit.H);
+      const availW = vw - COL_W * 2;
+      // Even vertical gap above AND below the table, measured to the TABLE's edge
+      // (not the gutter's): take 80% of the old 48px top gap and mirror it below.
+      // Fit + reserve the table-image height only (unit.H minus the gutter); the
+      // ball-return gutter then overflows the spacer downward into the bottom gap.
+      const V_GAP = Math.round(48 * 0.8); // 38
+      const availH = vh - V_GAP * 2;
+      let scale = Math.min(availW / unit.W, availH / (unit.H - unit.gutter));
       scale = Math.max(40, Math.min(scale, 430));
       layoutBase = layoutFor(scale, false); // the felt box (W/H/ox/oy)
-      // The table-wrap spacer reserves the felt's slot in the flex row so the side
-      // widgets sit beside it, exactly as before.
+      // The spacer reserves the TABLE image's footprint (no gutter), so centring
+      // it centres the table itself; the gutter is drawn below it in the gap.
+      const tableImgH = layoutBase.H - layoutBase.gutter;
       setTableW(layoutBase.W);
-      setTableH(layoutBase.H);
-      setCanvasH(layoutBase.H);
+      setTableH(tableImgH);
+      setCanvasH(tableImgH);
       // The canvas itself fills the whole game area (vw × vh, the swapped viewport
       // under rot90) so the cue can be drawn wherever it overhangs the felt. The
       // world origin is recentred onto the spacer each frame in draw().
@@ -1515,34 +1555,6 @@ const Game: Component = () => {
         <div class="turn-recap">{announce()}</div>
       </Show>
 
-      {/* Comm dock, bottom-left below the menu: toggles draw mode + emoji tray. */}
-      <Show when={!isSpectator()}>
-        <div class="comm-dock">
-          {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render once
-              and stay cached — remounting made them pop in / reflow each open. */}
-          <div class="emoji-tray" classList={{ open: comm() }}>
-            {EMOJIS.map((ch) => (
-              <div
-                class="tray-emoji"
-                onPointerDown={(e) => onTrayDown(ch, e)}
-                onPointerMove={onTrayMove}
-                onPointerUp={onTrayUp}
-                onPointerCancel={onTrayUp}
-              >
-                {ch}
-              </div>
-            ))}
-          </div>
-          <button
-            class="comm"
-            classList={{ active: comm() }}
-            title="communicate"
-            onClick={() => setComm((v) => !v)}
-          >
-            💬
-          </button>
-        </div>
-      </Show>
       {/* Floating emoji preview that follows the finger during a tray drag.
           Portaled to <body> so it stays in true screen space — inside the
           rot90-transformed game root, a position:fixed child would be offset. */}
@@ -1550,14 +1562,50 @@ const Game: Component = () => {
         <div class="emoji-drag" ref={dragEl} />
       </Portal>
 
+      {/* 3-column layout: equal-width side columns (1fr each) flank the
+          content-sized table column, so the table is always screen-centred. The
+          full-screen canvas behind this draws the felt over the table-spacer's
+          slot and lets the cue overhang anywhere. */}
       <div class="play-row">
-        <button
-          class="hamburger"
-          title="menu"
-          onClick={() => setShowMenu(true)}
-        >
-          ☰
-        </button>
+        {/* Left column: back menu (top) + emoji/comm dock (bottom). */}
+        <div class="left-col">
+          <button
+            class="hamburger"
+            title="menu"
+            onPointerDown={cueDragTakeover}
+            onClick={() => setShowMenu(true)}
+          >
+            ☰
+          </button>
+          <Show when={!isSpectator()}>
+            <div class="comm-dock">
+              {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render
+                  once and stay cached — remounting made them pop in each open. */}
+              <div class="emoji-tray" classList={{ open: comm() }}>
+                {EMOJIS.map((ch) => (
+                  <div
+                    class="tray-emoji"
+                    onPointerDown={(e) => onTrayDown(ch, e)}
+                    onPointerMove={onTrayMove}
+                    onPointerUp={onTrayUp}
+                    onPointerCancel={onTrayUp}
+                  >
+                    {ch}
+                  </div>
+                ))}
+              </div>
+              <button
+                class="comm"
+                classList={{ active: comm() }}
+                title="communicate"
+                onPointerDown={cueDragTakeover}
+                onClick={() => setComm((v) => !v)}
+              >
+                💬
+              </button>
+            </div>
+          </Show>
+        </div>
 
         {/* Empty spacer reserving the felt's footprint so the side widgets lay
             out beside it; the canvas draws the felt over this slot. */}
@@ -1575,6 +1623,7 @@ const Game: Component = () => {
               class="shoot-btn"
               title="shoot"
               disabled={!canAct() || striking || power() <= 0}
+              onPointerDown={cueDragTakeover}
               onClick={shoot}
             >
               <span class="ball-label">
@@ -1611,6 +1660,11 @@ const Game: Component = () => {
           >
             {/* Hide power bar + cue while it isn't this player's turn. */}
             <Show when={myTurn()}>
+              {/* Drag target = just the widget column (the viewBox). The cue
+                  <image> below is 250 units wide and overflows the box (so it can
+                  reach the screen edge), so it's pointer-events:none — otherwise
+                  its transparent margins would grab taps a quarter-screen away. */}
+              <rect x={0} y={0} width={40} height={200} fill="transparent" pointer-events="all" />
               {/* Power gauge behind the cue: yellow (low, top) → red (high,
                   bottom). Each block shows once the cue is drawn past its
                   level, so the stack grows with power. */}
@@ -1636,6 +1690,7 @@ const Game: Component = () => {
                 y={cueImgY()}
                 width={CUE_S}
                 height={CUE_S}
+                pointer-events="none"
               />
             </Show>
           </svg>

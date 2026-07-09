@@ -26,10 +26,10 @@ const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
 // empty transparent background. This is the tight opaque box (measured), used to
 // size the canvas so the visible table fills it and the margin is cropped off.
 const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
-// Width (world metres) of the ball-return track reserved OFF the left short
-// rail. The layout grows the canvas left by this much (scaled) into a blank
-// gutter; the track + potted balls are drawn there in raw pixels, so the felt
-// mapping (toPx) and collision geometry are untouched.
+// Depth (world metres) of the ball-return track reserved BELOW the bottom rail.
+// The layout grows the canvas down by this much (scaled) into a blank gutter; the
+// track + potted balls are drawn there in raw pixels, so the felt mapping (toPx)
+// and collision geometry are untouched.
 const RACK_W = 0.09;
 // Constant speed (world metres/sec) a potted ball rolls down the return track.
 // Distance-based, not time-based, so every ball rolls at the same pace whatever
@@ -57,6 +57,8 @@ export type Layout = {
   W: number; // full canvas css width
   H: number; // full canvas css height
   imgLeft: number; // px offset from felt origin (ox) to the table image's opaque left edge (minx, ≤0)
+  imgBottom: number; // px offset from felt origin (oy) to the table image's opaque bottom edge (maxy)
+  gutter: number; // px depth of the ball-return gutter reserved below the table (rackPx)
 };
 
 /**
@@ -90,14 +92,15 @@ export function layoutFor(scale: number, rotated = false): Layout {
   const maxx = Math.max(...cs.map((c) => c.x));
   const miny = Math.min(...cs.map((c) => c.y));
   const maxy = Math.max(...cs.map((c) => c.y));
-  // Shift world (0,0) so the image starts at the canvas origin, then push
-  // everything right by the rack gutter so a blank strip opens on the far left.
+  // Shift world (0,0) so the image starts at the canvas origin. The rack gutter
+  // grows the canvas DOWNWARD (a blank strip below the table) for the bottom
+  // ball-return track — the felt mapping is untouched.
   const rackPx = RACK_W * scale;
-  const ox = (rotated ? -minx - Hpx : -minx) + rackPx;
+  const ox = rotated ? -minx - Hpx : -minx;
   const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
   const ph = (rotated ? TABLE.w : TABLE.h) * scale;
-  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx + rackPx, H: maxy - miny, imgLeft: minx };
+  return { scale, ox, oy, rail: 0, rotated, pw, ph, W: maxx - minx, H: maxy - miny + rackPx, imgLeft: minx, imgBottom: maxy, gutter: rackPx };
 }
 
 // World -> pixel. Landscape is a straight scale; portrait applies a proper 90°
@@ -591,13 +594,13 @@ function mul3(a: Mat3, b: Mat3): Mat3 {
   return m as unknown as Mat3;
 }
 
-// The ball-return track down the LEFT short end: a recessed channel in the
-// gutter layoutFor opened on the far left. Every ball potted so far (the cue is
+// The ball-return track along the BOTTOM rail: a recessed channel in the gutter
+// layoutFor opened below the table. Every ball potted so far (the cue is
 // re-spotted, so it never enters) collects here in POT ORDER — each drops into a
 // pocket (the Sink animation), vanishes "under the table", then emerges at the
-// top of the track and rolls down to stack against the ones already resting at
-// the bottom end. Drawn in raw canvas pixels, not world coords, so it lives
-// entirely left of the felt and touches no physics.
+// left end of the track and rolls left→right to stack against the ones already
+// resting at the right end. Drawn in raw canvas pixels, not world coords, so it
+// lives entirely below the felt and touches no physics.
 function drawRack(
   ctx: CanvasRenderingContext2D,
   l: Layout,
@@ -605,19 +608,19 @@ function drawRack(
   now: number,
 ) {
   const rpx = R * l.scale;
-  const half = rpx * 1.35; // channel half-width (a touch wider than a ball)
-  // The table image's opaque left edge, in canvas px. The felt origin (ox) moves
-  // with the layout's tableWrap offset, so anchor here rather than at canvas x=0.
-  const tableLeft = l.ox + l.imgLeft;
-  const cx = tableLeft - half; // right edge of the channel touches the table's left side
-  const top = l.oy;
-  const bottom = l.oy + l.ph; // felt vertical span == left rail length
+  const half = rpx * 1.35; // channel half-height (a touch taller than a ball)
+  // The table image's opaque bottom edge, in canvas px. The felt origin (oy)
+  // moves with the layout's tableWrap offset, so anchor here rather than canvas 0.
+  const tableBottom = l.oy + l.imgBottom;
+  const cy = tableBottom + half; // top edge of the channel touches the table's bottom
+  const left = l.ox;
+  const right = l.ox + l.pw; // felt horizontal span == bottom rail length
 
   // Channel bed: a dark recessed groove with a soft inner edge.
   ctx.save();
   ctx.fillStyle = "#12141b";
   ctx.beginPath();
-  ctx.roundRect(cx - half, top, half * 2, bottom - top, rpx * 0.6);
+  ctx.roundRect(left, cy - half, right - left, half * 2, rpx * 0.6);
   ctx.fill();
   ctx.strokeStyle = "rgba(0,0,0,0.5)";
   ctx.lineWidth = Math.max(1, rpx * 0.12);
@@ -625,34 +628,34 @@ function drawRack(
   ctx.strokeStyle = "rgba(255,255,255,0.05)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.roundRect(cx - half + 1, top + 1, half * 2 - 2, bottom - top - 2, rpx * 0.6);
+  ctx.roundRect(left + 1, cy - half + 1, right - left - 2, half * 2 - 2, rpx * 0.6);
   ctx.stroke();
   ctx.restore();
 
   const step = rpx * 2.05; // touching, with a hair of daylight
-  const startY = bottom - rpx - rpx * 0.3; // first ball rests at the bottom end
-  const cornerY = top + rpx * 1.05; // where the horizontal lead-in turns downward
-  const leadIn = half + rpx * 1.3; // sideways run from under the table to the corner
+  const startX = right - rpx - rpx * 0.3; // first ball rests at the right end
+  const cornerX = left + rpx * 1.05; // where the vertical lead-in turns rightward
+  const leadIn = half + rpx * 1.3; // downward run from under the table to the corner
   const speed = (ROLL_MPS * l.scale) / 1000; // px per ms
-  // Path distance travelled: 0..leadIn is the sideways run into the corner (the
-  // start of it is off-channel, so the clip below keeps it hidden "under the
-  // table"); beyond that it's straight down the channel to the slot.
+  // Path distance travelled: 0..leadIn is the downward run into the corner (the
+  // start of it is off-channel above, so the clip below keeps it hidden "under
+  // the table"); beyond that it's straight along the channel to the slot.
   const posAt = (s: number) =>
     s <= leadIn
-      ? { x: cx + (leadIn - s), y: cornerY, down: 0 }
-      : { x: cx, y: cornerY + (s - leadIn), down: s - leadIn };
+      ? { x: cornerX, y: cy - (leadIn - s), across: 0 }
+      : { x: cornerX + (s - leadIn), y: cy, across: s - leadIn };
 
   // Clip to the channel so a ball is invisible until it rounds the corner into
   // view — no more sitting at the mouth while it waits.
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(cx - half, top, half * 2, bottom - top, rpx * 0.6);
+  ctx.roundRect(left, cy - half, right - left, half * 2, rpx * 0.6);
   ctx.clip();
-  let prevS = Infinity; // path distance of the ball ahead (further down the track)
+  let prevS = Infinity; // path distance of the ball ahead (further along the track)
   for (let i = 0; i < rack.length; i++) {
-    const restY = startY - i * step;
-    if (restY - rpx < top) break; // full track — stop rather than overflow the felt
-    const pathLen = leadIn + (restY - cornerY); // total distance to this slot
+    const restX = startX - i * step;
+    if (restX - rpx < left) break; // full track — stop rather than overflow the felt
+    const pathLen = leadIn + (restX - cornerX); // total distance to this slot
     // Constant-speed travel, clamped to the slot AND to one ball-gap behind the
     // ball ahead (in path distance) — a trailing ball can never overlap or
     // overtake its leader, even around the corner.
@@ -661,8 +664,8 @@ function drawRack(
     prevS = s;
     if (s < 0) continue; // still under the table (or queued behind) — hidden
     const p = posAt(s);
-    // Roll without slipping: sideways about y until the corner, then down about x.
-    const o = mul3(rollX(-p.down / rpx), rollY(-Math.min(s, leadIn) / rpx));
+    // Roll without slipping: down about x until the corner, then sideways about y.
+    const o = mul3(rollY(p.across / rpx), rollX(-Math.min(s, leadIn) / rpx));
     drawBall(ctx, { x: p.x, y: p.y }, rack[i].id, rpx, 1, o, false, true);
   }
   ctx.restore();
@@ -956,7 +959,7 @@ function drawBalls(
 /** A ball dropping into a pocket. `v` = its world velocity at the pot (m/s),
  *  `ms` = elapsed since. It keeps that momentum until it hits the pocket back,
  *  then plunges. */
-export type Sink = { id: number; from: Vec; pocket: Vec; v: Vec; ms: number };
+export type Sink = { id: number; from: Vec; pocket: Vec; v: Vec; ms: number; o0: Mat3 };
 
 // Rodrigues rotation about an in-plane (world x,y) axis — rolls the ball's
 // markings as it travels. The roll axis is the travel direction turned 90° in
@@ -1172,7 +1175,10 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   const r = rpx * (1 - sinkP);
   const scr = toPx(l, { x: px, y: py });
   const c = { x: scr.x, y: scr.y + rpx * SINK_DROP * sinkP * sinkP };
-  const o = rollAlong(vx, vy, dist / R);
+  // Compose the rattle's rolling ON TOP of the ball's field orientation at the
+  // moment it dropped (o0), so the markings carry over continuously instead of
+  // snapping to a fresh identity as the sink animation takes over.
+  const o = mul3(rollAlong(vx, vy, dist / R), sk.o0);
   drawBall(ctx, c, sk.id, r, 1, o, l.rotated, false);
   // A dark disc grows over it as it sinks below the rim into the pocket.
   ctx.save();

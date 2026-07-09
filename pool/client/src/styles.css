@@ -60,7 +60,11 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 0;
+  /* Above the side-column widgets (z:3) and the player banner (z:8) so an
+     overhanging cue draws ON TOP of the controls and banners; still below the
+     modals (z:10+). The canvas is cleared each frame (transparent except the
+     table + cue) and is pointer-events:none, so it never hides or blocks them. */
+  z-index: 9;
   pointer-events: none;
   box-shadow: none; /* override the global canvas drop-shadow */
   border-radius: 0;
@@ -90,15 +94,13 @@ body {
 
 /* Cue column spans the full play-row height (top of screen, below the banner, to
    the bottom) so the shoot ball pins to the top-right and the power cue can pull
-   all the way down to the screen edge without being clipped. */
+   all the way down to the screen edge without being clipped. Pass-through like
+   the left column so an overhanging cue reaches the table hit-layer beneath. */
 .cue-col {
   align-self: stretch;
+  pointer-events: none;
 }
 
-/* Hamburger pins to the top-left corner (not vertically centred in the row). */
-.hamburger {
-  align-self: flex-start;
-}
 
 canvas {
   border-radius: 8px;
@@ -114,7 +116,7 @@ canvas {
    swipe. No box: it reads as the cue ball zoomed in so you can place the tip. */
 .spin-hud {
   position: absolute;
-  z-index: 8;
+  z-index: 30; /* above everything — incl. the raised table canvas (z:9) */
   transform: translate(-50%, -50%);
   pointer-events: none;
   line-height: 0;
@@ -155,23 +157,62 @@ canvas {
   max-width: 940px;
 }
 
-/* Table with the cue power widget at its left short end. Fills the full height so
-   the side columns can run top-to-bottom; items align to the top (the felt is
-   pushed down for the banner via its own margin, the cue col stretches). */
+/* Three columns: equal-width side columns (1fr each) flank the content-sized
+   table column, so the felt is always perfectly screen-centred. Fills the full
+   height so the side columns run top-to-bottom. */
 .play-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   width: 100%;
   flex: 1;
   min-height: 0;
-  align-items: flex-start;
-  justify-content: space-evenly; /* equal gaps between AND outside the items */
-  gap: 0;
+  align-items: stretch;
 }
 
-/* Drop the felt below the banner overlay. Matches resize()'s BANNER_H reserve so
-   the table shrinks by the same amount it's shifted. */
+/* Left column: back menu (top) + emoji/comm dock (bottom), centred in the column
+   so it mirrors the right (cue) column. */
+.left-col {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  /* Pass-through: the cue can overhang the empty column space and be grabbed by
+     the table hit-layer beneath. The actual controls re-enable hit-testing (see
+     the rule below) — pointer-events is inherited, so children would otherwise
+     inherit `none` too. */
+  pointer-events: none;
+}
+
+/* Re-enable hit-testing on the real controls inside the pass-through columns
+   (they'd inherit the columns' pointer-events:none otherwise). */
+.hamburger,
+.comm,
+.shoot-btn,
+.cue-power {
+  pointer-events: auto;
+}
+
+/* touch-action:none so a drag off a button isn't stolen by the browser's
+   scroll/pan gesture (which fires pointercancel and kills the aim drag). */
+.hamburger,
+.comm,
+.shoot-btn {
+  touch-action: none;
+}
+
+/* A disabled shoot button (no power loaded) passes taps/drags through to the
+   table beneath so you can still aim over it. */
+.shoot-btn:disabled {
+  pointer-events: none;
+}
+
+/* Centre the felt vertically so the gap above and below is equal (resize()'s
+   V_GAP reserve sets how big — ~38px each). The banner overlay sits in the top
+   gap, centred over this column. */
 .table-spacer {
-  margin-top: 48px;
+  align-self: center;
 }
 
 /* Widget column beside the table: cue angle, spin ball, cue power.
@@ -353,9 +394,8 @@ canvas {
   height: 150px;
 }
 
-/* Hamburger menu button, left of the table — dropped below the top edge. */
+/* Hamburger menu button, top of the left column — dropped below the top edge. */
 .hamburger {
-  align-self: flex-start;
   margin-top: 20px;
   flex: none;
   width: 30px;
@@ -368,17 +408,13 @@ canvas {
   justify-content: center;
 }
 
-/* Comm dock — pinned bottom-left of the game root (rides the rot90 transform so
-   it stays in the table's frame). The button sits at the bottom; the emoji tray
-   stacks above it when open. */
+/* Comm dock — bottom of the left column. The button sits at the bottom; the
+   emoji tray stacks above it when open. */
 .comm-dock {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 15;
+  margin-bottom: 12px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -888,9 +924,8 @@ a {
    and frees room to work the cue when the ball hugs the top rail. */
 .player-banner {
   position: absolute;
-  /* Vertically centred in the 48px margin above the felt (table-spacer's
-     margin-top): centre sits at half of it. */
-  top: 24px;
+  /* Centred in the top gap above the felt (~V_GAP tall): centre at half of it. */
+  top: 19px;
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 8;
