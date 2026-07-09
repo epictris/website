@@ -1159,3 +1159,26 @@ a {
   font-weight: 700;
   opacity: 0.55;
 }
+
+/* Sandbox notice (no opponent yet) — reuses the banner slot, dimmed. */
+.player-banner.waiting {
+  font-weight: 700;
+  opacity: 0.6;
+}
+
+/* Game stalled on a dropped opponent — a persistent notice under the banner. */
+.stall-note {
+  position: absolute;
+  top: 5.5ch;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: 90%;
+  padding: 0.8ch 2ch;
+  text-align: center;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  opacity: 0.85;
+  pointer-events: none;
+}

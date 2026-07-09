@@ -28,8 +28,10 @@ export type SyncSnapshot = {
 };
 
 export type Msg =
-  | { t: "hello"; slot: number; id: string; peers: { slot: number; id: string }[] }
-  | { t: "peer-join"; slot: number; id: string; from?: number }
+  // `started` tells a joiner whether a game is already under way (so a spectator
+  // or a reconnecting player doesn't fall back into the sandbox state).
+  | { t: "hello"; slot: number; id: string; started: boolean; peers: { slot: number; id: string }[] }
+  | { t: "peer-join"; slot: number; id: string; started: boolean; from?: number }
   | { t: "peer-leave"; slot: number; id: string; from?: number }
   // A player's chosen identity (name / cue colour / emoji). Broadcast on join and
   // re-sent whenever a new peer arrives, so every table can label the banner and
@@ -74,11 +76,11 @@ export type Msg =
       from?: number;
     };
 
-export function wsUrl(room: string): string {
+export function wsUrl(room: string, cid: string): string {
   const base = import.meta.env.PROD
     ? `${location.protocol.replace("http", "ws")}//${location.host}`
     : "ws://localhost:8080";
-  return `${base}/ws?id=${encodeURIComponent(room)}`;
+  return `${base}/ws?id=${encodeURIComponent(room)}&cid=${encodeURIComponent(cid)}`;
 }
 
 /** HTTP origin of the game server (same host in prod, the relay in dev). */

@@ -63,18 +63,30 @@ open felt — each starts a different `mode` (`aim`/`place`/`spin`/`elev`).
 **New Game** button that mints a random room code and navigates to `/:room`, a
 **Load Replay** file button beside it, plus a live **lobby** below. The lobby
 polls `GET /rooms` every 3s (`fetchRooms` in `net.ts`) — the server returns every
-room holding exactly one socket (a single waiting player), newest first — and
-renders a **Join** button per game that navigates straight into it. No
-link-sharing needed; opening a shared `origin/<code>` link still works as a
-direct entry. Landing on `/:room` you're offered **fullscreen** (`showFsPrompt`)
-and land straight on a **solo practice table** (`solo()` is `peerCount <= 1`, so
-you can shoot freely, turns ignored). A `.solo-hint` banner shows the copy-link
-while waiting.
+**not-yet-started** room holding exactly one socket (a single waiting player),
+newest first — and renders a **Join** button per game. No link-sharing needed;
+opening a shared `origin/<code>` link still works as a direct entry.
 
-When a **second** peer joins, the host (**slot 0**) resets to a fresh rack via
-`doRematch(0, false)` on the `peer-join` 1→2 transition (guarded so later
-spectators don't reset) and syncs it; the joiner adopts it via `hello` →
-`need-sync`. The first connector is slot 0 and always **breaks** (`breaker = 0`).
+**Room lifecycle** (server-authoritative, in `server.ts`). Player slots 0/1 are
+*owned* by a stable per-browser **`cid`** (`loadClientId`, sent on the WS URL).
+
+- **Sandbox** — a lone player (slot 0, `started === false`). No rules: turns,
+  groups, fouls, and winner are all skipped (`resolveShot` early-returns; a potted
+  cue just respots). `sandbox()` is `!started() && !replaying()`. Banner reads
+  *"waiting for opponent…"*; the menu offers **leave**, not resign.
+- **Started** — the moment a **second distinct cid** claims slot 1 the server
+  flips `room.started` and tells clients via `hello`/`peer-join` `started`. The
+  host (**slot 0**) racks a fresh triangle (`doRematch(0, false)` + `announceGameInit`)
+  on the sandbox→started transition; the joiner adopts via `hello` → `need-sync`.
+  Once started it never reverts — a disconnect **stalls** the game, it doesn't
+  re-open the sandbox.
+- **Reconnect vs spectator** — after start, both slots stay reserved for their
+  owner cids. A socket whose cid owns a vacant slot **reclaims** it; anyone else
+  joins as a **spectator** (slot ≥ 2, `isSpectator()`, cannot act).
+- **Stall** — turns are enforced (`myTurn()` needs `rules().turn === myPlayer()`),
+  so a connected player can never shoot on the absent player's turn. If it's the
+  dropped player's turn nobody may act (a `.stall-note` shows) until they return;
+  if it's the present player's turn they play on until it flips.
 
 **In-game menu** — the table is always shown; the **hamburger button**
 (`.hamburger`, left of the table's top-left corner) opens `showMenu`, a modal

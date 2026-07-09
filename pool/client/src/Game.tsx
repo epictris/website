@@ -33,6 +33,7 @@ import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
 import { wsUrl, type Msg } from "./net";
 import {
   cueBand,
+  loadClientId,
   loadProfile,
   loadQuickEmojis,
   saveQuickEmojis,
@@ -214,10 +215,19 @@ const Game: Component = () => {
   const [rules, setRules] = createSignal<RulesState>(initRules(0));
   const [mySlot, setMySlot] = createSignal(-1);
   const [peerCount, setPeerCount] = createSignal(1);
+  // Room lifecycle. `started` is false in the sandbox (a lone player knocking
+  // balls around, no rules/win) and flips true the moment a real opponent joins;
+  // it stays true for the rest of the room's life (a disconnect stalls the game
+  // rather than reverting to sandbox). Server-driven via `hello`/`peer-join`.
+  const [started, setStarted] = createSignal(false);
+  // Slots (participants + spectators) with a live socket right now — used to tell
+  // whether the opponent is currently connected (their absence stalls their turn).
+  const [connSlots, setConnSlots] = createSignal<number[]>([]);
   // My chosen identity (loaded once from localStorage), plus every connected
   // player's profile keyed by slot — populated from `profile` messages and my own
   // slot on `hello`. Drives the banner above the table and each cue's colour.
   const myProfile = loadProfile();
+  const clientId = loadClientId(); // stable identity → reclaim my slot on reconnect
   const [profiles, setProfiles] = createSignal<Record<number, PlayerProfile>>({});
   const [power, setPower] = createSignal(0); // starts at zero; kept between shots
   const [follow, setFollow] = createSignal(0);
@@ -348,13 +358,27 @@ const Game: Component = () => {
   const [track, bump] = createSignal(0, { equals: false }); // force UI recompute
 
   const myPlayer = () => (mySlot() < 0 ? 0 : Math.min(mySlot(), 1));
-  const solo = () => peerCount() <= 1;
   const isSpectator = () => mySlot() > 1;
+  // Sandbox: the pre-game free-play state (one player, no opponent yet). Turns and
+  // rules are ignored, so the lone player can shoot at will. A replay is a full
+  // game, not a sandbox. Once `started`, this is false forever — even if the
+  // opponent drops — so turns stay enforced and no one plays the absent player.
+  const sandbox = () => !started() && !replaying();
+  const oppSlot = () => (1 - myPlayer()) as 0 | 1;
+  const oppConnected = () => connSlots().includes(oppSlot());
   const myTurn = () =>
     rules().winner === null &&
     !isSpectator() &&
-    (solo() || rules().turn === myPlayer());
+    (sandbox() || rules().turn === myPlayer());
   const canAct = () => !animating() && !replaying() && myTurn();
+  // The game is stalled on the opponent: it's their turn but they've dropped, so
+  // nobody may act until they reconnect. Surfaced as a banner.
+  const stalledOnOpp = () =>
+    started() &&
+    !isSpectator() &&
+    rules().winner === null &&
+    rules().turn !== myPlayer() &&
+    !oppConnected();
   // Freehand annotation is active whenever comm mode is on (and the player is a
   // live, non-spectator participant). Toggled by the comm button, independent of
   // whose turn it is — so it takes over the canvas from aiming while enabled.
@@ -457,7 +481,7 @@ const Game: Component = () => {
   };
 
   const connect = () => {
-    ws = new WebSocket(wsUrl(room));
+    ws = new WebSocket(wsUrl(room, clientId));
     ws.onmessage = (ev) => {
       let m: Msg;
       try {
@@ -479,6 +503,10 @@ const Game: Component = () => {
       case "hello": {
         setMySlot(m.slot);
         setPeerCount(m.peers.length + 1);
+        setConnSlots([...m.peers.map((p) => p.slot), m.slot]);
+        // Adopt the room's lifecycle: a spectator or a reconnecting player joins a
+        // game already in progress (started), not the sandbox.
+        setStarted(m.started);
         // Register my own profile (participants only) and announce it to the room.
         if (m.slot <= 1)
           setProfiles((pr) => ({ ...pr, [m.slot]: myProfile }));
@@ -493,18 +521,22 @@ const Game: Component = () => {
       }
       case "peer-join": {
         setPeerCount((n) => n + 1);
+        setConnSlots((s) => (s.includes(m.slot) ? s : [...s, m.slot]));
         // Re-announce my profile so the newcomer learns it (the snapshot below
         // carries no identity).
         sendProfile();
-        // Opponent just arrived: the host (slot 0) has been knocking balls
-        // around solo, so reset to a fresh rack — slot 0 breaks — before syncing.
-        // Only on the 1→2 transition; later spectators must not reset the game.
-        if (peerCount() === 2 && mySlot() === 0 && !gameStarted) {
+        // The sandbox→started transition: the first real opponent just arrived, so
+        // the host (slot 0) racks a fresh triangle and seeds the server's game log.
+        // Fires exactly once — a later spectator or a reconnecting player joins an
+        // already-started room (started already true), so this is skipped.
+        const wasSandbox = !started();
+        setStarted(m.started);
+        if (m.started && wasSandbox && mySlot() === 0) {
           doRematch(0, false);
-          announceGameInit(); // start the server's retained log for this game
+          announceGameInit();
         }
-        // Any active player answers a new joiner with the current (fresh) state;
-        // the joiner keeps the freshest snapshot (see the shotCount guard).
+        // Any active player answers a new joiner with the current state; the joiner
+        // keeps the freshest snapshot (see the shotCount guard).
         if (mySlot() === 0 || mySlot() === 1) applySnapshotToPeer(m.slot);
         // Snapshot carries no aim, so a joiner sees no cue until someone moves.
         // The active shooter pushes its current aim so the cue shows immediately.
@@ -513,12 +545,16 @@ const Game: Component = () => {
       }
       case "peer-leave":
         setPeerCount((n) => Math.max(1, n - 1));
+        setConnSlots((s) => s.filter((x) => x !== m.slot));
         setRematchVotes((v) => v.filter((s) => s !== m.slot)); // drop their rematch vote
-        setProfiles((pr) => {
-          const n = { ...pr };
-          delete n[m.slot];
-          return n;
-        });
+        // Keep a participant's profile so the banner still names them while they're
+        // gone (their slot is reserved for reconnect); only forget spectators.
+        if (m.slot > 1)
+          setProfiles((pr) => {
+            const n = { ...pr };
+            delete n[m.slot];
+            return n;
+          });
         // If they left mid-draw, drop their finger and let their dangling stroke
         // fade on the normal timeline instead of lingering forever (Infinity).
         delete annot.pointers[m.slot];
@@ -703,6 +739,21 @@ const Game: Component = () => {
     // yet resolved (opponent's rAF was paused while backgrounded) must NOT read as
     // caught up, or the stale-turn client rejects the very sync that flips it.
     shotCount++;
+    // Sandbox free-play (no opponent yet): no groups, fouls, turns, or winner.
+    // Just respot a potted cue ball so the lone player can keep shooting.
+    if (sandbox()) {
+      const cue = world.balls[0];
+      if (cue.potted) {
+        if (!pottedSeen.has(0)) addSink(cue, nowMs);
+        pottedSeen.delete(0);
+        cue.potted = false;
+        cue.p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
+      }
+      pendingPlace = undefined;
+      recomputePrediction();
+      bump(0);
+      return;
+    }
     const before = rules();
     const outcome = evaluateShot(before, worldBefore, events);
     if (outcome.reRack) {
@@ -1457,6 +1508,7 @@ const Game: Component = () => {
     shotCount = 0;
     totalShots = 0;
     gameStarted = true;
+    setStarted(true); // a rack exists — never fall back to the sandbox
     breaker = nextBreaker;
     setRules(initRules(nextBreaker));
     setReplaying(false);
@@ -1489,11 +1541,11 @@ const Game: Component = () => {
     if (v.includes(0) && v.includes(1) && mySlot() === 0) rematch();
   };
 
-  // The rematch button: solo resets immediately; otherwise cast my vote and wait
-  // for the opponent (button shows the tally until both are in).
+  // The rematch button: both players must agree, so cast my vote and wait for the
+  // opponent (button shows the tally until both are in). A game-over only occurs
+  // in a started 2-player room, so there's no lone-player fast path.
   const voteRematch = () => {
     if (isSpectator()) return;
-    if (solo()) return rematch();
     const me = mySlot();
     if (me < 0 || rematchVotes().includes(me)) return;
     addRematchVote(me);
@@ -1501,7 +1553,7 @@ const Game: Component = () => {
   };
   const rematchLabel = () => {
     const n = rematchVotes().length;
-    return solo() || n === 0 ? "rematch" : `rematch (${n}/2)`;
+    return n === 0 ? "rematch" : `rematch (${n}/2)`;
   };
 
   // --- Replay -------------------------------------------------------------
@@ -1612,7 +1664,7 @@ const Game: Component = () => {
     const onVisible = () => {
       if (document.hidden) return;
       settleNow();
-      if (!solo()) send({ t: "need-sync" } as Msg);
+      if (started()) send({ t: "need-sync" } as Msg);
     };
     document.addEventListener("visibilitychange", onVisible);
     // A replay picked on the Landing menu is stashed and consumed here.
@@ -1695,25 +1747,42 @@ const Game: Component = () => {
         </div>
       </Show>
 
-      {/* Player banner above the table: emoji + name per connected player, in
-          their cue colour. Centred when solo, split by "vs" when two are in. */}
-      <Show when={roster().length > 0}>
-        <div class="player-banner" style={{ top: `${bannerTop()}px` }}>
-          <For each={roster()}>
-            {(pl, i) => (
-              <>
-                <Show when={i() > 0}>
-                  <span class="pb-vs">vs</span>
-                </Show>
-                <div class="pb-chip" style={{ "border-color": pl.color }}>
-                  <span class="pb-emoji">{pl.emoji}</span>
-                  <span class="pb-name" style={{ color: "var(--fg)" }}>
-                    {pl.name}
-                  </span>
-                </div>
-              </>
-            )}
-          </For>
+      {/* Top banner. Sandbox (no opponent yet) → a "waiting for opponent…" notice;
+          otherwise the roster: emoji + name per player, split by "vs". */}
+      <Show
+        when={!sandbox()}
+        fallback={
+          <div class="player-banner waiting" style={{ top: `${bannerTop()}px` }}>
+            waiting for opponent…
+          </div>
+        }
+      >
+        <Show when={roster().length > 0}>
+          <div class="player-banner" style={{ top: `${bannerTop()}px` }}>
+            <For each={roster()}>
+              {(pl, i) => (
+                <>
+                  <Show when={i() > 0}>
+                    <span class="pb-vs">vs</span>
+                  </Show>
+                  <div class="pb-chip" style={{ "border-color": pl.color }}>
+                    <span class="pb-emoji">{pl.emoji}</span>
+                    <span class="pb-name" style={{ color: "var(--fg)" }}>
+                      {pl.name}
+                    </span>
+                  </div>
+                </>
+              )}
+            </For>
+          </div>
+        </Show>
+      </Show>
+
+      {/* Game stalled: the shooter dropped mid-game, so no one may act until they
+          return. (When it's my turn instead, I play on until it flips to them.) */}
+      <Show when={stalledOnOpp()}>
+        <div class="stall-note">
+          waiting for {profiles()[oppSlot()]?.name || "opponent"} to reconnect…
         </div>
       </Show>
 
@@ -1925,20 +1994,18 @@ const Game: Component = () => {
               {fullscreen() ? "exit fullscreen" : "go fullscreen"}
             </button>
           </Show>
+          {/* Resign only mid-game; in the sandbox, as a spectator, or once it's
+              over there's nothing to forfeit — just leave. */}
           <Show
-            when={rules().winner !== null}
+            when={started() && rules().winner === null && !isSpectator()}
             fallback={
-              <button
-                class="pm-done resign"
-                onClick={resign}
-                disabled={isSpectator()}
-              >
-                resign
+              <button class="pm-done" onClick={() => navigate("/")}>
+                leave
               </button>
             }
           >
-            <button class="pm-done" onClick={() => navigate("/")}>
-              leave
+            <button class="pm-done resign" onClick={resign}>
+              resign
             </button>
           </Show>
         </div>
@@ -1968,9 +2035,13 @@ const Game: Component = () => {
           <button
             class="pm-done"
             onClick={voteRematch}
-            disabled={isSpectator() || (!solo() && rematchVotes().includes(mySlot()))}
+            disabled={
+              isSpectator() || !oppConnected() || rematchVotes().includes(mySlot())
+            }
           >
-            {rematchLabel()}
+            {!isSpectator() && !oppConnected()
+              ? `${profiles()[oppSlot()]?.name || "opponent"} left`
+              : rematchLabel()}
           </button>
           <button
             class="pm-done"

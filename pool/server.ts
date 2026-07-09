@@ -4,8 +4,12 @@
 // Both clients run the same deterministic engine, so we only need to
 // forward shot parameters and live-aim presence between peers in a room.
 //
-// Slot assignment: the first socket in a room is player 0 ("host"), the
-// second is player 1. Any further sockets are spectators (slot >= 2).
+// Slot assignment: player slots 0 and 1 are *owned* by a client id (`cid`, a
+// stable per-browser identity). The first player owns slot 0, the second slot 1;
+// claiming slot 1 flips the room to `started`. Once started the two slots stay
+// reserved for their owners: a socket whose cid owns a slot (that isn't currently
+// live) reconnects into it; anyone else joins as a spectator (slot >= 2). A
+// player who drops keeps their slot reserved until they return.
 
 import { file } from "bun";
 import { join, normalize } from "node:path";
@@ -16,6 +20,7 @@ const DIST = join(import.meta.dir, "client", "dist");
 type SocketData = {
   room: string;
   id: string;
+  cid: string; // stable client identity (survives reconnects), owns a player slot
   slot: number;
 };
 
@@ -30,12 +35,18 @@ type GameLog = {
 
 type Room = {
   sockets: Set<Bun.ServerWebSocket<SocketData>>;
-  /** Monotonic counter so a rejoining peer keeps taking the next free slot. */
+  /** Monotonic counter for spectator slot ids. */
   nextSlot: number;
   /** When the room was first opened — for sorting the joinable lobby list. */
   created: number;
   /** Retained shot log, re-sent to any (re)joining socket. */
   log: GameLog | null;
+  /** The two player slots' owner cids (null until claimed). Reserved across a
+   *  drop so the same browser reconnects into its slot. */
+  owners: [string | null, string | null];
+  /** True once both player slots are claimed — a real game is under way. Sandbox
+   *  (one waiting player) rooms are the only ones offered in the lobby. */
+  started: boolean;
 };
 
 const rooms = new Map<string, Room>();
@@ -43,17 +54,41 @@ const rooms = new Map<string, Room>();
 function getRoom(code: string): Room {
   let room = rooms.get(code);
   if (!room) {
-    room = { sockets: new Set(), nextSlot: 0, created: Date.now(), log: null };
+    room = {
+      sockets: new Set(),
+      nextSlot: 0,
+      created: Date.now(),
+      log: null,
+      owners: [null, null],
+      started: false,
+    };
     rooms.set(code, room);
   }
   return room;
 }
 
-/** Lowest free slot in [0,1], else next spectator index. */
-function assignSlot(room: Room): number {
-  const taken = new Set([...room.sockets].map((s) => s.data.slot));
-  for (let i = 0; i < 2; i++) if (!taken.has(i)) return i;
-  return Math.max(2, room.nextSlot++);
+/** Is a player slot currently held by a live socket? */
+function liveHolder(room: Room, slot: number): boolean {
+  for (const s of room.sockets) if (s.data.slot === slot) return true;
+  return false;
+}
+
+/** Assign a joining socket its slot: reclaim an owned-but-vacant player slot,
+ *  else take a free player slot (claiming ownership), else spectate. */
+function claimSlot(room: Room, cid: string): number {
+  // Reconnect: this browser owns a player slot that nobody is currently holding.
+  for (let i = 0; i < 2; i++)
+    if (room.owners[i] === cid && !liveHolder(room, i)) return i;
+  // Already own a (live) slot in another tab → don't grab a second one.
+  if (room.owners.includes(cid)) return Math.max(2, room.nextSlot++);
+  // Fresh player: take the first unclaimed, unheld player slot.
+  for (let i = 0; i < 2; i++)
+    if (room.owners[i] === null && !liveHolder(room, i)) {
+      room.owners[i] = cid;
+      return i;
+    }
+  // Both player slots are spoken for → spectator.
+  return 2 + room.nextSlot++;
 }
 
 function peers(room: Room): { slot: number; id: string }[] {
@@ -77,7 +112,9 @@ const server = Bun.serve<SocketData, undefined>({
     if (url.pathname === "/ws") {
       const code = url.searchParams.get("id") ?? "lobby";
       const id = crypto.randomUUID();
-      const ok = server.upgrade(req, { data: { room: code, id, slot: -1 } });
+      // Stable per-browser identity so a reconnecting player reclaims their slot.
+      const cid = url.searchParams.get("cid") || crypto.randomUUID();
+      const ok = server.upgrade(req, { data: { room: code, id, cid, slot: -1 } });
       if (ok) return undefined;
       return new Response("upgrade failed", { status: 400 });
     }
@@ -88,7 +125,7 @@ const server = Bun.serve<SocketData, undefined>({
     // Newest first. (CORS-open so the dev client on another port can poll it.)
     if (url.pathname === "/rooms") {
       const list = [...rooms.entries()]
-        .filter(([, r]) => r.sockets.size === 1)
+        .filter(([, r]) => !r.started && r.sockets.size === 1)
         .map(([code, r]) => ({ code, created: r.created }))
         .sort((a, b) => b.created - a.created);
       return Response.json(list, {
@@ -109,22 +146,26 @@ const server = Bun.serve<SocketData, undefined>({
   websocket: {
     open(ws) {
       const room = getRoom(ws.data.room);
-      ws.data.slot = assignSlot(room);
+      ws.data.slot = claimSlot(room, ws.data.cid);
       room.sockets.add(ws);
+      // Claiming the 2nd player slot starts the game (and closes the lobby entry).
+      if (room.owners[0] !== null && room.owners[1] !== null) room.started = true;
 
-      // Tell the newcomer who they are and who is already here.
+      // Tell the newcomer who they are, whether the game is in progress, and who
+      // is already here.
       ws.send(
         JSON.stringify({
           t: "hello",
           slot: ws.data.slot,
           id: ws.data.id,
+          started: room.started,
           peers: peers(room).filter((p) => p.id !== ws.data.id),
         }),
       );
       // Tell everyone else a peer joined (host will answer with a state sync).
       broadcast(
         room,
-        { t: "peer-join", slot: ws.data.slot, id: ws.data.id },
+        { t: "peer-join", slot: ws.data.slot, id: ws.data.id, started: room.started },
         ws,
       );
       // Hand the newcomer the retained game log so it can rebuild losslessly —

@@ -27,6 +27,23 @@ export const EMOJI_CHOICES = [
   "⚡", "🌟", "🍀", "💀", "🤠", "🧊",
 ];
 
+// A stable per-browser identity, minted once and kept in localStorage. The
+// server uses it to own player slots, so a dropped player who reconnects with the
+// same cid reclaims their slot instead of being demoted to a spectator.
+const CID_KEY = "pool.cid";
+export function loadClientId(): string {
+  try {
+    let cid = localStorage.getItem(CID_KEY);
+    if (!cid) {
+      cid = crypto.randomUUID();
+      localStorage.setItem(CID_KEY, cid);
+    }
+    return cid;
+  } catch {
+    return crypto.randomUUID(); // storage unavailable — a per-session id still works
+  }
+}
+
 const KEY = "pool.profile";
 
 export function loadProfile(): PlayerProfile {
