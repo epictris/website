@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useNavigate, useParams } from "@solidjs/router";
 import {
@@ -26,9 +26,10 @@ import {
   type Vec,
   type World,
 } from "./physics";
-import { drawScene, layoutFor, type Aim, type CueDraw, type Layout } from "./render";
+import { cueSpriteDataURL, drawScene, layoutFor, type Aim, type CueDraw, type Layout } from "./render";
 import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
 import { wsUrl, type Msg } from "./net";
+import { cueBand, loadProfile, type PlayerProfile } from "./profile";
 import {
   buildReplay,
   downloadReplay,
@@ -191,6 +192,11 @@ const Game: Component = () => {
   const [rules, setRules] = createSignal<RulesState>(initRules(0));
   const [mySlot, setMySlot] = createSignal(-1);
   const [peerCount, setPeerCount] = createSignal(1);
+  // My chosen identity (loaded once from localStorage), plus every connected
+  // player's profile keyed by slot — populated from `profile` messages and my own
+  // slot on `hello`. Drives the banner above the table and each cue's colour.
+  const myProfile = loadProfile();
+  const [profiles, setProfiles] = createSignal<Record<number, PlayerProfile>>({});
   const [power, setPower] = createSignal(0); // starts at zero; kept between shots
   const [follow, setFollow] = createSignal(0);
   const [side, setSide] = createSignal(0);
@@ -253,8 +259,22 @@ const Game: Component = () => {
   const canPoint = () =>
     comm() && !isSpectator() && rules().winner === null;
 
+  // The connected participants (slots 0/1 with a known profile), for the banner
+  // above the table. One player → shown centred; two → separated by "vs".
+  const roster = () =>
+    ([0, 1] as const).flatMap((slot) => {
+      const p = profiles()[slot];
+      return p
+        ? [{ emoji: p.emoji, name: p.name || `Player ${slot + 1}`, color: p.color, slot }]
+        : [];
+    });
+
   // --- Networking ---------------------------------------------------------
   const send = (m: Partial<Msg>) => ws?.readyState === 1 && ws.send(JSON.stringify(m));
+
+  // Announce my identity to the room (on join, and re-sent when a peer arrives so
+  // late joiners learn it). The server tags it with my slot on relay.
+  const sendProfile = () => send({ t: "profile", profile: myProfile } as Msg);
 
   const applySnapshotToPeer = (to: number) => {
     send({
@@ -357,6 +377,10 @@ const Game: Component = () => {
       case "hello": {
         setMySlot(m.slot);
         setPeerCount(m.peers.length + 1);
+        // Register my own profile (participants only) and announce it to the room.
+        if (m.slot <= 1)
+          setProfiles((pr) => ({ ...pr, [m.slot]: myProfile }));
+        sendProfile();
         // Whenever anyone else is already here, pull the authoritative state —
         // covers a late joiner AND a reconnect (dropped/suspended socket) where we
         // may have missed any number of shots. The shotCount guard discards it if
@@ -367,6 +391,9 @@ const Game: Component = () => {
       }
       case "peer-join": {
         setPeerCount((n) => n + 1);
+        // Re-announce my profile so the newcomer learns it (the snapshot below
+        // carries no identity).
+        sendProfile();
         // Opponent just arrived: the host (slot 0) has been knocking balls
         // around solo, so reset to a fresh rack — slot 0 breaks — before syncing.
         // Only on the 1→2 transition; later spectators must not reset the game.
@@ -384,8 +411,17 @@ const Game: Component = () => {
       }
       case "peer-leave":
         setPeerCount((n) => Math.max(1, n - 1));
+        setProfiles((pr) => {
+          const n = { ...pr };
+          delete n[m.slot];
+          return n;
+        });
         annot.pointer = undefined; // drop a dangling finger if they left mid-draw
         annot.cur = undefined;
+        break;
+      case "profile":
+        if (m.from !== undefined)
+          setProfiles((pr) => ({ ...pr, [m.from!]: m.profile }));
         break;
       case "need-sync":
         if ((mySlot() === 0 || mySlot() === 1) && m.from !== mySlot())
@@ -718,18 +754,18 @@ const Game: Component = () => {
     if ((striking || lingering) && !cb.potted) {
       cue = {
         at: strikeCuePos ?? cb.p, angle: aimAngle, power: strikePwr,
-        elevation: strikeElev, side: strikeSide, follow: strikeFollow, band: CUE_RED,
+        elevation: strikeElev, side: strikeSide, follow: strikeFollow, band: myBand(),
       };
     } else if (canAct() && !animating() && !cb.potted) {
       cue = {
         at: cb.p, angle: aimAngle, power: power(), elevation: elevation(),
-        side: side(), follow: follow(), band: CUE_RED,
+        side: side(), follow: follow(), band: myBand(),
       };
     } else if (!canAct() && !animating() && !cb.potted && opp.aim) {
       cue = {
         at: cb.p, angle: opp.aim.angle, power: opp.aim.power,
         elevation: opp.aim.elevation, side: opp.aim.side, follow: opp.aim.follow,
-        band: CUE_BLUE,
+        band: oppBand(),
       };
     }
     drawScene(ctx, {
@@ -775,11 +811,19 @@ const Game: Component = () => {
     });
   };
 
-  // Cue colours: a wood shaft, a coloured wrap (red = you, blue = opponent), then
-  // a black butt. The stick is drawn on the main canvas by render.ts (drawCue).
-  type CueBand = { dark: string; light: string };
-  const CUE_RED: CueBand = { dark: "#7a0f22", light: "#a1142c" };
-  const CUE_BLUE: CueBand = { dark: "#1d3f74", light: "#356ac0" };
+  // Cue colours: a wood shaft, a coloured wrap, then a black butt. The wrap hue is
+  // each player's chosen colour (from their profile); the stick is drawn on the
+  // main canvas by render.ts (drawCue). Fall back to a neutral blue for a peer
+  // whose profile hasn't arrived yet.
+  const CUE_BLUE = { dark: "#1d3f74", light: "#356ac0" };
+  const myBand = () => cueBand(myProfile.color);
+  const oppBand = () => {
+    const p = profiles()[1 - myPlayer()];
+    return p ? cueBand(p.color) : CUE_BLUE;
+  };
+  // Power-widget cue sprite in my colour (my profile is fixed for the session, so
+  // build it once). Matches the on-table cue instead of a static red PNG.
+  const cueSprite = cueSpriteDataURL(myBand());
 
   // --- Pointer input ------------------------------------------------------
   // Screen point -> an element's own (un-rotated) local pixel space, plus that
@@ -1167,8 +1211,7 @@ const Game: Component = () => {
   });
 
   // Cue image (tip at very top, butt at bottom), square with transparent margins.
-  const CUE_IMG = "https://iili.io/CaZTlqP.png"; // active player's own (red) cue
-  const CUE_IMG_BLUE = "https://iili.io/CatLF5v.png"; // opponent's (blue) cue
+  // `cueSprite` is generated above from rodBitmap in the player's own colour.
   const CUE_S = 250; // square draw size in the 40×200 viewBox (bigger = thicker)
   const CUE_TIP_FRAC = 0; // tip sits at the top edge of the source image
   // Tip sits just under the spin ball (top) and slides down as power loads.
@@ -1318,7 +1361,11 @@ const Game: Component = () => {
       const GAPS = 14 * 4;
       const unit = layoutFor(1, false); // always landscape
       const availW = vw - SIDE_W - GAPS;
-      const availH = vh;
+      // Reserve room at the top for the in-flow player banner (its height + the
+      // game-root column gap). Shrinking the table here also frees space to work
+      // the cue when the ball sits against the top rail.
+      const BANNER_H = 34 + 14;
+      const availH = vh - BANNER_H;
       let scale = Math.min(availW / unit.W, availH / unit.H);
       scale = Math.max(40, Math.min(scale, 430));
       layoutBase = layoutFor(scale, false); // the felt box (W/H/ox/oy)
@@ -1442,6 +1489,28 @@ const Game: Component = () => {
         </div>
       </Show>
 
+      {/* Player banner above the table: emoji + name per connected player, in
+          their cue colour. Centred when solo, split by "vs" when two are in. */}
+      <Show when={roster().length > 0}>
+        <div class="player-banner">
+          <For each={roster()}>
+            {(pl, i) => (
+              <>
+                <Show when={i() > 0}>
+                  <span class="pb-vs">vs</span>
+                </Show>
+                <div class="pb-chip" style={{ "border-color": pl.color }}>
+                  <span class="pb-emoji">{pl.emoji}</span>
+                  <span class="pb-name" style={{ color: pl.color }}>
+                    {pl.name}
+                  </span>
+                </div>
+              </>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <Show when={announce()}>
         <div class="turn-recap">{announce()}</div>
       </Show>
@@ -1498,7 +1567,7 @@ const Game: Component = () => {
           style={{ width: `${tableW()}px`, height: `${tableH()}px` }}
         />
 
-        <div class="cue-col" style={{ height: `${canvasH()}px` }}>
+        <div class="cue-col">
           {/* Fire the loaded shot — a pool-ball button at the top of the column,
               horizontally centred over the cue. */}
           <Show when={myTurn()}>
@@ -1562,7 +1631,7 @@ const Game: Component = () => {
                 />
               ))}
               <image
-                href={CUE_IMG}
+                href={cueSprite}
                 x={20 - CUE_S / 2}
                 y={cueImgY()}
                 width={CUE_S}

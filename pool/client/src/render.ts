@@ -193,6 +193,14 @@ function rodBitmap(sizeCss: number, dpr: number, elev: number, band: CueBand) {
   return canvas;
 }
 
+// A straight (elevation 0) cue sprite as a data URL — tip at the top, butt at the
+// bottom — wrapped in the given band colour. The power widget uses this so its
+// cue matches the on-table cue's colour instead of a fixed red PNG. Allocates a
+// bitmap each call; cache the result by colour at the call site.
+export function cueSpriteDataURL(band: CueBand, sizeCss = 300): string {
+  return rodBitmap(sizeCss, 2, 0, band).toDataURL();
+}
+
 // Tip screen position + aim-back direction + whether the tip passes under the
 // ball. Mirrors the old positionCue contact geometry (see its comment).
 export function cueContact(l: Layout, d: CueDraw) {

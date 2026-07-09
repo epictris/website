@@ -3,6 +3,7 @@
 // fire-and-forget; `shot` and `sync` carry authoritative state transitions.
 
 import type { PhysicsConfig, Shot, Vec } from "./physics";
+import type { PlayerProfile } from "./profile";
 
 export type AimPresence = {
   angle: number;
@@ -30,6 +31,10 @@ export type Msg =
   | { t: "hello"; slot: number; id: string; peers: { slot: number; id: string }[] }
   | { t: "peer-join"; slot: number; id: string; from?: number }
   | { t: "peer-leave"; slot: number; id: string; from?: number }
+  // A player's chosen identity (name / cue colour / emoji). Broadcast on join and
+  // re-sent whenever a new peer arrives, so every table can label the banner and
+  // colour each cue. Fire-and-forget presence keyed by the sender's slot.
+  | { t: "profile"; profile: PlayerProfile; from?: number }
   | { t: "sync"; to: number; snap: SyncSnapshot; from?: number }
   | { t: "need-sync"; from?: number }
   | { t: "cursor"; x: number; y: number; from?: number }

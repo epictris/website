@@ -4,6 +4,13 @@ import { createSignal, onCleanup, onMount, For, type Component } from "solid-js"
 import Game from "./Game";
 import { fetchRooms, type RoomInfo } from "./net";
 import { parseReplay, setPendingReplay } from "./replay";
+import {
+  COLOR_CHOICES,
+  EMOJI_CHOICES,
+  loadProfile,
+  saveProfile,
+  type PlayerProfile,
+} from "./profile";
 import "./styles.css";
 
 // Generate a short random room code (URL-safe, no lookalike chars).
@@ -20,6 +27,15 @@ const Landing: Component = () => {
   const navigate = useNavigate();
   const [rooms, setRooms] = createSignal<RoomInfo[]>([]);
   const [loaded, setLoaded] = createSignal(false);
+
+  // Player identity — chosen here, persisted, and read back in-game. Every edit
+  // saves immediately so it's ready when a room is entered.
+  const [profile, setProfile] = createSignal<PlayerProfile>(loadProfile());
+  const update = (patch: Partial<PlayerProfile>) => {
+    const next = { ...profile(), ...patch };
+    setProfile(next);
+    saveProfile(next);
+  };
 
   const refresh = async () => {
     setRooms(await fetchRooms());
@@ -39,6 +55,52 @@ const Landing: Component = () => {
           pool<span class="dim">.tris.sh</span>
         </span>
       </div>
+      {/* Player customization: name, cue colour, emoji. */}
+      <div class="mm-profile">
+        <div class="mmp-preview">
+          <span class="mmp-emoji-lg">{profile().emoji}</span>
+          <span class="mmp-name-lg" style={{ color: profile().color }}>
+            {profile().name || "Player"}
+          </span>
+        </div>
+        <input
+          class="mmp-input"
+          type="text"
+          placeholder="your name"
+          maxLength={16}
+          value={profile().name}
+          onInput={(e) => update({ name: e.currentTarget.value })}
+        />
+        <div class="mmp-label">cue colour</div>
+        <div class="mmp-swatches">
+          <For each={COLOR_CHOICES}>
+            {(c) => (
+              <button
+                class="mmp-swatch"
+                classList={{ sel: profile().color === c }}
+                style={{ background: c }}
+                title="cue colour"
+                onClick={() => update({ color: c })}
+              />
+            )}
+          </For>
+        </div>
+        <div class="mmp-label">emoji</div>
+        <div class="mmp-emojis">
+          <For each={EMOJI_CHOICES}>
+            {(em) => (
+              <button
+                class="mmp-emoji"
+                classList={{ sel: profile().emoji === em }}
+                onClick={() => update({ emoji: em })}
+              >
+                {em}
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+
       <div class="mm-actions">
         <button
           class="primary mm-start"
