@@ -31,7 +31,14 @@ import {
 import { cueSpriteDataURL, drawScene, layoutFor, type Aim, type CueDraw, type Layout } from "./render";
 import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
 import { wsUrl, type Msg } from "./net";
-import { cueBand, loadProfile, type PlayerProfile } from "./profile";
+import {
+  cueBand,
+  loadProfile,
+  loadQuickEmojis,
+  saveQuickEmojis,
+  type PlayerProfile,
+} from "./profile";
+import { EMOJI_DB } from "./emojis";
 import {
   buildReplay,
   downloadReplay,
@@ -232,9 +239,40 @@ const Game: Component = () => {
   // Communication mode: a tap on the comm button enables freehand annotation AND
   // opens the emoji tray; tapping again closes both.
   const [comm, setComm] = createSignal(false);
-  const EMOJIS = ["🤏", "🗿", "😂", "😅"];
+  // Quick-select tray emojis (persisted). Swappable via the "more" picker.
+  const [quickEmojis, setQuickEmojis] = createSignal<string[]>(loadQuickEmojis());
+  const [showEmojiPicker, setShowEmojiPicker] = createSignal(false);
+  const [pickerDragging, setPickerDragging] = createSignal(false); // hide picker mid-drag
+  const [emojiSearch, setEmojiSearch] = createSignal("");
   let dragEl!: HTMLDivElement; // floating emoji preview that follows a tray drag
-  let dragCh = ""; // emoji currently being dragged out of the tray
+  let trayEl: HTMLDivElement | undefined; // quick tray, for drop-to-swap hit-testing
+  let dragCh = ""; // emoji currently being dragged out of the tray/picker
+  // Emoji entries filtered by the picker search box.
+  const filteredEmojis = () => {
+    const q = emojiSearch().trim().toLowerCase();
+    if (!q) return EMOJI_DB;
+    return EMOJI_DB.filter((e) => e.name.includes(q) || e.ch === q);
+  };
+  // Replace quick-tray slot `i` with `ch` and persist.
+  const swapQuick = (i: number, ch: string) => {
+    setQuickEmojis((prev) => {
+      const next = [...prev];
+      if (i >= 0 && i < next.length) next[i] = ch;
+      saveQuickEmojis(next);
+      return next;
+    });
+  };
+  // Which quick-tray slot (if any) sits under a screen point — geometry-based so
+  // it works under the rot90 transform and regardless of modal stacking.
+  const traySlotAt = (x: number, y: number): number => {
+    const nodes = trayEl?.querySelectorAll(".tray-emoji");
+    if (!nodes) return -1;
+    for (let i = 0; i < nodes.length; i++) {
+      const r = (nodes[i] as HTMLElement).getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+    }
+    return -1;
+  };
   // Transient turn-recap popup: what the last shot did + whose turn it is now.
   const [announce, setAnnounce] = createSignal<string | null>(null);
   let announceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1033,6 +1071,34 @@ const Game: Component = () => {
     spawnStamp(ch, toWorld(e));
   };
 
+  // Dragging an emoji out of the "more" picker: same floating preview, but on
+  // release it either swaps a quick-tray slot (dropped on the tray) or stamps the
+  // table (dropped anywhere else).
+  const onPickerDown = (ch: string, e: PointerEvent) => {
+    e.preventDefault();
+    dragCh = ch;
+    // Capture stays on this element (kept mounted) so hiding the modal doesn't
+    // break the drag — the picker just fades out until release.
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setPickerDragging(true);
+    dragEl.textContent = ch;
+    dragEl.style.display = "block";
+    moveDragEl(e);
+  };
+  const onPickerUp = (e: PointerEvent) => {
+    setPickerDragging(false);
+    if (!dragCh) return;
+    const ch = dragCh;
+    dragCh = "";
+    dragEl.style.display = "none";
+    const slot = traySlotAt(e.clientX, e.clientY);
+    if (slot >= 0) {
+      swapQuick(slot, ch); // dropped onto the quick tray → swap that slot
+      return;
+    }
+    spawnStamp(ch, toWorld(e)); // dropped on the felt → stamp it
+  };
+
   // Classify a canvas press into one of four gestures by *where* it lands:
   //  - on the cue ball  → spin (swipe away opens the floating window); during
   //    ball-in-hand a 1s hold-without-swipe instead grabs the ball to reposition.
@@ -1593,45 +1659,6 @@ const Game: Component = () => {
           >
             ☰
           </button>
-          <Show when={!isSpectator()}>
-            <div class="comm-dock">
-              {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render
-                  once and stay cached — remounting made them pop in each open. */}
-              <div class="emoji-tray" classList={{ open: comm() }}>
-                {EMOJIS.map((ch) => (
-                  <div
-                    class="tray-emoji"
-                    onPointerDown={(e) => onTrayDown(ch, e)}
-                    onPointerMove={onTrayMove}
-                    onPointerUp={onTrayUp}
-                    onPointerCancel={onTrayUp}
-                  >
-                    {ch}
-                  </div>
-                ))}
-              </div>
-              <button
-                class="comm"
-                classList={{ active: comm() }}
-                title="communicate"
-                onPointerDown={cueDragTakeover}
-                onClick={() => setComm((v) => !v)}
-              >
-                <span class="comm-ico comm-emoji">💬</span>
-                <svg
-                  class="comm-ico comm-x"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.6"
-                  stroke-linecap="round"
-                >
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                </svg>
-              </button>
-            </div>
-          </Show>
         </div>
 
         {/* Empty spacer reserving the felt's footprint so the side widgets lay
@@ -1724,6 +1751,71 @@ const Game: Component = () => {
         </div>
       </div>
 
+      {/* Comm dock — a direct child of .game-root (NOT inside .left-col, whose
+          z-index:3 stacking context would trap it below the z:9 table canvas and
+          let the on-table cue paint over the tray). Here it shares the root
+          stacking context with the canvas, so its z:10 sits above the cue. */}
+      <Show when={!isSpectator()}>
+        <div class="comm-dock" classList={{ "dock-raised": showEmojiPicker() }}>
+          {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render once
+              and stay cached — remounting made them pop in each open. */}
+          <div class="emoji-tray" classList={{ open: comm() }} ref={trayEl}>
+            {/* "more" opens the searchable full-emoji picker. */}
+            <button
+              class="tray-more"
+              title="more emojis"
+              onClick={() => {
+                setEmojiSearch("");
+                setShowEmojiPicker(true);
+              }}
+            >
+              ⋯
+            </button>
+            {quickEmojis().map((ch) => (
+              <div
+                class="tray-emoji"
+                onPointerDown={(e) => onTrayDown(ch, e)}
+                onPointerMove={onTrayMove}
+                onPointerUp={onTrayUp}
+                onPointerCancel={onTrayUp}
+              >
+                {ch}
+              </div>
+            ))}
+          </div>
+          <button
+            class="comm"
+            classList={{ active: comm() }}
+            title="communicate"
+            onPointerDown={cueDragTakeover}
+            onClick={() => setComm((v) => !v)}
+          >
+            <svg class="comm-ico comm-emoji" viewBox="0 0 24 24">
+              {/* Solid silhouette with the eyes + grin punched out as negative
+                  space (mask), so it's a single flat colour. */}
+              <mask id="comm-smile">
+                <rect width="24" height="24" fill="#fff" />
+                <ellipse cx="9" cy="9.4" rx="1.5" ry="2" fill="#000" />
+                <ellipse cx="15" cy="9.4" rx="1.5" ry="2" fill="#000" />
+                <path d="M6.5 13 H17.5 A5.5 5.5 0 0 1 6.5 13 Z" fill="#000" />
+              </mask>
+              <circle cx="12" cy="12" r="10" fill="currentColor" mask="url(#comm-smile)" />
+            </svg>
+            <svg
+              class="comm-ico comm-x"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.6"
+              stroke-linecap="round"
+            >
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </Show>
+
       <Show when={showMenu()}>
         <div class="menu-backdrop" onClick={() => setShowMenu(false)} />
         <div class="pick-modal menu-modal">
@@ -1765,6 +1857,44 @@ const Game: Component = () => {
               leave
             </button>
           </Show>
+        </div>
+      </Show>
+
+      <Show when={showEmojiPicker()}>
+        <div
+          class="menu-backdrop"
+          classList={{ "picker-hidden": pickerDragging() }}
+          onClick={() => setShowEmojiPicker(false)}
+        />
+        <div class="pick-modal emoji-modal" classList={{ "picker-hidden": pickerDragging() }}>
+          <div class="emoji-modal-head">
+            <span class="pm-title">emojis</span>
+            <button class="emoji-close" title="close" onClick={() => setShowEmojiPicker(false)}>
+              ✕
+            </button>
+          </div>
+          <input
+            class="emoji-search"
+            type="text"
+            placeholder="search emojis…"
+            value={emojiSearch()}
+            onInput={(e) => setEmojiSearch(e.currentTarget.value)}
+          />
+          <div class="emoji-hint">drag onto the table, or onto the tray to swap a quick emoji</div>
+          <div class="emoji-grid">
+            {filteredEmojis().map((em) => (
+              <div
+                class="pick-emoji"
+                title={em.name}
+                onPointerDown={(e) => onPickerDown(em.ch, e)}
+                onPointerMove={onTrayMove}
+                onPointerUp={onPickerUp}
+                onPointerCancel={onPickerUp}
+              >
+                {em.ch}
+              </div>
+            ))}
+          </div>
         </div>
       </Show>
     </div>

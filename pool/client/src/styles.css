@@ -425,15 +425,28 @@ canvas {
 
 /* Comm dock — pinned to the screen's bottom-left corner. The button sits at the
    bottom; the emoji tray stacks above it when open. */
+/* Comm dock spans from just below the hamburger down to the bottom-left corner.
+   The emoji tray flex-grows to fill that height (up to almost the hamburger); the
+   comm button is pinned at the bottom. Pass-through so the tall empty area doesn't
+   swallow cue/table taps — only the real controls re-enable hit-testing. */
 .comm-dock {
   position: fixed;
+  top: 78px; /* clears the 10px + 58px hamburger, with a small gap */
   bottom: 10px;
   left: 10px;
-  z-index: 4;
+  z-index: 10; /* above the table canvas + on-table cue (z:9) */
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: flex-end;
   gap: 10px;
+  pointer-events: none;
+}
+
+/* While the picker is open, float the tray above the modal backdrop so it stays
+   visible and can receive drop-to-swap gestures. */
+.comm-dock.dock-raised {
+  z-index: 14;
 }
 
 .comm {
@@ -459,7 +472,8 @@ canvas {
     transform 180ms ease;
 }
 
-.comm-x {
+.comm-x,
+.comm-emoji {
   width: 24px;
   height: 24px;
 }
@@ -485,6 +499,7 @@ canvas {
 /* The pop-up emoji palette above the comm button. Always in the DOM (fixed-size
    flex row so layout is deterministic — no reflow); shown via .open. */
 .emoji-tray {
+  flex: none; /* hug content: exactly the ⋯ button + quick emojis */
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -506,6 +521,20 @@ canvas {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+/* "more" button pinned at the top of the tray — opens the full picker. */
+.tray-more {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tray-emoji {
@@ -550,6 +579,89 @@ canvas {
 
 .menu-modal .resign {
   color: var(--accent-red);
+}
+
+/* Full emoji picker — a large panel to the right of the quick tray (so the tray
+   stays visible for drop-to-swap), not a centred box. */
+/* Hidden while an emoji is being dragged out of the picker, so the drop target
+   (table or tray) is visible. Kept in the DOM so the drag's pointer-capture
+   survives — hence opacity, not display:none. */
+.picker-hidden {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+.emoji-modal {
+  /* Centred (inherits top/left/transform from .pick-modal). Sized to leave a
+     margin on any screen; the grid scrolls inside. */
+  width: min(520px, 90%);
+  max-height: 90%;
+  padding: 14px;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.emoji-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.emoji-close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emoji-search {
+  width: 100%;
+  padding: 9px 11px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+
+.emoji-search:focus {
+  border-color: var(--accent);
+}
+
+.emoji-hint {
+  opacity: 0.6;
+  line-height: 1.2;
+}
+
+.emoji-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+  align-content: start;
+}
+
+.pick-emoji {
+  width: 44px;
+  height: 44px;
+  font-size: 26px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.pick-emoji:active {
+  cursor: grabbing;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Win / resign banner across the top of the table. */

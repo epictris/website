@@ -56,6 +56,32 @@ export function saveProfile(p: PlayerProfile): void {
   }
 }
 
+// The quick-select emoji tray (the strip beside the comm button). Persisted
+// separately so swaps made via the "more" picker stick across reloads.
+const QUICK_KEY = "pool.quickEmojis";
+export const QUICK_DEFAULT = ["🤏", "🗿", "🤯", "😛"];
+
+export function loadQuickEmojis(): string[] {
+  try {
+    const raw = localStorage.getItem(QUICK_KEY);
+    if (raw) {
+      const a = JSON.parse(raw);
+      if (Array.isArray(a) && a.length && a.every((x) => typeof x === "string")) return a;
+    }
+  } catch {
+    /* ignore malformed/absent storage */
+  }
+  return [...QUICK_DEFAULT];
+}
+
+export function saveQuickEmojis(a: string[]): void {
+  try {
+    localStorage.setItem(QUICK_KEY, JSON.stringify(a));
+  } catch {
+    /* storage may be unavailable — ignore */
+  }
+}
+
 const hex2 = (n: number) =>
   Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
 
