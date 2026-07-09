@@ -895,7 +895,7 @@ function drawNumberSpots(
     .sort((a, b) => a.z - b.z); // nearer (higher z) drawn last, on top
 
   const label = String(id);
-  const k = (rpx * 0.7) / NUM_FONT; // font px -> ball px, so the glyph fits the spot
+  const k = (rpx * 0.74) / NUM_FONT; // font px -> ball px; sized up so the numeral reads on small screens
   for (const p of poles) {
     // Fade the spot in across the horizon so it rolls into view from the rim
     // instead of popping in at full opacity (its antipode fades out in step).
@@ -909,8 +909,8 @@ function drawNumberSpots(
     ctx.ellipse(
       p.x,
       p.y,
-      rpx * 0.42 * Math.hypot(p.r.x, p.r.y),
-      rpx * 0.42 * Math.hypot(p.u.x, p.u.y),
+      rpx * 0.48 * Math.hypot(p.r.x, p.r.y),
+      rpx * 0.48 * Math.hypot(p.u.x, p.u.y),
       Math.atan2(p.r.y, p.r.x),
       0,
       Math.PI * 2,
@@ -921,7 +921,8 @@ function drawNumberSpots(
     ctx.translate(p.x, p.y);
     ctx.transform(k * p.r.x, k * p.r.y, k * p.u.x, k * p.u.y, 0, 0);
     ctx.fillStyle = "#111";
-    ctx.font = `${NUM_FONT}px monospace`;
+    // Pro balls (Aramith) print the number in a bold sans-serif — Helvetica/Arial-like.
+    ctx.font = `bold ${NUM_FONT}px "Helvetica Neue", Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, 0, 0);
