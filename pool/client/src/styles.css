@@ -691,6 +691,11 @@ canvas {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
+  /* Reset so the same class works as a <button> (landing picker) or a <div>
+     (in-game drag tray) — no button chrome, no padding to break the grid. */
+  padding: 0;
+  background: none;
+  border: none;
   cursor: grab;
   touch-action: none;
 }
@@ -698,6 +703,12 @@ canvas {
 .pick-emoji:active {
   cursor: grabbing;
   background: rgba(255, 255, 255, 0.08);
+}
+
+/* Currently-selected avatar in the landing picker. */
+.pick-emoji.sel {
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--accent) inset;
 }
 
 /* Win / resign banner across the top of the table. */
@@ -785,6 +796,24 @@ canvas {
   overflow-y: auto;
   background: var(--bg);
   padding: 24px clamp(16px, 6vw, 80px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Landing body: two columns — New Game / Load Replay / lobby on the left, player
+   customization on the right. Stacks to one column on narrow screens. */
+.mm-cols {
+  display: flex;
+  gap: clamp(20px, 5vw, 64px);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.mm-left,
+.mm-right {
+  flex: 1 1 300px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1039,20 +1068,21 @@ a {
 .mm-profile {
   display: flex;
   flex-direction: column;
+  align-items: flex-start; /* left-aligned: name+emoji row, then cue colour */
   gap: 8px;
   width: 100%;
-  max-width: 460px;
 }
 
-.mmp-preview {
+/* Name input + emoji picker share one row, emoji sitting to the right of name. */
+.mmp-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 1.6em;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
 }
 
-.mmp-name-lg {
-  font-weight: 700;
+.mmp-row .mmp-input {
+  flex: 0 1 240px;
 }
 
 .mmp-input {
@@ -1077,11 +1107,28 @@ a {
   margin-top: 2px;
 }
 
-.mmp-swatches,
-.mmp-emojis {
+.mmp-swatches {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Emoji chooser trigger — shows the current avatar + a hint, opens the modal. */
+.mmp-emoji-pick {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  align-self: flex-start;
+  padding: 5px 12px 5px 8px;
+}
+
+.mmp-emoji-cur {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.mmp-emoji-hint {
+  opacity: 0.7;
 }
 
 .mmp-swatch {
@@ -1096,25 +1143,6 @@ a {
 .mmp-swatch.sel {
   border-color: var(--fg);
   box-shadow: 0 0 0 2px var(--bg) inset;
-}
-
-.mmp-emoji {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.mmp-emoji.sel {
-  border-color: var(--accent);
-  background: var(--bg);
 }
 
 /* ── In-game player banner (above the table) ─────────────────────────────── */
