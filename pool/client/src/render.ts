@@ -283,8 +283,8 @@ export type Scene = {
   myGroup?: Group | null;
   onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
   opponent?: { cursor?: Vec; aim?: Aim };
-  pointer?: Vec; // waiting player's live pointing-finger (world coords)
-  strokes?: { pts: Vec[]; alpha: number }[]; // dotted paths (world), per-stroke fade
+  pointers?: { pos: Vec; color: string }[]; // each drawer's live pointing-finger
+  strokes?: { pts: Vec[]; erase: number; color: string }[]; // dotted paths; `erase`=fraction wiped from the start
   emojis?: { ch: string; pos: Vec; scale: number }[]; // dragged-out emoji stamps
   animating?: boolean;
   sinks?: Sink[]; // balls mid-drop into a pocket
@@ -341,7 +341,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
 
   // Live annotation from the waiting player: dotted paths under a pointing finger.
   if (s.strokes && s.strokes.length) drawStrokes(ctx, l, s.strokes);
-  if (s.pointer) drawPointer(ctx, l, s.pointer);
+  if (s.pointers) for (const p of s.pointers) drawPointer(ctx, l, p.pos);
   if (s.emojis) for (const e of s.emojis) drawEmoji(ctx, l, e);
 
   if (s.debug) drawDebugOverlay(ctx, l, s.world);
@@ -393,7 +393,7 @@ function drawCursorReadout(
 function drawStrokes(
   ctx: CanvasRenderingContext2D,
   l: Layout,
-  strokes: { pts: Vec[]; alpha: number }[],
+  strokes: { pts: Vec[]; erase: number; color: string }[],
 ) {
   ctx.save();
   ctx.lineCap = "round";
@@ -402,18 +402,49 @@ function drawStrokes(
   const under = Math.max(3.5, l.scale * 0.009);
   const top = Math.max(2.5, l.scale * 0.006);
   for (const s of strokes) {
-    if (s.alpha <= 0) continue;
-    ctx.globalAlpha = s.alpha;
-    // Dark underlay so the yellow reads on light felt, then bright dots on top.
+    // Wipe the leading `erase` fraction of the path so the line undoes itself
+    // from its start toward where the drawer released.
+    const { pts, cut } = s.erase > 0 ? trimFromStart(s.pts, s.erase) : { pts: s.pts, cut: 0 };
+    if (pts.length < 2) continue;
+    // Shift the dash phase by the erased world-length (in px) so the dots stay
+    // fixed in space and simply vanish — rather than sliding toward the end.
+    ctx.lineDashOffset = cut * l.scale;
+    // Dark underlay so the colour reads on light felt, then bright dots on top in
+    // the author's profile colour.
     ctx.strokeStyle = "rgba(0,0,0,0.4)";
     ctx.lineWidth = under;
-    polyline(ctx, l, s.pts);
-    ctx.strokeStyle = "#ffe14d"; // bright yellow
+    polyline(ctx, l, pts);
+    ctx.strokeStyle = s.color;
     ctx.lineWidth = top;
-    polyline(ctx, l, s.pts);
+    polyline(ctx, l, pts);
   }
+  ctx.lineDashOffset = 0;
   ctx.setLineDash([]);
   ctx.restore();
+}
+
+// Drop the leading `frac` (0..1) of a polyline's arc length, interpolating the
+// new first point so the cut advances smoothly. Returns the remaining tail plus
+// the removed world-length `cut` (used to keep the dash pattern stationary).
+function trimFromStart(pts: Vec[], frac: number): { pts: Vec[]; cut: number } {
+  if (frac >= 1 || pts.length < 2) return { pts: [], cut: 0 };
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const cut = total * frac;
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (acc + seg >= cut) {
+      const t = seg > 0 ? (cut - acc) / seg : 0;
+      const start = {
+        x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+        y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t,
+      };
+      return { pts: [start, ...pts.slice(i)], cut };
+    }
+    acc += seg;
+  }
+  return { pts: [], cut };
 }
 
 // The waiting player's live pointing finger, tip pinned to the touched point.

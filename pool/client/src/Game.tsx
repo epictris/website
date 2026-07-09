@@ -121,15 +121,23 @@ const Game: Component = () => {
   let replayQueue: ReplayShot[] = [];
   let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
-  // Live table annotation (pointing finger + dotted paths) drawn by whichever
-  // player is *waiting* while the other shoots. Only one side annotates at a time
-  // (it's gated on !myTurn), so a single bucket serves both the local drawer's
-  // own feedback and the incoming remote annotation. `cur` is the in-progress
-  // stroke; strokes linger until `expireAt` (set 5s ahead on release).
-  type Stroke = { pts: Vec[]; expireAt: number };
-  let annot: { pointer?: Vec; strokes: Stroke[]; cur?: Stroke } = { strokes: [] };
+  // Live table annotation (pointing finger + dotted paths). Both players can draw
+  // at once, so every stream is keyed by its author's slot: `cur[slot]` is that
+  // author's in-progress stroke and `pointers[slot]` their live finger. Each
+  // stroke carries the author's profile colour. Interleaving two authors into one
+  // bucket (the old design) made a single line jump between both fingers and
+  // orphaned strokes at Infinity expiry — hence the per-slot split.
+  type Stroke = { pts: Vec[]; expireAt: number; color: string };
+  type LivePointer = { pos: Vec; color: string };
+  let annot: {
+    pointers: Record<number, LivePointer>;
+    strokes: Stroke[];
+    cur: Record<number, Stroke | undefined>;
+  } = { pointers: {}, strokes: [], cur: {} };
   const DRAW_HOLD_MS = 5000;
-  const DRAW_FADE_MS = 200; // stroke fades out over this long after its hold ends
+  // After the hold, the stroke "undoes" itself: it erases progressively from its
+  // start point to where the drawer released, over this long.
+  const DRAW_ERASE_MS = 700;
   let drawing = false; // a local annotation drag is in progress
   let lastDraw = 0; // network-send throttle for annotation moves
   // Emoji stamps dragged onto the table from the comm tray. Each pops in (scale
@@ -424,8 +432,14 @@ const Game: Component = () => {
           delete n[m.slot];
           return n;
         });
-        annot.pointer = undefined; // drop a dangling finger if they left mid-draw
-        annot.cur = undefined;
+        // If they left mid-draw, drop their finger and let their dangling stroke
+        // fade on the normal timeline instead of lingering forever (Infinity).
+        delete annot.pointers[m.slot];
+        {
+          const cur = annot.cur[m.slot];
+          if (cur) cur.expireAt = nowMs + DRAW_HOLD_MS;
+          annot.cur[m.slot] = undefined;
+        }
         break;
       case "profile":
         if (m.from !== undefined)
@@ -482,19 +496,24 @@ const Game: Component = () => {
         opp.cursor = { x: m.x, y: m.y };
         break;
       case "draw": {
-        // The waiting opponent is annotating our table.
+        // A peer is annotating; keep their stream separate (keyed by sender slot)
+        // and draw it in their profile colour.
+        const from = m.from ?? -1;
+        const color = profiles()[from]?.color ?? "#ffe14d";
         const p = m.x !== undefined ? { x: m.x, y: m.y! } : undefined;
         if (m.phase === "start") {
-          annot.cur = { pts: p ? [p] : [], expireAt: Infinity };
-          annot.strokes.push(annot.cur);
-          annot.pointer = p;
+          const stroke = { pts: p ? [p] : [], expireAt: Infinity, color };
+          annot.cur[from] = stroke;
+          annot.strokes.push(stroke);
+          if (p) annot.pointers[from] = { pos: p, color };
         } else if (m.phase === "move") {
-          annot.pointer = p;
-          if (p && annot.cur) annot.cur.pts.push(p);
+          if (p) annot.pointers[from] = { pos: p, color };
+          if (p) annot.cur[from]?.pts.push(p);
         } else {
-          if (annot.cur) annot.cur.expireAt = nowMs + DRAW_HOLD_MS;
-          annot.cur = undefined;
-          annot.pointer = undefined;
+          const cur = annot.cur[from];
+          if (cur) cur.expireAt = nowMs + DRAW_HOLD_MS;
+          annot.cur[from] = undefined;
+          delete annot.pointers[from];
         }
         break;
       }
@@ -697,8 +716,8 @@ const Game: Component = () => {
       }
     }
     sinks = sinks.filter((sk) => t - sk.start < SINK_MS);
-    // Drop annotation strokes once their hold + fade-out lifetime elapses.
-    annot.strokes = annot.strokes.filter((s) => t < s.expireAt + DRAW_FADE_MS);
+    // Drop annotation strokes once their hold + self-erase lifetime elapses.
+    annot.strokes = annot.strokes.filter((s) => t < s.expireAt + DRAW_ERASE_MS);
     stamps = stamps.filter((s) => t - s.start < STAMP_LIFE);
 
     draw();
@@ -792,14 +811,16 @@ const Game: Component = () => {
       myGroup,
       onEight,
       opponent: opp,
-      pointer: annot.pointer,
-      // Full opacity through the hold, then a linear fade over DRAW_FADE_MS.
+      pointers: Object.values(annot.pointers),
+      // Whole line through the hold, then erase from start→release: `erase` is the
+      // fraction of the path length (from the start) already wiped away.
       strokes: annot.strokes.map((s) => ({
         pts: s.pts,
-        alpha:
+        color: s.color,
+        erase:
           nowMs < s.expireAt
-            ? 1
-            : Math.max(0, 1 - (nowMs - s.expireAt) / DRAW_FADE_MS),
+            ? 0
+            : Math.min(1, (nowMs - s.expireAt) / DRAW_ERASE_MS),
       })),
       emojis: stamps.map((s) => ({
         ch: s.ch,
@@ -934,7 +955,7 @@ const Game: Component = () => {
 
   const sendPresence = (w: Vec, cue: Vec) => {
     const now = performance.now();
-    if (now - lastPresence <= 25) return;
+    if (now - lastPresence <= 1000 / 60) return; // 60Hz — smooth remote aim
     lastPresence = now;
     send({ t: "cursor", x: w.x, y: w.y } as Msg);
     sendAim(cue);
@@ -943,20 +964,25 @@ const Game: Component = () => {
   // --- Table annotation (comm mode) ---------------------------------------
   // With comm mode on, our canvas pointer draws instead of aiming: touch shows a
   // pointing finger on the other table, drag leaves a dotted path. `draw` msgs.
+  // My own annotation stream is keyed by my slot (0 in solo, before `hello`).
+  const myDrawKey = () => (mySlot() < 0 ? 0 : mySlot());
   const startDraw = (e: PointerEvent) => {
     const w = toWorld(e);
+    const k = myDrawKey();
     drawing = true;
-    annot.cur = { pts: [w], expireAt: Infinity };
-    annot.strokes.push(annot.cur);
-    annot.pointer = w;
+    const stroke = { pts: [w], expireAt: Infinity, color: myProfile.color };
+    annot.cur[k] = stroke;
+    annot.strokes.push(stroke);
+    annot.pointers[k] = { pos: w, color: myProfile.color };
     lastDraw = 0;
     hitEl.setPointerCapture(e.pointerId);
     send({ t: "draw", phase: "start", x: w.x, y: w.y } as Msg);
   };
   const moveDraw = (e: PointerEvent) => {
     const w = toWorld(e);
-    annot.pointer = w;
-    if (annot.cur) annot.cur.pts.push(w); // append locally every move (smooth line)
+    const k = myDrawKey();
+    annot.pointers[k] = { pos: w, color: myProfile.color };
+    annot.cur[k]?.pts.push(w); // append locally every move (smooth line)
     const now = performance.now();
     if (now - lastDraw <= 30) return; // throttle only the network stream
     lastDraw = now;
@@ -965,9 +991,11 @@ const Game: Component = () => {
   const endDraw = () => {
     if (!drawing) return;
     drawing = false;
-    if (annot.cur) annot.cur.expireAt = nowMs + DRAW_HOLD_MS;
-    annot.cur = undefined;
-    annot.pointer = undefined;
+    const k = myDrawKey();
+    const cur = annot.cur[k];
+    if (cur) cur.expireAt = nowMs + DRAW_HOLD_MS;
+    annot.cur[k] = undefined;
+    delete annot.pointers[k];
     send({ t: "draw", phase: "end" } as Msg);
   };
 
@@ -1000,19 +1028,9 @@ const Game: Component = () => {
     const ch = dragCh;
     dragCh = "";
     dragEl.style.display = "none";
-    // Dropped over the felt? Spawn the stamp at that world point (clamped so it
-    // sits fully on the table even near an edge).
-    const r = canvas.getBoundingClientRect();
-    if (
-      e.clientX >= r.left && e.clientX <= r.right &&
-      e.clientY >= r.top && e.clientY <= r.bottom
-    ) {
-      const w = toWorld(e);
-      spawnStamp(ch, {
-        x: Math.max(0, Math.min(TABLE.w, w.x)),
-        y: Math.max(0, Math.min(TABLE.h, w.y)),
-      });
-    }
+    // Spawn the stamp wherever it was released — no clamp to the table, so it can
+    // sit anywhere on the (full-screen) felt, including off the playfield.
+    spawnStamp(ch, toWorld(e));
   };
 
   // Classify a canvas press into one of four gestures by *where* it lands:
@@ -1599,7 +1617,18 @@ const Game: Component = () => {
                 onPointerDown={cueDragTakeover}
                 onClick={() => setComm((v) => !v)}
               >
-                💬
+                <span class="comm-ico comm-emoji">💬</span>
+                <svg
+                  class="comm-ico comm-x"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.6"
+                  stroke-linecap="round"
+                >
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                </svg>
               </button>
             </div>
           </Show>
