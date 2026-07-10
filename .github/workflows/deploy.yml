@@ -14,12 +14,62 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  changes:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      deploy: ${{ steps.set-matrix.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            website:
+              - 'app/**'
+              - 'Dockerfile'
+            clipboard:
+              - 'clipboard/**'
+            pool:
+              - 'pool/**'
+            deploy-config:
+              - 'compose.yml'
+              - 'Caddyfile'
+              - '.github/workflows/deploy.yml'
+
+      - name: Build service matrix
+        id: set-matrix
+        run: |
+          matrix='[]'
+          add() { matrix=$(jq -c ". + [{\"name\":\"$1\",\"context\":\"$2\",\"image\":\"$3\"}]" <<<"$matrix"); }
+          if [ "${{ steps.filter.outputs.website }}" = "true" ]; then
+            add website . "ghcr.io/${{ github.repository }}"
+          fi
+          if [ "${{ steps.filter.outputs.clipboard }}" = "true" ]; then
+            add clipboard ./clipboard "ghcr.io/${{ github.repository }}/clipboard"
+          fi
+          if [ "${{ steps.filter.outputs.pool }}" = "true" ]; then
+            add pool ./pool "ghcr.io/${{ github.repository }}/pool"
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          if [ "$matrix" != "[]" ] || [ "${{ steps.filter.outputs.deploy-config }}" = "true" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.matrix != '[]'
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
-
+    strategy:
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -32,38 +82,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push website image
+      - name: Build and push ${{ matrix.service.name }} image
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.service.context }}
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ matrix.service.image }}:latest
+            ${{ matrix.service.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
-      - name: Build and push clipboard image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./clipboard
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/clipboard:latest
-            ghcr.io/${{ github.repository }}/clipboard:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push pool image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./pool
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/pool:latest
-            ghcr.io/${{ github.repository }}/pool:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+  deploy:
+    needs: [changes, build]
+    if: always() && needs.changes.outputs.deploy == 'true' && needs.build.result != 'failure' && needs.build.result != 'cancelled'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
 
       - name: Configure SSH
         run: |
@@ -80,8 +115,8 @@ jobs:
       - name: Pull and restart
         run: |
           ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} \
-            "export WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }} \
-             && export CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:${{ github.sha }} \
-             && export POOL_IMAGE=ghcr.io/${{ github.repository }}/pool:${{ github.sha }} \
+            "export WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:latest \
+             && export CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:latest \
+             && export POOL_IMAGE=ghcr.io/${{ github.repository }}/pool:latest \
              && docker compose -f /opt/website/compose.yml up -d --pull always \
              && docker compose -f /opt/website/compose.yml restart caddy"
