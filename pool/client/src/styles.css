@@ -431,16 +431,21 @@ canvas {
    swallow cue/table taps — only the real controls re-enable hit-testing. */
 .comm-dock {
   position: fixed;
-  top: 78px; /* clears the 10px + 58px hamburger, with a small gap */
   bottom: 10px;
   left: 10px;
+  right: 10px;
   z-index: 10; /* above the table canvas + on-table cue (z:9) */
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-end;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-start;
   gap: 10px;
   pointer-events: none;
+}
+
+/* Button pinned bottom-left; the emoji tray extends rightward along the bottom. */
+.comm {
+  order: -1;
 }
 
 /* While the picker is open, float the tray above the modal backdrop so it stays
@@ -496,21 +501,28 @@ canvas {
   transform: rotate(0deg) scale(1);
 }
 
-/* The pop-up emoji palette above the comm button. Always in the DOM (fixed-size
-   flex row so layout is deterministic — no reflow); shown via .open. */
+/* The pop-up emoji palette running along the bottom of the screen, centred on
+   the felt and matching its width (inline `width` = tableW). Absolutely centred
+   so the comm button keeps its bottom-left slot. Always in the DOM; shown via
+   .open. */
 .emoji-tray {
-  flex: none; /* hug content: exactly the ⋯ button + quick emojis */
+  position: absolute;
+  left: 50%; /* dock spans left:10..right:10 → 50% is the viewport/felt centre */
+  bottom: 0;
+  box-sizing: border-box;
+  max-width: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  justify-content: space-between; /* spread the emojis across the felt width */
   gap: 6px;
   padding: 8px;
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  backdrop-filter: blur(4px);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   opacity: 0;
-  transform: translateY(6px); /* vertical only — a horizontal scale pixel-snaps
-                                 the rightmost emoji ~2px on settle */
+  transform: translateX(-50%) translateY(6px); /* slide up from the bottom edge */
   pointer-events: none;
   transition:
     opacity 140ms ease-out,
@@ -519,12 +531,15 @@ canvas {
 
 .emoji-tray.open {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
   pointer-events: auto;
 }
 
-/* "more" button pinned at the top of the tray — opens the full picker. */
+/* "more" button at the right end of the tray — opens the full picker. `order`
+   pushes it past the emojis without changing DOM order (tray slot indices read
+   the .tray-emoji nodes only). */
 .tray-more {
+  order: 1;
   flex: none;
   width: 40px;
   height: 40px;
@@ -628,29 +643,18 @@ canvas {
 }
 
 .emoji-modal {
-  /* Centred (inherits top/left/transform from .pick-modal). Sized to leave a
-     margin on any screen; the grid scrolls inside. */
-  width: min(520px, 90%);
-  max-height: 90%;
+  /* Anchored just above the bottom quick-select tray (tray = 56px tall at
+     bottom:10 → its top is ~66px; sit above that). Width matches the tray (set
+     inline = tableW). Horizontally centred; the grid scrolls inside so it never
+     runs off the top. */
+  max-width: 96%;
+  top: auto;
+  bottom: 76px;
+  transform: translateX(-50%);
+  max-height: calc(100% - 96px);
   padding: 14px;
   gap: 10px;
   align-items: stretch;
-}
-
-.emoji-modal-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.emoji-close {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .emoji-search {
@@ -676,6 +680,10 @@ canvas {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Empty side gutters: no emoji lands here, so a drag started in them scrolls
+     the grid instead of grabbing an emoji. pan-y keeps the vertical scroll. */
+  padding-inline: 30px;
+  touch-action: pan-y;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   gap: 6px;

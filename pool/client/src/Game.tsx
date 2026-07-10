@@ -36,6 +36,7 @@ import {
   loadClientId,
   loadProfile,
   loadQuickEmojis,
+  QUICK_DEFAULT,
   saveQuickEmojis,
   type PlayerProfile,
 } from "./profile";
@@ -274,11 +275,37 @@ const Game: Component = () => {
   const [comm, setComm] = createSignal(false);
   // Quick-select tray emojis (persisted). Swappable via the "more" picker.
   const [quickEmojis, setQuickEmojis] = createSignal<string[]>(loadQuickEmojis());
+  // Tray geometry (must match .tray-emoji/.tray-more in styles.css): each slot is
+  // TRAY_SLOT wide with TRAY_GAP between items and TRAY_PAD inside the box. The
+  // tray is felt-wide, so it holds the ⋯ button + N emojis where
+  //   TRAY_SLOT·(N+1) + TRAY_GAP·N ≤ tableW − 2·TRAY_PAD.
+  const TRAY_SLOT = 40;
+  const TRAY_GAP = 6;
+  const TRAY_PAD = 8;
+  const traySlots = () =>
+    Math.max(
+      4,
+      Math.floor((tableW() - 2 * TRAY_PAD - TRAY_SLOT) / (TRAY_SLOT + TRAY_GAP)),
+    );
+  // The emojis actually rendered: the stored list sliced to the fitting count,
+  // padded from QUICK_DEFAULT (wrapping) when the felt is wider than the stored
+  // list. Deterministic, so padded slots are stable across reloads.
+  const trayEmojis = () => {
+    const n = traySlots();
+    const out = quickEmojis().slice(0, n);
+    for (let i = out.length; i < n; i++) out.push(QUICK_DEFAULT[i % QUICK_DEFAULT.length]);
+    return out;
+  };
   const [showEmojiPicker, setShowEmojiPicker] = createSignal(false);
+  // The picker is a sub-window of the quick tray — closing the tray closes it too.
+  createEffect(() => {
+    if (!comm()) setShowEmojiPicker(false);
+  });
   const [pickerDragging, setPickerDragging] = createSignal(false); // hide picker mid-drag
   const [emojiSearch, setEmojiSearch] = createSignal("");
   let dragEl!: HTMLDivElement; // floating emoji preview that follows a tray drag
   let trayEl: HTMLDivElement | undefined; // quick tray, for drop-to-swap hit-testing
+  let dockEl: HTMLDivElement | undefined; // comm dock (button + tray); tap outside closes it
   let dragCh = ""; // emoji currently being dragged out of the tray/picker
   // Emoji entries filtered by the picker search box.
   const filteredEmojis = () => {
@@ -286,14 +313,14 @@ const Game: Component = () => {
     if (!q) return EMOJI_DB;
     return EMOJI_DB.filter((e) => e.name.includes(q) || e.ch === q);
   };
-  // Replace quick-tray slot `i` with `ch` and persist.
+  // Replace quick-tray slot `i` with `ch` and persist. Base on the full visible
+  // list (padded slots included) so swapping a padded slot sticks.
   const swapQuick = (i: number, ch: string) => {
-    setQuickEmojis((prev) => {
-      const next = [...prev];
-      if (i >= 0 && i < next.length) next[i] = ch;
-      saveQuickEmojis(next);
-      return next;
-    });
+    const next = trayEmojis();
+    if (i < 0 || i >= next.length) return;
+    next[i] = ch;
+    setQuickEmojis(next);
+    saveQuickEmojis(next);
   };
   // Which quick-tray slot (if any) sits under a screen point — geometry-based so
   // it works under the rot90 transform and regardless of modal stacking.
@@ -355,6 +382,31 @@ const Game: Component = () => {
   };
   onCleanup(() => announceDismiss?.());
   onCleanup(() => clearTimeout(lpTimer));
+
+  // Tap anywhere outside the comm dock closes the emoji tray. Only a *tap*
+  // dismisses (release under TAP_PX of the press) — a drag is a table drawing
+  // gesture and must not close comm. Skip presses that start inside the dock so
+  // the button/tray keep their own handlers.
+  let commTapStart: { x: number; y: number } | null = null;
+  const onCommTapDown = (e: PointerEvent) => {
+    commTapStart =
+      comm() && !dockEl?.contains(e.target as Node)
+        ? { x: e.clientX, y: e.clientY }
+        : null;
+  };
+  const onCommTapUp = (e: PointerEvent) => {
+    if (!commTapStart) return;
+    const tap =
+      Math.hypot(e.clientX - commTapStart.x, e.clientY - commTapStart.y) <= TAP_PX;
+    commTapStart = null;
+    if (tap) setComm(false);
+  };
+  window.addEventListener("pointerdown", onCommTapDown);
+  window.addEventListener("pointerup", onCommTapUp);
+  onCleanup(() => {
+    window.removeEventListener("pointerdown", onCommTapDown);
+    window.removeEventListener("pointerup", onCommTapUp);
+  });
   // Portrait-locked phone held sideways: the whole game root is CSS-rotated 90°
   // (see .game-root.rot90) while the table itself stays laid out landscape.
   const [rot90, setRot90] = createSignal(false);
@@ -2016,12 +2068,13 @@ const Game: Component = () => {
 
         <div class="cue-col">
           {/* Fire the loaded shot — a pool-ball button at the top of the column,
-              horizontally centred over the cue. Hidden in replay (no shooting). */}
-          <Show when={myTurn() && !replaying()}>
+              horizontally centred over the cue. Kept in the DOM on the opponent's
+              turn (just disabled); removed only in replay (no shooting). */}
+          <Show when={!replaying()}>
             <button
               class="shoot-btn"
               title="shoot"
-              disabled={!canAct() || striking || power() <= 0}
+              disabled={!myTurn() || !canAct() || striking || power() <= 0}
               onPointerDown={cueDragTakeover}
               onClick={shoot}
             >
@@ -2057,9 +2110,10 @@ const Game: Component = () => {
             onPointerUp={onPowerUp}
             onPointerCancel={onPowerUp}
           >
-            {/* Hide power bar + cue while it isn't this player's turn, and always
-                in replay (playback isn't interactive). */}
-            <Show when={myTurn() && !replaying()}>
+            {/* Kept visible on the opponent's turn (only the Shoot button hides);
+                onPowerDown's canAct() guard keeps it inert. Hidden only in replay
+                (playback isn't interactive). */}
+            <Show when={!replaying()}>
               {/* Drag target = just the widget column (the viewBox). The cue
                   <image> below is 250 units wide and overflows the box (so it can
                   reach the screen edge), so it's pointer-events:none — otherwise
@@ -2102,10 +2156,15 @@ const Game: Component = () => {
           let the on-table cue paint over the tray). Here it shares the root
           stacking context with the canvas, so its z:10 sits above the cue. */}
       <Show when={!isSpectator() && !replaying()}>
-        <div class="comm-dock" classList={{ "dock-raised": showEmojiPicker() }}>
+        <div class="comm-dock" classList={{ "dock-raised": showEmojiPicker() }} ref={dockEl}>
           {/* Kept mounted (never <Show>-toggled) so the emoji glyphs render once
               and stay cached — remounting made them pop in each open. */}
-          <div class="emoji-tray" classList={{ open: comm() }} ref={trayEl}>
+          <div
+            class="emoji-tray"
+            classList={{ open: comm() }}
+            style={{ width: `${tableW()}px` }}
+            ref={trayEl}
+          >
             {/* "more" opens the searchable full-emoji picker. */}
             <button
               class="tray-more"
@@ -2117,7 +2176,7 @@ const Game: Component = () => {
             >
               ⋯
             </button>
-            {quickEmojis().map((ch) => (
+            {trayEmojis().map((ch) => (
               <div
                 class="tray-emoji"
                 onPointerDown={(e) => onTrayDown(ch, e)}
@@ -2307,13 +2366,11 @@ const Game: Component = () => {
           classList={{ "picker-hidden": pickerDragging() }}
           onClick={() => setShowEmojiPicker(false)}
         />
-        <div class="pick-modal emoji-modal" classList={{ "picker-hidden": pickerDragging() }}>
-          <div class="emoji-modal-head">
-            <span class="pm-title">emojis</span>
-            <button class="emoji-close" title="close" onClick={() => setShowEmojiPicker(false)}>
-              ✕
-            </button>
-          </div>
+        <div
+          class="pick-modal emoji-modal"
+          classList={{ "picker-hidden": pickerDragging() }}
+          style={{ width: `${tableW()}px` }}
+        >
           <input
             class="emoji-search"
             type="text"

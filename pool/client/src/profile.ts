@@ -96,7 +96,12 @@ export function saveProfile(p: PlayerProfile): void {
 // The quick-select emoji tray (the strip beside the comm button). Persisted
 // separately so swaps made via the "more" picker stick across reloads.
 const QUICK_KEY = "pool.quickEmojis";
-export const QUICK_DEFAULT = ["🤏", "🗿", "🤯", "😛"];
+// Long enough to fill a wide tray; the tray shows as many as fit the felt width
+// and pads any extra slots from this pool (wrapping) when the stored list is short.
+export const QUICK_DEFAULT = [
+  "🤏", "🗿", "🤯", "😛", "😂", "🔥", "💀", "👀",
+  "🎱", "😎", "🥳", "😳", "🤔", "👍", "❤️", "😅",
+];
 
 export function loadQuickEmojis(): string[] {
   try {
