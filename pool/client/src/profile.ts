@@ -10,8 +10,9 @@ export type PlayerProfile = {
   emoji: string;
 };
 
-// Cue-colour palette — bright hues that read well over the dark felt.
-export const COLOR_CHOICES = [
+// Cue-colour hues — bright colours that read well over the dark felt. These are
+// the pool a fresh player is randomly assigned from.
+export const CUE_HUES = [
   "#e0564a", // red
   "#e0873c", // orange
   "#e6c84f", // yellow
@@ -21,6 +22,16 @@ export const COLOR_CHOICES = [
   "#9b6bd4", // purple
   "#e070b0", // pink
 ];
+
+// The full swatch palette shown in the picker: the hues plus neutral off-white
+// and very-dark-grey. The neutrals are selectable but excluded from random
+// assignment.
+export const COLOR_CHOICES = [...CUE_HUES, "#e8e6de", "#1d1d1b"];
+
+// Pick a random cue hue for a brand-new player (no colour saved yet).
+export function randomCueColor(): string {
+  return CUE_HUES[Math.floor(Math.random() * CUE_HUES.length)];
+}
 
 export const EMOJI_CHOICES = [
   "🎱", "🔥", "🦈", "🐉", "👑", "🎯",
@@ -52,17 +63,26 @@ export function loadProfile(): PlayerProfile {
     if (raw) {
       const p = JSON.parse(raw) as Partial<PlayerProfile>;
       if (p && typeof p.name === "string") {
-        return {
+        // Old profiles may predate a saved colour — assign+persist one so it
+        // stays stable across reloads instead of re-rolling each visit.
+        const color = typeof p.color === "string" ? p.color : randomCueColor();
+        const prof = {
           name: p.name,
-          color: typeof p.color === "string" ? p.color : COLOR_CHOICES[0],
+          color,
           emoji: typeof p.emoji === "string" ? p.emoji : EMOJI_CHOICES[0],
         };
+        if (typeof p.color !== "string") saveProfile(prof);
+        return prof;
       }
     }
   } catch {
     /* ignore malformed/absent storage */
   }
-  return { name: "", color: COLOR_CHOICES[0], emoji: EMOJI_CHOICES[0] };
+  // No stored profile: mint a fresh identity with a random cue colour and
+  // persist it so the assignment sticks.
+  const prof = { name: "", color: randomCueColor(), emoji: EMOJI_CHOICES[0] };
+  saveProfile(prof);
+  return prof;
 }
 
 export function saveProfile(p: PlayerProfile): void {
@@ -99,58 +119,9 @@ export function saveQuickEmojis(a: string[]): void {
   }
 }
 
-const hex2 = (n: number) =>
-  Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
-
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  r /= 255;
-  g /= 255;
-  b /= 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  let h = 0;
-  let s = 0;
-  const d = max - min;
-  if (d > 0) {
-    s = d / (1 - Math.abs(2 * l - 1));
-    if (max === r) h = ((g - b) / d) % 6;
-    else if (max === g) h = (b - r) / d + 2;
-    else h = (r - g) / d + 4;
-    h *= 60;
-    if (h < 0) h += 360;
-  }
-  return [h, s, l];
-}
-
-function hslToHex(h: number, s: number, l: number): string {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = l - c / 2;
-  const [r, g, b] =
-    h < 60 ? [c, x, 0] :
-    h < 120 ? [x, c, 0] :
-    h < 180 ? [0, c, x] :
-    h < 240 ? [0, x, c] :
-    h < 300 ? [x, 0, c] : [c, 0, x];
-  return `#${hex2((r + m) * 255)}${hex2((g + m) * 255)}${hex2((b + m) * 255)}`;
-}
-
-// Darken a colour while keeping it vibrant: lower HSL lightness, and bump
-// saturation to counter the chroma loss that pure value-scaling reads as "dull".
-function darkenVibrant(hex: string, lMul: number, sBoost: number): string {
-  const h = hex.replace("#", "");
-  const [hue, s, l] = rgbToHsl(
-    parseInt(h.slice(0, 2), 16),
-    parseInt(h.slice(2, 4), 16),
-    parseInt(h.slice(4, 6), 16),
-  );
-  return hslToHex(hue, Math.min(1, s + sBoost), l * lMul);
-}
-
 // Build the cue's wrap band from a single chosen colour. render.ts paints the
-// wrap ring from band.light — a darker, still-vibrant take on the picked colour
-// so the stick reads richer than the flat swatch. dark is kept for parity.
+// wrap ring from band.light — the picked colour used as-is so the stick matches
+// the swatch exactly. dark is kept for parity.
 export function cueBand(hex: string): CueBand {
-  return { dark: darkenVibrant(hex, 0.55, -0.06), light: darkenVibrant(hex, 0.82, -0.1) };
+  return { dark: hex, light: hex };
 }
