@@ -1546,6 +1546,15 @@ const Game: Component = () => {
   };
 
   const doRematch = (nextBreaker: 0 | 1, local: boolean) => {
+    // Abort any in-flight shot: a fresh rack replaces `world`, so the physics
+    // loop must not keep stepping / resolving the old shot against it. Without
+    // this, an opponent joining mid-shot in the sandbox lets the still-`animating`
+    // loop resolve the new rack under started rules ("you missed…") and soft-lock.
+    setAnimating(false);
+    striking = false;
+    lingering = false;
+    acc = 0;
+    pottedSeen.clear();
     world = rackWorld(seed);
     initialWorld = cloneWorld(world);
     history = [];
