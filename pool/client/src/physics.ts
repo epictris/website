@@ -811,11 +811,14 @@ export function respotPosition(world: World, id: number): Vec {
     world.balls.some(
       (b) => !b.potted && b.id !== id && len(b.p.x - p.x, b.p.y - p.y) < 2 * R - 0.1,
     );
+  // NB: always return a FRESH Vec, never a SNOOKER_SPOTS entry by reference — the
+  // caller assigns it to ball.p, which the sim then mutates in place; handing back
+  // the shared spot object would corrupt the spot to wherever the ball later rolls.
   const own = SNOOKER_SPOTS[id];
-  if (own && !occupied(own)) return own;
+  if (own && !occupied(own)) return { ...own };
   for (let k = SNOOKER_COLOURS.length - 1; k >= 0; k--) {
     const s = SNOOKER_SPOTS[SNOOKER_COLOURS[k]];
-    if (!occupied(s)) return s;
+    if (!occupied(s)) return { ...s };
   }
   const step = 2 * R;
   const base = own ?? SNOOKER_SPOTS[19];
@@ -825,7 +828,7 @@ export function respotPosition(world: World, id: number): Vec {
     const dn = { x: base.x - dd, y: base.y };
     if (dn.x > R && !occupied(dn)) return dn;
   }
-  return base;
+  return { ...base };
 }
 
 export type Shot = {
