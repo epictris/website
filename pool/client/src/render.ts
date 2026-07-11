@@ -5,7 +5,8 @@
 
 import {
   CUSHION_SEGS,
-  CUSHION_VERTS,
+  currentGeo,
+  geoFor,
   IDENT3,
   POCKET_DEPTH,
   POCKET_LIST,
@@ -17,15 +18,41 @@ import {
   type World,
 } from "./physics";
 
-// The table is a photo (public/table.png). These are the pixel coordinates of
-// its felt playfield (the cushion-nose rectangle) within that image, measured
-// once — the felt box is mapped onto the physics play area so the drawn table,
-// its pockets, and the collision geometry all line up.
-const IMG = { W: 2391, H: 1793, fx: 233, fy: 418, fw: 1902, fh: 991 };
-// The table itself (wooden rails) occupies only part of the image — the rest is
-// empty transparent background. This is the tight opaque box (measured), used to
-// size the canvas so the visible table fills it and the margin is cropped off.
-const CROP = { x: 146, y: 332, w: 2078, h: 1164 };
+// Each variant's table is a photo. `mmPerPx` is the ONE image→world scale: how
+// many world millimetres one image pixel spans. `fx,fy` is the measured pixel of
+// the felt-box origin (top-left cushion nose). The felt box SIZE is not stored —
+// it's derived from the real felt (feltWidth×feltHeight mm ÷ mmPerPx), so tuning
+// feltWidth/feltHeight resizes the PLAYFIELD and never rescales the drawn photo;
+// mmPerPx alone governs how the image maps to the world. CROP = the tight opaque
+// box (wooden rails), used to size the canvas so the table fills it.
+type TableArt = {
+  IMG: { W: number; H: number; fx: number; fy: number };
+  mmPerPx: number; // world mm per image pixel
+  CROP: { x: number; y: number; w: number; h: number };
+};
+const ART: Record<Variant, TableArt> = {
+  pool: {
+    IMG: { W: 2391, H: 1793, fx: 270, fy: 457 },
+    mmPerPx: 1981 / 1828, // felt spans 1902 px = feltWidth 1981 mm
+    CROP: { x: 146, y: 332, w: 2078, h: 1164 },
+  },
+  // Snooker photo (1600×848): felt-nose origin measured off the cushion-nose
+  // shadow line (fx48 fy48); felt spans 1504 px = feltWidth 3569 mm.
+  snooker: {
+    IMG: { W: 1600, H: 848, fx: 48, fy: 48 },
+    mmPerPx: 3569 / 1504,
+    CROP: { x: 0, y: 0, w: 1600, h: 848 },
+  },
+};
+// The felt pixel box: measured origin (fx,fy) + a size derived from the real felt
+// size through mmPerPx. This is the single place feltWidth/feltHeight touch the
+// image — and only to place the world's felt corners on the photo, never to
+// stretch it (m11==m22==scale·mmPerPx in drawTable, independent of felt size).
+function feltPx(variant: Variant): { fx: number; fy: number; fw: number; fh: number } {
+  const { IMG, mmPerPx } = ART[variant];
+  const g = geoFor(variant);
+  return { fx: IMG.fx, fy: IMG.fy, fw: g.feltWidth / mmPerPx, fh: g.feltHeight / mmPerPx };
+}
 // Ball-return gutter geometry, expressed in ball radii (rpx). Shared by layoutFor
 // (which reserves the vertical gap for it) and drawRack (which draws it). The
 // channel holds a ball (radius 1) with ~a rail width of clearance to the inner
@@ -34,23 +61,28 @@ const G_RAIL_W = 0.16; // base rail width unit
 const G_HALF = 1 + G_RAIL_W * 1.5; // channel half-height (ball + the peeking rail)
 const G_DROP = 0.35; // clearance between the table's bottom edge and the gutter
 const G_BELOW = G_DROP + 2 * G_HALF + G_RAIL_W; // total gutter extent below the table (rpx)
-// Constant speed (world metres/sec) a potted ball rolls down the return track.
+// Constant speed (world mm/sec) a potted ball rolls down the return track.
 // Distance-based, not time-based, so every ball rolls at the same pace whatever
 // its slot.
-const ROLL_MPS = 0.384;
-let tableImg: HTMLImageElement | null = null;
-let tableReady = false;
-function ensureTableImg() {
-  if (tableImg || typeof Image === "undefined") return;
-  tableImg = new Image();
-  tableImg.crossOrigin = "anonymous";
-  tableImg.onload = () => (tableReady = true);
-  tableImg.src = "https://iili.io/CaPOw1s.png";
+const ROLL_MPS = 384;
+// One <img> per variant, lazily loaded and cached by variant so switching tables
+// (or a mixed set of tabs) never re-fetches or cross-wires the photos.
+const tableImgs: Partial<Record<Variant, HTMLImageElement>> = {};
+const tableReady: Partial<Record<Variant, boolean>> = {};
+function ensureTableImg(variant: Variant) {
+  if (tableImgs[variant] || typeof Image === "undefined") return;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => (tableReady[variant] = true);
+  img.src = TABLE_IMG[variant];
+  tableImgs[variant] = img;
 }
 import { groupOf, type Group } from "./rules";
+import { TABLE_IMG, type Variant } from "./variant";
+import { isColour } from "./physics";
 
 export type Layout = {
-  scale: number; // px per metre
+  scale: number; // px per world millimetre
   ox: number; // origin x (px) of play area
   oy: number;
   rail: number; // rail thickness (px)
@@ -71,7 +103,9 @@ export type Layout = {
  * area, and the surrounding wooden rails extend outside it. Rail widths come
  * straight from the image, so the canvas is bigger than the bare playfield.
  */
-export function layoutFor(scale: number, rotated = false): Layout {
+export function layoutFor(scale: number, rotated = false, variant: Variant = "pool"): Layout {
+  const { CROP } = ART[variant];
+  const IMG = feltPx(variant);
   const Wpx = TABLE.w * scale;
   const Hpx = TABLE.h * scale;
   // Screen delta (css px) for a full world width (U) / height (V), matching how
@@ -99,7 +133,7 @@ export function layoutFor(scale: number, rotated = false): Layout {
   // Shift world (0,0) so the image starts at the canvas origin. `gutter` is the
   // pixel extent the ball-return track occupies BELOW the table — reserved by
   // resize() as the bottom gap; the felt mapping itself is untouched.
-  const gutterPx = G_BELOW * R * scale;
+  const gutterPx = variant === "snooker" ? 0 : G_BELOW * R * scale;
   const ox = rotated ? -minx - Hpx : -minx;
   const oy = -miny;
   const pw = (rotated ? TABLE.h : TABLE.w) * scale;
@@ -271,9 +305,23 @@ export type Aim = {
   elevation: number; // radians (raises/foreshortens the drawn cue)
 };
 
+// Debug overlay layer toggles — each collider type can be shown/hidden.
+export type DebugLayers = {
+  cushions: boolean; // red cushion faces
+  normals: boolean; // salmon inward-normal ticks
+  pockets: boolean; // green pot circles
+  sinks: boolean; // pink sink polygons
+  walls: boolean; // orange outer rattle walls
+  balls: boolean; // yellow/cyan per-ball loci
+};
+export const DEBUG_LAYERS_ALL: DebugLayers = {
+  cushions: true, normals: true, pockets: true, sinks: true, walls: true, balls: true,
+};
+
 export type Scene = {
   world: World;
   layout: Layout;
+  variant?: Variant; // pool (default) selects the table photo + ball styling
   myAim?: Aim; // shown while it is my turn to aim
   prediction?: Prediction; // spin-aware predicted paths for my shot
   showCue?: boolean; // draw the physical cue stick behind the ball
@@ -291,6 +339,7 @@ export type Scene = {
   rack?: RackEntry[]; // potted balls collected in the return track, in pot order
   now?: number; // wall-clock ms, for driving rack roll animations
   debug?: boolean; // overlay the real collision geometry
+  debugLayers?: DebugLayers; // which collider types to show (defaults to all)
   debugCursor?: Vec; // world coords under the cursor, shown as a readout (debug)
   debugCopied?: boolean; // flash "copied" in the readout after a click-to-copy
 };
@@ -302,21 +351,23 @@ export type RackEntry = { id: number; rollStart: number };
 
 export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   const l = s.layout;
+  const variant = s.variant ?? "pool";
   ctx.clearRect(0, 0, l.W, l.H);
-  ensureTableImg();
+  ensureTableImg(variant);
   // Gutter BEFORE the table so the L-bend entry rails tuck up under the table
   // (the opaque table image drawn next covers them above its bottom edge).
-  drawRack(ctx, l, s.rack ?? [], s.now ?? 0);
-  drawTable(ctx, l);
+  // Snooker has no ball-return track — potted balls stay in the pocket.
+  if (variant !== "snooker") drawRack(ctx, l, s.rack ?? [], s.now ?? 0, variant);
+  drawTable(ctx, l, variant);
 
   // Object balls first; the cue ball + cue stick go down in painter's order so
   // "tip under/over the ball" is just which one is drawn last — no occluder.
-  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 2.88 : 1, true);
+  drawBalls(ctx, l, s.world, s.ballInHand ? 0 : -1, s.growCue ? 2.88 : 1, true, variant);
   const cb = s.world.balls[0];
   const drawCueBall = () => {
     if (cb.potted) return;
     const rpx = R * l.scale * (s.growCue ? 2.88 : 1);
-    drawBall(ctx, toPx(l, cb.p), 0, rpx, s.ballInHand ? 0.55 : 1, cb.o ?? IDENT3, l.rotated);
+    drawBall(ctx, toPx(l, cb.p), 0, rpx, s.ballInHand ? 0.55 : 1, cb.o ?? IDENT3, l.rotated, true, variant);
   };
   const under = s.cue ? cueContact(l, s.cue).under : false;
   if (s.cue && under) {
@@ -326,7 +377,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
     drawCueBall();
     if (s.cue) drawCue(ctx, l, s.cue); // tip over the ball → cue last
   }
-  if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk);
+  if (s.sinks) for (const sk of s.sinks) drawSink(ctx, l, sk, variant);
 
   // Aim assist — the spin-aware predicted path, shown only once power is being
   // dialled in (no preview at zero power). Drawn AFTER the balls so the lines
@@ -344,7 +395,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   if (s.pointers) for (const p of s.pointers) drawPointer(ctx, l, p.pos);
   if (s.emojis) for (const e of s.emojis) drawEmoji(ctx, l, e);
 
-  if (s.debug) drawDebugOverlay(ctx, l, s.world);
+  if (s.debug) drawDebugOverlay(ctx, l, s.world, variant, s.debugLayers);
   if (s.debug && s.debugCursor) drawCursorReadout(ctx, l, s.debugCursor, s.debugCopied);
 }
 
@@ -398,9 +449,9 @@ function drawStrokes(
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.setLineDash([2, l.scale * 0.026]); // fine dots
-  const under = Math.max(3.5, l.scale * 0.009);
-  const top = Math.max(2.5, l.scale * 0.006);
+  ctx.setLineDash([2, l.scale * 26]); // fine dots (26 mm pitch)
+  const under = Math.max(3.5, l.scale * 9);
+  const top = Math.max(2.5, l.scale * 6);
   for (const s of strokes) {
     // Wipe the leading `erase` fraction of the path so the line undoes itself
     // from its start toward where the drawer released.
@@ -482,94 +533,104 @@ function drawEmoji(
 // fly, so these lines ARE the collision faces). Convex corners are drawn as
 // R-circles: a ball centre rounds them, which is how it rebounds off a nose/jaw
 // tip at any angle. Pockets are a pure centre test whose circle is the hole.
-function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World) {
+function drawDebugOverlay(
+  ctx: CanvasRenderingContext2D,
+  l: Layout,
+  world: World,
+  variant: Variant,
+  layers?: DebugLayers,
+) {
+  const L = layers ?? DEBUG_LAYERS_ALL;
   ctx.save();
-  ctx.lineWidth = Math.max(0.5, l.scale * 0.002);
+  ctx.lineWidth = Math.max(0.5, l.scale * 2);
 
   // Cushion contact surface — the nose + angled jaws a ball's edge strikes, on
   // the true felt surface. Salmon ticks show each face's inward normal.
-  ctx.strokeStyle = "#ff3b3b";
-  for (const s of CUSHION_SEGS) {
-    const a = toPx(l, s.a);
-    const b = toPx(l, s.b);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    const mid = { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
-    const m = toPx(l, mid);
-    const n = toPx(l, { x: mid.x + s.nx * 0.02, y: mid.y + s.ny * 0.02 });
-    ctx.strokeStyle = "rgba(255,120,120,0.7)";
-    ctx.beginPath();
-    ctx.moveTo(m.x, m.y);
-    ctx.lineTo(n.x, n.y);
-    ctx.stroke();
-    ctx.strokeStyle = "#ff3b3b";
-  }
-
-  // Rounded convex corners — the ball centre rebounds off these R-circles.
-  ctx.strokeStyle = "rgba(190,120,255,0.9)";
-  for (const vt of CUSHION_VERTS) {
-    const c = toPx(l, { x: vt.x, y: vt.y });
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, R * l.scale, 0, Math.PI * 2);
-    ctx.stroke();
+  if (L.cushions || L.normals) {
+    for (const s of CUSHION_SEGS) {
+      if (L.cushions) {
+        ctx.strokeStyle = "#ff3b3b";
+        const a = toPx(l, s.a);
+        const b = toPx(l, s.b);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      if (L.normals) {
+        const mid = { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
+        const m = toPx(l, mid);
+        const n = toPx(l, { x: mid.x + s.nx * 20, y: mid.y + s.ny * 20 });
+        ctx.strokeStyle = "rgba(255,120,120,0.7)";
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y);
+        ctx.lineTo(n.x, n.y);
+        ctx.stroke();
+      }
+    }
   }
 
   // Pocket pot circles — a centre inside this drops the ball.
-  ctx.strokeStyle = "#39ff88";
-  for (const pk of POCKET_LIST) {
-    const c = toPx(l, pk.center);
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, pk.hole * l.scale, 0, Math.PI * 2);
-    ctx.stroke();
+  if (L.pockets) {
+    ctx.strokeStyle = "#39ff88";
+    for (const pk of POCKET_LIST) {
+      const c = toPx(l, pk.center);
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, pk.hole * l.scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
-  // Sink polygons — the hole shape a potted ball rattles inside. Tune
-  // SINK_POLY_CORNER / SINK_POLY_SIDE against these outlines.
-  ctx.strokeStyle = "rgba(255,90,220,0.9)";
-  ctx.fillStyle = "rgba(255,90,220,0.9)";
-  for (const pk of POCKET_LIST) {
-    const poly = sinkPoly(pk.center);
-    ctx.beginPath();
-    poly.forEach((v, i) => {
-      const p = toPx(l, v);
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    });
-    ctx.closePath();
-    ctx.stroke();
-    for (const v of poly) {
-      const p = toPx(l, v);
+  // Sink polygons — the hole shape a potted ball rattles inside.
+  if (L.sinks) {
+    ctx.strokeStyle = "rgba(255,90,220,0.9)";
+    ctx.fillStyle = "rgba(255,90,220,0.9)";
+    for (const pk of POCKET_LIST) {
+      const poly = sinkPoly(pk.center, variant);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); // vertex markers
-      ctx.fill();
+      poly.forEach((v, i) => {
+        const p = toPx(l, v);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+      for (const v of poly) {
+        const p = toPx(l, v);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); // vertex markers
+        ctx.fill();
+      }
     }
   }
 
   // Hard outer pocket walls — where a centre reflects if it misses the hole.
-  ctx.strokeStyle = "rgba(255,170,40,0.8)";
-  const wall = toPx(l, { x: -POCKET_DEPTH, y: -POCKET_DEPTH });
-  const wall2 = toPx(l, { x: TABLE.w + POCKET_DEPTH, y: TABLE.h + POCKET_DEPTH });
-  ctx.strokeRect(
-    Math.min(wall.x, wall2.x),
-    Math.min(wall.y, wall2.y),
-    Math.abs(wall2.x - wall.x),
-    Math.abs(wall2.y - wall.y),
-  );
+  if (L.walls) {
+    ctx.strokeStyle = "rgba(255,170,40,0.8)";
+    const wall = toPx(l, { x: -POCKET_DEPTH, y: -POCKET_DEPTH });
+    const wall2 = toPx(l, { x: TABLE.w + POCKET_DEPTH, y: TABLE.h + POCKET_DEPTH });
+    ctx.strokeRect(
+      Math.min(wall.x, wall2.x),
+      Math.min(wall.y, wall2.y),
+      Math.abs(wall2.x - wall.x),
+      Math.abs(wall2.y - wall.y),
+    );
+  }
 
   // Per-ball loci: R (own edge) and 2R (where another centre first contacts it).
-  for (const b of world.balls) {
-    if (b.potted) continue;
-    const c = toPx(l, b.p);
-    ctx.strokeStyle = "rgba(255,221,51,0.9)";
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, R * l.scale, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(90,220,255,0.5)";
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, 2 * R * l.scale, 0, Math.PI * 2);
-    ctx.stroke();
+  if (L.balls) {
+    for (const b of world.balls) {
+      if (b.potted) continue;
+      const c = toPx(l, b.p);
+      ctx.strokeStyle = "rgba(255,221,51,0.9)";
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, R * l.scale, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(90,220,255,0.5)";
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 2 * R * l.scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   ctx.restore();
@@ -579,10 +640,12 @@ function drawDebugOverlay(ctx: CanvasRenderingContext2D, l: Layout, world: World
 // play area with an affine transform derived from three world corners, so it
 // works in both orientations (portrait just rotates U/V) and keeps the felt,
 // pockets, and collision geometry aligned.
-function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
-  if (!tableImg || !tableReady) {
+function drawTable(ctx: CanvasRenderingContext2D, l: Layout, variant: Variant) {
+  const IMG = feltPx(variant);
+  const tableImg = tableImgs[variant];
+  if (!tableImg || !tableReady[variant]) {
     // Until the photo loads, fill the play area with felt colour so balls read.
-    ctx.fillStyle = "#1f9ad6";
+    ctx.fillStyle = variant === "snooker" ? "#2ca02c" : "#1f9ad6";
     ctx.fillRect(l.ox, l.oy, l.pw, l.ph);
     return;
   }
@@ -594,12 +657,24 @@ function drawTable(ctx: CanvasRenderingContext2D, l: Layout) {
   const vx = c01.x - c00.x;
   const vy = c01.y - c00.y;
   // image (ix,iy) -> screen: c00 + ((ix-fx)/fw)U + ((iy-fy)/fh)V.
-  const m11 = ux / IMG.fw;
-  const m12 = uy / IMG.fw;
-  const m21 = vx / IMG.fh;
-  const m22 = vy / IMG.fh;
-  const dx = c00.x - (IMG.fx / IMG.fw) * ux - (IMG.fy / IMG.fh) * vx;
-  const dy = c00.y - (IMG.fx / IMG.fw) * uy - (IMG.fy / IMG.fh) * vy;
+  let m11 = ux / IMG.fw;
+  let m12 = uy / IMG.fw;
+  let m21 = vx / IMG.fh;
+  let m22 = vy / IMG.fh;
+  let dx = c00.x - (IMG.fx / IMG.fw) * ux - (IMG.fy / IMG.fh) * vx;
+  let dy = c00.y - (IMG.fx / IMG.fw) * uy - (IMG.fy / IMG.fh) * vy;
+  // Snooker photo is rotated 180° about the felt-box centre: negate the linear
+  // part and shift the origin so the same felt box still maps onto the play area.
+  if (variant === "snooker") {
+    const cx = 2 * (IMG.fx + IMG.fw / 2);
+    const cy = 2 * (IMG.fy + IMG.fh / 2);
+    dx += m11 * cx + m21 * cy;
+    dy += m12 * cx + m22 * cy;
+    m11 = -m11;
+    m12 = -m12;
+    m21 = -m21;
+    m22 = -m22;
+  }
   ctx.save();
   ctx.transform(m11, m12, m21, m22, dx, dy); // composes onto the dpr transform
   ctx.drawImage(tableImg, 0, 0);
@@ -643,6 +718,7 @@ function drawRack(
   l: Layout,
   rack: RackEntry[],
   now: number,
+  variant: Variant,
 ) {
   const rpx = R * l.scale;
   const w = Math.max(2, G_RAIL_W * rpx); // rail tube width
@@ -748,7 +824,7 @@ function drawRack(
     const p = posAt(s);
     // Roll ~without slipping via net displacement: down about x, across about y.
     const o = mul3(rollY((p.x - cornerX) / rpx), rollX(-(p.y - vTopY) / rpx));
-    drawBall(ctx, { x: p.x, y: p.y }, rack[i].id, rpx, 1, o, false, true);
+    drawBall(ctx, { x: p.x, y: p.y }, rack[i].id, rpx, 1, o, false, true, variant);
   }
   ctx.restore();
 }
@@ -965,6 +1041,18 @@ function drawCueDots(
 }
 
 /** Draw a single glossy numbered ball at pixel centre c, radius rpx, alpha. */
+// Snooker ball hues: cue is off-white, reds share one red, each colour its own.
+const SNOOKER_HUE: Record<number, string> = {
+  16: "#e2c200", // yellow
+  17: "#128a35", // green
+  18: "#7a4a1e", // brown
+  19: "#1f5fd0", // blue
+  20: "#e87ba6", // pink
+  21: "#14181d", // black
+};
+const snookerBase = (id: number) =>
+  id === 0 ? "#f4f1ea" : isColour(id) ? SNOOKER_HUE[id] : "#c81f1f"; // else a red
+
 export function drawBall(
   ctx: CanvasRenderingContext2D,
   c: Vec,
@@ -974,6 +1062,7 @@ export function drawBall(
   o: Mat3,
   rotated: boolean,
   shadow = true,
+  variant: Variant = "pool",
 ) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -985,10 +1074,12 @@ export function drawBall(
     ctx.fill();
   }
 
-  // Body colour: stripes are a white ball wearing a coloured band; solids and the
-  // eight are the full hue; the cue is off-white.
-  const stripe = id > 8;
-  const base = id === 0 ? "#f4f1ea" : stripe ? "#f4f1ea" : HUE[id];
+  const snooker = variant === "snooker";
+  // Body colour. Pool: stripes are a white ball wearing a coloured band; solids
+  // and the eight are the full hue; the cue is off-white. Snooker: reds/colours
+  // are solid, no numbers; the cue is off-white.
+  const stripe = !snooker && id > 8;
+  const base = snooker ? snookerBase(id) : id === 0 ? "#f4f1ea" : stripe ? "#f4f1ea" : HUE[id];
   const g = ctx.createRadialGradient(
     c.x - rpx * 0.35,
     c.y - rpx * 0.35,
@@ -1011,8 +1102,9 @@ export function drawBall(
   ctx.arc(c.x, c.y, rpx, 0, Math.PI * 2);
   ctx.clip();
   if (stripe) drawBand(ctx, c, rpx, o, rotated, HUE[id - 8]);
+  // Snooker balls carry no number; the cue keeps its dots so spin still reads.
   if (id === 0) drawCueDots(ctx, c, rpx, o, rotated);
-  else drawNumberSpots(ctx, c, rpx, o, rotated, id);
+  else if (!snooker) drawNumberSpots(ctx, c, rpx, o, rotated, id);
   ctx.restore();
 
   ctx.beginPath();
@@ -1029,13 +1121,14 @@ function drawBalls(
   translucentId: number,
   cueScale = 1,
   hideCue = false,
+  variant: Variant = "pool",
 ) {
   const rpx = R * l.scale;
   for (const b of world.balls) {
     if (b.potted) continue;
     if (hideCue && b.id === 0) continue;
     const r = b.id === 0 ? rpx * cueScale : rpx;
-    drawBall(ctx, toPx(l, b.p), b.id, r, b.id === translucentId ? 0.55 : 1, b.o ?? IDENT3, l.rotated);
+    drawBall(ctx, toPx(l, b.p), b.id, r, b.id === translucentId ? 0.55 : 1, b.o ?? IDENT3, l.rotated, true, variant);
   }
 }
 
@@ -1073,22 +1166,58 @@ function rollAlong(vx: number, vy: number, ang: number): Mat3 {
 // positive u. Edit these 12 points against the debug overlay to match the art;
 // winding doesn't matter (inward normals are found via the centroid).
 type Vec2 = [number, number];
-const SINK_POLY_CORNER: Vec2[] = [
-  [-0.06, 0], [-0.058, 0.023], [-0.042, 0.04], [0.023, 0.029],
-  [0.041, 0.018], [0.049, 0], [0.041, -0.018], [0.023, -0.029],
-  [-0.042, -0.04], [-0.058, -0.023],
-];
-const SINK_POLY_SIDE: Vec2[] = [
-  [-0.06, 0], [-0.052, 0.028], [-0.042, 0.044], [-0.005, 0.036],
-  [0.016, 0.021], [0.02, 0], [0.016, -0.021], [-0.005, -0.036],
-  [-0.042, -0.044], [-0.052, -0.028],
-];
+// The rattle-hole polygon, in each pocket's local frame: u = "outward" (into the
+// pocket), w = perpendicular. The felt-side mouth is DERIVED (see pocketSinkLocal)
+// so it always rides the pot circle as the pocket params are tuned; only the
+// bowl-back (+u) is hand-authored here — corners deep, sides shallow.
+// World mm, in each pocket's local frame (u = into the pocket, w = perpendicular).
+const SINK_BACK_CORNER: Record<Variant, Vec2[]> = {
+  pool: [[28.61, 31.42], [51.33, 20.24], [59.71, 0], [51.33, -20.24], [28.61, -31.42]],
+  // Apex on the diagonal (w=0); the flanking pair is mirrored across it (w -> -w).
+  snooker: [[-7.3, 41.6], [10.3, 29.1], [25.5, 0], [10.3, -29.1], [-7.3, -41.6]],
+};
+const SINK_BACK_SIDE: Record<Variant, Vec2[]> = {
+  pool: [[13.72, 32.34], [27.31, 15.89], [29.26, 0], [27.31, -15.89], [13.72, -32.34]],
+  // Apex on the axis (w=0); the flanking pair is mirrored across it (w -> -w).
+  snooker: [[7.5, 42.8], [23.6, 25.0], [30.7, 0], [23.6, -25.0], [7.5, -42.8]],
+};
+
+// The felt-side mouth: 5 points on the pot circle (radius = pot hole about the
+// pocket centre), spanning jaw tip to jaw tip along the felt-facing arc through
+// (-hole, 0). The tips sit on that circle ±throat/2 off the centre line, so tip
+// angle = atan2(throat/2, -√(hole²-(throat/2)²)). Identical for corners and sides
+// (a side's tips lie ±sideThroat/2 along the rail, the same relation).
+function mouthArc(hole: number, half: number): Vec2[] {
+  const h = Math.min(half, hole); // guard: tip must lie on the circle
+  const c = Math.sqrt(Math.max(0, hole * hole - h * h));
+  const a0 = Math.atan2(h, -c); // one jaw tip
+  const a1 = 2 * Math.PI - a0; // the other, via the felt side (through π)
+  const out: Vec2[] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = a0 + ((a1 - a0) * i) / 4;
+    out.push([hole * Math.cos(a), hole * Math.sin(a)]);
+  }
+  return out;
+}
+
+// A pocket's local polygon: derived felt-side mouth + hand-authored bowl-back,
+// ordered by angle about the centre so the loop stays simple.
+function pocketSinkLocal(isSide: boolean, variant: Variant): Vec2[] {
+  const g = currentGeo();
+  const hole = isSide ? g.sideHole : g.cornerHole;
+  const throat = isSide ? g.sideThroat : g.cornerThroat;
+  const back = isSide ? SINK_BACK_SIDE[variant] : SINK_BACK_CORNER[variant];
+  return [...mouthArc(hole, throat / 2), ...back].sort(
+    (p, q) => Math.atan2(p[1], p[0]) - Math.atan2(q[1], q[0]),
+  );
+}
+
 // Map a pocket's local polygon into world coords, oriented along "outward" (into
 // the pocket). Corners point along the 45° table diagonal (a right-angle corner,
 // regardless of the table's aspect ratio); side pockets point straight out (±y).
-function sinkPoly(pocket: Vec): Vec[] {
-  const isSide = Math.abs(pocket.x - TABLE.w / 2) < 0.01;
-  const local = isSide ? SINK_POLY_SIDE : SINK_POLY_CORNER;
+function sinkPoly(pocket: Vec, variant: Variant): Vec[] {
+  const isSide = Math.abs(pocket.x - TABLE.w / 2) < 10;
+  const local = pocketSinkLocal(isSide, variant);
   const sx = Math.sign(pocket.x - TABLE.w / 2);
   const sy = Math.sign(pocket.y - TABLE.h / 2);
   const oux = isSide ? 0 : sx;
@@ -1107,18 +1236,18 @@ const SINK_DT = 0.004; // fixed sim step (s) — small enough a fast ball can't 
 const SINK_REST = 0.62; // wall restitution (normal energy kept per bounce — soft liner)
 const SINK_WALL_FRIC = 0.8; // tangential energy kept per bounce (the liner grabs the ball)
 const SINK_DRAG = 1.3; // per-second velocity bleed (rolling friction in the bowl)
-const SINK_G = 0.3; // accel (m/s²) toward the pocket back — tips a slow ball in
-const SINK_INSET_LO = -0.05; // depth where the wall inset starts ramping up from 0
-const SINK_INSET_HI = 0.0; // depth where the inset reaches full ball radius R
-const SINK_ENTER_GATE = -0.03; // depth (m) past which the whole ball has cleared the mouth
+const SINK_G = 300; // accel (mm/s²) toward the pocket back — tips a slow ball in
+const SINK_INSET_LO = -50; // depth (mm) where the wall inset starts ramping up from 0
+const SINK_INSET_HI = 0; // depth (mm) where the inset reaches full ball radius R
+const SINK_ENTER_GATE = -30; // depth (mm) past which the whole ball has cleared the mouth
 const SINK_FALL_MS = 240; // once past the boundary, how long the shrink/fall takes
 const SINK_DROP = 0.7; // screen-down depth of the fall, in ball radii
-function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
+function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink, variant: Variant = "pool") {
   const rpx = R * l.scale;
 
   // The pocket polygon + per-edge inward normals (pointing toward the centroid,
   // so the winding of the point list doesn't matter).
-  const poly = sinkPoly(sk.pocket);
+  const poly = sinkPoly(sk.pocket, variant);
   const N = poly.length;
   let cx = 0;
   let cy = 0;
@@ -1132,7 +1261,7 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   // 45° diagonal toward the corner, sides straight out. NOT the centroid — the
   // polygon reaches further toward the mouth than the back, so the centroid sits
   // on the wrong side and would flip this.
-  const isSideP = Math.abs(sk.pocket.x - TABLE.w / 2) < 0.01;
+  const isSideP = Math.abs(sk.pocket.x - TABLE.w / 2) < 10;
   const uox = isSideP ? 0 : Math.sign(sk.pocket.x - TABLE.w / 2);
   const uoy = Math.sign(sk.pocket.y - TABLE.h / 2);
   const uon = Math.hypot(uox, uoy) || 1e-9;
@@ -1262,7 +1391,7 @@ function drawSink(ctx: CanvasRenderingContext2D, l: Layout, sk: Sink) {
   // moment it dropped (o0), so the markings carry over continuously instead of
   // snapping to a fresh identity as the sink animation takes over.
   const o = mul3(rollAlong(vx, vy, dist / R), sk.o0);
-  drawBall(ctx, c, sk.id, r, 1, o, l.rotated, false);
+  drawBall(ctx, c, sk.id, r, 1, o, l.rotated, false, variant);
   // A dark disc grows over it as it sinks below the rim into the pocket.
   ctx.save();
   ctx.globalAlpha = 0.8 * sinkP;

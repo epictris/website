@@ -91,44 +91,141 @@ function dsincos(a: number): { s: number; c: number } {
 }
 
 // --- Table geometry ---------------------------------------------------------
-// Arcade / bar-box table: a compact 7ft-ish playfield (2.0 x 1.0 m) with big,
-// forgiving pockets. Origin at the cloth corner.
-export const TABLE = { w: 2.0, h: 1.0 };
-export const R = 0.028575; // 2.25" pool ball (57.15mm diameter)
-// Every cushion face is pulled this far into the felt (≈1 ball diameter). The
-// pocket holes follow the rails inward by the same amount (see POCKET_LIST) so
-// they stay reachable.
-export const RAIL_INSET = 0.040;
+// The WORLD UNIT IS THE MILLIMETRE. Every length/position/velocity below is in
+// mm (or mm/s, mm/s²). feltWidth/feltHeight are the real playing-surface sizes of
+// each table (7ft bar-box pool, 12ft snooker), so a ball, a pocket, and the felt
+// are all their true physical size. Origin at the cloth corner. Overwritten per
+// variant by setVariant(); defaults are pool.
+export const TABLE = { w: 1981, h: 991 };
+// Ball radius (world mm). Pool uses a 2.25" bar-box ball; snooker balls are
+// smaller relative to the (much bigger) 12ft bed, matching a real snooker table.
+// It's a live binding, not a const, so both clients pick the SAME value from the
+// shared variant before any shot — determinism holds. CUSHION_SEGS / POCKET_LIST
+// don't embed R (the cushion inset + ball-ball test read it at runtime), so
+// switching it needs no geometry rebuild. Call setVariant(variant) at startup.
+export let R = 28.575; // 2.25" pool ball (57.15mm diameter)
 
-// Pocket centres: 4 corners + 2 sides.
-export const POCKETS: Vec[] = [
-  { x: 0, y: 0 },
-  { x: TABLE.w / 2, y: 0 },
-  { x: TABLE.w, y: 0 },
-  { x: 0, y: TABLE.h },
-  { x: TABLE.w / 2, y: TABLE.h },
-  { x: TABLE.w, y: TABLE.h },
-];
+// Per-variant table + pocket geometry — the WHOLE collision table is derived from
+// these few numbers. The cushion noses sit on the felt-box edge, so the playfield
+// simply IS feltWidth × feltHeight (no separate rail inset). Each pocket is given
+// only its mouth: throat width (between the two jaw tips), throat depth, and pot-
+// circle radius — separately for corners and sides — plus one shared jaw fillet
+// radius and the sink-funnel segment counts.
+//
+// Everything else the old struct spelled out is SOLVED here, not stored:
+//   • each jaw is a circular arc of radius `cornerRadius` tangent to its rail and
+//     passing through its throat tip — the tangency point IS the nose start (the
+//     old LC / SC / sideHalf), so the mouth blends smoothly into the rail;
+//   • each pot circle is receded until it passes through that pocket's two jaw
+//     tips, so a ball squeezing the throat is exactly at the drop threshold (the
+//     old cornerPush / sidePush).
+// All lengths in world MILLIMETRES.
+type CushionGeo = {
+  feltWidth: number; // playfield (cushion-nose rectangle) width, mm — real table size
+  feltHeight: number; // playfield height, mm
+  cornerThroat: number; // corner mouth width, between the two jaw NOSES (the front, across the corner)
+  cornerThroatTaper: number; // -1..1 wall splay: 0 = parallel walls (snooker), >0 = mouth wider than the back (pool), <0 = pinched
+  cornerDepth: number; // corner throat depth, along the corner diagonal
+  cornerRadius: number; // fillet radius rounding where each throat wall meets the rail (nose)
+  cornerHole: number; // corner pot-circle radius
+  cornerSegs: number; // segments the corner nose fillet is sampled into
+  sideThroat: number; // side mouth width, between the two jaw NOSES (the front, along the rail)
+  sideThroatTaper: number; // -1..1 wall splay (0 = parallel)
+  sideDepth: number; // side throat depth, perpendicular into the felt
+  sideHole: number; // side pot-circle radius
+  sideSegs: number; // segments the side nose fillet is sampled into
+};
+const GEO: Record<"pool" | "snooker", CushionGeo> = {
+  // 7ft bar-box pool: 78" × 39" playing surface = 1981 × 991 mm. Pool throats
+  // taper — the walls splay open toward the mouth.
+  pool: {
+    feltWidth: 1981, feltHeight: 991,
+    cornerThroat: 88, cornerThroatTaper: 0.1, cornerDepth: 20, cornerRadius: 5, cornerHole: 59.4, cornerSegs: 4,
+    sideThroat: 95, sideThroatTaper: 0.3, sideDepth: 50, sideHole: 59.4, sideSegs: 4,
+  },
+  // 12ft full-size snooker: 3569 × 1778 mm playing surface. Snooker throats are
+  // parallel-walled — taper 0.
+  snooker: {
+    feltWidth: 3569, feltHeight: 1778,
+    cornerThroat: 89.2, cornerThroatTaper: 0, cornerDepth: 70, cornerRadius: 57.1, cornerHole: 89.2, cornerSegs: 6,
+    sideThroat: 108, sideThroatTaper: 0, sideDepth: 55, sideHole: 53.5, sideSegs: 6,
+  },
+};
+let geo: CushionGeo = GEO.pool;
 
-// The pocket hole is ONE circle used for both the pot test and the drawn hole,
-// so the visual always matches the collision. Centre is pushed out into the
-// corner/rail; a ball drops once its centre is inside the circle (i.e. at least
-// half over the hole's edge). The push keeps a rail-hugger (whose centre sits R
-// off the rail) outside the circle, so side pockets don't vacuum it.
+// The live per-variant geometry, so render-side helpers (e.g. the sink-hole
+// polygon) can derive their shapes from the SAME numbers the collision uses,
+// rather than hard-coding points that drift when the params are tuned.
+export function currentGeo(): CushionGeo {
+  return geo;
+}
+
+// The geometry for a specific variant (not necessarily the active one) — the
+// renderer uses feltWidth/feltHeight to derive that photo's felt pixel box from
+// its mm-per-pixel scale.
+export function geoFor(variant: "pool" | "snooker"): CushionGeo {
+  return GEO[variant];
+}
+
+// Select ball size + table/pocket geometry for a variant. A live binding, not a
+// const, so both clients pick the SAME geometry from the shared variant before any
+// shot — determinism holds. Rebuilds the felt box, cushion polygon + pocket list.
+export function setVariant(variant: "pool" | "snooker") {
+  geo = GEO[variant];
+  TABLE.w = geo.feltWidth;
+  TABLE.h = geo.feltHeight;
+  // Snooker ball = EXACTLY 21.6620805781 px diameter on the table photo, whose
+  // felt box spans 1504 px = feltWidth mm. So mm/px = feltWidth/1504 and the
+  // radius = (diameter/2)·mm/px = 21.6620805781·feltWidth/3008 (≈25.7 mm on the
+  // 3569 mm bed — a real 52.5 mm snooker ball). Pool is a real 2.25" ball.
+  R = variant === "snooker" ? (21.6620805781 * geo.feltWidth) / 3008 : 28.575;
+  POCKETS = buildPockets(geo);
+  POCKET_LIST = buildPocketList(geo);
+  CUSHION_SEGS = buildCushionSegs(geo);
+  CUSHION_VERTS = buildCushionVerts(CUSHION_SEGS);
+}
+
+// The cushion noses sit ON the felt-box edge — the playfield is exactly
+// feltWidth × feltHeight, so there is no inset knob. Kept as an export (== 0) for
+// call-sites that clamp a ball onto the cloth (its centre stays R off the nose).
+export let RAIL_INSET = 0;
+
+// Pocket centres: 4 corners + 2 sides (mid-rail), at the felt-box corners/edges.
+function buildPockets(g: CushionGeo): Vec[] {
+  const w = g.feltWidth;
+  const h = g.feltHeight;
+  return [
+    { x: 0, y: 0 }, { x: w / 2, y: 0 }, { x: w, y: 0 },
+    { x: 0, y: h }, { x: w / 2, y: h }, { x: w, y: h },
+  ];
+}
+export let POCKETS: Vec[] = buildPockets(geo);
+
+// The pocket hole is ONE circle used for both the pot test and the drawn hole, so
+// the visual always matches the collision. Radius = cornerHole/sideHole; how far
+// its centre sits past the mouth is set by the DEPTH param alone (cornerDepth for
+// corners, sideDepth for sides) — INDEPENDENT of throat width and hole radius, so
+// tuning a throat or a hole size never moves the hole centre.
 export type Pocket = { center: Vec; hole: number };
-export const POCKET_LIST: Pocket[] = POCKETS.map((pk) => {
-  const ox = pk.x === 0 ? -1 : pk.x >= TABLE.w - 1e-6 ? 1 : 0;
-  const oy = pk.y === 0 ? -1 : pk.y >= TABLE.h - 1e-6 ? 1 : 0;
-  // Side pockets sit mid-rail (ox === 0); corners recede along both axes.
-  const isSide = ox === 0;
-  const push = isSide ? 0.055 : 0.02; // recede the hole from the (inset) felt edge
-  const hole = 0.06;
-  const shift = push - RAIL_INSET; // follow the rails inward so pockets stay reachable
-  return { center: { x: pk.x + ox * shift, y: pk.y + oy * shift }, hole };
-});
+function buildPocketList(g: CushionGeo): Pocket[] {
+  const w = g.feltWidth;
+  const h = g.feltHeight;
+  return buildPockets(g).map((pk) => {
+    const ox = pk.x === 0 ? -1 : pk.x >= w - 1e-6 ? 1 : 0;
+    const oy = pk.y === 0 ? -1 : pk.y >= h - 1e-6 ? 1 : 0;
+    if (ox === 0) {
+      // Side pocket: centre sits sideDepth straight out through the rail (oy = ±1).
+      return { center: { x: pk.x, y: pk.y + oy * g.sideDepth }, hole: g.sideHole };
+    }
+    // Corner pocket: centre sits cornerDepth out along the diagonal past the corner.
+    const d = g.cornerDepth * Math.SQRT1_2;
+    return { center: { x: pk.x + ox * d, y: pk.y + oy * d }, hole: g.cornerHole };
+  });
+}
+export let POCKET_LIST: Pocket[] = buildPocketList(geo);
 // Hard outer walls sit this far beyond the felt edge — a ball that enters a
 // mouth but misses the hole rattles back instead of escaping off the table.
-export const POCKET_DEPTH = 0.055;
+export const POCKET_DEPTH = 55;
 
 // One straight run of the cushion polygon on the FELT contact surface, with its
 // inward unit normal (toward the playfield) and unit tangent. Collision insets
@@ -161,49 +258,157 @@ export type CushionVert = {
   lone: boolean; // exposed tip (one adjoining face) vs 2-face convex corner
 };
 
-// The cushion outline is traced from the table PHOTO. These are the felt
-// contact-surface vertices (world units) for the TOP-LEFT quadrant — the top
-// rail's left half, its corner facing, one side-pocket facing, and the left
-// rail. The other three quadrants are generated by mirroring across the table
-// mid-lines. Collision then insets each felt segment by R (a ball touches the
-// felt when its centre is R away), so the drawn cushions == the physics.
-const LC = 0.105; // long-rail nose start, measured in from the corner (x)
-const SC = 0.105; // short-rail nose start, measured in from the corner (y)
-const SIDE_HALF = 0.048; // side-pocket mouth half-width (nose ends at w/2 ± this)
-const SIDE_LIP = { x: 0.965, depth: -0.06 }; // side-pocket facing lip, depth into felt from the rail
-// Corner-pocket jaw: the two inset noses turn toward the hole and end in a
-// funnel. The throat sits JAW_DEPTH along the corner diagonal, JAW_THROAT wide;
-// smaller THROAT / larger DEPTH = tighter, deeper jaws. Tune with debug-table.
-const JAW_DEPTH = 0.02;
-const JAW_THROAT = 0.07;
-
-function buildCushionSegs(): CushionSeg[] {
-  const w = TABLE.w;
-  const h = TABLE.h;
+// The cushion outline for the TOP-LEFT quadrant — the top rail's left half, its
+// corner throat, one side-pocket facing, and the left rail — mirrored across both
+// mid-lines into all four quadrants. Faces are the felt contact surface (a nose
+// sits on the felt-box edge; collision insets by R on the fly, so drawn ==
+// physics). Each pocket throat is two STRAIGHT walls running from the jaw tips out
+// to the rails, splayed by `*ThroatTaper` (0 = parallel), with a `cornerRadius`
+// fillet rounding each nose — so the whole mouth is derived from throat / taper /
+// depth / radius, nothing is hand-placed.
+function buildCushionSegs(g: CushionGeo): CushionSeg[] {
+  const w = g.feltWidth;
+  const h = g.feltHeight;
   const P = (x: number, y: number): Vec => ({ x, y });
-  const I = RAIL_INSET;
-  // Corner-jaw throat tips, symmetric across the corner diagonal (x = y). The
-  // top-rail nose ends at the first tip, the left-rail nose at its mirror.
-  const dc = JAW_DEPTH * Math.SQRT1_2;
-  const to = (JAW_THROAT / 2) * Math.SQRT1_2;
-  const jawTop = P(dc + to, dc - to);
-  const jawLeft = P(dc - to, dc + to);
-  // Interior reference for the corner jaws: the mouth centre between the two
-  // nose ends. A jaw wall runs ALONG the corner diagonal, so the table-centre
-  // heuristic is degenerate for it; pointing both jaw normals at this shared
-  // point makes them face EACH OTHER across the throat.
-  const cornerMouth = P((LC + I) / 2, (I + SC) / 2);
+  const RR = g.cornerRadius;
 
-  // Top-left quadrant felt segments (contact surface, world coords), all pulled
-  // in by RAIL_INSET. Each corner gets a jaw that funnels the nose into the hole.
-  // `ref` overrides the inward-normal direction (defaults to the table centre).
+  const clampT = (t: number) => Math.max(-1, Math.min(1, t));
+  // Trim a wall N->T at the pot circle (centre C, radius r): if the wall crosses
+  // into the circle, return the entry point (a ball past it is already potted, so
+  // the collider — and its debug line — stops at the circle); else return T.
+  const clipToCircle = (N: Vec, T: Vec, C: Vec, r: number): Vec => {
+    const dx = T.x - N.x;
+    const dy = T.y - N.y;
+    const a = dx * dx + dy * dy;
+    if (a < 1e-12) return T;
+    const fx = N.x - C.x;
+    const fy = N.y - C.y;
+    const b = 2 * (fx * dx + fy * dy);
+    const c = fx * fx + fy * fy - r * r;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return T;
+    const t = (-b - Math.sqrt(disc)) / (2 * a); // near (entering) intersection
+    return t > 0 && t < 1 ? { x: N.x + dx * t, y: N.y + dy * t } : T;
+  };
+
+  // --- Corner (top-left): throat = the gap between the jaw NOSES (the mouth/front),
+  // measured across the corner; the tips (deep end) derive from depth + taper. ---
+  const aN = g.cornerThroat * Math.SQRT1_2; // nose in-distance along each rail (noses cornerThroat apart across the mouth)
+  const N_top = P(aN, 0); // top-rail nose (mouth front)
+  const N_left = P(0, aN); // left-rail nose
+  // Tip: run cornerDepth into the pocket along the diagonal (∥ the walls at taper 0),
+  // then shift toward the diagonal to narrow the BACK — taper 0 = parallel walls,
+  // >0 = mouth wider than the throat (pool), <0 = pinched. |taper| 1 ≈ 45° walls.
+  // Finally trim the tip to the pot circle so the wall never runs on past the hole.
+  const axd = g.cornerDepth * Math.SQRT1_2; // per-axis diagonal run to the throat
+  const cShift = clampT(g.cornerThroatTaper) * axd * Math.SQRT1_2; // perp shift toward the diagonal
+  const cCenter = P(-axd, -axd); // corner pot-circle centre (cornerDepth out along the diagonal)
+  const T_top = clipToCircle(N_top, P(aN - axd - cShift, -axd + cShift), cCenter, g.cornerHole);
+  const T_left = P(T_top.y, T_top.x); // corner is symmetric across x = y
+  // Interior reference for the corner walls: the mouth centre between the two
+  // noses. A wall runs toward the corner diagonal, so the table-centre heuristic
+  // is degenerate; pointing both wall normals here makes them face EACH OTHER.
+  const cornerMouth = P(aN / 2, aN / 2);
+
+  // --- Side (top rail centre, x = w/2): throat = the gap between the jaw NOSES on
+  // the rail; the tips (deep end) derive from sideDepth + taper. ---
+  const sHalf = g.sideThroat / 2;
+  const N_sL = P(w / 2 - sHalf, 0); // left nose (mouth front)
+  // Parallel wall is vertical (tip directly below the nose); taper slides the TIP
+  // inward (toward the mouth centre) to narrow the back. |taper| 1 ≈ a 45° wall.
+  // Trimmed to the pot circle so the wall stops at the hole, not past it.
+  const T_sL = clipToCircle(
+    N_sL,
+    P(N_sL.x + clampT(g.sideThroatTaper) * g.sideDepth, -g.sideDepth),
+    P(w / 2, -g.sideDepth),
+    g.sideHole,
+  );
+
   type Seg = { a: Vec; b: Vec; ref?: Vec };
+  // A jaw from a nose end N to the throat tip T, sampled into `segs` segments: a
+  // CIRCULAR ARC of radius RR bowing toward the table (the convex joins then round
+  // by R into a smooth pocket mouth). Falls back to a straight chamfer if RR is 0
+  // or too small to span the chord (an arc needs radius ≥ half the chord length).
+  const jaw = (N: Vec, T: Vec, segs: number, ref?: Vec): Seg[] => {
+    const dx = T.x - N.x;
+    const dy = T.y - N.y;
+    const L = hyp(dx, dy);
+    if (RR <= 0 || 2 * RR <= L) return [{ a: N, b: T, ref }];
+    const mid = { x: (N.x + T.x) / 2, y: (N.y + T.y) / 2 };
+    const sag = Math.sqrt(RR * RR - (L / 2) * (L / 2));
+    // Unit perpendicular to the chord. The arc centre sits `sag` off the chord
+    // midpoint; put it on the FAR side of the table interior so the arc bulges
+    // toward the playfield (a rounded mouth), not away into the cushion.
+    const ux = -dy / (L || 1e-9);
+    const uy = dx / (L || 1e-9);
+    const toInterior = ux * (w / 2 - mid.x) + uy * (h / 2 - mid.y);
+    const s = toInterior >= 0 ? -1 : 1; // centre opposite the interior
+    const cx = mid.x + s * ux * sag;
+    const cy = mid.y + s * uy * sag;
+    // Sample the minor arc from N to T about the centre.
+    let a0 = Math.atan2(N.y - cy, N.x - cx);
+    let a1 = Math.atan2(T.y - cy, T.x - cx);
+    let da = a1 - a0;
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    const K = Math.max(1, Math.round(segs));
+    const out: Seg[] = [];
+    for (let i = 0; i < K; i++) {
+      const t0 = a0 + (da * i) / K;
+      const t1 = a0 + (da * (i + 1)) / K;
+      const a = { x: cx + RR * Math.cos(t0), y: cy + RR * Math.sin(t0) };
+      const b = { x: cx + RR * Math.cos(t1), y: cy + RR * Math.sin(t1) };
+      // The arc is convex toward the playfield (centre on the far side), so each
+      // segment's inward normal points radially OUTWARD from the arc centre. Give
+      // it a ref on that outward side rather than the shared mouth point — a single
+      // mouth ref flips the tip-adjacent segments (which wrap past it) the wrong way.
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      out.push({ a, b, ref: { x: 2 * mx - cx, y: 2 * my - cy } });
+    }
+    return out;
+  };
+
+  // A straight throat facing from the nose N (on a rail) out to the jaw tip T,
+  // with a cornerRadius fillet rounding the nose where the wall meets the rail.
+  // `railOut` is the unit rail direction AWAY from the pocket (the plain rail
+  // continues that way); the returned `railEnd` is where the plain rail should
+  // stop — the fillet's start. The fillet reuses jaw()'s arc sampler between the
+  // two tangent points. The tip T stays sharp (a lone convex vert rounds it by R).
+  const throatWall = (
+    T: Vec, N: Vec, railOut: Vec, segs: number, ref?: Vec,
+  ): { segs: Seg[]; railEnd: Vec } => {
+    let wx = T.x - N.x;
+    let wy = T.y - N.y;
+    const wl = hyp(wx, wy) || 1e-9;
+    wx /= wl;
+    wy /= wl; // unit nose -> tip
+    const dot = Math.max(-1, Math.min(1, railOut.x * wx + railOut.y * wy));
+    const theta = Math.acos(dot); // interior angle at the nose (rail vs wall)
+    let A = N; // fillet start, on the rail
+    let B = N; // fillet end, on the wall
+    const out: Seg[] = [];
+    if (RR > 1e-6 && theta > 1e-3 && theta < Math.PI - 1e-3) {
+      const d = Math.min(RR / Math.tan(theta / 2), wl * 0.9);
+      A = P(N.x + railOut.x * d, N.y + railOut.y * d);
+      B = P(N.x + wx * d, N.y + wy * d);
+      out.push(...jaw(A, B, segs, ref)); // the nose fillet (arc between the tangents)
+    }
+    out.push({ a: B, b: T, ref }); // the straight facing to the tip
+    return { segs: out, railEnd: A };
+  };
+
+  // Top-left quadrant felt segments (contact surface, world coords). Each pocket
+  // gets two straight throat walls (filleted at the nose) that splay by taper.
+  const topW = throatWall(T_top, N_top, P(1, 0), g.cornerSegs, cornerMouth);
+  const leftW = throatWall(T_left, N_left, P(0, 1), g.cornerSegs, cornerMouth);
+  const sideW = throatWall(T_sL, N_sL, P(-1, 0), g.sideSegs);
   const base: Seg[] = [
-    { a: P(LC, I), b: P(w / 2 - SIDE_HALF, I) }, // top nose: jaw -> side pocket
-    { a: P(w / 2 - SIDE_HALF, I), b: P(SIDE_LIP.x, I + SIDE_LIP.depth) }, // side-pocket facing
-    { a: P(LC, I), b: jawTop, ref: cornerMouth }, // top-rail corner jaw
-    { a: P(I, SC), b: P(I, h - SC) }, // left nose (full height, no side pocket)
-    { a: P(I, SC), b: jawLeft, ref: cornerMouth }, // left-rail corner jaw
+    { a: topW.railEnd, b: sideW.railEnd }, // top rail: corner nose -> side-pocket nose
+    ...sideW.segs, // side-pocket left facing
+    ...topW.segs, // top-rail corner facing
+    { a: leftW.railEnd, b: P(0, h - leftW.railEnd.y) }, // left rail (full height, mirrored)
+    ...leftW.segs, // left-rail corner facing
   ];
   const mref = (r: Vec | undefined, fx: (v: Vec) => Vec) => (r ? fx(r) : undefined);
   const mx = (s: Seg): Seg => {
@@ -251,7 +456,7 @@ function buildCushionSegs(): CushionSeg[] {
     return { a, b, nx, ny, tx, ty, len };
   });
 }
-export const CUSHION_SEGS: CushionSeg[] = buildCushionSegs();
+export let CUSHION_SEGS: CushionSeg[] = buildCushionSegs(geo);
 
 // Collect the convex corners of the cushion polygon. A ball's centre rounds
 // these as circles of radius R, which is what lets it rebound off a nose/jaw tip
@@ -303,7 +508,7 @@ function unit(x: number, y: number): Vec {
   const l = hyp(x, y) || 1e-9;
   return { x: x / l, y: y / l };
 }
-export const CUSHION_VERTS: CushionVert[] = buildCushionVerts(CUSHION_SEGS);
+export let CUSHION_VERTS: CushionVert[] = buildCushionVerts(CUSHION_SEGS);
 
 // Is a contact normal `(dx,dy)` (vertex -> ball) inside a corner's playfield arc?
 // For a lone tip, the whole front half-plane. For a 2-face corner, the wedge
@@ -320,7 +525,7 @@ function vertNormalOk(dx: number, dy: number, vt: CushionVert): boolean {
 
 
 // --- Physical constants -----------------------------------------------------
-const G = 9.8;
+const G = 9800; // gravity, mm/s² (world unit is the millimetre)
 // ---- Configurable physics -------------------------------------------------
 // Each parameter is one distinct, real, separately-measurable physical
 // coefficient — no two unrelated mechanisms share a knob. Defaults are measured
@@ -341,14 +546,34 @@ export type PhysicsConfig = {
 // μ_s scaled by a fixed contact-patch geometry factor (~ a/R for a soft cloth).
 const CONTACT_PATCH = 0.11; // contact-patch geometry factor (dimensionless)
 
+// Pool: worsted (napless) cloth like Simonis — slick, so a low rolling
+// resistance and a long roll — with lively K-66 pool-rail rubber and Aramith
+// phenolic balls.
 export const DEFAULT_CONFIG: PhysicsConfig = {
-  clothFriction: 0.2, // measured ball–baize sliding friction (~0.18–0.22)
-  rollingResistance: 0.01, // snooker fast cloth (~0.005–0.015)
+  clothFriction: 0.2, // ball–cloth sliding friction (~0.18–0.22)
+  rollingResistance: 0.006, // slick worsted cloth rolls far (~0.005–0.008)
   cushionFriction: 0.2, // ball on cushion rubber (~0.14–0.25)
-  cushionRestitution: 0.8, // snooker cushion COR (~0.75–0.9)
+  cushionRestitution: 0.85, // lively pool cushion COR (~0.8–0.9)
   ballFriction: 0.06, // ball–ball friction (~0.03–0.08)
-  ballRestitution: 0.95, // snooker ball COR (~0.92–0.96)
+  ballRestitution: 0.95, // Aramith pool ball COR (~0.92–0.96)
 };
+
+// Snooker: napped wool baize (Strachan/Hainsworth) plays "heavier" — the nap
+// adds rolling drag and a grippier slide — with snooker L-cushions that rebound
+// noticeably deader than pool rails, and lighter phenolic snooker balls.
+export const SNOOKER_CONFIG: PhysicsConfig = {
+  clothFriction: 0.22, // napped baize grips the slide a touch more
+  rollingResistance: 0.014, // the nap drags a rolling ball — a slower bed
+  cushionFriction: 0.22,
+  cushionRestitution: 0.72, // snooker cushions are deader (~0.7–0.8)
+  ballFriction: 0.05,
+  ballRestitution: 0.94, // phenolic snooker ball COR (~0.92–0.96)
+};
+
+/** The measured cloth/cushion/ball constants for a variant. */
+export function configFor(variant: "pool" | "snooker"): PhysicsConfig {
+  return variant === "snooker" ? { ...SNOOKER_CONFIG } : { ...DEFAULT_CONFIG };
+}
 
 // Slider metadata for the UI: label, range, step per configurable parameter.
 export const PARAMS: {
@@ -365,9 +590,9 @@ export const PARAMS: {
   { key: "ballFriction", label: "ball friction μbb", min: 0.0, max: 0.3, step: 0.005 },
   { key: "ballRestitution", label: "ball bounce eb", min: 0.5, max: 1, step: 0.01 },
 ];
-const SLIP_EPS = 1e-3; // below this the ball is "rolling"
+const SLIP_EPS = 1; // below this (mm/s) the ball is "rolling"
 export const FIXED_DT = 1 / 240; // physics timestep (seconds)
-const REST_V = 5e-3; // linear speed below which a ball is at rest
+const REST_V = 5; // linear speed (mm/s) below which a ball is at rest
 const REST_W = 0.15; // angular speed below which spin is ignored
 
 // --- Small vector helpers ---------------------------------------------------
@@ -455,7 +680,7 @@ export function rackWorld(seed = 0): World {
   // Triangle rack near the foot spot (right quarter). Rows fan out in +x.
   const footX = TABLE.w * 0.72;
   const cy = TABLE.h / 2;
-  const d = 2 * R + 0.0002; // touching spacing with a hair of clearance
+  const d = 2 * R + 0.2; // touching spacing with a hair of clearance (mm)
   const dx = d * SQRT3_2; // d·sin(π/3), deterministic
 
   const rng = mulberry32(seed);
@@ -488,6 +713,92 @@ export function rackWorld(seed = 0): World {
   return { balls };
 }
 
+// --- Snooker -----------------------------------------------------------------
+// Ball ids: 0 = cue (white), 1..15 = reds, 16..21 = the colours in ascending
+// value (yellow=2 … black=7). value(id) below turns an id into its point value.
+export const SNOOKER_COLOURS = [16, 17, 18, 19, 20, 21] as const; // low → high
+export function isRed(id: number): boolean {
+  return id >= 1 && id <= 15;
+}
+export function isColour(id: number): boolean {
+  return id >= 16 && id <= 21;
+}
+/** Point value of a ball: red=1, yellow=2, green=3, brown=4, blue=5, pink=6, black=7. */
+export function ballValue(id: number): number {
+  return id === 0 ? 0 : id <= 15 ? 1 : id - 14;
+}
+
+// The six colour spots + the cue's break position, in world metres (table is
+// 2.0 × 1.0). Laid out to the standard snooker proportions, scaled to this bed:
+// baulk line a fifth in, the D's colours across it, blue at centre, pink midway
+// to the top cushion, black near it. Reds triangle just behind the pink.
+const BAULK_X = TABLE.w * 0.2; // baulk line
+const D_R = TABLE.h * 0.166; // radius of the D (yellow/green offset off centre)
+export const SNOOKER_SPOTS: Record<number, Vec> = {
+  16: { x: BAULK_X, y: TABLE.h / 2 - D_R }, // yellow
+  17: { x: BAULK_X, y: TABLE.h / 2 + D_R }, // green
+  18: { x: BAULK_X, y: TABLE.h / 2 }, // brown (baulk-line centre)
+  19: { x: TABLE.w / 2, y: TABLE.h / 2 }, // blue (centre spot)
+  20: { x: TABLE.w * 0.75, y: TABLE.h / 2 }, // pink
+  21: { x: TABLE.w * 0.909, y: TABLE.h / 2 }, // black
+};
+export const SNOOKER_CUE_SPOT: Vec = { x: BAULK_X * 0.75, y: TABLE.h / 2 - D_R * 0.5 };
+
+/** Snooker rack: 15 reds in a triangle behind the pink, six colours on spots,
+ *  cue in the D. Layout is fixed (no seed), but the arg keeps parity with
+ *  rackWorld so both clients build the same table. */
+export function rackSnooker(_seed = 0): World {
+  const balls: Ball[] = [];
+  const mk = (id: number, p: Vec): Ball => ({
+    id,
+    p: { ...p },
+    v: { x: 0, y: 0 },
+    w: { x: 0, y: 0, z: 0 },
+    potted: false,
+  });
+
+  balls.push(mk(0, SNOOKER_CUE_SPOT));
+  for (const id of SNOOKER_COLOURS) balls.push(mk(id, SNOOKER_SPOTS[id]));
+
+  // Reds: a 5-row triangle, apex touching the pink, fanning out toward the black.
+  const d = 2 * R + 0.2; // touching spacing with a hair of clearance (mm)
+  const dx = d * SQRT3_2;
+  const apexX = SNOOKER_SPOTS[20].x + d + 2; // just behind the pink (mm)
+  const cy = TABLE.h / 2;
+  let redId = 1;
+  for (let row = 0; row < 5; row++) {
+    for (let i = 0; i <= row; i++) {
+      balls.push(mk(redId++, { x: apexX + row * dx, y: cy + (i - row / 2) * d }));
+    }
+  }
+  return { balls };
+}
+
+/** Where a potted colour goes back on: its own spot, or (if occupied) the
+ *  highest free spot, or (all full) nudged off its spot toward the top cushion —
+ *  the standard snooker respot priority. */
+export function respotPosition(world: World, id: number): Vec {
+  const occupied = (p: Vec) =>
+    world.balls.some(
+      (b) => !b.potted && b.id !== id && len(b.p.x - p.x, b.p.y - p.y) < 2 * R - 0.1,
+    );
+  const own = SNOOKER_SPOTS[id];
+  if (own && !occupied(own)) return own;
+  for (let k = SNOOKER_COLOURS.length - 1; k >= 0; k--) {
+    const s = SNOOKER_SPOTS[SNOOKER_COLOURS[k]];
+    if (!occupied(s)) return s;
+  }
+  const step = 2 * R;
+  const base = own ?? SNOOKER_SPOTS[19];
+  for (let dd = step; dd < TABLE.w; dd += step) {
+    const up = { x: base.x + dd, y: base.y };
+    if (up.x < TABLE.w - R && !occupied(up)) return up;
+    const dn = { x: base.x - dd, y: base.y };
+    if (dn.x > R && !occupied(dn)) return dn;
+  }
+  return base;
+}
+
 export type Shot = {
   angle: number; // radians, direction the cue ball travels
   power: number; // 0..1 (mapped to launch speed)
@@ -496,7 +807,7 @@ export type Shot = {
   elevation: number; // radians, cue raised off the table (0 = level)
 };
 
-export const MAX_SPEED = 7.6; // m/s at power = 1 (80% of the former 9.5 cap)
+export const MAX_SPEED = 7600; // mm/s at power = 1 (7.6 m/s; 80% of the former 9.5 cap)
 export const MAX_ELEVATION = (80 * Math.PI) / 180; // steepest cue we allow
 
 /** Apply a shot's impulse + spin to the cue ball. */
@@ -985,7 +1296,7 @@ export function predictPaths(
   // heading. Head-on -> 1 -> full length; grazing -> ~0 -> the ray vanishes.
   let objId: number | null = null;
   const objPath: Vec[] = [];
-  const OBJ_MAX_LEN = 0.15; // ray length at a dead-centre (head-on) hit
+  const OBJ_MAX_LEN = 150; // ray length (mm) at a dead-centre (head-on) hit
 
   const events: ShotEvent[] = [];
   const steps = Math.round(maxTime / FIXED_DT);
@@ -1088,7 +1399,7 @@ export function predictPaths(
 /** A ball near a pocket mouth is heading in — don't clamp it back onto the cloth. */
 function nearPocket(p: Vec): boolean {
   for (const pk of POCKETS) {
-    if (len(p.x - pk.x, p.y - pk.y) < 0.13) return true;
+    if (len(p.x - pk.x, p.y - pk.y) < 130) return true;
   }
   return false;
 }

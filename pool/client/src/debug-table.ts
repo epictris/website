@@ -11,7 +11,7 @@ import {
   type Vec,
 } from "./physics";
 
-const scale = 360;
+const scale = 0.36; // px per world mm
 const layout: Layout = layoutFor(scale, false);
 const cv = document.getElementById("c") as HTMLCanvasElement;
 cv.width = layout.W;
@@ -48,7 +48,7 @@ for (const pk of POCKET_LIST) {
 
 // A reference ball touching the top cushion (centre on the collision line).
 ctx.strokeStyle = "#ffdd33";
-const bc = tp({ x: 0.3, y: R });
+const bc = tp({ x: 300, y: R });
 ctx.beginPath();
 ctx.arc(bc.x, bc.y, R * scale, 0, Math.PI * 2);
 ctx.stroke();

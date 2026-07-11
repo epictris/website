@@ -5,7 +5,7 @@ import {
   applyShot,
   atRest,
   cloneWorld,
-  DEFAULT_CONFIG,
+  configFor,
   freeze,
   FIXED_DT,
   IDENT3,
@@ -16,7 +16,11 @@ import {
   R,
   RAIL_INSET,
   rackWorld,
+  rackSnooker,
   rackSeed,
+  respotPosition,
+  setVariant as setPhysicsVariant,
+  SNOOKER_CUE_SPOT,
   stepFixed,
   TABLE,
   type Ball,
@@ -28,8 +32,10 @@ import {
   type Vec,
   type World,
 } from "./physics";
-import { cueSpriteDataURL, drawScene, layoutFor, type Aim, type CueDraw, type Layout } from "./render";
+import { cueSpriteDataURL, drawScene, layoutFor, DEBUG_LAYERS_ALL, type Aim, type CueDraw, type DebugLayers, type Layout } from "./render";
 import { evaluateShot, groupOf, initRules, type RulesState } from "./rules";
+import { evaluateSnooker, initSnooker } from "./rulesSnooker";
+import { variantOf, variantOfWorld, type Variant } from "./variant";
 import { wsUrl, type Msg } from "./net";
 import {
   cueBand,
@@ -54,6 +60,17 @@ import {
 const Game: Component = () => {
   const room = useParams().room ?? "lobby";
   const seed = rackSeed(room); // shared room id -> both clients rack identically
+  // Which game this room is: pool or snooker. Derived from the room code (so both
+  // clients + shared links agree); a loaded replay overrides it from its world.
+  const v0 = variantOf(room);
+  setPhysicsVariant(v0); // pick the variant's ball size + cushion geometry before any R-derived constant
+  const [variant, setVariant] = createSignal<Variant>(v0);
+  const buildRack = (vv: Variant): World => (vv === "snooker" ? rackSnooker(seed) : rackWorld(seed));
+  const freshRules = (b: 0 | 1): RulesState =>
+    variant() === "snooker" ? initSnooker(b) : initRules(b);
+  // Where a potted cue ball is respotted: the D for snooker, the head spot for pool.
+  const cueRespot = (): Vec =>
+    variant() === "snooker" ? { ...SNOOKER_CUE_SPOT } : { x: TABLE.w * 0.25, y: TABLE.h / 2 };
   const navigate = useNavigate();
   let canvas!: HTMLCanvasElement; // full-screen table canvas (felt, balls, cue, lines)
   let hitEl!: HTMLDivElement; // pointer target over the table + cue overhang
@@ -63,7 +80,7 @@ const Game: Component = () => {
   let layoutBase: Layout; // felt-box layout from layoutFor (before centring offset)
 
   // --- High-frequency mutable state (not Solid-reactive) ------------------
-  let world: World = rackWorld(seed);
+  let world: World = buildRack(v0);
   let initialWorld: World = cloneWorld(world);
   let history: ReplayShot[] = [];
   // Count of fully *resolved* shots (incremented in resolveShot, monotonic across
@@ -132,7 +149,7 @@ const Game: Component = () => {
   let replayData: Replay | null = null; // the loaded replay being watched
   let replayTimer: ReturnType<typeof setTimeout> | undefined; // gap between shots
   let seeking = false; // suppress auto-advance + popups during an instant seek
-  let shotConfig: PhysicsConfig = DEFAULT_CONFIG; // config a shot animates under
+  let shotConfig: PhysicsConfig = configFor(v0); // config a shot animates under
   let opp: { cursor?: Vec; aim?: Aim } = {};
   // Live table annotation (pointing finger + dotted paths). Both players can draw
   // at once, so every stream is keyed by its author's slot: `cur[slot]` is that
@@ -196,6 +213,7 @@ const Game: Component = () => {
   // late joiner adopts a synced snapshot (which carries no pot-order history, so
   // fall back to id order and show the balls already settled).
   const seedRack = () => {
+    if (variant() === "snooker") return; // snooker has no return track
     rackBalls = world.balls
       .filter((b) => b.potted && b.id !== 0)
       .sort((a, b) => a.id - b.id)
@@ -217,7 +235,7 @@ const Game: Component = () => {
   };
 
   // --- UI-facing signals --------------------------------------------------
-  const [rules, setRules] = createSignal<RulesState>(initRules(0));
+  const [rules, setRules] = createSignal<RulesState>(freshRules(0));
   const [mySlot, setMySlot] = createSignal(-1);
   const [peerCount, setPeerCount] = createSignal(1);
   // Room lifecycle. `started` is false in the sandbox (a lone player knocking
@@ -238,7 +256,7 @@ const Game: Component = () => {
   const [follow, setFollow] = createSignal(0);
   const [side, setSide] = createSignal(0);
   const [elevation, setElevation] = createSignal(0); // radians
-  const [config, setConfig] = createSignal<PhysicsConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = createSignal<PhysicsConfig>(configFor(v0));
   const [bannerTop, setBannerTop] = createSignal(24); // banner y (centre of the top gap)
   const [animating, setAnimating] = createSignal(false);
   const [replaying, setReplaying] = createSignal(false);
@@ -268,7 +286,20 @@ const Game: Component = () => {
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [tableW, setTableW] = createSignal(360); // felt-box spacer size (flex slot)
   const [tableH, setTableH] = createSignal(360);
-  const [debug, setDebug] = createSignal(false); // collision-geometry overlay
+  const [debug, setDebug] = createSignal(true); // collision-geometry overlay
+  const [debugLayers, setDebugLayers] = createSignal<DebugLayers>({ ...DEBUG_LAYERS_ALL });
+  const toggleLayer = (k: keyof DebugLayers) =>
+    setDebugLayers((p) => ({ ...p, [k]: !p[k] }));
+  // Left-side debug checkboxes: [key, label, colour] per collider type, in draw
+  // order. Colour matches that collider's overlay colour in drawDebugOverlay.
+  const DEBUG_LAYER_ROWS: [keyof DebugLayers, string, string][] = [
+    ["cushions", "cushions", "#ff3b3b"],
+    ["normals", "normals", "rgb(255,120,120)"],
+    ["pockets", "pot circles", "#39ff88"],
+    ["sinks", "sink polys", "rgb(255,90,220)"],
+    ["walls", "outer walls", "rgb(255,170,40)"],
+    ["balls", "ball radii", "#ffdd33"],
+  ];
   const [fullscreen, setFullscreen] = createSignal(false);
   // Communication mode: a tap on the comm button enables freehand annotation AND
   // opens the emoji tray; tapping again closes both.
@@ -520,6 +551,7 @@ const Game: Component = () => {
     strikeShot = undefined;
     acc = 0;
     world = worldFromInitial(log.initial);
+    { const rv = variantOfWorld(world); setVariant(rv); setPhysicsVariant(rv); } // a replay carries no room code — read it off the balls
     initialWorld = cloneWorld(world);
     history = [];
     shotCount = 0;
@@ -528,7 +560,7 @@ const Game: Component = () => {
     gameStarted = true;
     pendingPlace = undefined;
     setConfig(log.config);
-    setRules(initRules(log.breaker));
+    setRules(freshRules(log.breaker));
     resetSinks();
     pottedSeen.clear();
     for (const s of log.shots) {
@@ -813,7 +845,7 @@ const Game: Component = () => {
         if (!pottedSeen.has(0)) addSink(cue, nowMs);
         pottedSeen.delete(0);
         cue.potted = false;
-        cue.p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
+        cue.p = cueRespot();
       }
       pendingPlace = undefined;
       recomputePrediction();
@@ -821,12 +853,31 @@ const Game: Component = () => {
       return;
     }
     const before = rules();
-    const outcome = evaluateShot(before, worldBefore, events);
+    const outcome =
+      variant() === "snooker"
+        ? evaluateSnooker(before, worldBefore, events)
+        : evaluateShot(before, worldBefore, events);
     if (outcome.reRack) {
-      world = rackWorld(seed);
+      world = buildRack(variant());
       initialWorld = cloneWorld(world);
       history = [];
       resetSinks();
+    }
+    // Snooker: potted colours go back on their spots (during the reds phase, and
+    // any fouled colour). Un-pot each and place it — kicking off its sink now if
+    // the frame loop hadn't already, mirroring the scratch respot below.
+    if (variant() === "snooker" && "respot" in outcome) {
+      for (const id of (outcome as { respot: number[] }).respot) {
+        const b = world.balls.find((x) => x.id === id);
+        if (!b || !b.potted) continue;
+        if (!pottedSeen.has(id)) addSink(b, nowMs);
+        pottedSeen.delete(id);
+        b.potted = false;
+        b.p = respotPosition(world, id);
+        b.v = { x: 0, y: 0 };
+        b.w = { x: 0, y: 0, z: 0 };
+        rackBalls = rackBalls.filter((r) => r.id !== id);
+      }
     }
     // Scratch: bring the cue ball back for ball-in-hand. The cue is un-potted
     // here (before the frame loop could see it), so kick off its sink now — but
@@ -835,7 +886,7 @@ const Game: Component = () => {
       if (!pottedSeen.has(0)) addSink(world.balls[0], nowMs);
       pottedSeen.delete(0); // let a future scratch animate again
       world.balls[0].potted = false;
-      world.balls[0].p = { x: TABLE.w * 0.25, y: TABLE.h / 2 };
+      world.balls[0].p = cueRespot();
     }
     setRules(outcome.next);
     // A plain turn change → the transient recap. (Game end opens the game-over
@@ -912,7 +963,8 @@ const Game: Component = () => {
         // Collect it in the return track (cue re-spots, never racks). After the
         // pocket-drop it travels UNDER the table to the bottom-left gutter entry —
         // the farther that pocket, the longer before it rolls out into the track.
-        if (b.id !== 0 && !rackBalls.some((r) => r.id === b.id)) {
+        // Snooker has no return track: a potted ball stays down in its pocket.
+        if (variant() !== "snooker" && b.id !== 0 && !rackBalls.some((r) => r.id === b.id)) {
           const hole = nearestHole(b.p);
           const under =
             (Math.hypot(hole.x - GUTTER_ENTRY.x, hole.y - GUTTER_ENTRY.y) /
@@ -1025,6 +1077,7 @@ const Game: Component = () => {
     drawScene(ctx, {
       world,
       layout,
+      variant: variant(),
       myAim: live ? aim : undefined,
       prediction: live ? prediction : undefined,
       showCue: live,
@@ -1053,6 +1106,7 @@ const Game: Component = () => {
       })),
       animating: animating(),
       debug: debug(),
+      debugLayers: debugLayers(),
       sinks: sinks.map((sk) => ({
         id: sk.id,
         from: sk.from,
@@ -1607,7 +1661,7 @@ const Game: Component = () => {
     lingering = false;
     acc = 0;
     pottedSeen.clear();
-    world = rackWorld(seed);
+    world = buildRack(variant());
     initialWorld = cloneWorld(world);
     history = [];
     shotCount = 0;
@@ -1615,7 +1669,7 @@ const Game: Component = () => {
     gameStarted = true;
     setStarted(true); // a rack exists — never fall back to the sandbox
     breaker = nextBreaker;
-    setRules(initRules(nextBreaker));
+    setRules(freshRules(nextBreaker));
     setReplaying(false);
     setShowGameOver(false);
     setRematchVotes([]);
@@ -1737,6 +1791,7 @@ const Game: Component = () => {
     lingering = false;
     acc = 0;
     world = worldFromInitial(r.initial);
+    { const rv = variantOfWorld(world); setVariant(rv); setPhysicsVariant(rv); } // a replay carries no room code — read it off the balls
     initialWorld = cloneWorld(world);
     history = [];
     shotCount = 0;
@@ -1745,7 +1800,7 @@ const Game: Component = () => {
     gameStarted = true;
     pendingPlace = undefined;
     setConfig(r.config);
-    setRules(initRules(r.breaker));
+    setRules(freshRules(r.breaker));
     setShowGameOver(false);
     resetSinks();
     for (let i = 0; i < n; i++) {
@@ -1856,20 +1911,28 @@ const Game: Component = () => {
       // their widget (the 78px shoot button / 76px cue) with breathing room, so
       // reserve that on both sides — the table then centres exactly between them.
       const COL_W = 90; // per-side reserve (each 1fr column is at least this wide)
-      const unit = layoutFor(1, false); // always landscape
+      const unit = layoutFor(1, false, variant()); // always landscape
       const availW = vw - COL_W * 2;
       // Reserve the ball-return gutter's height (unit.gutter) as the BOTTOM gap,
       // mirrored on top, so the table centres with an equal gap on each side and
       // the gutter fills the bottom gap. Height-limited: table + 2 gaps = vh.
-      let scale = Math.min(availW / unit.W, vh / (unit.H + 2 * unit.gutter));
-      scale = Math.max(40, Math.min(scale, 430));
-      layoutBase = layoutFor(scale, false); // the felt box (W/H/ox/oy)
+      // Snooker has no gutter and no bottom gap — the table sits flush at the
+      // bottom (see .table-spacer.snkr-bottom), so reserve ONE banner-sized gap
+      // at the TOP only (just big enough for the player banner, ~26px tall).
+      const BANNER_GAP = 30; // px reserved above the table (snooker)
+      const snkr = variant() === "snooker";
+      let scale = snkr
+        ? Math.min(availW / unit.W, (vh - BANNER_GAP) / unit.H)
+        : Math.min(availW / unit.W, vh / (unit.H + 2 * unit.gutter));
+      scale = Math.max(0.04, Math.min(scale, 0.43)); // px per world mm
+      layoutBase = layoutFor(scale, false, variant()); // the felt box (W/H/ox/oy)
       // Spacer = table image only; the gutter overflows the spacer downward into
-      // the bottom gap. Banner sits centred in the (equal) top gap.
+      // the bottom gap. Snooker is bottom-flush → the whole gap is on top, so the
+      // banner centres in all of it; pool splits the gap equally top/bottom.
       setTableW(layoutBase.W);
       setTableH(layoutBase.H);
       setCanvasH(layoutBase.H);
-      setBannerTop((vh - layoutBase.H) / 4);
+      setBannerTop((vh - layoutBase.H) / (snkr ? 2 : 4));
       // The canvas itself fills the whole game area (vw × vh, the swapped viewport
       // under rot90) so the cue can be drawn wherever it overhangs the felt. The
       // world origin is recentred onto the spacer each frame in draw().
@@ -1969,6 +2032,23 @@ const Game: Component = () => {
         onPointerCancel={onPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       />
+      {/* Debug: left-side checkboxes to toggle each collider overlay type. */}
+      <Show when={debug()}>
+        <div class="debug-panel">
+          <For each={DEBUG_LAYER_ROWS}>
+            {([key, label, color]) => (
+              <label class="debug-row" style={{ color }}>
+                <input
+                  type="checkbox"
+                  checked={debugLayers()[key]}
+                  onChange={() => toggleLayer(key)}
+                />
+                <span>{label}</span>
+              </label>
+            )}
+          </For>
+        </div>
+      </Show>
       {/* Floating spin window — pops up at the finger while dragging off the cue
           ball, gone on release. In game-root (canvas-local frame) so it rides the
           rot90 transform and shares the frame the drag maps in. */}
@@ -2006,11 +2086,18 @@ const Game: Component = () => {
                   <Show when={i() > 0}>
                     <span class="pb-vs">vs</span>
                   </Show>
-                  <div class="pb-chip" style={{ "border-color": pl.color }}>
+                  <div
+                    class="pb-chip"
+                    classList={{ "pb-turn": started() && rules().turn === pl.slot }}
+                    style={{ "border-color": pl.color }}
+                  >
                     <span class="pb-emoji">{pl.emoji}</span>
                     <span class="pb-name" style={{ color: "var(--fg)" }}>
                       {pl.name}
                     </span>
+                    <Show when={variant() === "snooker"}>
+                      <span class="pb-score">{rules().scores?.[pl.slot] ?? 0}</span>
+                    </Show>
                   </div>
                 </>
               )}
@@ -2062,6 +2149,7 @@ const Game: Component = () => {
             out beside it; the canvas draws the felt over this slot. */}
         <div
           class="table-spacer"
+          classList={{ "snkr-bottom": variant() === "snooker" }}
           ref={tableWrap}
           style={{ width: `${tableW()}px`, height: `${tableH()}px` }}
         />

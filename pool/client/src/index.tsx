@@ -20,6 +20,7 @@ import {
   type PlayerProfile,
 } from "./profile";
 import { EMOJI_DB } from "./emojis";
+import { newRoomPath } from "./variant";
 import "./styles.css";
 
 // Generate a short random room code (URL-safe, no lookalike chars).
@@ -113,11 +114,20 @@ const Landing: Component = () => {
       <div class="mm-cols">
         <div class="mm-left">
           <div class="mm-actions">
+            {/* Two ways to start: standard pool, or snooker (its own ruleset +
+                table). The variant rides the room code, so a shared link / lobby
+                join lands in the same game. */}
             <button
               class="primary mm-start"
-              onClick={() => navigate(`/${newCode()}`)}
+              onClick={() => navigate(newRoomPath("pool", newCode()))}
             >
-              New Game
+              Pool
+            </button>
+            <button
+              class="primary mm-start"
+              onClick={() => navigate(newRoomPath("snooker", newCode()))}
+            >
+              Snooker
             </button>
             {/* Open the local replay library (list of saved replays + import). */}
             <button class="primary mm-start" onClick={openReplays}>

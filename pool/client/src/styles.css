@@ -77,11 +77,49 @@ body {
   touch-action: none;
 }
 
+/* Debug: collider-visibility checkboxes, pinned to the left edge. Above the
+   canvas (z:9) and pointer layer so it's clickable; below the modals. */
+.debug-panel {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid #313244;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #cbccc6;
+  user-select: none;
+}
+.debug-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.debug-row input {
+  cursor: pointer;
+  margin: 0;
+  accent-color: currentColor; /* checkbox tick matches the row's collider colour */
+}
+
 /* Empty spacer reserving the felt's footprint in the flex row; the canvas draws
    the felt over it. It stays UNpositioned so it isn't the offsetParent used to
    locate the felt (that must be .game-root). */
 .table-spacer {
   flex: none;
+}
+
+/* Snooker: no ball-return gutter and no bottom gap — pin the table to the bottom
+   of the play-row so the only vertical slack is the banner gap at the top. */
+.table-spacer.snkr-bottom {
+  align-self: end;
 }
 
 /* Side widgets sit above the hit layer (z:2) so they stay clickable; .play-row
@@ -1194,6 +1232,23 @@ a {
 .pb-vs {
   font-weight: 700;
   opacity: 0.55;
+}
+
+/* Snooker running score, shown inside each player's chip. */
+.pb-score {
+  font-weight: 700;
+  padding: 0 0.8ch;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--fg);
+  min-width: 3ch;
+  text-align: center;
+}
+
+/* The player whose turn it is — highlight their chip. */
+.pb-chip.pb-turn {
+  border-color: var(--accent, #65bddb);
+  box-shadow: 0 0 0 1px var(--accent, #65bddb);
 }
 
 /* Sandbox notice (no opponent yet) — reuses the banner slot, dimmed. */

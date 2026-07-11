@@ -8,6 +8,10 @@ import type { ShotEvent, World } from "./physics";
 export type Group = "solids" | "stripes";
 export type Phase = "break" | "open" | "assigned" | "over";
 
+// What the shooter must strike first this stroke (snooker only): a red, any
+// colour (after a red), or a specific colour by id (once the reds are gone).
+export type BallOn = "red" | "colour" | number;
+
 export type RulesState = {
   turn: 0 | 1;
   groups: [Group | null, Group | null];
@@ -15,6 +19,10 @@ export type RulesState = {
   ballInHand: boolean; // may the current player reposition the cue ball?
   winner: 0 | 1 | null;
   message: string;
+  // --- Snooker-only fields (absent for pool). ---
+  scores?: [number, number]; // running frame score per player
+  reds?: number; // reds still on the table
+  ballOn?: BallOn; // the legal first target this stroke
 };
 
 export function initRules(breaker: 0 | 1 = 0): RulesState {
