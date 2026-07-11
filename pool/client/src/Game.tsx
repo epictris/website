@@ -1184,44 +1184,82 @@ const Game: Component = () => {
   };
 
   const clampCue = (p: Vec): Vec => {
-    // Keep the ball on the felt: the playfield is inset from the table edge by
-    // RAIL_INSET, and the ball touches a rail when its centre is R away.
-    const m = RAIL_INSET + R;
-    let x = Math.max(m, Math.min(TABLE.w - m, p.x));
-    let y = Math.max(m, Math.min(TABLE.h - m, p.y));
-    // Keep the ball centre clear of every pocket hole so it can't be placed in
-    // (or half-hanging over) a pocket.
-    for (const pk of POCKET_LIST) {
-      const dx = x - pk.center.x;
-      const dy = y - pk.center.y;
-      const d = Math.hypot(dx, dy);
-      const min = pk.hole + R;
-      if (d < min && d > 1e-6) {
-        x = pk.center.x + (dx / d) * min;
-        y = pk.center.y + (dy / d) * min;
+    const m = RAIL_INSET + R; // ball touches a rail when its centre is R away
+    const inD = variant() === "snooker" && rules().ballInHand; // snooker in-hand: the D
+    // Clamp a point onto the felt, clear of the pocket holes, and (snooker
+    // in-hand) inside the D.
+    const toBounds = (px: number, py: number): [number, number] => {
+      let x = Math.max(m, Math.min(TABLE.w - m, px));
+      let y = Math.max(m, Math.min(TABLE.h - m, py));
+      for (const pk of POCKET_LIST) {
+        const dx = x - pk.center.x;
+        const dy = y - pk.center.y;
+        const d = Math.hypot(dx, dy);
+        const min = pk.hole + R;
+        if (d < min && d > 1e-6) {
+          x = pk.center.x + (dx / d) * min;
+          y = pk.center.y + (dy / d) * min;
+        }
       }
-    }
-    // Push out of any overlapping object ball.
-    for (const b of world.balls) {
-      if (b.potted || b.id === 0) continue;
-      const dx = x - b.p.x;
-      const dy = y - b.p.y;
-      const d = Math.hypot(dx, dy);
-      if (d < 2 * R && d > 1e-6) {
-        x = b.p.x + (dx / d) * 2 * R;
-        y = b.p.y + (dy / d) * 2 * R;
+      if (inD) {
+        if (x > SNOOKER_D.x) x = SNOOKER_D.x;
+        const dx = x - SNOOKER_D.x;
+        const dy = y - SNOOKER_D.y;
+        const d = Math.hypot(dx, dy);
+        if (d > SNOOKER_D.r) {
+          x = SNOOKER_D.x + (dx / d) * SNOOKER_D.r;
+          y = SNOOKER_D.y + (dy / d) * SNOOKER_D.r;
+        }
       }
+      return [x, y];
+    };
+    // Does (x,y) clear every other ball on the table?
+    const clearOf = (x: number, y: number): boolean => {
+      for (const b of world.balls) {
+        if (b.potted || b.id === 0) continue;
+        if (Math.hypot(x - b.p.x, y - b.p.y) < 2 * R - 1e-4) return false;
+      }
+      return true;
+    };
+
+    let [x, y] = toBounds(p.x, p.y);
+    // The cue ball may never overlap another ball. Slide it clear of any it
+    // overlaps, re-clamping to the bounds each pass: one push can shove it into a
+    // neighbour (e.g. inside a rack) and re-clamping can nudge it back onto one, so
+    // a few passes settle a spot wedged between balls (nice sliding feel).
+    for (let pass = 0; pass < 16; pass++) {
+      let moved = false;
+      for (const b of world.balls) {
+        if (b.potted || b.id === 0) continue;
+        const dx = x - b.p.x;
+        const dy = y - b.p.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 2 * R) {
+          if (d > 1e-6) {
+            x = b.p.x + (dx / d) * 2 * R;
+            y = b.p.y + (dy / d) * 2 * R;
+          } else {
+            x = b.p.x + 2 * R; // exactly coincident — pick a fixed direction
+            y = b.p.y;
+          }
+          moved = true;
+        }
+      }
+      if (!moved) return { x, y };
+      [x, y] = toBounds(x, y);
     }
-    // Snooker in-hand is always played from the D: keep the centre behind the
-    // baulk line and within the semicircle.
-    if (variant() === "snooker" && rules().ballInHand) {
-      if (x > SNOOKER_D.x) x = SNOOKER_D.x;
-      const dx = x - SNOOKER_D.x;
-      const dy = y - SNOOKER_D.y;
-      const d = Math.hypot(dx, dy);
-      if (d > SNOOKER_D.r) {
-        x = SNOOKER_D.x + (dx / d) * SNOOKER_D.r;
-        y = SNOOKER_D.y + (dy / d) * SNOOKER_D.r;
+    // Still wedged (deep in a tight cluster where the slide can't converge): spiral
+    // outward from the target for the nearest bounded, non-overlapping spot — a
+    // guaranteed clear placement.
+    if (!clearOf(x, y)) {
+      for (let ring = 1; ring < 200; ring++) {
+        const rad = ring * R * 0.5;
+        const steps = ring * 6;
+        for (let k = 0; k < steps; k++) {
+          const a = (k / steps) * 2 * Math.PI;
+          const [cx, cy] = toBounds(p.x + rad * Math.cos(a), p.y + rad * Math.sin(a));
+          if (clearOf(cx, cy)) return { x: cx, y: cy };
+        }
       }
     }
     return { x, y };
