@@ -174,15 +174,14 @@ export function setVariant(variant: "pool" | "snooker") {
   geo = GEO[variant];
   TABLE.w = geo.feltWidth;
   TABLE.h = geo.feltHeight;
-  // Snooker ball = EXACTLY 21.6620805781 px diameter on the table photo, whose
-  // felt box spans 1504 px = feltWidth mm. So mm/px = feltWidth/1504 and the
-  // radius = (diameter/2)·mm/px = 21.6620805781·feltWidth/3008 (≈25.7 mm on the
-  // 3569 mm bed — a real 52.5 mm snooker ball). Pool is a real 2.25" ball.
-  R = variant === "snooker" ? (21.6620805781 * geo.feltWidth) / 3008 : 28.575;
+  // Real ball radii (mm): snooker 52.5 mm diameter (26.25 mm), pool 2.25"
+  // (57.15 mm diameter, 28.575 mm) — their true sizes on the real-sized beds.
+  R = variant === "snooker" ? 26.25 : 28.575;
   POCKETS = buildPockets(geo);
   POCKET_LIST = buildPocketList(geo);
-  CUSHION_SEGS = buildCushionSegs(geo);
-  CUSHION_VERTS = buildCushionVerts(CUSHION_SEGS);
+  const c = buildCushionSegs(geo);
+  CUSHION_SEGS = c.segs;
+  CUSHION_VERTS = buildCushionVerts(c.segs, c.arcs, c.skip);
 }
 
 // The cushion noses sit ON the felt-box edge — the playfield is exactly
@@ -249,14 +248,21 @@ export type CushionSeg = {
 // two adjacent faces' inward normals); a `lone` tip accepts the whole front
 // half-plane. Contacts outside the arc are handled by the flat faces instead.
 export type CushionVert = {
-  x: number;
+  x: number; // circle centre (a plain tip/corner is a point: r = 0)
   y: number;
   n1x: number;
   n1y: number;
   n2x: number;
   n2y: number;
   lone: boolean; // exposed tip (one adjoining face) vs 2-face convex corner
+  r: number; // collider radius: 0 = point vertex; > 0 = a fillet ARC of this radius
 };
+
+// A fillet arc: a circular collider of radius `r` centred at (cx,cy), spanning
+// from tangent (ax,ay) on the rail to (bx,by) on the wall. The ball rebounds off
+// its convex (playfield) side — a TRUE arc, not sampled into flats. Stored as a
+// CushionVert with r > 0 (the swept vertex test rides a circle of radius r + R).
+type CushionArc = { cx: number; cy: number; r: number; ax: number; ay: number; bx: number; by: number };
 
 // The cushion outline for the TOP-LEFT quadrant — the top rail's left half, its
 // corner throat, one side-pocket facing, and the left rail — mirrored across both
@@ -266,7 +272,9 @@ export type CushionVert = {
 // to the rails, splayed by `*ThroatTaper` (0 = parallel), with a `cornerRadius`
 // fillet rounding each nose — so the whole mouth is derived from throat / taper /
 // depth / radius, nothing is hand-placed.
-function buildCushionSegs(g: CushionGeo): CushionSeg[] {
+function buildCushionSegs(
+  g: CushionGeo,
+): { segs: CushionSeg[]; arcs: CushionArc[]; skip: Set<string> } {
   const w = g.feltWidth;
   const h = g.feltHeight;
   const P = (x: number, y: number): Vec => ({ x, y });
@@ -325,59 +333,17 @@ function buildCushionSegs(g: CushionGeo): CushionSeg[] {
   );
 
   type Seg = { a: Vec; b: Vec; ref?: Vec };
-  // A jaw from a nose end N to the throat tip T, sampled into `segs` segments: a
-  // CIRCULAR ARC of radius RR bowing toward the table (the convex joins then round
-  // by R into a smooth pocket mouth). Falls back to a straight chamfer if RR is 0
-  // or too small to span the chord (an arc needs radius ≥ half the chord length).
-  const jaw = (N: Vec, T: Vec, segs: number, ref?: Vec): Seg[] => {
-    const dx = T.x - N.x;
-    const dy = T.y - N.y;
-    const L = hyp(dx, dy);
-    if (RR <= 0 || 2 * RR <= L) return [{ a: N, b: T, ref }];
-    const mid = { x: (N.x + T.x) / 2, y: (N.y + T.y) / 2 };
-    const sag = Math.sqrt(RR * RR - (L / 2) * (L / 2));
-    // Unit perpendicular to the chord. The arc centre sits `sag` off the chord
-    // midpoint; put it on the FAR side of the table interior so the arc bulges
-    // toward the playfield (a rounded mouth), not away into the cushion.
-    const ux = -dy / (L || 1e-9);
-    const uy = dx / (L || 1e-9);
-    const toInterior = ux * (w / 2 - mid.x) + uy * (h / 2 - mid.y);
-    const s = toInterior >= 0 ? -1 : 1; // centre opposite the interior
-    const cx = mid.x + s * ux * sag;
-    const cy = mid.y + s * uy * sag;
-    // Sample the minor arc from N to T about the centre.
-    let a0 = Math.atan2(N.y - cy, N.x - cx);
-    let a1 = Math.atan2(T.y - cy, T.x - cx);
-    let da = a1 - a0;
-    while (da > Math.PI) da -= 2 * Math.PI;
-    while (da < -Math.PI) da += 2 * Math.PI;
-    const K = Math.max(1, Math.round(segs));
-    const out: Seg[] = [];
-    for (let i = 0; i < K; i++) {
-      const t0 = a0 + (da * i) / K;
-      const t1 = a0 + (da * (i + 1)) / K;
-      const a = { x: cx + RR * Math.cos(t0), y: cy + RR * Math.sin(t0) };
-      const b = { x: cx + RR * Math.cos(t1), y: cy + RR * Math.sin(t1) };
-      // The arc is convex toward the playfield (centre on the far side), so each
-      // segment's inward normal points radially OUTWARD from the arc centre. Give
-      // it a ref on that outward side rather than the shared mouth point — a single
-      // mouth ref flips the tip-adjacent segments (which wrap past it) the wrong way.
-      const mx = (a.x + b.x) / 2;
-      const my = (a.y + b.y) / 2;
-      out.push({ a, b, ref: { x: 2 * mx - cx, y: 2 * my - cy } });
-    }
-    return out;
-  };
-
   // A straight throat facing from the nose N (on a rail) out to the jaw tip T,
-  // with a cornerRadius fillet rounding the nose where the wall meets the rail.
-  // `railOut` is the unit rail direction AWAY from the pocket (the plain rail
-  // continues that way); the returned `railEnd` is where the plain rail should
-  // stop — the fillet's start. The fillet reuses jaw()'s arc sampler between the
-  // two tangent points. The tip T stays sharp (a lone convex vert rounds it by R).
+  // plus a cornerRadius fillet ARC rounding the nose where the wall meets the
+  // rail. `railOut` is the unit rail direction AWAY from the pocket (the plain
+  // rail continues that way); `into` is a playfield-side point that picks the
+  // material side for the fillet centre. Returns the wall segment, the point the
+  // plain rail should stop at (`railEnd`, the fillet's rail tangent), and the
+  // fillet arc — a TRUE circular collider, not sampled. The tip T stays a sharp
+  // vert (rounded by R). `ref` orients the wall's inward normal.
   const throatWall = (
-    T: Vec, N: Vec, railOut: Vec, segs: number, ref?: Vec,
-  ): { segs: Seg[]; railEnd: Vec } => {
+    T: Vec, N: Vec, railOut: Vec, into: Vec, ref?: Vec,
+  ): { seg: Seg; railEnd: Vec; arc: CushionArc | null } => {
     let wx = T.x - N.x;
     let wy = T.y - N.y;
     const wl = hyp(wx, wy) || 1e-9;
@@ -385,31 +351,55 @@ function buildCushionSegs(g: CushionGeo): CushionSeg[] {
     wy /= wl; // unit nose -> tip
     const dot = Math.max(-1, Math.min(1, railOut.x * wx + railOut.y * wy));
     const theta = Math.acos(dot); // interior angle at the nose (rail vs wall)
-    let A = N; // fillet start, on the rail
-    let B = N; // fillet end, on the wall
-    const out: Seg[] = [];
     if (RR > 1e-6 && theta > 1e-3 && theta < Math.PI - 1e-3) {
-      const d = Math.min(RR / Math.tan(theta / 2), wl * 0.9);
-      A = P(N.x + railOut.x * d, N.y + railOut.y * d);
-      B = P(N.x + wx * d, N.y + wy * d);
-      out.push(...jaw(A, B, segs, ref)); // the nose fillet (arc between the tangents)
+      // Tangent distance from the nose along each edge. If the full-radius fillet
+      // would overrun the (short) wall, SHRINK the radius so it still fits AND
+      // stays tangent — clamping `d` alone would leave the radius too big for that
+      // distance, tilting the tangent off the rail (a kink + preview jump at the
+      // arc↔rail handoff).
+      const tan2 = Math.tan(theta / 2);
+      let rad = RR;
+      let d = rad / tan2;
+      const dmax = wl * 0.9;
+      if (d > dmax) {
+        d = dmax;
+        rad = d * tan2;
+      }
+      const A = P(N.x + railOut.x * d, N.y + railOut.y * d); // rail tangent
+      const B = P(N.x + wx * d, N.y + wy * d); // wall tangent
+      // Fillet centre: along the nose bisector, rad/sin(θ/2) from N, on the MATERIAL
+      // side (opposite `into`), so the arc bulges toward the playfield.
+      let bx = railOut.x + wx;
+      let by = railOut.y + wy;
+      const bl = hyp(bx, by) || 1e-9;
+      bx /= bl;
+      by /= bl;
+      const m = rad / Math.sin(theta / 2);
+      const sgn = (into.x - N.x) * bx + (into.y - N.y) * by > 0 ? -1 : 1;
+      const C = P(N.x + sgn * m * bx, N.y + sgn * m * by);
+      return {
+        seg: { a: B, b: T, ref },
+        railEnd: A,
+        arc: { cx: C.x, cy: C.y, r: rad, ax: A.x, ay: A.y, bx: B.x, by: B.y },
+      };
     }
-    out.push({ a: B, b: T, ref }); // the straight facing to the tip
-    return { segs: out, railEnd: A };
+    return { seg: { a: N, b: T, ref }, railEnd: N, arc: null }; // no fillet (sharp nose)
   };
 
   // Top-left quadrant felt segments (contact surface, world coords). Each pocket
-  // gets two straight throat walls (filleted at the nose) that splay by taper.
-  const topW = throatWall(T_top, N_top, P(1, 0), g.cornerSegs, cornerMouth);
-  const leftW = throatWall(T_left, N_left, P(0, 1), g.cornerSegs, cornerMouth);
-  const sideW = throatWall(T_sL, N_sL, P(-1, 0), g.sideSegs);
+  // gets two straight throat walls, each rounded at the nose by a fillet arc.
+  const topW = throatWall(T_top, N_top, P(1, 0), cornerMouth, cornerMouth);
+  const leftW = throatWall(T_left, N_left, P(0, 1), cornerMouth, cornerMouth);
+  const sideW = throatWall(T_sL, N_sL, P(-1, 0), P(w / 2, h / 2));
   const base: Seg[] = [
     { a: topW.railEnd, b: sideW.railEnd }, // top rail: corner nose -> side-pocket nose
-    ...sideW.segs, // side-pocket left facing
-    ...topW.segs, // top-rail corner facing
+    sideW.seg, // side-pocket left facing
+    topW.seg, // top-rail corner facing
     { a: leftW.railEnd, b: P(0, h - leftW.railEnd.y) }, // left rail (full height, mirrored)
-    ...leftW.segs, // left-rail corner facing
+    leftW.seg, // left-rail corner facing
   ];
+  const baseArcs = [topW.arc, leftW.arc, sideW.arc].filter((a): a is CushionArc => a !== null);
+
   const mref = (r: Vec | undefined, fx: (v: Vec) => Vec) => (r ? fx(r) : undefined);
   const mx = (s: Seg): Seg => {
     const f = (v: Vec) => P(w - v.x, v.y);
@@ -432,11 +422,24 @@ function buildCushionSegs(g: CushionGeo): CushionSeg[] {
   };
   for (const s of base) [s, mx(s), my(s), mx(my(s))].forEach(add);
 
+  // Mirror the fillet arcs the same way (no dedupe — none lie on a mid-line).
+  const mxA = (a: CushionArc): CushionArc => ({ cx: w - a.cx, cy: a.cy, r: a.r, ax: w - a.ax, ay: a.ay, bx: w - a.bx, by: a.by });
+  const myA = (a: CushionArc): CushionArc => ({ cx: a.cx, cy: h - a.cy, r: a.r, ax: a.ax, ay: h - a.ay, bx: a.bx, by: h - a.by });
+  const arcs: CushionArc[] = [];
+  for (const a of baseArcs) [a, mxA(a), myA(a), mxA(myA(a))].forEach((x) => arcs.push(x));
+  // Each arc's rail/wall tangents are covered by the arc, so they must NOT also
+  // spawn a point-vert (that would put a spurious R-bump at the fillet's ends).
+  const skip = new Set<string>();
+  for (const a of arcs) {
+    skip.add(`${a.ax.toFixed(4)},${a.ay.toFixed(4)}`);
+    skip.add(`${a.bx.toFixed(4)},${a.by.toFixed(4)}`);
+  }
+
   // Orient each felt segment's inward normal toward the playfield. No inset and
   // no miter: the faces stay on the true felt surface (so debug == physics), and
   // collision insets by R on the fly. Convex corners are closed by CUSHION_VERTS
-  // (point-circle rounding), not by extending the flat faces into each other.
-  return felt.map(({ a, b, ref }) => {
+  // (point-circles for tips, fillet arcs at the noses).
+  const segs = felt.map(({ a, b, ref }) => {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = hyp(dx, dy) || 1e-9;
@@ -444,7 +447,7 @@ function buildCushionSegs(g: CushionGeo): CushionSeg[] {
     const ty = dy / len;
     let nx = -ty;
     let ny = tx;
-    // Point the normal toward the interior reference (a jaw's throat centre, or
+    // Point the normal toward the interior reference (a wall's throat centre, or
     // the table centre for a plain rail) so it faces the playfield.
     const rx = ref ? ref.x : w / 2;
     const ry = ref ? ref.y : h / 2;
@@ -455,8 +458,10 @@ function buildCushionSegs(g: CushionGeo): CushionSeg[] {
     }
     return { a, b, nx, ny, tx, ty, len };
   });
+  return { segs, arcs, skip };
 }
-export let CUSHION_SEGS: CushionSeg[] = buildCushionSegs(geo);
+const _cushion = buildCushionSegs(geo);
+export let CUSHION_SEGS: CushionSeg[] = _cushion.segs;
 
 // Collect the convex corners of the cushion polygon. A ball's centre rounds
 // these as circles of radius R, which is what lets it rebound off a nose/jaw tip
@@ -465,7 +470,11 @@ export let CUSHION_SEGS: CushionSeg[] = buildCushionSegs(geo);
 // faces meeting so the cushion protrudes into the playfield). Concave junctions
 // and straight rail splits are skipped: there the flat faces already meet the
 // ball first, and a vertex circle would fire spuriously.
-function buildCushionVerts(segs: CushionSeg[]): CushionVert[] {
+function buildCushionVerts(
+  segs: CushionSeg[],
+  arcs: CushionArc[],
+  skip: Set<string>,
+): CushionVert[] {
   const key = (x: number, y: number) => `${x.toFixed(4)},${y.toFixed(4)}`;
   type Edge = { far: Vec; nx: number; ny: number };
   const at = new Map<string, { v: Vec; edges: Edge[] }>();
@@ -483,9 +492,12 @@ function buildCushionVerts(segs: CushionSeg[]): CushionVert[] {
 
   const verts: CushionVert[] = [];
   for (const { v, edges } of at.values()) {
+    // A fillet arc's rail/wall tangents are covered by the arc — skip them, else
+    // a spurious point-circle bumps out of the fillet ends.
+    if (skip.has(key(v.x, v.y))) continue;
     if (edges.length === 1) {
       const e = edges[0];
-      verts.push({ x: v.x, y: v.y, n1x: e.nx, n1y: e.ny, n2x: e.nx, n2y: e.ny, lone: true });
+      verts.push({ x: v.x, y: v.y, n1x: e.nx, n1y: e.ny, n2x: e.nx, n2y: e.ny, lone: true, r: 0 });
     } else if (edges.length === 2) {
       const [e1, e2] = edges;
       // Convex if the average inward normal points OPPOSITE the wedge between the
@@ -497,10 +509,19 @@ function buildCushionVerts(segs: CushionSeg[]): CushionVert[] {
       const mxx = u.x + wv.x;
       const myy = u.y + wv.y;
       if (gx * mxx + gy * myy < -1e-9) {
-        verts.push({ x: v.x, y: v.y, n1x: e1.nx, n1y: e1.ny, n2x: e2.nx, n2y: e2.ny, lone: false });
+        verts.push({ x: v.x, y: v.y, n1x: e1.nx, n1y: e1.ny, n2x: e2.nx, n2y: e2.ny, lone: false, r: 0 });
       }
     }
     // >2 faces (T-junction): leave to the flat faces.
+  }
+
+  // The fillet arcs: each is a fat vertex — a circle of radius r whose wedge is
+  // bounded by the two tangent normals (rail-facing n1, wall-facing n2). The
+  // swept vertex test rides a circle of radius r + R off the centre.
+  for (const a of arcs) {
+    const n1 = unit(a.ax - a.cx, a.ay - a.cy);
+    const n2 = unit(a.bx - a.cx, a.by - a.cy);
+    verts.push({ x: a.cx, y: a.cy, n1x: n1.x, n1y: n1.y, n2x: n2.x, n2y: n2.y, lone: false, r: a.r });
   }
   return verts;
 }
@@ -508,7 +529,7 @@ function unit(x: number, y: number): Vec {
   const l = hyp(x, y) || 1e-9;
   return { x: x / l, y: y / l };
 }
-export let CUSHION_VERTS: CushionVert[] = buildCushionVerts(CUSHION_SEGS);
+export let CUSHION_VERTS: CushionVert[] = buildCushionVerts(_cushion.segs, _cushion.arcs, _cushion.skip);
 
 // Is a contact normal `(dx,dy)` (vertex -> ball) inside a corner's playfield arc?
 // For a lone tip, the whole front half-plane. For a 2-face corner, the wedge
@@ -728,21 +749,26 @@ export function ballValue(id: number): number {
   return id === 0 ? 0 : id <= 15 ? 1 : id - 14;
 }
 
-// The six colour spots + the cue's break position, in world metres (table is
-// 2.0 × 1.0). Laid out to the standard snooker proportions, scaled to this bed:
-// baulk line a fifth in, the D's colours across it, blue at centre, pink midway
-// to the top cushion, black near it. Reds triangle just behind the pink.
-const BAULK_X = TABLE.w * 0.2; // baulk line
-const D_R = TABLE.h * 0.166; // radius of the D (yellow/green offset off centre)
+// The six colour spots + the cue's break position, in world mm, laid out to the
+// REAL 12ft snooker table (3569 × 1778 mm). Pinned to the snooker felt dims — NOT
+// the live TABLE binding, which is pool-sized when this module loads. Standard
+// marks: baulk line 29" from the baulk cushion, the D (11.5" radius) with the
+// three baulk colours across it, blue at centre, pink midway to the top cushion,
+// black 12.75" from it. Reds triangle just behind the pink.
+const SNK_LEN = GEO.snooker.feltWidth; // 3569 mm (length, long axis)
+const SNK_WID = GEO.snooker.feltHeight; // 1778 mm (width)
+const BAULK_X = 737; // baulk line, 29" from the baulk cushion
+const D_R = 292; // radius of the D, 11.5" (yellow/green offset off centre)
 export const SNOOKER_SPOTS: Record<number, Vec> = {
-  16: { x: BAULK_X, y: TABLE.h / 2 - D_R }, // yellow
-  17: { x: BAULK_X, y: TABLE.h / 2 + D_R }, // green
-  18: { x: BAULK_X, y: TABLE.h / 2 }, // brown (baulk-line centre)
-  19: { x: TABLE.w / 2, y: TABLE.h / 2 }, // blue (centre spot)
-  20: { x: TABLE.w * 0.75, y: TABLE.h / 2 }, // pink
-  21: { x: TABLE.w * 0.909, y: TABLE.h / 2 }, // black
+  16: { x: BAULK_X, y: SNK_WID / 2 - D_R }, // yellow (right corner of the D)
+  17: { x: BAULK_X, y: SNK_WID / 2 + D_R }, // green (left corner of the D)
+  18: { x: BAULK_X, y: SNK_WID / 2 }, // brown (baulk-line centre)
+  19: { x: SNK_LEN / 2, y: SNK_WID / 2 }, // blue (centre spot)
+  20: { x: (SNK_LEN / 2 + SNK_LEN) / 2, y: SNK_WID / 2 }, // pink (midway centre → top cushion)
+  21: { x: SNK_LEN - 324, y: SNK_WID / 2 }, // black (12.75" from the top cushion)
 };
-export const SNOOKER_CUE_SPOT: Vec = { x: BAULK_X * 0.75, y: TABLE.h / 2 - D_R * 0.5 };
+// Cue ball breaks from inside the D (bulging toward the baulk cushion, −x).
+export const SNOOKER_CUE_SPOT: Vec = { x: BAULK_X - D_R * 0.45, y: SNK_WID / 2 - D_R * 0.5 };
 
 /** Snooker rack: 15 reds in a triangle behind the pink, six colours on spots,
  *  cue in the D. Layout is fixed (no seed), but the arg keeps parity with
@@ -1135,13 +1161,16 @@ export function stepFixed(
         if (A < 1e-12) continue;
         const B = fx * b.v.x + fy * b.v.y; // half the usual b
         if (B >= 0) continue; // moving away from the vertex
-        const C = fx * fx + fy * fy - R * R;
+        // Ball centre rides a circle of radius r + R off the collider centre: r = 0
+        // for a point tip, r = fillet radius for an arc.
+        const Reff = vt.r + R;
+        const C = fx * fx + fy * fy - Reff * Reff;
         const disc = B * B - A * C;
         if (disc < 0) continue;
         const t = (-B - Math.sqrt(disc)) / A;
         if (t < 0 || t >= best) continue;
-        const nx = (fx + b.v.x * t) / R; // unit contact normal (vertex -> ball)
-        const ny = (fy + b.v.y * t) / R;
+        const nx = (fx + b.v.x * t) / Reff; // unit contact normal (centre -> ball)
+        const ny = (fy + b.v.y * t) / Reff;
         if (b.v.x * nx + b.v.y * ny >= 0) continue; // not closing on the corner
         if (!vertNormalOk(nx, ny, vt)) continue; // belongs to a flat face
         best = t;
@@ -1249,13 +1278,14 @@ function railContactPoint(p0: Vec, v: Vec): Vec | null {
     if (A < 1e-12) continue;
     const B = fx * v.x + fy * v.y;
     if (B >= 0) continue;
-    const C = fx * fx + fy * fy - R * R;
+    const Reff = vt.r + R;
+    const C = fx * fx + fy * fy - Reff * Reff;
     const disc = B * B - A * C;
     if (disc < 0) continue;
     const t = (-B - Math.sqrt(disc)) / A;
     if (t < 0 || t >= best) continue;
-    const nx = (fx + v.x * t) / R;
-    const ny = (fy + v.y * t) / R;
+    const nx = (fx + v.x * t) / Reff;
+    const ny = (fy + v.y * t) / Reff;
     if (v.x * nx + v.y * ny >= 0) continue;
     if (!vertNormalOk(nx, ny, vt)) continue;
     best = t;

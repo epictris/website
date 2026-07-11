@@ -286,7 +286,7 @@ const Game: Component = () => {
   const [canvasH, setCanvasH] = createSignal(360); // sizes the cue column
   const [tableW, setTableW] = createSignal(360); // felt-box spacer size (flex slot)
   const [tableH, setTableH] = createSignal(360);
-  const [debug, setDebug] = createSignal(true); // collision-geometry overlay
+  const [debug, setDebug] = createSignal(false); // collision-geometry overlay (toggle with "d")
   const [debugLayers, setDebugLayers] = createSignal<DebugLayers>({ ...DEBUG_LAYERS_ALL });
   const toggleLayer = (k: keyof DebugLayers) =>
     setDebugLayers((p) => ({ ...p, [k]: !p[k] }));

@@ -5,6 +5,7 @@
 
 import {
   CUSHION_SEGS,
+  CUSHION_VERTS,
   currentGeo,
   geoFor,
   IDENT3,
@@ -565,6 +566,26 @@ function drawDebugOverlay(
         ctx.beginPath();
         ctx.moveTo(m.x, m.y);
         ctx.lineTo(n.x, n.y);
+        ctx.stroke();
+      }
+    }
+    // Fillet arcs (r > 0 verts) — a TRUE curved collider, sampled only for drawing.
+    // The tip verts (r = 0) are point-circles rounded by R; not drawn.
+    if (L.cushions) {
+      ctx.strokeStyle = "#ff3b3b";
+      for (const vt of CUSHION_VERTS) {
+        if (vt.r <= 0) continue;
+        const a1 = Math.atan2(vt.n1y, vt.n1x);
+        let da = Math.atan2(vt.n2y, vt.n2x) - a1;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        ctx.beginPath();
+        const N = 14;
+        for (let i = 0; i <= N; i++) {
+          const ang = a1 + (da * i) / N;
+          const p = toPx(l, { x: vt.x + vt.r * Math.cos(ang), y: vt.y + vt.r * Math.sin(ang) });
+          i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+        }
         ctx.stroke();
       }
     }
