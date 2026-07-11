@@ -24,6 +24,15 @@ const NAME: Record<number, string> = {
 };
 const ballName = (id: number) => (isRed(id) ? "a red" : (NAME[id] ?? "a ball"));
 
+/** Is `id` a legal FIRST ball to strike given what the shooter is on? A red when
+ *  on a red, any colour when on a colour, or exactly the nominated colour. The
+ *  shot preview uses this to flag a foul (wrong ball first) before the shot. */
+export function legalSnookerTarget(ballOn: BallOn, id: number): boolean {
+  if (ballOn === "red") return isRed(id);
+  if (ballOn === "colour") return isColour(id);
+  return id === ballOn; // a specific colour is on (reds gone)
+}
+
 export function initSnooker(breaker: 0 | 1 = 0): RulesState {
   return {
     turn: breaker,

@@ -21,6 +21,7 @@ import {
   respotPosition,
   setVariant as setPhysicsVariant,
   SNOOKER_CUE_SPOT,
+  SNOOKER_D,
   stepFixed,
   TABLE,
   type Ball,
@@ -1087,6 +1088,7 @@ const Game: Component = () => {
 
       myGroup,
       onEight,
+      snookerOn: variant() === "snooker" ? r.ballOn : undefined,
       opponent: opp,
       pointers: Object.values(annot.pointers),
       // Whole line through the hold, then erase from start→release: `erase` is the
@@ -1208,6 +1210,18 @@ const Game: Component = () => {
       if (d < 2 * R && d > 1e-6) {
         x = b.p.x + (dx / d) * 2 * R;
         y = b.p.y + (dy / d) * 2 * R;
+      }
+    }
+    // Snooker in-hand is always played from the D: keep the centre behind the
+    // baulk line and within the semicircle.
+    if (variant() === "snooker" && rules().ballInHand) {
+      if (x > SNOOKER_D.x) x = SNOOKER_D.x;
+      const dx = x - SNOOKER_D.x;
+      const dy = y - SNOOKER_D.y;
+      const d = Math.hypot(dx, dy);
+      if (d > SNOOKER_D.r) {
+        x = SNOOKER_D.x + (dx / d) * SNOOKER_D.r;
+        y = SNOOKER_D.y + (dy / d) * SNOOKER_D.r;
       }
     }
     return { x, y };

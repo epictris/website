@@ -12,6 +12,7 @@ import {
   POCKET_DEPTH,
   POCKET_LIST,
   R,
+  SNOOKER_D,
   TABLE,
   type Mat3,
   type Prediction,
@@ -78,7 +79,8 @@ function ensureTableImg(variant: Variant) {
   img.src = TABLE_IMG[variant];
   tableImgs[variant] = img;
 }
-import { groupOf, type Group } from "./rules";
+import { groupOf, type BallOn, type Group } from "./rules";
+import { legalSnookerTarget } from "./rulesSnooker";
 import { TABLE_IMG, type Variant } from "./variant";
 import { isColour } from "./physics";
 
@@ -331,6 +333,7 @@ export type Scene = {
   cue?: CueDraw; // the on-table cue stick (own aim, opponent's, or strike linger)
   myGroup?: Group | null;
   onEight?: boolean; // shooter has cleared their group -> the 8 is a legal target
+  snookerOn?: BallOn; // snooker: the ball the shooter is on ("red"/"colour"/id) — drives the foul preview
   opponent?: { cursor?: Vec; aim?: Aim };
   pointers?: { pos: Vec; color: string }[]; // each drawer's live pointing-finger
   strokes?: { pts: Vec[]; erase: number; color: string }[]; // dotted paths; `erase`=fraction wiped from the start
@@ -360,6 +363,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   // Snooker has no ball-return track — potted balls stay in the pocket.
   if (variant !== "snooker") drawRack(ctx, l, s.rack ?? [], s.now ?? 0, variant);
   drawTable(ctx, l, variant);
+  if (variant === "snooker") drawSnookerMarks(ctx, l);
 
   // Object balls first; the cue ball + cue stick go down in painter's order so
   // "tip under/over the ball" is just which one is drawn last — no occluder.
@@ -384,7 +388,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, s: Scene) {
   // dialled in (no preview at zero power). Drawn AFTER the balls so the lines
   // (cue path, ghost, struck-ball ray) sit on top of them, not under.
   if (s.myAim && s.prediction && !s.animating)
-    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null, s.onEight ?? false);
+    drawPrediction(ctx, l, s.prediction, s.myGroup ?? null, s.onEight ?? false, s.snookerOn);
 
   // NB: both cue sticks are DOM <img> overlays in Game.tsx (so they can extend
   // past the canvas edge): the active player's own cue, and the opponent's blue
@@ -699,6 +703,34 @@ function drawTable(ctx: CanvasRenderingContext2D, l: Layout, variant: Variant) {
   ctx.save();
   ctx.transform(m11, m12, m21, m22, dx, dy); // composes onto the dpr transform
   ctx.drawImage(tableImg, 0, 0);
+  ctx.restore();
+}
+
+// The snooker baulk line + the D, drawn on the felt (under the balls). The baulk
+// line spans the width at x = D.x; the D is a semicircle of radius D.r bulging
+// toward the baulk cushion (−x). Sampled points go through toPx so it tracks any
+// orientation.
+function drawSnookerMarks(ctx: CanvasRenderingContext2D, l: Layout) {
+  const { x: cx, y: cy, r } = SNOOKER_D;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.45)";
+  ctx.lineWidth = Math.max(1.2, l.scale * 4); // ~4 mm chalk line
+  // Baulk line across the full width.
+  const a = toPx(l, { x: cx, y: 0 });
+  const b = toPx(l, { x: cx, y: TABLE.h });
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  // The D — the −x half circle (ang π/2 → 3π/2 keeps cos ≤ 0, the baulk side).
+  ctx.beginPath();
+  const N = 40;
+  for (let i = 0; i <= N; i++) {
+    const ang = Math.PI / 2 + (Math.PI * i) / N;
+    const p = toPx(l, { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) });
+    i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -1443,7 +1475,9 @@ function drawPrediction(
   pr: Prediction,
   myGroup: Group | null,
   onEight: boolean,
+  snookerOn?: BallOn,
 ) {
+  const snooker = snookerOn !== undefined;
   const rpx = R * l.scale;
   const PRED_LINE_W = 1.6; // one width for both prediction lines (cue + struck)
   ctx.save();
@@ -1455,16 +1489,21 @@ function drawPrediction(
   polyline(ctx, l, pr.cue);
   ctx.setLineDash([]);
 
-  // A predicted foul: cue ball scratches, or first contact is an opponent ball.
+  // A predicted foul: cue ball scratches, or the WRONG ball is struck first.
+  // Pool: an opponent's ball (or the 8 before the group is cleared). Snooker: any
+  // ball that isn't legal for what the shooter is on — a colour when on a red, a
+  // red when on a colour, or the wrong colour (all fouls).
   const oppHit =
     myGroup !== null &&
     pr.objectId !== undefined &&
     groupOf(pr.objectId) !== myGroup &&
     groupOf(pr.objectId) !== "eight";
-  // Hitting the 8 first is a foul unless the shooter is on the 8 (group cleared).
   const eightHit =
     pr.objectId !== undefined && groupOf(pr.objectId) === "eight" && !onEight;
-  const foul = pr.cuePotted || oppHit || eightHit;
+  const wrongFirst = snooker
+    ? pr.objectId !== undefined && !legalSnookerTarget(snookerOn, pr.objectId)
+    : oppHit || eightHit;
+  const foul = pr.cuePotted || wrongFirst;
 
   // Struck ball's initial travel — solid white line from its centre. Suppressed
   // on a predicted foul (the shot is illegal, so its outcome isn't previewed).
@@ -1473,7 +1512,9 @@ function drawPrediction(
     // against the felt. Stripes (9..15) reuse their solid's hue. Length encodes hit
     // fullness (head-on = longest, grazing shrinks to nothing) — draw as-is.
     const oid = pr.objectId ?? 1;
-    const base = HUE[oid <= 8 ? oid : oid - 8] ?? "#f4f1ea";
+    // Colour the ray like the struck ball: the snooker ball's own hue, or the
+    // pool solid/stripe hue.
+    const base = snooker ? snookerBase(oid) : HUE[oid <= 8 ? oid : oid - 8] ?? "#f4f1ea";
     ctx.strokeStyle = saturate(base, 0.4, 0.06);
     ctx.lineWidth = PRED_LINE_W;
     polyline(ctx, l, pr.object);
@@ -1496,7 +1537,7 @@ function drawPrediction(
     ? pr.cue.length
       ? pr.cue[pr.cue.length - 1]
       : null
-    : oppHit || eightHit
+    : wrongFirst
       ? pr.ghost
       : null;
   if (crossAt) {

@@ -769,6 +769,9 @@ export const SNOOKER_SPOTS: Record<number, Vec> = {
 };
 // Cue ball breaks from inside the D (bulging toward the baulk cushion, −x).
 export const SNOOKER_CUE_SPOT: Vec = { x: BAULK_X - D_R * 0.45, y: SNK_WID / 2 - D_R * 0.5 };
+// The D: a semicircle of radius `r` centred on the baulk line at (x, y), bulging
+// toward the baulk cushion (−x). The cue-ball in-hand region + a drawn table mark.
+export const SNOOKER_D = { x: BAULK_X, y: SNK_WID / 2, r: D_R };
 
 /** Snooker rack: 15 reds in a triangle behind the pink, six colours on spots,
  *  cue in the D. Layout is fixed (no seed), but the arg keeps parity with
