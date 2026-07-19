@@ -7,6 +7,7 @@ on:
       - 'app/**'
       - 'clipboard/**'
       - 'pool/**'
+      - 'rope/**'
       - 'Dockerfile'
       - 'compose.yml'
       - 'Caddyfile'
@@ -33,6 +34,8 @@ jobs:
               - 'clipboard/**'
             pool:
               - 'pool/**'
+            rope:
+              - 'rope/**'
             deploy-config:
               - 'compose.yml'
               - 'Caddyfile'
@@ -51,6 +54,9 @@ jobs:
           fi
           if [ "${{ steps.filter.outputs.pool }}" = "true" ]; then
             add pool ./pool "ghcr.io/${{ github.repository }}/pool"
+          fi
+          if [ "${{ steps.filter.outputs.rope }}" = "true" ]; then
+            add rope ./rope "ghcr.io/${{ github.repository }}/rope"
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -118,5 +124,6 @@ jobs:
             "export WEBSITE_IMAGE=ghcr.io/${{ github.repository }}:latest \
              && export CLIPBOARD_IMAGE=ghcr.io/${{ github.repository }}/clipboard:latest \
              && export POOL_IMAGE=ghcr.io/${{ github.repository }}/pool:latest \
+             && export ROPE_IMAGE=ghcr.io/${{ github.repository }}/rope:latest \
              && docker compose -f /opt/website/compose.yml up -d --pull always \
              && docker compose -f /opt/website/compose.yml restart caddy"

@@ -13,3 +13,7 @@ clipboard.tris.sh {
 pool.tris.sh {
 	reverse_proxy pool:8080
 }
+
+rope.tris.sh {
+	reverse_proxy rope:8080
+}

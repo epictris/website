@@ -13,6 +13,7 @@ services:
       - website
       - clipboard
       - pool
+      - rope
 
   website:
     image: ${WEBSITE_IMAGE}
@@ -26,6 +27,12 @@ services:
 
   pool:
     image: ${POOL_IMAGE}
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+
+  rope:
+    image: ${ROPE_IMAGE}
     restart: unless-stopped
     environment:
       - PORT=8080

@@ -1,0 +1,17 @@
+{
+  "level": "LEVEL_2",
+  "frames": 320,
+  "holds": [
+    { "action": "fire", "from": 30, "to": 320 },
+    { "action": "retract", "from": 70, "to": 260 },
+    { "action": "move_right", "from": 100, "to": 200 }
+  ],
+  "mouse": [
+    { "from": 1, "to": 320, "x": 200, "y": -220, "relative": true }
+  ],
+  "asserts": [
+    { "reachState": "AirborneState", "byFrame": 200 },
+    { "frame": 320, "maxSpeed": 100000 },
+    { "frame": 120, "hasRope": true }
+  ]
+}

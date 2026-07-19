@@ -1,0 +1,36 @@
+# rope 🪝
+
+A tiny browser playground for a grappling-hook character controller — swing, wall-run,
+wall-jump, and reel yourself around with a rope that wraps realistically around geometry.
+
+TypeScript port of a C#/Godot prototype (no engine dependency — physics is hand-rolled).
+
+## Play
+
+```sh
+bun install
+bun run dev      # open http://localhost:3100
+```
+
+Keybinds match the original Godot project:
+
+| Input | Action |
+|-------|--------|
+| `R` / `T` | move left / right |
+| `Space` | jump (wall-jump on a wall) |
+| left-click | fire the hook toward the cursor |
+| right-click | strong retract tug |
+| `C` | reel in · `S` reel out |
+| `1` / `2` | spawn a small / large box |
+| `P` | download a replayable session bundle |
+
+## Share a playtest
+
+Press **P** to download a `session-*.json` bundle. Replay it (deterministically, with
+sanity checks) headlessly:
+
+```sh
+bun run src/tools/cli.ts replay session-1234f.json
+```
+
+See `CLAUDE.md` for architecture and the full tooling reference.
