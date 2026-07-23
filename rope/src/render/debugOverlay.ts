@@ -1,11 +1,15 @@
-// Ledge-grab debug overlay (toggle: L). Render-side only — draws directly
-// from LedgeDetection, the same module the player states grab through, so the
-// visualization can never drift from the sim. Movers re-evaluate live: a
+// Debug overlay (toggle: L). Render-side only — draws directly from the same
+// modules the sim runs through (LedgeDetection, the player state machine), so
+// the visualization can never drift from the sim. Movers re-evaluate live: a
 // rotating corner visibly swings in and out of grabbability.
 
 import { Vec2 } from "../engine/vec2";
 import { PhysicsBody2D } from "../engine/body";
 import { Player } from "../classes/player";
+import { GroundedState } from "../classes/states/groundedState";
+import { OnWallState } from "../classes/states/onWallState";
+import { LedgeHangState } from "../classes/states/ledgeHangState";
+import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { GRAB_REACH_MARGIN, LedgeDetection } from "../lib/ledgeDetection";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Surface } from "../lib/surface";
@@ -42,7 +46,7 @@ function drawTick(ctx: CanvasRenderingContext2D, from: Vec2, normal: Vec2, color
 //    candidate has rotated out of reach, grey X when a compound-body seam
 //    occludes it.
 // Non-candidate vertices and circles (never grabbable) draw nothing.
-export function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
+function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
   const bodies = level.world.bodies;
   for (const body of bodies) {
     if (body instanceof Player) continue;
@@ -97,4 +101,60 @@ export function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): v
       }
     }
   }
+}
+
+const CONTACT_ARROW_LENGTH = 24;
+const CONTACT_ARROW_HEAD = 5;
+
+function drawContactArrow(
+  ctx: CanvasRenderingContext2D,
+  from: Vec2,
+  normal: Vec2,
+  rotating: boolean,
+): void {
+  const color = FACE_COLORS[Surface.getSurfaceType(normal, rotating)];
+  const to = from.add(normal.mul(CONTACT_ARROW_LENGTH));
+  const dir = normal;
+  const left = dir.rotated(Math.PI * 0.8).mul(CONTACT_ARROW_HEAD);
+  const right = dir.rotated(-Math.PI * 0.8).mul(CONTACT_ARROW_HEAD);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(to.x + left.x, to.y + left.y);
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(to.x + right.x, to.y + right.y);
+  ctx.stroke();
+}
+
+// Draws the surface normal(s) the sim currently believes the player is
+// touching, as arrows from the contact point, colored by surface
+// classification (floor green / wall yellow / ceiling red). Reads the same
+// state fields the states steer by — no separate collision probe.
+function drawContactNormals(ctx: CanvasRenderingContext2D, level: Level): void {
+  const player = level.player;
+  const state = player.state;
+
+  if (state instanceof GroundedState || state instanceof OnWallState) {
+    const normal = state.surfaceNormal;
+    if (normal.lengthSquared() === 0) return;
+    const contact = player.globalPosition.sub(normal.mul(player.radius));
+    drawContactArrow(ctx, contact, normal, state.supportBody?.isRotating ?? false);
+    return;
+  }
+
+  if (state instanceof LedgeHangState || state instanceof LedgeClimbState) {
+    if (state.body.removed) return;
+    const info = LedgeDetection.grabInfo(state.body, state.vertexIndex);
+    if (!info) return;
+    drawContactArrow(ctx, info.vertex, info.wallNormal, state.body.isRotating);
+    drawContactArrow(ctx, info.vertex, info.floorNormal, state.body.isRotating);
+  }
+}
+
+export function drawDebugOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
+  drawLedgeOverlay(ctx, level);
+  drawContactNormals(ctx, level);
 }

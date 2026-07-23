@@ -68,9 +68,11 @@ bun run dev        # http://localhost:3100
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire
 hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn circles ·
 **P** download a replayable session bundle ·
-**L** toggle the ledge-grab debug overlay (render-only: green marker + dashed grab-radius
-circle = grabbable now, hollow red = candidate rotated out of reach, grey X = seam-occluded,
-face ticks colored by floor/wall/ceiling classification).
+**L** toggle the debug overlay (render-only). It shows ledge-grab markers (green marker +
+dashed grab-radius circle = grabbable now, hollow red = candidate rotated out of reach,
+grey X = seam-occluded, face ticks colored by floor/wall/ceiling classification) and an
+arrow for the surface normal the player is currently touching (grounded/wall surface, or
+both ledge faces while hanging/climbing), colored by the same classification.
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).

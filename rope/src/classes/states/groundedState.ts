@@ -2,7 +2,6 @@
 
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
-import { Colors, Debug } from "../../engine/debug";
 import { PhysicsBody2D, RigidBody2D } from "../../engine/body";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
@@ -81,11 +80,6 @@ export class GroundedState extends PlayerState {
       return new AirborneState();
     }
 
-    Debug.drawArrow(
-      player.globalPosition,
-      player.globalPosition.sub(this.surfaceNormal.mul(12)),
-      Colors.Red,
-    );
     return this;
   }
 
