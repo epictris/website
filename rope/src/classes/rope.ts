@@ -68,7 +68,8 @@ export class Rope {
   }
 
   retract(amount = 1): void {
-    this.maxRopeLength -= amount;
+    // The rope may never be retracted to a negative length.
+    this.maxRopeLength = Mathf.max(this.maxRopeLength - amount, 0);
   }
 
   extend(): void {
