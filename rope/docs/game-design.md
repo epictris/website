@@ -106,6 +106,50 @@ The static/mobile distinction (above) still matters for the physics/rope solvers
 and for *why* a normal changed, but it does **not** let the controller skip the
 per-frame reclassification.
 
+## Surface snapping (character controller)
+
+While in surface contact the controller does not rely on the slide loop alone to
+keep the player attached — after each frame's move-and-slide it actively snaps
+back onto the surface. This is what lets the player walk over a convex corner or
+down a slope crest without launching, and hug a wall whose normal is changing.
+Two variants, matching the two contact states:
+
+**Snap-to-ground** (grounded). If the slide loop produced no contact this frame
+(the player moved past the edge of the supporting face), do a *test* move one
+unit along the inverted stored surface normal (i.e. into where the floor was):
+
+- No hit → genuinely airborne; transition out.
+- Hit a **physics-driven body** (circle) → do not snap; go airborne. Snapping
+  only targets static/scripted geometry.
+- Hit a surface whose normal is too aligned with the player's current
+  motion-plus-gravity direction → reject the snap (the candidate face is the one
+  the player is moving *away* from); go airborne.
+- Otherwise: teleport the player by the test move's travel (skipped while a rope
+  is attached — the rope constraint owns position there) and **reclassify** the
+  new normal: floor → stay grounded on the new face, wall → wall slide,
+  ceiling → airborne. So walking over a rounded crest onto a steep side flows
+  directly from grounded into wall-slide via the snap, without an airborne gap.
+
+**Snap-to-wall** (on wall). Every frame still on the wall, the controller moves
+the player *into* the wall (a large motion along the inverted wall normal); the
+resulting collision both re-presses the player against the surface and refreshes
+the stored wall normal from the hit. Around this snap the wall state also
+probes:
+
+- A ray past the top of the wall (offset one player-radius beyond the corner, in
+  the movement direction): if it hits a **floor**-classified surface the wall
+  ends in a grabbable ledge — moving up transitions into ledge climb, otherwise
+  into ledge hang (with a positional correction onto the corner). This is the
+  reachability check from the ledge section below acting in-engine: the ray must
+  see a floor on top, so a wall-steep top face never triggers a grab.
+- A ray into the wall from the player's position: no hit → the wall ran out;
+  go airborne.
+- After the snap, if the refreshed normal now classifies as **floor** (the wall
+  curved or rotated under the threshold) → transition to grounded.
+
+Both snaps are the mechanism that makes the per-frame reclassification (above)
+concrete: the snap collision is where the fresh normal comes from.
+
 ## Velocity inheritance from the supporting surface
 
 While the player stands on or slides down a mobile surface, they inherit that
@@ -163,3 +207,11 @@ player must approach from. So ledge grabbing splits into:
 2. **Reachability** — evaluated against the vertex's *current* world position and
    edge normals (per frame for mobile shapes, since a rotating corner can swing
    into or out of a grabbable orientation).
+
+Reachability requires the ledge's **top surface to classify as a floor** (same
+normal-vs-gravity thresholds as the character controller's floor / wall /
+ceiling classification above). If the surface on top of the corner is steep
+enough to count as a wall — or faces down as a ceiling — the corner is **not
+grabbable**, even though its interior angle keeps it a candidate. A rotating
+shape can therefore carry a permanent candidate vertex in and out of
+grabbability as its top face crosses the floor/wall threshold.
