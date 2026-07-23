@@ -16,6 +16,12 @@ import { Hook } from "../classes/hook";
 import type { Level } from "../level/level";
 import type { Camera } from "./camera";
 import { drawDebugOverlay } from "./debugOverlay";
+import {
+  drawPlayerRigBack,
+  drawPlayerRigFront,
+  rightHandPosition,
+  updatePlayerRig,
+} from "./playerRig";
 
 const BG = "#1f2430";
 const GEOMETRY_FILL = "#2a2f3d";
@@ -48,7 +54,6 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     pathShape(ctx, t);
     ctx.fillStyle = PLAYER;
     ctx.fill();
-    // Facing indicator.
     return;
   }
   if (body instanceof Hook) {
@@ -124,21 +129,37 @@ export function render(
   ctx.scale(camera.zoom, camera.zoom);
   ctx.translate(-camera.position.x, -camera.position.y);
 
-  for (const body of level.world.bodies) drawBody(ctx, body);
+  for (const body of level.world.bodies) {
+    if (body instanceof Player) continue; // drawn between the rig layers below
+    drawBody(ctx, body);
+  }
   for (const area of level.world.areas) drawBody(ctx, area);
 
-  // Rope spans.
+  // Player sandwich: far-side limbs, body, rope, near-side limbs.
+  updatePlayerRig(level);
+  drawPlayerRigBack(ctx);
+  drawBody(ctx, level.player);
+
+  // Rope spans. The first span is redrawn from the right hand's centre so the
+  // rope visually originates from the rope-holding arm (sim attach unchanged).
   const rope = level.player.rope;
   if (rope) {
+    const origin = rightHandPosition();
     ctx.strokeStyle = HOOK;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (const span of rope.getSpans()) {
-      ctx.moveTo(span.span.start.x, span.span.start.y);
-      ctx.lineTo(span.span.end.x, span.span.end.y);
+    const spans = rope.getSpans();
+    for (let i = 0; i < spans.length; i++) {
+      const s = spans[i]!.span;
+      const start = i === 0 && origin ? origin : s.start;
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(s.end.x, s.end.y);
     }
     ctx.stroke();
   }
+
+  // Near-side limbs over the rope so the rope-holding arm reads on top.
+  drawPlayerRigFront(ctx);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
   if (showDebug) drawDebugOverlay(ctx, level);

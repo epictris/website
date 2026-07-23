@@ -154,7 +154,22 @@ function drawContactNormals(ctx: CanvasRenderingContext2D, level: Level): void {
   }
 }
 
+const COLLIDER = "#ffe14d";
+
+// The player's actual circle collider — the rendered body is a narrower
+// capsule, so the debug view shows the true collision bounds.
+function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
+  const t = level.player.getShape();
+  if (t.shape.kind !== "circle") return;
+  ctx.strokeStyle = COLLIDER;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(t.globalPosition.x, t.globalPosition.y, t.shape.radius, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
 export function drawDebugOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
   drawLedgeOverlay(ctx, level);
   drawContactNormals(ctx, level);
+  drawPlayerCollider(ctx, level);
 }
