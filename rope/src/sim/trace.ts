@@ -7,6 +7,9 @@ import { Vec2 } from "../engine/vec2";
 import { StaticBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { Hook } from "../classes/hook";
+import { LedgeClimbState } from "../classes/states/ledgeClimbState";
+import { LedgeHangState } from "../classes/states/ledgeHangState";
+import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { Level } from "../level/level";
 
@@ -19,8 +22,8 @@ export const ACTIONS = [
   "extend",
   "fire",
   "retractClick",
-  "spawnSmallRect",
-  "spawnLargeRect",
+  "spawnSmallCircle",
+  "spawnLargeCircle",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -107,6 +110,79 @@ export interface Violation {
 
 const RUNAWAY_SPEED = 1e5;
 const EMBED_TOLERANCE = 3;
+
+// ---- input-frozen detector -------------------------------------------------
+// Flags the "player holds a direction but barely moves" class of bug: with a
+// mobile body nearby, holding a direction for a sustained window must produce
+// real displacement along it. Pressing into a static wall is exempt (no
+// mobile body involved). Frames in deliberate-stationary states (ledge hang /
+// climb, wall-jump startup) or with an active rope are exempt — but a state
+// merely *thrashing* through Airborne must not reset the window, so the
+// streak counts every non-exempt input-held frame regardless of state.
+
+const STUCK_WINDOW = 45; // frames of continuous same-direction input
+const STUCK_MIN_DISPLACEMENT = 25; // px along the input direction over the window
+const STUCK_MOBILE_DIST = 48; // px — a mobile body this close implicates movers
+
+function mobileBodyNear(level: Level): boolean {
+  const p = level.player;
+  for (const body of level.world.bodies) {
+    if (body === p || body.removed || !body.isMobile || !body.hasShape()) continue;
+    if (body instanceof Hook) continue;
+    const s = body.getShape().shape;
+    const bound = s.kind === "circle" ? s.radius : Math.hypot(s.size.x, s.size.y) * 0.5;
+    if (body.globalPosition.distanceTo(p.globalPosition) <= bound + STUCK_MOBILE_DIST) return true;
+  }
+  return false;
+}
+
+export class StuckDetector {
+  private streak = 0;
+  private dir = 0;
+  private xs: number[] = [];
+  private mobileSeen: boolean[] = [];
+
+  // Call once per frame after level.physicsProcess. Returns a violation when
+  // the window criteria trip, then restarts the streak (no per-frame spam).
+  push(level: Level, input: FrameInput): Violation | null {
+    const p = level.player;
+    const dir = (input.moveRight.held ? 1 : 0) - (input.moveLeft.held ? 1 : 0);
+    const exempt =
+      p.rope !== null ||
+      p.state instanceof LedgeHangState ||
+      p.state instanceof LedgeClimbState ||
+      p.state instanceof WallJumpingState;
+
+    if (dir === 0 || exempt || dir !== this.dir) {
+      this.dir = dir;
+      this.streak = 0;
+      this.xs.length = 0;
+      this.mobileSeen.length = 0;
+      if (dir === 0 || exempt) return null;
+    }
+
+    this.streak++;
+    this.xs.push(p.globalPosition.x);
+    this.mobileSeen.push(mobileBodyNear(level));
+    if (this.streak < STUCK_WINDOW) return null;
+
+    const dx = (this.xs[this.xs.length - 1]! - this.xs[0]!) * dir;
+    const mobileInvolved = this.mobileSeen.some(Boolean);
+    this.xs.shift();
+    this.mobileSeen.shift();
+    if (dx < STUCK_MIN_DISPLACEMENT && mobileInvolved) {
+      this.streak = 0;
+      this.xs.length = 0;
+      this.mobileSeen.length = 0;
+      return {
+        frame: level.frame,
+        kind: "input-frozen",
+        detail: `held ${dir > 0 ? "right" : "left"} ${STUCK_WINDOW}f, moved ${dx.toFixed(1)}px (state=${p.state.constructor.name})`,
+      };
+    }
+    return null;
+  }
+}
 
 // Per-frame sanity checks (ported in spirit from snapshot/InvariantChecker.cs).
 export function checkInvariants(level: Level): Violation[] {

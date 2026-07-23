@@ -2,6 +2,7 @@
 
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
+import type { PhysicsBody2D } from "../../engine/body";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
 import { SlideType, SurfaceType } from "../../lib/types";
@@ -53,15 +54,23 @@ export class AirborneState extends PlayerState {
       const collision = player.moveAndCollide(motionVector);
       if (!collision) return newState;
       const normal = collision.getNormal();
-      switch (Surface.getSurfaceType(normal)) {
+      const collider = collision.getCollider() as PhysicsBody2D;
+      // Separating contact (depenetration pushout): positional correction
+      // only — see GroundedState.moveAndSlide.
+      if (player.velocity.dot(normal) > 0) {
+        motionVector = collision.getRemainder();
+        continue;
+      }
+      switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
           if (player.xInputDirection * normal.x < 0)
-            newState = OnWallState.running(player.velocity, normal);
-          else if (player.xInputDirection * normal.x === 0) newState = OnWallState.sliding(normal);
+            newState = OnWallState.running(player.velocity, normal, collider);
+          else if (player.xInputDirection * normal.x === 0)
+            newState = OnWallState.sliding(normal, collider);
           // else: pressing away from wall — don't attach
           break;
         case SurfaceType.FLOOR:
-          newState = new GroundedState(normal);
+          newState = new GroundedState(normal, collider);
           break;
         case SurfaceType.CEILING:
           newState = new AirborneState();
@@ -71,9 +80,18 @@ export class AirborneState extends PlayerState {
         case SlideType.KEEP_VELOCITY:
           player.velocity = player.velocity.slide(normal).normalized().mul(player.velocity.length());
           break;
-        case SlideType.PROJECT_VELOCITY:
-          player.velocity = player.velocity.slide(normal);
+        case SlideType.PROJECT_VELOCITY: {
+          // Project the velocity *relative* to a mobile surface so an
+          // advancing mover imparts its motion (statics reduce to the plain
+          // slide as before).
+          if (collider.isMobile) {
+            const vSurf = collider.velocityAtPoint(collision.getPosition());
+            player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
+          } else {
+            player.velocity = player.velocity.slide(normal);
+          }
           break;
+        }
       }
       motionVector = collision.getRemainder().slide(normal);
     }

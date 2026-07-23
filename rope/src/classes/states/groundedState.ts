@@ -3,7 +3,7 @@
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
 import { Colors, Debug } from "../../engine/debug";
-import { RigidBody2D } from "../../engine/body";
+import { PhysicsBody2D, RigidBody2D } from "../../engine/body";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
 import { SlideType, SurfaceType } from "../../lib/types";
@@ -15,14 +15,26 @@ import { OnWallState } from "./onWallState";
 
 export class GroundedState extends PlayerState {
   surfaceNormal: Vec2;
+  supportBody: PhysicsBody2D | null;
 
-  constructor(surfaceNormal: Vec2 = Vec2.ZERO) {
+  constructor(surfaceNormal: Vec2 = Vec2.ZERO, supportBody: PhysicsBody2D | null = null) {
     super();
     this.surfaceNormal = surfaceNormal;
+    this.supportBody = supportBody;
   }
 
   enter(player: Player, _delta: number): void {
     player.coyoteBufferFrames = PlayerClass.COYOTE_BUFFER_FRAMES;
+  }
+
+  // Contact-point velocity of the supporting surface (v + ω × r,
+  // game-design.md velocity inheritance); null on static supports so the
+  // static path runs the exact pre-inheritance math.
+  private carriedVelocity(player: Player): Vec2 | null {
+    if (!this.supportBody?.isMobile) return null;
+    const shape = player.getShape().shape;
+    const r = shape.kind === "circle" ? shape.radius : 0;
+    return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
   }
 
   private applySurfaceFriction(currentSpeed: number, delta: number): number {
@@ -41,6 +53,16 @@ export class GroundedState extends PlayerState {
   }
 
   update(player: Player, delta: number): PlayerState {
+    // Locomotion runs relative to the supporting surface; the carried velocity
+    // is re-added on the way out so exits launch with it.
+    const carried = this.carriedVelocity(player);
+    if (carried) player.velocity = player.velocity.sub(carried);
+    const next = this.updateRelative(player, delta);
+    if (carried) player.velocity = player.velocity.add(carried);
+    return next;
+  }
+
+  private updateRelative(player: Player, delta: number): PlayerState {
     player.coyoteBufferFrames = PlayerClass.COYOTE_BUFFER_FRAMES;
 
     let currentSpeed = player.velocity.cross(this.surfaceNormal);
@@ -67,13 +89,29 @@ export class GroundedState extends PlayerState {
     return this;
   }
 
+  // Whether the last moveAndSlide saw a static floor contact — used by the
+  // snap path so a mover's corner can't steal the locomotion basis from an
+  // underlying static floor (wedge rules, game-design.md).
+  private sawStaticFloor = false;
+
   private moveAndSlide(player: Player, delta: number): PlayerState {
     let motionVector = player.velocity.mul(delta);
     let newState: PlayerState = this;
+    this.sawStaticFloor = false;
     for (let i = 0; i < 4; i++) {
       const collision = player.moveAndCollide(motionVector);
       if (!collision) return newState;
       const normal = collision.getNormal();
+      const collider = collision.getCollider() as PhysicsBody2D;
+      // Separating contact — a depenetration pushout from an advancing mover
+      // (or skin wobble) while the player already moves away from the surface.
+      // Take the positional correction but leave velocity and state alone,
+      // else the redirect points an escape velocity into the opposite wedge
+      // face and it gets zeroed there.
+      if (player.velocity.dot(normal) > 0) {
+        motionVector = collision.getRemainder();
+        continue;
+      }
       switch (Slide.getSlideType(motionVector, normal)) {
         case SlideType.KEEP_VELOCITY:
           player.velocity = player.velocity
@@ -82,22 +120,64 @@ export class GroundedState extends PlayerState {
             .mul(player.velocity.length());
           break;
         case SlideType.PROJECT_VELOCITY:
-          player.velocity = Vec2.ZERO;
+          // Against a mobile surface, stop only the *relative normal*
+          // component — keep the relative tangent so input still moves the
+          // player along the surface (a full relative stop wiped locomotion
+          // every frame while riding a mover). Statics keep the hard stop.
+          if (collider.isMobile) {
+            const vSurf = collider.velocityAtPoint(collision.getPosition());
+            player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
+          } else {
+            player.velocity = Vec2.ZERO;
+          }
+          // Recover the locomotion basis when the stop is against a floor —
+          // the early return otherwise leaves the basis on a mover inside a
+          // wedge (static preference as below).
+          if (Surface.getSurfaceType(normal, collider.isRotating) === SurfaceType.FLOOR) {
+            if (!collider.isMobile) {
+              this.surfaceNormal = normal;
+              this.supportBody = collider;
+              this.sawStaticFloor = true;
+            } else if (!this.sawStaticFloor) {
+              this.surfaceNormal = normal;
+              this.supportBody = collider;
+            }
+          }
           return newState;
       }
-      switch (Surface.getSurfaceType(normal)) {
+      switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
-          newState =
-            player.xInputDirection * normal.x < 0
-              ? OnWallState.running(player.velocity, normal)
-              : OnWallState.sliding(normal);
+          // A mobile wall that is NOT the supporting surface is a mover
+          // wedging the player against the floor — stay grounded so floor
+          // locomotion keeps working. Static walls and a steepened support
+          // (collider === supportBody) still hand over to wall states.
+          if (player.xInputDirection * normal.x < 0) {
+            newState = OnWallState.running(player.velocity, normal, collider);
+          } else if (!collider.isMobile || collider === this.supportBody) {
+            newState = OnWallState.sliding(normal, collider);
+          }
           break;
         case SurfaceType.FLOOR:
-          this.surfaceNormal = normal;
+          // Prefer a static floor as the locomotion basis: a mobile floor
+          // contact (e.g. a mover's corner) must not displace a static floor
+          // seen in the same frame, else input runs in the mover's drifting
+          // frame and gets eaten inside a wedge.
+          if (!collider.isMobile) {
+            this.surfaceNormal = normal;
+            this.supportBody = collider;
+            this.sawStaticFloor = true;
+          } else if (!this.sawStaticFloor) {
+            this.surfaceNormal = normal;
+            this.supportBody = collider;
+          }
           newState = this;
           break;
         case SurfaceType.CEILING:
-          player.velocity = Vec2.ZERO;
+          // A mover's underside/corner must not hard-zero the player —
+          // adopt its contact velocity instead (statics still full-stop).
+          player.velocity = collider.isMobile
+            ? collider.velocityAtPoint(collision.getPosition())
+            : Vec2.ZERO;
           return new AirborneState();
       }
       motionVector = collision.getRemainder().slide(normal);
@@ -119,12 +199,25 @@ export class GroundedState extends PlayerState {
           if (player.rope === null) {
             player.globalPosition = player.globalPosition.add(testCollision.getTravel());
           }
-          switch (Surface.getSurfaceType(normal)) {
-            case SurfaceType.WALL:
-              return OnWallState.sliding(normal);
-            case SurfaceType.FLOOR:
-              this.surfaceNormal = normal;
+          const collider = testCollision.getCollider() as PhysicsBody2D;
+          switch (Surface.getSurfaceType(normal, collider.isRotating)) {
+            case SurfaceType.WALL: {
+              // Same wedge guard as moveAndSlide: a mobile wall that is not
+              // the supporting surface must not capture the player into
+              // wall-slide while the floor is still underfoot.
+              if (collider.isMobile && collider !== this.supportBody) return this;
+              return OnWallState.sliding(normal, collider);
+            }
+            case SurfaceType.FLOOR: {
+              // Static-floor preference (see moveAndSlide): the snap probe
+              // must not hand the basis to a mover when a static floor was
+              // in contact this frame.
+              if (!(collider.isMobile && this.sawStaticFloor)) {
+                this.surfaceNormal = normal;
+                this.supportBody = collider;
+              }
               return this;
+            }
             case SurfaceType.CEILING:
               return new AirborneState();
           }

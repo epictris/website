@@ -47,3 +47,8 @@ export const Mathf = {
 export function mod(a: number, b: number): number {
   return ((a % b) + b) % b;
 }
+
+// Shortest signed angle equivalent to rad, in [-π, π).
+export function wrapAngle(rad: number): number {
+  return mod(rad + Math.PI, Math.PI * 2) - Math.PI;
+}

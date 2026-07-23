@@ -16,11 +16,42 @@ import {
   RigidBody2D,
   StaticBody2D,
 } from "./body";
-import { circleOverlap, rayVsShape, sweepCircle } from "./collision";
+import { circleOverlap, outwardDirection, rayVsShape, sweepCircle } from "./collision";
+import { PhysTrace } from "./physTrace";
+
+// Trace helper: one record per moveAndCollide hit.
+function traceContact(
+  mode: "overlap" | "sweep",
+  body: CharacterBody2D,
+  collider: PhysicsBody2D,
+  normal: Vec2,
+  position: Vec2,
+  testOnly: boolean,
+): void {
+  if (!PhysTrace.enabled) return;
+  PhysTrace.emit({
+    t: "contact",
+    mode,
+    body: body.name || body.constructor.name,
+    hit: collider.name || collider.constructor.name,
+    mobile: collider.isMobile,
+    n: [Number(normal.x.toFixed(4)), Number(normal.y.toFixed(4))],
+    ...(collider.isMobile
+      ? {
+          cvel: (({ x, y }) => [Number(x.toFixed(2)), Number(y.toFixed(2))])(
+            collider.velocityAtPoint(position),
+          ),
+        }
+      : {}),
+    test: testOnly,
+  });
+}
 
 // Godot 2D default gravity, in px/s². dt is 1/60, so ≈16.3 px/frame².
 export const GRAVITY = new Vec2(0, 980);
 const SKIN = 0.08;
+// Scale on the impulse a pushing character imparts to a rigid circle.
+const CHARACTER_PUSH_FACTOR = 0.5;
 
 export interface RayResult {
   collider: PhysicsBody2D;
@@ -91,6 +122,17 @@ export class World {
       }
 
       const sweep = sweepCircle(start, motion, r, ts);
+      if (sweep) {
+        // Phantom-contact guards for grazing sweeps that start within the
+        // skin of a thin shape (a rotating blade): the reported normal can
+        // belong to the far face — "hit from inside" — which misclassifies
+        // the surface and resets the player's state.
+        // 1. A real contact opposes the motion.
+        if (sweep.normal.dot(motion) > 1e-9) continue;
+        // 2. The normal must agree with the side of the shape the sweep
+        //    starts on.
+        if (sweep.normal.dot(outwardDirection(start, ts)) < -1e-6) continue;
+      }
       if (sweep && sweep.t <= 1 && (!sweepHit || sweep.t < sweepHit.t)) {
         sweepHit = { t: sweep.t, normal: sweep.normal, collider: target };
       }
@@ -100,8 +142,19 @@ export class World {
     if (overlapHit) {
       const finalPos = start.add(overlapHit.normal.mul(overlapHit.depth));
       const travel = finalPos.sub(start);
-      if (!testOnly) body.globalPosition = finalPos;
-      return new KinematicCollision2D(overlapHit.normal, travel, motion, overlapHit.collider);
+      const position = finalPos.sub(overlapHit.normal.mul(r));
+      traceContact("overlap", body, overlapHit.collider, overlapHit.normal, position, testOnly);
+      if (!testOnly) {
+        body.globalPosition = finalPos;
+        this.applyCharacterPush(body, overlapHit.collider, overlapHit.normal, position);
+      }
+      return new KinematicCollision2D(
+        overlapHit.normal,
+        travel,
+        motion,
+        overlapHit.collider,
+        position,
+      );
     }
 
     if (!sweepHit) {
@@ -114,8 +167,38 @@ export class World {
     const finalPos = contact.add(sweepHit.normal.mul(SKIN));
     const travel = finalPos.sub(start);
     const remainder = motion.mul(1 - sweepHit.t);
-    if (!testOnly) body.globalPosition = finalPos;
-    return new KinematicCollision2D(sweepHit.normal, travel, remainder, sweepHit.collider);
+    const position = contact.sub(sweepHit.normal.mul(r));
+    traceContact("sweep", body, sweepHit.collider, sweepHit.normal, position, testOnly);
+    if (!testOnly) {
+      body.globalPosition = finalPos;
+      this.applyCharacterPush(body, sweepHit.collider, sweepHit.normal, position);
+    }
+    return new KinematicCollision2D(
+      sweepHit.normal,
+      travel,
+      remainder,
+      sweepHit.collider,
+      position,
+    );
+  }
+
+  // Circles are the only physics-driven shape and "move when collided with by
+  // the player" (game-design.md) — impart a modest mass-aware impulse.
+  private applyCharacterPush(
+    body: CharacterBody2D,
+    collider: PhysicsBody2D,
+    normal: Vec2,
+    position: Vec2,
+  ): void {
+    if (!body.pushesRigidBodies || !(collider instanceof RigidBody2D)) return;
+    const rel = body.velocity.sub(collider.velocityAtPoint(position));
+    const vn = rel.dot(normal); // normal points toward the character
+    if (vn >= 0) return;
+    const mEff = (body.mass * collider.mass) / (body.mass + collider.mass);
+    collider.applyImpulse(
+      normal.mul(vn * mEff * CHARACTER_PUSH_FACTOR),
+      position.sub(collider.globalPosition),
+    );
   }
 
   // ---- space-state IntersectRay -----------------------------------------
@@ -175,7 +258,10 @@ export class World {
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;
       const s = body.getShape().shape;
-      const r = s.kind === "circle" ? s.radius : Math.hypot(s.size.x * 0.5, s.size.y * 0.5);
+      // Rects/polygons are never physics-driven (game-design.md); circles are
+      // the only dynamic bodies.
+      if (s.kind !== "circle") continue;
+      const r = s.radius;
       for (const other of this.bodies) {
         if (other === body || other.removed || !other.hasShape()) continue;
         if (body.exceptions.has(other.id)) continue;
@@ -183,9 +269,12 @@ export class World {
         const ov = circleOverlap(body.globalPosition, r, other.getShape());
         if (!ov) continue;
         if (other instanceof StaticBody2D) {
-          // Push fully out of static geometry and kill inward velocity.
+          // Push fully out of static geometry and kill inward velocity,
+          // relative to the surface (scripted movers can bat circles).
           body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
-          const vn = body.linearVelocity.dot(ov.normal);
+          const contactPoint = body.globalPosition.sub(ov.normal.mul(r));
+          const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
+          const vn = rel.dot(ov.normal);
           if (vn < 0) body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn));
           body.linearVelocity = body.linearVelocity.mul(0.98); // light friction
         } else {

@@ -469,8 +469,8 @@ export class Rope {
 
   private generatePathObjects(): PathObject[] {
     const spans = this.regenerateSpans();
-    const start = new PathStart(this.start.contact.obj, spans[0]!.span);
-    const end = new PathEnd(this.end.contact.obj, spans[spans.length - 1]!.span);
+    const start = new PathStart(this.start.contact.obj as PhysicsBody2D, spans[0]!.span);
+    const end = new PathEnd(this.end.contact.obj as PhysicsBody2D, spans[spans.length - 1]!.span);
     const pathWraps: PathWrap[] = [];
 
     let prevSegment = spans[0]!.span;
@@ -489,7 +489,9 @@ export class Rope {
             nodeA.contact.globalPosition,
             nodeB.contact.globalPosition,
           );
-          pathWraps.push(new PathWrap(prevSegment, nextSegment, nodeA.contact.obj, nodeA.wrapDir));
+          pathWraps.push(
+            new PathWrap(prevSegment, nextSegment, nodeA.contact.obj as PhysicsBody2D, nodeA.wrapDir),
+          );
           prevSegment = nextSegment;
         }
       }

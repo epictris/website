@@ -2,6 +2,7 @@
 // Only the surface the game actually touches is modelled.
 
 import { Vec2 } from "./vec2";
+import { wrapAngle } from "./mathf";
 import type { Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
@@ -56,12 +57,65 @@ export abstract class CollisionObject2D {
   removed = false;
 }
 
-export abstract class PhysicsBody2D extends CollisionObject2D {}
+export abstract class PhysicsBody2D extends CollisionObject2D {
+  // Mobility classification (game-design.md): can this body's transform change
+  // over time? Separate axis from "physics-driven".
+  get isMobile(): boolean {
+    return false;
+  }
+
+  // Surface velocity at a world point: v + ω × r (game-design.md, velocity
+  // inheritance). Static bodies are immobile, so zero.
+  velocityAtPoint(_worldPoint: Vec2): Vec2 {
+    return Vec2.ZERO;
+  }
+
+  // Whether the body is currently rotating — drives the character
+  // controller's grip grace on near-threshold faces (game-design.md).
+  get isRotating(): boolean {
+    return false;
+  }
+}
 
 export class StaticBody2D extends PhysicsBody2D {}
 
 // Rope-attachment blocker: hooks are destroyed on contact instead of attaching.
 export class ImpermeableBody extends StaticBody2D {}
+
+// Script-driven mover (Godot AnimatableBody2D): transform is set by game logic
+// each frame; collides as static / infinite mass, but exposes the per-frame
+// contact velocities so the character controller can inherit them.
+export class AnimatableBody2D extends StaticBody2D {
+  linearVelocity: Vec2 = Vec2.ZERO;
+  angularVelocity = 0;
+  private prevPosition: Vec2 = Vec2.ZERO;
+  private prevRotation = 0;
+
+  override get isMobile(): boolean {
+    return true;
+  }
+
+  override get isRotating(): boolean {
+    return Math.abs(this.angularVelocity) > 1e-9;
+  }
+
+  // Snapshot the transform before the mover script runs this frame.
+  beginMove(): void {
+    this.prevPosition = this.globalPosition;
+    this.prevRotation = this.globalRotation;
+  }
+
+  // Derive contact velocities from the per-frame transform delta.
+  commitMove(dt: number): void {
+    this.linearVelocity = this.globalPosition.sub(this.prevPosition).div(dt);
+    this.angularVelocity = wrapAngle(this.globalRotation - this.prevRotation) / dt;
+  }
+
+  override velocityAtPoint(worldPoint: Vec2): Vec2 {
+    const r = worldPoint.sub(this.globalPosition);
+    return this.linearVelocity.add(new Vec2(-r.y, r.x).mul(this.angularVelocity));
+  }
+}
 
 // Result of CharacterBody2D.moveAndCollide.
 export class KinematicCollision2D {
@@ -70,6 +124,7 @@ export class KinematicCollision2D {
     private travel: Vec2,
     private remainder: Vec2,
     private collider: CollisionObject2D,
+    private position: Vec2,
   ) {}
   getNormal(): Vec2 {
     return this.normal;
@@ -83,10 +138,28 @@ export class KinematicCollision2D {
   getCollider(): CollisionObject2D {
     return this.collider;
   }
+  // World-space contact point on the collider (Godot GetPosition).
+  getPosition(): Vec2 {
+    return this.position;
+  }
 }
 
 export class CharacterBody2D extends PhysicsBody2D {
   velocity: Vec2 = Vec2.ZERO;
+  // Whether moveAndCollide imparts an impulse on RigidBody2D colliders.
+  pushesRigidBodies = false;
+
+  get mass(): number {
+    return 1;
+  }
+
+  override get isMobile(): boolean {
+    return true;
+  }
+
+  override velocityAtPoint(_worldPoint: Vec2): Vec2 {
+    return this.velocity;
+  }
 
   moveAndCollide(motion: Vec2, testOnly = false): KinematicCollision2D | null {
     if (!this.world) return null;
@@ -98,6 +171,19 @@ export class RigidBody2D extends PhysicsBody2D {
   linearVelocity: Vec2 = Vec2.ZERO;
   angularVelocity = 0;
   mass = 1;
+
+  override get isMobile(): boolean {
+    return true;
+  }
+
+  override get isRotating(): boolean {
+    return Math.abs(this.angularVelocity) > 1e-9;
+  }
+
+  override velocityAtPoint(worldPoint: Vec2): Vec2 {
+    const r = worldPoint.sub(this.globalPosition);
+    return this.linearVelocity.add(new Vec2(-r.y, r.x).mul(this.angularVelocity));
+  }
   // Moment of inertia about the centre of mass.
   inertia = 1;
   gravityScale = 1;

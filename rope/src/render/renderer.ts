@@ -4,6 +4,7 @@
 import { Vec2 } from "../engine/vec2";
 import type { ShapeTransform } from "../engine/shapes";
 import {
+  AnimatableBody2D,
   Area2D,
   RigidBody2D,
   StaticBody2D,
@@ -19,6 +20,7 @@ const BG = "#1f2430";
 const GEOMETRY_FILL = "#2a2f3d";
 const GEOMETRY_STROKE = "#3c445c";
 const DYNAMIC_FILL = "#5c6a7a";
+const MOVER_FILL = "#3d4a45";
 const PLAYER = "#65bddb";
 const HOOK = "#f4a460";
 const KILLZONE = "rgba(220,60,80,0.35)";
@@ -57,6 +59,15 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
   if (body instanceof RigidBody2D) {
     pathShape(ctx, t);
     ctx.fillStyle = DYNAMIC_FILL;
+    ctx.fill();
+    ctx.strokeStyle = GEOMETRY_STROKE;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    return;
+  }
+  if (body instanceof AnimatableBody2D) {
+    pathShape(ctx, t);
+    ctx.fillStyle = MOVER_FILL;
     ctx.fill();
     ctx.strokeStyle = GEOMETRY_STROKE;
     ctx.lineWidth = 1;

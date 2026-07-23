@@ -91,10 +91,11 @@ export class Player extends CharacterBody2D {
   constructor(radius = 5) {
     super();
     this.name = "Player";
+    this.pushesRigidBodies = true;
     if (!this.hasShape()) this.setShape(circleShape(radius));
   }
 
-  get mass(): number {
+  override get mass(): number {
     return ShapeGeometry.computeMass(this.getShape());
   }
   get inertia(): number {

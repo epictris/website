@@ -3,6 +3,8 @@
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
 import { Colors, Debug } from "../../engine/debug";
+import type { PhysicsBody2D } from "../../engine/body";
+import { ShapeGeometry } from "../../lib/shapeGeometry";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
 import { SlideType, SurfaceType } from "../../lib/types";
@@ -16,6 +18,9 @@ import { LedgeClimbState } from "./ledgeClimbState";
 import { LedgeHangState } from "./ledgeHangState";
 
 const WALL_RUN_ACCELERATION = 0.1;
+// How close the ledge probe hit must land to a shape vertex to count as that
+// vertex's ledge (px). Probe geometry offsets are 9 px, so 16 covers them.
+const LEDGE_VERTEX_TOLERANCE = 16;
 
 export enum WallMode {
   Running,
@@ -26,24 +31,40 @@ export class OnWallState extends PlayerState {
   surfaceNormal: Vec2 = Vec2.ZERO;
   wallMode: WallMode = WallMode.Sliding;
   entryVelocity: Vec2 = Vec2.ZERO;
+  supportBody: PhysicsBody2D | null = null;
 
   get wallDirection(): Vec2 {
     return this.surfaceNormal.orthogonal().mul(this.surfaceNormal.x > 0 ? 1 : -1);
   }
 
-  static running(entryVelocity: Vec2, surfaceNormal: Vec2): OnWallState {
+  static running(
+    entryVelocity: Vec2,
+    surfaceNormal: Vec2,
+    supportBody: PhysicsBody2D | null = null,
+  ): OnWallState {
     const s = new OnWallState();
     s.wallMode = WallMode.Running;
     s.entryVelocity = entryVelocity;
     s.surfaceNormal = surfaceNormal;
+    s.supportBody = supportBody;
     return s;
   }
 
-  static sliding(surfaceNormal: Vec2): OnWallState {
+  static sliding(surfaceNormal: Vec2, supportBody: PhysicsBody2D | null = null): OnWallState {
     const s = new OnWallState();
     s.wallMode = WallMode.Sliding;
     s.surfaceNormal = surfaceNormal;
+    s.supportBody = supportBody;
     return s;
+  }
+
+  // Contact-point velocity of the wall (game-design.md velocity inheritance);
+  // null on static walls so the static path runs the exact pre-inheritance math.
+  private carriedVelocity(player: Player): Vec2 | null {
+    if (!this.supportBody?.isMobile) return null;
+    const shape = player.getShape().shape;
+    const r = shape.kind === "circle" ? shape.radius : 0;
+    return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
   }
 
   enter(player: Player, delta: number): void {
@@ -68,6 +89,16 @@ export class OnWallState extends PlayerState {
   }
 
   update(player: Player, delta: number): PlayerState {
+    // Wall physics runs relative to the wall's contact-point velocity; the
+    // carried velocity is re-added on the way out so exits launch with it.
+    const carried = this.carriedVelocity(player);
+    if (carried) player.velocity = player.velocity.sub(carried);
+    const next = this.updateRelative(player, delta);
+    if (carried) player.velocity = player.velocity.add(carried);
+    return next;
+  }
+
+  private updateRelative(player: Player, delta: number): PlayerState {
     player.velocity = player.velocity.add(Vec2.DOWN.mul(0.25 / delta));
 
     const rightDirection = this.surfaceNormal.rotated(Mathf.Pi * 0.5);
@@ -122,12 +153,20 @@ export class OnWallState extends PlayerState {
       const collision = player.moveAndCollide(motionVector);
       if (!collision) return newState;
       const normal = collision.getNormal();
-      switch (Surface.getSurfaceType(normal)) {
+      const collider = collision.getCollider() as PhysicsBody2D;
+      // Separating contact (depenetration pushout): positional correction
+      // only — see GroundedState.moveAndSlide.
+      if (player.velocity.dot(normal) > 0) {
+        motionVector = collision.getRemainder();
+        continue;
+      }
+      switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
           this.surfaceNormal = normal;
+          this.supportBody = collider;
           break;
         case SurfaceType.FLOOR:
-          newState = new GroundedState(normal);
+          newState = new GroundedState(normal, collider);
           break;
         case SurfaceType.CEILING:
           newState = new AirborneState();
@@ -140,9 +179,16 @@ export class OnWallState extends PlayerState {
             .normalized()
             .mul(player.velocity.length());
           break;
-        case SlideType.PROJECT_VELOCITY:
-          player.velocity = player.velocity.slide(normal);
+        case SlideType.PROJECT_VELOCITY: {
+          // Relative projection against mobile surfaces (see AirborneState).
+          if (collider.isMobile) {
+            const vSurf = collider.velocityAtPoint(collision.getPosition());
+            player.velocity = player.velocity.sub(vSurf).slide(normal).add(vSurf);
+          } else {
+            player.velocity = player.velocity.slide(normal);
+          }
           break;
+        }
       }
       motionVector = collision.getRemainder().slide(normal);
     }
@@ -166,13 +212,20 @@ export class OnWallState extends PlayerState {
         if (
           result &&
           !result.normal.equals(Vec2.ZERO) &&
-          Surface.getSurfaceType(result.normal) === SurfaceType.FLOOR
+          Surface.getSurfaceType(result.normal, result.collider.isRotating) === SurfaceType.FLOOR
         ) {
-          onWallState.snapToSurface(player, delta);
-          return new LedgeClimbState(
-            result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
-            this.surfaceNormal,
-          );
+          // Candidacy: the floor hit must sit on a stored ledge-candidate
+          // vertex (game-design.md). Circles have no vertices — never grab.
+          const vi = OnWallState.ledgeVertexIndex(result.collider, result.position);
+          if (vi !== null) {
+            onWallState.snapToSurface(player, delta);
+            return new LedgeClimbState(
+              result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
+              this.surfaceNormal,
+              result.collider,
+              vi,
+            );
+          }
         }
       } else if (world) {
         const rayEnd = player.globalPosition
@@ -184,15 +237,20 @@ export class OnWallState extends PlayerState {
         if (
           result &&
           !result.normal.equals(Vec2.ZERO) &&
-          Surface.getSurfaceType(result.normal) === SurfaceType.FLOOR
+          Surface.getSurfaceType(result.normal, result.collider.isRotating) === SurfaceType.FLOOR
         ) {
-          const positionalCorrection = result.position.sub(rayEnd);
-          player.globalPosition = player.globalPosition.add(positionalCorrection);
-          onWallState.snapToSurface(player, delta);
-          return new LedgeHangState(
-            result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
-            this.surfaceNormal,
-          );
+          const vi = OnWallState.ledgeVertexIndex(result.collider, result.position);
+          if (vi !== null) {
+            const positionalCorrection = result.position.sub(rayEnd);
+            player.globalPosition = player.globalPosition.add(positionalCorrection);
+            onWallState.snapToSurface(player, delta);
+            return new LedgeHangState(
+              result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
+              this.surfaceNormal,
+              result.collider,
+              vi,
+            );
+          }
         }
       }
 
@@ -206,15 +264,33 @@ export class OnWallState extends PlayerState {
       }
 
       onWallState.snapToSurface(player, delta);
-      if (Surface.getSurfaceType(onWallState.surfaceNormal) === SurfaceType.FLOOR) {
-        return new GroundedState(onWallState.surfaceNormal);
+      if (
+        Surface.getSurfaceType(
+          onWallState.surfaceNormal,
+          onWallState.supportBody?.isRotating ?? false,
+        ) === SurfaceType.FLOOR
+      ) {
+        return new GroundedState(onWallState.surfaceNormal, onWallState.supportBody);
       }
     }
     return newState;
   }
 
+  // Nearest ledge-candidate vertex of the collider to the probe hit, or null
+  // when none qualifies (no vertex nearby, angle above threshold, circles).
+  private static ledgeVertexIndex(collider: PhysicsBody2D, hitPosition: Vec2): number | null {
+    if (!collider.hasShape()) return null;
+    const shape = collider.getShape();
+    const vi = ShapeGeometry.findNearestVertexIndex(shape, hitPosition, LEDGE_VERTEX_TOLERANCE);
+    if (vi === null || !ShapeGeometry.isLedgeCandidate(shape.shape, vi)) return null;
+    return vi;
+  }
+
   snapToSurface(player: Player, delta: number): void {
     const col = player.moveAndCollide(this.surfaceNormal.mul(-2 / delta));
-    if (col) this.surfaceNormal = col.getNormal();
+    if (col) {
+      this.surfaceNormal = col.getNormal();
+      this.supportBody = col.getCollider() as PhysicsBody2D;
+    }
   }
 }

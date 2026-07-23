@@ -1,0 +1,12 @@
+{
+  "level": "TEST_WINDMILL",
+  "frames": 300,
+  "asserts": [
+    { "reachState": "GroundedState", "byFrame": 20 },
+    { "reachState": "OnWallState", "byFrame": 115 },
+    { "frame": 121, "state": "OnWallState" },
+    { "frame": 240, "state": "GroundedState" },
+    { "frame": 240, "minX": 0, "maxX": 15 },
+    { "frame": 240, "minY": 65, "maxY": 75 }
+  ]
+}

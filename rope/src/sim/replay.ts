@@ -9,6 +9,7 @@ import {
   digest,
   digestsEqual,
   inputDeserializer,
+  StuckDetector,
   type Digest,
   type Recording,
   type Violation,
@@ -25,19 +26,23 @@ export interface ReplayResult {
 }
 
 export function replayRecording(rec: Recording): ReplayResult {
-  const data = LEVELS[rec.level];
-  if (!data) throw new Error(`Unknown level: ${rec.level}`);
-  const level = new Level(data);
+  const spec = LEVELS[rec.level];
+  if (!spec) throw new Error(`Unknown level: ${rec.level}`);
+  const level = new Level(spec.data, spec.init);
   const deserialize = inputDeserializer();
   const digests: Digest[] = [];
   const violations: Violation[] = [];
+  const stuck = new StuckDetector();
   let divergedAtFrame: number | null = null;
 
   for (let i = 0; i < rec.frames.length; i++) {
-    level.physicsProcess(deserialize(rec.frames[i]!), 1 / 60);
+    const input = deserialize(rec.frames[i]!);
+    level.physicsProcess(input, 1 / 60);
     const d = digest(level);
     digests.push(d);
     violations.push(...checkInvariants(level));
+    const sv = stuck.push(level, input);
+    if (sv) violations.push(sv);
     if (rec.digests && divergedAtFrame === null) {
       const expected = rec.digests[i];
       if (expected && !digestsEqual(d, expected)) divergedAtFrame = i + 1;

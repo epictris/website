@@ -2,11 +2,10 @@
 
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
-import { LEVEL_2 } from "./level/levelData";
 import { LiveInputSource } from "./input/liveInput";
 import { render } from "./render/renderer";
 import type { Camera } from "./render/camera";
-import { DEFAULT_LEVEL } from "./level/registry";
+import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import { digest, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
 
@@ -39,9 +38,16 @@ function resize(): void {
 resize();
 window.addEventListener("resize", resize);
 
-let level = new Level(LEVEL_2);
+// Level selection via ?level=NAME (defaults to DEFAULT_LEVEL).
+const levelId = ((): string => {
+  const requested = new URLSearchParams(location.search).get("level") ?? DEFAULT_LEVEL;
+  return LEVELS[requested] ? requested : DEFAULT_LEVEL;
+})();
+const levelSpec = LEVELS[levelId]!;
+
+let level = new Level(levelSpec.data, levelSpec.init);
 function reset(): void {
-  level = new Level(LEVEL_2);
+  level = new Level(levelSpec.data, levelSpec.init);
   level.onReset = reset;
   recFrames.length = 0;
   recDigests.length = 0;
@@ -58,7 +64,7 @@ const recDigests: Digest[] = [];
 
 function downloadRecording(): void {
   const rec: Recording = {
-    level: DEFAULT_LEVEL,
+    level: levelId,
     frames: recFrames.slice(),
     digests: recDigests.slice(),
   };

@@ -66,8 +66,11 @@ bun run dev        # http://localhost:3100
 ```
 
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire
-hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn rects ·
+hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn circles ·
 **P** download a replayable session bundle.
+
+Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
+`TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).
 
 ## Headless tooling
 
@@ -75,11 +78,24 @@ hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** 
 bun run replay selftest                       # determinism + replay round-trip check
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
+bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
+bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input table
+bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
 ```
 
+Debugging workflow for gameplay bugs: reproduce in the browser, press **P**, drop the
+bundle into `playtests/bundles/` — `cli bundles` replays it with current physics and
+fails on invariant violations (including the `input-frozen` stuck detector: held
+direction + locomotion state + mobile body nearby + no displacement). Digest
+divergence is informational only (bundles recorded before a physics fix legitimately
+diverge). `cli continue` replays a bundle to a frame then takes over with scripted
+held input; `--trace` writes per-frame JSONL (contacts with normals/classification/
+surface velocity, state transitions, snapshots) via `src/engine/physTrace.ts`.
+
 Playtest scripts are frame-indexed held-button ranges + mouse aim with asserts
-(`reachState`, per-frame `state`/`maxSpeed`/`hasRope`). Invariants checked every frame:
-NaN, runaway speed, rope-over-length (once anchored), player-embedded-in-geometry.
+(`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds). Invariants
+checked every frame: NaN, runaway speed, rope-over-length (once anchored),
+player-embedded-in-geometry.
 
 ## Regenerating level geometry
 

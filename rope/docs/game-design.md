@@ -136,7 +136,7 @@ resulting collision both re-presses the player against the surface and refreshes
 the stored wall normal from the hit. Around this snap the wall state also
 probes:
 
-- A ray past the top of the wall (offset one player-radius beyond the corner, in
+- A ray past the top of the wall (offset a fixed margin beyond the corner, in
   the movement direction): if it hits a **floor**-classified surface the wall
   ends in a grabbable ledge — moving up transitions into ledge climb, otherwise
   into ledge hang (with a positional correction onto the corner). This is the
@@ -149,6 +149,31 @@ probes:
 
 Both snaps are the mechanism that makes the per-frame reclassification (above)
 concrete: the snap collision is where the fresh normal comes from.
+
+Two wedge rules keep the player controllable when a **mobile** surface presses
+them against other geometry:
+
+- **Ground contact wins over a mover's wall.** While grounded, a wall-classified
+  contact with a mobile shape that is *not* the supporting surface (a windmill
+  blade sweeping into a player standing on the floor) does not transfer the
+  player into wall-slide — they stay grounded and can keep running along the
+  floor. Static walls, and the player's own support steepening past the floor
+  threshold, still hand over to the wall state.
+- **Stops are relative to the surface.** Where a collision would kill the
+  player's velocity (running into a wall), against a mobile surface the player
+  instead keeps their velocity *relative* to it — only the relative normal
+  component stops, so input still moves them along the surface and an advancing
+  mover pushes rather than freezes them. Against static geometry this reduces
+  to the plain stop.
+- **Separating contacts are positional only.** A depenetration pushout from an
+  advancing mover while the player already moves away from it corrects position
+  but never redirects velocity — otherwise the pushout would rotate an escape
+  velocity into the opposite wedge face.
+- **Rotating faces get grip grace.** A face on a *rotating* body classifies as
+  floor up to a steeper angle (~65° instead of ~55°). A blade face hovering at
+  the static threshold would otherwise flip the player between grounded and
+  wall-slide and treadmill them against the rotation. Translating movers and
+  static geometry keep the normal thresholds.
 
 ## Velocity inheritance from the supporting surface
 

@@ -10,6 +10,7 @@ import {
   checkInvariants,
   digest,
   serializeInput,
+  StuckDetector,
   type Digest,
   type SerializedFrame,
   type Violation,
@@ -34,8 +35,8 @@ const ACTION_FIELD: Record<PlaytestAction, keyof FrameInput> = {
   extend: "extend",
   fire: "fire",
   retract_click: "retractClick",
-  spawn_small: "spawnSmallRect",
-  spawn_large: "spawnLargeRect",
+  spawn_small: "spawnSmallCircle",
+  spawn_large: "spawnLargeCircle",
 };
 
 export interface HoldRange {
@@ -54,6 +55,7 @@ export type PlaytestAssert =
   | { frame: number; state: string }
   | { frame: number; maxSpeed: number }
   | { frame: number; hasRope: boolean }
+  | { frame: number; minX?: number; maxX?: number; minY?: number; maxY?: number }
   | { reachState: string; byFrame?: number };
 
 export interface PlaytestScript {
@@ -112,9 +114,9 @@ export interface PlaytestResult {
 }
 
 export function runScript(script: PlaytestScript): PlaytestResult {
-  const data = LEVELS[script.level];
-  if (!data) throw new Error(`Unknown level: ${script.level}`);
-  const level = new Level(data);
+  const spec = LEVELS[script.level];
+  if (!spec) throw new Error(`Unknown level: ${script.level}`);
+  const level = new Level(spec.data, spec.init);
   let resetFired = false;
   level.onReset = () => {
     resetFired = true;
@@ -124,6 +126,7 @@ export function runScript(script: PlaytestScript): PlaytestResult {
   const digests: Digest[] = [];
   const serializedFrames: SerializedFrame[] = [];
   const violations: Violation[] = [];
+  const stuck = new StuckDetector();
   const statesSeen = new Set<string>();
   const stateFirstFrame = new Map<string, number>();
 
@@ -138,6 +141,8 @@ export function runScript(script: PlaytestScript): PlaytestResult {
       stateFirstFrame.set(d.state, f);
     }
     violations.push(...checkInvariants(level));
+    const sv = stuck.push(level, input);
+    if (sv) violations.push(sv);
   }
 
   const assertResults: AssertResult[] = (script.asserts ?? []).map((a) => {
@@ -153,8 +158,19 @@ export function runScript(script: PlaytestScript): PlaytestResult {
       const speed = Math.hypot(d.vx, d.vy);
       return { ok: speed <= a.maxSpeed, description: `f${a.frame} speed=${speed.toFixed(1)} <= ${a.maxSpeed}` };
     }
-    const has = d.ropeLen !== null;
-    return { ok: has === a.hasRope, description: `f${a.frame} hasRope=${has} want ${a.hasRope}` };
+    if ("hasRope" in a) {
+      const has = d.ropeLen !== null;
+      return { ok: has === a.hasRope, description: `f${a.frame} hasRope=${has} want ${a.hasRope}` };
+    }
+    const ok =
+      (a.minX === undefined || d.px >= a.minX) &&
+      (a.maxX === undefined || d.px <= a.maxX) &&
+      (a.minY === undefined || d.py >= a.minY) &&
+      (a.maxY === undefined || d.py <= a.maxY);
+    return {
+      ok,
+      description: `f${a.frame} pos=(${d.px.toFixed(1)},${d.py.toFixed(1)}) in x[${a.minX ?? "-∞"},${a.maxX ?? "∞"}] y[${a.minY ?? "-∞"},${a.maxY ?? "∞"}]`,
+    };
   });
 
   const passed = violations.length === 0 && assertResults.every((r) => r.ok);

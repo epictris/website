@@ -3,7 +3,7 @@
 // (physical keys, US-QWERTY positions):
 //
 //   move_left R · move_right T · jump Space · retract C · extend S
-//   fire left-click · retract-tug right-click · spawn 1 small / 2 large rect
+//   fire left-click · retract-tug right-click · spawn 1 small / 2 large circle
 
 import { Vec2 } from "../engine/vec2";
 import {
@@ -61,8 +61,8 @@ export class LiveInputSource implements IInputSource {
       extend: b(this.held("KeyS"), p.extend),
       fire: b(this.mouseLeft, p.fire),
       retractClick: b(this.mouseRight, p.retractClick),
-      spawnSmallRect: b(this.held("Digit1"), p.spawnSmallRect),
-      spawnLargeRect: b(this.held("Digit2"), p.spawnLargeRect),
+      spawnSmallCircle: b(this.held("Digit1"), p.spawnSmallCircle),
+      spawnLargeCircle: b(this.held("Digit2"), p.spawnLargeCircle),
       mouseWorldPosition: screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y),
     };
     this.prev = input;

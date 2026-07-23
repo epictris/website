@@ -1,0 +1,22 @@
+{
+  "level": "TEST_MOVERS",
+  "frames": 480,
+  "holds": [
+    { "action": "move_left", "from": 1, "to": 48 },
+    { "action": "jump", "from": 300, "to": 304 },
+    { "action": "move_right", "from": 380, "to": 480 }
+  ],
+  "asserts": [
+    { "reachState": "OnWallState", "byFrame": 335 },
+    { "reachState": "LedgeHangState", "byFrame": 340 },
+    { "frame": 352, "state": "LedgeHangState" },
+    { "frame": 352, "minX": -350, "maxX": -346 },
+    { "frame": 379, "state": "LedgeHangState" },
+    { "frame": 379, "minX": -345, "maxX": -342 },
+    { "reachState": "LedgeClimbState", "byFrame": 385 },
+    { "frame": 400, "state": "GroundedState" },
+    { "frame": 439, "state": "AirborneState" },
+    { "frame": 463, "state": "GroundedState" },
+    { "frame": 463, "minX": 0 }
+  ]
+}

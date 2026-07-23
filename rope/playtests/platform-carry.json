@@ -1,0 +1,13 @@
+{
+  "level": "TEST_MOVERS",
+  "frames": 240,
+  "asserts": [
+    { "reachState": "GroundedState", "byFrame": 25 },
+    { "frame": 101, "state": "GroundedState" },
+    { "frame": 121, "state": "GroundedState" },
+    { "frame": 121, "minX": -135, "maxX": -120 },
+    { "frame": 240, "state": "GroundedState" },
+    { "frame": 240, "minX": -225, "maxX": -205 },
+    { "frame": 240, "maxSpeed": 100 }
+  ]
+}

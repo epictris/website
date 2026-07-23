@@ -18,8 +18,8 @@ export interface FrameInput {
   extend: ButtonInput;
   fire: ButtonInput;
   retractClick: ButtonInput;
-  spawnSmallRect: ButtonInput;
-  spawnLargeRect: ButtonInput;
+  spawnSmallCircle: ButtonInput;
+  spawnLargeCircle: ButtonInput;
   mouseWorldPosition: Vec2;
 }
 
@@ -32,8 +32,8 @@ export function emptyFrameInput(): FrameInput {
     extend: { ...NO_BUTTON },
     fire: { ...NO_BUTTON },
     retractClick: { ...NO_BUTTON },
-    spawnSmallRect: { ...NO_BUTTON },
-    spawnLargeRect: { ...NO_BUTTON },
+    spawnSmallCircle: { ...NO_BUTTON },
+    spawnLargeCircle: { ...NO_BUTTON },
     mouseWorldPosition: Vec2.ZERO,
   };
 }

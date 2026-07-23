@@ -219,6 +219,39 @@ export function circleOverlap(
   return { normal: toWorldDir(n, target.globalRotation), depth: r + minPen };
 }
 
+// Direction from the shape's closest surface point toward p — which side of
+// the shape p is on. Used to validate sweep normals against phantom
+// "hit-from-inside" contacts on thin shapes.
+export function outwardDirection(p: Vec2, target: ShapeTransform): Vec2 {
+  const s = target.shape;
+  if (s.kind === "circle") {
+    const delta = p.sub(target.globalPosition);
+    return delta.length() < EPS ? Vec2.UP : delta.normalized();
+  }
+  const hw = s.size.x * 0.5;
+  const hh = s.size.y * 0.5;
+  const local = toLocal(p, target.globalPosition, target.globalRotation);
+  const dx = local.x - Math.max(-hw, Math.min(hw, local.x));
+  const dy = local.y - Math.max(-hh, Math.min(hh, local.y));
+  const distSq = dx * dx + dy * dy;
+  if (distSq > EPS) {
+    const dist = Math.sqrt(distSq);
+    return toWorldDir(new Vec2(dx / dist, dy / dist), target.globalRotation);
+  }
+  // Inside: side of the axis with least penetration (as in circleOverlap).
+  const dRight = hw - local.x;
+  const dLeft = hw + local.x;
+  const dTop = hh + local.y;
+  const dBottom = hh - local.y;
+  const minPen = Math.min(dRight, dLeft, dTop, dBottom);
+  let n: Vec2;
+  if (minPen === dRight) n = new Vec2(1, 0);
+  else if (minPen === dLeft) n = new Vec2(-1, 0);
+  else if (minPen === dBottom) n = new Vec2(0, 1);
+  else n = new Vec2(0, -1);
+  return toWorldDir(n, target.globalRotation);
+}
+
 // ---------------------------------------------------------------------------
 // Ray casts (space-state IntersectRay)
 // ---------------------------------------------------------------------------
