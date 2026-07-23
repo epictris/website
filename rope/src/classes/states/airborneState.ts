@@ -11,9 +11,14 @@ import type { Player } from "../player";
 import { Player as PlayerClass } from "../player";
 import { PlayerState } from "./playerState";
 import { OnWallState } from "./onWallState";
+import { WallJumpingState } from "./wallJumpingState";
 import { GroundedState } from "./groundedState";
 import { LedgeClimbState } from "./ledgeClimbState";
 import { LedgeHangState } from "./ledgeHangState";
+
+// How far beyond the player's radius a wall face still counts as "touching"
+// for the unattached wall jump.
+const WALL_TOUCH_MARGIN = 2;
 
 export class AirborneState extends PlayerState {
   update(player: Player, delta: number): PlayerState {
@@ -44,10 +49,41 @@ export class AirborneState extends PlayerState {
       player.inputs.jump.deactivate();
       if (player.coyoteBufferFrames > 0) {
         player.velocity = player.velocity.withY(-PlayerClass.JUMP_FORCE / delta);
+      } else {
+        // Unattached wall jump (game-design.md, deliberate wall attach):
+        // falling flush against a wall without toward-input never enters the
+        // wall state, but a buffered jump with a wall in touch range still
+        // launches a wall jump off it.
+        const wallNormal = this.touchingWallNormal(player);
+        if (wallNormal) return new WallJumpingState(wallNormal);
       }
     }
 
     return this;
+  }
+
+  // Probe for a wall face within touch range (radius + margin) on either
+  // side; the held direction is probed first so chimneys favor it.
+  private touchingWallNormal(player: Player): Vec2 | null {
+    const world = player.world;
+    if (!world) return null;
+    const reach = player.radius + WALL_TOUCH_MARGIN;
+    const dirs =
+      player.xInputDirection !== 0
+        ? [player.xInputDirection, -player.xInputDirection]
+        : [1, -1];
+    for (const dir of dirs) {
+      const hit = world.intersectRay(
+        player.globalPosition,
+        player.globalPosition.add(new Vec2(reach * dir, 0)),
+        { collisionMask: 1, exclude: [player] },
+      );
+      if (!hit) continue;
+      if (Surface.getSurfaceType(hit.normal, hit.collider.isRotating) === SurfaceType.WALL) {
+        return hit.normal;
+      }
+    }
+    return null;
   }
 
   private moveAndSlide(player: Player, delta: number): PlayerState {
@@ -66,11 +102,11 @@ export class AirborneState extends PlayerState {
       }
       switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
+          // Deliberate wall attach (game-design.md): only toward-input
+          // attaches. No input or away-input keeps falling past the wall;
+          // the slide below still stops the normal component of motion.
           if (player.xInputDirection * normal.x < 0)
             newState = OnWallState.running(player.velocity, normal, collider);
-          else if (player.xInputDirection * normal.x === 0)
-            newState = OnWallState.sliding(normal, collider);
-          // else: pressing away from wall — don't attach
           break;
         case SurfaceType.FLOOR:
           newState = new GroundedState(normal, collider);

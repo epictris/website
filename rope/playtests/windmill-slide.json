@@ -1,0 +1,12 @@
+{
+  "level": "TEST_WINDMILL",
+  "frames": 300,
+  "holds": [{ "action": "move_left", "from": 100, "to": 300 }],
+  "asserts": [
+    { "reachState": "GroundedState", "byFrame": 20 },
+    { "reachState": "OnWallState", "byFrame": 120 },
+    { "frame": 150, "state": "OnWallState" },
+    { "frame": 240, "state": "GroundedState" },
+    { "frame": 240, "maxX": -100 }
+  ]
+}

@@ -147,14 +147,13 @@ export class GroundedState extends PlayerState {
       }
       switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
-          // A mobile wall that is NOT the supporting surface is a mover
-          // wedging the player against the floor — stay grounded so floor
-          // locomotion keeps working. Static walls and a steepened support
-          // (collider === supportBody) still hand over to wall states.
+          // Deliberate wall attach (game-design.md): only toward-input hands
+          // over to the wall state. Otherwise the wall just stops motion and
+          // the player stays grounded (floor still underfoot). This also
+          // subsumes the mover-wedge rule: a mobile wall that is NOT the
+          // supporting surface never captures the player without input.
           if (player.xInputDirection * normal.x < 0) {
             newState = OnWallState.running(player.velocity, normal, collider);
-          } else if (!collider.isMobile || collider === this.supportBody) {
-            newState = OnWallState.sliding(normal, collider);
           }
           break;
         case SurfaceType.FLOOR:
@@ -206,7 +205,13 @@ export class GroundedState extends PlayerState {
               // the supporting surface must not capture the player into
               // wall-slide while the floor is still underfoot.
               if (collider.isMobile && collider !== this.supportBody) return this;
-              return OnWallState.sliding(normal, collider);
+              // Deliberate wall attach: walking over a crest onto a steep
+              // face only flows into wall-slide under toward-input;
+              // otherwise the player leaves the crest airborne.
+              if (player.xInputDirection * normal.x < 0) {
+                return OnWallState.sliding(normal, collider);
+              }
+              return new AirborneState();
             }
             case SurfaceType.FLOOR: {
               // Static-floor preference (see moveAndSlide): the snap probe

@@ -82,10 +82,10 @@ export class WallJumpingState extends PlayerState {
       }
       switch (Surface.getSurfaceType(normal, collider.isRotating)) {
         case SurfaceType.WALL:
+          // Deliberate wall attach (game-design.md): only toward-input
+          // attaches to the opposite wall mid wall-jump.
           if (player.xInputDirection * normal.x < 0)
             newState = OnWallState.running(player.velocity, normal, collider);
-          else if (player.xInputDirection * normal.x === 0)
-            newState = OnWallState.sliding(normal, collider);
           break;
         case SurfaceType.FLOOR:
           newState = new GroundedState(normal, collider);

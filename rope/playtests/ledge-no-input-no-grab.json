@@ -6,7 +6,7 @@
     { "action": "jump", "from": 300, "to": 304 }
   ],
   "asserts": [
-    { "reachState": "OnWallState", "byFrame": 335 },
+    { "neverState": "OnWallState" },
     { "neverState": "LedgeHangState" },
     { "neverState": "LedgeClimbState" },
     { "reachState": "GroundedState", "byFrame": 420 }

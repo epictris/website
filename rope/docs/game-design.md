@@ -126,9 +126,11 @@ unit along the inverted stored surface normal (i.e. into where the floor was):
   the player is moving *away* from); go airborne.
 - Otherwise: teleport the player by the test move's travel (skipped while a rope
   is attached — the rope constraint owns position there) and **reclassify** the
-  new normal: floor → stay grounded on the new face, wall → wall slide,
+  new normal: floor → stay grounded on the new face, wall → wall slide *if
+  toward-input is held* (see deliberate wall attach below), otherwise airborne,
   ceiling → airborne. So walking over a rounded crest onto a steep side flows
-  directly from grounded into wall-slide via the snap, without an airborne gap.
+  directly from grounded into wall-slide via the snap, without an airborne gap,
+  but only while the player is inputting into the face.
 
 **Snap-to-wall** (on wall). Every frame still on the wall, the controller moves
 the player *into* the wall (a large motion along the inverted wall normal); the
@@ -174,6 +176,20 @@ them against other geometry:
   the static threshold would otherwise flip the player between grounded and
   wall-slide and treadmill them against the rotation. Translating movers and
   static geometry keep the normal thresholds.
+
+## Deliberate wall attach and the unattached wall jump
+
+Touching a wall never captures the player by itself.
+The wall states (wall run / wall slide) are only entered while the player is actively inputting movement toward the wall, mirroring the deliberate-grab rule for ledges (below).
+
+- Airborne or grounded contact with a wall under toward-input attaches; contact with no input, or with away-input, does not.
+  The wall still stops the normal component of motion, but the player keeps falling (or stays grounded) past it.
+- The toward-input requirement is continuous while sliding: releasing it detaches the player into a fall.
+- This subsumes the old mover-wedge attach guard: no wall, mobile or static, captures a grounded player without input.
+
+Wall jumps do not require being attached.
+A buffered jump while airborne, with a wall face within touch range (player radius plus a small margin, probed on both sides, held direction first), launches a wall jump off that wall exactly as if jumped from the wall state.
+Falling flush against a wall with no input therefore still allows jumping off it.
 
 ## Velocity inheritance from the supporting surface
 

@@ -1,0 +1,15 @@
+{
+  "level": "TEST_MOVERS",
+  "frames": 400,
+  "holds": [
+    { "action": "move_left", "from": 1, "to": 200 },
+    { "action": "jump", "from": 300, "to": 304 },
+    { "action": "jump", "from": 324, "to": 328 }
+  ],
+  "asserts": [
+    { "frame": 322, "state": "AirborneState" },
+    { "reachState": "WallJumpingState", "byFrame": 326 },
+    { "frame": 368, "state": "GroundedState" },
+    { "frame": 368, "minX": -260 }
+  ]
+}

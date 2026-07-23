@@ -9,6 +9,7 @@ import { circleOverlap } from "../engine/collision";
 import { Hook } from "../classes/hook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { LedgeHangState } from "../classes/states/ledgeHangState";
+import { OnWallState } from "../classes/states/onWallState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { Level } from "../level/level";
@@ -116,9 +117,11 @@ const EMBED_TOLERANCE = 3;
 // mobile body nearby, holding a direction for a sustained window must produce
 // real displacement along it. Pressing into a static wall is exempt (no
 // mobile body involved). Frames in deliberate-stationary states (ledge hang /
-// climb, wall-jump startup) or with an active rope are exempt — but a state
-// merely *thrashing* through Airborne must not reset the window, so the
-// streak counts every non-exempt input-held frame regardless of state.
+// climb, wall-jump startup, wall slide — attach requires toward-input, so
+// pressing into the wall there is deliberate) or with an active rope are
+// exempt — but a state merely *thrashing* through Airborne must not reset the
+// window, so the streak counts every non-exempt input-held frame regardless
+// of state.
 
 const STUCK_WINDOW = 45; // frames of continuous same-direction input
 const STUCK_MIN_DISPLACEMENT = 25; // px along the input direction over the window
@@ -177,7 +180,8 @@ export class StuckDetector {
       p.rope !== null ||
       p.state instanceof LedgeHangState ||
       p.state instanceof LedgeClimbState ||
-      p.state instanceof WallJumpingState;
+      p.state instanceof WallJumpingState ||
+      p.state instanceof OnWallState;
 
     if (dir === 0 || exempt || dir !== this.dir) {
       this.dir = dir;

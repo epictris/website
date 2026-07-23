@@ -111,7 +111,6 @@ export class OnWallState extends PlayerState {
     }
 
     const towardWall = player.xInputDirection * this.surfaceNormal.x < 0;
-    const awayFromWall = player.xInputDirection * this.surfaceNormal.x > 0;
     const movingUp = velocity.y < 0;
 
     player.velocity = velocity;
@@ -127,7 +126,9 @@ export class OnWallState extends PlayerState {
       if (this.surfaceNormal.y > 0.001) return new AirborneState();
       if (towardWall && movingUp) {
         this.wallMode = WallMode.Running;
-      } else if (awayFromWall) {
+      } else if (!towardWall) {
+        // Deliberate wall attach (game-design.md): the slide only holds
+        // while toward-input is held. Releasing it detaches into a fall.
         return new AirborneState();
       } else {
         if (velocity.y > PlayerClass.WALL_SLIDE_SPEED / delta) {
