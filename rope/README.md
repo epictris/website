@@ -24,6 +24,18 @@ Keybinds match the original Godot project:
 | `1` / `2` | spawn a small / large box |
 | `P` | download a replayable session bundle |
 
+A gamepad (standard mapping) works too, merged with keyboard/mouse:
+
+| Input | Action |
+|-------|--------|
+| left stick / dpad | move |
+| `A` | jump |
+| right stick | aim (crosshair) |
+| `RT` | fire the hook |
+| `LT` | strong retract tug |
+| `RB` / `LB` | reel in / reel out |
+| `X` / `Y` | spawn a small / large box |
+
 ## Share a playtest
 
 Press **P** to download a `session-*.json` bundle. Replay it (deterministically, with

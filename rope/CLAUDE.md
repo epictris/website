@@ -68,6 +68,9 @@ bun run dev        # http://localhost:3100
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire
 hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn circles ·
 **P** download a replayable session bundle ·
+Gamepad (standard mapping, merged with keyboard/mouse): **left stick/dpad** move ·
+**A** jump · **right stick** aim (rendered crosshair) · **RT** fire · **LT** retract-tug ·
+**RB/LB** retract/extend · **X/Y** spawn circles ·
 **L** toggle the debug overlay (render-only). It shows ledge-grab markers (green marker +
 dashed grab-radius circle = grabbable now, hollow red = candidate rotated out of reach,
 grey X = seam-occluded, face ticks colored by floor/wall/ceiling classification) and an

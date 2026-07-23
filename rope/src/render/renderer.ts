@@ -109,6 +109,26 @@ function arrowHead(ctx: CanvasRenderingContext2D, a: Vec2, b: Vec2, color: strin
   ctx.stroke();
 }
 
+// Small ring + four ticks, drawn in world space at the stick aim point.
+function drawCrosshair(ctx: CanvasRenderingContext2D, p: Vec2): void {
+  const r = 4;
+  const tick = 3;
+  ctx.strokeStyle = "#cbccc6";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ] as const) {
+    ctx.moveTo(p.x + dx * r, p.y + dy * r);
+    ctx.lineTo(p.x + dx * (r + tick), p.y + dy * (r + tick));
+  }
+  ctx.stroke();
+}
+
 export function render(
   ctx: CanvasRenderingContext2D,
   dpr: number,
@@ -118,6 +138,7 @@ export function render(
   camera: Camera,
   fps: number,
   showDebug = false,
+  gamepadAim: Vec2 | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = BG;
@@ -157,6 +178,10 @@ export function render(
   drawPlayerRigBack(ctx);
   drawBody(ctx, level.player);
   drawPlayerRigFront(ctx);
+
+  // Gamepad crosshair — only while the right stick owns aim (with the mouse,
+  // the OS cursor shows aim already).
+  if (gamepadAim) drawCrosshair(ctx, gamepadAim);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
   if (showDebug) drawDebugOverlay(ctx, level);

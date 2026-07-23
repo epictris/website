@@ -54,7 +54,7 @@ function reset(): void {
 }
 level.onReset = reset;
 
-const input = new LiveInputSource(canvas, camera);
+const input = new LiveInputSource(canvas, camera, () => level.player.globalPosition);
 
 // Full-session recording — press P to download a replayable bundle. A bundle
 // must start at level start to replay deterministically, so the trace isn't
@@ -110,7 +110,7 @@ function frame(now: number): void {
   camera.position = level.cameraPosition;
 
   const dpr = window.devicePixelRatio || 1;
-  render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug);
+  render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug, input.gamepadAim());
 
   requestAnimationFrame(frame);
 }
