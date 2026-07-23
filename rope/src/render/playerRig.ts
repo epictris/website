@@ -12,12 +12,15 @@ import { LedgeHangState } from "../classes/states/ledgeHangState";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { LedgeDetection } from "../lib/ledgeDetection";
+import { Surface } from "../lib/surface";
+import { SurfaceType } from "../lib/types";
+import type { PhysicsBody2D } from "../engine/body";
 import type { Level } from "../level/level";
 
-// Right limbs red, left limbs green (ayu-mirage) — distinct from the body,
+// Right limbs green, left limbs red (ayu-mirage) — distinct from the body,
 // so they stay readable without outlines.
-const RIGHT_COLOR = "#ff4d4d";
-const LEFT_COLOR = "#bae67e";
+const RIGHT_COLOR = "#bae67e";
+const LEFT_COLOR = "#ff4d4d";
 const LIMB_RADIUS = 2.4;
 const STRIDE = 5.25; // walk-cycle foot swing amplitude (px) — matches ARM_REACH
 const LIFT = 2; // walk-cycle foot lift (px)
@@ -54,13 +57,56 @@ let prevPos: Vec2 | null = null;
 // body and only pose *changes* get eased.
 const current: (Vec2 | null)[] = [null, null, null, null];
 
-function airbornePose(p: Vec2, r: number): Vec2[] {
+// Passive wall contact (no toward-input, so the sim state is still grounded
+// or airborne): render-side probe, read-only test sweeps to either side.
+let wallPressed = false;
+
+function touchingWallNormal(player: Player): Vec2 | null {
+  for (const sign of [-1, 1]) {
+    const hit = player.moveAndCollide(new Vec2(sign * 1.5, 0), true);
+    if (!hit) continue;
+    const nrm = hit.getNormal();
+    const collider = hit.getCollider() as PhysicsBody2D;
+    if (Surface.getSurfaceType(nrm, collider.isRotating) === SurfaceType.WALL) return nrm;
+  }
+  return null;
+}
+
+// All four limbs pinned flat against a wall face — shared by the wall-slide
+// state and passive wall contact.
+function pressedPose(player: Player, n: Vec2): Vec2[] {
+  const p = player.globalPosition;
+  const r = player.radius;
+  let up = n.orthogonal();
+  if (up.y > 0) up = up.mul(-1);
+  const base = p.add(n.mul(-(r - 1)));
   return [
-    p.add(new Vec2(-r * 0.9, -r * 0.25)),
-    p.add(new Vec2(r * 0.9, -r * 0.25)),
-    p.add(new Vec2(-r * 0.85, r * 0.9)),
-    p.add(new Vec2(r * 0.85, r * 0.9)),
+    base.add(up.mul(5.5)),
+    base.add(up.mul(3)),
+    base.add(up.mul(-5)),
+    base.add(up.mul(-7.5)),
   ];
+}
+
+function airbornePose(player: Player): Vec2[] {
+  const p = player.globalPosition;
+  const r = player.radius;
+  // Jump → fall blend on vertical velocity: falling, the legs tuck in and
+  // the arms ride higher than during the jump's rise.
+  const fall = Math.min(1, Math.max(0, player.velocity.y / 300));
+  const jump: Vec2[] = [
+    new Vec2(-r * 0.9, -r * 0.25),
+    new Vec2(r * 0.9, -r * 0.25),
+    new Vec2(-r * 0.85, r * 0.9),
+    new Vec2(r * 0.85, r * 0.9),
+  ];
+  const falling: Vec2[] = [
+    new Vec2(-r * 0.9, -r * 0.65),
+    new Vec2(r * 0.9, -r * 0.65),
+    new Vec2(-r * 0.55, r * 0.9),
+    new Vec2(r * 0.55, r * 0.9),
+  ];
+  return jump.map((o, i) => p.add(o.lerp(falling[i]!, fall)));
 }
 
 function groundedPose(player: Player, state: GroundedState): Vec2[] {
@@ -94,6 +140,12 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
   const armBase = p.add(n.mul(-0.5));
   const moving = Math.abs(player.velocity.cross(n)) > 5;
   if (!moving) {
+    // Standing against a wall: brace the limbs on it.
+    const wn = touchingWallNormal(player);
+    if (wn) {
+      wallPressed = true;
+      return pressedPose(player, wn);
+    }
     // t points screen-left for upright ground (n = UP), so the player's right
     // limbs (viewer's left, front-on) take the +t side.
     return [
@@ -192,17 +244,12 @@ function wallPose(player: Player, state: OnWallState): Vec2[] {
   }
 
   // Sliding: limbs pinned against the wall, fixed relative to the player.
-  return [
-    base.add(up.mul(5.5)),
-    base.add(up.mul(3)),
-    base.add(up.mul(-5)),
-    base.add(up.mul(-7.5)),
-  ];
+  return pressedPose(player, n);
 }
 
 function ledgePose(player: Player, body: LedgeHangState["body"], vertexIndex: number): Vec2[] {
   const info = !body.removed ? LedgeDetection.grabInfo(body, vertexIndex) : null;
-  if (!info) return airbornePose(player.globalPosition, player.radius);
+  if (!info) return airbornePose(player);
   const p = player.globalPosition;
   const r = player.radius;
   // Feet flat on the wall face below the corner.
@@ -219,13 +266,21 @@ function ledgePose(player: Player, body: LedgeHangState["body"], vertexIndex: nu
 }
 
 function poseTargets(player: Player): Vec2[] {
+  wallPressed = false;
   const state = player.state;
   if (state instanceof GroundedState) return groundedPose(player, state);
   if (state instanceof OnWallState) return wallPose(player, state);
   if (state instanceof LedgeHangState || state instanceof LedgeClimbState) {
     return ledgePose(player, state.body, state.vertexIndex);
   }
-  return airbornePose(player.globalPosition, player.radius);
+  // Airborne against a wall (falling beside it, shoved into it, mid
+  // wall-jump launch): brace on it.
+  const wn = touchingWallNormal(player);
+  if (wn) {
+    wallPressed = true;
+    return pressedPose(player, wn);
+  }
+  return airbornePose(player);
 }
 
 let lastP: Vec2 | null = null;
@@ -238,12 +293,13 @@ let frontLimbs: number[] = [];
 // Pose crossfade: when the animation kind changes (ground ↔ air ↔ wall ↔
 // ledge), the old pose is frozen and eased into the new one instead of the
 // limbs jumping to the new targets.
-const BLEND_FRAMES = 15; // ~250ms at 60fps
+const BLEND_FRAMES = 10; // ~165ms at 60fps
 let lastKind = "";
 let blend = 1; // 0 → just switched, 1 → fully on the current pose
 let blendFrom: (Vec2 | null)[] = [null, null, null, null];
 
 function poseKind(player: Player): string {
+  if (wallPressed) return "wall-press";
   const state = player.state;
   if (state instanceof GroundedState) return "ground";
   if (state instanceof OnWallState) {
