@@ -123,6 +123,15 @@ const EMBED_TOLERANCE = 3;
 const STUCK_WINDOW = 45; // frames of continuous same-direction input
 const STUCK_MIN_DISPLACEMENT = 25; // px along the input direction over the window
 const STUCK_MOBILE_DIST = 48; // px — a mobile body this close implicates movers
+// Yield exemption (wedge rules: movers push, never freeze): a player being
+// displaced backward by a mover is moving, not frozen — the treadmill bug
+// class this detector exists for pins the player near zero displacement.
+// Two signatures qualify: shoved backward over the whole window, or a
+// sustained backward drift in the window's tail (the push phase of a window
+// that straddles earlier real progress).
+const STUCK_PUSHED_BACK_EXEMPT = 10; // px against the input over the window
+const STUCK_YIELD_TAIL = 15; // frames — tail length checked for backward drift
+const STUCK_YIELD_DISPLACEMENT = 3; // px backward over the tail counts as yielding
 
 function mobileBodyNear(level: Level): boolean {
   const p = level.player;
@@ -136,16 +145,33 @@ function mobileBodyNear(level: Level): boolean {
   return false;
 }
 
+// A ledge climb is a short scripted traversal (~a second at most); staying in
+// LedgeClimbState longer means the climb target is unreachable (e.g. wedged in
+// a notch between rects) and the player is locked out of all input.
+const CLIMB_STALL_FRAMES = 90;
+
 export class StuckDetector {
   private streak = 0;
   private dir = 0;
   private xs: number[] = [];
   private mobileSeen: boolean[] = [];
+  private climbFrames = 0;
 
   // Call once per frame after level.physicsProcess. Returns a violation when
   // the window criteria trip, then restarts the streak (no per-frame spam).
   push(level: Level, input: FrameInput): Violation | null {
     const p = level.player;
+
+    // Climb-stall check (independent of input — climb ignores input).
+    this.climbFrames = p.state instanceof LedgeClimbState ? this.climbFrames + 1 : 0;
+    if (this.climbFrames === CLIMB_STALL_FRAMES) {
+      return {
+        frame: level.frame,
+        kind: "climb-stalled",
+        detail: `LedgeClimbState for ${CLIMB_STALL_FRAMES}f at (${p.globalPosition.x.toFixed(1)},${p.globalPosition.y.toFixed(1)})`,
+      };
+    }
+
     const dir = (input.moveRight.held ? 1 : 0) - (input.moveLeft.held ? 1 : 0);
     const exempt =
       p.rope !== null ||
@@ -167,10 +193,24 @@ export class StuckDetector {
     if (this.streak < STUCK_WINDOW) return null;
 
     const dx = (this.xs[this.xs.length - 1]! - this.xs[0]!) * dir;
+    // Peak forward progress within the window, not just endpoint-to-endpoint:
+    // a window straddling real progress followed by a mover push-back is
+    // movement, not a freeze — the treadmill bug class never advances at all.
+    const dxMax = Math.max(...this.xs.map((x) => (x - this.xs[0]!) * dir));
+    // Backward drift over the window tail — yielding to an active push.
+    const tail = this.xs[this.xs.length - 1 - STUCK_YIELD_TAIL];
+    const yielding =
+      tail !== undefined &&
+      (this.xs[this.xs.length - 1]! - tail) * dir < -STUCK_YIELD_DISPLACEMENT;
     const mobileInvolved = this.mobileSeen.some(Boolean);
     this.xs.shift();
     this.mobileSeen.shift();
-    if (dx < STUCK_MIN_DISPLACEMENT && mobileInvolved) {
+    if (
+      dxMax < STUCK_MIN_DISPLACEMENT &&
+      dx > -STUCK_PUSHED_BACK_EXEMPT &&
+      !yielding &&
+      mobileInvolved
+    ) {
       this.streak = 0;
       this.xs.length = 0;
       this.mobileSeen.length = 0;

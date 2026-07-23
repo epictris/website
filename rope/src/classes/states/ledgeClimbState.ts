@@ -1,75 +1,127 @@
-// LedgeClimbState, ported from classes/PlayerStates/LedgeClimbState.cs.
-// Extended for mobile shapes (game-design.md): the climb target is stored in
-// body-local space and re-derived each frame so it follows a moving ledge.
+// LedgeClimbState, ported from classes/PlayerStates/LedgeClimbState.cs, then
+// rebuilt on LedgeDetection (game-design.md): the climb stores the grabbed
+// body + vertex index and re-derives the corner and its face normals every
+// frame, so the target follows a moving ledge and a corner that rotates out
+// of grabbability releases the player mid-climb.
+//
+// The climb runs in two phases: straight up along the hang face until the
+// player's body clears the lip, then laterally onto the top face. The old
+// single straight-line path dragged the player into the corner and could
+// wedge in notches; the timeout is now a true dead-man switch.
 
 import { Vec2 } from "../../engine/vec2";
 import type { PhysicsBody2D } from "../../engine/body";
+import { LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
 import { SurfaceType } from "../../lib/types";
 import type { Player } from "../player";
+import { Player as PlayerClass } from "../player";
 import { PlayerState } from "./playerState";
+import { AirborneState } from "./airborneState";
 import { GroundedState } from "./groundedState";
+import { WallJumpingState } from "./wallJumpingState";
+
+// A climb normally completes in under a second. If the target is unreachable
+// the climb would otherwise push forever with input locked out — bail to
+// airborne instead. Must stay under the climb-stall invariant (90 frames,
+// src/sim/trace.ts).
+const CLIMB_TIMEOUT_FRAMES = 80;
+const CLIMB_SPEED = 1.5; // px per frame-step, scaled by 1/delta
 
 export class LedgeClimbState extends PlayerState {
-  targetPosition: Vec2;
-  surfaceNormal: Vec2;
-  body: PhysicsBody2D | null;
-  vertexIndex: number;
-  private localTarget: Vec2 = Vec2.ZERO;
-  private supportBody: PhysicsBody2D | null;
+  readonly body: PhysicsBody2D;
+  readonly vertexIndex: number;
+  private surfaceNormal: Vec2 = Vec2.ZERO;
+  private supportBody: PhysicsBody2D | null = null;
+  private frames = 0;
 
-  constructor(
-    targetPosition: Vec2 = Vec2.ZERO,
-    surfaceNormal: Vec2 = Vec2.ZERO,
-    body: PhysicsBody2D | null = null,
-    vertexIndex = -1,
-  ) {
+  constructor(body: PhysicsBody2D, vertexIndex: number) {
     super();
-    this.targetPosition = targetPosition;
-    this.surfaceNormal = surfaceNormal;
     this.body = body;
     this.vertexIndex = vertexIndex;
     this.supportBody = body;
   }
 
-  private get tracksMobileBody(): boolean {
-    return (this.body?.isMobile ?? false) && this.vertexIndex >= 0;
-  }
+  update(player: Player, _delta: number): PlayerState {
+    if (this.body.removed) return this.release(player);
+    const info = LedgeDetection.grabInfo(this.body, this.vertexIndex);
+    if (!info) return this.release(player); // corner rotated out mid-climb
 
-  enter(_player: Player, _delta: number): void {
-    if (!this.tracksMobileBody || !this.body) return;
-    const rot = this.body.globalRotation;
-    this.localTarget = this.targetPosition.sub(this.body.globalPosition).rotated(-rot);
-  }
+    // Ledge jump mid-climb (mirrors LedgeHangState): buffered jump launches
+    // up-and-away off the hang face using the wall-jump vector.
+    const jumpFrames = player.inputs.jump.framesSinceActivation;
+    if (jumpFrames !== null && jumpFrames <= PlayerClass.JUMP_BUFFER_FRAMES) {
+      player.inputs.jump.deactivate();
+      this.release(player); // sets the separation velocity
+      return new WallJumpingState(info.wallNormal);
+    }
 
-  update(_player: Player, _delta: number): PlayerState {
+    // Input away from the wall cancels the climb (mirrors LedgeHangState);
+    // the timeout is the backstop for unreachable targets.
+    if (player.xInputDirection * info.wallNormal.x > 0) return this.release(player);
+    this.frames++;
+    if (this.frames > CLIMB_TIMEOUT_FRAMES) return this.release(player);
     return this;
   }
 
+  // Separation keeps the surface's contact-point velocity (game-design.md).
+  private release(player: Player): AirborneState {
+    if (this.body.isMobile && !this.body.removed) {
+      player.velocity = this.body.velocityAtPoint(player.globalPosition);
+    } else {
+      player.velocity = Vec2.ZERO;
+    }
+    return new AirborneState();
+  }
+
   resolveCollision(player: Player, delta: number): PlayerState {
-    if (this.tracksMobileBody && this.body && !this.body.removed) {
-      this.targetPosition = this.body.globalPosition.add(
-        this.localTarget.rotated(this.body.globalRotation),
-      );
-    }
+    const info = LedgeDetection.grabInfo(this.body, this.vertexIndex);
+    if (!info) return this; // update() already scheduled the release
 
-    player.velocity = player.globalPosition.directionTo(this.targetPosition).mul(0.75 / delta);
+    const shape = player.getShape().shape;
+    const radius = shape.kind === "circle" ? shape.radius : 0;
+    const target = LedgeDetection.climbTarget(info, radius);
 
+    // Phase 1: rise along the hang face until the body clears the lip.
+    // Phase 2: move laterally onto the top face.
+    const cleared = (): boolean =>
+      player.globalPosition.sub(info.vertex).dot(info.floorNormal) >= radius + 1;
+    const direction = cleared()
+      ? player.globalPosition.directionTo(target)
+      : LedgeDetection.hangDirection(info).neg();
+    player.velocity = direction.mul(CLIMB_SPEED / delta);
+
+    // One frame's motion, sliding along obstructions — the loop iterates on
+    // the collision remainder only (re-applying the full motion each pass
+    // quadrupled the climb speed and made it snap).
+    let motion = player.velocity.mul(delta);
     for (let i = 0; i < 4; i++) {
-      const collision = player.moveAndCollide(player.velocity.mul(delta));
-      if (collision) {
-        const normal = collision.getNormal();
-        player.velocity = player.velocity.slide(normal);
-        this.surfaceNormal = normal;
-        this.supportBody = collision.getCollider() as PhysicsBody2D;
-      }
+      const collision = player.moveAndCollide(motion);
+      if (!collision) break;
+      const normal = collision.getNormal();
+      player.velocity = player.velocity.slide(normal);
+      this.surfaceNormal = normal;
+      this.supportBody = collision.getCollider() as PhysicsBody2D;
+      motion = collision.getRemainder().slide(normal);
     }
 
-    // Snap to surface.
-    const newCol = player.moveAndCollide(this.surfaceNormal.mul(-2 / delta));
-    if (newCol) {
-      this.surfaceNormal = newCol.getNormal();
-      this.supportBody = newCol.getCollider() as PhysicsBody2D;
+    // Directed snap probe (post-move): into the hang face while rising, down
+    // onto the top face once horizontally past the wall plane — that floor
+    // contact ends the climb grounded. In the corner-transit region between
+    // the two (over the lip, not yet over the face) probing would drag the
+    // player off the path, so no probe runs there.
+    const overFace = player.globalPosition.sub(info.vertex).dot(info.wallNormal) < 0;
+    const probeDir = cleared()
+      ? overFace
+        ? info.floorNormal.neg()
+        : null
+      : info.wallNormal.neg();
+    if (probeDir) {
+      const newCol = player.moveAndCollide(probeDir.mul(2));
+      if (newCol) {
+        this.surfaceNormal = newCol.getNormal();
+        this.supportBody = newCol.getCollider() as PhysicsBody2D;
+      }
     }
 
     if (

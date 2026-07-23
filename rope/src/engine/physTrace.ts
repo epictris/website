@@ -7,6 +7,9 @@
 //    cvel:[x,y]?, test}                      — every moveAndCollide hit
 //   {f, t:"frame", ...}                      — per-frame snapshot (harness)
 //   {f, t:"transition", from, to}            — state changes (harness)
+//   {f, t:"ledge", event:"grab"|"miss", ...} — ledge detection: every grab,
+//    and near-miss rejections with a reason (wrong-side, behind-wall,
+//    out-of-reach, seam) — grep these when a grab "should have" happened
 
 export const PhysTrace = {
   enabled: false,

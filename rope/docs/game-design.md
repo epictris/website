@@ -136,12 +136,12 @@ resulting collision both re-presses the player against the surface and refreshes
 the stored wall normal from the hit. Around this snap the wall state also
 probes:
 
-- A ray past the top of the wall (offset a fixed margin beyond the corner, in
-  the movement direction): if it hits a **floor**-classified surface the wall
-  ends in a grabbable ledge — moving up transitions into ledge climb, otherwise
-  into ledge hang (with a positional correction onto the corner). This is the
-  reachability check from the ledge section below acting in-engine: the ray must
-  see a floor on top, so a wall-steep top face never triggers a grab.
+- A vertex-first ledge query (see the ledge section below): if a grabbable
+  corner lies within grab reach of the player's swept path, the wall ends in a
+  ledge — moving up transitions into ledge climb, otherwise into ledge hang.
+  Detection is by corner, not by ray, so approach speed and wall angle cannot
+  produce misses; the reachability rules (floor top face, wall hang face) are
+  evaluated on the corner itself.
 - A ray into the wall from the player's position: no hit → the wall ran out;
   go airborne.
 - After the snap, if the refreshed normal now classifies as **floor** (the wall
@@ -233,10 +233,47 @@ player must approach from. So ledge grabbing splits into:
    edge normals (per frame for mobile shapes, since a rotating corner can swing
    into or out of a grabbable orientation).
 
+Grabbing is also **deliberate**: a ledge is only grabbed while the player is
+actively inputting movement toward the wall. Sliding up past a lip with no
+toward-input continues past it with the current velocity — candidacy and
+reachability gate what *can* be grabbed, input gates what *is*.
+
 Reachability requires the ledge's **top surface to classify as a floor** (same
 normal-vs-gravity thresholds as the character controller's floor / wall /
-ceiling classification above). If the surface on top of the corner is steep
-enough to count as a wall — or faces down as a ceiling — the corner is **not
-grabbable**, even though its interior angle keeps it a candidate. A rotating
-shape can therefore carry a permanent candidate vertex in and out of
+ceiling classification above) and the adjacent face to classify as a **wall**
+(the face the player hangs against). If the surface on top of the corner is
+steep enough to count as a wall — or faces down as a ceiling — the corner is
+**not grabbable**, even though its interior angle keeps it a candidate. A
+rotating shape can therefore carry a permanent candidate vertex in and out of
 grabbability as its top face crosses the floor/wall threshold.
+
+Detection is **vertex-first** (`lib/ledgeDetection.ts`, the single source of
+truth for states and debug overlay alike): every candidate corner is tested
+against the player's **swept path for the current frame** with a reach radius
+of player radius plus a margin. There is no probe ray, so approach speed and
+surface angle cannot cause misses; there is deliberately no multi-frame grab
+memory (no coyote grabs). Additional gates:
+
+- **Interior rejection.** The player must be outside at least one incident face
+  half-plane of the corner — never grab through the body from behind.
+- **Direction rule.** Corners below the player's centre are never grab
+  targets — rising or falling, jumping or flying past a lip must not yank the
+  player down onto it. Fast falls still catch: on the frame the corner is
+  passed it ends up above centre, and that frame's swept segment reaches back
+  to it.
+- **Seam filter.** A candidate vertex lying on/inside another blocking body is
+  a compound-body seam corner and never grabs (rigid debris is ignored so a
+  ball resting on a lip cannot switch the ledge off).
+
+The **catch** swings the body down the hang face — entry momentum plus easing,
+decaying under grip friction — to the one rest pose: the player's centre
+**exactly on the edge of the grab radius**. Only once the catch settles can
+toward-input start a climb. The hang is a **lock to the grabbed body**: the
+pose is derived from the corner's current transform and set directly each
+frame, so a mover carries the player exactly and imparts no forces. A
+catch blocked by geometry times out into a release rather than pinning the
+player. The **climb** runs in two phases — up along the hang face until the
+body clears the lip, then laterally onto the top face — with a timeout as a
+dead-man switch. Hanging and climbing both offer a **ledge jump**: a buffered
+jump launches up-and-away using the wall-jump vector. Running off a ledge
+never grabs it — the player leaves the lip with their velocity.

@@ -4,7 +4,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { button, emptyFrameInput, type ButtonInput, type FrameInput } from "../input/frameInput";
-import { Level } from "../level/level";
+import { Level, type LevelSpec } from "../level/level";
 import { LEVELS } from "../level/registry";
 import {
   checkInvariants,
@@ -56,7 +56,9 @@ export type PlaytestAssert =
   | { frame: number; maxSpeed: number }
   | { frame: number; hasRope: boolean }
   | { frame: number; minX?: number; maxX?: number; minY?: number; maxY?: number }
-  | { reachState: string; byFrame?: number };
+  | { reachState: string; byFrame?: number }
+  | { reachAnyState: string[]; byFrame?: number }
+  | { neverState: string };
 
 export interface PlaytestScript {
   level: string;
@@ -113,8 +115,10 @@ export interface PlaytestResult {
   passed: boolean;
 }
 
-export function runScript(script: PlaytestScript): PlaytestResult {
-  const spec = LEVELS[script.level];
+// `specOverride` runs the script on an ad-hoc level (the ledge matrix builds
+// its geometry programmatically); script.level is then only a label.
+export function runScript(script: PlaytestScript, specOverride?: LevelSpec): PlaytestResult {
+  const spec = specOverride ?? LEVELS[script.level];
   if (!spec) throw new Error(`Unknown level: ${script.level}`);
   const level = new Level(spec.data, spec.init);
   let resetFired = false;
@@ -150,6 +154,24 @@ export function runScript(script: PlaytestScript): PlaytestResult {
       const first = stateFirstFrame.get(a.reachState);
       const ok = first !== undefined && (a.byFrame === undefined || first <= a.byFrame);
       return { ok, description: `reach ${a.reachState}${a.byFrame ? ` by ${a.byFrame}` : ""} (first=${first ?? "never"})` };
+    }
+    if ("reachAnyState" in a) {
+      const firsts = a.reachAnyState
+        .map((s) => stateFirstFrame.get(s))
+        .filter((f): f is number => f !== undefined);
+      const first = firsts.length ? Math.min(...firsts) : undefined;
+      const ok = first !== undefined && (a.byFrame === undefined || first <= a.byFrame);
+      return {
+        ok,
+        description: `reach any of ${a.reachAnyState.join("|")}${a.byFrame ? ` by ${a.byFrame}` : ""} (first=${first ?? "never"})`,
+      };
+    }
+    if ("neverState" in a) {
+      const first = stateFirstFrame.get(a.neverState);
+      return {
+        ok: first === undefined,
+        description: `never ${a.neverState} (first=${first ?? "never"})`,
+      };
     }
     const d = digests[a.frame - 1];
     if (!d) return { ok: false, description: `frame ${a.frame} out of range` };

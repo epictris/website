@@ -15,6 +15,7 @@ import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import type { Level } from "../level/level";
 import type { Camera } from "./camera";
+import { drawLedgeOverlay } from "./ledgeOverlay";
 
 const BG = "#1f2430";
 const GEOMETRY_FILL = "#2a2f3d";
@@ -112,6 +113,7 @@ export function render(
   level: Level,
   camera: Camera,
   fps: number,
+  showLedges = false,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = BG;
@@ -137,6 +139,9 @@ export function render(
     }
     ctx.stroke();
   }
+
+  // Ledge-grab overlay (toggle: L).
+  if (showLedges) drawLedgeOverlay(ctx, level);
 
   // Debug overlay.
   for (const cmd of Debug.cmds) {

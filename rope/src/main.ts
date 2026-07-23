@@ -76,8 +76,12 @@ function downloadRecording(): void {
   a.click();
   URL.revokeObjectURL(url);
 }
+// Ledge-grab overlay toggle. Render-side only — deliberately outside the
+// deterministic FrameInput stream so toggling never affects recordings.
+let showLedges = false;
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyP") downloadRecording();
+  if (e.code === "KeyL") showLedges = !showLedges;
 });
 
 let last = -1;
@@ -106,7 +110,7 @@ function frame(now: number): void {
   camera.position = level.cameraPosition;
 
   const dpr = window.devicePixelRatio || 1;
-  render(ctx, dpr, cssWidth, cssHeight, level, camera, fps);
+  render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showLedges);
 
   requestAnimationFrame(frame);
 }

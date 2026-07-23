@@ -67,7 +67,10 @@ bun run dev        # http://localhost:3100
 
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire
 hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn circles ·
-**P** download a replayable session bundle.
+**P** download a replayable session bundle ·
+**L** toggle the ledge-grab debug overlay (render-only: green marker + dashed grab-radius
+circle = grabbable now, hollow red = candidate rotated out of reach, grey X = seam-occluded,
+face ticks colored by floor/wall/ceiling classification).
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).
@@ -76,6 +79,7 @@ Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 
 ```sh
 bun run replay selftest                       # determinism + replay round-trip check
+bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
 bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
@@ -83,19 +87,68 @@ bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input 
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
 ```
 
-Debugging workflow for gameplay bugs: reproduce in the browser, press **P**, drop the
-bundle into `playtests/bundles/` — `cli bundles` replays it with current physics and
-fails on invariant violations (including the `input-frozen` stuck detector: held
-direction + locomotion state + mobile body nearby + no displacement). Digest
-divergence is informational only (bundles recorded before a physics fix legitimately
-diverge). `cli continue` replays a bundle to a frame then takes over with scripted
-held input; `--trace` writes per-frame JSONL (contacts with normals/classification/
-surface velocity, state transitions, snapshots) via `src/engine/physTrace.ts`.
-
 Playtest scripts are frame-indexed held-button ranges + mouse aim with asserts
 (`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds). Invariants
 checked every frame: NaN, runaway speed, rope-over-length (once anchored),
 player-embedded-in-geometry.
+
+## Debugging physics issues
+
+The debugging loop for gameplay/physics bugs (player stuck, frozen input, bad
+launches, mover misbehavior):
+
+1. **Capture.** Reproduce in the browser, press **P** — downloads a bundle
+   (level id + full input trace + per-frame digests). Recording restarts on
+   level reset, so a bundle always replays from frame 0.
+2. **Make it red.** Drop the bundle into `playtests/bundles/` (gitignored,
+   local corpus) and run `cli bundles`. Every bundle is re-simulated with
+   *current* physics and checked against per-frame invariants — the bug should
+   show up as violations at the frames where it was felt. If it doesn't,
+   the invariants have a blind spot: fix the detector first, then the bug.
+   A fix is only "done" when the bundle that reported it goes green.
+3. **Locate.** `cli dump bundle.json --from A --to B --every N` prints a
+   digest+held-input table (re-simulated, not the recorded digests). Look for
+   `vx=0.0` runs under held input, state thrash (Grounded↔Airborne flicker),
+   or position drifting against input.
+4. **Inspect.** `cli continue bundle.json --from F --hold left --frames 120
+   --trace t.jsonl` replays to frame F, then takes over with scripted held
+   input (fed through the input deserializer so pressed/released edges are
+   correct relative to the recording — do not hand-roll input streams; the
+   `InputBuffer`s are edge-triggered and a missed `released` latches a key
+   forever). The trace JSONL (`src/engine/physTrace.ts`) has one record per
+   `moveAndCollide` contact — collider, `overlap` (depenetration) vs `sweep`,
+   normal, mobility, contact-point surface velocity — plus per-frame snapshots
+   (state, support body, velocity), state transitions, and ledge-detection
+   events (`t:"ledge"` — every grab, and near-miss rejections with a reason:
+   wrong-side, below-player, behind-wall, out-of-reach, seam). Grep it: opposite
+   normals from the same body in one frame, surface classifications flipping,
+   velocity resetting to the collider's `cvel` every frame.
+5. **Verify.** `cli bundles` green + all playtests + `bun run replay selftest`
+   (must stay bit-identical — static-path behavior may never change; mobile
+   behavior is gated behind `isMobile`/`isRotating` branches).
+
+Key invariant — the **`input-frozen` stuck detector** (`src/sim/trace.ts`):
+held direction for 45 frames with a mobile body nearby must produce ≥25 px of
+displacement along the input, or >10 px *against* it (yielding to a mover's
+push is displacement, not a freeze — wedge rules). Counts every input-held frame regardless of
+state (state thrash must not reset the window); exempt: active rope, ledge
+hang/climb, wall-jump startup, and purely static blockers (pressing into a
+static wall is legit). Runs inside every playtest, replay, and continue.
+
+Bundle semantics: digest divergence in `cli replay`/`cli bundles` is
+**informational, not failure** — a bundle recorded before a physics fix
+legitimately diverges from the frame the fix first bites; invariants are the
+pass/fail signal. Consequence: after early divergence, the re-simulated tail
+no longer matches what the user experienced — diagnose stuck windows via the
+detector's frame numbers on the *current* simulation, not the recorded tail.
+
+Past root causes worth suspecting again (all found via this loop): absolute
+velocity zeroed instead of surface-relative (PROJECT/CEILING cases), locomotion
+basis stolen by a mover's corner normal (static-floor preference), separating
+depenetration contacts redirecting escape velocity, phantom "hit-from-inside"
+sweep normals on thin rotating shapes (guards in `World.moveAndCollide`), and
+near-threshold face classification flapping on rotating bodies (grip grace in
+`lib/surface.ts`).
 
 ## Regenerating level geometry
 

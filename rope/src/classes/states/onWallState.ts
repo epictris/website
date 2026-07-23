@@ -2,9 +2,8 @@
 
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
-import { Colors, Debug } from "../../engine/debug";
 import type { PhysicsBody2D } from "../../engine/body";
-import { ShapeGeometry } from "../../lib/shapeGeometry";
+import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
 import { SlideType, SurfaceType } from "../../lib/types";
@@ -18,9 +17,6 @@ import { LedgeClimbState } from "./ledgeClimbState";
 import { LedgeHangState } from "./ledgeHangState";
 
 const WALL_RUN_ACCELERATION = 0.1;
-// How close the ledge probe hit must land to a shape vertex to count as that
-// vertex's ledge (px). Probe geometry offsets are 9 px, so 16 covers them.
-const LEDGE_VERTEX_TOLERANCE = 16;
 
 export enum WallMode {
   Running,
@@ -201,56 +197,23 @@ export class OnWallState extends PlayerState {
     if (newState instanceof OnWallState) {
       const world = player.world;
       const onWallState = newState;
+      // Ledge grabs are deliberate: only while inputting toward the wall.
+      // Otherwise the player continues past the lip with their velocity.
+      const inputTowardWall = player.xInputDirection * onWallState.surfaceNormal.x < 0;
 
-      if (world && player.velocity.y < 0) {
-        const rayStart = player.globalPosition
-          .add(onWallState.wallDirection.mul(9))
-          .sub(onWallState.surfaceNormal.mul(9));
-        const rayEnd = rayStart.sub(onWallState.wallDirection.mul(player.velocity.length() * delta));
-        Debug.drawArrow(rayStart, rayEnd, Colors.Yellow);
-        const result = world.intersectRay(rayStart, rayEnd, { hitFromInside: true });
-        if (
-          result &&
-          !result.normal.equals(Vec2.ZERO) &&
-          Surface.getSurfaceType(result.normal, result.collider.isRotating) === SurfaceType.FLOOR
-        ) {
-          // Candidacy: the floor hit must sit on a stored ledge-candidate
-          // vertex (game-design.md). Circles have no vertices — never grab.
-          const vi = OnWallState.ledgeVertexIndex(result.collider, result.position);
-          if (vi !== null) {
-            onWallState.snapToSurface(player, delta);
-            return new LedgeClimbState(
-              result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
-              this.surfaceNormal,
-              result.collider,
-              vi,
-            );
-          }
-        }
-      } else if (world) {
-        const rayEnd = player.globalPosition
-          .add(onWallState.wallDirection.mul(9))
-          .sub(onWallState.surfaceNormal.mul(9));
-        const rayStart = rayEnd.add(onWallState.wallDirection.mul(player.velocity.length() * delta));
-        Debug.drawArrow(rayStart, rayEnd, Colors.Yellow);
-        const result = world.intersectRay(rayStart, rayEnd, { hitFromInside: true });
-        if (
-          result &&
-          !result.normal.equals(Vec2.ZERO) &&
-          Surface.getSurfaceType(result.normal, result.collider.isRotating) === SurfaceType.FLOOR
-        ) {
-          const vi = OnWallState.ledgeVertexIndex(result.collider, result.position);
-          if (vi !== null) {
-            const positionalCorrection = result.position.sub(rayEnd);
-            player.globalPosition = player.globalPosition.add(positionalCorrection);
-            onWallState.snapToSurface(player, delta);
-            return new LedgeHangState(
-              result.position.add(this.wallDirection.mul(9)).sub(this.surfaceNormal.mul(9)),
-              this.surfaceNormal,
-              result.collider,
-              vi,
-            );
-          }
+      if (world && inputTowardWall && player.rope?.isTaut !== true) {
+        // Vertex-first detection over the swept path (LedgeDetection): no
+        // ray, so approach speed and wall angle can't produce misses.
+        const grab = LedgeDetection.findGrab(world.bodies, {
+          path: player.sweptPath(),
+          reach: player.radius + GRAB_REACH_MARGIN,
+          wallNormalXSign: Math.sign(onWallState.surfaceNormal.x),
+        });
+        if (grab) {
+          // Moving up transitions into ledge climb, otherwise into ledge hang.
+          return player.velocity.y < 0
+            ? new LedgeClimbState(grab.body, grab.vertexIndex)
+            : new LedgeHangState(grab.body, grab.vertexIndex);
         }
       }
 
@@ -274,16 +237,6 @@ export class OnWallState extends PlayerState {
       }
     }
     return newState;
-  }
-
-  // Nearest ledge-candidate vertex of the collider to the probe hit, or null
-  // when none qualifies (no vertex nearby, angle above threshold, circles).
-  private static ledgeVertexIndex(collider: PhysicsBody2D, hitPosition: Vec2): number | null {
-    if (!collider.hasShape()) return null;
-    const shape = collider.getShape();
-    const vi = ShapeGeometry.findNearestVertexIndex(shape, hitPosition, LEDGE_VERTEX_TOLERANCE);
-    if (vi === null || !ShapeGeometry.isLedgeCandidate(shape.shape, vi)) return null;
-    return vi;
   }
 
   snapToSurface(player: Player, delta: number): void {

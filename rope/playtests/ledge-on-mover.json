@@ -4,19 +4,21 @@
   "holds": [
     { "action": "move_left", "from": 1, "to": 48 },
     { "action": "jump", "from": 300, "to": 304 },
-    { "action": "move_right", "from": 380, "to": 480 }
+    { "action": "move_right", "from": 328, "to": 330 },
+    { "action": "move_right", "from": 420, "to": 480 }
   ],
   "asserts": [
     { "reachState": "OnWallState", "byFrame": 335 },
-    { "reachState": "LedgeHangState", "byFrame": 340 },
+    { "reachState": "LedgeHangState", "byFrame": 335 },
     { "frame": 352, "state": "LedgeHangState" },
-    { "frame": 352, "minX": -350, "maxX": -346 },
-    { "frame": 379, "state": "LedgeHangState" },
-    { "frame": 379, "minX": -345, "maxX": -342 },
-    { "reachState": "LedgeClimbState", "byFrame": 385 },
-    { "frame": 400, "state": "GroundedState" },
-    { "frame": 439, "state": "AirborneState" },
-    { "frame": 463, "state": "GroundedState" },
-    { "frame": 463, "minX": 0 }
+    { "frame": 352, "minX": -352, "maxX": -346 },
+    { "frame": 403, "state": "LedgeHangState" },
+    { "frame": 403, "minX": -335, "maxX": -329 },
+    { "reachState": "LedgeClimbState", "byFrame": 425 },
+    { "frame": 432, "state": "LedgeClimbState" },
+    { "frame": 444, "state": "GroundedState" },
+    { "frame": 444, "minX": -290 },
+    { "frame": 460, "state": "GroundedState" },
+    { "frame": 460, "minX": -245 }
   ]
 }

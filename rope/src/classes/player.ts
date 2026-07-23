@@ -80,6 +80,10 @@ export class Player extends CharacterBody2D {
   xInputDirection = 0;
   radialCoMOffset = Player.COM_OFFSET_MAX;
   previousFrameVelocity = Vec2.ZERO;
+  // This frame's start position — with the current position it forms the
+  // swept segment ledge detection tests (anti-tunnelling for fast frames).
+  // Deliberately a single frame: no coyote-style grab memory.
+  private frameStartPosition: Vec2 | null = null;
 
   inputs = new PlayerInputs();
   rope: Rope | null = null;
@@ -124,8 +128,22 @@ export class Player extends CharacterBody2D {
     if (input.retractClick.pressed) this.rope?.retract(4);
   }
 
+  get radius(): number {
+    const shape = this.getShape().shape;
+    return shape.kind === "circle" ? shape.radius : 0;
+  }
+
+  // Swept path for ledge detection: this frame's start position plus the
+  // current position (call after movement for the full frame segment).
+  sweptPath(): Vec2[] {
+    return this.frameStartPosition
+      ? [this.frameStartPosition, this.globalPosition]
+      : [this.globalPosition];
+  }
+
   resolveInput(input: FrameInput, delta: number): void {
     this.inputs.tick(input);
+    this.frameStartPosition = this.globalPosition;
 
     if (this.inputs.retract.isActive) this.rope?.retract(2);
 

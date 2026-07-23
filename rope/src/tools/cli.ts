@@ -16,6 +16,7 @@ import { Level } from "../level/level";
 import { LEVELS, DEFAULT_LEVEL } from "../level/registry";
 import { PhysTrace } from "../engine/physTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
+import { runLedgeMatrix } from "../sim/ledgeMatrix";
 import { replayRecording } from "../sim/replay";
 import {
   ACTIONS,
@@ -256,6 +257,22 @@ switch (cmd) {
   case "selftest":
     cmdSelftest();
     break;
+  case "ledges":
+    cmdLedges();
+    break;
   default:
-    fail("usage: cli <play|replay|dump|continue|bundles|selftest> [file] [options]");
+    fail("usage: cli <play|replay|dump|continue|bundles|selftest|ledges> [file] [options]");
+}
+
+// Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
+function cmdLedges(): void {
+  const results = runLedgeMatrix();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[ledges] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
 }

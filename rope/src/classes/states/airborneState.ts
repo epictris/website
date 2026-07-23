@@ -3,6 +3,7 @@
 import { Vec2 } from "../../engine/vec2";
 import { Mathf } from "../../engine/mathf";
 import type { PhysicsBody2D } from "../../engine/body";
+import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
 import { SlideType, SurfaceType } from "../../lib/types";
@@ -11,6 +12,8 @@ import { Player as PlayerClass } from "../player";
 import { PlayerState } from "./playerState";
 import { OnWallState } from "./onWallState";
 import { GroundedState } from "./groundedState";
+import { LedgeClimbState } from "./ledgeClimbState";
+import { LedgeHangState } from "./ledgeHangState";
 
 export class AirborneState extends PlayerState {
   update(player: Player, delta: number): PlayerState {
@@ -99,6 +102,32 @@ export class AirborneState extends PlayerState {
   }
 
   resolveCollision(player: Player, delta: number): PlayerState {
-    return this.moveAndSlide(player, delta);
+    const newState = this.moveAndSlide(player, delta);
+
+    // Airborne ledge grab (game-design.md, universal deliberate-grab rule):
+    // falling or rising past a corner with toward-input grabs it directly —
+    // no wall-contact frame required first. A taut rope wins over hanging.
+    // Runs on wall-attach frames too: a corner deflection can throw the
+    // player out of grab reach by the time OnWallState's own check runs, so
+    // the transition frame must not be a blind spot. Landing (grounded) still
+    // wins over grabbing.
+    if (
+      (newState instanceof AirborneState || newState instanceof OnWallState) &&
+      player.xInputDirection !== 0 &&
+      player.rope?.isTaut !== true &&
+      player.world
+    ) {
+      const grab = LedgeDetection.findGrab(player.world.bodies, {
+        path: player.sweptPath(),
+        reach: player.radius + GRAB_REACH_MARGIN,
+        wallNormalXSign: -player.xInputDirection,
+      });
+      if (grab) {
+        return player.velocity.y < 0
+          ? new LedgeClimbState(grab.body, grab.vertexIndex)
+          : new LedgeHangState(grab.body, grab.vertexIndex);
+      }
+    }
+    return newState;
   }
 }
