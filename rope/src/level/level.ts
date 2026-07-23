@@ -26,9 +26,12 @@ export type MoverScript = (body: AnimatableBody2D, time: number) => void;
 
 // A registry entry: static geometry plus an optional init hook that adds
 // scripted movers (hand-written levels only — levelData.ts stays generated).
+// controller: "ball" runs the arena with the ball & chain controller
+// (BallLevel) instead of the grappling character controller.
 export interface LevelSpec {
   data: LevelData;
   init?: (level: Level) => void;
+  controller?: "ball";
 }
 
 export class Level {

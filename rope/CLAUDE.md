@@ -80,6 +80,26 @@ both ledge faces while hanging/climbing), colored by the same classification.
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).
 
+`?level=BALL` runs the **ball & chain controller** — a separate vertical slice
+(`classes/ballPlayer.ts`, `level/ballLevel.ts`, `input/ballInput.ts`,
+`renderBall`) that shares nothing with the Player state machine. The ball is a
+RigidBody2D (rolls via the opt-in `contactFriction` field on RigidBody2D;
+default 0 keeps old replays bit-identical). The chain reuses the Rope wrap
+solver: its start contact sits on the ball's edge in the ball's local frame, so
+it rotates with the ball, winds around it, and applies torque. The chain has an
+absolute max length (`BallPlayer.CHAIN_MAX_LENGTH`); a hook that flies past it
+misses and the chain snaps. The chain deploys through the **loop** — a fixed
+material point on the rim (top of the ball at rotation 0). Aiming rotates the
+ball so the loop faces the aim direction (proportional steering — also while
+the chain is out, which winds it around the ball); the shot always leaves
+through the loop. A stick-released frame encodes its aim point as the ball's
+own position ("not aiming"). Gamepad only: left stick aim, RB
+shoot/release, RT reel in, LT pay out, A sharp tug. RB is hold-to-keep:
+releasing it drops the chain. Ball inputs map onto the existing FrameInput fields
+(aim→mouseWorldPosition, shoot→fire, reel→retract, payout→extend), so
+recordings serialize and `cli replay`/`cli bundles` work unchanged
+(`cli continue` and playtest scripts are not ball-aware yet).
+
 ## Headless tooling
 
 ```sh

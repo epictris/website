@@ -25,6 +25,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   },
   TEST_MOVERS,
   TEST_WINDMILL,
+  // Ball & chain controller in the LEVEL_2 arena (no movers — the ball level
+  // driver has no mover support yet).
+  BALL: { data: LEVEL_2, controller: "ball" },
 };
 
 export const DEFAULT_LEVEL = "LEVEL_2";

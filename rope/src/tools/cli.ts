@@ -115,6 +115,7 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const spec = LEVELS[rec.level];
   if (!spec) fail(`Unknown level: ${rec.level}`);
+  if (spec.controller === "ball") fail(`continue does not support ball levels yet (${rec.level})`);
   const from = Math.min(Number(o.from ?? rec.frames.length), rec.frames.length);
   const frames = Number(o.frames ?? 120);
   const every = Number(o.every ?? 3);

@@ -120,6 +120,9 @@ export interface PlaytestResult {
 export function runScript(script: PlaytestScript, specOverride?: LevelSpec): PlaytestResult {
   const spec = specOverride ?? LEVELS[script.level];
   if (!spec) throw new Error(`Unknown level: ${script.level}`);
+  if (spec.controller === "ball") {
+    throw new Error(`playtest scripts do not support ball levels yet (${script.level})`);
+  }
   const level = new Level(spec.data, spec.init);
   let resetFired = false;
   level.onReset = () => {

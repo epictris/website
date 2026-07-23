@@ -36,6 +36,19 @@ A gamepad (standard mapping) works too, merged with keyboard/mouse:
 | `RB` / `LB` | reel in / reel out |
 | `X` / `Y` | spawn a small / large box |
 
+## Ball & chain mode
+
+An alternate character controller at `?level=BALL`: you are a rolling ball that
+shoots a chain (absolute max length) from its edge. Gamepad only for now:
+
+| Input | Action |
+|-------|--------|
+| left stick | aim — rotates the ball; the chain deploys through the loop on the rim |
+| `RB` | shoot chain (hold — releasing lets go) |
+| `RT` | reel in |
+| `LT` | pay out |
+| `A` | sharp tug on the chain |
+
 ## Share a playtest
 
 Press **P** to download a `session-*.json` bundle. Replay it (deterministically, with

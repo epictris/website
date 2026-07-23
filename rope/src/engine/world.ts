@@ -298,11 +298,11 @@ export class World {
         body.globalRotation += body.angularVelocity * dt;
       }
     }
-    this.resolveDynamicCollisions();
+    this.resolveDynamicCollisions(dt);
     this.notifyAreas();
   }
 
-  private resolveDynamicCollisions(): void {
+  private resolveDynamicCollisions(dt: number): void {
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;
       const s = body.getShape().shape;
@@ -323,8 +323,45 @@ export class World {
           const contactPoint = body.globalPosition.sub(ov.normal.mul(r));
           const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
           const vn = rel.dot(ov.normal);
-          if (vn < 0) body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn));
-          body.linearVelocity = body.linearVelocity.mul(0.98); // light friction
+          let vnKilled = 0;
+          if (vn < 0) {
+            body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn));
+            vnKilled = -vn;
+          }
+          // Tangential contact friction (opt-in per body): drive the relative
+          // surface velocity at the contact point toward zero through the
+          // coupled linear/angular effective mass, so a sliding circle spins
+          // up into a roll. Coulomb-capped: the impulse cannot exceed
+          // contactFriction (μ) times this frame's normal impulse — estimated
+          // from the normal velocity just killed plus gravity's bite into the
+          // surface. A vertical wall gets no gravity bite and thus (once
+          // resting) no traction, so a spinning ball cannot climb it.
+          // contactFriction = 0 skips this — the historical path.
+          if (body.contactFriction > 0) {
+            const rvec = ov.normal.mul(-r); // centre → contact point
+            const tangent = new Vec2(-ov.normal.y, ov.normal.x);
+            const surfSpeed = body.linearVelocity
+              .add(new Vec2(-rvec.y, rvec.x).mul(body.angularVelocity))
+              .sub(other.velocityAtPoint(contactPoint))
+              .dot(tangent);
+            const rCrossT = rvec.cross(tangent);
+            const invEff = body.inverseMass + rCrossT * rCrossT * body.inverseInertia;
+            if (invEff > 1e-9) {
+              const gravityBite = Math.max(
+                0,
+                GRAVITY.mul(body.gravityScale * dt).dot(ov.normal.mul(-1)),
+              );
+              const maxImpulse = body.contactFriction * body.mass * (vnKilled + gravityBite);
+              let j = -surfSpeed / invEff; // full-stick impulse
+              j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
+              // Braking impulses (opposing current travel) are scaled by
+              // contactBrakeScale; driving ones always apply in full.
+              if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
+              body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
+              body.angularVelocity += rCrossT * j * body.inverseInertia;
+            }
+          }
+          body.linearVelocity = body.linearVelocity.mul(body.contactDamp); // light friction
         } else {
           // Rigid-rigid: split the push, damp approach velocity (approximate).
           body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth * 0.5));

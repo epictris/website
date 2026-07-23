@@ -13,6 +13,7 @@ import { OnWallState } from "../classes/states/onWallState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { Level } from "../level/level";
+import type { BallLevel } from "../level/ballLevel";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -88,6 +89,22 @@ export function digest(level: Level): Digest {
     ropeLen: p.rope ? p.rope.getCurrentLength() : null,
     maxRope: p.rope ? p.rope.maxRopeLength : null,
     state: p.state.constructor.name,
+  };
+}
+
+// Ball & chain variant of digest() — same shape so recordings stay uniform.
+export function digestBall(level: BallLevel): Digest {
+  const b = level.ball;
+  return {
+    frame: level.frame,
+    px: b.globalPosition.x,
+    py: b.globalPosition.y,
+    rot: b.globalRotation,
+    vx: b.linearVelocity.x,
+    vy: b.linearVelocity.y,
+    ropeLen: b.chain ? b.chain.getCurrentLength() : null,
+    maxRope: b.chain ? b.chain.maxRopeLength : null,
+    state: b.chainAnchored ? "BallAnchored" : b.chain ? "BallFiring" : "Ball",
   };
 }
 
@@ -226,6 +243,51 @@ export class StuckDetector {
     }
     return null;
   }
+}
+
+// Ball & chain invariants: NaN, runaway speed, chain-over-length once
+// anchored, ball embedded in static geometry. No stuck detector — the ball
+// has no direct locomotion input to freeze.
+export function checkBallInvariants(level: BallLevel): Violation[] {
+  const out: Violation[] = [];
+  const b = level.ball;
+  const frame = level.frame;
+
+  if (!b.globalPosition.isFinite() || !b.linearVelocity.isFinite()) {
+    out.push({ frame, kind: "nan", detail: `pos=${b.globalPosition} vel=${b.linearVelocity}` });
+    return out;
+  }
+  if (b.linearVelocity.length() > RUNAWAY_SPEED) {
+    out.push({
+      frame,
+      kind: "runaway-speed",
+      detail: `|vel|=${b.linearVelocity.length().toFixed(1)}`,
+    });
+  }
+  if (b.chain) {
+    const len = b.chain.getCurrentLength();
+    if (b.chainAnchored && len > b.chain.maxRopeLength + 5) {
+      out.push({
+        frame,
+        kind: "rope-over-length",
+        detail: `len=${len.toFixed(1)} > max=${b.chain.maxRopeLength.toFixed(1)}`,
+      });
+    }
+    if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "chain length NaN" });
+  }
+  for (const body of level.world.bodies) {
+    if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
+    const ov = circleOverlap(b.globalPosition, b.radius, body.getShape());
+    if (ov && ov.depth > EMBED_TOLERANCE) {
+      out.push({
+        frame,
+        kind: "player-embedded",
+        detail: `depth=${ov.depth.toFixed(2)} in ${body.name || "static"}`,
+      });
+      break;
+    }
+  }
+  return out;
 }
 
 // Per-frame sanity checks (ported in spirit from snapshot/InvariantChecker.cs).

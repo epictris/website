@@ -171,6 +171,22 @@ export class RigidBody2D extends PhysicsBody2D {
   linearVelocity: Vec2 = Vec2.ZERO;
   angularVelocity = 0;
   mass = 1;
+  // Coulomb friction coefficient (μ) for static contacts: tangential impulses
+  // (capped at μ × the frame's normal impulse) couple linear and angular
+  // motion so sliding becomes rolling. 0 preserves the historical
+  // frictionless-rotation behaviour and MUST stay the default: recorded
+  // replays predate this field.
+  contactFriction = 0;
+  // Per-frame velocity damp applied while touching static geometry. The
+  // historical 0.98 MUST stay the default (recorded replays); rolling bodies
+  // set it lighter and get their resistance from the Coulomb model instead.
+  contactDamp = 0.98;
+  // Scale on friction impulses that oppose the body's current travel
+  // (braking); impulses that push along it (spin driving a roll) always apply
+  // in full. 1 = symmetric Coulomb friction, the default. The ball controller
+  // fades this with speed while the player aims, so reorienting the spin
+  // mid-roll cannot shed momentum but can still drive the ball.
+  contactBrakeScale = 1;
 
   override get isMobile(): boolean {
     return true;

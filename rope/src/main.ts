@@ -2,12 +2,15 @@
 
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
+import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
-import { render } from "./render/renderer";
+import { BallInputSource } from "./input/ballInput";
+import { render, renderBall } from "./render/renderer";
 import type { Camera } from "./render/camera";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
-import { digest, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
+import { digest, digestBall, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
+import type { IInputSource } from "./input/frameInput";
 
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5; // avoid spiral-of-death after a long stall
@@ -44,17 +47,28 @@ const levelId = ((): string => {
   return LEVELS[requested] ? requested : DEFAULT_LEVEL;
 })();
 const levelSpec = LEVELS[levelId]!;
+const isBall = levelSpec.controller === "ball";
 
-let level = new Level(levelSpec.data, levelSpec.init);
+function makeLevel(): Level | BallLevel {
+  return isBall ? new BallLevel(levelSpec.data) : new Level(levelSpec.data, levelSpec.init);
+}
+
+let level = makeLevel();
 function reset(): void {
-  level = new Level(levelSpec.data, levelSpec.init);
+  level = makeLevel();
   level.onReset = reset;
   recFrames.length = 0;
   recDigests.length = 0;
 }
 level.onReset = reset;
 
-const input = new LiveInputSource(canvas, camera, () => level.player.globalPosition);
+const ballInput = isBall
+  ? new BallInputSource(() => (level as BallLevel).ball.globalPosition)
+  : null;
+const liveInput = isBall
+  ? null
+  : new LiveInputSource(canvas, camera, () => (level as Level).player.globalPosition);
+const input: IInputSource = (ballInput ?? liveInput)!;
 
 // Full-session recording — press P to download a replayable bundle. A bundle
 // must start at level start to replay deterministically, so the trace isn't
@@ -103,14 +117,18 @@ function frame(now: number): void {
     const frameInput: FrameInput = input.sample();
     level.physicsProcess(frameInput, STEP);
     recFrames.push(serializeInput(frameInput));
-    recDigests.push(digest(level));
+    recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
     accumulator -= STEP;
     steps++;
   }
   camera.position = level.cameraPosition;
 
   const dpr = window.devicePixelRatio || 1;
-  render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug, input.gamepadAim());
+  if (level instanceof BallLevel) {
+    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps);
+  } else {
+    render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug, liveInput!.gamepadAim());
+  }
 
   requestAnimationFrame(frame);
 }

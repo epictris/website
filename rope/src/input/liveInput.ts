@@ -21,22 +21,22 @@ import {
   type FrameInput,
   type IInputSource,
 } from "./frameInput";
+import {
+  PAD_A,
+  PAD_DPAD_LEFT,
+  PAD_DPAD_RIGHT,
+  PAD_LB,
+  PAD_LT,
+  PAD_RB,
+  PAD_RT,
+  PAD_X,
+  PAD_Y,
+  readGamepad,
+} from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
-
-// Standard-mapping button indices (https://w3c.github.io/gamepad/#remapping).
-const PAD_A = 0;
-const PAD_X = 2;
-const PAD_Y = 3;
-const PAD_LB = 4;
-const PAD_RB = 5;
-const PAD_LT = 6;
-const PAD_RT = 7;
-const PAD_DPAD_LEFT = 14;
-const PAD_DPAD_RIGHT = 15;
 
 const MOVE_DEADZONE = 0.35; // left-stick X → digital move threshold
 const AIM_DEADZONE = 0.3; // right-stick deflection before it takes over aim
-const TRIGGER_THRESHOLD = 0.5; // analog trigger → digital press
 const AIM_DISTANCE = 150; // world px from the player to the stick aim point
 
 interface PadState {
@@ -66,31 +66,22 @@ const NO_PAD: PadState = {
 };
 
 function pollGamepad(): PadState {
-  if (typeof navigator === "undefined" || !navigator.getGamepads) return NO_PAD;
-  for (const pad of navigator.getGamepads()) {
-    if (!pad || !pad.connected) continue;
-    const pressed = (i: number): boolean => {
-      const b = pad.buttons[i];
-      return b ? b.value > TRIGGER_THRESHOLD || b.pressed : false;
-    };
-    const lx = pad.axes[0] ?? 0;
-    const rx = pad.axes[2] ?? 0;
-    const ry = pad.axes[3] ?? 0;
-    const aimVec = new Vec2(rx, ry);
-    return {
-      moveLeft: lx < -MOVE_DEADZONE || pressed(PAD_DPAD_LEFT),
-      moveRight: lx > MOVE_DEADZONE || pressed(PAD_DPAD_RIGHT),
-      jump: pressed(PAD_A),
-      retract: pressed(PAD_RB),
-      extend: pressed(PAD_LB),
-      fire: pressed(PAD_RT),
-      retractTug: pressed(PAD_LT),
-      spawnSmall: pressed(PAD_X),
-      spawnLarge: pressed(PAD_Y),
-      aim: aimVec.length() > AIM_DEADZONE ? aimVec.normalized() : null,
-    };
-  }
-  return NO_PAD;
+  const pad = readGamepad();
+  if (!pad) return NO_PAD;
+  const lx = pad.axis(0);
+  const aimVec = new Vec2(pad.axis(2), pad.axis(3));
+  return {
+    moveLeft: lx < -MOVE_DEADZONE || pad.pressed(PAD_DPAD_LEFT),
+    moveRight: lx > MOVE_DEADZONE || pad.pressed(PAD_DPAD_RIGHT),
+    jump: pad.pressed(PAD_A),
+    retract: pad.pressed(PAD_RB),
+    extend: pad.pressed(PAD_LB),
+    fire: pad.pressed(PAD_RT),
+    retractTug: pad.pressed(PAD_LT),
+    spawnSmall: pad.pressed(PAD_X),
+    spawnLarge: pad.pressed(PAD_Y),
+    aim: aimVec.length() > AIM_DEADZONE ? aimVec.normalized() : null,
+  };
 }
 
 export class LiveInputSource implements IInputSource {

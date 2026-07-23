@@ -12,8 +12,10 @@ import {
 } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { Player } from "../classes/player";
+import { BallPlayer } from "../classes/ballPlayer";
 import { Hook } from "../classes/hook";
 import type { Level } from "../level/level";
+import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
@@ -59,6 +61,20 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     pathShape(ctx, t);
     ctx.fillStyle = HOOK;
     ctx.fill();
+    return;
+  }
+  if (body instanceof BallPlayer) {
+    pathShape(ctx, t);
+    ctx.fillStyle = PLAYER;
+    ctx.fill();
+    // The chain loop on the rim — shows where the ball is aiming (the chain
+    // deploys through it) and doubles as the rotation indicator.
+    const loop = body.globalPosition.add(body.loopDirection.mul(body.radius + 1.5));
+    ctx.strokeStyle = HOOK;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(loop.x, loop.y, 2, 0, Math.PI * 2);
+    ctx.stroke();
     return;
   }
   if (body instanceof RigidBody2D) {
@@ -196,6 +212,57 @@ export function render(
     ctx.stroke();
     if (cmd.kind === "arrow") arrowHead(ctx, cmd.a, cmd.b, cmd.color);
   }
+
+  ctx.restore();
+
+  // FPS counter (screen space, top-right).
+  ctx.font = "14px monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#cbccc6";
+  ctx.fillText(`${Math.round(fps)} fps`, cssWidth - 8, 6);
+  ctx.textAlign = "left";
+}
+
+// Ball & chain frame: bodies + chain spans. No rig, no ledge overlay — the
+// ball has neither; aim is shown by the loop on the ball itself.
+export function renderBall(
+  ctx: CanvasRenderingContext2D,
+  dpr: number,
+  cssWidth: number,
+  cssHeight: number,
+  level: BallLevel,
+  camera: Camera,
+  fps: number,
+): void {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+  ctx.save();
+  ctx.translate(cssWidth / 2, cssHeight / 2);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.translate(-camera.position.x, -camera.position.y);
+
+  for (const body of level.world.bodies) {
+    if (body instanceof BallPlayer) continue; // drawn over the chain below
+    drawBody(ctx, body);
+  }
+  for (const area of level.world.areas) drawBody(ctx, area);
+
+  // Chain spans behind the ball so the body covers the edge attachment.
+  const chain = level.ball.chain;
+  if (chain) {
+    ctx.strokeStyle = HOOK;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const { span } of chain.getSpans()) {
+      ctx.moveTo(span.start.x, span.start.y);
+      ctx.lineTo(span.end.x, span.end.y);
+    }
+    ctx.stroke();
+  }
+  drawBody(ctx, level.ball);
 
   ctx.restore();
 
