@@ -138,9 +138,57 @@ export class World {
       }
     }
 
-    // Depenetration takes priority over a forward sweep.
+    // Depenetration takes priority over a forward sweep. Recover against ALL
+    // overlapping bodies, not just the deepest: pushing out of one body may
+    // push into another (a mover advancing into a static wedge), and a
+    // single-body pushout ping-pongs deeper into the pair every call —
+    // whichever body the last pass handled wins, and the rope solver turns
+    // the leftover displacement into velocity spikes. Godot's recovery
+    // resolves the full shape set at once; mirror that with bounded passes.
+    // Each pass gathers the two deepest overlaps at the recovered position:
+    // one overlap is a plain pushout, two with converging normals (dot < 0)
+    // are solved simultaneously — the translation d with d·n1 = depth1 and
+    // d·n2 = depth2 escapes through the wedge mouth instead of oscillating.
+    // A true crush (near-opposite normals) falls back to the deepest pushout
+    // and leaves a residual at the cap.
     if (overlapHit) {
-      const finalPos = start.add(overlapHit.normal.mul(overlapHit.depth));
+      let finalPos = start;
+      for (let pass = 0; pass < 4; pass++) {
+        // Gather the two deepest contacts INCLUDING within-skin ones: a full
+        // pushout of one wedge face re-embeds the other, so scanning only for
+        // depth > SKIN sees one face per pass and ping-pongs. The shallow
+        // second face must join the solve before the first pushout runs.
+        let a: { normal: Vec2; depth: number } | null = null;
+        let b: { normal: Vec2; depth: number } | null = null;
+        for (const target of this.bodies) {
+          if (target === body || target.removed) continue;
+          if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
+          if (body.exceptions.has(target.id)) continue;
+          if (!target.hasShape()) continue;
+          const ov = circleOverlap(finalPos, r, target.getShape());
+          if (!ov) continue;
+          if (!a || ov.depth > a.depth) {
+            b = a;
+            a = { normal: ov.normal, depth: ov.depth };
+          } else if (!b || ov.depth > b.depth) {
+            b = { normal: ov.normal, depth: ov.depth };
+          }
+        }
+        if (!a || a.depth <= SKIN) break;
+        const c = b ? a.normal.dot(b.normal) : 1;
+        // Converging pair: translate so BOTH faces end flush (d·n1 = depth1,
+        // d·n2 = depth2) — the exit through the wedge mouth. Guarded away
+        // from a degenerate crush (denominator 1-c² explodes as c → -1),
+        // which falls back to the deepest pushout and accepts a residual.
+        if (b && c < 0 && c > -0.98) {
+          const inv = 1 / (1 - c * c);
+          const ka = (a.depth - c * b.depth) * inv;
+          const kb = (b.depth - c * a.depth) * inv;
+          finalPos = finalPos.add(a.normal.mul(ka)).add(b.normal.mul(kb));
+        } else {
+          finalPos = finalPos.add(a.normal.mul(a.depth));
+        }
+      }
       const travel = finalPos.sub(start);
       const position = finalPos.sub(overlapHit.normal.mul(r));
       traceContact("overlap", body, overlapHit.collider, overlapHit.normal, position, testOnly);

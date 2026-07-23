@@ -105,7 +105,9 @@ export class AirborneState extends PlayerState {
           // Deliberate wall attach (game-design.md): only toward-input
           // attaches. No input or away-input keeps falling past the wall;
           // the slide below still stops the normal component of motion.
-          if (player.xInputDirection * normal.x < 0)
+          // A taut rope wins over the wall (as with ledge grabs): the rope
+          // drags positionally and the wall stick would fight it.
+          if (player.xInputDirection * normal.x < 0 && player.rope?.isTaut !== true)
             newState = OnWallState.running(player.velocity, normal, collider);
           break;
         case SurfaceType.FLOOR:

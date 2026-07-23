@@ -19,7 +19,6 @@ import { drawDebugOverlay } from "./debugOverlay";
 import {
   drawPlayerRigBack,
   drawPlayerRigFront,
-  rightHandPosition,
   updatePlayerRig,
 } from "./playerRig";
 
@@ -135,30 +134,28 @@ export function render(
   }
   for (const area of level.world.areas) drawBody(ctx, area);
 
-  // Player sandwich: far-side limbs, body, rope, near-side limbs.
-  updatePlayerRig(level);
-  drawPlayerRigBack(ctx);
-  drawBody(ctx, level.player);
-
-  // Rope spans. The first span is redrawn from the right hand's centre so the
-  // rope visually originates from the rope-holding arm (sim attach unchanged).
+  // Rope spans, drawn exactly as simulated and BEHIND the player so the body
+  // covers the origin at its centre. The first span used to be redrawn from
+  // the right hand's centre, but the offset between the hand and the sim
+  // attach point bent the rendered path at every wrap node — a sub-pixel wrap
+  // read as the rope snagging on a corner. The rig's arm reaches toward the
+  // rope instead (playerRig), so the hand still tracks the rope visually.
   const rope = level.player.rope;
   if (rope) {
-    const origin = rightHandPosition();
     ctx.strokeStyle = HOOK;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    const spans = rope.getSpans();
-    for (let i = 0; i < spans.length; i++) {
-      const s = spans[i]!.span;
-      const start = i === 0 && origin ? origin : s.start;
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(s.end.x, s.end.y);
+    for (const { span } of rope.getSpans()) {
+      ctx.moveTo(span.start.x, span.start.y);
+      ctx.lineTo(span.end.x, span.end.y);
     }
     ctx.stroke();
   }
 
-  // Near-side limbs over the rope so the rope-holding arm reads on top.
+  // Player sandwich over the rope: far-side limbs, body, near-side limbs.
+  updatePlayerRig(level);
+  drawPlayerRigBack(ctx);
+  drawBody(ctx, level.player);
   drawPlayerRigFront(ctx);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.

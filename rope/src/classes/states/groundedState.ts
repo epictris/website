@@ -146,7 +146,8 @@ export class GroundedState extends PlayerState {
           // the player stays grounded (floor still underfoot). This also
           // subsumes the mover-wedge rule: a mobile wall that is NOT the
           // supporting surface never captures the player without input.
-          if (player.xInputDirection * normal.x < 0) {
+          // A taut rope wins over the wall (see OnWallState.update).
+          if (player.xInputDirection * normal.x < 0 && player.rope?.isTaut !== true) {
             newState = OnWallState.running(player.velocity, normal, collider);
           }
           break;
@@ -201,8 +202,9 @@ export class GroundedState extends PlayerState {
               if (collider.isMobile && collider !== this.supportBody) return this;
               // Deliberate wall attach: walking over a crest onto a steep
               // face only flows into wall-slide under toward-input;
-              // otherwise the player leaves the crest airborne.
-              if (player.xInputDirection * normal.x < 0) {
+              // otherwise the player leaves the crest airborne. A taut rope
+              // wins over the wall (see OnWallState.update).
+              if (player.xInputDirection * normal.x < 0 && player.rope?.isTaut !== true) {
                 return OnWallState.sliding(normal, collider);
               }
               return new AirborneState();

@@ -40,6 +40,10 @@ interface DynamicBody {
 }
 
 export class Rope {
+  // Minimum distance a rect corner must deflect the rope path before it
+  // becomes a wrap node (see the grazing-contact gate in regeneratePath).
+  private static readonly MIN_WRAP_DEFLECTION = 0.5;
+
   maxRopeLength = 1000;
   maxIterations = 10;
   frictionCoefficient = 0.4;
@@ -169,6 +173,14 @@ export class Rope {
         }
       }
     }
+
+    // Winch stall: if scene geometry blocked the correction (a pinned player
+    // while retracting), the rope cannot actually shorten. Grow the max back
+    // to the settled length so the constraint doesn't wind up and catapult
+    // the player the moment the obstruction clears. A converged solve leaves
+    // length <= max, so this only bites when the solver was blocked.
+    const settledLength = this.calculateRopePathLength();
+    if (settledLength > this.maxRopeLength) this.maxRopeLength = settledLength;
   }
 
   private regenerateSpans(): RopePath[] {
@@ -416,7 +428,15 @@ export class Rope {
           }
           if (
             vertexIndex !== null &&
-            corners[vertexIndex]!.distanceTo(span.span.start) > 5
+            corners[vertexIndex]!.distanceTo(span.span.start) > 5 &&
+            // Grazing-contact gate: a corner this close to the span line
+            // bends the rope sub-visibly and adds no physical constraint,
+            // but renders as a phantom snag and flip-flops as the contact
+            // crosses the line on moving bodies (destabilising detachment).
+            // Only a corner that actually deflects the rope becomes a wrap.
+            span.span
+              .getClosestPointOnLine(corners[vertexIndex]!)
+              .distanceTo(corners[vertexIndex]!) > Rope.MIN_WRAP_DEFLECTION
           ) {
             newNodes.push(
               new RopeWrap(
@@ -454,14 +474,30 @@ export class Rope {
 
   private cullDuplicateNodes(): void {
     const newNodes: RopeWrap[] = [];
+    let previousNode: RopeWrap | null = null;
     let previousNodePosition = this.start.contact.globalPosition;
     for (const node of this.wraps) {
       const shape = node.contact.obj.getShape();
+      // Coincident duplicate: the same corner of the same body wrapped twice
+      // in the same direction (adjacent spans can each contribute the corner
+      // when it sits exactly on the rope line, e.g. a rotating rect crossing
+      // it). The rect branch below would keep both; the resulting zero-length
+      // span has no direction, which sends cullDetachedNodes into a
+      // reroute/detach cycle until its depth cap throws — drop the duplicate.
+      if (
+        previousNode !== null &&
+        node.contact.obj === previousNode.contact.obj &&
+        node.wrapDir === previousNode.wrapDir &&
+        node.contact.globalPosition.distanceSquaredTo(previousNodePosition) < 1e-6
+      ) {
+        continue;
+      }
       if (
         shape.shape.kind === "rect" ||
         node.contact.globalPosition.distanceTo(previousNodePosition) > 1
       ) {
         newNodes.push(node);
+        previousNode = node;
         previousNodePosition = node.contact.globalPosition;
       }
     }
@@ -640,17 +676,38 @@ export class Rope {
         const denominator = dynamicBody.inertia + dynamicBody.mass * torqueSquared;
         const linearFactor = dynamicBody.inertia / denominator;
         const angularFactor = (dynamicBody.mass * torqueArm) / denominator;
-        dynamicBody.body.globalPosition = dynamicBody.body.globalPosition.add(
+        this.applyCorrectionMotion(
+          dynamicBody.body,
           correctionDir.mul(totalCorrectionMagnitude * linearFactor),
         );
         dynamicBody.body.globalRotation += totalCorrectionMagnitude * angularFactor;
       } else {
-        dynamicBody.body.globalPosition = dynamicBody.body.globalPosition.add(
+        this.applyCorrectionMotion(
+          dynamicBody.body,
           correctionDir.mul(totalCorrectionMagnitude),
         );
       }
     }
     return scaledCorrectionImpulse;
+  }
+
+  // Positional corrections on the player go through the collision system so
+  // the rope cannot drag the body through scene geometry: moveAndCollide
+  // stops at contact and the remainder slides along the surface. (The C#
+  // original wrote the transform directly and relied on Godot's MoveAndSlide
+  // recovery next frame, which this engine does not replicate.) Other bodies
+  // keep the direct write — rigid circles are depenetrated by the world.
+  private applyCorrectionMotion(body: PhysicsBody2D, motion: Vec2): void {
+    if (!(body instanceof Player)) {
+      body.globalPosition = body.globalPosition.add(motion);
+      return;
+    }
+    let remaining = motion;
+    for (let i = 0; i < 3; i++) {
+      const collision = body.moveAndCollide(remaining);
+      if (!collision) return;
+      remaining = collision.getRemainder().slide(collision.getNormal());
+    }
   }
 
   private genDistanceToStartLookup(): Map<RopeNode, number> {

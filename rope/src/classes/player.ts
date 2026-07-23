@@ -116,8 +116,10 @@ export class Player extends CharacterBody2D {
         this.rope = null;
       });
       this.spawnBody?.(hook);
+      // Rope attaches at the player's centre (the C# original used UP*5, but
+      // an off-centre origin made the rendered rope kink against wrap nodes).
       this.rope = new Rope(
-        new RopeContact(this, Vec2.UP.mul(5)),
+        new RopeContact(this, Vec2.ZERO),
         new RopeContact(hook, Vec2.ZERO),
         [] as RopeWrap[],
         null,

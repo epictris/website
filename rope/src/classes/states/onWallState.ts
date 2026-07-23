@@ -85,6 +85,12 @@ export class OnWallState extends PlayerState {
   }
 
   update(player: Player, delta: number): PlayerState {
+    // A taut rope drags the body positionally, outside the state machine;
+    // the wall slide can't stay stuck to the surface against it (retracting
+    // would ratchet the player along the wall). Detach and let the rope take
+    // over — same rule as LedgeHangState.
+    if (player.rope?.isTaut === true) return new AirborneState();
+
     // Wall physics runs relative to the wall's contact-point velocity; the
     // carried velocity is re-added on the way out so exits launch with it.
     const carried = this.carriedVelocity(player);

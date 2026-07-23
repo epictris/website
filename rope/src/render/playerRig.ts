@@ -399,12 +399,6 @@ export function updatePlayerRig(level: Level): void {
   lastP = p;
 }
 
-// Exact centre of the right-arm circle as smoothed this frame — the rendered
-// rope's origin. The sim attach point (Vec2.UP * 5) is untouched.
-export function rightHandPosition(): Vec2 | null {
-  const off = current[Limb.ArmR];
-  return lastP && off ? lastP.add(off) : null;
-}
 
 function drawLimbs(ctx: CanvasRenderingContext2D, indices: number[]): void {
   if (!lastP) return;
