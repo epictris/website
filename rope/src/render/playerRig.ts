@@ -52,6 +52,11 @@ const enum Limb {
 
 let phase = 0;
 let prevPos: Vec2 | null = null;
+// Supporting mover tracked across render frames — its actual per-frame
+// displacement is subtracted from the gait's phase advance (a velocity-based
+// estimate would need the frame's physics-step count, which render can't see).
+let prevSupportId = -1;
+let prevSupportPos: Vec2 | null = null;
 // Smoothed limb offsets in player-local space. Smoothing world positions
 // would make limbs trail the player at speed; offsets move rigidly with the
 // body and only pose *changes* get eased.
@@ -115,8 +120,18 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
   const n = state.surfaceNormal.lengthSquared() > 0 ? state.surfaceNormal : Vec2.UP;
   const t = n.orthogonal();
 
+  // The gait runs in the supporting surface's frame: standing on a mover the
+  // player is carried, not running — subtract the contact-point surface
+  // velocity (v + ω × r, as the sim does) before measuring locomotion.
+  const support = state.supportBody;
+  const surfVel =
+    support && support.isMobile && !support.removed
+      ? support.velocityAtPoint(p.sub(n.mul(r)))
+      : Vec2.ZERO;
+  const relVel = player.velocity.sub(surfVel);
+
   // Walk → run blend: 0 at walking speeds, 1 at top ground speed.
-  const speed = Math.abs(player.velocity.cross(n));
+  const speed = Math.abs(relVel.cross(n));
   const run = Math.min(1, Math.max(0, (speed - 60) / 240));
 
   // Stride amplitude scales with speed: short steps when barely moving,
@@ -134,11 +149,26 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
   // stance feet to the ground (no foot-slip) and makes strides naturally
   // fewer and longer as speed and stride grow.
   const cycleDistance = (2 * stride) / duty;
-  if (prevPos) advancePhase(p.sub(prevPos).dot(t) * ((2 * Math.PI) / cycleDistance));
+  // Surface-relative displacement: world delta minus the platform's measured
+  // motion over the same render frame.
+  let platformDelta = 0;
+  if (support && support.isMobile && !support.removed) {
+    if (prevSupportId === support.id && prevSupportPos) {
+      platformDelta = support.globalPosition.sub(prevSupportPos).dot(t);
+    }
+    prevSupportId = support.id;
+    prevSupportPos = support.globalPosition;
+  } else {
+    prevSupportId = -1;
+    prevSupportPos = null;
+  }
+  if (prevPos) {
+    advancePhase((p.sub(prevPos).dot(t) - platformDelta) * ((2 * Math.PI) / cycleDistance));
+  }
 
   const footBase = p.add(n.mul(-(r - 0.5)));
   const armBase = p.add(n.mul(-0.5));
-  const moving = Math.abs(player.velocity.cross(n)) > 5;
+  const moving = speed > 5;
   if (!moving) {
     // Standing against a wall: brace the limbs on it.
     const wn = touchingWallNormal(player);
@@ -163,7 +193,7 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
 
   // Travel direction along the surface tangent; the player's right limbs
   // stay on the trailing side of the body, whichever way it runs.
-  const fwd = player.velocity.dot(t) >= 0 ? 1 : -1;
+  const fwd = relVel.dot(t) >= 0 ? 1 : -1;
 
   const pose: Vec2[] = [];
   for (let i = 0; i < 2; i++) {
@@ -269,6 +299,9 @@ function poseTargets(player: Player): Vec2[] {
   wallPressed = false;
   const state = player.state;
   if (state instanceof GroundedState) return groundedPose(player, state);
+  // Not grounded: drop the mover-tracking so a later re-land starts fresh.
+  prevSupportId = -1;
+  prevSupportPos = null;
   if (state instanceof OnWallState) return wallPose(player, state);
   if (state instanceof LedgeHangState || state instanceof LedgeClimbState) {
     return ledgePose(player, state.body, state.vertexIndex);
