@@ -118,10 +118,14 @@ material point on the rim (top of the ball at rotation 0). Aiming rotates the
 ball so the loop faces the aim direction (proportional steering — also while
 the chain is out, which winds it around the ball); the shot always leaves
 through the loop. A stick-released frame encodes its aim point as the ball's
-own position ("not aiming"). Controls (mouse + gamepad, most-recent aim device
+own position ("not aiming"). Controls (mouse + gamepad + touch, most-recent aim device
 wins): mouse move aim / left-click deploy chain; left
 stick aim, RB deploy chain, top face button (X on a Pro Controller)
-restart. Deploy is hold-to-keep: releasing it drops the chain. Restart routes
+restart; on touch, drag the canvas to aim and hold the on-screen circular
+DEPLOY button (bottom-left) to deploy (no touch restart - reload the page).
+Deploy is hold-to-keep: releasing it drops the chain.
+The camera zoom scales down on short viewports (height-driven, capped at the
+desktop zoom) so a landscape phone still frames the ball and its chain arc. Restart routes
 through the `jump`
 FrameInput field so it stays in the recorded input stream (BallLevel calls
 onReset). Ball inputs map onto the existing FrameInput fields
