@@ -1,0 +1,10 @@
+{
+  "name": "rope",
+  "short_name": "rope",
+  "start_url": ".",
+  "scope": ".",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#1f2430",
+  "theme_color": "#1f2430"
+}

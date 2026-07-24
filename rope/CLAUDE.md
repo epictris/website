@@ -121,11 +121,18 @@ through the loop. A stick-released frame encodes its aim point as the ball's
 own position ("not aiming"). Controls (mouse + gamepad + touch, most-recent aim device
 wins): mouse move aim / left-click deploy chain; left
 stick aim, RB deploy chain, top face button (X on a Pro Controller)
-restart; on touch, drag the canvas to aim and hold the on-screen circular
-DEPLOY button (bottom-left) to deploy (no touch restart - reload the page).
-Deploy is hold-to-keep: releasing it drops the chain.
+restart; on touch, the bottom-left on-screen joystick aims (deflect past the
+deadzone to steer the loop, like the left stick) and the bottom-right circular
+DEPLOY button deploys (no touch restart - reload the page).
+Deploy is hold-to-keep: releasing it drops the chain. The touch controls only
+appear on a coarse primary pointer (`(pointer: coarse)`), so desktop and
+mouse-primary touchscreen laptops get none.
 The camera zoom scales down on short viewports (height-driven, capped at the
-desktop zoom) so a landscape phone still frames the ball and its chain arc. Restart routes
+desktop zoom) so a landscape phone still frames the ball and its chain arc.
+The page is an installable full-screen web app (`public/manifest.webmanifest`
+with `display: fullscreen`, plus `apple-mobile-web-app-*` metas for iOS and
+`viewport-fit=cover`): added to a phone's home screen it launches without
+browser chrome. Restart routes
 through the `jump`
 FrameInput field so it stays in the recorded input stream (BallLevel calls
 onReset). Ball inputs map onto the existing FrameInput fields

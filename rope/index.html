@@ -2,8 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>rope</title>
+    <!-- Installable full-screen web app: manifest drives Android/Chrome
+         (display: fullscreen); the apple-* metas do the same on iOS Safari,
+         which ignores the manifest's display mode. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1f2430" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="rope" />
     <style>
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; overscroll-behavior: none; }
       #game { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; cursor: crosshair; touch-action: none; }
