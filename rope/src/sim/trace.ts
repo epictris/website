@@ -126,6 +126,20 @@ export function digestsEqual(a: Digest, b: Digest): boolean {
   );
 }
 
+// Positional distance (metres) between two digests. A recording made in the
+// browser and re-simulated in node diverges by sub-mm float noise on a resting
+// body every frame; drift is the honest signal of a *behavioural* difference,
+// where bit-exact `digestsEqual` cries wolf. State mismatch counts as infinite
+// drift — a different state is a different behaviour regardless of position.
+export function digestDrift(a: Digest, b: Digest): number {
+  if (a.state !== b.state) return Infinity;
+  return Math.hypot(a.px - b.px, a.py - b.py);
+}
+
+// Above this positional drift (metres, ~1px) a replay has genuinely diverged
+// from its recording, not just accumulated float noise on a settled body.
+export const DRIFT_EPSILON = 0.01;
+
 export interface Violation {
   frame: number;
   kind: string;
@@ -139,6 +153,11 @@ const EMBED_TOLERANCE = 0.03;
 // hitting nudges it a few tenths of m/s as it depenetrates. The tip-anchor bug
 // injects ~1.9 m/s — well clear of both.
 const ANCHOR_KICK_TOLERANCE = 0.6;
+// A chain span may graze a corner (endpoints on a surface), but its interior
+// must never run deep inside static geometry — that's the chain clipping
+// through the scene. Same 3 cm slack as the embed check.
+const CHAIN_CLIP_TOLERANCE = 0.03;
+const CHAIN_CLIP_SAMPLES = 24;
 
 // ---- input-frozen detector -------------------------------------------------
 // Flags the "player holds a direction but barely moves" class of bug: with a
@@ -296,6 +315,35 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       });
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "chain length NaN" });
+    // Chain-clip: no span's interior may run deep inside static geometry. A span
+    // legitimately touches corners it wraps (endpoints on the surface), so
+    // sample interior points and flag only genuine penetration past tolerance.
+    const nodes = b.chain.path().map((n) => n.contact.globalPosition);
+    const statics = level.world.bodies.filter(
+      (body): body is StaticBody2D => body instanceof StaticBody2D && body.hasShape(),
+    );
+    let clip: { depth: number; name: string } | null = null;
+    for (let s = 0; s < nodes.length - 1 && !clip; s++) {
+      const a = nodes[s]!;
+      const d = nodes[s + 1]!.sub(a);
+      for (let k = 1; k < CHAIN_CLIP_SAMPLES && !clip; k++) {
+        const p = a.add(d.mul(k / CHAIN_CLIP_SAMPLES));
+        for (const body of statics) {
+          const ov = circleOverlap(p, 0, body.getShape());
+          if (ov && ov.depth > CHAIN_CLIP_TOLERANCE) {
+            clip = { depth: ov.depth, name: body.name || "static" };
+            break;
+          }
+        }
+      }
+    }
+    if (clip) {
+      out.push({
+        frame,
+        kind: "chain-clip",
+        detail: `chain span ${clip.depth.toFixed(2)}m inside ${clip.name}`,
+      });
+    }
   }
   for (const body of level.world.bodies) {
     if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;

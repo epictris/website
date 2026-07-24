@@ -81,6 +81,7 @@ const recDigests: Digest[] = [];
 function downloadRecording(): void {
   const rec: Recording = {
     level: levelId,
+    git: __GIT_COMMIT__,
     frames: recFrames.slice(),
     digests: recDigests.slice(),
   };

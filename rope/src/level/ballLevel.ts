@@ -69,6 +69,9 @@ export class BallLevel {
 
     this.ball.resolveInput(input);
     this.bodies = this.bodies.filter((b) => !b.removed);
+    // The hook's attach callback (fired inside the step below) needs the scene
+    // to regenerate the chain's wrap path; hand it this frame's bodies.
+    this.ball.sceneBodies = this.bodies;
 
     // Armed hooks run their swept attach check before integration moves them.
     for (const b of this.bodies) {

@@ -111,6 +111,14 @@ export class Rope {
     return this.regenerateSpans();
   }
 
+  // Recompute the wrap nodes against the current scene without running the
+  // length solve — the same path regeneration physicsStep does first, exposed so
+  // a caller can measure the true (wrapped) path length before the solver runs.
+  syncWraps(bodies: PhysicsBody2D[]): void {
+    this.uncrossAdjacentNodes();
+    this.regeneratePath(bodies);
+  }
+
   // Wrap detection for a still-deploying ball chain. While the hook is in
   // flight the chain is slack (no length solver runs), so a straight span that
   // crosses scene geometry is normally ignored. This runs the wrap generator

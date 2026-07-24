@@ -202,6 +202,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (!testData || recFrames.length === 0) return;
     const rec: Recording = {
       level: currentName ?? "editor",
+      git: __GIT_COMMIT__,
       controller: testController,
       data: testData,
       frames: recFrames.slice(),

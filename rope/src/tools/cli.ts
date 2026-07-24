@@ -4,6 +4,8 @@
 //   bun run src/tools/cli.ts dump      bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts continue  bundle.json [--from N] [--hold left,jump]
 //                                      [--frames M] [--every K] [--trace out.jsonl]
+//   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
+//   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
 //   bun run src/tools/cli.ts selftest
 //
@@ -17,7 +19,9 @@ import { LEVELS, DEFAULT_LEVEL } from "../level/registry";
 import { PhysTrace } from "../engine/physTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
 import { runLedgeMatrix } from "../sim/ledgeMatrix";
-import { replayRecording } from "../sim/replay";
+import { replayRecording, levelFromRecording } from "../sim/replay";
+import { renderFrameSVG } from "../sim/svgFrame";
+import { BallLevel } from "../level/ballLevel";
 import {
   ACTIONS,
   checkInvariants,
@@ -69,6 +73,25 @@ function printViolations(violations: Violation[], max = 20): void {
   if (violations.length > max) console.log(`  … ${violations.length - max} more violations`);
 }
 
+// Human-readable divergence summary. Behavioural drift is the real signal;
+// bit-exact mismatch on a settled body is float noise and is reported as such,
+// not as "diverged", so it stops reading like a regression.
+function divergenceLine(r: {
+  divergedAtFrame: number | null;
+  divergedByStateFork: boolean | null;
+  bitDivergedAtFrame: number | null;
+  maxDrift: number;
+}): string {
+  const drift = `maxDrift=${(r.maxDrift * 100).toFixed(2)}px`;
+  if (r.divergedAtFrame !== null) {
+    return r.divergedByStateFork
+      ? `behaviour forked @f${r.divergedAtFrame} (different state branch; ${drift} where states agree)`
+      : `drifted @f${r.divergedAtFrame} (${drift})`;
+  }
+  if (r.bitDivergedAtFrame !== null) return `bit-identical behaviour (${drift} float noise @f${r.bitDivergedAtFrame}+)`;
+  return `bit-exact match with recording`;
+}
+
 function cmdPlay(file: string): void {
   const script = JSON.parse(readFileSync(file, "utf8")) as PlaytestScript;
   const r = runScript(script);
@@ -82,8 +105,8 @@ function cmdPlay(file: string): void {
 function cmdReplay(file: string): void {
   const rec = loadRecording(file);
   const r = replayRecording(rec);
-  console.log(`[replay] ${file} — level=${r.level} frames=${r.framesRun}`);
-  if (r.divergedAtFrame !== null) console.log(`  diverged from recording at frame ${r.divergedAtFrame}`);
+  console.log(`[replay] ${file} — level=${r.level} frames=${r.framesRun}${rec.git ? ` recorded@${rec.git}` : ""}`);
+  console.log("  " + divergenceLine(r));
   printViolations(r.violations);
   // exit 0 healthy, 2 diverged-but-healthy (fix working), 3 invariant violated.
   const code = r.violations.length > 0 ? 3 : r.divergedAtFrame !== null ? 2 : 0;
@@ -100,7 +123,7 @@ function cmdDump(file: string, o: Record<string, string>): void {
   const to = Number(o.to ?? r.digests.length);
   const every = Number(o.every ?? 4);
   console.log(`[dump] ${file} — level=${r.level} frames=${r.framesRun} (current physics)`);
-  if (r.divergedAtFrame !== null) console.log(`  diverged from recording at frame ${r.divergedAtFrame}`);
+  console.log("  " + divergenceLine(r));
   for (let i = from - 1; i < Math.min(to, r.digests.length); i += every) {
     console.log("  " + digestRow(r.digests[i]!, heldActions(rec.frames[i]?.h ?? 0)));
   }
@@ -181,6 +204,50 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   process.exit(violations.length === 0 ? 0 : 1);
 }
 
+// Re-simulate a bundle up to --frame and write an SVG snapshot of the scene
+// (bodies + chain wrap path + avatar). Makes geometric glitches visible without
+// a browser. Defaults to the last frame; --out defaults to <bundle>.f<N>.svg.
+function cmdRender(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const target = Math.min(Number(o.frame ?? rec.frames.length), rec.frames.length);
+  for (let i = 0; i < target; i++) level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+  const svg = renderFrameSVG(level);
+  const out = o.out ?? `${file.replace(/\.json$/, "")}.f${target}.svg`;
+  writeFileSync(out, svg);
+  console.log(`[render] ${file} @f${target} → ${out}`);
+  process.exit(0);
+}
+
+// Print the chain/rope wrap path (node polyline) per frame — the geometry the
+// digest table omits. Node count > 2 means the chain has caught corners.
+function cmdChainpath(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const from = Number(o.from ?? 1);
+  const to = Number(o.to ?? rec.frames.length);
+  const every = Number(o.every ?? 1);
+  console.log(`[chainpath] ${file} — ${rec.frames.length} frames (current physics, px)`);
+  for (let i = 0; i < rec.frames.length; i++) {
+    level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+    const n = i + 1;
+    if (n < from || n > to || (n - from) % every !== 0) continue;
+    const rope = level instanceof BallLevel ? level.ball.chain : (level as Level).player.rope;
+    if (!rope) continue;
+    const pts = rope
+      .path()
+      .map((nd) => {
+        const p = nd.contact.globalPosition;
+        return `(${(p.x * 100).toFixed(0)},${(p.y * 100).toFixed(0)})`;
+      })
+      .join(" ");
+    console.log(`  f${String(n).padStart(4)} nodes=${rope.path().length} ${pts}`);
+  }
+  process.exit(0);
+}
+
 // Replay every bundle in a directory with current physics; invariants (incl.
 // the stuck detector) must hold. Digest divergence is informational — bundles
 // recorded before a physics fix legitimately diverge.
@@ -194,14 +261,16 @@ function cmdBundles(dir: string): void {
   if (files.length === 0) fail(`no bundles in ${dir}`);
   let failed = 0;
   for (const f of files) {
-    const r = replayRecording(loadRecording(join(dir, f)));
-    const div = r.divergedAtFrame !== null ? ` (diverges @f${r.divergedAtFrame})` : "";
+    const rec = loadRecording(join(dir, f));
+    const r = replayRecording(rec);
+    const div = r.divergedAtFrame !== null ? ` (diverges @f${r.divergedAtFrame}, maxDrift=${(r.maxDrift * 100).toFixed(1)}px)` : "";
+    const g = rec.git ? ` @${rec.git}` : "";
     if (r.violations.length > 0) {
       failed++;
-      console.log(`FAIL ${f} — ${r.violations.length} violation(s)${div}`);
+      console.log(`FAIL ${f}${g} — ${r.violations.length} violation(s)${div}`);
       printViolations(r.violations, 5);
     } else {
-      console.log(`PASS ${f} — ${r.framesRun} frames${div}`);
+      console.log(`PASS ${f}${g} — ${r.framesRun} frames${div}`);
     }
   }
   console.log(failed === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failed}/${files.length})`);
@@ -227,9 +296,10 @@ function cmdSelftest(): void {
   const rec: Recording = { level: script.level, frames: a.serializedFrames, digests: a.digests };
   const b = replayRecording(rec);
 
-  const ok = b.divergedAtFrame === null && b.violations.length === 0;
+  // Same-engine round-trip: demand bit-exact reproduction, not just low drift.
+  const ok = b.bitDivergedAtFrame === null && b.violations.length === 0;
   console.log(`[selftest] ran ${a.framesRun} frames, replayed ${b.framesRun}`);
-  console.log(`  diverged: ${b.divergedAtFrame ?? "no"}  violations: ${b.violations.length}`);
+  console.log(`  diverged: ${b.bitDivergedAtFrame ?? "no"}  violations: ${b.violations.length}`);
   if (b.violations[0]) console.log(`  first: f${b.violations[0].frame} ${b.violations[0].kind}`);
   console.log(ok ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
   process.exit(ok ? 0 : 1);
@@ -252,6 +322,14 @@ switch (cmd) {
     if (!arg) fail("usage: cli continue <bundle.json> [--from N] [--hold a,b] [--frames M] [--every K] [--trace out.jsonl]");
     cmdContinue(arg, opts(rest));
     break;
+  case "render":
+    if (!arg) fail("usage: cli render <bundle.json> [--frame N] [--out file.svg]");
+    cmdRender(arg, opts(rest));
+    break;
+  case "chainpath":
+    if (!arg) fail("usage: cli chainpath <bundle.json> [--from A] [--to B] [--every N]");
+    cmdChainpath(arg, opts(rest));
+    break;
   case "bundles":
     cmdBundles(arg ?? "playtests/bundles");
     break;
@@ -262,7 +340,7 @@ switch (cmd) {
     cmdLedges();
     break;
   default:
-    fail("usage: cli <play|replay|dump|continue|bundles|selftest|ledges> [file] [options]");
+    fail("usage: cli <play|replay|dump|continue|render|chainpath|bundles|selftest|ledges> [file] [options]");
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).

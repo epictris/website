@@ -7,7 +7,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
+
+// Short commit the app was built/served from — stamped into exported replay
+// bundles (Recording.git) so a bundle self-reports which physics recorded it.
+function gitCommit(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 // Dev-only REST API backing the level editor's save/load-from-disk. Levels live
 // as JSON files under rope/levels/. Only reachable via `bun run dev`; the built
@@ -97,6 +108,7 @@ function editorRoute(): Plugin {
 
 export default defineConfig({
   server: { port: 3100 },
+  define: { __GIT_COMMIT__: JSON.stringify(gitCommit()) },
   build: {
     target: "esnext",
     rollupOptions: {

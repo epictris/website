@@ -66,6 +66,10 @@ export class BallPlayer extends RigidBody2D {
   // or released.
   chainTip: BallHook | null = null;
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
+  // Scene bodies for the current frame, set by BallLevel before hooks step, so
+  // the hook's attach callback can regenerate the chain's wrap path (the hook
+  // fires mid-integration, with no bodies list in hand).
+  sceneBodies: PhysicsBody2D[] = [];
 
   constructor(radius = 0.08) {
     super();
@@ -240,6 +244,12 @@ export class BallPlayer extends RigidBody2D {
       this.chain.end = new RopeAttachment(
         new RopeContact(body, point.sub(body.globalPosition)),
       );
+      // Regenerate wraps now so the length below is the true wrapped path. The
+      // solver (chain.physicsStep) will wrap it this same frame regardless; if we
+      // measured the straight span here, clamping to it would leave the wrapped
+      // path over max and the solve would dump the difference into the ball as a
+      // one-frame lurch (session-116f: a 0.9 m/s kick off a resting ball).
+      this.chain.syncWraps(this.sceneBodies);
       const len = this.chain.getCurrentLength();
       if (len > BallPlayer.CHAIN_MAX_LENGTH + BallPlayer.ATTACH_SNAP_TOLERANCE) {
         // Attached far beyond the chain's absolute length — snap instead of
