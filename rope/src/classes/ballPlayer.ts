@@ -181,9 +181,8 @@ export class BallPlayer extends RigidBody2D {
     const muzzle = this.globalPosition.add(dir.mul(this.radius));
     const hook = new BallHook();
     hook.globalPosition = muzzle;
-    // Launch speed along the loop direction plus the ball's own velocity, so a
-    // moving ball throws the chain with its momentum carried through.
-    hook.linearVelocity = dir.mul(BallPlayer.HOOK_SPEED).add(this.linearVelocity);
+    // Launch speed along the loop direction.
+    hook.linearVelocity = dir.mul(BallPlayer.HOOK_SPEED);
     hook.addCollisionExceptionWith(this);
     this.hookInFlight = hook;
     this.spawnBody?.(hook);
