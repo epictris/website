@@ -2,13 +2,13 @@
 // controller. Keyboard has no bindings here; the two aim devices merge, most
 // recent wins:
 //
-//   Mouse:   move to aim (cursor) · left-click deploy chain · right-click reel in
-//   Gamepad: left stick aim · RB deploy chain (hold-to-keep) · A reel in ·
+//   Mouse:   move to aim (cursor) · left-click deploy chain
+//   Gamepad: left stick aim · RB deploy chain (hold-to-keep) ·
 //            top face button (X on a Pro Controller) restart level
 //
 // The ball controller reuses the FrameInput shape so recordings serialize with
 // the existing tooling: aim → mouseWorldPosition, deploy → fire,
-// reel in → retract, restart → jump. Everything else stays NO_BUTTON.
+// restart → jump. Everything else stays NO_BUTTON.
 //
 // Aim encoding differs by device. The mouse always aims: its cursor projects
 // straight to world space. The stick aims only while deflected; a released
@@ -22,7 +22,7 @@ import {
   type FrameInput,
   type IInputSource,
 } from "./frameInput";
-import { PAD_A, PAD_RB, PAD_Y, readGamepad } from "./gamepad";
+import { PAD_RB, PAD_Y, readGamepad } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
 import { BallPlayer } from "../classes/ballPlayer";
 
@@ -32,7 +32,6 @@ const AIM_DISTANCE = BallPlayer.CHAIN_MAX_LENGTH;
 export class BallInputSource implements IInputSource {
   private prev: FrameInput = emptyFrameInput();
   private mouseLeft = false;
-  private mouseRight = false;
   private mouseScreen = new Vec2(0, 0);
   private aimSource: "mouse" | "pad" = "mouse";
 
@@ -48,20 +47,16 @@ export class BallInputSource implements IInputSource {
     });
     canvas.addEventListener("mousedown", (e) => {
       if (e.button === 0) this.mouseLeft = true;
-      if (e.button === 2) this.mouseRight = true;
       this.aimSource = "mouse";
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.mouseLeft = false;
-      if (e.button === 2) this.mouseRight = false;
     });
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
   sample(): FrameInput {
     const pad = readGamepad();
     let padFire = false;
-    let padReel = false;
     let restart = false;
     let padAim: Vec2 | null = null;
     if (pad) {
@@ -71,7 +66,6 @@ export class BallInputSource implements IInputSource {
         this.aimSource = "pad";
       }
       padFire = pad.pressed(PAD_RB);
-      padReel = pad.pressed(PAD_A);
       restart = pad.pressed(PAD_Y);
     }
 
@@ -84,7 +78,6 @@ export class BallInputSource implements IInputSource {
     const input: FrameInput = {
       ...emptyFrameInput(),
       fire: button(this.mouseLeft || padFire, p.fire),
-      retract: button(this.mouseRight || padReel, p.retract),
       jump: button(restart, p.jump), // top face button (X on Pro Controller) → restart
       mouseWorldPosition: aimWorld,
     };

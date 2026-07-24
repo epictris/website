@@ -105,7 +105,7 @@ straight-line grapple Hook) that anchors to the first surface it contacts,
 flying or dangling. At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it
-touches a surface and anchors, or is reeled in / released. A deploying chain
+touches a surface and anchors, or is released. A deploying chain
 that snags scene geometry mid-flight also converts to the dangling tip: while
 the hook is in flight the chain is slack (no length solver), so
 `BallPlayer.checkChainReach` runs `Rope.detectSceneCatch` each frame — if the
@@ -119,13 +119,13 @@ ball so the loop faces the aim direction (proportional steering — also while
 the chain is out, which winds it around the ball); the shot always leaves
 through the loop. A stick-released frame encodes its aim point as the ball's
 own position ("not aiming"). Controls (mouse + gamepad, most-recent aim device
-wins): mouse move aim / left-click deploy chain / right-click reel in; left
-stick aim, RB deploy chain, A reel in, top face button (X on a Pro Controller)
+wins): mouse move aim / left-click deploy chain; left
+stick aim, RB deploy chain, top face button (X on a Pro Controller)
 restart. Deploy is hold-to-keep: releasing it drops the chain. Restart routes
 through the `jump`
 FrameInput field so it stays in the recorded input stream (BallLevel calls
 onReset). Ball inputs map onto the existing FrameInput fields
-(aim→mouseWorldPosition, shoot→fire, reel→retract, payout→extend), so
+(aim→mouseWorldPosition, shoot→fire, restart→jump), so
 recordings serialize and `cli replay`/`cli bundles` work unchanged
 (`cli continue` and playtest scripts are not ball-aware yet).
 

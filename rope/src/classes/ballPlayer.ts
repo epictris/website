@@ -22,7 +22,6 @@ export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
   // this length has missed, and an attachment beyond it snaps the chain.
   static readonly CHAIN_MAX_LENGTH = 3;
-  static readonly REEL_RATE = 0.02; // m/frame while reeling in
   static readonly HOOK_SPEED = 12; // m/s launch speed (gravity arcs the flight)
   // Attachments longer than max by more than this snap the chain; within it
   // they clamp to max instead. Must cover the dangling state's solver
@@ -54,7 +53,6 @@ export class BallPlayer extends RigidBody2D {
   // dangling tip weight — the chain stays deployed at max length until reeled
   // or released.
   chainTip: BallHook | null = null;
-  private reeling = false; // reel button held this frame (set in resolveInput)
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
 
   constructor(radius = 0.08) {
@@ -118,28 +116,17 @@ export class BallPlayer extends RigidBody2D {
     // controller's fire semantics).
     if (input.fire.pressed && !this.chain) this.shoot();
     if (input.fire.released) this.releaseChain();
-
-    // Reel is held? Record it for checkChainReach (which runs post-integrate).
-    // Anchored: shortens the chain. Still deploying: cuts the deploy short —
-    // freezes the chain at its current length instead of reeling it in.
-    this.reeling = input.retract.held;
-    if (this.chainAnchored && this.chain && this.reeling) {
-      this.chain.retract(BallPlayer.REEL_RATE);
-    }
   }
 
-  // Called after the hook has flown this frame. Three triggers convert the
+  // Called after the hook has flown this frame. Two triggers convert the
   // flying hook into the dangling chain tip: reaching the absolute max length
-  // (a missed throw), the player reeling while it is still deploying (cut the
-  // deploy short and hold the current length), or the deploying chain snagging
-  // on scene geometry — it wraps the corner and the deploy stops there.
+  // (a missed throw), or the deploying chain snagging on scene geometry — it
+  // wraps the corner and the deploy stops there.
   checkChainReach(bodies: PhysicsBody2D[]): void {
     if (!this.hookInFlight || !this.chain) return;
     const len = this.chain.getCurrentLength();
     if (len > BallPlayer.CHAIN_MAX_LENGTH) {
       this.deployTip(BallPlayer.CHAIN_MAX_LENGTH);
-    } else if (this.reeling) {
-      this.deployTip(len);
     } else if (this.chain.detectSceneCatch(bodies, this)) {
       // Snagged mid-flight: the wrap node is now in the chain, so freeze at the
       // wrapped path length (longer than the straight span was).
@@ -147,8 +134,8 @@ export class BallPlayer extends RigidBody2D {
     }
   }
 
-  // The chain has stopped paying out mid-flight (hit max, or the player cut
-  // it short by reeling): from here the hook is the chain tip — the rope
+  // The chain has stopped paying out mid-flight (hit max, or snagged on scene
+  // geometry): from here the hook is the chain tip — the rope
   // solver takes over (dangle, swing, get reeled in) — but it stays armed and
   // still anchors to the first surface it touches. `targetLength` is the
   // length to freeze at.
