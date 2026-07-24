@@ -63,7 +63,7 @@ export function getCatenaryCurve(
 
   if (distance < chainLength) {
     const diff = p2.x - p1.x;
-    if (diff > 0.01) {
+    if (diff > 0.0001) {
       const h = p2.x - p1.x;
       const v = p2.y - p1.y;
       const a = -getCatenaryParameter(h, v, chainLength, iterationLimit);

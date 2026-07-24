@@ -1,12 +1,33 @@
 {
   "level": "TEST_WINDMILL",
   "frames": 520,
-  "holds": [{ "action": "move_left", "from": 440, "to": 520 }],
+  "holds": [
+    {
+      "action": "move_left",
+      "from": 440,
+      "to": 520
+    }
+  ],
   "asserts": [
-    { "frame": 445, "state": "GroundedState" },
-    { "frame": 461, "state": "GroundedState" },
-    { "frame": 497, "state": "GroundedState" },
-    { "frame": 497, "maxX": -10 },
-    { "frame": 520, "maxX": -45 }
+    {
+      "frame": 445,
+      "state": "GroundedState"
+    },
+    {
+      "frame": 461,
+      "state": "GroundedState"
+    },
+    {
+      "frame": 497,
+      "state": "GroundedState"
+    },
+    {
+      "frame": 497,
+      "maxX": -0.1
+    },
+    {
+      "frame": 520,
+      "maxX": -0.45
+    }
   ]
 }

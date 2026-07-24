@@ -11,6 +11,7 @@
 // out into a release rather than pinning the player.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
 import { circleOverlap } from "../../engine/collision";
 import type { PhysicsBody2D } from "../../engine/body";
@@ -25,8 +26,8 @@ import { WallJumpingState } from "./wallJumpingState";
 // Catch easing toward the rest pose: fraction of the remaining offset per
 // frame, with a floor so the tail converges; SETTLE_EPSILON ends the settle.
 const SETTLE_RATE = 0.2;
-const SETTLE_MIN_STEP = 1;
-const SETTLE_EPSILON = 0.5;
+const SETTLE_MIN_STEP = 0.01;
+const SETTLE_EPSILON = 0.005;
 // Grip friction: down-the-wall momentum kept per catch frame (an early
 // release keeps the remainder).
 const CATCH_DAMPING = 0.75;
@@ -85,7 +86,7 @@ export class LedgeHangState extends PlayerState {
     const radius = player.radius;
     const along = LedgeDetection.hangDirection(this.info);
     // Hang line: against the wall face, parameterised by depth below the corner.
-    const lateralArm = radius + 1;
+    const lateralArm = radius + PX;
     const face = this.info.vertex.add(this.info.wallNormal.mul(lateralArm));
     // Rest pose: the player's centre sits exactly on the edge of the grab
     // radius — identical for every kind of catch (fall grab and run-off).

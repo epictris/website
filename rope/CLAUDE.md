@@ -17,6 +17,19 @@ There is **no game engine dependency**. Godot's physics (CharacterBody2D `MoveAn
 RigidBody2D dynamics, `PhysicsServer2D` raycasts/shape queries) was reimplemented from
 scratch in `src/engine/` so the simulation is self-contained and deterministic.
 
+## Units
+
+The simulation runs in **metres and seconds** (per-frame lengths at the fixed 1/60 step).
+Every tuning constant, level coordinate, and stored position/velocity is metres - **never pixels**.
+Pixels exist only at the edges: rendering (`render/`) and pointer un-projection (`camera.ts`).
+
+`src/engine/units.ts` holds the single conversion, `PIXELS_PER_METER = 100` (chosen so the ported Godot gravity 980 px/s² reads as 9.8 m/s²), plus `PX = 1 / PIXELS_PER_METER`.
+It is applied symmetrically - `÷` on the way in (level import via `scaleLevelData`, input) and `×` on the way out (the render transform is `camera.zoom * PIXELS_PER_METER`; fixed on-screen decoration is written as `<px> * PX`) - so changing it is an invisible reparametrization.
+To rescale how large the world appears on screen, change `camera.zoom`; the physics never sees it.
+
+When adding a constant, classify its dimension: lengths/velocities/accelerations scale by `PX` (Coulomb frictions here are per-frame decelerations - **length**, not coefficients); dimensionless coefficients, gains (1/s), angles, and frame counts do not.
+`levelData.ts` stays authored in Godot pixels (converted at load); `playtests/*.json` world-coordinate/speed fields are in metres.
+
 ## Layout
 
 | Path | Purpose |
@@ -169,8 +182,8 @@ launches, mover misbehavior):
    behavior is gated behind `isMobile`/`isRotating` branches).
 
 Key invariant — the **`input-frozen` stuck detector** (`src/sim/trace.ts`):
-held direction for 45 frames with a mobile body nearby must produce ≥25 px of
-displacement along the input, or >10 px *against* it (yielding to a mover's
+held direction for 45 frames with a mobile body nearby must produce ≥0.25 m of
+displacement along the input, or >0.1 m *against* it (yielding to a mover's
 push is displacement, not a freeze — wedge rules). Counts every input-held frame regardless of
 state (state thrash must not reset the window); exempt: active rope, ledge
 hang/climb, wall-jump startup, and purely static blockers (pressing into a

@@ -17,7 +17,8 @@ import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import { KillZone } from "../classes/killZone";
 import type { FrameInput } from "../input/frameInput";
-import type { LevelData } from "./levelData";
+import { scaleLevelData, type LevelData } from "./levelData";
+import { PX } from "../engine/units";
 
 // Scripted-mover update: sets the body's transform for the given sim time.
 // Deterministic — must be a pure function of time (frame * dt). Keep contact
@@ -44,7 +45,8 @@ export class Level {
   cameraPosition = Vec2.ZERO;
   onReset: (() => void) | null = null;
 
-  constructor(data: LevelData, init?: (level: Level) => void) {
+  constructor(rawData: LevelData, init?: (level: Level) => void) {
+    const data = scaleLevelData(rawData, PX);
     this.player = new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);
@@ -109,8 +111,8 @@ export class Level {
     }
 
     this.player.resolveMouseActions(input);
-    if (input.spawnSmallCircle.pressed) this.spawnCircle(10, input.mouseWorldPosition);
-    if (input.spawnLargeCircle.pressed) this.spawnCircle(40, input.mouseWorldPosition);
+    if (input.spawnSmallCircle.pressed) this.spawnCircle(0.1, input.mouseWorldPosition);
+    if (input.spawnLargeCircle.pressed) this.spawnCircle(0.4, input.mouseWorldPosition);
 
     this.player.rope?.updateFrameStartDistanceLookup();
     this.player.resolveInput(input, delta);

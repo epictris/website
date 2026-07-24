@@ -1,6 +1,7 @@
 // GroundedState, ported from classes/PlayerStates/GroundedState.cs.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
 import { PhysicsBody2D, RigidBody2D } from "../../engine/body";
 import { Surface } from "../../lib/surface";
@@ -185,8 +186,8 @@ export class GroundedState extends PlayerState {
     if (newState instanceof GroundedState) {
       // If the player moved past the surface edge, try to snap to the closest surface
       // in the direction of the current normal, unless the new normal is too different.
-      const maxSnapSurfaceDirection = player.velocity.add(Vec2.DOWN.mul(1 / delta)).normalized();
-      const testCollision = player.moveAndCollide(this.surfaceNormal.mul(-1), true);
+      const maxSnapSurfaceDirection = player.velocity.add(Vec2.DOWN.mul(PX / delta)).normalized();
+      const testCollision = player.moveAndCollide(this.surfaceNormal.mul(-PX), true);
       if (testCollision && !(testCollision.getCollider() instanceof RigidBody2D)) {
         const normal = testCollision.getNormal();
         if (normal.dot(maxSnapSurfaceDirection) <= 0.001) {

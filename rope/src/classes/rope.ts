@@ -3,6 +3,7 @@
 // geometry rather than evenly spaced segments.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import { PhysicsBody2D, RigidBody2D } from "../engine/body";
 import { Colors } from "../engine/debug";
@@ -42,9 +43,9 @@ interface DynamicBody {
 export class Rope {
   // Minimum distance a rect corner must deflect the rope path before it
   // becomes a wrap node (see the grazing-contact gate in regeneratePath).
-  private static readonly MIN_WRAP_DEFLECTION = 0.5;
+  private static readonly MIN_WRAP_DEFLECTION = 0.005;
 
-  maxRopeLength = 1000;
+  maxRopeLength = 10;
   maxIterations = 10;
   frictionCoefficient = 0.4;
 
@@ -68,16 +69,16 @@ export class Rope {
   }
 
   get isTaut(): boolean {
-    return this.calculateRopePathLength() > this.maxRopeLength - 3;
+    return this.calculateRopePathLength() > this.maxRopeLength - 3 * PX;
   }
 
-  retract(amount = 1): void {
+  retract(amount = PX): void {
     // The rope may never be retracted to a negative length.
     this.maxRopeLength = Mathf.max(this.maxRopeLength - amount, 0);
   }
 
   extend(): void {
-    this.maxRopeLength += 1;
+    this.maxRopeLength += PX;
   }
 
   updateFrameStartDistanceLookup(): void {
@@ -163,7 +164,7 @@ export class Rope {
         const lastWrap = this.wraps[this.wraps.length - 1]!;
         endObj.velocity = endObj.globalPosition
           .directionTo(lastWrap.contact.obj.globalPosition)
-          .mul(10);
+          .mul(10 * PX);
         this.wraps.pop();
         this.end = new RopeAttachment(lastWrap.contact);
         this.maxRopeLength = this.calculateRopePathLength();
@@ -238,7 +239,7 @@ export class Rope {
         span.end,
         GenerationDirection.Reversed,
       );
-      if (tangentPoint.distanceTo(span.start) > 5) {
+      if (tangentPoint.distanceTo(span.start) > 5 * PX) {
         return new RopeWrap(new RopeContact(obj, tangentPoint.sub(circleCenter)), wrapDir);
       }
     } else if (fromShape.shape.kind === "rect") {
@@ -248,7 +249,7 @@ export class Rope {
       let minAngle = Infinity;
       for (let i = 0; i < 4; i++) {
         const vertex = corners[i]!;
-        if (vertex.distanceSquaredTo(fromNode.contact.globalPosition) < 0.01) {
+        if (vertex.distanceSquaredTo(fromNode.contact.globalPosition) < 0.01 * PX * PX) {
           nextVertexIndex = Calc.mod(i + (wrapDir as number), 4);
           break;
         }
@@ -291,7 +292,7 @@ export class Rope {
         span.start,
         GenerationDirection.Forward,
       );
-      if (tangentPoint.distanceTo(span.end) > 5) {
+      if (tangentPoint.distanceTo(span.end) > 5 * PX) {
         return new RopeWrap(new RopeContact(obj, tangentPoint.sub(circleCenter)), wrapDir);
       }
     } else if (toShape.shape.kind === "rect") {
@@ -301,7 +302,7 @@ export class Rope {
       let minAngle = Infinity;
       for (let i = 0; i < 4; i++) {
         const vertex = corners[i]!;
-        if (vertex.distanceSquaredTo(toNode.contact.globalPosition) < 0.01) {
+        if (vertex.distanceSquaredTo(toNode.contact.globalPosition) < 0.01 * PX * PX) {
           nextVertexIndex = Calc.mod(i - (wrapDir as number), 4);
           break;
         }
@@ -343,7 +344,7 @@ export class Rope {
   private shouldIgnorePathCollisions(span: RopePath): boolean {
     return (
       span.from.contact.obj === span.to.contact.obj ||
-      span.span.start.distanceTo(span.span.end) < 1
+      span.span.start.distanceTo(span.span.end) < PX
     );
   }
 
@@ -402,7 +403,7 @@ export class Rope {
             );
           } else continue;
 
-          if (tangentPoint.distanceTo(span.span.start) > 5) {
+          if (tangentPoint.distanceTo(span.span.start) > 5 * PX) {
             newNodes.push(
               new RopeWrap(new RopeContact(body, tangentPoint.sub(bodyShape.globalPosition)), wrapDir),
             );
@@ -443,7 +444,7 @@ export class Rope {
           }
           if (
             vertexIndex !== null &&
-            corners[vertexIndex]!.distanceTo(span.span.start) > 5 &&
+            corners[vertexIndex]!.distanceTo(span.span.start) > 5 * PX &&
             // Grazing-contact gate: a corner this close to the span line
             // bends the rope sub-visibly and adds no physical constraint,
             // but renders as a phantom snag and flip-flops as the contact
@@ -509,7 +510,7 @@ export class Rope {
       }
       if (
         shape.shape.kind === "rect" ||
-        node.contact.globalPosition.distanceTo(previousNodePosition) > 1
+        node.contact.globalPosition.distanceTo(previousNodePosition) > PX
       ) {
         newNodes.push(node);
         previousNode = node;

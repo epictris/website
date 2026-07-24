@@ -47,9 +47,11 @@ function traceContact(
   });
 }
 
-// Godot 2D default gravity, in px/s². dt is 1/60, so ≈16.3 px/frame².
-export const GRAVITY = new Vec2(0, 980);
-const SKIN = 0.08;
+// Gravity in m/s² — the ported Godot default (980 px/s² at 100 px/m) reads as
+// real-world 9.8. dt is 1/60, so ≈0.00272 m/frame².
+export const GRAVITY = new Vec2(0, 9.8);
+// Contact skin: the sliver of penetration left after depenetration, in metres.
+const SKIN = 0.0008;
 // Scale on the impulse a pushing character imparts to a rigid circle.
 const CHARACTER_PUSH_FACTOR = 0.5;
 

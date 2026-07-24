@@ -3,6 +3,7 @@
 // max length; models the hanging catenary-ish curve and collides it with bodies.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { Colors, Debug } from "../engine/debug";
@@ -11,7 +12,7 @@ import { IntersectionStatus } from "../lib/types";
 import { RopeContact, type RopeNode } from "../lib/ropeContact";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 
-const SPACING = 5;
+const SPACING = 0.05;
 
 class SlackNode {
   previousPosition: Vec2;
@@ -206,7 +207,7 @@ export class SlackSimulation {
     for (const slackNode of this.slackNodes) {
       slackNode.velocity = slackNode.position.sub(slackNode.previousPosition);
       slackNode.velocity = slackNode.velocity.mul(0.99);
-      slackNode.velocity = slackNode.velocity.add(Vec2.DOWN.mul(0.1));
+      slackNode.velocity = slackNode.velocity.add(Vec2.DOWN.mul(0.001));
       slackNode.previousPosition = slackNode.position;
       slackNode.position = slackNode.position.add(slackNode.velocity);
     }
@@ -248,7 +249,7 @@ export class SlackSimulation {
           const circleRadius = bodyShape.shape.radius;
           const delta = slackNode.position.sub(circleCenter);
           const dist = delta.length();
-          if (dist < 0.001) {
+          if (dist < 0.001 * PX) {
             slackNode.position = circleCenter.add(Vec2.UP.mul(circleRadius));
             slackNode.contactSurfaceNormal = Vec2.UP;
           } else {

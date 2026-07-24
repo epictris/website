@@ -6,6 +6,7 @@
 // slow/resting contact.
 
 import { RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
+import { PX } from "../engine/units";
 import { circleShape } from "../engine/shapes";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
@@ -17,7 +18,7 @@ export class BallHook extends RigidBody2D {
   constructor() {
     super();
     this.name = "BallHook";
-    this.setShape(circleShape(2));
+    this.setShape(circleShape(2 * PX));
     this.mass = ShapeGeometry.computeMass(this.getShape());
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
   }
@@ -45,8 +46,8 @@ export class BallHook extends RigidBody2D {
       return;
     }
     const shape = this.getShape().shape;
-    const r = shape.kind === "circle" ? shape.radius : 2;
-    for (const body of this.world.intersectCircle(from, r + 0.5)) {
+    const r = shape.kind === "circle" ? shape.radius : 2 * PX;
+    for (const body of this.world.intersectCircle(from, r + 0.5 * PX)) {
       if (body === this || body.name === "Player") continue;
       if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
       this.attach(body, from);

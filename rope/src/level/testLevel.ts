@@ -7,8 +7,8 @@ import { addSlidingPlatform, addWindmill } from "./movers";
 import type { LevelData } from "./levelData";
 import type { LevelSpec } from "./level";
 
-// Peak platform speed = amplitude * ω = 80 * 0.8 = 64 px/s ≈ 1.07 px/frame.
-// Windmill blade tip speed = 110 * 0.6 = 66 px/s ≈ 1.1 px/frame.
+// Peak platform speed = amplitude * ω = 0.8 * 0.8 = 0.64 m/s ≈ 0.0107 m/frame.
+// Windmill blade tip speed = 1.1 * 0.6 = 0.66 m/s ≈ 0.011 m/frame.
 
 // Player spawns on the sliding platform (floor top face is at y=80).
 const MOVERS_DATA: LevelData = {
@@ -22,8 +22,8 @@ const MOVERS_DATA: LevelData = {
 export const TEST_MOVERS: LevelSpec = {
   data: MOVERS_DATA,
   init: (level) => {
-    addSlidingPlatform(level, new Vec2(-200, 40), 80, 0.8);
-    addWindmill(level, new Vec2(380, -80), 0.6);
+    addSlidingPlatform(level, new Vec2(-2, 0.4), 0.8, 0.8);
+    addWindmill(level, new Vec2(3.8, -0.8), 0.6);
   },
 };
 
@@ -38,6 +38,6 @@ const WINDMILL_DATA: LevelData = {
 export const TEST_WINDMILL: LevelSpec = {
   data: WINDMILL_DATA,
   init: (level) => {
-    addWindmill(level, new Vec2(0, -40), 0.6);
+    addWindmill(level, new Vec2(0, -0.4), 0.6);
   },
 };

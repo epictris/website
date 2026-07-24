@@ -11,6 +11,7 @@ import {
   type CollisionObject2D,
 } from "../engine/body";
 import { Debug } from "../engine/debug";
+import { PIXELS_PER_METER, PX } from "../engine/units";
 import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -98,7 +99,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fillStyle = DYNAMIC_FILL;
     ctx.fill();
     ctx.strokeStyle = GEOMETRY_STROKE;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = PX;
     ctx.stroke();
     return;
   }
@@ -107,7 +108,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fillStyle = MOVER_FILL;
     ctx.fill();
     ctx.strokeStyle = GEOMETRY_STROKE;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = PX;
     ctx.stroke();
     return;
   }
@@ -116,7 +117,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fillStyle = GEOMETRY_FILL;
     ctx.fill();
     ctx.strokeStyle = GEOMETRY_STROKE;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = PX;
     ctx.stroke();
     return;
   }
@@ -130,8 +131,8 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
 
 function arrowHead(ctx: CanvasRenderingContext2D, a: Vec2, b: Vec2, color: string): void {
   const dir = a.directionTo(b);
-  const left = dir.rotated(Math.PI * 0.8).mul(4);
-  const right = dir.rotated(-Math.PI * 0.8).mul(4);
+  const left = dir.rotated(Math.PI * 0.8).mul(4 * PX);
+  const right = dir.rotated(-Math.PI * 0.8).mul(4 * PX);
   ctx.beginPath();
   ctx.moveTo(b.x, b.y);
   ctx.lineTo(b.x + left.x, b.y + left.y);
@@ -143,10 +144,10 @@ function arrowHead(ctx: CanvasRenderingContext2D, a: Vec2, b: Vec2, color: strin
 
 // Small ring + four ticks, drawn in world space at the stick aim point.
 function drawCrosshair(ctx: CanvasRenderingContext2D, p: Vec2): void {
-  const r = 4;
-  const tick = 3;
+  const r = 4 * PX;
+  const tick = 3 * PX;
   ctx.strokeStyle = "#cbccc6";
-  ctx.lineWidth = 1;
+  ctx.lineWidth = PX;
   ctx.beginPath();
   ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   for (const [dx, dy] of [
@@ -178,7 +179,10 @@ export function render(
 
   ctx.save();
   ctx.translate(cssWidth / 2, cssHeight / 2);
-  ctx.scale(camera.zoom, camera.zoom);
+  // World is in metres; scale metres → screen pixels. camera.zoom is the view
+  // knob, PIXELS_PER_METER the unit conversion. Fixed-pixel decoration drawn in
+  // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
+  ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
   for (const body of level.world.bodies) {
@@ -196,7 +200,7 @@ export function render(
   const rope = level.player.rope;
   if (rope) {
     ctx.strokeStyle = HOOK;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = PX;
     ctx.beginPath();
     for (const { span } of rope.getSpans()) {
       ctx.moveTo(span.start.x, span.start.y);
@@ -221,7 +225,7 @@ export function render(
   // Debug overlay.
   for (const cmd of Debug.cmds) {
     ctx.strokeStyle = cmd.color;
-    ctx.lineWidth = cmd.width;
+    ctx.lineWidth = cmd.width * PX;
     ctx.beginPath();
     ctx.moveTo(cmd.a.x, cmd.a.y);
     ctx.lineTo(cmd.b.x, cmd.b.y);
@@ -240,8 +244,8 @@ export function render(
   ctx.textAlign = "left";
 }
 
-const CHAIN_LINK_LEN = 3.8; // world px per link
-const CHAIN_LINK_W = 1.8; // half-width of the broad (in-plane) link
+const CHAIN_LINK_LEN = 3.8 * PX; // fixed on-screen link length (world metres)
+const CHAIN_LINK_W = 1.8 * PX; // half-width of the broad (in-plane) link
 
 // Metal chain from `a` to `b`: interlocking oval links, alternately rotated
 // 90° so it reads as forged loops. Links are a FIXED world length, laid from
@@ -258,12 +262,12 @@ function drawChainLink(
   phase = 0,
 ): { phase: number; remainder: number } {
   const total = a.distanceTo(b);
-  if (total < 1e-3) return { phase, remainder: 0 };
+  if (total < 1e-3 * PX) return { phase, remainder: 0 };
   const dir = a.directionTo(b);
   const n = Math.floor(total / CHAIN_LINK_LEN);
   const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
 
-  ctx.lineWidth = 1;
+  ctx.lineWidth = PX;
   for (let i = 0; i < n; i++) {
     const mid = a.add(dir.mul((i + 0.5) * CHAIN_LINK_LEN));
     const broad = (i + phase) % 2 === 0; // alternate link orientation
@@ -301,12 +305,12 @@ function drawChainPolyline(ctx: CanvasRenderingContext2D, points: Vec2[]): void 
 // clevis link joining it to the chain. `dir` points from the cuff toward the
 // chain, so the housing always faces the span it hangs from.
 function drawManacle(ctx: CanvasRenderingContext2D, center: Vec2, dir: Vec2): void {
-  const R = 4.5; // cuff band radius
+  const R = 4.5 * PX; // cuff band radius
   ctx.save();
   ctx.translate(center.x, center.y);
   ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points toward the chain
   // Cuff band: thick steel ring.
-  ctx.lineWidth = 1.6;
+  ctx.lineWidth = 1.6 * PX;
   ctx.strokeStyle = MANACLE;
   ctx.beginPath();
   ctx.arc(0, 0, R, 0, Math.PI * 2);
@@ -314,18 +318,18 @@ function drawManacle(ctx: CanvasRenderingContext2D, center: Vec2, dir: Vec2): vo
   // Hinge pin on the far side (opposite the chain).
   ctx.fillStyle = MANACLE_DARK;
   ctx.beginPath();
-  ctx.arc(-R, 0, 1.1, 0, Math.PI * 2);
+  ctx.arc(-R, 0, 1.1 * PX, 0, Math.PI * 2);
   ctx.fill();
   // Lock housing where the chain meets the cuff (chain side, +x).
   ctx.fillStyle = MANACLE_DARK;
-  ctx.fillRect(R - 1.2, -2, 3.4, 4);
-  ctx.lineWidth = 0.7;
+  ctx.fillRect(R - 1.2 * PX, -2 * PX, 3.4 * PX, 4 * PX);
+  ctx.lineWidth = 0.7 * PX;
   ctx.strokeStyle = MANACLE;
-  ctx.strokeRect(R - 1.2, -2, 3.4, 4);
+  ctx.strokeRect(R - 1.2 * PX, -2 * PX, 3.4 * PX, 4 * PX);
   // Clevis link joining the housing to the chain.
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 1.2 * PX;
   ctx.beginPath();
-  ctx.arc(R + 2.6, 0, 1.4, 0, Math.PI * 2);
+  ctx.arc(R + 2.6 * PX, 0, 1.4 * PX, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 }
@@ -347,7 +351,10 @@ export function renderBall(
 
   ctx.save();
   ctx.translate(cssWidth / 2, cssHeight / 2);
-  ctx.scale(camera.zoom, camera.zoom);
+  // World is in metres; scale metres → screen pixels. camera.zoom is the view
+  // knob, PIXELS_PER_METER the unit conversion. Fixed-pixel decoration drawn in
+  // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
+  ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
   for (const body of level.world.bodies) {
@@ -379,18 +386,18 @@ export function renderBall(
     // Orient its housing toward the previous chain node.
     const tip = spans[spans.length - 1]!.span.end;
     const prev = spans[spans.length - 1]!.span.start;
-    const dir = tip.distanceTo(prev) > 1e-3 ? tip.directionTo(prev) : ball.loopDirection;
+    const dir = tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.loopDirection;
     drawManacle(ctx, tip, dir);
   }
   drawBody(ctx, ball);
 
   // Steel mounting loop: material point on the rim, rotating with the ball
   // (its aim direction when no chain is out). Drawn on top of the body.
-  const loop = ball.globalPosition.add(ball.loopDirection.mul(ball.radius + 1.5));
+  const loop = ball.globalPosition.add(ball.loopDirection.mul(ball.radius + 1.5 * PX));
   ctx.strokeStyle = CHAIN;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = PX;
   ctx.beginPath();
-  ctx.arc(loop.x, loop.y, 2, 0, Math.PI * 2);
+  ctx.arc(loop.x, loop.y, 2 * PX, 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.restore();

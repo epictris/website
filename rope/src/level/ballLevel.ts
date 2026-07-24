@@ -13,7 +13,8 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { KillZone } from "../classes/killZone";
 import type { FrameInput } from "../input/frameInput";
-import type { LevelData } from "./levelData";
+import { scaleLevelData, type LevelData } from "./levelData";
+import { PX } from "../engine/units";
 
 export class BallLevel {
   readonly world = new World();
@@ -37,7 +38,8 @@ export class BallLevel {
   // & chain than the grapple avatar, without hand-editing generated levelData.
   static readonly BALL_RADIUS_SCALE = 1.5;
 
-  constructor(data: LevelData) {
+  constructor(rawData: LevelData) {
+    const data = scaleLevelData(rawData, PX);
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);

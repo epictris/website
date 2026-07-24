@@ -7,14 +7,15 @@ import { rectShape } from "../engine/shapes";
 import type { Level } from "./level";
 
 // Horizontal sine shuttle: sweeps base.x ± amplitude. Keep peak speed
-// (amplitude * omega) under ~2 px/frame (see MoverScript).
+// (amplitude * omega) under ~0.02 m/frame (see MoverScript). base/amplitude in
+// metres; omega in rad/s.
 export function addSlidingPlatform(
   level: Level,
   base: Vec2,
   amplitude: number,
   omega: number,
-  width = 120,
-  height = 16,
+  width = 1.2,
+  height = 0.16,
 ): void {
   const platform = new AnimatableBody2D();
   platform.name = "SlidingPlatform";
@@ -25,13 +26,13 @@ export function addSlidingPlatform(
   });
 }
 
-// Constant-rate rotor about its centre.
+// Constant-rate rotor about its centre. pivot in metres; omega in rad/s.
 export function addWindmill(
   level: Level,
   pivot: Vec2,
   omega: number,
-  length = 220,
-  thickness = 14,
+  length = 2.2,
+  thickness = 0.14,
 ): void {
   const windmill = new AnimatableBody2D();
   windmill.name = "Windmill";

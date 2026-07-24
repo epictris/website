@@ -9,6 +9,7 @@
 // current frame. No ray, no tunnelling at any speed.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { PhysicsBody2D, RigidBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { PhysTrace } from "../engine/physTrace";
@@ -19,11 +20,11 @@ import { SurfaceType } from "./types";
 // Extra reach beyond the player radius for the swept grab test (px) —
 // covers lateral near-misses; the swept segment covers fast approaches.
 // Also sets the hang rest depth (centre on the grab-radius edge).
-export const GRAB_REACH_MARGIN = 5;
+export const GRAB_REACH_MARGIN = 0.05;
 
 // A vertex sitting this deep on/inside another blocking body is a
 // compound-body seam (game-design.md) — never grabbable.
-const SEAM_EPSILON = 0.5;
+const SEAM_EPSILON = 0.005;
 
 // Everything the states need to grab a corner. Normals are the *current*
 // world-space face normals — recompute via grabInfo every frame for movers.
@@ -54,7 +55,7 @@ export interface GrabQuery {
 // jumping past a lip must not yank the player down onto it. A fast fall
 // still catches: on the frame it passes the corner, the corner ends up above
 // centre and the frame's swept segment reaches back to it.
-const BELOW_TOLERANCE = 2;
+const BELOW_TOLERANCE = 0.02;
 
 function pointSegmentDistance(p: Vec2, a: Vec2, b: Vec2): number {
   const ab = b.sub(a);
@@ -156,7 +157,7 @@ export const LedgeDetection = {
         // region (behind the wall face AND under the floor face) is rejected
         // — "above a tilted corner" is a legitimate approach.
         const toPlayer = current.sub(info.vertex);
-        if (toPlayer.dot(info.wallNormal) < -1 && toPlayer.dot(info.floorNormal) < -1) {
+        if (toPlayer.dot(info.wallNormal) < -PX && toPlayer.dot(info.floorNormal) < -PX) {
           miss("behind-wall");
           continue;
         }
@@ -194,7 +195,7 @@ export const LedgeDetection = {
   // Depth below the corner (along the hang face) of the rest pose: the
   // player's centre sits exactly on the edge of the grab radius.
   hangRestDepth(playerRadius: number): number {
-    const lateralArm = playerRadius + 1;
+    const lateralArm = playerRadius + PX;
     const reach = playerRadius + GRAB_REACH_MARGIN;
     return Math.sqrt(Math.max(0, reach * reach - lateralArm * lateralArm));
   },
@@ -203,7 +204,7 @@ export const LedgeDetection = {
   // exactly on the grab-radius edge — identical for every kind of catch.
   hangPosition(info: LedgeGrabInfo, playerRadius: number): Vec2 {
     return info.vertex
-      .add(info.wallNormal.mul(playerRadius + 1))
+      .add(info.wallNormal.mul(playerRadius + PX))
       .add(LedgeDetection.hangDirection(info).mul(LedgeDetection.hangRestDepth(playerRadius)));
   },
 
@@ -211,7 +212,7 @@ export const LedgeDetection = {
   // the corner.
   climbTarget(info: LedgeGrabInfo, playerRadius: number): Vec2 {
     return info.vertex
-      .add(info.floorNormal.mul(playerRadius + 1))
-      .sub(info.wallNormal.mul(playerRadius + 1));
+      .add(info.floorNormal.mul(playerRadius + PX))
+      .sub(info.wallNormal.mul(playerRadius + PX));
   },
 };

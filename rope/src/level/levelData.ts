@@ -10,6 +10,30 @@ export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
 }
+
+// Level geometry is authored in Godot/scene pixels; the simulation runs in
+// metres. Scale every length by `factor` (pass PX = 1 / PIXELS_PER_METER) at
+// load, leaving rotations and kinds untouched. Returns a fresh copy so the
+// exported level constants stay pristine.
+export function scaleLevelData(data: LevelData, factor: number): LevelData {
+  return {
+    player: {
+      x: data.player.x * factor,
+      y: data.player.y * factor,
+      radius: data.player.radius * factor,
+    },
+    bodies: data.bodies.map((b) => ({
+      kind: b.kind,
+      x: b.x * factor,
+      y: b.y * factor,
+      rot: b.rot,
+      shape:
+        b.shape.kind === "rect"
+          ? { kind: "rect", w: b.shape.w * factor, h: b.shape.h * factor }
+          : { kind: "circle", r: b.shape.r * factor },
+    })),
+  };
+}
 export const LEVEL_2: LevelData = {
   "player": {
     "x": -394,

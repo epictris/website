@@ -37,7 +37,7 @@ import { screenToWorld, type Camera } from "../render/camera";
 
 const MOVE_DEADZONE = 0.35; // left-stick X → digital move threshold
 const AIM_DEADZONE = 0.3; // right-stick deflection before it takes over aim
-const AIM_DISTANCE = 150; // world px from the player to the stick aim point
+const AIM_DISTANCE = 1.5; // world metres from the player to the stick aim point
 
 interface PadState {
   moveLeft: boolean;

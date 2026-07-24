@@ -4,6 +4,7 @@
 // an ImpermeableBody.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { CharacterBody2D, ImpermeableBody, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
 import { Segment } from "../lib/segment";
@@ -15,7 +16,7 @@ export class Hook extends CharacterBody2D {
   constructor() {
     super();
     this.name = "Hook";
-    if (!this.hasShape()) this.setShape(circleShape(1));
+    if (!this.hasShape()) this.setShape(circleShape(PX));
   }
 
   onDestroyed(cb: () => void): void {
@@ -29,7 +30,7 @@ export class Hook extends CharacterBody2D {
   // Called by Level each physics frame (Godot _PhysicsProcess).
   physicsStep(): void {
     if (!this.world) return;
-    if (this.velocity.lengthSquared() < 0.0001) return;
+    if (this.velocity.lengthSquared() < 0.0001 * PX * PX) return;
 
     const ray = new Segment(this.globalPosition, this.globalPosition.add(this.velocity));
     const result = this.world.intersectRay(ray.start, ray.end, {

@@ -4,6 +4,7 @@
 // rotating corner visibly swings in and out of grabbability.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { PhysicsBody2D } from "../engine/body";
 import { Player } from "../classes/player";
 import { GroundedState } from "../classes/states/groundedState";
@@ -25,13 +26,13 @@ const FACE_COLORS: Record<SurfaceType, string> = {
   [SurfaceType.CEILING]: "#ff4d4d",
 };
 
-const TICK_LENGTH = 10;
-const MARKER_RADIUS = 3;
+const TICK_LENGTH = 10 * PX;
+const MARKER_RADIUS = 3 * PX;
 
 function drawTick(ctx: CanvasRenderingContext2D, from: Vec2, normal: Vec2, color: string): void {
   const to = from.add(normal.mul(TICK_LENGTH));
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = PX;
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
   ctx.lineTo(to.x, to.y);
@@ -68,7 +69,7 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
 
       if (seam) {
         ctx.strokeStyle = SEAM;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = PX;
         ctx.beginPath();
         ctx.moveTo(vertex.x - MARKER_RADIUS, vertex.y - MARKER_RADIUS);
         ctx.lineTo(vertex.x + MARKER_RADIUS, vertex.y + MARKER_RADIUS);
@@ -87,8 +88,8 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
         // swept centre path enters this circle (LedgeDetection reach).
         ctx.strokeStyle = GRABBABLE;
         ctx.globalAlpha = 0.3;
-        ctx.setLineDash([3, 3]);
-        ctx.lineWidth = 1;
+        ctx.setLineDash([3 * PX, 3 * PX]);
+        ctx.lineWidth = PX;
         ctx.beginPath();
         ctx.arc(vertex.x, vertex.y, level.player.radius + GRAB_REACH_MARGIN, 0, Math.PI * 2);
         ctx.stroke();
@@ -96,15 +97,15 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
         ctx.globalAlpha = 1;
       } else {
         ctx.strokeStyle = BLOCKED;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = PX;
         ctx.stroke();
       }
     }
   }
 }
 
-const CONTACT_ARROW_LENGTH = 24;
-const CONTACT_ARROW_HEAD = 5;
+const CONTACT_ARROW_LENGTH = 24 * PX;
+const CONTACT_ARROW_HEAD = 5 * PX;
 
 function drawContactArrow(
   ctx: CanvasRenderingContext2D,
@@ -118,7 +119,7 @@ function drawContactArrow(
   const left = dir.rotated(Math.PI * 0.8).mul(CONTACT_ARROW_HEAD);
   const right = dir.rotated(-Math.PI * 0.8).mul(CONTACT_ARROW_HEAD);
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.5 * PX;
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
   ctx.lineTo(to.x, to.y);
@@ -162,7 +163,7 @@ function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
   const t = level.player.getShape();
   if (t.shape.kind !== "circle") return;
   ctx.strokeStyle = COLLIDER;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = PX;
   ctx.beginPath();
   ctx.arc(t.globalPosition.x, t.globalPosition.y, t.shape.radius, 0, Math.PI * 2);
   ctx.stroke();

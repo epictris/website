@@ -1,6 +1,7 @@
 // OnWallState (wall-run / wall-slide), ported from classes/PlayerStates/OnWallState.cs.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
 import type { PhysicsBody2D } from "../../engine/body";
 import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
@@ -16,7 +17,7 @@ import { WallJumpingState } from "./wallJumpingState";
 import { LedgeClimbState } from "./ledgeClimbState";
 import { LedgeHangState } from "./ledgeHangState";
 
-const WALL_RUN_ACCELERATION = 0.1;
+const WALL_RUN_ACCELERATION = 0.001;
 
 export enum WallMode {
   Running,
@@ -101,7 +102,7 @@ export class OnWallState extends PlayerState {
   }
 
   private updateRelative(player: Player, delta: number): PlayerState {
-    player.velocity = player.velocity.add(Vec2.DOWN.mul(0.25 / delta));
+    player.velocity = player.velocity.add(Vec2.DOWN.mul((0.25 * PX) / delta));
 
     const rightDirection = this.surfaceNormal.rotated(Mathf.Pi * 0.5);
     const leftDirection = this.surfaceNormal.rotated(Mathf.Pi * -0.5);
@@ -227,7 +228,7 @@ export class OnWallState extends PlayerState {
       if (world) {
         const raycast = world.intersectRay(
           player.globalPosition,
-          player.globalPosition.sub(onWallState.surfaceNormal.mul(12)),
+          player.globalPosition.sub(onWallState.surfaceNormal.mul(12 * PX)),
           { collisionMask: 1, exclude: [player] },
         );
         if (!raycast) return new AirborneState();
@@ -247,7 +248,7 @@ export class OnWallState extends PlayerState {
   }
 
   snapToSurface(player: Player, delta: number): void {
-    const col = player.moveAndCollide(this.surfaceNormal.mul(-2 / delta));
+    const col = player.moveAndCollide(this.surfaceNormal.mul((-2 * PX) / delta));
     if (col) {
       this.surfaceNormal = col.getNormal();
       this.supportBody = col.getCollider() as PhysicsBody2D;

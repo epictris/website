@@ -10,6 +10,7 @@
 // wedge in notches; the timeout is now a true dead-man switch.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import type { PhysicsBody2D } from "../../engine/body";
 import { LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
@@ -26,7 +27,7 @@ import { WallJumpingState } from "./wallJumpingState";
 // airborne instead. Must stay under the climb-stall invariant (90 frames,
 // src/sim/trace.ts).
 const CLIMB_TIMEOUT_FRAMES = 80;
-const CLIMB_SPEED = 1.5; // px per frame-step, scaled by 1/delta
+const CLIMB_SPEED = 0.015; // m per frame-step, scaled by 1/delta
 
 export class LedgeClimbState extends PlayerState {
   readonly body: PhysicsBody2D;
@@ -85,7 +86,7 @@ export class LedgeClimbState extends PlayerState {
     // Phase 1: rise along the hang face until the body clears the lip.
     // Phase 2: move laterally onto the top face.
     const cleared = (): boolean =>
-      player.globalPosition.sub(info.vertex).dot(info.floorNormal) >= radius + 1;
+      player.globalPosition.sub(info.vertex).dot(info.floorNormal) >= radius + PX;
     const direction = cleared()
       ? player.globalPosition.directionTo(target)
       : LedgeDetection.hangDirection(info).neg();
@@ -117,7 +118,7 @@ export class LedgeClimbState extends PlayerState {
         : null
       : info.wallNormal.neg();
     if (probeDir) {
-      const newCol = player.moveAndCollide(probeDir.mul(2));
+      const newCol = player.moveAndCollide(probeDir.mul(2 * PX));
       if (newCol) {
         this.surfaceNormal = newCol.getNormal();
         this.supportBody = newCol.getCollider() as PhysicsBody2D;

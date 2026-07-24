@@ -1,6 +1,7 @@
 // WallJumpingState, ported from classes/PlayerStates/WallJumpingState.cs.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
 import type { PhysicsBody2D } from "../../engine/body";
 import { Surface } from "../../lib/surface";
@@ -51,7 +52,7 @@ export class WallJumpingState extends PlayerState {
 
   update(player: Player, delta: number): PlayerState {
     let velocity = player.velocity;
-    velocity = velocity.add(Vec2.DOWN.mul(0.25 / delta));
+    velocity = velocity.add(Vec2.DOWN.mul((0.25 * PX) / delta));
     const maxXSpeed = Mathf.max(PlayerClass.MAX_AIR_SPEED / delta, Mathf.abs(velocity.x));
 
     const input = player.xInputDirection;

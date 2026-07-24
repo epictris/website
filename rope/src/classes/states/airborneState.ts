@@ -1,6 +1,7 @@
 // AirborneState, ported from classes/PlayerStates/AirborneState.cs.
 
 import { Vec2 } from "../../engine/vec2";
+import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
 import type { PhysicsBody2D } from "../../engine/body";
 import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
@@ -18,20 +19,20 @@ import { LedgeHangState } from "./ledgeHangState";
 
 // How far beyond the player's radius a wall face still counts as "touching"
 // for the unattached wall jump.
-const WALL_TOUCH_MARGIN = 2;
+const WALL_TOUCH_MARGIN = 0.02;
 
 export class AirborneState extends PlayerState {
   update(player: Player, delta: number): PlayerState {
     player.coyoteBufferFrames--;
 
     let velocity = player.velocity;
-    velocity = velocity.add(Vec2.DOWN.mul(0.25 / delta));
+    velocity = velocity.add(Vec2.DOWN.mul((0.25 * PX) / delta));
     const maxXSpeed = Mathf.max(PlayerClass.MAX_AIR_SPEED / delta, Mathf.abs(velocity.x));
 
     const input = player.xInputDirection;
 
     if (player.rope?.isTaut ?? false) {
-      velocity = velocity.withX(velocity.x + (0.05 / delta) * input);
+      velocity = velocity.withX(velocity.x + ((0.05 * PX) / delta) * input);
     } else {
       if (velocity.x * input < 0) {
         velocity = velocity.withX(velocity.x + (PlayerClass.AIR_ACCELERATION / delta) * input);

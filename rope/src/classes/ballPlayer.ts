@@ -8,6 +8,7 @@
 // deliberately bypasses).
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
 import { ImpermeableBody, RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
@@ -20,14 +21,14 @@ import { BallHook } from "./ballHook";
 export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
   // this length has missed, and an attachment beyond it snaps the chain.
-  static readonly CHAIN_MAX_LENGTH = 300;
-  static readonly REEL_RATE = 2; // px/frame while reeling in
-  static readonly HOOK_SPEED = 1200; // px/s launch speed (gravity arcs the flight)
+  static readonly CHAIN_MAX_LENGTH = 3;
+  static readonly REEL_RATE = 0.02; // m/frame while reeling in
+  static readonly HOOK_SPEED = 12; // m/s launch speed (gravity arcs the flight)
   // Attachments longer than max by more than this snap the chain; within it
   // they clamp to max instead. Must cover the dangling state's solver
   // tolerance (~1 px over) — a deployed tip that finally lands attaches at
   // slightly over max and must NOT snap (found via session-1565f).
-  static readonly ATTACH_SNAP_TOLERANCE = 20;
+  static readonly ATTACH_SNAP_TOLERANCE = 0.2;
   // Proportional gain steering the loop toward the aim direction (1/s).
   // Stable at 1/60 while gain*dt < 1.
   static readonly AIM_TURN_GAIN = 15;
@@ -44,7 +45,7 @@ export class BallPlayer extends RigidBody2D {
   // keeps biting before it thins out. A smooth gradient the whole way, with no
   // corner where grip suddenly vanishes (the old linear ramp cliffed to the
   // floor by ~60 px/s, leaving almost no friction at medium speed).
-  static readonly AIM_BRAKE_DECAY_SPEED = 110; // px/s — brake ≈ 0.6 at 60, 0.5 at 80
+  static readonly AIM_BRAKE_DECAY_SPEED = 1.1; // m/s — brake ≈ 0.6 at 0.6, 0.5 at 0.8
   static readonly AIM_BRAKE_MIN = 0.05; // braking fraction remaining at high speed
 
   chain: Rope | null = null;
@@ -56,7 +57,7 @@ export class BallPlayer extends RigidBody2D {
   private reeling = false; // reel button held this frame (set in resolveInput)
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
 
-  constructor(radius = 8) {
+  constructor(radius = 0.08) {
     super();
     // KillZone reset and the hook's don't-attach-to-the-avatar check both
     // match by name.
@@ -96,7 +97,7 @@ export class BallPlayer extends RigidBody2D {
     // frame's angular velocity; the chain solver's corrections still land on
     // top of it afterwards.
     const toAim = input.mouseWorldPosition.sub(this.globalPosition);
-    const aiming = toAim.lengthSquared() > 1;
+    const aiming = toAim.lengthSquared() > PX * PX;
     // Speed-faded braking while aiming; symmetric friction otherwise. Full grip
     // at rest, decaying exponentially with speed toward the floor — grippy at
     // low/medium speed, sliding once fast.

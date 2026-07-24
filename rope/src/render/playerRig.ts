@@ -5,6 +5,7 @@
 // speed tracks movement speed), and never touches the sim.
 
 import { Vec2 } from "../engine/vec2";
+import { PIXELS_PER_METER, PX } from "../engine/units";
 import { Player } from "../classes/player";
 import { GroundedState } from "../classes/states/groundedState";
 import { OnWallState, WallMode } from "../classes/states/onWallState";
@@ -21,13 +22,15 @@ import type { Level } from "../level/level";
 // so they stay readable without outlines.
 const RIGHT_COLOR = "#bae67e";
 const LEFT_COLOR = "#ff4d4d";
-const LIMB_RADIUS = 2.4;
-const STRIDE = 5.25; // walk-cycle foot swing amplitude (px) — matches ARM_REACH
-const LIFT = 2; // walk-cycle foot lift (px)
-const FOOT_SPREAD = 2; // per-foot lateral offset in the walk cycle (px)
-const ARM_REACH = 5.25; // horizontal arm travel per unit amplitude (px)
-const ARM_HANG = 7.5; // hand depth below the shoulder at mid-swing (px)
-const ARM_ARC = 0.03; // shallow arc: rise per horizontal px squared
+// Fixed on-screen sizes, expressed as world lengths (metres) via PX so they
+// render at a constant pixel size regardless of PIXELS_PER_METER.
+const LIMB_RADIUS = 2.4 * PX;
+const STRIDE = 5.25 * PX; // walk-cycle foot swing amplitude — matches ARM_REACH
+const LIFT = 2 * PX; // walk-cycle foot lift
+const FOOT_SPREAD = 2 * PX; // per-foot lateral offset in the walk cycle
+const ARM_REACH = 5.25 * PX; // horizontal arm travel per unit amplitude
+const ARM_HANG = 7.5 * PX; // hand depth below the shoulder at mid-swing
+const ARM_ARC = 0.03 * PIXELS_PER_METER; // shallow arc: rise per horizontal length² (1/length)
 const SMOOTH = 0.35; // per-render-frame lerp toward the pose target
 // Visual cadence cap. Distance-locked gait at this sim's speeds (~25 body
 // lengths/s) would demand humanly impossible stride rates; past the cap the
@@ -38,7 +41,7 @@ const MAX_PHASE_STEP = (2 * Math.PI * MAX_CYCLE_HZ) / 60; // per ~60fps frame
 function advancePhase(d: number): void {
   phase += Math.max(-MAX_PHASE_STEP, Math.min(MAX_PHASE_STEP, d));
 }
-const SNAP_DISTANCE = 25; // teleport/reset: jump straight to the target
+const SNAP_DISTANCE = 25 * PX; // teleport/reset: jump straight to the target
 
 // Limb order: [right arm, left arm, right foot, left foot]. The player's
 // right side faces the viewer's left (front-on POV), so default poses put
@@ -68,7 +71,7 @@ let wallPressed = false;
 
 function touchingWallNormal(player: Player): Vec2 | null {
   for (const sign of [-1, 1]) {
-    const hit = player.moveAndCollide(new Vec2(sign * 1.5, 0), true);
+    const hit = player.moveAndCollide(new Vec2(sign * 1.5 * PX, 0), true);
     if (!hit) continue;
     const nrm = hit.getNormal();
     const collider = hit.getCollider() as PhysicsBody2D;
@@ -84,12 +87,12 @@ function pressedPose(player: Player, n: Vec2): Vec2[] {
   const r = player.radius;
   let up = n.orthogonal();
   if (up.y > 0) up = up.mul(-1);
-  const base = p.add(n.mul(-(r - 1)));
+  const base = p.add(n.mul(-(r - 1 * PX)));
   return [
-    base.add(up.mul(5.5)),
-    base.add(up.mul(3)),
-    base.add(up.mul(-5)),
-    base.add(up.mul(-7.5)),
+    base.add(up.mul(5.5 * PX)),
+    base.add(up.mul(3 * PX)),
+    base.add(up.mul(-5 * PX)),
+    base.add(up.mul(-7.5 * PX)),
   ];
 }
 
@@ -98,7 +101,7 @@ function airbornePose(player: Player): Vec2[] {
   const r = player.radius;
   // Jump → fall blend on vertical velocity: falling, the legs tuck in and
   // the arms ride higher than during the jump's rise.
-  const fall = Math.min(1, Math.max(0, player.velocity.y / 300));
+  const fall = Math.min(1, Math.max(0, player.velocity.y / (300 * PX)));
   const jump: Vec2[] = [
     new Vec2(-r * 0.9, -r * 0.25),
     new Vec2(r * 0.9, -r * 0.25),
@@ -132,11 +135,11 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
 
   // Walk → run blend: 0 at walking speeds, 1 at top ground speed.
   const speed = Math.abs(relVel.cross(n));
-  const run = Math.min(1, Math.max(0, (speed - 60) / 240));
+  const run = Math.min(1, Math.max(0, (speed - 60 * PX) / (240 * PX)));
 
   // Stride amplitude scales with speed: short steps when barely moving,
   // full stride at the run threshold, longest at top speed.
-  const amp = 0.4 + 0.6 * Math.min(1, speed / 60) + 0.6 * run;
+  const amp = 0.4 + 0.6 * Math.min(1, speed / (60 * PX)) + 0.6 * run;
   const stride = STRIDE * amp;
   // Ground-contact fraction of each foot's cycle. Real walking keeps both
   // feet down part of the time (duty > 0.5); running shrinks contact toward
@@ -166,9 +169,9 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
     advancePhase((p.sub(prevPos).dot(t) - platformDelta) * ((2 * Math.PI) / cycleDistance));
   }
 
-  const footBase = p.add(n.mul(-(r - 0.5)));
-  const armBase = p.add(n.mul(-0.5));
-  const moving = speed > 5;
+  const footBase = p.add(n.mul(-(r - 0.5 * PX)));
+  const armBase = p.add(n.mul(-0.5 * PX));
+  const moving = speed > 5 * PX;
   if (!moving) {
     // Standing against a wall: brace the limbs on it.
     const wn = touchingWallNormal(player);
@@ -181,13 +184,13 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
     return [
       armBase.add(t.mul(r * 0.8)),
       armBase.add(t.mul(-r * 0.8)),
-      footBase.add(t.mul(4.2)),
-      footBase.add(t.mul(-4.2)),
+      footBase.add(t.mul(4.2 * PX)),
+      footBase.add(t.mul(-4.2 * PX)),
     ];
   }
 
   const liftAmp = LIFT * (1 + 1.5 * run);
-  const shoulder = p.add(n.mul(4.5));
+  const shoulder = p.add(n.mul(4.5 * PX));
   // Running arms carry a bent elbow: the hand rides a little higher.
   const armHang = ARM_HANG * (1 - 0.15 * run);
 
@@ -224,7 +227,7 @@ function groundedPose(player: Player, state: GroundedState): Vec2[] {
     const frontness = Math.max(0, (armX * fwd) / (ARM_REACH * 1.6));
     const rise = armX * armX * ARM_ARC * (1 + 0.7 * frontness);
     pose[Limb.ArmR + i] = shoulder
-      .add(t.mul(armX - 0.8 * run * fwd))
+      .add(t.mul(armX - 0.8 * PX * run * fwd))
       .add(n.mul(-(armHang - rise)));
     pose[Limb.FootR + i] = footBase
       .add(t.mul((i === 0 ? -fwd : fwd) * FOOT_SPREAD + fx * stride))
@@ -240,14 +243,14 @@ function wallPose(player: Player, state: OnWallState): Vec2[] {
   // Along-wall direction, pointing up.
   let up = n.orthogonal();
   if (up.y > 0) up = up.mul(-1);
-  const base = p.add(n.mul(-(r - 1)));
+  const base = p.add(n.mul(-(r - 1 * PX)));
 
   if (state.wallMode === WallMode.Running) {
     // Climb cycle, built like the ground gait: each limb grips the wall
     // (world-stationary while the body slides past — grip fraction of the
     // cycle) then lifts slightly off the wall and reaches to re-grip.
     // Same-side hand and foot run half a cycle apart (diagonal crawl).
-    const amp = 3; // half sweep along the wall
+    const amp = 3 * PX; // half sweep along the wall
     const duty = 0.55; // gripping fraction of the cycle
     const cycleDistance = (2 * amp) / duty; // grip-locked, as in groundedPose
     if (prevPos) advancePhase(p.sub(prevPos).dot(up) * ((2 * Math.PI) / cycleDistance));
@@ -257,7 +260,7 @@ function wallPose(player: Player, state: OnWallState): Vec2[] {
       const w = (u - duty) / (1 - duty);
       return {
         x: amp * (-1 + 2 * w * w * (3 - 2 * w)),
-        lift: Math.sin(Math.PI * w) * 1.8,
+        lift: Math.sin(Math.PI * w) * 1.8 * PX,
       };
     };
 
@@ -267,8 +270,8 @@ function wallPose(player: Player, state: OnWallState): Vec2[] {
       const uf = (uh + 0.5) % 1;
       const h = limb(uh);
       const f = limb(uf);
-      pose[Limb.ArmR + i] = base.add(up.mul(5 + h.x)).add(n.mul(h.lift));
-      pose[Limb.FootR + i] = base.add(up.mul(-7 + f.x)).add(n.mul(f.lift));
+      pose[Limb.ArmR + i] = base.add(up.mul(5 * PX + h.x)).add(n.mul(h.lift));
+      pose[Limb.FootR + i] = base.add(up.mul(-7 * PX + f.x)).add(n.mul(f.lift));
     }
     return pose;
   }
@@ -285,13 +288,13 @@ function ledgePose(player: Player, body: LedgeHangState["body"], vertexIndex: nu
   // Feet flat on the wall face below the corner.
   let down = info.wallNormal.orthogonal();
   if (down.y < 0) down = down.mul(-1);
-  const footBase = p.add(info.wallNormal.mul(-(r - 1)));
+  const footBase = p.add(info.wallNormal.mul(-(r - 1 * PX)));
   return [
     // Hands gripping the corner: one on the top face, one on the wall face.
-    info.vertex.add(info.floorNormal.mul(1.2)),
-    info.vertex.add(info.wallNormal.mul(1.2)),
-    footBase.add(down.mul(1.5)),
-    footBase.add(down.mul(4.5)),
+    info.vertex.add(info.floorNormal.mul(1.2 * PX)),
+    info.vertex.add(info.wallNormal.mul(1.2 * PX)),
+    footBase.add(down.mul(1.5 * PX)),
+    footBase.add(down.mul(4.5 * PX)),
   ];
 }
 
@@ -355,8 +358,8 @@ export function updatePlayerRig(level: Level): void {
   let ropeHeld = false;
   if (rope) {
     const span = rope.getSpans()[0]?.span;
-    if (span && span.end.distanceSquaredTo(p) > 1) {
-      targets[Limb.ArmR] = p.add(p.directionTo(span.end).mul(player.radius + 1.5));
+    if (span && span.end.distanceSquaredTo(p) > PX * PX) {
+      targets[Limb.ArmR] = p.add(p.directionTo(span.end).mul(player.radius + 1.5 * PX));
       ropeHeld = true;
     }
   }

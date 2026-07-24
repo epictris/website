@@ -18,7 +18,7 @@ function mkIntersection(point: Vec2, normalA: Vec2, normalB: Vec2): Intersection
   return { point, normalA, normalB };
 }
 
-const TOLERANCE = 0.01;
+const TOLERANCE = 0.0001;
 
 function statusFromDistance(signedDist: number): IntersectionStatus {
   if (signedDist < -TOLERANCE) return IntersectionStatus.Overlap;

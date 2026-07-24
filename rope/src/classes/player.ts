@@ -2,6 +2,7 @@
 // A CharacterBody2D whose behaviour is delegated to a PlayerState machine.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import { CharacterBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
@@ -62,19 +63,23 @@ export class PlayerInputs {
 
 export class Player extends CharacterBody2D {
   static readonly MAX_CANNON_CHARGE_FRAMES = 60;
-  static readonly GROUND_FRICTION = 0.2;
-  static readonly WALL_FRICTION = 0.3;
-  static readonly WALL_SLIDE_SPEED = 1;
-  static readonly MAX_GROUND_SPEED = 5;
-  static readonly MAX_AIR_SPEED = 3;
-  static readonly GROUND_ACCELERATION = 0.32;
-  static readonly AIR_ACCELERATION = 0.1;
-  static readonly JUMP_FORCE = 5;
+  // Coulomb friction: a fixed speed removed per frame (m/frame), applied as
+  // FRICTION / delta. A per-frame length, not a dimensionless coefficient.
+  static readonly GROUND_FRICTION = 0.002;
+  static readonly WALL_FRICTION = 0.003;
+  // Speeds/accelerations below are per-frame lengths (m/frame, m/frame²) at the
+  // fixed 1/60 step — states convert to per-second via ÷delta where needed.
+  static readonly WALL_SLIDE_SPEED = 0.01;
+  static readonly MAX_GROUND_SPEED = 0.05;
+  static readonly MAX_AIR_SPEED = 0.03;
+  static readonly GROUND_ACCELERATION = 0.0032;
+  static readonly AIR_ACCELERATION = 0.001;
+  static readonly JUMP_FORCE = 0.05;
   static readonly JUMP_BUFFER_FRAMES = 20;
-  static readonly TERMINAL_VELOCITY = 7;
+  static readonly TERMINAL_VELOCITY = 0.07;
   static readonly COYOTE_BUFFER_FRAMES = 5;
-  static readonly COM_OFFSET_RATE = 1;
-  static readonly COM_OFFSET_MAX = 8;
+  static readonly COM_OFFSET_RATE = 0.01;
+  static readonly COM_OFFSET_MAX = 0.08;
 
   coyoteBufferFrames = 0;
   xInputDirection = 0;
@@ -92,7 +97,7 @@ export class Player extends CharacterBody2D {
 
   state: PlayerState = new AirborneState();
 
-  constructor(radius = 5) {
+  constructor(radius = 0.05) {
     super();
     this.name = "Player";
     this.pushesRigidBodies = true;
@@ -110,7 +115,7 @@ export class Player extends CharacterBody2D {
     if (input.fire.pressed && this.rope === null) {
       const hook = new Hook();
       hook.globalPosition = this.globalPosition;
-      hook.velocity = this.globalPosition.directionTo(input.mouseWorldPosition).mul(20);
+      hook.velocity = this.globalPosition.directionTo(input.mouseWorldPosition).mul(20 * PX);
       hook.addCollisionExceptionWith(this);
       hook.onDestroyed(() => {
         this.rope = null;
@@ -127,7 +132,7 @@ export class Player extends CharacterBody2D {
     }
 
     if (input.fire.released) this.rope = null;
-    if (input.retractClick.pressed) this.rope?.retract(4);
+    if (input.retractClick.pressed) this.rope?.retract(4 * PX);
   }
 
   get radius(): number {
@@ -147,7 +152,7 @@ export class Player extends CharacterBody2D {
     this.inputs.tick(input);
     this.frameStartPosition = this.globalPosition;
 
-    if (this.inputs.retract.isActive) this.rope?.retract(2);
+    if (this.inputs.retract.isActive) this.rope?.retract(2 * PX);
 
     if (this.inputs.extend.isActive) {
       this.radialCoMOffset = Mathf.max(

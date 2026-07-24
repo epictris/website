@@ -2,13 +2,30 @@
   "level": "TEST_MOVERS",
   "frames": 420,
   "holds": [
-    { "action": "move_left", "from": 1, "to": 48 },
-    { "action": "jump", "from": 300, "to": 304 }
+    {
+      "action": "move_left",
+      "from": 1,
+      "to": 48
+    },
+    {
+      "action": "jump",
+      "from": 300,
+      "to": 304
+    }
   ],
   "asserts": [
-    { "neverState": "OnWallState" },
-    { "neverState": "LedgeHangState" },
-    { "neverState": "LedgeClimbState" },
-    { "reachState": "GroundedState", "byFrame": 420 }
+    {
+      "neverState": "OnWallState"
+    },
+    {
+      "neverState": "LedgeHangState"
+    },
+    {
+      "neverState": "LedgeClimbState"
+    },
+    {
+      "reachState": "GroundedState",
+      "byFrame": 420
+    }
   ]
 }

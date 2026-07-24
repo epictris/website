@@ -126,13 +126,13 @@ export interface Violation {
   detail: string;
 }
 
-const RUNAWAY_SPEED = 1e5;
-const EMBED_TOLERANCE = 3;
+const RUNAWAY_SPEED = 1e3;
+const EMBED_TOLERANCE = 0.03;
 // Slack above numerical/geometry noise for the anchor-kick check. Legit anchors
 // brake (negative gain); a point-blank shot into a wall the ball is already
-// hitting nudges it a few tens of px/s as it depenetrates. The tip-anchor bug
-// injects ~190 px/s — well clear of both.
-const ANCHOR_KICK_TOLERANCE = 60;
+// hitting nudges it a few tenths of m/s as it depenetrates. The tip-anchor bug
+// injects ~1.9 m/s — well clear of both.
+const ANCHOR_KICK_TOLERANCE = 0.6;
 
 // ---- input-frozen detector -------------------------------------------------
 // Flags the "player holds a direction but barely moves" class of bug: with a
@@ -146,17 +146,17 @@ const ANCHOR_KICK_TOLERANCE = 60;
 // of state.
 
 const STUCK_WINDOW = 45; // frames of continuous same-direction input
-const STUCK_MIN_DISPLACEMENT = 25; // px along the input direction over the window
-const STUCK_MOBILE_DIST = 48; // px — a mobile body this close implicates movers
+const STUCK_MIN_DISPLACEMENT = 0.25; // m along the input direction over the window
+const STUCK_MOBILE_DIST = 0.48; // m — a mobile body this close implicates movers
 // Yield exemption (wedge rules: movers push, never freeze): a player being
 // displaced backward by a mover is moving, not frozen — the treadmill bug
 // class this detector exists for pins the player near zero displacement.
 // Two signatures qualify: shoved backward over the whole window, or a
 // sustained backward drift in the window's tail (the push phase of a window
 // that straddles earlier real progress).
-const STUCK_PUSHED_BACK_EXEMPT = 10; // px against the input over the window
+const STUCK_PUSHED_BACK_EXEMPT = 0.1; // m against the input over the window
 const STUCK_YIELD_TAIL = 15; // frames — tail length checked for backward drift
-const STUCK_YIELD_DISPLACEMENT = 3; // px backward over the tail counts as yielding
+const STUCK_YIELD_DISPLACEMENT = 0.03; // m backward over the tail counts as yielding
 
 function mobileBodyNear(level: Level): boolean {
   const p = level.player;
@@ -282,7 +282,7 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   }
   if (b.chain) {
     const len = b.chain.getCurrentLength();
-    if (b.chainAnchored && len > b.chain.maxRopeLength + 5) {
+    if (b.chainAnchored && len > b.chain.maxRopeLength + 0.05) {
       out.push({
         frame,
         kind: "rope-over-length",
@@ -325,7 +325,7 @@ export function checkInvariants(level: Level): Violation[] {
     // the path length every frame and the hook moves after the rope step, so the
     // length legitimately exceeds it — only meaningful once the rope is anchored.
     const anchored = !(p.rope.end.contact.obj instanceof Hook);
-    if (anchored && len > p.rope.maxRopeLength + 5) {
+    if (anchored && len > p.rope.maxRopeLength + 0.05) {
       out.push({
         frame,
         kind: "rope-over-length",
