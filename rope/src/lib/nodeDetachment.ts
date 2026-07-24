@@ -67,7 +67,14 @@ function shouldDetachNode(fromPrevious: Segment, toTarget: Segment, wrap: RopeWr
 function buildValidPathToTarget(head: PathNode, target: RopeNode, depth = 0): PathNode {
   if (head.node === target) return head;
   depth++;
-  if (depth > 50) throw new Error("Max depth reached");
+  if (depth > 50) {
+    // Pathological wrap tangle (a degenerate span — e.g. an anchor landing
+    // almost on top of the ball — sends the router into an unresolving cycle).
+    // Connecting head straight to target instead of throwing keeps the sim
+    // alive; the next solve refines the path. Depth>50 is unreachable on any
+    // healthy path, so this never fires for well-behaved replays.
+    return new PathNode(target, head);
+  }
 
   const toTarget = new Segment(
     head.node.contact.globalPosition,
