@@ -39,15 +39,17 @@ A gamepad (standard mapping) works too, merged with keyboard/mouse:
 ## Ball & chain mode
 
 An alternate character controller at `?level=BALL`: you are a rolling ball that
-shoots a chain (absolute max length) from its edge. Gamepad only for now:
+throws a hooked chain (absolute max length) from the loop on its rim. The hook
+flies in a gravity arc and anchors to the first surface it touches; a miss
+leaves it dangling at full length until it lands, is reeled in, or released.
+Gamepad only for now:
 
 | Input | Action |
 |-------|--------|
 | left stick | aim — rotates the ball; the chain deploys through the loop on the rim |
 | `RB` | shoot chain (hold — releasing lets go) |
-| `RT` | reel in |
-| `LT` | pay out |
-| `A` | sharp tug on the chain |
+| `A` | reel in |
+| `X` (top face button) | restart level |
 
 ## Share a playtest
 

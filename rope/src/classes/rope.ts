@@ -110,6 +110,21 @@ export class Rope {
     return this.regenerateSpans();
   }
 
+  // Wrap detection for a still-deploying ball chain. While the hook is in
+  // flight the chain is slack (no length solver runs), so a straight span that
+  // crosses scene geometry is normally ignored. This runs the wrap generator
+  // once to catch that case: if the span has snagged a body OTHER than
+  // `ballBody`, the wrap node(s) are kept so the caller can freeze the deploy
+  // around them. Ball self-winding (from aiming spinning the ball) is not a
+  // catch — when nothing else is hit the path is reset to straight so flight
+  // keeps rendering as a single slack span. Returns true on a genuine catch.
+  detectSceneCatch(bodies: PhysicsBody2D[], ballBody: PhysicsBody2D): boolean {
+    this.regeneratePath(bodies);
+    const caught = this.wraps.some((w) => w.contact.obj !== ballBody);
+    if (!caught) this.wraps = [];
+    return caught;
+  }
+
   getCurrentLength(): number {
     return this.calculateRopePathLength();
   }

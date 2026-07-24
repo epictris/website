@@ -13,6 +13,7 @@ import {
 import { Debug } from "../engine/debug";
 import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
+import { BallHook } from "../classes/ballHook";
 import { Hook } from "../classes/hook";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
@@ -31,6 +32,14 @@ const DYNAMIC_FILL = "#5c6a7a";
 const MOVER_FILL = "#3d4a45";
 const PLAYER = "#65bddb";
 const HOOK = "#f4a460";
+// Ball & chain palette: rusty black cast iron — warm near-black base, rust
+// browns for wear, matte throughout (no bright steel).
+const CANNONBALL = "#3a424b"; // steel body (shaded side)
+const CANNONBALL_HI = "#8b939d"; // metallic sheen
+const CHAIN = "#767e88"; // steel — broad (lit) link
+const CHAIN_DARK = "#4e555e"; // shadowed / narrow link
+const MANACLE = "#7c848e"; // steel cuff band
+const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 
 function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
@@ -57,24 +66,31 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fill();
     return;
   }
-  if (body instanceof Hook) {
+  if (body instanceof Hook || body instanceof BallHook) {
     pathShape(ctx, t);
     ctx.fillStyle = HOOK;
     ctx.fill();
     return;
   }
   if (body instanceof BallPlayer) {
+    const c = body.globalPosition;
+    const r = body.radius;
+    // Cast-iron cannonball: near-black body, subtle off-centre highlight for sheen.
     pathShape(ctx, t);
-    ctx.fillStyle = PLAYER;
+    ctx.fillStyle = CANNONBALL;
     ctx.fill();
-    // The chain loop on the rim — shows where the ball is aiming (the chain
-    // deploys through it) and doubles as the rotation indicator.
-    const loop = body.globalPosition.add(body.loopDirection.mul(body.radius + 1.5));
-    ctx.strokeStyle = HOOK;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(loop.x, loop.y, 2, 0, Math.PI * 2);
-    ctx.stroke();
+    const g = ctx.createRadialGradient(
+      c.x - r * 0.35,
+      c.y - r * 0.35,
+      r * 0.1,
+      c.x,
+      c.y,
+      r,
+    );
+    g.addColorStop(0, CANNONBALL_HI);
+    g.addColorStop(1, CANNONBALL);
+    ctx.fillStyle = g;
+    ctx.fill();
     return;
   }
   if (body instanceof RigidBody2D) {
@@ -224,6 +240,96 @@ export function render(
   ctx.textAlign = "left";
 }
 
+const CHAIN_LINK_LEN = 3.8; // world px per link
+const CHAIN_LINK_W = 1.8; // half-width of the broad (in-plane) link
+
+// Metal chain from `a` to `b`: interlocking oval links, alternately rotated
+// 90° so it reads as forged loops. Links are a FIXED world length, laid from
+// `a` — the partial leftover falls at the `b` end. Callers pass the anchored
+// (world-fixed) end as `a` and the ball-side as `b`, so as the chain reels the
+// links stay put in the world and the last one is consumed into the ball
+// rather than the whole chain compressing toward the anchor. `phase` seeds the
+// broad/narrow alternation for continuity across joined segments; returns the
+// next phase and the unused remainder length past the last full link.
+function drawChainLink(
+  ctx: CanvasRenderingContext2D,
+  a: Vec2,
+  b: Vec2,
+  phase = 0,
+): { phase: number; remainder: number } {
+  const total = a.distanceTo(b);
+  if (total < 1e-3) return { phase, remainder: 0 };
+  const dir = a.directionTo(b);
+  const n = Math.floor(total / CHAIN_LINK_LEN);
+  const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
+
+  ctx.lineWidth = 1;
+  for (let i = 0; i < n; i++) {
+    const mid = a.add(dir.mul((i + 0.5) * CHAIN_LINK_LEN));
+    const broad = (i + phase) % 2 === 0; // alternate link orientation
+    const w = broad ? CHAIN_LINK_W : CHAIN_LINK_W * 0.5;
+    ctx.strokeStyle = broad ? CHAIN : CHAIN_DARK;
+    ctx.beginPath();
+    // Oval link as a rounded capsule: two side arcs are approximated by an
+    // ellipse aligned to the span.
+    ctx.save();
+    ctx.translate(mid.x, mid.y);
+    ctx.rotate(Math.atan2(dir.y, dir.x));
+    ctx.ellipse(0, 0, half, w, 0, 0, Math.PI * 2);
+    ctx.restore();
+    ctx.stroke();
+  }
+  return { phase: phase + n, remainder: total - n * CHAIN_LINK_LEN };
+}
+
+// Lay chain links at fixed spacing along a polyline, measured from points[0]
+// (the anchor). The sub-link remainder falls at the far end (the ball centre,
+// hidden under the body), so reeling consumes links into the ball rather than
+// rescaling the whole chain.
+function drawChainPolyline(ctx: CanvasRenderingContext2D, points: Vec2[]): void {
+  let phase = 0;
+  for (let i = 0; i + 1 < points.length; i++) {
+    const r = drawChainLink(ctx, points[i]!, points[i + 1]!, phase);
+    phase = r.phase;
+    // (Per-segment remainder is small and lands at wrap corners / the covered
+    // ball centre; the visible run from the anchor stays world-pinned.)
+  }
+}
+
+// The chain's far end — the "hook" — drawn as an iron manacle: a thick steel
+// cuff band with a lock housing on the chain side, a hinge pin opposite, and a
+// clevis link joining it to the chain. `dir` points from the cuff toward the
+// chain, so the housing always faces the span it hangs from.
+function drawManacle(ctx: CanvasRenderingContext2D, center: Vec2, dir: Vec2): void {
+  const R = 4.5; // cuff band radius
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points toward the chain
+  // Cuff band: thick steel ring.
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = MANACLE;
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.stroke();
+  // Hinge pin on the far side (opposite the chain).
+  ctx.fillStyle = MANACLE_DARK;
+  ctx.beginPath();
+  ctx.arc(-R, 0, 1.1, 0, Math.PI * 2);
+  ctx.fill();
+  // Lock housing where the chain meets the cuff (chain side, +x).
+  ctx.fillStyle = MANACLE_DARK;
+  ctx.fillRect(R - 1.2, -2, 3.4, 4);
+  ctx.lineWidth = 0.7;
+  ctx.strokeStyle = MANACLE;
+  ctx.strokeRect(R - 1.2, -2, 3.4, 4);
+  // Clevis link joining the housing to the chain.
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(R + 2.6, 0, 1.4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Ball & chain frame: bodies + chain spans. No rig, no ledge overlay — the
 // ball has neither; aim is shown by the loop on the ball itself.
 export function renderBall(
@@ -246,23 +352,46 @@ export function renderBall(
 
   for (const body of level.world.bodies) {
     if (body instanceof BallPlayer) continue; // drawn over the chain below
+    if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
     drawBody(ctx, body);
   }
   for (const area of level.world.areas) drawBody(ctx, area);
 
-  // Chain spans behind the ball so the body covers the edge attachment.
-  const chain = level.ball.chain;
+  // Metal chain behind the ball. Links are laid at a fixed length from the
+  // ANCHOR toward the ball, then on through the loop into the ball CENTRE
+  // (that tail runs under the body, which is drawn on top). Pinning the links
+  // to the anchor means that as the chain reels in — the ball being pulled
+  // toward the anchor — the links stay put in the world and are consumed one
+  // by one INTO the cannonball, instead of the whole chain compressing away at
+  // the anchor.
+  const ball = level.ball;
+  const chain = ball.chain;
   if (chain) {
-    ctx.strokeStyle = HOOK;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (const { span } of chain.getSpans()) {
-      ctx.moveTo(span.start.x, span.start.y);
-      ctx.lineTo(span.end.x, span.end.y);
-    }
-    ctx.stroke();
+    const spans = chain.getSpans();
+    // Node path loop→anchor (loop is spans[0].start, then each span end).
+    const loopToAnchor = [spans[0]!.span.start, ...spans.map((s) => s.span.end)];
+    // Walk anchor → … → loop → ball centre: reverse to start at the anchor,
+    // then extend past the loop into the covered centre at the ball end.
+    const path = [...loopToAnchor.reverse(), ball.globalPosition];
+    drawChainPolyline(ctx, path);
+
+    // Manacle at the chain's far end (flying hook, dangling tip, or anchor).
+    // Orient its housing toward the previous chain node.
+    const tip = spans[spans.length - 1]!.span.end;
+    const prev = spans[spans.length - 1]!.span.start;
+    const dir = tip.distanceTo(prev) > 1e-3 ? tip.directionTo(prev) : ball.loopDirection;
+    drawManacle(ctx, tip, dir);
   }
-  drawBody(ctx, level.ball);
+  drawBody(ctx, ball);
+
+  // Steel mounting loop: material point on the rim, rotating with the ball
+  // (its aim direction when no chain is out). Drawn on top of the body.
+  const loop = ball.globalPosition.add(ball.loopDirection.mul(ball.radius + 1.5));
+  ctx.strokeStyle = CHAIN;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(loop.x, loop.y, 2, 0, Math.PI * 2);
+  ctx.stroke();
 
   ctx.restore();
 

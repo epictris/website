@@ -86,16 +86,32 @@ Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 RigidBody2D (rolls via the opt-in `contactFriction` field on RigidBody2D;
 default 0 keeps old replays bit-identical). The chain reuses the Rope wrap
 solver: its start contact sits on the ball's edge in the ball's local frame, so
-it rotates with the ball, winds around it, and applies torque. The chain has an
-absolute max length (`BallPlayer.CHAIN_MAX_LENGTH`); a hook that flies past it
-misses and the chain snaps. The chain deploys through the **loop** — a fixed
+it rotates with the ball, winds around it, and applies torque. The chain end is
+a `BallHook` — a RigidBody2D projectile (gravity arcs its flight, unlike the
+straight-line grapple Hook) that anchors to the first surface it contacts,
+flying or dangling. At the absolute max length
+(`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
+tip: the chain stays deployed at that length (solver-driven swing) until it
+touches a surface and anchors, or is reeled in / released. A deploying chain
+that snags scene geometry mid-flight also converts to the dangling tip: while
+the hook is in flight the chain is slack (no length solver), so
+`BallPlayer.checkChainReach` runs `Rope.detectSceneCatch` each frame — if the
+straight span has caught on a body other than the ball itself (ball
+self-winding from aiming is not a catch), it keeps the generated wrap node and
+freezes the deploy at the wrapped path length, so the chain wraps the corner
+and stops paying out. The chain deploys
+through the **loop** — a fixed
 material point on the rim (top of the ball at rotation 0). Aiming rotates the
 ball so the loop faces the aim direction (proportional steering — also while
 the chain is out, which winds it around the ball); the shot always leaves
 through the loop. A stick-released frame encodes its aim point as the ball's
-own position ("not aiming"). Gamepad only: left stick aim, RB
-shoot/release, RT reel in, LT pay out, A sharp tug. RB is hold-to-keep:
-releasing it drops the chain. Ball inputs map onto the existing FrameInput fields
+own position ("not aiming"). Controls (mouse + gamepad, most-recent aim device
+wins): mouse move aim / left-click deploy chain / right-click reel in; left
+stick aim, RB deploy chain, A reel in, top face button (X on a Pro Controller)
+restart. Deploy is hold-to-keep: releasing it drops the chain. Restart routes
+through the `jump`
+FrameInput field so it stays in the recorded input stream (BallLevel calls
+onReset). Ball inputs map onto the existing FrameInput fields
 (aim→mouseWorldPosition, shoot→fire, reel→retract, payout→extend), so
 recordings serialize and `cli replay`/`cli bundles` work unchanged
 (`cli continue` and playtest scripts are not ball-aware yet).

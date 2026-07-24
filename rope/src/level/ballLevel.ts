@@ -10,7 +10,7 @@ import { Debug } from "../engine/debug";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
-import { Hook } from "../classes/hook";
+import { BallHook } from "../classes/ballHook";
 import { KillZone } from "../classes/killZone";
 import type { FrameInput } from "../input/frameInput";
 import type { LevelData } from "./levelData";
@@ -24,8 +24,12 @@ export class BallLevel {
   cameraPosition = Vec2.ZERO;
   onReset: (() => void) | null = null;
 
+  // The ball plays 1.5× the arena's authored avatar radius — a heftier ball
+  // & chain than the grapple avatar, without hand-editing generated levelData.
+  static readonly BALL_RADIUS_SCALE = 1.5;
+
   constructor(data: LevelData) {
-    this.ball = new BallPlayer(data.player.radius);
+    this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);
     this.world.add(this.ball);
@@ -62,24 +66,35 @@ export class BallLevel {
     Debug.clear();
     PhysTrace.frame = this.frame;
 
+    // Restart (top face button → jump field). Replaces this level instance;
+    // bail before touching more of the frame.
+    if (input.jump.pressed) {
+      this.onReset?.();
+      return;
+    }
+
     this.ball.resolveInput(input);
     this.bodies = this.bodies.filter((b) => !b.removed);
 
-    // The chain solver runs only once anchored; while the hook is in flight
-    // the chain is slack (Rope.physicsStep's unfurl handling is
-    // Player-specific, so the ball controller skips it entirely).
+    // Armed hooks run their swept attach check before integration moves them.
+    for (const b of this.bodies) {
+      if (b instanceof BallHook) b.physicsStep(delta);
+    }
+    this.bodies = this.bodies.filter((b) => !b.removed);
+
+    this.world.integrate(delta);
+
+    // Chain logic runs AFTER integration — the ball is a RigidBody2D, so
+    // integration moves it; solving afterwards leaves the frame's final state
+    // within the length constraint (solve-then-integrate ended every fast
+    // swing frame over-length by |v|·dt). The solver runs only once the chain
+    // is fully deployed or anchored; while the hook is in flight the chain is
+    // slack (Rope.physicsStep's unfurl handling is Player-specific, so the
+    // ball controller skips it entirely).
+    this.ball.checkChainReach(this.bodies);
     if (this.ball.chainAnchored && this.ball.chain) {
       this.ball.chain.physicsStep(this.bodies, delta);
     }
-
-    // Hooks fly after level logic, mirroring the Player frame order.
-    for (const b of this.bodies) {
-      if (b instanceof Hook) b.physicsStep();
-    }
-    this.bodies = this.bodies.filter((b) => !b.removed);
-    this.ball.checkChainReach();
-
-    this.world.integrate(delta);
 
     this.cameraPosition = this.ball.globalPosition;
   }

@@ -63,7 +63,7 @@ function reset(): void {
 level.onReset = reset;
 
 const ballInput = isBall
-  ? new BallInputSource(() => (level as BallLevel).ball.globalPosition)
+  ? new BallInputSource(canvas, camera, () => (level as BallLevel).ball.globalPosition)
   : null;
 const liveInput = isBall
   ? null
