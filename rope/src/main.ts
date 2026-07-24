@@ -48,6 +48,8 @@ const levelId = ((): string => {
 })();
 const levelSpec = LEVELS[levelId]!;
 const isBall = levelSpec.controller === "ball";
+// Ball & chain plays at a tighter scale than the grapple level.
+if (isBall) camera.zoom = 3;
 
 function makeLevel(): Level | BallLevel {
   return isBall ? new BallLevel(levelSpec.data) : new Level(levelSpec.data, levelSpec.init);

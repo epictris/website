@@ -327,8 +327,12 @@ export class World {
           const vn = rel.dot(ov.normal);
           let vnKilled = 0;
           if (vn < 0) {
-            body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn));
-            vnKilled = -vn;
+            // Kill inward velocity and reflect a restitution fraction back out.
+            // restitution = 0 (default) removes exactly vn — the historical
+            // fully-inelastic path, bit-identical for recorded replays.
+            const bounce = 1 + body.restitution;
+            body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn * bounce));
+            vnKilled = -vn * bounce;
           }
           // Tangential contact friction (opt-in per body): drive the relative
           // surface velocity at the contact point toward zero through the

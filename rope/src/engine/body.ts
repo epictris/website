@@ -192,6 +192,11 @@ export class RigidBody2D extends PhysicsBody2D {
   // fades this with speed while the player aims, so reorienting the spin
   // mid-roll cannot shed momentum but can still drive the ball.
   contactBrakeScale = 1;
+  // Coefficient of restitution (bounciness) for static contacts: the fraction
+  // of inward normal velocity reflected back on impact. 0 = fully inelastic
+  // (kill inward velocity) and MUST stay the default — recorded replays predate
+  // this field. 1 would be a perfect bounce.
+  restitution = 0;
 
   override get isMobile(): boolean {
     return true;

@@ -21,7 +21,7 @@ import { BallHook } from "./ballHook";
 export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
   // this length has missed, and an attachment beyond it snaps the chain.
-  static readonly CHAIN_MAX_LENGTH = 3;
+  static readonly CHAIN_MAX_LENGTH = 1.8;
   static readonly HOOK_SPEED = 12; // m/s launch speed (gravity arcs the flight)
   // Attachments longer than max by more than this snap the chain; within it
   // they clamp to max instead. Must cover the dangling state's solver
@@ -37,7 +37,11 @@ export class BallPlayer extends RigidBody2D {
   // ball fades with speed while aiming: full grip at rest, decaying smoothly
   // as the ball speeds up so it slides once genuinely fast (down a ramp)
   // while still gripping firmly through low/medium speeds.
-  static readonly ROLL_FRICTION = 0.8;
+  static readonly ROLL_FRICTION = 1.8;
+  // Density relative to the default sim material (computeMass ≈ water). The
+  // ball is cast iron: ρ ≈ 7200 kg/m³ vs water 1000 → 7.2× the base mass.
+  // Higher = heavier, more sluggish response to aim-kicks, chain tugs, impacts.
+  static readonly MASS_SCALE = 7.2;
   // Braking friction follows an exponential falloff in speed:
   //   brake = MIN + (1 - MIN) * exp(-speed / DECAY_SPEED)
   // DECAY_SPEED is the e-folding speed — the higher it is, the longer friction
@@ -61,7 +65,10 @@ export class BallPlayer extends RigidBody2D {
     // match by name.
     this.name = "Player";
     this.setShape(circleShape(radius));
-    this.mass = ShapeGeometry.computeMass(this.getShape());
+    // Heavy ball: mass scaled up so aim-kicks, chain tugs, and collisions move
+    // it less (F = ma) — sluggish, momentum-carrying feel. Gravity is
+    // acceleration-based, so this does not change fall speed.
+    this.mass = ShapeGeometry.computeMass(this.getShape()) * BallPlayer.MASS_SCALE;
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
     // Coulomb friction coefficient — ground contact gradually converts slide
     // into roll; capped by normal force, so no wall-climbing traction.
@@ -69,6 +76,8 @@ export class BallPlayer extends RigidBody2D {
     // Light damp: rolling resistance comes from the Coulomb model, not the
     // historical 0.98 contact damp.
     this.contactDamp = 0.99;
+    // Small bounce on impact — a cast-iron ball is not perfectly dead.
+    this.restitution = 0.15;
   }
 
   get radius(): number {
@@ -172,7 +181,9 @@ export class BallPlayer extends RigidBody2D {
     const muzzle = this.globalPosition.add(dir.mul(this.radius));
     const hook = new BallHook();
     hook.globalPosition = muzzle;
-    hook.linearVelocity = dir.mul(BallPlayer.HOOK_SPEED);
+    // Launch speed along the loop direction plus the ball's own velocity, so a
+    // moving ball throws the chain with its momentum carried through.
+    hook.linearVelocity = dir.mul(BallPlayer.HOOK_SPEED).add(this.linearVelocity);
     hook.addCollisionExceptionWith(this);
     this.hookInFlight = hook;
     this.spawnBody?.(hook);
