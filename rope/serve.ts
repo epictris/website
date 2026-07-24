@@ -13,6 +13,7 @@ Bun.serve({
     const url = new URL(req.url);
     let pathname = normalize(decodeURIComponent(url.pathname));
     if (pathname === "/" || pathname === "") pathname = "/index.html";
+    if (pathname === "/editor" || pathname === "/editor/") pathname = "/editor.html";
 
     const full = join(DIST, pathname);
     // Reject path traversal outside DIST.

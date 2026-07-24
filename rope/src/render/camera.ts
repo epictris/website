@@ -17,3 +17,12 @@ export function screenToWorld(cam: Camera, screenX: number, screenY: number): Ve
     new Vec2((screenX - cam.viewportWidth / 2) / scale, (screenY - cam.viewportHeight / 2) / scale),
   );
 }
+
+// Inverse of screenToWorld: a world-metre point → CSS-pixel screen coordinate.
+export function worldToScreen(cam: Camera, world: Vec2): Vec2 {
+  const scale = cam.zoom * PIXELS_PER_METER;
+  return new Vec2(
+    (world.x - cam.position.x) * scale + cam.viewportWidth / 2,
+    (world.y - cam.position.y) * scale + cam.viewportHeight / 2,
+  );
+}

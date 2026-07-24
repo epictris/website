@@ -204,6 +204,42 @@ sweep normals on thin rotating shapes (guards in `World.moveAndCollide`), and
 near-threshold face classification flapping on rotating bodies (grip grace in
 `lib/surface.ts`).
 
+## Level editor
+
+The **`/editor`** page (its own HTML page `editor.html` → `src/editorMain.ts`, distinct
+from the game at `/`) runs an in-browser level editor (`src/editor/`, its own canvas loop +
+DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production maps it to
+`dist/editor.html` in `serve.ts`; the build emits both pages (`rollupOptions.input`). It
+edits an `EdModel` (positions in world **metres**, one
+stable id per body) and manipulates it with the mouse: pan (drag empty space / middle /
+right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
+radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies. The kind picker
+covers `static`, `rigid`, `killzone`, `impermeable`. A toggleable snap (fixed 10 cm, the
+backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body's top-left
+corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
+**Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
+discrete action (each drag, add/delete/duplicate, kind/colour/opacity/numeric edit); New and
+Load clear the stack. Each body has an editable **colour + opacity** (inspector); defaults to
+dark grey `#555555` at 0.5,
+borders always drawn fully opaque in the same colour (`DEFAULT_BODY_COLOR`/`_OPACITY` in
+`levelFormat.ts`, carried on the engine body as `fillColor`/`fillOpacity`, rendered the same
+way in editor and game via `src/render/color.ts`). Both the editor and the game render
+on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
+`▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
+the current model and run it inline; **Esc** returns to editing.
+
+Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
+(same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
+/api/levels[/<name>]`) added by the `levelApi` Vite plugin in `vite.config.ts`. The built
+app has no server, so the editor is a dev tool.
+
+The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
+the generated one — adds the `rigid` kind); `levelData.ts` stays auto-generated and is
+structurally assignable to it. Both level drivers construct geometry through the shared
+`src/level/buildBodies.ts` (statics, killzones, impermeables, and rigid bodies), so the
+grapple and ball controllers load identical scenes. `rigid` bodies get mass/inertia from
+`ShapeGeometry` and fall under gravity.
+
 ## Regenerating level geometry
 
 `levelData.ts` is generated from the prototype's Godot scene; do not hand-edit it:

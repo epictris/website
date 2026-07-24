@@ -6,18 +6,17 @@ import {
   AnimatableBody2D,
   PhysicsBody2D,
   RigidBody2D,
-  StaticBody2D,
 } from "../engine/body";
-import { rectShape, circleShape } from "../engine/shapes";
+import { circleShape } from "../engine/shapes";
 import { Debug } from "../engine/debug";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
-import { KillZone } from "../classes/killZone";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type LevelData } from "./levelData";
+import { scaleLevelData, type LevelData } from "./levelFormat";
+import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
 // Scripted-mover update: sets the body's transform for the given sim time.
@@ -53,23 +52,7 @@ export class Level {
     this.world.add(this.player);
     this.bodies.push(this.player);
 
-    for (const b of data.bodies) {
-      const shape = b.shape.kind === "rect" ? rectShape(b.shape.w, b.shape.h) : circleShape(b.shape.r);
-      if (b.kind === "killzone") {
-        const kz = new KillZone(() => this.onReset?.());
-        kz.setShape(shape);
-        kz.globalPosition = new Vec2(b.x, b.y);
-        kz.globalRotation = b.rot;
-        this.world.add(kz);
-      } else {
-        const sb = new StaticBody2D();
-        sb.setShape(shape);
-        sb.globalPosition = new Vec2(b.x, b.y);
-        sb.globalRotation = b.rot;
-        this.world.add(sb);
-        this.bodies.push(sb);
-      }
-    }
+    this.bodies.push(...buildLevelBodies(this.world, data, () => this.onReset?.()));
 
     init?.(this);
 

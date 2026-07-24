@@ -19,6 +19,8 @@ import { Hook } from "../classes/hook";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
+import { drawTrainingGrid } from "./trainingGrid";
+import { hexToRgba } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
   drawPlayerRigBack,
@@ -26,7 +28,6 @@ import {
   updatePlayerRig,
 } from "./playerRig";
 
-const BG = "#1f2430";
 const GEOMETRY_FILL = "#2a2f3d";
 const GEOMETRY_STROKE = "#3c445c";
 const DYNAMIC_FILL = "#5c6a7a";
@@ -94,6 +95,18 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fill();
     return;
   }
+  // Authored level geometry (static/rigid/killzone/impermeable): fill in the
+  // body's colour + opacity, border fully opaque in the same colour.
+  if (body.fillColor) {
+    pathShape(ctx, t);
+    ctx.fillStyle = hexToRgba(body.fillColor, body.fillOpacity);
+    ctx.fill();
+    ctx.strokeStyle = body.fillColor;
+    ctx.lineWidth = PX;
+    ctx.stroke();
+    return;
+  }
+
   if (body instanceof RigidBody2D) {
     pathShape(ctx, t);
     ctx.fillStyle = DYNAMIC_FILL;
@@ -174,8 +187,7 @@ export function render(
   gamepadAim: Vec2 | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, cssWidth, cssHeight);
+  drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
 
   ctx.save();
   ctx.translate(cssWidth / 2, cssHeight / 2);
@@ -239,7 +251,7 @@ export function render(
   ctx.font = "14px monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#cbccc6";
+  ctx.fillStyle = "#5a6472";
   ctx.fillText(`${Math.round(fps)} fps`, cssWidth - 8, 6);
   ctx.textAlign = "left";
 }
@@ -346,8 +358,7 @@ export function renderBall(
   fps: number,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, cssWidth, cssHeight);
+  drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
 
   ctx.save();
   ctx.translate(cssWidth / 2, cssHeight / 2);
@@ -406,7 +417,7 @@ export function renderBall(
   ctx.font = "14px monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#cbccc6";
+  ctx.fillStyle = "#5a6472";
   ctx.fillText(`${Math.round(fps)} fps`, cssWidth - 8, 6);
   ctx.textAlign = "left";
 }

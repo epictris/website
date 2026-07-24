@@ -4,16 +4,15 @@
 // recorded replays bit-for-bit.
 
 import { Vec2 } from "../engine/vec2";
-import { StaticBody2D, type PhysicsBody2D } from "../engine/body";
-import { rectShape, circleShape } from "../engine/shapes";
+import { type PhysicsBody2D } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
-import { KillZone } from "../classes/killZone";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type LevelData } from "./levelData";
+import { scaleLevelData, type LevelData } from "./levelFormat";
+import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
 export class BallLevel {
@@ -46,23 +45,7 @@ export class BallLevel {
     this.world.add(this.ball);
     this.bodies.push(this.ball);
 
-    for (const b of data.bodies) {
-      const shape = b.shape.kind === "rect" ? rectShape(b.shape.w, b.shape.h) : circleShape(b.shape.r);
-      if (b.kind === "killzone") {
-        const kz = new KillZone(() => this.onReset?.());
-        kz.setShape(shape);
-        kz.globalPosition = new Vec2(b.x, b.y);
-        kz.globalRotation = b.rot;
-        this.world.add(kz);
-      } else {
-        const sb = new StaticBody2D();
-        sb.setShape(shape);
-        sb.globalPosition = new Vec2(b.x, b.y);
-        sb.globalRotation = b.rot;
-        this.world.add(sb);
-        this.bodies.push(sb);
-      }
-    }
+    this.bodies.push(...buildLevelBodies(this.world, data, () => this.onReset?.()));
 
     this.cameraPosition = this.ball.globalPosition;
   }

@@ -33,6 +33,11 @@ export abstract class CollisionObject2D {
   // Bodies excused from colliding with this one (Godot AddCollisionExceptionWith).
   readonly exceptions = new Set<number>();
   world: World | null = null;
+  // Optional authored appearance (level geometry): hex fill colour + 0..1 fill
+  // opacity. Null = the renderer uses its type-based default. Borders draw fully
+  // opaque in `fillColor` regardless of `fillOpacity`.
+  fillColor: string | null = null;
+  fillOpacity = 1;
 
   setShape(shape: Shape): CollisionShape2D {
     this.collisionShape = new CollisionShape2D(this, shape);
