@@ -128,6 +128,11 @@ export interface Violation {
 
 const RUNAWAY_SPEED = 1e5;
 const EMBED_TOLERANCE = 3;
+// Slack above numerical/geometry noise for the anchor-kick check. Legit anchors
+// brake (negative gain); a point-blank shot into a wall the ball is already
+// hitting nudges it a few tens of px/s as it depenetrates. The tip-anchor bug
+// injects ~190 px/s — well clear of both.
+const ANCHOR_KICK_TOLERANCE = 60;
 
 // ---- input-frozen detector -------------------------------------------------
 // Flags the "player holds a direction but barely moves" class of bug: with a
@@ -262,6 +267,17 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       frame,
       kind: "runaway-speed",
       detail: `|vel|=${b.linearVelocity.length().toFixed(1)}`,
+    });
+  }
+  // A chain going taut against a fixed anchor can only brake the ball, never
+  // accelerate it. A positive solver speed-gain on the anchoring frame means
+  // the anchor was born over its max length and the solve dumped the excess
+  // into the ball as a one-frame velocity kick (the tip-anchor lurch).
+  if (level.anchorKickSpeedGain !== null && level.anchorKickSpeedGain > ANCHOR_KICK_TOLERANCE) {
+    out.push({
+      frame,
+      kind: "rope-anchor-kick",
+      detail: `solve added ${level.anchorKickSpeedGain.toFixed(1)} px/s as the chain anchored`,
     });
   }
   if (b.chain) {

@@ -215,8 +215,44 @@ export class BallPlayer extends RigidBody2D {
         this.releaseChain();
         return;
       }
-      this.chain.maxRopeLength = Math.min(len, BallPlayer.CHAIN_MAX_LENGTH);
+      const target = Math.min(len, BallPlayer.CHAIN_MAX_LENGTH);
+      // A dangling tip anchors a few px past target (it was swinging outward and
+      // swept slightly beyond max before the solver caught it). Absorb that
+      // overshoot here, exactly as deployTip does for a mid-air freeze — else
+      // the length solver dumps it into the ball in one frame the instant the
+      // anchor goes rigid, a hard forward lurch (found via session-922f).
+      this.settleAnchorOvershoot(target);
+      this.chain.maxRopeLength = target;
     });
+  }
+
+  // Pull the freshly-set anchor in along the final span so the chain path is
+  // exactly `targetLength`, and strip the ball's outward radial velocity — the
+  // anchor counterpart to deployTip's overshoot handling. Keeping the ball put
+  // (only the anchor point moves) means the constraint is already satisfied
+  // when it goes rigid, so no one-frame correction is dumped into the ball.
+  private settleAnchorOvershoot(targetLength: number): void {
+    const chain = this.chain;
+    if (!chain) return;
+    const overshoot = chain.getCurrentLength() - targetLength;
+    if (overshoot <= 0) return;
+
+    const end = chain.end.contact;
+    const lastWrap = chain.wraps[chain.wraps.length - 1];
+    const prevPos = lastWrap
+      ? lastWrap.contact.globalPosition
+      : chain.start.contact.globalPosition;
+    const anchorPos = end.globalPosition;
+    const pulled = anchorPos.add(anchorPos.directionTo(prevPos).mul(overshoot));
+    chain.end = new RopeAttachment(new RopeContact(end.obj, pulled.sub(end.obj.globalPosition)));
+
+    // Remove the component of the ball's velocity that points away from the
+    // chain (it would stretch the first span past the length just set).
+    const firstWrap = chain.wraps[0];
+    const nextPos = firstWrap ? firstWrap.contact.globalPosition : chain.end.contact.globalPosition;
+    const outward = nextPos.directionTo(this.globalPosition);
+    const vr = this.linearVelocity.dot(outward);
+    if (vr > 0) this.linearVelocity = this.linearVelocity.sub(outward.mul(vr));
   }
 
   releaseChain(): void {

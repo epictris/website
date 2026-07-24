@@ -24,6 +24,15 @@ export class BallLevel {
   cameraPosition = Vec2.ZERO;
   onReset: (() => void) | null = null;
 
+  // Diagnostic for the anchor-kick invariant. On the frame the chain first
+  // anchors to a fixed body, this holds the speed the length solve added to
+  // the ball; null on every other frame. A rope going taut against a fixed
+  // point can only brake the ball (remove its outward velocity), so a positive
+  // value means the solver injected energy — the tip-anchor over-length dump
+  // (see checkBallInvariants).
+  anchorKickSpeedGain: number | null = null;
+  private endWasFixed = false;
+
   // The ball plays 1.5× the arena's authored avatar radius — a heftier ball
   // & chain than the grapple avatar, without hand-editing generated levelData.
   static readonly BALL_RADIUS_SCALE = 1.5;
@@ -92,9 +101,22 @@ export class BallLevel {
     // slack (Rope.physicsStep's unfurl handling is Player-specific, so the
     // ball controller skips it entirely).
     this.ball.checkChainReach(this.bodies);
+    // The chain end is "fixed" once it anchors to a surface — before that it is
+    // the (in-flight or dangling) BallHook. Catch the false→true transition so
+    // the invariant only scrutinises the frame the anchor goes rigid.
+    const endFixed =
+      this.ball.chain !== null && !(this.ball.chain.end.contact.obj instanceof BallHook);
+    const anchoredThisFrame = endFixed && !this.endWasFixed;
     if (this.ball.chainAnchored && this.ball.chain) {
+      const speedBefore = this.ball.linearVelocity.length();
       this.ball.chain.physicsStep(this.bodies, delta);
+      this.anchorKickSpeedGain = anchoredThisFrame
+        ? this.ball.linearVelocity.length() - speedBefore
+        : null;
+    } else {
+      this.anchorKickSpeedGain = null;
     }
+    this.endWasFixed = endFixed;
 
     this.cameraPosition = this.ball.globalPosition;
   }
