@@ -34,12 +34,17 @@ export class BallPlayer extends RigidBody2D {
   // Coulomb coefficient for ground contact. Friction that DRIVES the ball
   // (the steered spin gripping the ground) always applies in full, so aiming
   // kicks and crawls the ball at any speed. Friction that would BRAKE the
-  // ball fades with speed while aiming: full at crawl speeds ("aiming has
-  // real friction"), nearly gone when moving fast (reorienting mid-roll keeps
-  // the momentum).
+  // ball fades with speed while aiming: full grip at rest, decaying smoothly
+  // as the ball speeds up so it slides once genuinely fast (down a ramp)
+  // while still gripping firmly through low/medium speeds.
   static readonly ROLL_FRICTION = 0.8;
-  static readonly AIM_BRAKE_FULL_SPEED = 15; // px/s — full braking below this
-  static readonly AIM_BRAKE_FADE_SPEED = 60; // px/s — braking at its floor beyond this
+  // Braking friction follows an exponential falloff in speed:
+  //   brake = MIN + (1 - MIN) * exp(-speed / DECAY_SPEED)
+  // DECAY_SPEED is the e-folding speed — the higher it is, the longer friction
+  // keeps biting before it thins out. A smooth gradient the whole way, with no
+  // corner where grip suddenly vanishes (the old linear ramp cliffed to the
+  // floor by ~60 px/s, leaving almost no friction at medium speed).
+  static readonly AIM_BRAKE_DECAY_SPEED = 110; // px/s — brake ≈ 0.6 at 60, 0.5 at 80
   static readonly AIM_BRAKE_MIN = 0.05; // braking fraction remaining at high speed
 
   chain: Rope | null = null;
@@ -92,19 +97,15 @@ export class BallPlayer extends RigidBody2D {
     // top of it afterwards.
     const toAim = input.mouseWorldPosition.sub(this.globalPosition);
     const aiming = toAim.lengthSquared() > 1;
-    // Speed-faded braking while aiming; symmetric friction otherwise.
+    // Speed-faded braking while aiming; symmetric friction otherwise. Full grip
+    // at rest, decaying exponentially with speed toward the floor — grippy at
+    // low/medium speed, sliding once fast.
     let brake = 1;
     if (aiming) {
       const speed = this.linearVelocity.length();
-      const t = Math.min(
-        1,
-        Math.max(
-          0,
-          (speed - BallPlayer.AIM_BRAKE_FULL_SPEED) /
-            (BallPlayer.AIM_BRAKE_FADE_SPEED - BallPlayer.AIM_BRAKE_FULL_SPEED),
-        ),
-      );
-      brake = 1 - t * (1 - BallPlayer.AIM_BRAKE_MIN);
+      brake =
+        BallPlayer.AIM_BRAKE_MIN +
+        (1 - BallPlayer.AIM_BRAKE_MIN) * Math.exp(-speed / BallPlayer.AIM_BRAKE_DECAY_SPEED);
     }
     this.contactBrakeScale = brake;
     if (aiming) {
