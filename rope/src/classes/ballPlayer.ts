@@ -38,6 +38,14 @@ export class BallPlayer extends RigidBody2D {
   // as the ball speeds up so it slides once genuinely fast (down a ramp)
   // while still gripping firmly through low/medium speeds.
   static readonly ROLL_FRICTION = 1.8;
+  // Static-friction coefficient μ_s → breakaway angle atan(μ_s). 0.58 ≈ 30°:
+  // the ball holds on shallow/moderate slopes and only slides once steeper.
+  static readonly STATIC_FRICTION = 0.58;
+  // The mounting loop's collision radius, and the gap between the ball's rim
+  // and the loop ring's centre. Shared by the physics (a second collision
+  // circle) and the renderer so the solid loop matches the drawn one.
+  static readonly LOOP_RADIUS = 2 * PX;
+  static readonly LOOP_GAP = 1.5 * PX;
   // Density relative to the default sim material (computeMass ≈ water). The
   // ball is cast iron: ρ ≈ 7200 kg/m³ vs water 1000 → 7.2× the base mass.
   // Higher = heavier, more sluggish response to aim-kicks, chain tugs, impacts.
@@ -65,6 +73,12 @@ export class BallPlayer extends RigidBody2D {
     // match by name.
     this.name = "Player";
     this.setShape(circleShape(radius));
+    // The mounting loop is solid: a second collision circle fixed to the rim,
+    // so the ball can rest, tip, and catch edges on the loop as it rotates.
+    // (The flying chain hook still ignores it — BallHook skips bodies named
+    // "Player".) Mass/inertia stay those of the ball body: the loop is a light
+    // steel ring, a collision bump rather than a significant mass.
+    this.addShape(circleShape(BallPlayer.LOOP_RADIUS), this.loopLocalOffset);
     // Heavy ball: mass scaled up so aim-kicks, chain tugs, and collisions move
     // it less (F = ma) — sluggish, momentum-carrying feel. Gravity is
     // acceleration-based, so this does not change fall speed.
@@ -73,6 +87,9 @@ export class BallPlayer extends RigidBody2D {
     // Coulomb friction coefficient — ground contact gradually converts slide
     // into roll; capped by normal force, so no wall-climbing traction.
     this.contactFriction = BallPlayer.ROLL_FRICTION;
+    // Static friction (stiction): the ball stays put on slopes gentler than the
+    // breakaway angle atan(STATIC_FRICTION) and only slides/rolls once past it.
+    this.staticFriction = BallPlayer.STATIC_FRICTION;
     // Light damp: rolling resistance comes from the Coulomb model, not the
     // historical 0.98 contact damp.
     this.contactDamp = 0.99;
@@ -96,6 +113,17 @@ export class BallPlayer extends RigidBody2D {
     return new Vec2(0, -1).rotated(this.globalRotation);
   }
 
+  // The loop ring's centre in the ball's local frame (top of the ball at
+  // rotation 0). Mounts the loop's collision circle; rotates with the ball.
+  get loopLocalOffset(): Vec2 {
+    return new Vec2(0, -(this.radius + BallPlayer.LOOP_GAP));
+  }
+
+  // The loop ring's centre in world space (shared by physics and rendering).
+  get loopCenter(): Vec2 {
+    return this.globalPosition.add(this.loopDirection.mul(this.radius + BallPlayer.LOOP_GAP));
+  }
+
   resolveInput(input: FrameInput): void {
     // Aim steering: rotate the ball so the loop faces the aim point — also
     // with the chain out (winding it around the ball). An aim point at the
@@ -116,6 +144,11 @@ export class BallPlayer extends RigidBody2D {
         (1 - BallPlayer.AIM_BRAKE_MIN) * Math.exp(-speed / BallPlayer.AIM_BRAKE_DECAY_SPEED);
     }
     this.contactBrakeScale = brake;
+    // While aiming, the steering below drives rotation kinematically. Flag it so
+    // ground contacts stop pouring their friction impulse into angular velocity
+    // (which this line would overwrite anyway) and instead brake the linear
+    // slide — otherwise a ball balanced on its loop coasts sideways forever.
+    this.kinematicRotation = aiming;
     if (aiming) {
       const delta = wrapAngle(toAim.angle() - this.loopDirection.angle());
       this.angularVelocity = delta * BallPlayer.AIM_TURN_GAIN;

@@ -7,13 +7,19 @@ import type { Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
 // Live view of a body's collision shape (position/rotation track the body).
+// `localOffset` mounts the shape away from the body origin in the body's local
+// frame (rotates with the body); the default zero keeps single-shape bodies
+// centred, exactly as before.
 export class CollisionShape2D implements ShapeTransform {
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,
+    public localOffset: Vec2 = Vec2.ZERO,
   ) {}
   get globalPosition(): Vec2 {
-    return this.owner.globalPosition;
+    return this.owner.globalPosition.add(
+      this.localOffset.rotated(this.owner.globalRotation),
+    );
   }
   get globalRotation(): number {
     return this.owner.globalRotation;
@@ -29,7 +35,10 @@ export abstract class CollisionObject2D {
   globalRotation = 0;
   // Bitmask of layers this body occupies (default layer 1, matching the project).
   collisionLayer = 1;
-  collisionShape: CollisionShape2D | null = null;
+  // A body can carry more than one collision shape (a compound body). The first
+  // is the primary, centred shape that `getShape()` returns for the many call
+  // sites that assume a single shape; the rest are offset auxiliaries.
+  collisionShapes: CollisionShape2D[] = [];
   // Bodies excused from colliding with this one (Godot AddCollisionExceptionWith).
   readonly exceptions = new Set<number>();
   world: World | null = null;
@@ -39,18 +48,36 @@ export abstract class CollisionObject2D {
   fillColor: string | null = null;
   fillOpacity = 1;
 
+  // Reset the body to a single centred shape (Godot's usual one-CollisionShape
+  // node). Replaces any auxiliaries.
   setShape(shape: Shape): CollisionShape2D {
-    this.collisionShape = new CollisionShape2D(this, shape);
-    return this.collisionShape;
+    const s = new CollisionShape2D(this, shape);
+    this.collisionShapes = [s];
+    return s;
   }
 
+  // Mount an extra shape offset in the body's local frame (rotates with it).
+  addShape(shape: Shape, localOffset: Vec2): CollisionShape2D {
+    const s = new CollisionShape2D(this, shape, localOffset);
+    this.collisionShapes.push(s);
+    return s;
+  }
+
+  // The primary (centred) shape. Used by every query that assumes a single
+  // shape — the rope solver, mass/inertia, the character sweep's moving shape.
   getShape(): CollisionShape2D {
-    if (!this.collisionShape) throw new Error(`No shape found for body ${this.name}`);
-    return this.collisionShape;
+    const s = this.collisionShapes[0];
+    if (!s) throw new Error(`No shape found for body ${this.name}`);
+    return s;
+  }
+
+  // Every collision shape the body carries (primary first).
+  getShapes(): readonly CollisionShape2D[] {
+    return this.collisionShapes;
   }
 
   hasShape(): boolean {
-    return this.collisionShape !== null;
+    return this.collisionShapes.length > 0;
   }
 
   addCollisionExceptionWith(other: CollisionObject2D): void {
@@ -197,6 +224,27 @@ export class RigidBody2D extends PhysicsBody2D {
   // (kill inward velocity) and MUST stay the default — recorded replays predate
   // this field. 1 would be a perfect bounce.
   restitution = 0;
+  // When true, the body's rotation is driven externally (the ball & chain
+  // avatar's aim steering overwrites angularVelocity every frame), so contact
+  // resolution treats it as rotationally locked (infinite rotational inertia):
+  // no contact feeds angular velocity — that would be discarded next frame, and
+  // the wasted impulse is what let a steered ball slide instead of braking.
+  // Default false keeps every other body — and recorded replays — unchanged.
+  kinematicRotation = false;
+  // Static-friction (stiction) coefficient μ_s. A nearly-stationary body on a
+  // slope whose along-surface gravity is within μ_s × the normal force is
+  // pinned (tangential velocity and spin zeroed) instead of rolling/creeping
+  // off — it breaks loose only past the breakaway angle atan(μ_s). This is a
+  // deliberately non-physical grip (a real point-contact ball rolls down any
+  // slope). 0 disables it and MUST stay the default: recorded replays predate
+  // this field.
+  staticFriction = 0;
+  // World-space anchor held while static friction has the body gripped: its
+  // along-surface position is pinned here so gravity cannot ratchet it downhill
+  // one integration step at a time. Null when not gripped; cleared the first
+  // frame the body has no sticking contact (so it never snaps back after
+  // leaving the ground).
+  stickAnchor: Vec2 | null = null;
 
   override get isMobile(): boolean {
     return true;

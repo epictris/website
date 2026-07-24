@@ -55,6 +55,20 @@ const SKIN = 0.0008;
 // Scale on the impulse a pushing character imparts to a rigid circle.
 const CHARACTER_PUSH_FACTOR = 0.5;
 
+// Static friction only grabs a body moving slower than this (m/s) and spinning
+// slower than this (rad/s); a faster body slides/rolls under kinetic friction
+// until it slows into the grip. The spin gate also lets a steered ball roll:
+// while the aim actively sweeps the ball (high ω) it rolls, and it only grips
+// once the aim settles (ω → 0).
+const STICK_SPEED = 0.3;
+const STICK_SPIN = 0.5;
+// Static-friction slip threshold (m/s): a steered contact grips (no-slip roll)
+// only while the relative velocity between the ball's contact point and the
+// surface stays below this. Rotate/move slowly and the contact sticks — precise
+// placement; rotate or travel fast and the slip exceeds it, so the contact
+// falls through to the slippery, Coulomb-capped kinetic friction instead.
+const SLIP_STICK = 0.15;
+
 export interface RayResult {
   collider: PhysicsBody2D;
   position: Vec2;
@@ -307,74 +321,227 @@ export class World {
   private resolveDynamicCollisions(dt: number): void {
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;
-      const s = body.getShape().shape;
       // Rects/polygons are never physics-driven (game-design.md); circles are
-      // the only dynamic bodies.
-      if (s.kind !== "circle") continue;
-      const r = s.radius;
-      for (const other of this.bodies) {
-        if (other === body || other.removed || !other.hasShape()) continue;
-        if (body.exceptions.has(other.id)) continue;
-        if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
-        const ov = circleOverlap(body.globalPosition, r, other.getShape());
-        if (!ov) continue;
-        if (other instanceof StaticBody2D) {
-          // Push fully out of static geometry and kill inward velocity,
-          // relative to the surface (scripted movers can bat circles).
-          body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
-          const contactPoint = body.globalPosition.sub(ov.normal.mul(r));
-          const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
-          const vn = rel.dot(ov.normal);
-          let vnKilled = 0;
-          if (vn < 0) {
-            // Kill inward velocity and reflect a restitution fraction back out.
-            // restitution = 0 (default) removes exactly vn — the historical
-            // fully-inelastic path, bit-identical for recorded replays.
-            const bounce = 1 + body.restitution;
-            body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn * bounce));
-            vnKilled = -vn * bounce;
+      // the only dynamic bodies. Resolve every circle the body carries — a
+      // compound body (the ball & chain avatar) adds an offset rim circle for
+      // its loop. The primary circle is centred and keeps the historical
+      // resolution bit-for-bit; offset circles additionally torque the body.
+      let stuck = false;
+      for (const bshape of body.getShapes()) {
+        if (bshape.shape.kind !== "circle") continue;
+        const r = bshape.shape.radius;
+        // Local-frame offset from the body centre to this circle's centre. The
+        // primary shape is centred, so this is exactly zero (position cancels)
+        // and the resolution below reduces to the historical centred path.
+        const offset = bshape.globalPosition.sub(body.globalPosition);
+        for (const other of this.bodies) {
+          if (other === body || other.removed || !other.hasShape()) continue;
+          if (body.exceptions.has(other.id)) continue;
+          if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
+          // A compound target exposes each of its shapes (e.g. the ball's loop
+          // blocks other dynamic bodies too).
+          for (const oshape of other.getShapes()) {
+            stuck = this.resolveRigidCircle(body, offset, r, other, oshape, dt) || stuck;
           }
-          // Tangential contact friction (opt-in per body): drive the relative
-          // surface velocity at the contact point toward zero through the
-          // coupled linear/angular effective mass, so a sliding circle spins
-          // up into a roll. Coulomb-capped: the impulse cannot exceed
-          // contactFriction (μ) times this frame's normal impulse — estimated
-          // from the normal velocity just killed plus gravity's bite into the
-          // surface. A vertical wall gets no gravity bite and thus (once
-          // resting) no traction, so a spinning ball cannot climb it.
-          // contactFriction = 0 skips this — the historical path.
-          if (body.contactFriction > 0) {
-            const rvec = ov.normal.mul(-r); // centre → contact point
-            const tangent = new Vec2(-ov.normal.y, ov.normal.x);
-            const surfSpeed = body.linearVelocity
-              .add(new Vec2(-rvec.y, rvec.x).mul(body.angularVelocity))
-              .sub(other.velocityAtPoint(contactPoint))
-              .dot(tangent);
-            const rCrossT = rvec.cross(tangent);
-            const invEff = body.inverseMass + rCrossT * rCrossT * body.inverseInertia;
-            if (invEff > 1e-9) {
-              const gravityBite = Math.max(
-                0,
-                GRAVITY.mul(body.gravityScale * dt).dot(ov.normal.mul(-1)),
-              );
-              const maxImpulse = body.contactFriction * body.mass * (vnKilled + gravityBite);
-              let j = -surfSpeed / invEff; // full-stick impulse
-              j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
-              // Braking impulses (opposing current travel) are scaled by
-              // contactBrakeScale; driving ones always apply in full.
-              if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
-              body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
-              body.angularVelocity += rCrossT * j * body.inverseInertia;
-            }
-          }
-          body.linearVelocity = body.linearVelocity.mul(body.contactDamp); // light friction
-        } else {
-          // Rigid-rigid: split the push, damp approach velocity (approximate).
-          body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth * 0.5));
-          const rel = body.linearVelocity.dot(ov.normal);
-          if (rel < 0) body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(rel * 0.5));
         }
       }
+      // Released (or never gripped) this frame: drop the anchor so it can move
+      // freely and never snaps back to a stale spot after leaving the ground.
+      if (!stuck) body.stickAnchor = null;
+    }
+  }
+
+  // Resolve one of a rigidbody's circles (centred at `body.globalPosition +
+  // offset`, radius `r`) against a single target shape. A centred circle
+  // (offset zero) reproduces the legacy resolution exactly; an offset circle
+  // adds a torque term so an off-centre contact spins the body.
+  private resolveRigidCircle(
+    body: RigidBody2D,
+    offset: Vec2,
+    r: number,
+    other: PhysicsBody2D,
+    oshape: ShapeTransform,
+    dt: number,
+  ): boolean {
+    const center = body.globalPosition.add(offset);
+    const ov = circleOverlap(center, r, oshape);
+    if (!ov) return false;
+    // The primary shape's offset is exactly (0,0), so this gate (not a
+    // floating-point cross-product test) keeps the centred circle on the
+    // legacy torque-free path, bit-for-bit with recorded replays.
+    const centered = offset.x === 0 && offset.y === 0;
+    if (other instanceof StaticBody2D) {
+      // Push fully out of static geometry and kill inward velocity, relative to
+      // the surface (scripted movers can bat circles).
+      body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
+      // Body centre → contact point. For the centred primary circle this is
+      // exactly -r·n (offset is zero), so the torque lever below vanishes.
+      const rContact = offset.add(ov.normal.mul(-r));
+      const contactPoint = body.globalPosition.add(rContact);
+      const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
+      const vn = rel.dot(ov.normal);
+      // Rotation may be kinematically driven (aim steering overwrites the ball's
+      // angular velocity every frame); then contacts must not feed angular
+      // velocity — it would be discarded anyway, and the wasted impulse is what
+      // let the ball slide instead of braking. Treat it as rotationally locked:
+      // infinite rotational inertia in the contact solve, so the same friction
+      // that spun the ball up instead brakes the linear slide.
+      const invI = body.kinematicRotation ? 0 : body.inverseInertia;
+      let vnKilled = 0;
+      if (vn < 0) {
+        // Kill inward velocity and reflect a restitution fraction back out.
+        // restitution = 0 (default) removes exactly vn — the historical
+        // fully-inelastic path, bit-identical for recorded replays.
+        const bounce = 1 + body.restitution;
+        if (centered || body.kinematicRotation) {
+          // No torque (centred contact, or rotation externally driven): direct
+          // velocity change, exactly the legacy centred path.
+          body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(vn * bounce));
+          vnKilled = -vn * bounce;
+        } else {
+          // Off-centre contact: normal impulse through the coupled
+          // linear/angular effective mass, so the loop can tip the ball.
+          const rCrossN = rContact.cross(ov.normal);
+          const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
+          const jn = invEffN > 1e-9 ? (-vn * bounce) / invEffN : 0;
+          body.linearVelocity = body.linearVelocity.add(ov.normal.mul(jn * body.inverseMass));
+          body.angularVelocity += rCrossN * jn * invI;
+          vnKilled = jn * body.inverseMass; // equivalent normal Δv for the friction cap
+        }
+      }
+      // Steered (aiming) contact: the aim steering drives rotation
+      // kinematically, with full authority — a control input, not a
+      // friction-limited force. Static/kinetic split on the contact slip: while
+      // the ball's contact point moves slowly relative to the surface (slow,
+      // careful rotation) grip it and enforce exact roll-without-slip — the
+      // centre orbits the contact so the ball rolls/pivots over it and the
+      // off-centre loop never scrubs. Rotate or travel fast and the slip exceeds
+      // the threshold, so it falls through to the slippery Coulomb kinetic
+      // friction below instead of stopping dead on contact.
+      if (body.kinematicRotation) {
+        const surfV = other.velocityAtPoint(contactPoint);
+        const wCrossR = new Vec2(
+          -body.angularVelocity * rContact.y,
+          body.angularVelocity * rContact.x,
+        );
+        // Pre-solve slip: relative velocity between the contact points, tangent
+        // to the surface.
+        const relV = body.linearVelocity.add(wCrossR).sub(surfV);
+        const slipTan = relV.sub(ov.normal.mul(relV.dot(ov.normal)));
+        const g = GRAVITY.mul(body.gravityScale);
+        const gN = -g.dot(ov.normal);
+        const withinBudget =
+          body.staticFriction > 0 &&
+          !other.isMobile &&
+          gN > 1e-6 &&
+          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= body.staticFriction * gN;
+        if (slipTan.length() < SLIP_STICK && withinBudget) {
+          // Grip: drive the centre so the contact is stationary,
+          // v_centre = surfaceVel − ω × r_contact.
+          const desired = surfV.sub(wCrossR);
+          const vnKeep = body.linearVelocity.dot(ov.normal);
+          const rollTan = desired.sub(ov.normal.mul(desired.dot(ov.normal)));
+          body.linearVelocity = ov.normal.mul(vnKeep).add(rollTan);
+          // Kill gravity creep at any spin: integration slides the ball one step
+          // of gravity downhill each frame before this solve (worse the steeper
+          // the slope); undo it by pinning the along-surface position to an
+          // anchor that ADVANCES by the intended roll (rollTan·dt). The steered
+          // roll is preserved exactly while the gravity drift on top is removed;
+          // at ω = 0 the anchor is static and the ball simply holds.
+          if (body.stickAnchor === null) {
+            body.stickAnchor = body.globalPosition;
+          } else {
+            body.stickAnchor = body.stickAnchor.add(rollTan.mul(dt));
+          }
+          const d = body.globalPosition.sub(body.stickAnchor);
+          const dTan = d.sub(ov.normal.mul(d.dot(ov.normal)));
+          body.globalPosition = body.globalPosition.sub(dTan);
+          return true;
+        }
+        // Slipping: release the grip and fall through to kinetic friction.
+        body.stickAnchor = null;
+      }
+      // Tangential contact friction (opt-in per body): drive the relative
+      // surface velocity at the contact point toward zero through the coupled
+      // linear/angular effective mass, so a sliding circle spins up into a
+      // roll. Coulomb-capped: the impulse cannot exceed contactFriction (μ)
+      // times this frame's normal impulse — estimated from the normal velocity
+      // just killed plus gravity's bite into the surface. A vertical wall gets
+      // no gravity bite and thus (once resting) no traction, so a spinning ball
+      // cannot climb it. contactFriction = 0 skips this — the historical path.
+      // Every circle the body carries shares its friction and restitution, so an
+      // offset auxiliary (the ball & chain avatar's loop) grips exactly like the
+      // main tread.
+      //
+      // Static friction (stiction): a slow body on a slope gentler than its
+      // breakaway angle atan(μ_s) is pinned rather than left to roll/creep off.
+      // Compare the along-surface gravity to μ_s × the normal force; if it is
+      // within budget and the body is nearly stopped, cancel its tangential
+      // velocity and spin, pin its along-surface position, and skip kinetic
+      // friction. Steered (aiming) contacts are handled above (grip or slip) and
+      // must not enter here — this zeroes spin, which would fight the steering.
+      let stuck = false;
+      if (!body.kinematicRotation && body.staticFriction > 0 && !other.isMobile) {
+        const g = GRAVITY.mul(body.gravityScale);
+        const gN = -g.dot(ov.normal); // normal gravity pull into the surface
+        const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
+        if (
+          gN > 1e-6 &&
+          rel.length() < STICK_SPEED &&
+          Math.abs(body.angularVelocity) < STICK_SPIN &&
+          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= body.staticFriction * gN
+        ) {
+          const otherVel = other.velocityAtPoint(contactPoint);
+          const vn = body.linearVelocity.dot(ov.normal);
+          // Keep only the normal component; match the surface's tangential
+          // velocity (zero for a static floor). Spin stops too.
+          const otherTan = otherVel.sub(ov.normal.mul(otherVel.dot(ov.normal)));
+          body.linearVelocity = ov.normal.mul(vn).add(otherTan);
+          body.angularVelocity = 0;
+          // Pin the along-surface position to the grip anchor. Without this the
+          // body still slides one integration step of gravity each frame (move
+          // then freeze), creeping downhill; here that drift is undone while the
+          // normal component stays free to settle onto the surface.
+          if (body.stickAnchor === null) {
+            body.stickAnchor = body.globalPosition;
+          } else {
+            const d = body.globalPosition.sub(body.stickAnchor);
+            body.globalPosition = body.stickAnchor.add(ov.normal.mul(d.dot(ov.normal)));
+          }
+          stuck = true;
+        }
+      }
+      if (!stuck && body.contactFriction > 0) {
+        const tangent = new Vec2(-ov.normal.y, ov.normal.x);
+        const surfSpeed = body.linearVelocity
+          .add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity))
+          .sub(other.velocityAtPoint(contactPoint))
+          .dot(tangent);
+        const rCrossT = rContact.cross(tangent);
+        const invEff = body.inverseMass + rCrossT * rCrossT * invI;
+        if (invEff > 1e-9) {
+          const gravityBite = Math.max(
+            0,
+            GRAVITY.mul(body.gravityScale * dt).dot(ov.normal.mul(-1)),
+          );
+          const maxImpulse = body.contactFriction * body.mass * (vnKilled + gravityBite);
+          let j = -surfSpeed / invEff; // full-stick impulse
+          j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
+          // Braking impulses (opposing current travel) are scaled by
+          // contactBrakeScale; driving ones always apply in full.
+          if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
+          body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
+          body.angularVelocity += rCrossT * j * invI;
+        }
+      }
+      body.linearVelocity = body.linearVelocity.mul(body.contactDamp); // light friction
+      return stuck;
+    } else {
+      // Rigid-rigid: split the push, damp approach velocity (approximate).
+      body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth * 0.5));
+      const rel = body.linearVelocity.dot(ov.normal);
+      if (rel < 0) body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(rel * 0.5));
+      return false;
     }
   }
 

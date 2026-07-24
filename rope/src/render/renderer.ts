@@ -404,11 +404,11 @@ export function renderBall(
 
   // Steel mounting loop: material point on the rim, rotating with the ball
   // (its aim direction when no chain is out). Drawn on top of the body.
-  const loop = ball.globalPosition.add(ball.loopDirection.mul(ball.radius + 1.5 * PX));
+  const loop = ball.loopCenter;
   ctx.strokeStyle = CHAIN;
   ctx.lineWidth = PX;
   ctx.beginPath();
-  ctx.arc(loop.x, loop.y, 2 * PX, 0, Math.PI * 2);
+  ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.restore();
