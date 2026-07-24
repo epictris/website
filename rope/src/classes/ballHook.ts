@@ -8,7 +8,7 @@
 import { ImpermeableBody, RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
 import { PX } from "../engine/units";
 import { circleShape } from "../engine/shapes";
-import { circleOverlap } from "../engine/collision";
+import { circleOverlap, sweepCircle } from "../engine/collision";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
@@ -42,34 +42,58 @@ export class BallHook extends RigidBody2D {
     this.world?.remove(this);
   }
 
-  // Attach check, run before World.integrate moves the body: a swept ray
-  // along the upcoming motion (anchors fast flight at the surface instead of
-  // bouncing off it), then an overlap probe for slow or resting contact.
+  // Attach check, run before World.integrate moves the body: a swept *circle*
+  // (radius-aware) along the upcoming motion, then an overlap probe for slow or
+  // resting contact. Sweeping the circle rather than a centre-ray means a hook
+  // whose rim clips a surface — a graze the bare centre would pass beside —
+  // still registers as first contact, so it anchors to a static (or bounces off
+  // impermeable) instead of slipping into World.integrate's discrete collision,
+  // which merely deflects it (a stray bounce, and a max-length hook then whips
+  // off). The contact is exact, so the hook never anchors to geometry it isn't
+  // touching.
   physicsStep(dt: number): void {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
-    const to = from.add(this.linearVelocity.mul(dt));
     const shape = this.getShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
-    const hit = this.world.intersectRay(from, to, { collisionMask: 1, exclude: [this] });
-    if (hit && hit.collider.name !== "Player") {
-      // Impermeable bodies aren't attach targets — the hook bounces off them.
-      // Reflect here on the swept ray rather than leaning on World.integrate's
-      // discrete depenetration: a fast hook would fully cross a thin wall in one
-      // step, be found on the far side with no overlap, and tunnel through.
-      if (hit.collider instanceof ImpermeableBody) {
-        this.bounce(hit.normal, hit.position.add(hit.normal.mul(r)));
+    const motion = this.linearVelocity.mul(dt);
+
+    let best: { t: number; normal: Vec2; collider: PhysicsBody2D } | null = null;
+    for (const body of this.world.bodies) {
+      if (body.removed || body === this || body.name === "Player") continue;
+      if (this.exceptions.has(body.id)) continue;
+      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
+      if (!body.hasShape()) continue;
+      const sweep = sweepCircle(from, motion, r, body.getShape());
+      if (sweep && sweep.t <= 1 && (!best || sweep.t < best.t)) {
+        best = { t: sweep.t, normal: sweep.normal, collider: body };
+      }
+    }
+    if (best) {
+      const contactCenter = from.add(motion.mul(best.t));
+      if (best.collider instanceof ImpermeableBody) {
+        this.bounce(best.normal, contactCenter);
         return;
       }
-      this.attach(hit.collider, hit.position);
+      // Anchor on the surface itself: one radius from the contact-frame centre
+      // along the (inward) contact normal.
+      this.attach(best.collider, contactCenter.sub(best.normal.mul(r)));
       return;
     }
+    this.probeContact();
+  }
+
+  // Radius-aware overlap probe for slow / resting contact the sweep (which needs
+  // motion) doesn't cover: attach to a static/rigid surface, bounce off
+  // impermeable. Runs at the end of physicsStep.
+  probeContact(): void {
+    if (!this.armed || !this.world) return;
+    const from = this.globalPosition;
+    const shape = this.getShape().shape;
+    const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const probeR = r + 0.5 * PX;
     for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
-      // Impermeable contact the swept centre-ray missed — a hook grazing the
-      // face with only its rim (centre passing beside the wall). Bounce off it
-      // here too, so the deploy still stops instead of skimming past.
       if (body instanceof ImpermeableBody) {
         const ov = circleOverlap(from, probeR, body.getShape());
         if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));

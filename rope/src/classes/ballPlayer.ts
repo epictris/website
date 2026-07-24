@@ -263,45 +263,21 @@ export class BallPlayer extends RigidBody2D {
         this.releaseChain();
         return;
       }
-      const target = Math.min(len, BallPlayer.CHAIN_MAX_LENGTH);
-      // A dangling tip anchors a few px past target (it was swinging outward and
-      // swept slightly beyond max before the solver caught it). Absorb that
-      // overshoot here, exactly as deployTip does for a mid-air freeze — else
-      // the length solver dumps it into the ball in one frame the instant the
-      // anchor goes rigid, a hard forward lurch (found via session-922f).
-      this.settleAnchorOvershoot(target);
-      this.chain.maxRopeLength = target;
+      // Anchor at the length the chain actually reached, NOT clamped to
+      // CHAIN_MAX_LENGTH. Two things fall out of this: the constraint is already
+      // satisfied on the anchoring frame (path length == maxRopeLength), so the
+      // solver injects no correction — no one-frame lurch/whip/launch into the
+      // ball; and the anchor stays exactly where the hook hit the surface,
+      // instead of being dragged inward off the geometry to hit a shorter target
+      // (which floated the anchor in mid-air — session-601f). The small overshoot
+      // past CHAIN_MAX_LENGTH is bounded by ATTACH_SNAP_TOLERANCE above.
+      this.chain.maxRopeLength = len;
     });
   }
 
-  // Pull the freshly-set anchor in along the final span so the chain path is
-  // exactly `targetLength`, and strip the ball's outward radial velocity — the
-  // anchor counterpart to deployTip's overshoot handling. Keeping the ball put
-  // (only the anchor point moves) means the constraint is already satisfied
-  // when it goes rigid, so no one-frame correction is dumped into the ball.
-  private settleAnchorOvershoot(targetLength: number): void {
-    const chain = this.chain;
-    if (!chain) return;
-    const overshoot = chain.getCurrentLength() - targetLength;
-    if (overshoot <= 0) return;
-
-    const end = chain.end.contact;
-    const lastWrap = chain.wraps[chain.wraps.length - 1];
-    const prevPos = lastWrap
-      ? lastWrap.contact.globalPosition
-      : chain.start.contact.globalPosition;
-    const anchorPos = end.globalPosition;
-    const pulled = anchorPos.add(anchorPos.directionTo(prevPos).mul(overshoot));
-    chain.end = new RopeAttachment(new RopeContact(end.obj, pulled.sub(end.obj.globalPosition)));
-
-    // Remove the component of the ball's velocity that points away from the
-    // chain (it would stretch the first span past the length just set).
-    const firstWrap = chain.wraps[0];
-    const nextPos = firstWrap ? firstWrap.contact.globalPosition : chain.end.contact.globalPosition;
-    const outward = nextPos.directionTo(this.globalPosition);
-    const vr = this.linearVelocity.dot(outward);
-    if (vr > 0) this.linearVelocity = this.linearVelocity.sub(outward.mul(vr));
-  }
+  // (settleAnchorOvershoot removed: anchoring at the as-reached length leaves the
+  // constraint satisfied, so there is no overshoot to absorb and no anchor to
+  // drag off the surface.)
 
   releaseChain(): void {
     if (this.hookInFlight) this.hookInFlight.world?.remove(this.hookInFlight);
