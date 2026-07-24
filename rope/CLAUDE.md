@@ -139,6 +139,10 @@ bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run 
 bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
 bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input table
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
+bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG snapshot of one frame
+bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
+bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
+scripts/abtest.sh session.json 979 <oldRef>                             # A/B the current tree vs oldRef from the fork frame
 ```
 
 Playtest scripts are frame-indexed held-button ranges + mouse aim with asserts
@@ -177,9 +181,33 @@ launches, mover misbehavior):
    wrong-side, below-player, behind-wall, out-of-reach, seam). Grep it: opposite
    normals from the same body in one frame, surface classifications flipping,
    velocity resetting to the collider's `cvel` every frame.
+4b. **See it.** For *geometric* bugs (rope/chain clipping through geometry,
+   anchoring in mid-air, a hook on the wrong side of a wall) the digest table is
+   blind — it only carries the avatar's pos/vel/rope-length, not the chain wrap
+   path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
+   whole scene at frame N (bodies, impermeable = dashed steel border, chain wrap
+   path + wrap-node markers, avatar); convert with `magick f.svg f.png` and look.
+   `cli chainpath bundle.json --from A --to B` prints the wrap-node polyline per
+   frame in px (node count > 2 means the chain caught a corner). Reach for these
+   the moment a bug is about position/shape rather than a stuck/velocity number.
 5. **Verify.** `cli bundles` green + all playtests + `bun run replay selftest`
    (must stay bit-identical — static-path behavior may never change; mobile
-   behavior is gated behind `isMobile`/`isRotating` branches).
+   behavior is gated behind `isMobile`/`isRotating` branches). To confirm a fix
+   actually changed the felt behaviour — which plain replay *cannot* show once
+   the fix diverges the recorded tail (see Bundle semantics) — use the **A/B
+   fork**: `scripts/abtest.sh bundle.json <forkFrame> <oldRef>` replays the
+   bundle to `forkFrame` under both the current tree and `oldRef`, then traces
+   both past it and diffs. Because the sim is deterministic and a fix only bites
+   at the issue frame, both sides reproduce the *same* pre-issue state, so the
+   diff (and the two before/after SVGs) is exactly the fix's effect. Pick
+   `oldRef` = the commit just before the fix, and `forkFrame` = a frame where old
+   and new still agree, just before the issue (if they already diverge there, the
+   divergence started earlier — walk `forkFrame` back until the pre-fork lines
+   match). The script runs old *physics* with new *tooling* (it copies the
+   current `src/tools` + `src/sim` into the old worktree), so `cli fork` need not
+   exist in `oldRef`; this holds only while the tooling touches stable physics
+   interfaces (`physicsProcess`, body/rope fields) — if a change alters those,
+   run the two `cli fork`s by hand.
 
 Key invariant — the **`input-frozen` stuck detector** (`src/sim/trace.ts`):
 held direction for 45 frames with a mobile body nearby must produce ≥0.25 m of
@@ -192,9 +220,16 @@ static wall is legit). Runs inside every playtest, replay, and continue.
 Bundle semantics: digest divergence in `cli replay`/`cli bundles` is
 **informational, not failure** — a bundle recorded before a physics fix
 legitimately diverges from the frame the fix first bites; invariants are the
-pass/fail signal. Consequence: after early divergence, the re-simulated tail
-no longer matches what the user experienced — diagnose stuck windows via the
-detector's frame numbers on the *current* simulation, not the recorded tail.
+pass/fail signal.
+`replay` distinguishes the two kinds it can see: `bit-identical behaviour (…
+float noise)` is a settled body jittering in the last ULP (ignore it), whereas
+`drifted @fN (maxDrift=…px)` or `behaviour forked @fN (different state branch)`
+is a real path difference — `maxDrift` in the `bundles` line tells a faithful
+bundle (≈0px) from a stale one (hundreds of px) at a glance.
+Consequence: after a real divergence the re-simulated tail no longer matches
+what the user experienced — diagnose via the detector's frame numbers on the
+*current* simulation, not the recorded tail, and to check a fix landed at the
+felt frame use the **A/B fork** (step 5) rather than reading the diverged tail.
 
 Past root causes worth suspecting again (all found via this loop): absolute
 velocity zeroed instead of surface-relative (PROJECT/CEILING cases), locomotion

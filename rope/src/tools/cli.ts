@@ -6,6 +6,7 @@
 //                                      [--frames M] [--every K] [--trace out.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
+//   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
 //   bun run src/tools/cli.ts selftest
 //
@@ -22,6 +23,7 @@ import { runLedgeMatrix } from "../sim/ledgeMatrix";
 import { replayRecording, levelFromRecording } from "../sim/replay";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
+import { PIXELS_PER_METER } from "../engine/units";
 import {
   ACTIONS,
   checkInvariants,
@@ -220,6 +222,61 @@ function cmdRender(file: string, o: Record<string, string>): void {
   process.exit(0);
 }
 
+// Compact one-line state of the avatar+chain at the current frame, for the A/B
+// fork trace. Ball: deploy phase (HOOK flying / tip dangling / anch anchored) +
+// chain end body + path length + ball speed. Grapple: player state + rope length.
+function forkStateLine(level: Level | BallLevel): string {
+  if (level instanceof BallLevel) {
+    const b = level.ball;
+    const c = b.chain;
+    const phase = b.hookInFlight ? "HOOK" : b.chainTip ? "tip " : c ? "anch" : "----";
+    const end = c ? c.end.contact.obj.constructor.name.replace("Body2D", "") : "-";
+    const len = c ? (c.getCurrentLength() * PIXELS_PER_METER).toFixed(0) : "-";
+    const spd = (b.linearVelocity.length() * PIXELS_PER_METER).toFixed(0);
+    return `${phase} end=${end.padEnd(8)} len=${len.padStart(4)} ballSpd=${spd.padStart(5)}px/s`;
+  }
+  const p = level.player;
+  const rope = p.rope ? (p.rope.getCurrentLength() * PIXELS_PER_METER).toFixed(0) : "-";
+  const spd = (p.velocity.length() * PIXELS_PER_METER).toFixed(0);
+  return `${p.state.constructor.name.padEnd(16)} rope=${rope.padStart(4)} spd=${spd.padStart(5)}px/s`;
+}
+
+// A/B fork: re-simulate a bundle to --frame (the frame just before an issue),
+// then continue on the recorded inputs and print a compact state trace across
+// the window, plus before/after SVGs. Because the sim is deterministic and a fix
+// only bites at the issue frame, running this on two git checkouts (old ref vs
+// current working tree — see scripts/abtest.sh) reproduces the SAME pre-issue
+// state in both, so the diff of the two traces IS the fix's effect. Sidesteps
+// the "recorded tail diverges after the fix" problem that makes plain replay
+// useless for confirming a change landed.
+function cmdFork(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const total = rec.frames.length;
+  const forkAt = Math.min(Number(o.frame ?? total), total);
+  const window = Number(o.frames ?? 24);
+  const pre = Math.max(0, forkAt - 3);
+  const post = Math.min(total, forkAt + window);
+  const outPrefix = o.out ?? `${file.replace(/\.json$/, "")}.fork`;
+
+  console.log(`[fork] ${file}${rec.git ? ` recorded@${rec.git}` : ""} — forkAt=f${forkAt} window=${window}`);
+  for (let i = 0; i < post; i++) {
+    level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+    const n = i + 1;
+    if (n === forkAt) {
+      writeFileSync(`${outPrefix}.before.svg`, renderFrameSVG(level));
+    }
+    if (n >= pre) {
+      const mark = n === forkAt ? " ◀ fork" : "";
+      console.log(`  f${String(n).padStart(4)} ${forkStateLine(level)}${mark}`);
+    }
+  }
+  writeFileSync(`${outPrefix}.after.svg`, renderFrameSVG(level));
+  console.log(`  SVGs: ${outPrefix}.before.svg  ${outPrefix}.after.svg`);
+  process.exit(0);
+}
+
 // Print the chain/rope wrap path (node polyline) per frame — the geometry the
 // digest table omits. Node count > 2 means the chain has caught corners.
 function cmdChainpath(file: string, o: Record<string, string>): void {
@@ -330,6 +387,10 @@ switch (cmd) {
     if (!arg) fail("usage: cli chainpath <bundle.json> [--from A] [--to B] [--every N]");
     cmdChainpath(arg, opts(rest));
     break;
+  case "fork":
+    if (!arg) fail("usage: cli fork <bundle.json> --frame N [--frames M] [--out prefix]");
+    cmdFork(arg, opts(rest));
+    break;
   case "bundles":
     cmdBundles(arg ?? "playtests/bundles");
     break;
@@ -340,7 +401,7 @@ switch (cmd) {
     cmdLedges();
     break;
   default:
-    fail("usage: cli <play|replay|dump|continue|render|chainpath|bundles|selftest|ledges> [file] [options]");
+    fail("usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges> [file] [options]");
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
