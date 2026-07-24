@@ -6,6 +6,7 @@ import type { ShapeTransform } from "../engine/shapes";
 import {
   AnimatableBody2D,
   Area2D,
+  ImpermeableBody,
   RigidBody2D,
   StaticBody2D,
   type CollisionObject2D,
@@ -43,6 +44,7 @@ const CHAIN_DARK = "#4e555e"; // shadowed / narrow link
 const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
+const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 
 function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
   ctx.beginPath();
@@ -95,8 +97,25 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.fill();
     return;
   }
-  // Authored level geometry (static/rigid/killzone/impermeable): fill in the
-  // body's colour + opacity, border fully opaque in the same colour.
+  // Impermeable (hook-proof) surfaces: authored fill, but a dashed steel border
+  // instead of the plain one so they read as chain-repelling — it's clear why
+  // the hook bounces off them rather than anchoring.
+  if (body instanceof ImpermeableBody) {
+    pathShape(ctx, t);
+    if (body.fillColor) {
+      ctx.fillStyle = hexToRgba(body.fillColor, body.fillOpacity);
+      ctx.fill();
+    }
+    ctx.strokeStyle = IMPERMEABLE_EDGE;
+    ctx.lineWidth = 2 * PX;
+    ctx.setLineDash([5 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
+
+  // Authored level geometry (static/rigid/killzone): fill in the body's colour
+  // + opacity, border fully opaque in the same colour.
   if (body.fillColor) {
     pathShape(ctx, t);
     ctx.fillStyle = hexToRgba(body.fillColor, body.fillOpacity);

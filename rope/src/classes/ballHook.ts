@@ -8,11 +8,13 @@
 import { ImpermeableBody, RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
 import { PX } from "../engine/units";
 import { circleShape } from "../engine/shapes";
+import { circleOverlap } from "../engine/collision";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
 export class BallHook extends RigidBody2D {
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
+  private bounceCallbacks: Array<() => void> = [];
   private armed = true;
 
   constructor() {
@@ -28,6 +30,10 @@ export class BallHook extends RigidBody2D {
 
   registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
     this.attachmentCallbacks.push(onAttach);
+  }
+
+  registerBounceCallback(onBounce: () => void): void {
+    this.bounceCallbacks.push(onBounce);
   }
 
   private attach(body: PhysicsBody2D, point: Vec2): void {
@@ -52,29 +58,38 @@ export class BallHook extends RigidBody2D {
       // discrete depenetration: a fast hook would fully cross a thin wall in one
       // step, be found on the far side with no overlap, and tunnel through.
       if (hit.collider instanceof ImpermeableBody) {
-        this.bounce(hit.position, hit.normal, r);
+        this.bounce(hit.normal, hit.position.add(hit.normal.mul(r)));
         return;
       }
       this.attach(hit.collider, hit.position);
       return;
     }
-    for (const body of this.world.intersectCircle(from, r + 0.5 * PX)) {
+    const probeR = r + 0.5 * PX;
+    for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
-      if (body instanceof ImpermeableBody) continue;
+      // Impermeable contact the swept centre-ray missed — a hook grazing the
+      // face with only its rim (centre passing beside the wall). Bounce off it
+      // here too, so the deploy still stops instead of skimming past.
+      if (body instanceof ImpermeableBody) {
+        const ov = circleOverlap(from, probeR, body.getShape());
+        if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
+        return;
+      }
       if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
       this.attach(body, from);
       return;
     }
   }
 
-  // Reflect the hook's velocity about the surface normal and seat it on the
-  // surface (radius off, along the normal) so the following World.integrate step
-  // carries it away instead of back into the wall.
-  private bounce(point: Vec2, normal: Vec2, radius: number): void {
+  // Reflect the hook's velocity about the surface normal (outward) and seat it
+  // at `seatPos` so the following World.integrate step carries it away rather
+  // than back into the wall. Notifies bounce listeners (they stop the deploy).
+  private bounce(normal: Vec2, seatPos: Vec2): void {
     const vn = this.linearVelocity.dot(normal);
     if (vn < 0) {
       this.linearVelocity = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
     }
-    this.globalPosition = point.add(normal.mul(radius));
+    this.globalPosition = seatPos;
+    for (const cb of this.bounceCallbacks) cb();
   }
 }

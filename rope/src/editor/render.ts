@@ -3,13 +3,14 @@
 // truth for handle positions, shared by drawing and hit-testing.
 
 import { Vec2 } from "../engine/vec2";
-import { PIXELS_PER_METER } from "../engine/units";
+import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { hexToRgba } from "../render/color";
 import { toWorld, type EdBody, type EdModel } from "./model";
 
 const PLAYER = "#65bddb";
+const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const SELECT = "#f4a460";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
@@ -107,9 +108,19 @@ export function drawEditor(
     pathBody(ctx, body);
     ctx.fillStyle = hexToRgba(body.color, body.opacity);
     ctx.fill();
-    ctx.strokeStyle = body.color; // border fully opaque
-    ctx.lineWidth = worldLine;
-    ctx.stroke();
+    if (body.kind === "impermeable") {
+      // Hook-proof: dashed steel border so it's distinct from a plain static
+      // (matches the in-game render).
+      ctx.strokeStyle = IMPERMEABLE_EDGE;
+      ctx.lineWidth = worldLine * 2;
+      ctx.setLineDash([5 * PX, 3 * PX]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      ctx.strokeStyle = body.color; // border fully opaque
+      ctx.lineWidth = worldLine;
+      ctx.stroke();
+    }
   }
 
   // Player spawn marker: ring at the avatar radius + crosshair.
