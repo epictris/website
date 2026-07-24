@@ -4,7 +4,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { screenToWorld, worldToScreen, type Camera } from "../render/camera";
+import { ballCameraPosition, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { render, renderBall } from "../render/renderer";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
@@ -24,6 +24,15 @@ import {
 } from "./model";
 import { computeHandles, drawEditor, HANDLE_HIT_PX } from "./render";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
+import {
+  digest,
+  digestBall,
+  serializeInput,
+  type Digest,
+  type Recording,
+  type SerializedFrame,
+} from "../sim/trace";
+import type { LevelData } from "../level/levelFormat";
 
 type Tool = "select" | "rect" | "circle";
 
@@ -152,11 +161,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
 
+  // Full-session recording of the current test run — press P to download a
+  // self-contained replay bundle (embeds the tested geometry, since an
+  // in-editor level isn't in the registry). Mirrors main.ts's P export.
+  let testController: "grapple" | "ball" = "grapple";
+  let testData: LevelData | null = null;
+  const recFrames: SerializedFrame[] = [];
+  const recDigests: Digest[] = [];
+
   function startTest(controller: "grapple" | "ball"): void {
     if (mode === "test") stopTest();
     const pixelData = modelToDisk(model);
     savedCam = { pos: camera.position, zoom: camera.zoom };
+    testController = controller;
+    testData = pixelData;
+    recFrames.length = 0;
+    recDigests.length = 0;
     if (controller === "ball") {
+      camera.zoom = 3;
       testLevel = new BallLevel(pixelData);
       ballInput ??= new BallInputSource(canvas, camera, () =>
         testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO,
@@ -174,6 +196,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     root.style.display = "none";
     testBanner.style.display = "block";
     canvas.style.cursor = "crosshair";
+  }
+
+  function downloadTestRecording(): void {
+    if (!testData || recFrames.length === 0) return;
+    const rec: Recording = {
+      level: currentName ?? "editor",
+      controller: testController,
+      data: testData,
+      frames: recFrames.slice(),
+      digests: recDigests.slice(),
+    };
+    const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `session-${recFrames.length}f.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function stopTest(): void {
@@ -699,6 +739,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       else select(null);
       return;
     }
+    if (mode === "test") {
+      if (e.code === "KeyP") downloadTestRecording();
+      return;
+    }
     if (mode !== "edit") return;
     // Ignore shortcuts while typing in a field (let the field's native undo win).
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -739,10 +783,17 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       while (accumulator >= STEP && steps < MAX_STEPS) {
         const fi: FrameInput = src.sample();
         testLevel.physicsProcess(fi, STEP);
+        recFrames.push(serializeInput(fi));
+        recDigests.push(
+          testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
+        );
         accumulator -= STEP;
         steps++;
       }
-      camera.position = testLevel.cameraPosition;
+      camera.position =
+        testLevel instanceof BallLevel
+          ? ballCameraPosition(camera, testLevel.cameraPosition)
+          : testLevel.cameraPosition;
       if (testLevel instanceof BallLevel) {
         renderBall(ctx, dpr, cssW, cssH, testLevel, camera, fps);
       } else {

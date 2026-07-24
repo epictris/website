@@ -14,6 +14,7 @@ import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
+import type { LevelData } from "../level/levelFormat";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -40,6 +41,11 @@ export interface Recording {
   frames: SerializedFrame[];
   digests?: Digest[];
   git?: string;
+  // Self-contained bundles (e.g. exported from the level editor, whose level
+  // isn't in the registry) embed their geometry + controller here. When
+  // present, replay builds from `data` instead of looking `level` up.
+  controller?: "grapple" | "ball";
+  data?: LevelData;
 }
 
 export interface Digest {

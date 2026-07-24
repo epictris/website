@@ -6,7 +6,7 @@ import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { render, renderBall } from "./render/renderer";
-import type { Camera } from "./render/camera";
+import { ballCameraPosition, type Camera } from "./render/camera";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import { digest, digestBall, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
@@ -123,7 +123,10 @@ function frame(now: number): void {
     accumulator -= STEP;
     steps++;
   }
-  camera.position = level.cameraPosition;
+  camera.position =
+    level instanceof BallLevel
+      ? ballCameraPosition(camera, level.cameraPosition)
+      : level.cameraPosition;
 
   const dpr = window.devicePixelRatio || 1;
   if (level instanceof BallLevel) {

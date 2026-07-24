@@ -5,7 +5,7 @@
 // length — via a swept ray for fast motion plus an overlap probe for
 // slow/resting contact.
 
-import { RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
+import { ImpermeableBody, RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
 import { PX } from "../engine/units";
 import { circleShape } from "../engine/shapes";
 import { ShapeGeometry } from "../lib/shapeGeometry";
@@ -21,6 +21,9 @@ export class BallHook extends RigidBody2D {
     this.setShape(circleShape(2 * PX));
     this.mass = ShapeGeometry.computeMass(this.getShape());
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
+    // Impermeable (hook-proof) surfaces are bounced off rather than anchored to
+    // — World.integrate reflects this restitution fraction on static contact.
+    this.restitution = 0.5;
   }
 
   registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
@@ -41,7 +44,10 @@ export class BallHook extends RigidBody2D {
     const from = this.globalPosition;
     const to = from.add(this.linearVelocity.mul(dt));
     const hit = this.world.intersectRay(from, to, { collisionMask: 1, exclude: [this] });
-    if (hit && hit.collider.name !== "Player") {
+    // Impermeable bodies aren't attach targets — the hook bounces off them
+    // (World.integrate resolves the contact with restitution), so skip them and
+    // keep looking for a real anchor.
+    if (hit && hit.collider.name !== "Player" && !(hit.collider instanceof ImpermeableBody)) {
       this.attach(hit.collider, hit.position);
       return;
     }
@@ -49,6 +55,7 @@ export class BallHook extends RigidBody2D {
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     for (const body of this.world.intersectCircle(from, r + 0.5 * PX)) {
       if (body === this || body.name === "Player") continue;
+      if (body instanceof ImpermeableBody) continue;
       if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
       this.attach(body, from);
       return;

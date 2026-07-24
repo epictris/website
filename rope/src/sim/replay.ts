@@ -29,10 +29,19 @@ export interface ReplayResult {
 }
 
 export function replayRecording(rec: Recording): ReplayResult {
-  const spec = LEVELS[rec.level];
-  if (!spec) throw new Error(`Unknown level: ${rec.level}`);
-  const isBall = spec.controller === "ball";
-  const level = isBall ? new BallLevel(spec.data) : new Level(spec.data, spec.init);
+  // Self-contained bundles (level-editor exports) carry their own geometry; use
+  // it rather than the registry, which won't know the ad-hoc level.
+  let isBall: boolean;
+  let level: Level | BallLevel;
+  if (rec.data) {
+    isBall = rec.controller === "ball";
+    level = isBall ? new BallLevel(rec.data) : new Level(rec.data);
+  } else {
+    const spec = LEVELS[rec.level];
+    if (!spec) throw new Error(`Unknown level: ${rec.level}`);
+    isBall = spec.controller === "ball";
+    level = isBall ? new BallLevel(spec.data) : new Level(spec.data, spec.init);
+  }
   const deserialize = inputDeserializer();
   const digests: Digest[] = [];
   const violations: Violation[] = [];

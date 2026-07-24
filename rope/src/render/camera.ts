@@ -18,6 +18,14 @@ export function screenToWorld(cam: Camera, screenX: number, screenY: number): Ve
   );
 }
 
+// Camera position that frames the ball 3/5 of the way down the screen (more
+// room above for the chain arc). Centering puts cam.position at the viewport
+// middle, so shift the camera up by 1/10 of a viewport-height in world metres.
+export function ballCameraPosition(cam: Camera, ballPos: Vec2): Vec2 {
+  const scale = cam.zoom * PIXELS_PER_METER;
+  return new Vec2(ballPos.x, ballPos.y - cam.viewportHeight / 10 / scale);
+}
+
 // Inverse of screenToWorld: a world-metre point → CSS-pixel screen coordinate.
 export function worldToScreen(cam: Camera, world: Vec2): Vec2 {
   const scale = cam.zoom * PIXELS_PER_METER;
