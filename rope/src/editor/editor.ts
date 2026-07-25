@@ -59,6 +59,14 @@ type Drag =
   | { mode: "rotate"; body: EdBody }
   | { mode: "draw"; body: EdBody; start: Vec2 };
 
+// Arrow-key nudge directions (world axes, +y down).
+const NUDGE_DIRS: Record<string, Vec2 | undefined> = {
+  ArrowLeft: new Vec2(-1, 0),
+  ArrowRight: new Vec2(1, 0),
+  ArrowUp: new Vec2(0, -1),
+  ArrowDown: new Vec2(0, 1),
+};
+
 const STEP = 1 / 60;
 const MAX_STEPS = 5;
 
@@ -102,6 +110,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let drag: Drag | null = null;
   let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
+  let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
 
   // --- undo/redo ------------------------------------------------------------
   // Snapshots of the whole model. Shapes are mutated in place, so clone them;
@@ -119,6 +128,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   };
   // Record the current state before a mutating action, so it can be undone.
   function beginAction(): void {
+    nudging = false; // any other action ends the current nudge run
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
     future.length = 0;
@@ -137,6 +147,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
   function afterHistoryChange(): void {
     drag = null;
+    nudging = false;
     dirty = true;
     const live = new Set(model.bodies.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
@@ -151,10 +162,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (ids.length === selectedIds.size && ids.every((id) => selectedIds.has(id))) return;
     selectedIds.clear();
     for (const id of ids) selectedIds.add(id);
+    nudging = false;
     rebuildInspector();
   }
   function toggleSelection(id: number): void {
     if (!selectedIds.delete(id)) selectedIds.add(id);
+    nudging = false;
     rebuildInspector();
   }
 
@@ -544,6 +557,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     markDirty();
     rebuildInspector();
   }
+  // Arrow-key nudge: one grid cell, or `NUDGE_FINE` with Ctrl held. A pure
+  // translation — deliberately not snapped, so a body keeps whatever sub-cell
+  // offset it has and a fine nudge survives with snap on.
+  const NUDGE_FINE = 0.01; // 1 cm
+  function nudgeSelection(dir: Vec2, fine: boolean): void {
+    const sel = selectedBodies();
+    if (!sel.length) return;
+    // One undo step per run of nudges (a held arrow is a single gesture, like
+    // a drag); releasing the key or any other action ends it.
+    if (!nudging) {
+      beginAction();
+      nudging = true;
+    }
+    const d = dir.mul(fine ? NUDGE_FINE : gridStep);
+    for (const b of sel) b.pos = b.pos.add(d);
+    markDirty();
+    refreshFields();
+  }
+
   function duplicateSelected(): void {
     const sel = selectedBodies();
     if (!sel.length) return;
@@ -871,6 +903,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         focused.type !== "radio") ||
       focused instanceof HTMLSelectElement;
     if (typing) return;
+    // Arrows before the Ctrl block: Ctrl+Arrow is the fine nudge, not a combo.
+    const dir = NUDGE_DIRS[e.code];
+    if (dir) {
+      nudgeSelection(dir, e.ctrlKey || e.metaKey);
+      e.preventDefault(); // don't scroll the page
+      return;
+    }
     // Modifier combos first: the bare-key tool shortcuts share letters with
     // them (V/C), so Ctrl+V must not also switch tools.
     if (e.ctrlKey || e.metaKey) {
@@ -903,6 +942,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
+  });
+
+  // Releasing an arrow closes the nudge run, so the next press starts a fresh
+  // undo step.
+  window.addEventListener("keyup", (e) => {
+    if (NUDGE_DIRS[e.code]) nudging = false;
   });
 
   // --- loop -----------------------------------------------------------------

@@ -272,7 +272,11 @@ so an impermeable's dashed steel edge stays legible while selected.
 **Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor: the clipboard holds copies
 detached from the model, and paste re-centres the group's bounding box on the pointer (with
 snap on, its top-left corner lands on the grid), leaving the new bodies selected so it can be
-repeated. `Ctrl+D` duplicates in place at a 2-cell offset. The kind picker
+repeated. `Ctrl+D` duplicates in place at a 2-cell offset.
+**Arrow keys** nudge the whole selection one grid cell (10 cm), or 1 cm with **Ctrl** held; the
+nudge is a pure translation (never snapped), so a body keeps any sub-cell offset it has and the
+fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
+key is released. The kind picker
 covers `static`, `rigid`, `killzone`, `impermeable`, `force`.
 Every non-area body carries a **surface friction** (0 = ice, 1 = rubber; see below), and a
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
