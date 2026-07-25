@@ -1,7 +1,7 @@
 {
   "player": {
-    "x": 130,
-    "y": -50,
+    "x": 0,
+    "y": -10,
     "radius": 8
   },
   "bodies": [
@@ -2908,6 +2908,62 @@
         "r": 15
       },
       "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2555.0000000000005,
+      "y": -1340.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 70,
+        "h": 40
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2785,
+      "y": -1410.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 70,
+        "h": 40
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3070,
+      "y": -1490,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 40,
+        "h": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3400.000000000001,
+      "y": -1490,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 40,
+        "h": 20
+      },
+      "color": "#555555",
       "opacity": 0.5,
       "friction": 1
     }

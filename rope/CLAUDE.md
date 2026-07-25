@@ -92,8 +92,10 @@ both ledge faces while hanging/climbing), colored by the same classification.
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).
+`LEVEL_2` is the grapple arena (the Godot-extracted scene).
 
-`?level=BALL` runs the **ball & chain controller** — a separate vertical slice
+`BALL` is the **default level** (`DEFAULT_LEVEL`), so a bare `/` runs the
+**ball & chain controller** — a separate vertical slice
 (`classes/ballPlayer.ts`, `level/ballLevel.ts`, `input/ballInput.ts`,
 `renderBall`) that shares nothing with the Player state machine. The ball is a
 RigidBody2D (rolls via the opt-in `contactFriction` field on RigidBody2D;
@@ -299,6 +301,11 @@ Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` form
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
 /api/levels[/<name>]`) added by the `levelApi` Vite plugin in `vite.config.ts`. The built
 app has no server, so the editor is a dev tool.
+
+A saved level ships in the build by being **imported** into `src/level/registry.ts`
+(`resolveJsonModule`; JSON widens string literals, so the spec casts to `LevelData`). That
+is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor and bundled
+into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds); `levelData.ts` stays auto-generated

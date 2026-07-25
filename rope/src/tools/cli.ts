@@ -338,7 +338,9 @@ function cmdBundles(dir: string): void {
 // captured inputs+digests, and confirm bit-for-bit reproduction.
 function cmdSelftest(): void {
   const script: PlaytestScript = {
-    level: DEFAULT_LEVEL,
+    // Pinned to the grapple arena, not DEFAULT_LEVEL: this script holds
+    // fire/retract/move/jump, and playtest scripts can't drive ball levels.
+    level: "LEVEL_2",
     frames: 300,
     holds: [
       { action: "fire", from: 40, to: 300 },
