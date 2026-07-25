@@ -4,7 +4,13 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { ballCameraPosition, screenToWorld, worldToScreen, type Camera } from "../render/camera";
+import {
+  ballCameraPosition,
+  ballZoom,
+  screenToWorld,
+  worldToScreen,
+  type Camera,
+} from "../render/camera";
 import { render, renderBall } from "../render/renderer";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
@@ -216,7 +222,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     recFrames.length = 0;
     recDigests.length = 0;
     if (controller === "ball") {
-      camera.zoom = 3;
+      camera.zoom = ballZoom(camera.viewportHeight);
       testLevel = new BallLevel(pixelData);
       ballInput ??= new BallInputSource(canvas, camera, () =>
         testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO,
@@ -254,6 +260,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  // A resize mid-test re-derives the ball zoom from the new viewport height,
+  // matching the game. Registered here rather than inside resize() because the
+  // test state it reads is declared below resize()'s first call.
+  window.addEventListener("resize", () => {
+    if (mode === "test" && testController === "ball") camera.zoom = ballZoom(camera.viewportHeight);
+  });
 
   function stopTest(): void {
     mode = "edit";

@@ -6,7 +6,7 @@ import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { render, renderBall } from "./render/renderer";
-import { ballCameraPosition, type Camera } from "./render/camera";
+import { ballCameraPosition, ballZoom, type Camera } from "./render/camera";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import { digest, digestBall, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
@@ -48,15 +48,6 @@ const levelId = ((): string => {
 const levelSpec = LEVELS[levelId]!;
 const isBall = levelSpec.controller === "ball";
 
-// Ball & chain plays at a tighter scale than the grapple level (zoom 3 on a
-// desktop-height viewport), but scales down on short viewports so a landscape
-// phone still frames the ball and its chain arc. Height-driven: the vertical
-// span is what the framing (ball 3/5 down, arc above) needs to fit.
-const BALL_ZOOM = 3;
-const BALL_ZOOM_REF_HEIGHT = 900; // viewport height the base zoom is tuned for
-function ballZoom(height: number): number {
-  return Math.min(BALL_ZOOM, BALL_ZOOM * (height / BALL_ZOOM_REF_HEIGHT));
-}
 resize();
 window.addEventListener("resize", resize);
 
