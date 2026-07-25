@@ -139,7 +139,11 @@ export class OnWallState extends PlayerState {
         return new AirborneState();
       } else {
         if (velocity.y > PlayerClass.WALL_SLIDE_SPEED / delta) {
-          velocity = velocity.sub(currentDirection.mul(PlayerClass.WALL_FRICTION / delta));
+          // The wall's own friction scales the slide's deceleration: an icy
+          // wall barely slows the fall, rubber grips as it always has (the
+          // default 1 multiplies by exactly 1).
+          const grip = this.supportBody?.surfaceFriction ?? 1;
+          velocity = velocity.sub(currentDirection.mul((PlayerClass.WALL_FRICTION * grip) / delta));
           if (velocity.length() < PlayerClass.WALL_SLIDE_SPEED / delta) {
             velocity = velocity.normalized().mul(PlayerClass.WALL_SLIDE_SPEED / delta);
           }

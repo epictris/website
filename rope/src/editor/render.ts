@@ -6,8 +6,9 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
+import { fillForceArea, fillKillZone } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
-import { toWorld, type EdBody, type EdModel } from "./model";
+import { halfExtents, toWorld, type EdBody, type EdModel } from "./model";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -23,17 +24,25 @@ export interface Handles {
   body: EdBody;
   corners: Vec2[]; // screen; rect only (TL, TR, BR, BL)
   rotate: Vec2 | null; // screen
+  rotateBase: Vec2 | null; // screen; where the rotate knob's stalk starts
   radius: Vec2 | null; // screen; circle only
 }
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
 export function computeHandles(cam: Camera, body: EdBody): Handles {
+  // Knob sits above the shape's top edge, along the body's own up axis.
+  const up = new Vec2(0, -1).rotated(body.rot).normalized();
   if (body.shape.kind === "circle") {
     const r = body.shape.r;
+    // A circle's rotation is invisible — except on a force area, where it aims
+    // the current, so those get the knob too rather than only the rot° field.
+    const base =
+      body.kind === "force" ? worldToScreen(cam, toWorld(body, new Vec2(0, -r))) : null;
     return {
       body,
       corners: [],
-      rotate: null,
+      rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
+      rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
     };
   }
@@ -46,9 +55,7 @@ export function computeHandles(cam: Camera, body: EdBody): Handles {
     new Vec2(-hw, hh),
   ].map((l) => worldToScreen(cam, toWorld(body, l)));
   const topMid = worldToScreen(cam, toWorld(body, new Vec2(0, -hh)));
-  const up = new Vec2(0, -1).rotated(body.rot).normalized();
-  const rotate = topMid.add(up.mul(ROT_OFFSET_PX));
-  return { body, corners, rotate, radius: null };
+  return { body, corners, rotate: topMid.add(up.mul(ROT_OFFSET_PX)), rotateBase: topMid, radius: null };
 }
 
 function pathBody(ctx: CanvasRenderingContext2D, body: EdBody): void {
@@ -92,7 +99,7 @@ export function drawEditor(
   h: number,
   cam: Camera,
   model: EdModel,
-  selectedId: number | null,
+  selectedIds: ReadonlySet<number>,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, cam, w, h);
@@ -105,9 +112,40 @@ export function drawEditor(
 
   const worldLine = 1 / scale;
   for (const body of model.bodies) {
+    // Areas fill with their glyph cut out of them — the same calls the game
+    // makes, so authoring shows exactly what play shows.
+    if (body.kind === "force") {
+      fillForceArea(
+        ctx,
+        body.pos,
+        body.rot,
+        halfExtents(body),
+        body.shape.kind === "circle",
+        body.force,
+        hexToRgba(body.color, body.opacity),
+      );
+    } else if (body.kind === "killzone") {
+      fillKillZone(
+        ctx,
+        body.pos,
+        body.rot,
+        halfExtents(body),
+        body.shape.kind === "circle",
+        hexToRgba(body.color, body.opacity),
+      );
+    } else {
+      pathBody(ctx, body);
+      ctx.fillStyle = hexToRgba(body.color, body.opacity);
+      ctx.fill();
+    }
     pathBody(ctx, body);
-    ctx.fillStyle = hexToRgba(body.color, body.opacity);
-    ctx.fill();
+    if (selectedIds.has(body.id)) {
+      // Selection halo, drawn *under* the body's own border so an
+      // impermeable's dashed steel edge stays readable while selected.
+      ctx.strokeStyle = SELECT;
+      ctx.lineWidth = worldLine * 5;
+      ctx.stroke();
+    }
     if (body.kind === "impermeable") {
       // Hook-proof: dashed steel border so it's distinct from a plain static
       // (matches the in-game render).
@@ -138,25 +176,17 @@ export function drawEditor(
   ctx.lineTo(p.x, p.y + tick);
   ctx.stroke();
 
-  // Selection outline (drawn in world space, over the fill).
-  const selected = model.bodies.find((b) => b.id === selectedId);
-  if (selected) {
-    pathBody(ctx, selected);
-    ctx.strokeStyle = SELECT;
-    ctx.lineWidth = worldLine * 2;
-    ctx.stroke();
-  }
-
   ctx.restore();
 
-  // Handles in screen space so they stay a constant on-screen size.
+  // Handles in screen space so they stay a constant on-screen size. They edit
+  // one body's geometry, so they only appear for a single selection.
+  const selection = model.bodies.filter((b) => selectedIds.has(b.id));
+  const selected = selection.length === 1 ? selection[0]! : null;
   if (selected) {
     const hs = computeHandles(cam, selected);
     if (hs.rotate) {
       // Stalk from the top edge to the rotate knob.
-      const topMid = hs.corners.length
-        ? hs.corners[0]!.add(hs.corners[1]!).mul(0.5)
-        : hs.rotate;
+      const topMid = hs.rotateBase ?? hs.rotate;
       ctx.strokeStyle = HANDLE;
       ctx.lineWidth = 1.5;
       ctx.beginPath();

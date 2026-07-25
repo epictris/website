@@ -6,6 +6,7 @@ import type { ShapeTransform } from "../engine/shapes";
 import {
   AnimatableBody2D,
   Area2D,
+  ForceArea,
   ImpermeableBody,
   RigidBody2D,
   StaticBody2D,
@@ -17,10 +18,12 @@ import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { Hook } from "../classes/hook";
+import { KillZone } from "../classes/killZone";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
 import { drawTrainingGrid } from "./trainingGrid";
+import { fillForceArea, fillKillZone } from "./areaFill";
 import { hexToRgba } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
@@ -45,6 +48,7 @@ const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
 
 function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
   ctx.beginPath();
@@ -59,6 +63,13 @@ function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
     ctx.rect(-hw, -hh, hw * 2, hh * 2);
     ctx.restore();
   }
+}
+
+// Half-extents of an area's shape, the form the glyph layout wants.
+function areaHalfExtents(t: ShapeTransform): Vec2 {
+  return t.shape.kind === "circle"
+    ? new Vec2(t.shape.radius, t.shape.radius)
+    : t.shape.size.mul(0.5);
 }
 
 function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void {
@@ -114,7 +125,38 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     return;
   }
 
-  // Authored level geometry (static/rigid/killzone): fill in the body's colour
+  // Force areas: authored fill (or a translucent blue default) with the flow
+  // arrows punched out of it. Checked before the generic authored branch so an
+  // area that was given a colour still gets its arrows.
+  if (body instanceof ForceArea) {
+    fillForceArea(
+      ctx,
+      t.globalPosition,
+      t.globalRotation,
+      areaHalfExtents(t),
+      t.shape.kind === "circle",
+      body.magnitude,
+      body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : FORCE_FILL,
+    );
+    return;
+  }
+
+  // Killzones: authored fill (or translucent red) stamped with skulls, so a
+  // lethal region is never mistakable for standable geometry. Before the
+  // generic authored branch so a killzone given a colour still gets its mark.
+  if (body instanceof KillZone) {
+    fillKillZone(
+      ctx,
+      t.globalPosition,
+      t.globalRotation,
+      areaHalfExtents(t),
+      t.shape.kind === "circle",
+      body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : KILLZONE,
+    );
+    return;
+  }
+
+  // Authored level geometry (static/rigid): fill in the body's colour
   // + opacity, border fully opaque in the same colour.
   if (body.fillColor) {
     pathShape(ctx, t);
@@ -153,6 +195,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.stroke();
     return;
   }
+  // Any other area (none today): still filled as an area, never as geometry.
   if (body instanceof Area2D) {
     pathShape(ctx, t);
     ctx.fillStyle = KILLZONE;

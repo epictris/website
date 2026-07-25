@@ -11,6 +11,7 @@ import {
   Area2D,
   CharacterBody2D,
   CollisionObject2D,
+  ForceArea,
   KinematicCollision2D,
   PhysicsBody2D,
   RigidBody2D,
@@ -307,6 +308,7 @@ export class World {
   // ---- dynamic-body integration -----------------------------------------
 
   integrate(dt: number): void {
+    this.applyAreaForces(dt);
     for (const body of this.bodies) {
       if (body instanceof RigidBody2D && !body.removed) {
         body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
@@ -316,6 +318,33 @@ export class World {
     }
     this.resolveDynamicCollisions(dt);
     this.notifyAreas();
+  }
+
+  // Constant-acceleration areas (a river current, wind). Runs before gravity
+  // so a body entering the area is already carried on its first frame inside.
+  // Both velocity-carrying body types are pushed — the grapple avatar and the
+  // hook are CharacterBody2D, the ball, its hook and loose debris are
+  // RigidBody2D — so a current moves everything that can move. A level with no
+  // force areas touches nothing here, keeping recorded replays bit-identical.
+  private applyAreaForces(dt: number): void {
+    for (const area of this.areas) {
+      if (!(area instanceof ForceArea) || area.removed || !area.hasShape()) continue;
+      if (area.magnitude === 0) continue;
+      const dv = area.acceleration.mul(dt);
+      const ashape = area.getShape();
+      for (const body of this.bodies) {
+        if (body.removed || !body.hasShape()) continue;
+        if (!shapesOverlap(ashape, body.getShape())) continue;
+        if (body instanceof RigidBody2D) {
+          body.linearVelocity = body.linearVelocity.add(dv);
+        } else if (body instanceof CharacterBody2D) {
+          // The character's state machine reads this velocity next frame; the
+          // grounded basis discards the into-surface component, so a current
+          // pushes along a floor rather than through it.
+          body.velocity = body.velocity.add(dv);
+        }
+      }
+    }
   }
 
   private resolveDynamicCollisions(dt: number): void {
@@ -371,6 +400,13 @@ export class World {
     // legacy torque-free path, bit-for-bit with recorded replays.
     const centered = offset.x === 0 && offset.y === 0;
     if (other instanceof StaticBody2D) {
+      // The surface's own friction scales both Coulomb coefficients the body
+      // brings to the contact: 1 (the default) multiplies by exactly 1 and is
+      // bit-identical to the pre-surface-friction path, 0 makes the surface
+      // ice — no traction to roll on, no stiction to hold a slope.
+      const grip = other.surfaceFriction;
+      const staticMu = body.staticFriction * grip;
+      const kineticMu = body.contactFriction * grip;
       // Push fully out of static geometry and kill inward velocity, relative to
       // the surface (scripted movers can bat circles).
       body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
@@ -431,10 +467,10 @@ export class World {
         const g = GRAVITY.mul(body.gravityScale);
         const gN = -g.dot(ov.normal);
         const withinBudget =
-          body.staticFriction > 0 &&
+          staticMu > 0 &&
           !other.isMobile &&
           gN > 1e-6 &&
-          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= body.staticFriction * gN;
+          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= staticMu * gN;
         if (slipTan.length() < SLIP_STICK && withinBudget) {
           // Grip: drive the centre so the contact is stationary,
           // v_centre = surfaceVel − ω × r_contact.
@@ -481,7 +517,7 @@ export class World {
       // friction. Steered (aiming) contacts are handled above (grip or slip) and
       // must not enter here — this zeroes spin, which would fight the steering.
       let stuck = false;
-      if (!body.kinematicRotation && body.staticFriction > 0 && !other.isMobile) {
+      if (!body.kinematicRotation && staticMu > 0 && !other.isMobile) {
         const g = GRAVITY.mul(body.gravityScale);
         const gN = -g.dot(ov.normal); // normal gravity pull into the surface
         const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
@@ -489,7 +525,7 @@ export class World {
           gN > 1e-6 &&
           rel.length() < STICK_SPEED &&
           Math.abs(body.angularVelocity) < STICK_SPIN &&
-          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= body.staticFriction * gN
+          g.sub(ov.normal.mul(g.dot(ov.normal))).length() <= staticMu * gN
         ) {
           const otherVel = other.velocityAtPoint(contactPoint);
           const vn = body.linearVelocity.dot(ov.normal);
@@ -511,7 +547,7 @@ export class World {
           stuck = true;
         }
       }
-      if (!stuck && body.contactFriction > 0) {
+      if (!stuck && kineticMu > 0) {
         const tangent = new Vec2(-ov.normal.y, ov.normal.x);
         const surfSpeed = body.linearVelocity
           .add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity))
@@ -524,7 +560,7 @@ export class World {
             0,
             GRAVITY.mul(body.gravityScale * dt).dot(ov.normal.mul(-1)),
           );
-          const maxImpulse = body.contactFriction * body.mass * (vnKilled + gravityBite);
+          const maxImpulse = kineticMu * body.mass * (vnKilled + gravityBite);
           let j = -surfSpeed / invEff; // full-stick impulse
           j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
           // Braking impulses (opposing current travel) are scaled by
@@ -534,7 +570,13 @@ export class World {
           body.angularVelocity += rCrossT * j * invI;
         }
       }
-      body.linearVelocity = body.linearVelocity.mul(body.contactDamp); // light friction
+      // Light contact drag. `contactDamp` is the fraction of speed *retained*,
+      // so the surface fades it toward 1 (no drag) as friction drops to ice.
+      // The grip === 1 branch is not an optimisation: it keeps the default path
+      // on the literal `contactDamp`, since 1 - (1 - 0.98) * 1 does not round
+      // back to exactly 0.98 and would drift recorded replays.
+      const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
+      body.linearVelocity = body.linearVelocity.mul(damp);
       return stuck;
     } else {
       // Rigid-rigid: split the push, damp approach velocity (approximate).

@@ -42,6 +42,50 @@ Circles are the **only** shape that the physics engine may move. A circle can:
 Circles are the sole dynamic bodies. Any object that needs to be pushed around,
 swung, or dragged by the rope must be a circle.
 
+## Areas must read as areas
+
+A level contains two categories of thing, and they behave nothing alike:
+
+- **Bodies** — collision geometry. You stand on them, the rope wraps them, they
+  stop you.
+- **Areas** — regions. Nothing rests on them, the rope passes straight through,
+  and they act on whatever is inside (a killzone resets the level, a force area
+  accelerates you).
+
+An area must **never** be mistakable for a body. Fill colour alone does not
+carry that distinction: colour is authored per-body, so an author can — and will
+— give a killzone the same grey as a wall. The rule is therefore stronger than
+"pick a different colour":
+
+> Every area type carries a **glyph that names what it does**, stamped across its
+> whole extent, and no body type carries one.
+
+The test is a screenshot with no legend and no interaction. Someone looking at a
+still of the level — a bug report, an `cli render` snapshot, a design review —
+must be able to say what every region does. Anything that only becomes apparent
+by walking into it has failed.
+
+Consequences for how the glyphs are drawn:
+
+- **Cutouts, not overlays.** The glyph is punched out of the area's fill as an
+  even-odd hole, so it shows whatever is behind. An overlay needs a contrast
+  colour that some authored fill will always defeat; a hole cannot be hidden by
+  the fill it is cut from.
+- **Tiled across the extent, at a fixed world size.** One badge in a corner is
+  ambiguous about where the region ends, and a badge scaled to the box makes a
+  big river look like a different thing from a small one.
+- **Motion means motion.** A force area's arrows drift along its push, at a
+  speed carrying its magnitude. A killzone's skulls are static — it does not
+  flow anywhere, and a moving stamp would imply it does.
+- **One source of geometry.** The glyph polygons live in `render/areaGlyphs.ts`
+  and are emitted into an abstract path sink, so the game canvas, the level
+  editor and the headless SVG snapshot all stamp identical marks. A renderer
+  that skips areas is a bug, not a simplification — the snapshot is exactly the
+  case this rule exists for.
+
+Current glyphs: `killzone` → skulls, `force` → flow arrows. A new area type must
+bring its own before it ships.
+
 ## Convex-only polygons; compound bodies
 
 Every polygon primitive is **convex**. Concave polygons are never allowed as a

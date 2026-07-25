@@ -8,6 +8,7 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
+  DEFAULT_SURFACE_FRICTION,
   scaleLevelData,
   type BodyKind,
   type LevelData,
@@ -25,6 +26,8 @@ export interface EdBody {
   shape: EdShape; // metres
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (border draws fully opaque)
+  friction: number; // surface friction, 0 (ice) .. 1 (rubber)
+  force: number; // force areas only: m/s² along the body's rotation
 }
 
 export interface EdModel {
@@ -54,6 +57,8 @@ function fromLevelData(data: LevelData): EdModel {
           : { kind: "circle", r: b.shape.r },
       color: b.color ?? DEFAULT_BODY_COLOR,
       opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
+      friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
+      force: b.force ?? 0,
     })),
   };
 }
@@ -73,6 +78,10 @@ export function toLevelData(model: EdModel): LevelData {
           : { kind: "circle", r: b.shape.r },
       color: b.color,
       opacity: b.opacity,
+      friction: b.friction,
+      // Only force areas carry a magnitude; omitting it elsewhere keeps saved
+      // levels free of a field that would read as meaningful.
+      ...(b.kind === "force" ? { force: b.force } : {}),
     })),
   };
 }
@@ -88,6 +97,31 @@ export function modelToDisk(model: EdModel): LevelData {
 }
 
 // --- geometry ---------------------------------------------------------------
+
+// Half-extents of a body's (unrotated) bounding box, i.e. centre → top-left.
+export function halfExtents(body: EdBody): Vec2 {
+  return body.shape.kind === "circle"
+    ? new Vec2(body.shape.r, body.shape.r)
+    : new Vec2(body.shape.w / 2, body.shape.h / 2);
+}
+
+// Axis-aligned bounds of a group of bodies, from their unrotated extents (the
+// same approximation `halfExtents` gives snapping). Empty group → a zero box.
+export function groupBounds(bodies: readonly EdBody[]): { min: Vec2; max: Vec2 } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const b of bodies) {
+    const h = halfExtents(b);
+    minX = Math.min(minX, b.pos.x - h.x);
+    minY = Math.min(minY, b.pos.y - h.y);
+    maxX = Math.max(maxX, b.pos.x + h.x);
+    maxY = Math.max(maxY, b.pos.y + h.y);
+  }
+  if (!bodies.length) return { min: Vec2.ZERO, max: Vec2.ZERO };
+  return { min: new Vec2(minX, minY), max: new Vec2(maxX, maxY) };
+}
 
 // A point in the body's local (unrotated) frame, origin at the body centre.
 export function toLocal(body: EdBody, world: Vec2): Vec2 {
@@ -119,6 +153,8 @@ export function emptyModel(): EdModel {
         shape: { kind: "rect", w: 8, h: 0.6 },
         color: DEFAULT_BODY_COLOR,
         opacity: DEFAULT_BODY_OPACITY,
+        friction: DEFAULT_SURFACE_FRICTION,
+        force: 0,
       },
     ],
   };

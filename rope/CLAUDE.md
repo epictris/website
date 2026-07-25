@@ -196,8 +196,10 @@ launches, mover misbehavior):
    anchoring in mid-air, a hook on the wrong side of a wall) the digest table is
    blind — it only carries the avatar's pos/vel/rope-length, not the chain wrap
    path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
-   whole scene at frame N (bodies, impermeable = dashed steel border, chain wrap
-   path + wrap-node markers, avatar); convert with `magick f.svg f.png` and look.
+   whole scene at frame N (bodies, impermeable = dashed steel border, areas with
+   their glyphs — skulls for a killzone, flow arrows for a force area — chain
+   wrap path + wrap-node markers, avatar); convert with `magick f.svg f.png` and
+   look.
    `cli chainpath bundle.json --from A --to B` prints the wrap-node polyline per
    frame in px (node count > 2 means the chain caught a corner). Reach for these
    the moment a bug is about position/shape rather than a stuck/velocity number.
@@ -259,8 +261,23 @@ DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production
 edits an `EdModel` (positions in world **metres**, one
 stable id per body) and manipulates it with the mouse: pan (drag empty space / middle /
 right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
-radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies. The kind picker
-covers `static`, `rigid`, `killzone`, `impermeable`. A toggleable snap (fixed 10 cm, the
+radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies.
+Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or
+out (on empty space it pans without clearing), and dragging any member moves the whole group
+(the grabbed body leads the snap; the rest keep their offsets).
+Resize handles and the geometry inspector only appear for a *single* selection - a
+multi-selection gets a group panel (Duplicate / Delete) and the toolbar kind picker, which
+applies to every selected body. Selected bodies draw an orange halo *under* their own border,
+so an impermeable's dashed steel edge stays legible while selected.
+**Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor: the clipboard holds copies
+detached from the model, and paste re-centres the group's bounding box on the pointer (with
+snap on, its top-left corner lands on the grid), leaving the new bodies selected so it can be
+repeated. `Ctrl+D` duplicates in place at a 2-cell offset. The kind picker
+covers `static`, `rigid`, `killzone`, `impermeable`, `force`.
+Every non-area body carries a **surface friction** (0 = ice, 1 = rubber; see below), and a
+`force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
+knob steers the current, and force-kind circles get that knob too (a plain circle's rotation
+is invisible, so it has none). A toggleable snap (fixed 10 cm, the
 backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body's top-left
 corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
@@ -280,11 +297,61 @@ Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` form
 app has no server, so the editor is a dev tool.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
-the generated one — adds the `rigid` kind); `levelData.ts` stays auto-generated and is
-structurally assignable to it. Both level drivers construct geometry through the shared
-`src/level/buildBodies.ts` (statics, killzones, impermeables, and rigid bodies), so the
-grapple and ball controllers load identical scenes. `rigid` bodies get mass/inertia from
-`ShapeGeometry` and fall under gravity.
+the generated one — adds the `rigid` and `force` kinds); `levelData.ts` stays auto-generated
+and is structurally assignable to it. Both level drivers construct geometry through the
+shared `src/level/buildBodies.ts` (statics, killzones, impermeables, force areas, and rigid
+bodies), so the grapple and ball controllers load identical scenes. `rigid` bodies get
+mass/inertia from `ShapeGeometry` and fall under gravity.
+
+## Force areas and surface friction
+
+A **`force`** body is a `ForceArea` (`engine/body.ts`, an `Area2D`): a region that
+accelerates every velocity-carrying body inside it — the grapple avatar and hook
+(`CharacterBody2D`), the ball, its hook and loose debris (`RigidBody2D`). `World.integrate`
+applies it before gravity, so a body entering is carried on its first frame inside. The
+direction is the area's **own rotation** (local +X, so `rot` 0 flows right) and `force` is a
+signed magnitude in px/s² on disk, m/s² in the sim — negative reverses the flow. It is
+deliberately an *acceleration*, not a true force: a current carries light and heavy bodies
+alike, so one authored number behaves the same for the avatar, a pebble and a boulder. Areas
+are not wrap bodies; the rope passes straight through.
+
+**`friction`** (0 = ice, 1 = rubber, default 1) is a property of every non-area body,
+carried on the engine body as `CollisionObject2D.surfaceFriction`. It scales the contact
+friction terms another body applies *against* it: `GROUND_FRICTION` in `GroundedState`,
+`WALL_FRICTION` in `OnWallState`, and a rigidbody's Coulomb `contactFriction`, stiction
+`staticFriction` and `contactDamp` in `World.resolveRigidCircle`. Every scaling is a plain
+multiply so the default 1 multiplies by *exactly* 1 and is bit-identical to the historical
+constants (recorded replays predate the field) — `contactDamp` is the one exception, since
+`1 - (1 - 0.98) * 1` does not round back to `0.98`, so it takes an explicit `grip === 1`
+branch. Locomotion *acceleration* is untouched: friction models how a surface slows you,
+not how hard you can push off it.
+
+A river is the two composed: a `force` area over a low-`friction` bed. On a default rubber
+bed the ground friction (≈7 m/s² of deceleration) swamps a 3 m/s² current and the avatar
+barely drifts; drop the bed to ~0.15 and the same current carries it.
+
+### Area glyphs
+
+Areas must never be mistakable for bodies in a still frame — see **"Areas must read as
+areas"** in `docs/game-design.md` for the rule and its rationale. Every area type is stamped
+with a glyph naming what it does: `killzone` → **skulls**, `force` → **flow arrows**.
+
+`render/areaGlyphs.ts` holds the glyph geometry as plain closed polygons emitted into an
+abstract `PolyPath` sink, so the game canvas, the level editor and the headless SVG snapshot
+stamp identical marks from one source (`CanvasRenderingContext2D` satisfies the sink as-is;
+`svgFrame.ts` has a small writer that turns it into path data). `render/areaFill.ts` wraps it
+for canvas as `fillForceArea` / `fillKillZone`.
+
+The fill is one **even-odd** path — outline plus glyph polygons, clipped to the outline — so
+glyphs are **cutouts** showing whatever is behind, legible against any authored colour
+including an opaque one. Nested rings flip back to solid under the same rule, which is what
+gives the skull its eye sockets. Glyph size *and* lattice spacing are fixed world constants,
+so a long river and a small vent read as the same current and only the glyph *count* grows
+with the box (a cap thins the lattice on huge areas; glyphs keep their size). Discs get an odd
+row count so one row lies on the widest chord. Force arrows drift along the flow at a speed
+proportional to the magnitude (clamped), driven by the wall clock — decoration that can never
+reach the fixed-step sim; killzone skulls are static, since a killzone does not flow. The SVG
+snapshot pins the phase at 0 so a frame render never depends on the wall clock.
 
 ## Regenerating level geometry
 

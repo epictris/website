@@ -5,13 +5,45 @@
 
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
-import { StaticBody2D, RigidBody2D, ImpermeableBody } from "../engine/body";
+import { ForceArea, StaticBody2D, RigidBody2D, ImpermeableBody } from "../engine/body";
 import { PIXELS_PER_METER } from "../engine/units";
 import type { Rope } from "../classes/rope";
 import type { PhysicsBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
+import { forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "../render/areaGlyphs";
 
 const M = PIXELS_PER_METER; // metres → px
+
+// Areas carry the same glyphs the canvas renderers stamp on them, so a snapshot
+// shows what each region does rather than an anonymous translucent box (see
+// docs/game-design.md, "Areas must read as areas"). Sink that turns the shared
+// glyph polygons into SVG path data.
+class SvgPolyPath implements PolyPath {
+  private readonly parts: string[] = [];
+  moveTo(x: number, y: number): void {
+    this.parts.push(`M${(x * M).toFixed(1)} ${(y * M).toFixed(1)}`);
+  }
+  lineTo(x: number, y: number): void {
+    this.parts.push(`L${(x * M).toFixed(1)} ${(y * M).toFixed(1)}`);
+  }
+  closePath(): void {
+    this.parts.push("Z");
+  }
+  toString(): string {
+    return this.parts.join(" ");
+  }
+}
+
+const f1 = (v: number): string => v.toFixed(1);
+
+// Outline of an area in its own local frame, in px.
+function outlinePath(hw: number, hh: number, circle: boolean): string {
+  if (circle) {
+    // Two half-arcs — an exact circle, no polygon approximation needed here.
+    return `M${f1(-hw)} 0 A${f1(hw)} ${f1(hw)} 0 1 0 ${f1(hw)} 0 A${f1(hw)} ${f1(hw)} 0 1 0 ${f1(-hw)} 0 Z`;
+  }
+  return `M${f1(-hw)} ${f1(-hh)} L${f1(hw)} ${f1(-hh)} L${f1(hw)} ${f1(hh)} L${f1(-hw)} ${f1(hh)} Z`;
+}
 
 interface Box {
   minX: number;
@@ -21,10 +53,23 @@ interface Box {
 }
 
 function grow(box: Box, x: number, y: number, pad = 0): void {
-  box.minX = Math.min(box.minX, x - pad);
-  box.minY = Math.min(box.minY, y - pad);
-  box.maxX = Math.max(box.maxX, x + pad);
-  box.maxY = Math.max(box.maxY, y + pad);
+  growXY(box, x, y, pad, pad);
+}
+
+function growXY(box: Box, x: number, y: number, padX: number, padY: number): void {
+  box.minX = Math.min(box.minX, x - padX);
+  box.minY = Math.min(box.minY, y - padY);
+  box.maxX = Math.max(box.maxX, x + padX);
+  box.maxY = Math.max(box.maxY, y + padY);
+}
+
+// Half-extents of a rotated rect's axis-aligned bounding box. Padding by the
+// half-diagonal instead (the obvious shortcut) frames a long floor as though it
+// were as tall as it is wide, burying the scene in dead space.
+function rotatedHalfExtents(hw: number, hh: number, rot: number): { x: number; y: number } {
+  const c = Math.abs(Math.cos(rot));
+  const s = Math.abs(Math.sin(rot));
+  return { x: hw * c + hh * s, y: hw * s + hh * c };
 }
 
 function bodyColor(b: PhysicsBody2D): { fill: string; stroke: string } {
@@ -67,9 +112,8 @@ export function renderFrameSVG(level: Level | BallLevel): string {
         shapeEls.push(
           `<rect x="${(cx - w / 2).toFixed(1)}" y="${(cy - h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="1"${rot}/>`,
         );
-        // Rotated corners still bound conservatively via the AABB of the centre ± half-diagonal.
-        const halfDiag = Math.hypot(w, h) / 2;
-        grow(box, cx, cy, halfDiag);
+        const ext = rotatedHalfExtents(w / 2, h / 2, s.globalRotation);
+        growXY(box, cx, cy, ext.x, ext.y);
       } else {
         const rad = s.shape.radius * M;
         shapeEls.push(
@@ -78,6 +122,51 @@ export function renderFrameSVG(level: Level | BallLevel): string {
         grow(box, cx, cy, rad);
       }
     }
+  }
+
+  // Areas (killzones, force areas). Drawn after geometry so their glyphs read
+  // over anything they overlap, and with the same even-odd cutout the canvas
+  // uses, so a snapshot and the running game agree.
+  const defsEls: string[] = [];
+  const areaEls: string[] = [];
+  for (const area of level.world.areas) {
+    if (area.removed || !area.hasShape()) continue;
+    const s = area.getShape();
+    const cx = s.globalPosition.x * M;
+    const cy = s.globalPosition.y * M;
+    const circle = s.shape.kind === "circle";
+    const half =
+      s.shape.kind === "circle"
+        ? new Vec2(s.shape.radius, s.shape.radius)
+        : s.shape.size.mul(0.5);
+    const hw = half.x * M;
+    const hh = half.y * M;
+    const ext = circle
+      ? { x: hw, y: hh }
+      : rotatedHalfExtents(hw, hh, s.globalRotation);
+    growXY(box, cx, cy, ext.x, ext.y);
+
+    const glyphs = new SvgPolyPath();
+    if (area instanceof ForceArea) {
+      // Pin the phase: a snapshot of a frame must not depend on the wall clock.
+      forceAreaGlyphs(glyphs, half, circle, area.magnitude, 0);
+    } else {
+      killZoneGlyphs(glyphs, half, circle);
+    }
+
+    const outline = outlinePath(hw, hh, circle);
+    const isForce = area instanceof ForceArea;
+    const fill = area.fillColor ?? (isForce ? "#65bddb" : "#dc3c50");
+    const op = area.fillColor ? area.fillOpacity : isForce ? 0.2 : 0.4;
+    const deg = (s.globalRotation * 180) / Math.PI;
+    const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
+    const clipId = `area${area.id}`;
+    defsEls.push(`<clipPath id="${clipId}"><path d="${outline}"/></clipPath>`);
+    areaEls.push(
+      `<g transform="translate(${f1(cx)} ${f1(cy)})${rot}">` +
+        `<path d="${outline} ${glyphs}" fill-rule="evenodd" fill="${fill}" fill-opacity="${op}" clip-path="url(#${clipId})"/>` +
+        `</g>`,
+    );
   }
 
   // Avatar (ball / player).
@@ -118,7 +207,9 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}" width="${Math.round(vw)}" height="${Math.round(vh)}">`,
     `<rect x="${vx.toFixed(1)}" y="${vy.toFixed(1)}" width="${vw.toFixed(1)}" height="${vh.toFixed(1)}" fill="#1f2430"/>`,
+    ...(defsEls.length ? [`<defs>${defsEls.join("")}</defs>`] : []),
     ...shapeEls,
+    ...areaEls,
     ...ropeEls,
     avatarEl,
     `<text x="${(vx + 6).toFixed(1)}" y="${(vy + 18).toFixed(1)}" fill="#cbccc6" font-family="monospace" font-size="14">f${frame}</text>`,

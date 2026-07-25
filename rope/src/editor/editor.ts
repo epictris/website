@@ -11,9 +11,17 @@ import { BallLevel } from "../level/ballLevel";
 import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
-import { DEFAULT_BODY_COLOR, DEFAULT_BODY_OPACITY, type BodyKind } from "../level/levelFormat";
+import {
+  DEFAULT_BODY_COLOR,
+  DEFAULT_BODY_OPACITY,
+  DEFAULT_FORCE_MAGNITUDE,
+  DEFAULT_SURFACE_FRICTION,
+  type BodyKind,
+} from "../level/levelFormat";
 import {
   emptyModel,
+  groupBounds,
+  halfExtents,
   modelFromDisk,
   modelToDisk,
   newBodyId,
@@ -36,9 +44,15 @@ import type { LevelData } from "../level/levelFormat";
 
 type Tool = "select" | "rect" | "circle";
 
+// Kinds offered by both kind pickers (toolbar + inspector), in one place so
+// they can't drift apart.
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "force"];
+
 type Drag =
-  | { mode: "pan"; lastScreen: Vec2 }
-  | { mode: "move"; body: EdBody; grab: Vec2 }
+  | { mode: "pan"; lastScreen: Vec2; keepSelection: boolean }
+  // The lead body follows the pointer (and the grid); the rest of the
+  // selection rides along at a fixed offset from it.
+  | { mode: "move"; lead: EdBody; others: Array<{ body: EdBody; offset: Vec2 }>; grab: Vec2 }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdBody; anchor: Vec2 }
   | { mode: "radius"; body: EdBody }
@@ -76,7 +90,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   // --- state ----------------------------------------------------------------
   let model: EdModel = emptyModel();
-  let selectedId: number | null = null;
+  // Selection is a set: plain click selects one, shift+click toggles a body in
+  // or out. Handles and the per-body inspector only apply to a lone selection.
+  const selectedIds = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
   let snapOn = true;
@@ -122,25 +138,34 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function afterHistoryChange(): void {
     drag = null;
     dirty = true;
-    if (!model.bodies.some((b) => b.id === selectedId)) selectedId = null;
+    const live = new Set(model.bodies.map((b) => b.id));
+    for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     rebuildInspector();
     updateTitle();
   }
 
-  const selected = () => model.bodies.find((b) => b.id === selectedId) ?? null;
+  // Model order, so a group keeps its z-order through copy/duplicate.
+  const selectedBodies = () => model.bodies.filter((b) => selectedIds.has(b.id));
+  const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
+  function setSelection(ids: readonly number[]): void {
+    if (ids.length === selectedIds.size && ids.every((id) => selectedIds.has(id))) return;
+    selectedIds.clear();
+    for (const id of ids) selectedIds.add(id);
+    rebuildInspector();
+  }
+  function toggleSelection(id: number): void {
+    if (!selectedIds.delete(id)) selectedIds.add(id);
+    rebuildInspector();
+  }
+
   const snap = (v: number) => (snapOn ? Math.round(v / gridStep) * gridStep : v);
   const snapVec = (v: Vec2) => new Vec2(snap(v.x), snap(v.y));
   // Snap a shape dimension (width/height/radius) to the grid, never below one cell.
   const snapLen = (v: number) => Math.max(gridStep, snap(v));
-  // Centre → top-left offset of a body's (axis-aligned) bounding box, so moves
-  // snap the top-left corner to the grid rather than the centre.
-  const cornerOffset = (b: EdBody) =>
-    b.shape.kind === "circle"
-      ? new Vec2(b.shape.r, b.shape.r)
-      : new Vec2(b.shape.w / 2, b.shape.h / 2);
-  // Snap a would-be centre so the body's top-left corner lands on the grid.
+  // Snap a would-be centre so the body's top-left corner lands on the grid
+  // (moves snap the corner rather than the centre).
   const snapCorner = (b: EdBody, center: Vec2) => {
-    const off = cornerOffset(b);
+    const off = halfExtents(b);
     return snapVec(center.sub(off)).add(off);
   };
   const snapAngle = (a: number) => {
@@ -251,7 +276,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (dirty && !confirm("Discard unsaved changes?")) return;
     model = emptyModel();
     resetHistory();
-    selectedId = null;
+    selectedIds.clear();
     currentName = null;
     dirty = false;
     camera.position = Vec2.ZERO;
@@ -293,20 +318,20 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   };
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
-  for (const k of ["static", "rigid", "killzone", "impermeable"] as BodyKind[]) {
+  for (const k of BODY_KINDS) {
     const o = document.createElement("option");
     o.value = k;
     o.textContent = k;
     kindSel.appendChild(o);
   }
   kindSel.value = newKind;
-  kindSel.title = "Kind for new bodies (and the selected body)";
+  kindSel.title = "Kind for new bodies (and every selected body)";
   kindSel.addEventListener("change", () => {
     newKind = kindSel.value as BodyKind;
-    const s = selected();
-    if (s) {
+    const sel = selectedBodies();
+    if (sel.length) {
       beginAction();
-      s.kind = newKind;
+      for (const b of sel) b.kind = newKind;
       markDirty();
       rebuildInspector();
     }
@@ -383,6 +408,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     inspector.appendChild(player);
 
     if (!s) {
+      if (selectedIds.size > 1) {
+        // Geometry fields are per-body, so a group only gets the ops that make
+        // sense for all of it at once.
+        const g = el("div", "ed-group");
+        g.appendChild(heading(`${selectedIds.size} bodies selected`));
+        const hint = el("div", "ed-hint");
+        hint.textContent =
+          "Drag to move them together. Shift+click to add/remove. Ctrl+C copies, Ctrl+V pastes at the cursor.";
+        g.appendChild(hint);
+        const row = el("div", "ed-row");
+        row.append(
+          button("Duplicate", () => duplicateSelected()),
+          button("Delete", () => deleteSelected()),
+        );
+        g.appendChild(row);
+        inspector.appendChild(g);
+        return;
+      }
       const hint = el("div", "ed-hint");
       hint.textContent = "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas.";
       inspector.appendChild(hint);
@@ -396,7 +439,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     kw.textContent = "kind";
     const ks = document.createElement("select");
     ks.className = "ed-select";
-    for (const k of ["static", "rigid", "killzone", "impermeable"] as BodyKind[]) {
+    for (const k of BODY_KINDS) {
       const o = document.createElement("option");
       o.value = k;
       o.textContent = k;
@@ -407,14 +450,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       beginAction();
       s.kind = ks.value as BodyKind;
       markDirty();
+      // Which fields apply depends on the kind (force magnitude, friction), so
+      // the panel has to be rebuilt rather than just revalued.
+      rebuildInspector();
     });
     kw.appendChild(ks);
     g.appendChild(kw);
 
+    // Areas are regions, not surfaces: nothing rests on them, so they carry no
+    // friction. A force area does carry a direction, hence a rot° even when it
+    // is a circle (whose rotation is otherwise invisible).
+    const isArea = s.kind === "killzone" || s.kind === "force";
+
     numField(g, "x", () => s.pos.x * M2PX, (v) => (s.pos = s.pos.withX(v * PX)));
     numField(g, "y", () => s.pos.y * M2PX, (v) => (s.pos = s.pos.withY(v * PX)));
-    if (s.shape.kind === "rect") {
+    if (s.shape.kind === "rect" || s.kind === "force") {
       numField(g, "rot°", () => (s.rot * 180) / Math.PI, (v) => (s.rot = (v * Math.PI) / 180));
+    }
+    if (s.shape.kind === "rect") {
       numField(g, "w", () => s.shape.kind === "rect" ? s.shape.w * M2PX : 0, (v) => {
         if (s.shape.kind === "rect") s.shape.w = Math.max(1, v) * PX;
       });
@@ -425,6 +478,14 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       numField(g, "radius", () => s.shape.kind === "circle" ? s.shape.r * M2PX : 0, (v) => {
         if (s.shape.kind === "circle") s.shape.r = Math.max(1, v) * PX;
       });
+    }
+    if (s.kind === "force") {
+      // Acceleration along rot°, authored in px/s² like every other length.
+      // Negative reverses the flow, so it is deliberately not clamped at 0.
+      numField(g, "force", () => s.force * M2PX, (v) => (s.force = v * PX), 50);
+    }
+    if (!isArea) {
+      numField(g, "friction", () => s.friction, (v) => (s.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
 
     const cw = el("label", "ed-field");
@@ -460,33 +521,54 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
 
   // --- editing ops ----------------------------------------------------------
+  // Detached copies of the given bodies, each with a fresh id and shifted by
+  // `offset`. Shapes are mutated in place, so clone them.
+  const cloneBodies = (bodies: readonly EdBody[], offset: Vec2): EdBody[] =>
+    bodies.map((b) => ({ ...b, id: newBodyId(), pos: b.pos.add(offset), shape: { ...b.shape } }));
+
+  // Add freshly created bodies to the model and leave them selected, so the
+  // group can immediately be dragged or pasted again.
+  function addAndSelect(bodies: EdBody[]): void {
+    model.bodies.push(...bodies);
+    selectedIds.clear();
+    for (const b of bodies) selectedIds.add(b.id);
+    markDirty();
+    rebuildInspector();
+  }
+
   function deleteSelected(): void {
-    if (selectedId == null) return;
+    if (!selectedIds.size) return;
     beginAction();
-    model.bodies = model.bodies.filter((b) => b.id !== selectedId);
-    selectedId = null;
+    model.bodies = model.bodies.filter((b) => !selectedIds.has(b.id));
+    selectedIds.clear();
     markDirty();
     rebuildInspector();
   }
   function duplicateSelected(): void {
-    const s = selected();
-    if (!s) return;
+    const sel = selectedBodies();
+    if (!sel.length) return;
     beginAction();
-    const copy: EdBody = {
-      ...s,
-      id: newBodyId(),
-      pos: s.pos.add(new Vec2(gridStep * 2, gridStep * 2)),
-      shape: { ...s.shape },
-    };
-    model.bodies.push(copy);
-    selectedId = copy.id;
-    markDirty();
-    rebuildInspector();
+    addAndSelect(cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2)));
   }
-  function select(id: number | null): void {
-    if (id === selectedId) return;
-    selectedId = id;
-    rebuildInspector();
+
+  // --- clipboard ------------------------------------------------------------
+  // Copies detached from the model (so later edits or an undo can't mutate
+  // them); paste re-centres the group's bounding box on the cursor.
+  let clipboard: EdBody[] = [];
+
+  function copySelection(): void {
+    const sel = selectedBodies();
+    if (!sel.length) return;
+    clipboard = sel.map((b) => ({ ...b, shape: { ...b.shape } }));
+  }
+  function pasteClipboard(): void {
+    if (!clipboard.length) return;
+    const box = groupBounds(clipboard);
+    let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
+    // Land the group's top-left corner on the grid, as a move does.
+    if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
+    beginAction();
+    addAndSelect(cloneBodies(clipboard, delta));
   }
 
   // --- disk -----------------------------------------------------------------
@@ -513,7 +595,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       const data = await loadLevel(name);
       model = modelFromDisk(data);
       resetHistory();
-      selectedId = null;
+      selectedIds.clear();
       currentName = name;
       dirty = false;
       camera.position = model.player.pos;
@@ -551,6 +633,15 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     return new Vec2(e.clientX - r.left, e.clientY - r.top);
   }
 
+  // Last pointer position, kept in screen space so it un-projects through the
+  // current camera (paste targets where the cursor is *now*, after any zoom or
+  // pan). Falls back to the view centre before the mouse has moved.
+  let lastPointerScreen: Vec2 | null = null;
+  const pointerWorld = (): Vec2 =>
+    lastPointerScreen
+      ? screenToWorld(camera, lastPointerScreen.x, lastPointerScreen.y)
+      : camera.position;
+
   // Which handle of the selected body (if any) is under the pointer?
   function pickHandle(scr: Vec2): Drag | null {
     const s = selected();
@@ -576,7 +667,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
     if (e.button === 1 || e.button === 2) {
-      drag = { mode: "pan", lastScreen: pointerScreen(e) };
+      drag = { mode: "pan", lastScreen: pointerScreen(e), keepSelection: true };
       e.preventDefault();
       return;
     }
@@ -597,13 +688,20 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       beginAction();
       dragPushed = true;
       const start = snapVec(world);
-      const style = { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
+      const style = {
+        color: DEFAULT_BODY_COLOR,
+        opacity: DEFAULT_BODY_OPACITY,
+        friction: DEFAULT_SURFACE_FRICTION,
+        // Only meaningful on a force area, but a new one needs a non-zero pull
+        // or it would draw no arrows and do nothing until the field is touched.
+        force: DEFAULT_FORCE_MAGNITUDE * PX,
+      };
       const body: EdBody =
         tool === "rect"
           ? { id: newBodyId(), kind: newKind, pos: start, rot: 0, shape: { kind: "rect", w: gridStep, h: gridStep }, ...style }
           : { id: newBodyId(), kind: newKind, pos: start, rot: 0, shape: { kind: "circle", r: gridStep }, ...style };
       model.bodies.push(body);
-      selectedId = body.id;
+      setSelection([body.id]);
       drag = { mode: "draw", body, start };
       markDirty();
       rebuildInspector();
@@ -617,19 +715,32 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // 4. Topmost body under the pointer.
     for (let i = model.bodies.length - 1; i >= 0; i--) {
       const b = model.bodies[i]!;
-      if (pointInBody(b, world)) {
-        select(b.id);
-        drag = { mode: "move", body: b, grab: b.pos.sub(world) };
+      if (!pointInBody(b, world)) continue;
+      if (e.shiftKey) {
+        // Shift+click only edits the selection — no drag, so it can't nudge
+        // geometry while picking bodies out of a group.
+        toggleSelection(b.id);
+        drag = null;
         return;
       }
+      // Clicking inside an existing multi-selection drags the whole group.
+      if (!selectedIds.has(b.id)) setSelection([b.id]);
+      const others = selectedBodies()
+        .filter((o) => o !== b)
+        .map((o) => ({ body: o, offset: o.pos.sub(b.pos) }));
+      drag = { mode: "move", lead: b, others, grab: b.pos.sub(world) };
+      return;
     }
-    // 5. Empty space: pan, and deselect if it turns out to be a click.
-    drag = { mode: "pan", lastScreen: scr };
+    // 5. Empty space: pan, and deselect if it turns out to be a click (shift
+    // keeps the selection so a miss doesn't undo the picking so far).
+    drag = { mode: "pan", lastScreen: scr, keepSelection: e.shiftKey };
   });
 
   window.addEventListener("mousemove", (e) => {
-    if (mode !== "edit" || !drag) return;
+    if (mode !== "edit") return;
     const scr = pointerScreen(e);
+    lastPointerScreen = scr;
+    if (!drag) return;
     const world = screenToWorld(camera, scr.x, scr.y);
     dragMoved = true;
 
@@ -648,11 +759,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         drag.lastScreen = scr;
         break;
       }
-      case "move":
-        drag.body.pos = snapCorner(drag.body, world.add(drag.grab));
+      case "move": {
+        // Snap the lead body's corner; the rest keep their relative offsets so
+        // a group's internal layout survives the move.
+        const lead = snapCorner(drag.lead, world.add(drag.grab));
+        drag.lead.pos = lead;
+        for (const o of drag.others) o.body.pos = lead.add(o.offset);
         markDirty();
         refreshFields();
         break;
+      }
       case "movePlayer":
         model.player.pos = snapVec(world.add(drag.grab));
         markDirty();
@@ -717,7 +833,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
-    if (drag.mode === "pan" && !dragMoved) select(null);
+    if (drag.mode === "pan" && !dragMoved && !drag.keepSelection) setSelection([]);
     drag = null;
   });
 
@@ -737,7 +853,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
-      else select(null);
+      else setSelection([]);
       return;
     }
     if (mode === "test") {
@@ -745,25 +861,48 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       return;
     }
     if (mode !== "edit") return;
-    // Ignore shortcuts while typing in a field (let the field's native undo win).
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
-    if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey)) {
-      if (e.shiftKey) redo();
-      else undo();
+    // Ignore shortcuts while a field that consumes keystrokes has focus (let
+    // its native editing/undo win). Toggles don't consume them, so clicking the
+    // snap checkbox must not leave the editor deaf to shortcuts.
+    const focused = e.target;
+    const typing =
+      (focused instanceof HTMLInputElement &&
+        focused.type !== "checkbox" &&
+        focused.type !== "radio") ||
+      focused instanceof HTMLSelectElement;
+    if (typing) return;
+    // Modifier combos first: the bare-key tool shortcuts share letters with
+    // them (V/C), so Ctrl+V must not also switch tools.
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.code) {
+        case "KeyZ":
+          if (e.shiftKey) redo();
+          else undo();
+          break;
+        case "KeyY":
+          redo();
+          break;
+        case "KeyD":
+          duplicateSelected();
+          break;
+        case "KeyC":
+          copySelection();
+          break;
+        case "KeyV":
+          pasteClipboard();
+          break;
+        default:
+          return;
+      }
       e.preventDefault();
-    } else if (e.code === "KeyY" && (e.ctrlKey || e.metaKey)) {
-      redo();
-      e.preventDefault();
-    } else if (e.code === "Delete" || e.code === "Backspace") {
+      return;
+    }
+    if (e.code === "Delete" || e.code === "Backspace") {
       deleteSelected();
       e.preventDefault();
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
-    else if (e.code === "KeyD" && (e.ctrlKey || e.metaKey)) {
-      duplicateSelected();
-      e.preventDefault();
-    }
   });
 
   // --- loop -----------------------------------------------------------------
@@ -801,7 +940,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim());
       }
     } else {
-      drawEditor(ctx, dpr, cssW, cssH, camera, model, selectedId);
+      drawEditor(ctx, dpr, cssW, cssH, camera, model, selectedIds);
     }
     requestAnimationFrame(frame);
   }

@@ -5,6 +5,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
+  ForceArea,
   ImpermeableBody,
   PhysicsBody2D,
   RigidBody2D,
@@ -17,6 +18,7 @@ import { KillZone } from "../classes/killZone";
 import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
+  DEFAULT_SURFACE_FRICTION,
   type LevelBodyData,
   type LevelData,
 } from "./levelFormat";
@@ -29,6 +31,7 @@ function makeShape(shape: LevelBodyData["shape"]) {
 function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
   body.fillColor = b.color ?? DEFAULT_BODY_COLOR;
   body.fillOpacity = b.opacity ?? DEFAULT_BODY_OPACITY;
+  body.surfaceFriction = b.friction ?? DEFAULT_SURFACE_FRICTION;
 }
 
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
@@ -51,6 +54,19 @@ export function buildLevelBodies(
       kz.globalRotation = b.rot;
       applyStyle(kz, b);
       world.add(kz);
+      continue;
+    }
+
+    if (b.kind === "force") {
+      // A current: accelerates whatever is inside along the area's rotation.
+      // Not a wrap body — the rope passes straight through it.
+      const fa = new ForceArea();
+      fa.setShape(shape);
+      fa.globalPosition = pos;
+      fa.globalRotation = b.rot;
+      fa.magnitude = b.force ?? 0;
+      applyStyle(fa, b);
+      world.add(fa);
       continue;
     }
 

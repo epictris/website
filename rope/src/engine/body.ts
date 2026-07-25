@@ -47,6 +47,13 @@ export abstract class CollisionObject2D {
   // opaque in `fillColor` regardless of `fillOpacity`.
   fillColor: string | null = null;
   fillOpacity = 1;
+  // Surface friction of this body's geometry, 0 (ice) .. 1 (rubber). It scales
+  // every contact-friction term another body applies *against* this one: the
+  // character controller's ground and wall friction, and a rigidbody's Coulomb
+  // friction, stiction and contact damping. 1 is the default and multiplies
+  // those constants by exactly 1, so untouched levels — and recorded replays,
+  // which predate this field — stay bit-identical.
+  surfaceFriction = 1;
 
   // Reset the body to a single centred shape (Godot's usual one-CollisionShape
   // node). Replaces any auxiliaries.
@@ -293,5 +300,27 @@ export class Area2D extends CollisionObject2D {
       }
     }
     this.inside = currentIds;
+  }
+}
+
+// A region that accelerates every body inside it — a river current, wind, an
+// updraft (Godot's Area2D gravity override, which this mirrors). The direction
+// is the area's own rotation, so the same rotate handle that aims a rect aims
+// the flow; `magnitude` is signed, and negative reverses it.
+//
+// Deliberately an acceleration rather than a true force: the current carries
+// light and heavy bodies alike, so a level author tunes one number and gets the
+// same drift for the avatar, a pebble and a boulder.
+export class ForceArea extends Area2D {
+  // Acceleration along the area's local +X, in m/s².
+  magnitude = 0;
+
+  constructor() {
+    super();
+    this.name = "ForceArea";
+  }
+
+  get acceleration(): Vec2 {
+    return Vec2.RIGHT.rotated(this.globalRotation).mul(this.magnitude);
   }
 }

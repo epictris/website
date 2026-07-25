@@ -37,8 +37,15 @@ export class GroundedState extends PlayerState {
     return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
   }
 
+  // Friction of the surface underfoot, 0 (ice) .. 1 (rubber). The default 1
+  // multiplies the constant by exactly 1, so ordinary geometry keeps the
+  // historical deceleration bit-for-bit.
+  private surfaceGrip(): number {
+    return this.supportBody?.surfaceFriction ?? 1;
+  }
+
   private applySurfaceFriction(currentSpeed: number, delta: number): number {
-    const f = PlayerClass.GROUND_FRICTION / delta;
+    const f = (PlayerClass.GROUND_FRICTION * this.surfaceGrip()) / delta;
     if (currentSpeed > f) return currentSpeed - f;
     if (currentSpeed < -f) return currentSpeed + f;
     return 0;
