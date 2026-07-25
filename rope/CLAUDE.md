@@ -129,6 +129,30 @@ DEPLOY button deploys (no touch restart - reload the page).
 Deploy is hold-to-keep: releasing it drops the chain. The touch controls only
 appear on a coarse primary pointer (`(pointer: coarse)`), so desktop and
 mouse-primary touchscreen laptops get none.
+The OS cursor is hidden on the ball controller; a black **aim reticle** stands in
+for it, drawn by `renderBall` from `BallInputSource.aimPoint()` (the same aim the
+FrameInput carries, null when nothing aims).
+Every device writes one piece of state, `aimLocal` - the aim point as an offset
+from the ball, in metres. A deflected left stick or on-screen joystick writes it
+at exactly the chain's reach (`CHAIN_MAX_LENGTH`).
+The mouse has two aim modes behind the `MOTION_AIM` setting in `ballInput.ts`
+(default **off**, overridable per session with `?motionAim=1` / `?motionAim=0` so
+the two can be compared by feel without a rebuild):
+- **position** (default): `aimLocal` is the cursor's position relative to the
+  ball, unbounded - the reticle is exactly where the pointer is, a drawn stand-in
+  for the hidden OS cursor and nothing more.
+- **motion**: `aimLocal` accumulates each mousemove's delta (metres at the
+  current zoom) and is held within the reach, and clicking the canvas takes
+  **pointer lock** (Esc releases it, the next click takes it back) so the cursor
+  stays in the window; while locked the delta comes from `movementX/Y`, falling
+  back to cursor travel for synthetic events that carry none.
+  Clamping a *position* mapping is what this avoids: past the boundary the drawn
+  dot would stop while the real cursor kept travelling outward, so moving back
+  inward would do nothing until the real cursor re-entered the reach circle, dead
+  travel the player cannot see since the cursor is hidden. Integrating motion
+  lets the reticle be bounded without that cost.
+  The first move (and the first after another device owned aim) seeds `aimLocal`
+  from the real cursor position.
 The camera zoom scales down on short viewports (height-driven, capped at the
 desktop zoom) so a landscape phone still frames the ball and its chain arc.
 The page is an installable full-screen web app (`public/manifest.webmanifest`

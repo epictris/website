@@ -239,7 +239,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     mode = "test";
     root.style.display = "none";
     testBanner.style.display = "block";
-    canvas.style.cursor = "crosshair";
+    // The ball controller draws its own aim reticle, so the OS cursor would be
+    // a second pointer — hide it there (the grapple aims with the cursor).
+    canvas.style.cursor = controller === "ball" ? "none" : "crosshair";
   }
 
   function downloadTestRecording(): void {
@@ -993,7 +995,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
           ? ballCameraPosition(camera, testLevel.cameraPosition)
           : testLevel.cameraPosition;
       if (testLevel instanceof BallLevel) {
-        renderBall(ctx, dpr, cssW, cssH, testLevel, camera, fps);
+        renderBall(ctx, dpr, cssW, cssH, testLevel, camera, fps, ballInput?.aimPoint() ?? null);
       } else {
         render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim());
       }

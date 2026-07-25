@@ -12,12 +12,34 @@
 // the existing tooling: aim → mouseWorldPosition, deploy → fire,
 // restart → jump. Everything else stays NO_BUTTON.
 //
-// Aim encoding differs by device. The mouse always aims: its cursor projects
-// straight to world space. The stick and the on-screen joystick aim only while
-// deflected past a deadzone, sending a direction; a released stick/joystick
-// sends the ball's own position, which BallPlayer reads as "not aiming"
-// (rotation left to the physics). The joystick's screen vector maps straight to
-// a world direction — screen +y (down) is world +y (down) — so up on the stick
+// Every device writes one piece of state, `aimLocal`: the aim point as an
+// offset from the ball, in world metres, never longer than the chain's reach.
+// `aimPoint()` turns it into a world point for both the FrameInput and the
+// renderer, which draws the aim reticle there — the OS cursor is hidden on the
+// ball controller, so that reticle *is* the cursor, and every device gets it.
+//
+// The mouse has two aim modes, chosen by the MOTION_AIM setting below:
+//
+//   position (default) — `aimLocal` is the cursor's own position relative to the
+//     ball, unbounded: the reticle is exactly where the pointer is, a drawn
+//     stand-in for the hidden OS cursor and nothing more.
+//   motion — `aimLocal` accumulates each mousemove's delta (metres at the
+//     current zoom) and is held within the chain's reach, and the canvas takes
+//     pointer lock so the cursor stays in the window. Clamping a *position*
+//     mapping is what motion aim avoids: past the boundary the drawn dot would
+//     stop while the real cursor kept travelling outward, so moving back inward
+//     would do nothing until the real cursor re-entered the reach circle — dead
+//     travel the player can't see, since the cursor is hidden. Integrating
+//     motion keeps reticle and pointer one thing: it moves inward the instant
+//     the mouse does, and the reticle can be bounded without that cost. The
+//     first move (and the first after another device owned aim) seeds it from
+//     the cursor.
+//
+// The stick and the on-screen joystick aim only while deflected past a
+// deadzone, writing a direction at exactly the reach distance; a released
+// stick/joystick sends the ball's own position, which BallPlayer reads as "not
+// aiming" (rotation left to the physics). Their screen vector maps straight to a
+// world direction — screen +y (down) is world +y (down) — so up on the stick
 // aims the loop up, matching the mouse.
 
 import { Vec2 } from "../engine/vec2";
@@ -29,10 +51,29 @@ import {
 } from "./frameInput";
 import { PAD_RB, PAD_Y, readGamepad } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
+import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
 
+// Motion-driven mouse aim + pointer lock (see the header). Off: the reticle
+// follows the cursor's position, clamped to the reach. Override per session with
+// `?motionAim=1` / `?motionAim=0` to compare the two by feel without a rebuild.
+const MOTION_AIM_DEFAULT = false;
+const MOTION_AIM = ((): boolean => {
+  if (typeof location === "undefined") return MOTION_AIM_DEFAULT;
+  const q = new URLSearchParams(location.search).get("motionAim");
+  return q === null ? MOTION_AIM_DEFAULT : q !== "0";
+})();
+
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
+// The chain's reach. The stick and joystick aim at exactly this distance; motion
+// aim keeps its reticle within it (position aim is unbounded — it is the cursor).
 const AIM_DISTANCE = BallPlayer.CHAIN_MAX_LENGTH;
+
+// Clamp an aim offset to the reach, keeping its direction.
+function clampReach(v: Vec2): Vec2 {
+  const len = v.length();
+  return len > AIM_DISTANCE ? v.mul(AIM_DISTANCE / len) : v;
+}
 
 const JOYSTICK_RADIUS_PX = 56; // knob travel from the base centre
 const JOYSTICK_DEADZONE = 0.25; // fraction of travel before it counts as aiming
@@ -50,12 +91,19 @@ const TOUCH_CAPABLE =
 export class BallInputSource implements IInputSource {
   private prev: FrameInput = emptyFrameInput();
   private mouseLeft = false;
-  private mouseScreen = new Vec2(0, 0);
-  // No input yet: don't aim (avoids the ball snapping toward screen origin
-  // before the first move). Any device sets this true.
-  private hasAimed = false;
+  // Last cursor position in canvas space — the delta source for mouse aim, and
+  // the seed for the first move. Null until the first mousemove.
+  private mouseScreen: Vec2 | null = null;
+  // The aim point as an offset from the ball, in metres, clamped to the reach.
+  // Null = nothing has aimed yet (don't aim, rather than snap the ball toward
+  // some default direction before the first input).
+  private aimLocal: Vec2 | null = null;
   private aimSource: "mouse" | "pad" | "touch" = "mouse";
 
+  // Left-stick aim: a normalized direction while deflected past the deadzone,
+  // else null ("not aiming"). Refreshed every sample(); kept as a field so the
+  // reticle can be placed between samples.
+  private padAim: Vec2 | null = null;
   // On-screen joystick aim (touch only): a normalized direction while deflected
   // past the deadzone, else null ("not aiming").
   private joyAim: Vec2 | null = null;
@@ -69,14 +117,24 @@ export class BallInputSource implements IInputSource {
   ) {
     canvas.addEventListener("mousemove", (e) => {
       const rect = canvas.getBoundingClientRect();
-      this.mouseScreen = new Vec2(e.clientX - rect.left, e.clientY - rect.top);
+      const screen = new Vec2(e.clientX - rect.left, e.clientY - rect.top);
+      const prev = this.mouseScreen;
+      this.mouseScreen = screen;
+      this.aimLocal = MOTION_AIM
+        ? this.motionAim(e, screen, prev)
+        : screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin());
       this.aimSource = "mouse";
-      this.hasAimed = true;
     });
     canvas.addEventListener("mousedown", (e) => {
       if (e.button === 0) this.mouseLeft = true;
-      this.aimSource = "mouse";
-      this.hasAimed = true;
+      // Motion aim only: keep the pointer in the window, since the cursor has no
+      // business leaving (or reaching a screen edge and quietly capping the
+      // motion). Needs a user gesture, hence here; Esc releases it and the next
+      // click takes it back. Rejects harmlessly if the browser refuses (e.g. a
+      // lock request too soon after an Esc exit).
+      if (MOTION_AIM && document.pointerLockElement !== canvas) {
+        void Promise.resolve(canvas.requestPointerLock()).catch(() => {});
+      }
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.mouseLeft = false;
@@ -86,6 +144,28 @@ export class BallInputSource implements IInputSource {
       this.buildJoystick();
       this.buildDeploy();
     }
+  }
+
+  // Motion aim (MOTION_AIM): the new aim offset after this mousemove, moved by
+  // the mouse's own travel rather than set from the cursor's position.
+  private motionAim(e: MouseEvent, screen: Vec2, prev: Vec2 | null): Vec2 {
+    const locked = document.pointerLockElement === this.canvas;
+    const travel = prev ? screen.sub(prev) : null;
+    const device = new Vec2(e.movementX, e.movementY);
+    // Locked, the device delta is the only motion there is (the cursor holds
+    // still); it falls back to cursor travel for events that carry no
+    // movementX/Y, which is what synthetic events (headless tooling) dispatch.
+    const motion = locked && device.lengthSquared() > 0 ? device : travel;
+    // Taking over from another device (or aiming for the first time) puts the
+    // reticle under the real cursor; from there it travels by motion alone.
+    if (!motion || !this.aimLocal || this.aimSource !== "mouse") {
+      if (locked && this.aimLocal) return this.aimLocal; // locked: no cursor to seed from
+      return clampReach(screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin()));
+    }
+    // Metres per screen pixel at the current zoom, so a given hand movement
+    // covers the same on-screen distance whatever the zoom is.
+    const metresPerPx = 1 / (this.camera.zoom * PIXELS_PER_METER);
+    return clampReach(this.aimLocal.add(motion.mul(metresPerPx)));
   }
 
   // Bottom-left virtual joystick: a fixed base ring with a draggable knob. The
@@ -135,8 +215,8 @@ export class BallInputSource implements IInputSource {
       knob.style.transform = `translate(calc(-50% + ${v.x}px), calc(-50% + ${v.y}px))`;
       const frac = Math.min(len, JOYSTICK_RADIUS_PX) / JOYSTICK_RADIUS_PX;
       this.joyAim = frac > JOYSTICK_DEADZONE ? v.normalized() : null;
+      if (this.joyAim) this.aimLocal = this.joyAim.mul(AIM_DISTANCE);
       this.aimSource = "touch";
-      this.hasAimed = true;
     };
     const release = (): void => {
       joyId = null;
@@ -225,17 +305,28 @@ export class BallInputSource implements IInputSource {
     document.body.append(deploy);
   }
 
+  // The world point currently aimed at, or null when nothing aims (no input
+  // yet, or a released stick/joystick — those hold their last aimLocal, but a
+  // released stick means "physics owns rotation"). The renderer draws the aim
+  // reticle here; sample() encodes null as the ball's own position.
+  aimPoint(): Vec2 | null {
+    if (!this.aimLocal) return null;
+    if (this.aimSource === "pad" && !this.padAim) return null;
+    if (this.aimSource === "touch" && !this.joyAim) return null;
+    return this.aimOrigin().add(this.aimLocal);
+  }
+
   sample(): FrameInput {
     const pad = readGamepad();
     let padFire = false;
     let restart = false;
-    let padAim: Vec2 | null = null;
+    this.padAim = null;
     if (pad) {
       const stick = new Vec2(pad.axis(0), pad.axis(1));
       if (stick.length() > AIM_DEADZONE) {
-        padAim = stick.normalized();
+        this.padAim = stick.normalized();
+        this.aimLocal = this.padAim.mul(AIM_DISTANCE);
         this.aimSource = "pad";
-        this.hasAimed = true;
       }
       padFire = pad.pressed(PAD_RB);
       restart = pad.pressed(PAD_Y);
@@ -243,17 +334,7 @@ export class BallInputSource implements IInputSource {
 
     // "Not aiming" sentinel: the ball's own position (BallPlayer treats a
     // zero-length aim vector as physics-driven rotation).
-    const origin = this.aimOrigin();
-    let aimWorld = origin;
-    if (this.hasAimed) {
-      if (this.aimSource === "pad") {
-        aimWorld = padAim ? origin.add(padAim.mul(AIM_DISTANCE)) : origin;
-      } else if (this.aimSource === "touch") {
-        aimWorld = this.joyAim ? origin.add(this.joyAim.mul(AIM_DISTANCE)) : origin;
-      } else {
-        aimWorld = screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y);
-      }
-    }
+    const aimWorld = this.aimPoint() ?? this.aimOrigin();
 
     const p = this.prev;
     const input: FrameInput = {

@@ -49,6 +49,13 @@ const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
+// Ball & chain aim reticle: the OS cursor is hidden there, so this white ring is
+// the cursor. World-sized (not fixed pixels) so it keeps its size relative to
+// the ball and its reach at any zoom. The thin dark edge keeps it legible
+// against the pale grid backdrop.
+const RETICLE = "#ffffff";
+const RETICLE_EDGE = "#12161d";
+const RETICLE_RADIUS = 5 * PX;
 
 function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
   ctx.beginPath();
@@ -408,8 +415,29 @@ function drawManacle(ctx: CanvasRenderingContext2D, center: Vec2, dir: Vec2): vo
   ctx.restore();
 }
 
-// Ball & chain frame: bodies + chain spans. No rig, no ledge overlay — the
-// ball has neither; aim is shown by the loop on the ball itself.
+// The aim reticle — the cursor for the ball controller, whichever device aims.
+// Drawn straight at the aim point BallInputSource reports, so the sim aims
+// exactly where this is drawn; any bounding of that point belongs there.
+// A hollow ring, not a disc: the scene stays visible through the middle, so the
+// reticle never hides what is being aimed at. Drawn as a dark stroke with the
+// white one laid over it, which leaves a thin dark edge on both sides of the
+// white — legible over pale grid and dark geometry alike.
+function drawAimReticle(ctx: CanvasRenderingContext2D, at: Vec2): void {
+  ctx.beginPath();
+  ctx.arc(at.x, at.y, RETICLE_RADIUS, 0, Math.PI * 2);
+  ctx.strokeStyle = RETICLE_EDGE;
+  ctx.lineWidth = 2.2 * PX;
+  ctx.stroke();
+  ctx.strokeStyle = RETICLE;
+  ctx.lineWidth = 1 * PX;
+  ctx.stroke();
+}
+
+// Ball & chain frame: bodies + chain spans + the aim reticle. No rig, no ledge
+// overlay — the ball has neither.
+//
+// `aimWorld` is the aim point from BallInputSource (null = not aiming) — see
+// drawAimReticle.
 export function renderBall(
   ctx: CanvasRenderingContext2D,
   dpr: number,
@@ -418,6 +446,7 @@ export function renderBall(
   level: BallLevel,
   camera: Camera,
   fps: number,
+  aimWorld: Vec2 | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
@@ -472,6 +501,8 @@ export function renderBall(
   ctx.beginPath();
   ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
   ctx.stroke();
+
+  if (aimWorld) drawAimReticle(ctx, aimWorld);
 
   ctx.restore();
 

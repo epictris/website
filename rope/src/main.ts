@@ -67,6 +67,9 @@ level.onReset = reset;
 const ballInput = isBall
   ? new BallInputSource(canvas, camera, () => (level as BallLevel).ball.globalPosition)
   : null;
+// The ball controller draws its own aim reticle (clamped to the chain's reach),
+// so the OS cursor would be a second, misleading pointer — hide it.
+if (isBall) canvas.style.cursor = "none";
 const liveInput = isBall
   ? null
   : new LiveInputSource(canvas, camera, () => (level as Level).player.globalPosition);
@@ -131,7 +134,7 @@ function frame(now: number): void {
 
   const dpr = window.devicePixelRatio || 1;
   if (level instanceof BallLevel) {
-    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps);
+    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps, ballInput!.aimPoint());
   } else {
     render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug, liveInput!.gamepadAim());
   }
