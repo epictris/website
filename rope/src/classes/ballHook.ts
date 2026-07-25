@@ -13,6 +13,17 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
 export class BallHook extends RigidBody2D {
+  // Inbound normal speed (m/s) above which a bounce counts as an impact and also
+  // drains the hook's tangential momentum. Below it — a hook settling under
+  // gravity (one frame of gravity is ~0.16 m/s), or one sliding along a wall
+  // where the inbound component is ~0 — the tangent is left alone, so a chain tip
+  // resting on or swinging past a hook-proof surface isn't glued to it.
+  private static readonly BOUNCE_IMPACT_SPEED = 0.5;
+  // Fraction of the along-surface velocity a real impact keeps. The hook is a
+  // lump of iron, not a rubber ball: a hook-proof surface eats nearly all of its
+  // momentum, so it drops down the wall instead of skating off along it.
+  private static readonly BOUNCE_TANGENT_RETENTION = 0.15;
+
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
   private bounceCallbacks: Array<() => void> = [];
   private armed = true;
@@ -108,10 +119,17 @@ export class BallHook extends RigidBody2D {
   // Reflect the hook's velocity about the surface normal (outward) and seat it
   // at `seatPos` so the following World.integrate step carries it away rather
   // than back into the wall. Notifies bounce listeners (they stop the deploy).
+  // A real impact also drains the along-surface component: the rebound is a
+  // token nudge off the wall, not a deflected shot that keeps flying.
   private bounce(normal: Vec2, seatPos: Vec2): void {
     const vn = this.linearVelocity.dot(normal);
     if (vn < 0) {
-      this.linearVelocity = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
+      let v = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
+      if (-vn > BallHook.BOUNCE_IMPACT_SPEED) {
+        const outward = normal.mul(v.dot(normal));
+        v = outward.add(v.sub(outward).mul(BallHook.BOUNCE_TANGENT_RETENTION));
+      }
+      this.linearVelocity = v;
     }
     this.globalPosition = seatPos;
     for (const cb of this.bounceCallbacks) cb();
