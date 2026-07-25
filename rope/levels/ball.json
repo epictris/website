@@ -1,19 +1,19 @@
 {
   "player": {
     "x": 130,
-    "y": -10,
+    "y": -50,
     "radius": 8
   },
   "bodies": [
     {
       "kind": "static",
       "x": 60.00000000000006,
-      "y": 30.000000000000004,
+      "y": 65,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 1320,
-        "h": 60.00000000000001
+        "h": 130
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -64,12 +64,12 @@
     {
       "kind": "static",
       "x": 550.0000000000001,
-      "y": -60.00000000000001,
+      "y": -55.00000000000001,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 340.00000000000006,
-        "h": 120.00000000000001
+        "h": 110.00000000000001
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -91,13 +91,13 @@
     },
     {
       "kind": "static",
-      "x": 879.9999999999999,
-      "y": -200.00000000000006,
+      "x": 944.9999999999999,
+      "y": -59.999999999999964,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 180,
-        "h": 520
+        "w": 290.00000000000006,
+        "h": 220.00000000000003
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -162,48 +162,48 @@
     {
       "kind": "impermeable",
       "x": 725,
-      "y": -320,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10.000000000000053,
-        "h": 280.00000000000006
-      },
-      "color": "#000000",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "impermeable",
-      "x": 785,
-      "y": -200.00000000000014,
+      "y": -190,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 10,
-        "h": 520
+        "h": 20
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 795,
+      "y": -60.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 220.00000000000003
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 0.2
     },
     {
       "kind": "impermeable",
       "x": 724.9999999999999,
-      "y": -25.000000000000032,
+      "y": -20.00000000000003,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 10,
-        "h": 190
+        "h": 180
       },
       "color": "#000000",
-      "opacity": 0.5,
-      "friction": 1
+      "opacity": 0.8,
+      "friction": 0.2
     },
     {
       "kind": "impermeable",
-      "x": 890.0000000000002,
+      "x": 890,
       "y": 125.00000000000003,
       "rot": 0,
       "shape": {
@@ -212,7 +212,7 @@
         "h": 10
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
     },
     {
@@ -226,13 +226,13 @@
         "h": 10
       },
       "color": "#000000",
-      "opacity": 0.5,
-      "friction": 1
+      "opacity": 0.8,
+      "friction": 0.2
     },
     {
       "kind": "impermeable",
       "x": 910.0000000000001,
-      "y": 65.00000000000001,
+      "y": 55.00000000000001,
       "rot": 0,
       "shape": {
         "kind": "rect",
@@ -240,35 +240,35 @@
         "h": 10
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
     },
     {
       "kind": "impermeable",
-      "x": 1050.0000000000002,
-      "y": 95,
+      "x": 1058.5355339059329,
+      "y": 88.53553390593274,
       "rot": 0.7853981633974483,
       "shape": {
         "kind": "rect",
-        "w": 80,
+        "w": 100,
         "h": 10
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
     },
     {
       "kind": "impermeable",
-      "x": 1075.0000000000002,
-      "y": 150.00000000000003,
+      "x": 1085.0000000000002,
+      "y": 145.00000000000003,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 10,
-        "h": 60.00000000000001
+        "h": 50
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
     },
     {
@@ -279,21 +279,21 @@
       "shape": {
         "kind": "rect",
         "w": 10,
-        "h": 60.00000000000001
+        "h": 40
       },
       "color": "#000000",
-      "opacity": 0.5,
+      "opacity": 0.8,
       "friction": 1
     },
     {
       "kind": "static",
-      "x": 870.0000000000001,
-      "y": 155,
+      "x": 770.0000000000001,
+      "y": 140.00000000000003,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 280.00000000000006,
-        "h": 10.000000000000009
+        "w": 480.00000000000006,
+        "h": 20
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -301,41 +301,13 @@
     },
     {
       "kind": "static",
-      "x": 1340,
-      "y": 155,
+      "x": 1470,
+      "y": 470,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 520,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "static",
-      "x": 735,
-      "y": 275,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 230.00000000000003
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "static",
-      "x": 1530,
-      "y": 385,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 1580,
-        "h": 10
+        "w": 1460.0000000000002,
+        "h": 20
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -343,13 +315,195 @@
     },
     {
       "kind": "static",
-      "x": 1595,
-      "y": 64.99999999999999,
+      "x": 1770.0000000000002,
+      "y": 85.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 725.0000000000001,
+      "y": 335.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 290.00000000000006
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 620.0000000000002,
+      "y": 180,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 180,
+        "h": 60.00000000000001
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 620.0000000000001,
+      "y": 335.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 180,
+        "h": 270
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1010,
+      "y": 175.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1090,
+      "y": 175.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2030.0000000000005,
+      "y": 85.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2105,
+      "y": -70.00000000000001,
       "rot": 0,
       "shape": {
         "kind": "rect",
         "w": 10,
-        "h": 170.00000000000003
+        "h": 300
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1850.0000000000005,
+      "y": 85.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2110,
+      "y": 85.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1011.0834680974724,
+      "y": 128.39658562275588,
+      "rot": -0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 10.068807893754547,
+        "h": 14.667923313501843
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2266.975578699731,
+      "y": 129.99398996650422,
+      "rot": -1.308996938995747,
+      "shape": {
+        "kind": "rect",
+        "w": 160,
+        "h": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 0.5
+    },
+    {
+      "kind": "static",
+      "x": 2205,
+      "y": 200,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2430,
+      "y": 130,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 300,
+        "h": 160
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -357,32 +511,2405 @@
     },
     {
       "kind": "static",
-      "x": 1935.0000000000002,
-      "y": -25,
+      "x": 745,
+      "y": 235,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 670.0000000000002,
-        "h": 10.000000000000004
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 254.99999999999997,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 275,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 295,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 315,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 335,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 355,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 215,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 375,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "force",
+      "x": 2000,
+      "y": 390.00000000000006,
+      "rot": -3.141592653589793,
+      "shape": {
+        "kind": "rect",
+        "w": 2520.0000000000005,
+        "h": 140
+      },
+      "color": "#518dcd",
+      "opacity": 0.5,
+      "friction": 1,
+      "force": 300
+    },
+    {
+      "kind": "impermeable",
+      "x": 2405,
+      "y": 204.99999999999997,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 350,
+        "h": 10.000000000000009
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2750,
+      "y": 465.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 1040,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 0
+    },
+    {
+      "kind": "impermeable",
+      "x": 2585,
+      "y": 114.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2574.9999999999995,
+      "y": 15.000000000000007,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2555,
+      "y": 20,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2575,
+      "y": -55.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2555,
+      "y": -60.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2585,
+      "y": -270.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 420
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2935.0000000000005,
+      "y": -489.9999999999999,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 1400
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2570.0000000000005,
+      "y": 35,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 19.99999999999993,
+        "h": 30
       },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1
     },
     {
-      "kind": "force",
-      "x": 1030,
-      "y": 349.99999999999994,
-      "rot": -3.141592653589793,
+      "kind": "static",
+      "x": 2760,
+      "y": -10,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2760,
+      "y": 170.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2760,
+      "y": -190.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2760,
+      "y": -370,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 20
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 235,
+      "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 580.0000000000001,
-        "h": 60.00000000000001
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 255.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 275.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 295.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 315,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 335,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 355,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 215,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 375.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 3105,
+      "y": 204.99999999999997,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 330,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 395,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 415.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 435.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 745,
+      "y": 455.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 395,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 415.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 434.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3005,
+      "y": 455.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 3140,
+      "y": 334.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 260,
+        "h": 250
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2615,
+      "y": -520,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 100
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2585,
+      "y": -655,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.0000000000005,
+      "y": -549.9999999999999,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.0000000000005,
+      "y": -530,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.0000000000005,
+      "y": -509.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.0000000000005,
+      "y": -489.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2615.0000000000005,
+      "y": -790,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 100
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2455,
+      "y": -825,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 310,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.000000000001,
+      "y": -819.9999999999999,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.000000000001,
+      "y": -800,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.000000000001,
+      "y": -780.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.000000000001,
+      "y": -760,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2585,
+      "y": -925,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2615,
+      "y": -1020.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2460,
+      "y": -1025,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 300,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2615,
+      "y": -1100.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2455,
+      "y": -1095,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 310,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2585,
+      "y": -1145.0000000000005,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 90
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2305,
+      "y": -930.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 200
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2455,
+      "y": -755.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 310,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2455,
+      "y": -555.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 310,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2455,
+      "y": -485.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 310,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2235,
+      "y": -880.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 300
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2270.0000000000005,
+      "y": -1065,
+      "rot": -0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 100,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2305,
+      "y": -655,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2235,
+      "y": -515,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 430
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2305,
+      "y": -385.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2270.0000000000005,
+      "y": -255.00000000000003,
+      "rot": -0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 100,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2170.0000000000005,
+      "y": -225.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 140,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2035.0000000000002,
+      "y": -70.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 300
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1939.9999999999998,
+      "y": -225.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 200,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1845.0000000000002,
+      "y": -70.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 300
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1775,
+      "y": -200.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 560
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -305,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -345,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -385.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -425,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -465.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -265.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1845.0000000000002,
+      "y": -395,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 190
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2220.0000000000005,
+      "y": 200,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2215.0000000000005,
+      "y": 470.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1685.0000000000002,
+      "y": -240.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 170.00000000000003,
+        "h": 160
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1345,
+      "y": -85.00000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 510.00000000000006,
+        "h": 470
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2625.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2655.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -225.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1764.9999999999998,
+      "y": -485.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1764.9999999999998,
+      "y": -555.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1745.0000000000002,
+      "y": -480.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10.000000000000142,
+        "h": 20.000000000000018
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1745.0000000000002,
+      "y": -560,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10.000000000000142,
+        "h": 20.000000000000018
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "force",
+      "x": 1445,
+      "y": -370,
+      "rot": -1.5707963267948966,
+      "shape": {
+        "kind": "rect",
+        "w": 100,
+        "h": 650
       },
       "color": "#518dcd",
       "opacity": 0.5,
       "friction": 1,
-      "force": 300
+      "force": 0
+    },
+    {
+      "kind": "impermeable",
+      "x": 1939.9999999999998,
+      "y": -295,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 200,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1005.6066017177983,
+      "y": -385.6066017177983,
+      "rot": 2.356194490192345,
+      "shape": {
+        "kind": "rect",
+        "w": 600,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 0.2
+    },
+    {
+      "kind": "impermeable",
+      "x": 935.6066017177982,
+      "y": -405.606601717799,
+      "rot": 2.356194490192345,
+      "shape": {
+        "kind": "rect",
+        "w": 600,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 0.2
+    },
+    {
+      "kind": "impermeable",
+      "x": 1215,
+      "y": -940.0000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 700
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1145,
+      "y": -1425.000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 1630
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1115.0000000000002,
+      "y": -409.99999999999994,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 180
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 925,
+      "y": -1090,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 390.00000000000006,
+        "h": 980.0000000000001
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1610.0000000000002,
+      "y": -610,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1230,
+      "y": -645,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1130,
+      "y": -1235,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1130,
+      "y": -645,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1133.5355339059329,
+      "y": -621.4644660940671,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1230,
+      "y": -1235,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1230,
+      "y": -825.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1130,
+      "y": -825.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1739.9999999999998,
+      "y": -1000.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 20
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1230,
+      "y": -1035,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1130,
+      "y": -1035,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 20,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2170.0000000000005,
+      "y": -295,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 140,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2105,
+      "y": -310,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2035.0000000000002,
+      "y": -310,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2030.0000000000005,
+      "y": -325,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 19.99999999999993,
+        "h": 10.000000000000009
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2110,
+      "y": -325.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 19.99999999999993,
+        "h": 10.000000000000009
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1809.9999999999998,
+      "y": -525.0000000000001,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 100,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1420,
+      "y": -850,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 10
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2685.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2715,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2745.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2775.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2805.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2835.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2865,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2895.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2925.0000000000005,
+      "y": -1195.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2595.0000000000005,
+      "y": -1195,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 5
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2760,
+      "y": -1175,
+      "rot": 1.5707963267948966,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 380
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2450.0000000000005,
+      "y": -1145,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 240.00000000000003,
+        "h": 90
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3125,
+      "y": -1034.9999999999998,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 350,
+        "h": 310
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2405,
+      "y": -1220,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2405,
+      "y": -1300.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2255,
+      "y": -1225,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 290.00000000000006,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2230,
+      "y": -1295,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 340.00000000000006,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2360,
+      "y": -1205,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 60.00000000000001,
+        "h": 30.000000000000004
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2229.9999999999995,
+      "y": -1330,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 320,
+        "h": 60.00000000000001
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1825.0000000000005,
+      "y": -1540,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 1210.0000000000002,
+        "h": 360
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2037.071067811865,
+      "y": -1327.9289321881345,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 80,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1600,
+      "y": -1285,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 760,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1615.0000000000002,
+      "y": -1355,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 790,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1215.0000000000002,
+      "y": -1555,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 410.00000000000006
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1355,
+      "y": -1270,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 19.99999999999993
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1585.0000000000002,
+      "y": -1270,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 19.99999999999993
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1785.0000000000002,
+      "y": -1270,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 19.99999999999993
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1195,
+      "y": -555.0000000000002,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 30.000000000000004,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2105,
+      "y": -1215,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10.000000000000142,
+        "h": 30.00000000000007
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2110,
+      "y": -1194.9999999999973,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 19.99999999999993,
+        "h": 10.000000000000009
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2030.0000000000005,
+      "y": -1195,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 19.99999999999993,
+        "h": 10.000000000000009
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2035.0000000000005,
+      "y": -1215,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10.000000000000142,
+        "h": 30.00000000000007
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 2010.0000000000002,
+      "y": -1255,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 80,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1955,
+      "y": -1270,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 19.99999999999993
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1985.0000000000002,
+      "y": -1260.0000000000002,
+      "rot": 0.7853981633974483,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 19.99999999999993
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "impermeable",
+      "x": 1215.0000000000002,
+      "y": -2035.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 410.00000000000006
+      },
+      "color": "#000000",
+      "opacity": 0.8,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1830,
+      "y": -1740.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 1220,
+        "h": 40
+      },
+      "color": "#2c6704",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 3120.0000000000005,
+      "y": -340.00000000000006,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 360,
+        "h": 1080
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2945.0000000000005,
+      "y": -1020.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 280
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2455,
+      "y": -980.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 250,
+        "h": 80
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2455.0000000000005,
+      "y": -885.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 250,
+        "h": 110.00000000000001
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2455.0000000000005,
+      "y": -655,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 250,
+        "h": 190
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2455.0000000000005,
+      "y": -400.0000000000001,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 250,
+        "h": 160
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2270,
+      "y": -1180,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 120.00000000000001,
+        "h": 80
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2175.0000000000005,
+      "y": -1200.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 70,
+        "h": 40
+      },
+      "color": "#412a10",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1939.9999999999998,
+      "y": -310,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 180.00000000000006,
+        "h": 20.000000000000018
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2170.0000000000005,
+      "y": -310,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 119.99999999999993,
+        "h": 20.000000000000018
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2445.0000000000005,
+      "y": -245.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 269.99999999999994,
+        "h": 150
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 2210,
+      "y": -195.00000000000003,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 200,
+        "h": 50
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1939.9999999999998,
+      "y": -190,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 180.00000000000006,
+        "h": 60.00000000000001
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1739.9999999999998,
+      "y": -1000.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 30.000000000000004
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1420,
+      "y": -850,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 15
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": 1610.0000000000002,
+      "y": -610,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 15
+      },
+      "color": "#000000",
+      "opacity": 0.5,
+      "friction": 1
     }
   ]
 }
