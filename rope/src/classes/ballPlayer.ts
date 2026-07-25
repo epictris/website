@@ -232,12 +232,9 @@ export class BallPlayer extends RigidBody2D {
       [],
       null,
     );
-    // Bouncing off an impermeable (hook-proof) surface stops the deploy: the
-    // chain freezes at its current length and the hook becomes the dangling tip,
-    // swinging on the solver instead of paying out further.
-    hook.registerBounceCallback(() => {
-      if (this.hookInFlight && this.chain) this.deployTip(this.chain.getCurrentLength());
-    });
+    // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
+    // the hook and scales its speed by how glancing the hit was, and the chain
+    // keeps paying out until it reaches max length or snags on geometry.
     hook.registerAttachmentCallback((body, point) => {
       this.hookInFlight = null;
       this.chainTip = null;

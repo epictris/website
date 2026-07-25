@@ -13,19 +13,12 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
 export class BallHook extends RigidBody2D {
-  // Inbound normal speed (m/s) above which a bounce counts as an impact and also
-  // drains the hook's tangential momentum. Below it — a hook settling under
-  // gravity (one frame of gravity is ~0.16 m/s), or one sliding along a wall
-  // where the inbound component is ~0 — the tangent is left alone, so a chain tip
-  // resting on or swinging past a hook-proof surface isn't glued to it.
-  private static readonly BOUNCE_IMPACT_SPEED = 0.5;
-  // Fraction of the along-surface velocity a real impact keeps. The hook is a
-  // lump of iron, not a rubber ball: a hook-proof surface eats nearly all of its
-  // momentum, so it drops down the wall instead of skating off along it.
-  private static readonly BOUNCE_TANGENT_RETENTION = 0.15;
+  // Speed below which a contact is too slow to bother rescaling — the direction
+  // of a near-zero velocity is numerical noise, so the glancing factor below
+  // would be meaningless.
+  private static readonly BOUNCE_MIN_SPEED = 1e-6;
 
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
-  private bounceCallbacks: Array<() => void> = [];
   private armed = true;
 
   constructor() {
@@ -41,10 +34,6 @@ export class BallHook extends RigidBody2D {
 
   registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
     this.attachmentCallbacks.push(onAttach);
-  }
-
-  registerBounceCallback(onBounce: () => void): void {
-    this.bounceCallbacks.push(onBounce);
   }
 
   private attach(body: PhysicsBody2D, point: Vec2): void {
@@ -116,22 +105,26 @@ export class BallHook extends RigidBody2D {
     }
   }
 
-  // Reflect the hook's velocity about the surface normal (outward) and seat it
-  // at `seatPos` so the following World.integrate step carries it away rather
-  // than back into the wall. Notifies bounce listeners (they stop the deploy).
-  // A real impact also drains the along-surface component: the rebound is a
-  // token nudge off the wall, not a deflected shot that keeps flying.
+  // Deflect off a hook-proof surface and seat the hook at `seatPos` so the
+  // following World.integrate step carries it away rather than back into the
+  // wall. The deploy is NOT stopped: the hook stays armed and keeps flying, so
+  // a chain can be skipped along a hook-proof wall into whatever lies past it.
+  //
+  // How much speed survives is |n × d| — the sine of the angle between the
+  // surface normal and the hook's travel direction, i.e. how glancing the hit
+  // was. A shot straight into the wall (d antiparallel to n) has a zero cross
+  // product and is killed dead; a shot skimming along it (d perpendicular to n)
+  // has |n × d| = 1 and passes through untouched, with everything in between
+  // scaling smoothly. The reflection about the normal happens first, so the
+  // surviving speed points away from the wall.
   private bounce(normal: Vec2, seatPos: Vec2): void {
+    const speed = this.linearVelocity.length();
     const vn = this.linearVelocity.dot(normal);
-    if (vn < 0) {
-      let v = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
-      if (-vn > BallHook.BOUNCE_IMPACT_SPEED) {
-        const outward = normal.mul(v.dot(normal));
-        v = outward.add(v.sub(outward).mul(BallHook.BOUNCE_TANGENT_RETENTION));
-      }
-      this.linearVelocity = v;
+    if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
+      const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
+      const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
+      this.linearVelocity = reflected.mul(glance);
     }
     this.globalPosition = seatPos;
-    for (const cb of this.bounceCallbacks) cb();
   }
 }
