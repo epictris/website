@@ -5,7 +5,7 @@
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
-import { PhysicsBody2D, RigidBody2D } from "../engine/body";
+import { CollisionObject2D, PhysicsBody2D, RigidBody2D } from "../engine/body";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
@@ -23,6 +23,14 @@ import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/t
 import { PathEnd, PathObject, PathStart, PathWrap } from "../lib/pathObject";
 import { Player } from "./player";
 import { Hook } from "./hook";
+
+// Pass-through geometry (a hook-only `AnchorBody`): the rope may be *pinned* to
+// it — that is what the hook is for — but it may never bend around it. Every
+// wrap-generating path filters on this, so the invariant lives with the solver
+// rather than depending on the caller handing it a pre-filtered body list.
+function isPassThrough(obj: CollisionObject2D): boolean {
+  return obj instanceof PhysicsBody2D && !obj.isSolid;
+}
 
 export class RopePath {
   constructor(
@@ -226,6 +234,7 @@ export class Rope {
     const obj = fromNode.contact.obj;
     if (obj instanceof Player && fromNode === this.start) return null;
     if (obj instanceof Hook && fromNode === this.start) return null;
+    if (isPassThrough(obj)) return null;
 
     if (Intersections.intersectsSegment(obj.getShape(), span) !== IntersectionStatus.Overlap) {
       return null;
@@ -282,6 +291,7 @@ export class Rope {
   private resolveSelfIntersectionAtEnd(toNode: RopeNode, span: Segment): RopeNode | null {
     const obj = toNode.contact.obj;
     if (obj instanceof Hook && toNode === this.end) return null;
+    if (isPassThrough(obj)) return null;
 
     const toShape = obj.getShape();
     if (Intersections.intersectsSegment(toShape, span) !== IntersectionStatus.Overlap) return null;
@@ -374,6 +384,7 @@ export class Rope {
       const colliders: PhysicsBody2D[] = [];
       for (const body of bodies) {
         if (body === span.from.contact.obj || body === span.to.contact.obj) continue;
+        if (isPassThrough(body)) continue;
         const shape = body.getShape();
         if (
           this.isPointOutsideBoundingStrip(body.globalPosition, span.span) &&

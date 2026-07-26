@@ -369,7 +369,15 @@ Three mechanisms keep it out of the sim, none of them a per-call-site special ca
   both, which is exactly what makes it attachable. `BallHook`'s swept/probe contact names
   `AnchorBody` explicitly for the same reason.
 - `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list**, so
-  the rope solver never sees it and no span can catch on it.
+  a passing span has nothing to catch on, and `Rope` itself refuses to wrap a body whose
+  `isSolid` is false (the `isPassThrough` gate in `regeneratePath` *and* in both
+  self-intersection resolvers).
+  The second half is not redundant: the wrap list is only the *scan* list, whereas the
+  self-intersection resolvers wrap whatever a rope node is **already attached to**, list or
+  no list.
+  Since the hook's whole purpose is to attach to an anchor, that path is reached on every
+  anchored chain — without the gate the chain bent around the grate it was hooked to, which
+  is precisely the collision anchors exist to avoid.
 
 Queries that scan bodies generically (ledge detection, the debug overlay) filter on
 `PhysicsBody2D.isSolid`, which is false only for anchors — a grate corner is not a ledge.
