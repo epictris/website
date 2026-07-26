@@ -286,15 +286,20 @@ from the game at `/`) runs an in-browser level editor (`src/editor/`, its own ca
 DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production maps it to
 `dist/editor.html` in `serve.ts`; the build emits both pages (`rollupOptions.input`). It
 edits an `EdModel` (positions in world **metres**, one
-stable id per body) and manipulates it with the mouse: pan (drag empty space / middle /
+stable id per body) and manipulates it with the mouse: pan (**middle**-button drag, or the
 right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies.
-Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or
-out (on empty space it pans without clearing), and dragging any member moves the whole group
-(the grabbed body leads the snap; the rest keep their offsets).
-Resize handles and the geometry inspector only appear for a *single* selection - a
-multi-selection gets a group panel (Duplicate / Delete) and the toolbar kind picker, which
-applies to every selected body. Selected bodies draw an orange halo *under* their own border,
+Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and dragging any member moves the whole group (the grabbed body leads the snap; the rest keep their offsets).
+Dragging from empty space rubber-bands a **rectangle selection** - anything the band touches is caught (a rotated box is tested with SAT, a circle by its nearest point), so it need not enclose a body; **Shift** unions the hits into the current selection instead of replacing it, and a click that never moves clears it.
+That is why pan is on the middle button: the left button belongs to the band.
+Resize handles only appear for a *single* selection, but the inspector is a **group panel** at
+any size: every property the selection has in common is shown and every edit applies to all of
+them (position and colour always; `rot°` when each body has a meaningful one, `w`/`h` or
+`radius` when they are all the same shape, `force` when they are all force areas, `friction`
+when none of them is an area or an anchor).
+A property the bodies disagree on shows blank with a `mixed` placeholder and only writes once
+something is typed into it; the kind picker gains a `mixed` entry for the same reason.
+Selected bodies draw an orange halo *under* their own border,
 so an impermeable's dashed steel edge stays legible while selected.
 **Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor: the clipboard holds copies
 detached from the model, and paste re-centres the group's bounding box on the pointer (with

@@ -123,6 +123,30 @@ export function groupBounds(bodies: readonly EdBody[]): { min: Vec2; max: Vec2 }
   return { min: new Vec2(minX, minY), max: new Vec2(maxX, maxY) };
 }
 
+// Does a body overlap an axis-aligned world rect (min/max sorted)? Touch
+// semantics — any overlap counts, so a rubber-band need not enclose a body.
+export function bodyIntersectsRect(body: EdBody, min: Vec2, max: Vec2): boolean {
+  if (body.shape.kind === "circle") {
+    // Closest point on the rect to the centre.
+    const cx = Math.min(Math.max(body.pos.x, min.x), max.x);
+    const cy = Math.min(Math.max(body.pos.y, min.y), max.y);
+    return body.pos.distanceTo(new Vec2(cx, cy)) <= body.shape.r;
+  }
+  // SAT between the rect (world axes) and the body's rotated box: four axes,
+  // the two world ones and the body's own.
+  const ha = max.sub(min).mul(0.5);
+  const hb = halfExtents(body);
+  const d = body.pos.sub(min.add(max).mul(0.5));
+  const c = Math.abs(Math.cos(body.rot));
+  const s = Math.abs(Math.sin(body.rot));
+  if (Math.abs(d.x) > ha.x + hb.x * c + hb.y * s) return false;
+  if (Math.abs(d.y) > ha.y + hb.x * s + hb.y * c) return false;
+  const dl = d.rotated(-body.rot);
+  if (Math.abs(dl.x) > hb.x + ha.x * c + ha.y * s) return false;
+  if (Math.abs(dl.y) > hb.y + ha.x * s + ha.y * c) return false;
+  return true;
+}
+
 // A point in the body's local (unrotated) frame, origin at the body centre.
 export function toLocal(body: EdBody, world: Vec2): Vec2 {
   return world.sub(body.pos).rotated(-body.rot);

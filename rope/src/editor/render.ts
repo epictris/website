@@ -13,6 +13,7 @@ import { halfExtents, toWorld, type EdBody, type EdModel } from "./model";
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const SELECT = "#f4a460";
+const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
 
@@ -100,6 +101,7 @@ export function drawEditor(
   cam: Camera,
   model: EdModel,
   selectedIds: ReadonlySet<number>,
+  marquee: { min: Vec2; max: Vec2 } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, cam, w, h);
@@ -220,5 +222,18 @@ export function drawEditor(
     }
     for (const c of hs.corners) square(ctx, c);
     if (hs.radius) square(ctx, hs.radius);
+  }
+
+  // Rubber-band box, in screen space so its outline stays one pixel at any zoom.
+  if (marquee) {
+    const a = worldToScreen(cam, marquee.min);
+    const b = worldToScreen(cam, marquee.max);
+    ctx.fillStyle = MARQUEE_FILL;
+    ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    ctx.setLineDash([]);
   }
 }

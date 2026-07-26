@@ -25,6 +25,7 @@ import {
   type BodyKind,
 } from "../level/levelFormat";
 import {
+  bodyIntersectsRect,
   emptyModel,
   groupBounds,
   halfExtents,
@@ -55,7 +56,10 @@ type Tool = "select" | "rect" | "circle";
 const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "anchor", "force"];
 
 type Drag =
-  | { mode: "pan"; lastScreen: Vec2; keepSelection: boolean }
+  | { mode: "pan"; lastScreen: Vec2 }
+  // Rubber-band select. `additive` (shift) unions the hits into the existing
+  // selection instead of replacing it.
+  | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean }
   // The lead body follows the pointer (and the grid); the rest of the
   // selection rides along at a fixed offset from it.
   | { mode: "move"; lead: EdBody; others: Array<{ body: EdBody; offset: Vec2 }>; grab: Vec2 }
@@ -395,22 +399,33 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
     title.textContent = `${currentName ?? "(unsaved)"}${state} · ${model.bodies.length} bodies`;
   }
+  // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
+  function applyToolCursor(): void {
+    canvas.style.cursor = tool === "select" ? "default" : "crosshair";
+  }
   function setTool(t: Tool): void {
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
-    canvas.style.cursor = t === "select" ? "default" : "crosshair";
+    applyToolCursor();
   }
   setTool("select");
 
   // --- inspector build ------------------------------------------------------
-  const fields: Array<{ input: HTMLInputElement; get: () => number; set: (v: number) => void }> = [];
+  // `get` returns null when the selected bodies disagree — a mixed field shows
+  // blank and only writes once something is typed into it.
+  const fields: Array<{
+    input: HTMLInputElement;
+    get: () => number | null;
+    set: (v: number) => void;
+  }> = [];
 
   function numField(
     parent: HTMLElement,
     label: string,
-    get: () => number,
+    get: () => number | null,
     set: (v: number) => void,
     step = 1,
+    mixable = false, // can the selected bodies disagree on this value?
   ): void {
     const wrap = el("label", "ed-field");
     wrap.textContent = label;
@@ -418,7 +433,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     input.type = "number";
     input.className = "ed-num";
     input.step = String(step);
-    input.value = fmt(get());
+    input.value = fmtOrBlank(get());
+    if (mixable) input.placeholder = "mixed";
     // One undo step per editing session (snapshot on focus, before any edit).
     input.addEventListener("focus", () => beginAction());
     input.addEventListener("input", () => {
@@ -433,60 +449,57 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     fields.push({ input, get, set });
   }
 
-  function rebuildInspector(): void {
-    fields.length = 0;
-    inspector.innerHTML = "";
-    const s = selected();
+  // The value every body in the group agrees on, or null if they differ.
+  function shared(bodies: readonly EdBody[], get: (b: EdBody) => number): number | null {
+    const first = get(bodies[0]!);
+    return bodies.every((b) => get(b) === first) ? first : null;
+  }
 
-    const player = el("div", "ed-group");
-    player.appendChild(heading("Player spawn"));
-    numField(player, "x", () => model.player.pos.x * M2PX, (v) => (model.player.pos = model.player.pos.withX(v * PX)));
-    numField(player, "y", () => model.player.pos.y * M2PX, (v) => (model.player.pos = model.player.pos.withY(v * PX)));
-    numField(player, "radius", () => model.player.radius * M2PX, (v) => (model.player.radius = Math.max(1, v) * PX));
-    inspector.appendChild(player);
+  // Nothing rests on a region or on hook-only scenery, so neither carries a
+  // friction. A force area does carry a direction, hence a rot° even when it is
+  // a circle (whose rotation is otherwise invisible).
+  const frictionless = (b: EdBody) =>
+    b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
 
-    if (!s) {
-      if (selectedIds.size > 1) {
-        // Geometry fields are per-body, so a group only gets the ops that make
-        // sense for all of it at once.
-        const g = el("div", "ed-group");
-        g.appendChild(heading(`${selectedIds.size} bodies selected`));
-        const hint = el("div", "ed-hint");
-        hint.textContent =
-          "Drag to move them together. Shift+click to add/remove. Ctrl+C copies, Ctrl+V pastes at the cursor.";
-        g.appendChild(hint);
-        const row = el("div", "ed-row");
-        row.append(
-          button("Duplicate", () => duplicateSelected()),
-          button("Delete", () => deleteSelected()),
-        );
-        g.appendChild(row);
-        inspector.appendChild(g);
-        return;
-      }
-      const hint = el("div", "ed-hint");
-      hint.textContent = "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas.";
-      inspector.appendChild(hint);
-      return;
-    }
-
+  // One panel for the whole selection: every property the group has in common
+  // is editable and writes to all of them. A lone body is just the N=1 case, so
+  // single and multi editing can't drift apart.
+  function buildBodyGroup(bodies: EdBody[]): void {
     const g = el("div", "ed-group");
-    g.appendChild(heading(`Body #${s.id}`));
+    g.appendChild(
+      heading(bodies.length === 1 ? `Body #${bodies[0]!.id}` : `${bodies.length} bodies selected`),
+    );
+    if (bodies.length > 1) {
+      const hint = el("div", "ed-hint");
+      hint.textContent =
+        "Edits apply to all of them. Shift+click adds or removes; drag empty space to rubber-band.";
+      g.appendChild(hint);
+    }
 
     const kw = el("label", "ed-field");
     kw.textContent = "kind";
     const ks = document.createElement("select");
     ks.className = "ed-select";
+    const sharedKind = bodies.every((b) => b.kind === bodies[0]!.kind) ? bodies[0]!.kind : null;
+    if (!sharedKind) {
+      // Mixed kinds: a blank entry holds the selection until one is picked, so
+      // the picker never misreports one kind as the group's.
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "mixed";
+      ks.appendChild(o);
+    }
     for (const k of BODY_KINDS) {
       const o = document.createElement("option");
       o.value = k;
       o.textContent = k;
       ks.appendChild(o);
     }
-    ks.value = s.kind;
+    ks.value = sharedKind ?? "";
     ks.addEventListener("change", () => {
+      if (!ks.value) return;
       beginAction();
-      s.kind = ks.value as BodyKind;
+      for (const b of bodies) b.kind = ks.value as BodyKind;
       markDirty();
       // Which fields apply depends on the kind (force magnitude, friction), so
       // the panel has to be rebuilt rather than just revalued.
@@ -495,35 +508,48 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     kw.appendChild(ks);
     g.appendChild(kw);
 
-    // Nothing rests on a region or on hook-only scenery, so neither carries a
-    // friction. A force area does carry a direction, hence a rot° even when it
-    // is a circle (whose rotation is otherwise invisible).
-    const frictionless = s.kind === "killzone" || s.kind === "force" || s.kind === "anchor";
+    const num = (
+      label: string,
+      get: (b: EdBody) => number,
+      set: (b: EdBody, v: number) => void,
+      step?: number,
+    ): void =>
+      numField(
+        g,
+        label,
+        () => shared(bodies, get),
+        (v) => {
+          for (const b of bodies) set(b, v);
+        },
+        step,
+        bodies.length > 1,
+      );
 
-    numField(g, "x", () => s.pos.x * M2PX, (v) => (s.pos = s.pos.withX(v * PX)));
-    numField(g, "y", () => s.pos.y * M2PX, (v) => (s.pos = s.pos.withY(v * PX)));
-    if (s.shape.kind === "rect" || s.kind === "force") {
-      numField(g, "rot°", () => (s.rot * 180) / Math.PI, (v) => (s.rot = (v * Math.PI) / 180));
+    num("x", (b) => b.pos.x * M2PX, (b, v) => (b.pos = b.pos.withX(v * PX)));
+    num("y", (b) => b.pos.y * M2PX, (b, v) => (b.pos = b.pos.withY(v * PX)));
+    if (bodies.every((b) => b.shape.kind === "rect" || b.kind === "force")) {
+      num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
     }
-    if (s.shape.kind === "rect") {
-      numField(g, "w", () => s.shape.kind === "rect" ? s.shape.w * M2PX : 0, (v) => {
-        if (s.shape.kind === "rect") s.shape.w = Math.max(1, v) * PX;
+    // Size is per-shape, so it only appears when the group is all one shape.
+    if (bodies.every((b) => b.shape.kind === "rect")) {
+      num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "rect") b.shape.w = Math.max(1, v) * PX;
       });
-      numField(g, "h", () => s.shape.kind === "rect" ? s.shape.h * M2PX : 0, (v) => {
-        if (s.shape.kind === "rect") s.shape.h = Math.max(1, v) * PX;
+      num("h", (b) => (b.shape.kind === "rect" ? b.shape.h * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "rect") b.shape.h = Math.max(1, v) * PX;
       });
-    } else {
-      numField(g, "radius", () => s.shape.kind === "circle" ? s.shape.r * M2PX : 0, (v) => {
-        if (s.shape.kind === "circle") s.shape.r = Math.max(1, v) * PX;
+    } else if (bodies.every((b) => b.shape.kind === "circle")) {
+      num("radius", (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
       });
     }
-    if (s.kind === "force") {
+    if (bodies.every((b) => b.kind === "force")) {
       // Acceleration along rot°, authored in px/s² like every other length.
       // Negative reverses the flow, so it is deliberately not clamped at 0.
-      numField(g, "force", () => s.force * M2PX, (v) => (s.force = v * PX), 50);
+      num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
     }
-    if (!frictionless) {
-      numField(g, "friction", () => s.friction, (v) => (s.friction = Math.min(1, Math.max(0, v))), 0.1);
+    if (!bodies.some(frictionless)) {
+      num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
 
     const cw = el("label", "ed-field");
@@ -531,15 +557,17 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const ci = document.createElement("input");
     ci.type = "color";
     ci.className = "ed-color";
-    ci.value = s.color;
+    // A colour input has no mixed state; it shows the first body's and writes
+    // to all of them, which is the only sane reading of "set the colour".
+    ci.value = bodies[0]!.color;
     ci.addEventListener("focus", () => beginAction());
     ci.addEventListener("input", () => {
-      s.color = ci.value;
+      for (const b of bodies) b.color = ci.value;
       markDirty();
     });
     cw.appendChild(ci);
     g.appendChild(cw);
-    numField(g, "opacity", () => s.opacity, (v) => (s.opacity = Math.min(1, Math.max(0, v))), 0.1);
+    num("opacity", (b) => b.opacity, (b, v) => (b.opacity = Math.min(1, Math.max(0, v))), 0.1);
 
     const row = el("div", "ed-row");
     row.append(
@@ -550,11 +578,33 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     inspector.appendChild(g);
   }
 
+  function rebuildInspector(): void {
+    fields.length = 0;
+    inspector.innerHTML = "";
+
+    const player = el("div", "ed-group");
+    player.appendChild(heading("Player spawn"));
+    numField(player, "x", () => model.player.pos.x * M2PX, (v) => (model.player.pos = model.player.pos.withX(v * PX)));
+    numField(player, "y", () => model.player.pos.y * M2PX, (v) => (model.player.pos = model.player.pos.withY(v * PX)));
+    numField(player, "radius", () => model.player.radius * M2PX, (v) => (model.player.radius = Math.max(1, v) * PX));
+    inspector.appendChild(player);
+
+    const sel = selectedBodies();
+    if (!sel.length) {
+      const hint = el("div", "ed-hint");
+      hint.textContent =
+        "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
+      inspector.appendChild(hint);
+      return;
+    }
+    buildBodyGroup(sel);
+  }
+
   // Refresh field values after a canvas drag, without disturbing a focused input.
   function refreshFields(): void {
     for (const f of fields) {
       if (document.activeElement === f.input) continue;
-      f.input.value = fmt(f.get());
+      f.input.value = fmtOrBlank(f.get());
     }
   }
 
@@ -773,8 +823,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
+    // Pan is a middle-button drag (right too, as a convenience): the left button
+    // draws the rubber-band selection instead.
     if (e.button === 1 || e.button === 2) {
-      drag = { mode: "pan", lastScreen: pointerScreen(e), keepSelection: true };
+      drag = { mode: "pan", lastScreen: pointerScreen(e) };
+      canvas.style.cursor = "grabbing";
       e.preventDefault();
       return;
     }
@@ -838,9 +891,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       drag = { mode: "move", lead: b, others, grab: b.pos.sub(world) };
       return;
     }
-    // 5. Empty space: pan, and deselect if it turns out to be a click (shift
-    // keeps the selection so a miss doesn't undo the picking so far).
-    drag = { mode: "pan", lastScreen: scr, keepSelection: e.shiftKey };
+    // 5. Empty space: rubber-band select. A click that never moves deselects
+    // (shift keeps the selection, so a miss doesn't undo the picking so far).
+    drag = { mode: "marquee", start: world, current: world, additive: e.shiftKey };
   });
 
   window.addEventListener("mousemove", (e) => {
@@ -851,9 +904,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const world = screenToWorld(camera, scr.x, scr.y);
     dragMoved = true;
 
-    // Snapshot once, on the first movement of a model-mutating drag (pan does
-    // not touch the model; draw already snapshotted at mousedown).
-    if (!dragPushed && drag.mode !== "pan") {
+    // Snapshot once, on the first movement of a model-mutating drag (pan and
+    // marquee don't touch the model; draw already snapshotted at mousedown).
+    if (!dragPushed && drag.mode !== "pan" && drag.mode !== "marquee") {
       beginAction();
       dragPushed = true;
     }
@@ -866,6 +919,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         drag.lastScreen = scr;
         break;
       }
+      case "marquee":
+        drag.current = world;
+        break;
       case "move": {
         // Snap the lead body's corner; the rest keep their relative offsets so
         // a group's internal layout survives the move.
@@ -938,10 +994,33 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
   });
 
+  // The in-progress rubber-band, as a sorted world-space box (null unless one is
+  // actually being dragged out — a click that never moves draws nothing).
+  function marqueeRect(): { min: Vec2; max: Vec2 } | null {
+    if (!drag || drag.mode !== "marquee" || !dragMoved) return null;
+    const { start, current } = drag;
+    return {
+      min: new Vec2(Math.min(start.x, current.x), Math.min(start.y, current.y)),
+      max: new Vec2(Math.max(start.x, current.x), Math.max(start.y, current.y)),
+    };
+  }
+
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
-    if (drag.mode === "pan" && !dragMoved && !drag.keepSelection) setSelection([]);
+    if (drag.mode === "marquee") {
+      const box = marqueeRect();
+      if (box) {
+        // Touch semantics: anything the band overlaps is caught.
+        const hits = model.bodies
+          .filter((b) => bodyIntersectsRect(b, box.min, box.max))
+          .map((b) => b.id);
+        setSelection(drag.additive ? [...new Set([...selectedIds, ...hits])] : hits);
+      } else if (!drag.additive) {
+        setSelection([]); // a plain click on empty space clears
+      }
+    }
     drag = null;
+    applyToolCursor();
   });
 
   canvas.addEventListener("wheel", (e) => {
@@ -1060,7 +1139,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim());
       }
     } else {
-      drawEditor(ctx, dpr, cssW, cssH, camera, model, selectedIds);
+      drawEditor(ctx, dpr, cssW, cssH, camera, model, selectedIds, marqueeRect());
     }
     requestAnimationFrame(frame);
   }
@@ -1107,8 +1186,16 @@ function heading(text: string): HTMLElement {
   h.textContent = text;
   return h;
 }
+// Three decimals: enough for a 0.05 friction or opacity step to survive a
+// panel rebuild (1 dp used to redisplay 0.25 as 0.3), and short enough that
+// float noise from the metre/pixel round trip rounds away.
 function fmt(v: number): string {
-  return (Math.round(v * 10) / 10).toString();
+  return String(Number(v.toFixed(3)));
+}
+// A field whose selected bodies disagree shows blank (with a "mixed"
+// placeholder) rather than picking one body's value to display.
+function fmtOrBlank(v: number | null): string {
+  return v === null ? "" : fmt(v);
 }
 
 function injectStyles(): void {
