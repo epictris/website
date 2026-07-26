@@ -65,7 +65,12 @@ function levelApi(): Plugin {
             req.on("end", () => {
               try {
                 const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-                writeFileSync(fileFor(name), JSON.stringify(parsed, null, 2) + "\n");
+                const text = JSON.stringify(parsed, null, 2) + "\n";
+                // The editor autosaves, so identical writes are common; skipping
+                // them keeps the file's mtime (and the watcher) quiet.
+                const unchanged =
+                  existsSync(fileFor(name)) && readFileSync(fileFor(name), "utf8") === text;
+                if (!unchanged) writeFileSync(fileFor(name), text);
                 send(200, { ok: true, name });
               } catch {
                 send(400, { error: "invalid JSON body" });
@@ -84,6 +89,15 @@ function levelApi(): Plugin {
           return send(500, { error: String(e) });
         }
       });
+    },
+
+    // levels/*.json is imported by src/level/registry.ts (levels/ball.json backs
+    // the BALL entry), so a plain-JSON change would full-reload every open page.
+    // The editor autosaves - reloading it out from under the author on every
+    // write is exactly wrong - so level writes are excluded from HMR entirely.
+    // A level is only read at page load anyway; reload by hand to pick one up.
+    handleHotUpdate(ctx) {
+      if (ctx.file.startsWith(dir + "/")) return [];
     },
   };
 }

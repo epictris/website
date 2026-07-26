@@ -2521,6 +2521,20 @@
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1
+    },
+    {
+      "kind": "anchor",
+      "x": 1415,
+      "y": 35,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 30.00000000000007,
+        "h": 30
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
     }
   ]
 }

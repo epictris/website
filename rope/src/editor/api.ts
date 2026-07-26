@@ -17,11 +17,18 @@ export async function loadLevel(name: string): Promise<LevelData> {
   return (await res.json()) as LevelData;
 }
 
-export async function saveLevel(name: string, data: LevelData): Promise<void> {
+// `keepalive` lets a save started while the page is going away still complete
+// (the pagehide flush of a pending autosave).
+export async function saveLevel(
+  name: string,
+  data: LevelData,
+  opts: { keepalive?: boolean } = {},
+): Promise<void> {
   const res = await fetch(`${BASE}/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+    keepalive: opts.keepalive ?? false,
   });
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
 }

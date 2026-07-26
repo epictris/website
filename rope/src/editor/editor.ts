@@ -113,6 +113,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const gridStep = 0.1; // snap spacing: fixed 10 cm (matches the backdrop minor grid)
   let currentName: string | null = null;
   let dirty = false;
+  // Bumped by every model edit, so a save that started before an edit knows not
+  // to clear `dirty` on a model that has moved on under it.
+  let modelRev = 0;
+  let saveError: string | null = null;
   let drag: Drag | null = null;
   let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
@@ -154,11 +158,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function afterHistoryChange(): void {
     drag = null;
     nudging = false;
-    dirty = true;
     const live = new Set(model.bodies.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     rebuildInspector();
-    updateTitle();
+    markDirty(); // an undo/redo is a change like any other - it autosaves too
   }
 
   // Model order, so a group keeps its z-order through copy/duplicate.
@@ -195,6 +198,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   function markDirty(): void {
     dirty = true;
+    modelRev++;
+    scheduleAutosave();
     updateTitle();
   }
 
@@ -302,6 +307,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   bar.appendChild(fileRow);
   const btnNew = button("New", () => {
     if (dirty && !confirm("Discard unsaved changes?")) return;
+    cancelAutosave();
     model = emptyModel();
     resetHistory();
     selectedIds.clear();
@@ -329,6 +335,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const btnDelete = button("Delete File", async () => {
     if (!currentName) return;
     if (!confirm(`Delete level "${currentName}" from disk?`)) return;
+    cancelAutosave(); // a queued write would recreate the file
     await deleteLevel(currentName);
     currentName = null;
     dirty = true;
@@ -383,7 +390,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   root.appendChild(inspector);
 
   function updateTitle(): void {
-    title.textContent = `${currentName ?? "(unsaved)"}${dirty ? " *" : ""} · ${model.bodies.length} bodies`;
+    // A named level autosaves, so `*` is a brief in-flight marker rather than a
+    // standing warning; an unnamed one keeps it until the first Save names it.
+    const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${model.bodies.length} bodies`;
   }
   function setTool(t: Tool): void {
     tool = t;
@@ -638,6 +648,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
   }
   async function doLoad(name: string): Promise<void> {
+    cancelAutosave(); // don't write the outgoing model to the incoming name
     try {
       const data = await loadLevel(name);
       model = modelFromDisk(data);
@@ -652,7 +663,33 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       alert(`Load failed: ${e}`);
     }
   }
-  async function doSave(saveAs: boolean): Promise<void> {
+  // --- autosave -------------------------------------------------------------
+  // Once a model has a name on disk, every edit is written back, debounced so a
+  // drag (or a burst of nudges) collapses into one write. An unnamed model is
+  // left alone: the first Save/Save As names the file, and everything after it
+  // persists on its own. Writes do not reload the page - the levelApi plugin in
+  // vite.config.ts keeps levels/*.json out of HMR.
+  const AUTOSAVE_DELAY_MS = 750;
+  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelAutosave(): void {
+    if (autosaveTimer !== null) clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+  }
+  function scheduleAutosave(): void {
+    if (!currentName) return;
+    cancelAutosave();
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      void doSave(false, true);
+    }, AUTOSAVE_DELAY_MS);
+  }
+
+  async function doSave(saveAs: boolean, auto = false): Promise<void> {
+    // A queued autosave can fire after New/Delete cleared the name, or after a
+    // manual Save already wrote the model. Either way it must be a no-op - and
+    // in particular must never reach the "Save as" prompt below.
+    if (auto && (!dirty || !currentName)) return;
     let name = currentName;
     if (saveAs || !name) {
       const input = prompt("Save level as (letters, digits, _ and - only):", name ?? "level");
@@ -663,16 +700,39 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       }
       name = input;
     }
+    cancelAutosave();
+    // Snapshot what is being written, so edits landing during the request are
+    // still seen as unsaved when it returns.
+    const isNewFile = name !== currentName;
+    const rev = modelRev;
+    const data = modelToDisk(model);
     try {
-      await saveLevel(name, modelToDisk(model));
+      await saveLevel(name, data);
       currentName = name;
-      dirty = false;
-      await refreshLevelList();
+      if (modelRev === rev) dirty = false;
+      saveError = null;
+      if (isNewFile) await refreshLevelList();
       updateTitle();
     } catch (e) {
-      alert(`Save failed: ${e}`);
+      if (!auto) {
+        alert(`Save failed: ${e}`);
+        return;
+      }
+      // An autosave failure must not throw a modal dialog at someone mid-drag; the
+      // title carries the state and the next edit retries.
+      console.error(e);
+      saveError = String(e);
+      updateTitle();
     }
   }
+
+  // A pending autosave would otherwise be lost on navigation/close; `keepalive`
+  // lets the request outlive the page.
+  window.addEventListener("pagehide", () => {
+    if (autosaveTimer === null || !dirty || !currentName) return;
+    cancelAutosave();
+    void saveLevel(currentName, modelToDisk(model), { keepalive: true }).catch(() => {});
+  });
 
   // --- canvas input ---------------------------------------------------------
   function pointerScreen(e: MouseEvent): Vec2 {
