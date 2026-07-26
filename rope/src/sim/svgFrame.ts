@@ -5,12 +5,23 @@
 
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
-import { ForceArea, StaticBody2D, RigidBody2D, ImpermeableBody } from "../engine/body";
+import {
+  AnchorBody,
+  ForceArea,
+  StaticBody2D,
+  RigidBody2D,
+  ImpermeableBody,
+} from "../engine/body";
 import { PIXELS_PER_METER } from "../engine/units";
 import type { Rope } from "../classes/rope";
 import type { PhysicsBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
-import { forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "../render/areaGlyphs";
+import {
+  anchorGlyphs,
+  forceAreaGlyphs,
+  killZoneGlyphs,
+  type PolyPath,
+} from "../render/areaGlyphs";
 
 const M = PIXELS_PER_METER; // metres → px
 
@@ -95,6 +106,41 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     (b) => (b instanceof StaticBody2D || b instanceof RigidBody2D) && b.hasShape(),
   );
   const box: Box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  const defsEls: string[] = [];
+
+  // Hook-only anchor geometry, drawn behind the solid bodies exactly as the
+  // canvas renderers draw it, with the same grate holes cut out of it. A
+  // snapshot has to show which bodies the chain can anchor to but not touch —
+  // without the mesh, a hook resting in mid-air would look like a bug.
+  const anchorEls: string[] = [];
+  for (const b of level.world.bodies) {
+    if (!(b instanceof AnchorBody) || b.removed || !b.hasShape()) continue;
+    const s = b.getShape();
+    const cx = s.globalPosition.x * M;
+    const cy = s.globalPosition.y * M;
+    const circle = s.shape.kind === "circle";
+    const half =
+      s.shape.kind === "circle"
+        ? new Vec2(s.shape.radius, s.shape.radius)
+        : s.shape.size.mul(0.5);
+    const hw = half.x * M;
+    const hh = half.y * M;
+    const ext = circle ? { x: hw, y: hh } : rotatedHalfExtents(hw, hh, s.globalRotation);
+    growXY(box, cx, cy, ext.x, ext.y);
+
+    const glyphs = new SvgPolyPath();
+    anchorGlyphs(glyphs, half, circle);
+    const outline = outlinePath(hw, hh, circle);
+    const deg = (s.globalRotation * 180) / Math.PI;
+    const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
+    const clipId = `anchor${b.id}`;
+    defsEls.push(`<clipPath id="${clipId}"><path d="${outline}"/></clipPath>`);
+    anchorEls.push(
+      `<g transform="translate(${f1(cx)} ${f1(cy)})${rot}">` +
+        `<path d="${outline} ${glyphs}" fill-rule="evenodd" fill="${b.fillColor ?? "#7a8c9b"}" fill-opacity="${b.fillColor ? b.fillOpacity : 0.38}" clip-path="url(#${clipId})"/>` +
+        `</g>`,
+    );
+  }
 
   // Collect geometry as SVG elements while accumulating the bounding box.
   const shapeEls: string[] = [];
@@ -127,7 +173,6 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   // Areas (killzones, force areas). Drawn after geometry so their glyphs read
   // over anything they overlap, and with the same even-odd cutout the canvas
   // uses, so a snapshot and the running game agree.
-  const defsEls: string[] = [];
   const areaEls: string[] = [];
   for (const area of level.world.areas) {
     if (area.removed || !area.hasShape()) continue;
@@ -208,6 +253,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vx.toFixed(1)} ${vy.toFixed(1)} ${vw.toFixed(1)} ${vh.toFixed(1)}" width="${Math.round(vw)}" height="${Math.round(vh)}">`,
     `<rect x="${vx.toFixed(1)}" y="${vy.toFixed(1)}" width="${vw.toFixed(1)}" height="${vh.toFixed(1)}" fill="#1f2430"/>`,
     ...(defsEls.length ? [`<defs>${defsEls.join("")}</defs>`] : []),
+    ...anchorEls,
     ...shapeEls,
     ...areaEls,
     ...ropeEls,

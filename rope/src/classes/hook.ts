@@ -5,7 +5,13 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
-import { CharacterBody2D, ImpermeableBody, type PhysicsBody2D } from "../engine/body";
+import {
+  CharacterBody2D,
+  ImpermeableBody,
+  LAYER_ANCHOR,
+  LAYER_SOLID,
+  type PhysicsBody2D,
+} from "../engine/body";
 import { circleShape } from "../engine/shapes";
 import { Segment } from "../lib/segment";
 
@@ -33,8 +39,11 @@ export class Hook extends CharacterBody2D {
     if (this.velocity.lengthSquared() < 0.0001 * PX * PX) return;
 
     const ray = new Segment(this.globalPosition, this.globalPosition.add(this.velocity));
+    // Solid geometry plus hook-only anchors: the hook is the one query that
+    // sees LAYER_ANCHOR, which is exactly what makes a grate attachable while
+    // the avatar (and every other mask-1 query) passes through it.
     const result = this.world.intersectRay(ray.start, ray.end, {
-      collisionMask: 1,
+      collisionMask: LAYER_SOLID | LAYER_ANCHOR,
       exclude: [this],
     });
 

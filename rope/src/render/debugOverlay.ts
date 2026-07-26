@@ -52,6 +52,7 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
   for (const body of bodies) {
     if (body instanceof Player) continue;
     if (!(body instanceof PhysicsBody2D) || !body.hasShape()) continue;
+    if (!body.isSolid) continue; // hook-only scenery is never grabbable
     const t = body.getShape();
     if (t.shape.kind !== "rect") continue;
 

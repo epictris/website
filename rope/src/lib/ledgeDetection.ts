@@ -115,6 +115,7 @@ export const LedgeDetection = {
       if (body === owner || body.removed || !body.hasShape()) continue;
       if (body instanceof RigidBody2D) continue;
       if (!(body instanceof PhysicsBody2D)) continue;
+      if (!body.isSolid) continue; // hook-only scenery blocks nothing, seams included
       if (circleOverlap(vertex, SEAM_EPSILON, body.getShape())) return true;
     }
     return false;
@@ -130,6 +131,9 @@ export const LedgeDetection = {
 
     for (const body of bodies) {
       if (body.removed || !body.hasShape()) continue;
+      // A corner you cannot stand on is not a ledge: hook-only scenery has no
+      // surface to pull up onto, the player passes through it.
+      if (!body.isSolid) continue;
       const t = body.getShape();
       if (t.shape.kind !== "rect") continue;
       const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;

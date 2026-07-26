@@ -3,9 +3,16 @@
 // RigidBody2D: gravity bends its flight into an arc. It attaches to the first
 // surface it contacts — during flight or later while dangling at full chain
 // length — via a swept ray for fast motion plus an overlap probe for
-// slow/resting contact.
+// slow/resting contact. "Surface" includes hook-only `AnchorBody` scenery,
+// which nothing else in the sim collides with.
 
-import { ImpermeableBody, RigidBody2D, StaticBody2D, type PhysicsBody2D } from "../engine/body";
+import {
+  AnchorBody,
+  ImpermeableBody,
+  RigidBody2D,
+  StaticBody2D,
+  type PhysicsBody2D,
+} from "../engine/body";
 import { PX } from "../engine/units";
 import { circleShape } from "../engine/shapes";
 import { circleOverlap, sweepCircle } from "../engine/collision";
@@ -62,7 +69,13 @@ export class BallHook extends RigidBody2D {
     for (const body of this.world.bodies) {
       if (body.removed || body === this || body.name === "Player") continue;
       if (this.exceptions.has(body.id)) continue;
-      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
+      // AnchorBody is not solid — nothing else in the sim collides with it —
+      // but the hook is what it exists for, so it is named explicitly here.
+      if (
+        !(body instanceof StaticBody2D || body instanceof RigidBody2D || body instanceof AnchorBody)
+      ) {
+        continue;
+      }
       if (!body.hasShape()) continue;
       const sweep = sweepCircle(from, motion, r, body.getShape());
       if (sweep && sweep.t <= 1 && (!best || sweep.t < best.t)) {
@@ -99,7 +112,11 @@ export class BallHook extends RigidBody2D {
         if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
         return;
       }
-      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
+      if (
+        !(body instanceof StaticBody2D || body instanceof RigidBody2D || body instanceof AnchorBody)
+      ) {
+        continue;
+      }
       this.attach(body, from);
       return;
     }

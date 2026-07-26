@@ -28,13 +28,20 @@ export class CollisionShape2D implements ShapeTransform {
 
 let nextId = 1;
 
+// Collision layers. Bit 1 is solid scene geometry — everything the project has
+// ever had, so every existing `collisionMask: 1` query keeps its meaning. Bit 2
+// is hook-only geometry (`AnchorBody`), which those queries therefore miss by
+// construction; only the hook asks for both.
+export const LAYER_SOLID = 1;
+export const LAYER_ANCHOR = 2;
+
 export abstract class CollisionObject2D {
   readonly id: number = nextId++;
   name = "";
   globalPosition: Vec2 = Vec2.ZERO;
   globalRotation = 0;
   // Bitmask of layers this body occupies (default layer 1, matching the project).
-  collisionLayer = 1;
+  collisionLayer = LAYER_SOLID;
   // A body can carry more than one collision shape (a compound body). The first
   // is the primary, centred shape that `getShape()` returns for the many call
   // sites that assume a single shape; the rest are offset auxiliaries.
@@ -114,12 +121,44 @@ export abstract class PhysicsBody2D extends CollisionObject2D {
   get isRotating(): boolean {
     return false;
   }
+
+  // Does this body block motion? False only for hook-only geometry
+  // (`AnchorBody`), which the hook anchors to but nothing collides with.
+  // Queries that scan bodies generically — ledge detection, the debug overlay —
+  // filter on this rather than naming the class.
+  get isSolid(): boolean {
+    return true;
+  }
 }
 
 export class StaticBody2D extends PhysicsBody2D {}
 
 // Rope-attachment blocker: hooks are destroyed on contact instead of attaching.
 export class ImpermeableBody extends StaticBody2D {}
+
+// Hook-only scene geometry — the mirror image of ImpermeableBody. The hook
+// anchors to it, but the avatar, the rope/chain and loose debris all pass
+// straight through: a background grate, girder or chandelier the player can
+// swing from without it blocking the level.
+//
+// It deliberately extends PhysicsBody2D *directly* rather than StaticBody2D.
+// Every collision path in `World` (moveAndCollide, resolveDynamicCollisions) is
+// written as an allowlist of `StaticBody2D | RigidBody2D`, so a body outside
+// that pair is excluded by construction instead of by a special case each site
+// would have to remember. Raycasts exclude it by layer (`LAYER_ANCHOR`), and
+// the rope never sees it at all — `buildLevelBodies` keeps it out of the wrap
+// list, so no span can catch on it.
+export class AnchorBody extends PhysicsBody2D {
+  constructor() {
+    super();
+    this.name = "Anchor";
+    this.collisionLayer = LAYER_ANCHOR;
+  }
+
+  override get isSolid(): boolean {
+    return false;
+  }
+}
 
 // Script-driven mover (Godot AnimatableBody2D): transform is set by game logic
 // each frame; collides as static / infinite mass, but exposes the per-frame

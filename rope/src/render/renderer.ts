@@ -4,6 +4,7 @@
 import { Vec2 } from "../engine/vec2";
 import type { ShapeTransform } from "../engine/shapes";
 import {
+  AnchorBody,
   AnimatableBody2D,
   Area2D,
   ForceArea,
@@ -23,7 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
 import { drawTrainingGrid } from "./trainingGrid";
-import { fillForceArea, fillKillZone } from "./areaFill";
+import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
 import { hexToRgba } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
@@ -48,6 +49,7 @@ const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
 // Ball & chain aim reticle: the OS cursor is hidden there, so this white ring is
 // the cursor. World-sized (not fixed pixels) so it keeps its size relative to
@@ -127,6 +129,25 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     ctx.strokeStyle = IMPERMEABLE_EDGE;
     ctx.lineWidth = 2 * PX;
     ctx.setLineDash([5 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
+
+  // Hook-only anchor geometry (a background grate, a girder): the hook attaches
+  // to it, but the avatar and the rope pass straight through. Punched with a
+  // grate mesh — the backdrop shows through the holes — and given a dotted edge
+  // rather than a solid one, so nothing about it reads as standable. `render`
+  // draws these first, behind the solid geometry they sit among.
+  if (body instanceof AnchorBody) {
+    const half = areaHalfExtents(t);
+    const circle = t.shape.kind === "circle";
+    const fill = body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : ANCHOR_FILL;
+    fillAnchor(ctx, t.globalPosition, t.globalRotation, half, circle, fill);
+    pathShape(ctx, t);
+    ctx.strokeStyle = body.fillColor ?? IMPERMEABLE_EDGE;
+    ctx.lineWidth = PX;
+    ctx.setLineDash([PX, 2 * PX]);
     ctx.stroke();
     ctx.setLineDash([]);
     return;
@@ -266,8 +287,14 @@ export function render(
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
+  // Hook-only scenery is background the player passes through, so it goes down
+  // first and solid geometry draws over it.
+  for (const body of level.world.bodies) {
+    if (body instanceof AnchorBody) drawBody(ctx, body);
+  }
   for (const body of level.world.bodies) {
     if (body instanceof Player) continue; // drawn between the rig layers below
+    if (body instanceof AnchorBody) continue; // already drawn, behind
     drawBody(ctx, body);
   }
   for (const area of level.world.areas) drawBody(ctx, area);
@@ -459,9 +486,14 @@ export function renderBall(
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
+  // Hook-only scenery behind the solid geometry it sits among (see `render`).
+  for (const body of level.world.bodies) {
+    if (body instanceof AnchorBody) drawBody(ctx, body);
+  }
   for (const body of level.world.bodies) {
     if (body instanceof BallPlayer) continue; // drawn over the chain below
     if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
+    if (body instanceof AnchorBody) continue; // already drawn, behind
     drawBody(ctx, body);
   }
   for (const area of level.world.areas) drawBody(ctx, area);

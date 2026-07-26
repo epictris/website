@@ -222,7 +222,8 @@ launches, mover misbehavior):
    anchoring in mid-air, a hook on the wrong side of a wall) the digest table is
    blind — it only carries the avatar's pos/vel/rope-length, not the chain wrap
    path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
-   whole scene at frame N (bodies, impermeable = dashed steel border, areas with
+   whole scene at frame N (bodies, impermeable = dashed steel border, hook-only
+   anchors = a grate mesh, areas with
    their glyphs — skulls for a killzone, flow arrows for a force area — chain
    wrap path + wrap-node markers, avatar); convert with `magick f.svg f.png` and
    look.
@@ -303,8 +304,8 @@ repeated. `Ctrl+D` duplicates in place at a 2-cell offset.
 nudge is a pure translation (never snapped), so a body keeps any sub-cell offset it has and the
 fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
 key is released. The kind picker
-covers `static`, `rigid`, `killzone`, `impermeable`, `force`.
-Every non-area body carries a **surface friction** (0 = ice, 1 = rubber; see below), and a
+covers `static`, `rigid`, `killzone`, `impermeable`, `anchor`, `force`.
+Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below), and a
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
 knob steers the current, and force-kind circles get that knob too (a plain circle's rotation
 is invisible, so it has none). A toggleable snap (fixed 10 cm, the
@@ -332,11 +333,36 @@ is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor
 into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
-the generated one — adds the `rigid` and `force` kinds); `levelData.ts` stays auto-generated
-and is structurally assignable to it. Both level drivers construct geometry through the
-shared `src/level/buildBodies.ts` (statics, killzones, impermeables, force areas, and rigid
-bodies), so the grapple and ball controllers load identical scenes. `rigid` bodies get
-mass/inertia from `ShapeGeometry` and fall under gravity.
+the generated one — adds the `rigid`, `anchor` and `force` kinds); `levelData.ts` stays
+auto-generated and is structurally assignable to it. Both level drivers construct geometry
+through the shared `src/level/buildBodies.ts` (statics, killzones, impermeables, anchors,
+force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
+`rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
+
+## Hook-only anchor geometry
+
+An **`anchor`** body is an `AnchorBody` (`engine/body.ts`) — the exact mirror image of
+`impermeable`. The hook attaches to it, but **nothing collides with it**: the avatar, the
+ball, loose debris and the rope/chain all pass straight through. It is what background
+scenery you can swing from is made of — a metal grate, a girder, a chandelier — geometry
+that must not block the level it decorates.
+
+Three mechanisms keep it out of the sim, none of them a per-call-site special case:
+
+- It extends `PhysicsBody2D` **directly** rather than `StaticBody2D`. Every collision path
+  in `World` (`moveAndCollide`, `resolveDynamicCollisions`) is written as an allowlist of
+  `StaticBody2D | RigidBody2D`, so an anchor is excluded by construction.
+- It sits on its own collision layer (`LAYER_ANCHOR`). Every existing raycast asks for
+  `LAYER_SOLID`, so they all miss it; the grapple `Hook` is the one query that asks for
+  both, which is exactly what makes it attachable. `BallHook`'s swept/probe contact names
+  `AnchorBody` explicitly for the same reason.
+- `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list**, so
+  the rope solver never sees it and no span can catch on it.
+
+Queries that scan bodies generically (ledge detection, the debug overlay) filter on
+`PhysicsBody2D.isSolid`, which is false only for anchors — a grate corner is not a ledge.
+Anchors carry no surface friction (nothing rests on them) and are drawn first, behind the
+solid geometry they sit among, in both renderers and the SVG snapshot.
 
 ## Force areas and surface friction
 
@@ -367,15 +393,16 @@ barely drifts; drop the bed to ~0.15 and the same current carries it.
 
 ### Area glyphs
 
-Areas must never be mistakable for bodies in a still frame — see **"Areas must read as
-areas"** in `docs/game-design.md` for the rule and its rationale. Every area type is stamped
-with a glyph naming what it does: `killzone` → **skulls**, `force` → **flow arrows**.
+Anything the player passes through must never be mistakable for solid geometry in a still
+frame — see **"Pass-through geometry must read as pass-through"** in `docs/game-design.md`
+for the rule and its rationale. Each such type is stamped with a glyph naming what it does:
+`killzone` → **skulls**, `force` → **flow arrows**, `anchor` → a **grate mesh**.
 
 `render/areaGlyphs.ts` holds the glyph geometry as plain closed polygons emitted into an
 abstract `PolyPath` sink, so the game canvas, the level editor and the headless SVG snapshot
 stamp identical marks from one source (`CanvasRenderingContext2D` satisfies the sink as-is;
 `svgFrame.ts` has a small writer that turns it into path data). `render/areaFill.ts` wraps it
-for canvas as `fillForceArea` / `fillKillZone`.
+for canvas as `fillForceArea` / `fillKillZone` / `fillAnchor`.
 
 The fill is one **even-odd** path — outline plus glyph polygons, clipped to the outline — so
 glyphs are **cutouts** showing whatever is behind, legible against any authored colour
@@ -386,7 +413,10 @@ with the box (a cap thins the lattice on huge areas; glyphs keep their size). Di
 row count so one row lies on the widest chord. Force arrows drift along the flow at a speed
 proportional to the magnitude (clamped), driven by the wall clock — decoration that can never
 reach the fixed-step sim; killzone skulls are static, since a killzone does not flow. The SVG
-snapshot pins the phase at 0 so a frame render never depends on the wall clock.
+snapshot pins the phase at 0 so a frame render never depends on the wall clock. An anchor's
+grate is the same machinery on a much finer pitch (11 cm holes on a 16 cm lattice, so 5 cm
+bars) and static —
+its holes are literally holes, so the backdrop shows through the body.
 
 ## Regenerating level geometry
 

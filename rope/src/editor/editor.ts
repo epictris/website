@@ -52,7 +52,7 @@ type Tool = "select" | "rect" | "circle";
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
-const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "force"];
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "anchor", "force"];
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2; keepSelection: boolean }
@@ -485,10 +485,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     kw.appendChild(ks);
     g.appendChild(kw);
 
-    // Areas are regions, not surfaces: nothing rests on them, so they carry no
+    // Nothing rests on a region or on hook-only scenery, so neither carries a
     // friction. A force area does carry a direction, hence a rot° even when it
     // is a circle (whose rotation is otherwise invisible).
-    const isArea = s.kind === "killzone" || s.kind === "force";
+    const frictionless = s.kind === "killzone" || s.kind === "force" || s.kind === "anchor";
 
     numField(g, "x", () => s.pos.x * M2PX, (v) => (s.pos = s.pos.withX(v * PX)));
     numField(g, "y", () => s.pos.y * M2PX, (v) => (s.pos = s.pos.withY(v * PX)));
@@ -512,7 +512,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       // Negative reverses the flow, so it is deliberately not clamped at 0.
       numField(g, "force", () => s.force * M2PX, (v) => (s.force = v * PX), 50);
     }
-    if (!isArea) {
+    if (!frictionless) {
       numField(g, "friction", () => s.friction, (v) => (s.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
 

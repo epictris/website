@@ -1,10 +1,12 @@
 // Shared level-geometry builder. Turns (metre-scaled) LevelData bodies into
 // engine bodies and adds them to the world, returning the subset the rope may
-// wrap (statics + rigids, but not killzones). Used by both level drivers so the
-// grapple and ball controllers load identical geometry, including rigid bodies.
+// wrap (statics + rigids, but not areas and not hook-only anchors). Used by
+// both level drivers so the grapple and ball controllers load identical
+// geometry, including rigid bodies.
 
 import { Vec2 } from "../engine/vec2";
 import {
+  AnchorBody,
   ForceArea,
   ImpermeableBody,
   PhysicsBody2D,
@@ -67,6 +69,19 @@ export function buildLevelBodies(
       fa.magnitude = b.force ?? 0;
       applyStyle(fa, b);
       world.add(fa);
+      continue;
+    }
+
+    if (b.kind === "anchor") {
+      // Hook-only geometry: in the world so the hook's queries can find it, but
+      // NOT a wrap body — keeping it out of the returned list is what stops the
+      // rope from catching on scenery the player passes straight through.
+      const ab = new AnchorBody();
+      ab.setShape(shape);
+      ab.globalPosition = pos;
+      ab.globalRotation = b.rot;
+      applyStyle(ab, b);
+      world.add(ab);
       continue;
     }
 

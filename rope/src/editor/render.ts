@@ -6,7 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
-import { fillForceArea, fillKillZone } from "../render/areaFill";
+import { fillAnchor, fillForceArea, fillKillZone } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import { halfExtents, toWorld, type EdBody, type EdModel } from "./model";
 
@@ -111,7 +111,13 @@ export function drawEditor(
   ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
-  for (const body of model.bodies) {
+  // Hook-only anchors first: they are background the player passes through, and
+  // the game draws them behind solid geometry too. `sort` is stable, so the
+  // authored order is preserved within each group.
+  const ordered = [...model.bodies].sort(
+    (a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"),
+  );
+  for (const body of ordered) {
     // Areas fill with their glyph cut out of them — the same calls the game
     // makes, so authoring shows exactly what play shows.
     if (body.kind === "force") {
@@ -126,6 +132,16 @@ export function drawEditor(
       );
     } else if (body.kind === "killzone") {
       fillKillZone(
+        ctx,
+        body.pos,
+        body.rot,
+        halfExtents(body),
+        body.shape.kind === "circle",
+        hexToRgba(body.color, body.opacity),
+      );
+    } else if (body.kind === "anchor") {
+      // Hook-only scenery: the same grate mesh the game punches through it.
+      fillAnchor(
         ctx,
         body.pos,
         body.rot,
@@ -152,6 +168,13 @@ export function drawEditor(
       ctx.strokeStyle = IMPERMEABLE_EDGE;
       ctx.lineWidth = worldLine * 2;
       ctx.setLineDash([5 * PX, 3 * PX]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (body.kind === "anchor") {
+      // Hook-only: dotted edge, as in game — nothing about it reads as solid.
+      ctx.strokeStyle = body.color;
+      ctx.lineWidth = worldLine;
+      ctx.setLineDash([PX, 2 * PX]);
       ctx.stroke();
       ctx.setLineDash([]);
     } else {

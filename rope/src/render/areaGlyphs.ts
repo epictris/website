@@ -1,10 +1,13 @@
-// Glyph geometry for non-body areas, as plain closed polygons.
+// Glyph geometry for everything the player passes through, as plain closed
+// polygons.
 //
 // Areas are regions, not surfaces — nothing rests on them and the rope passes
 // through — so they must never be mistakable for geometry in a screenshot (see
 // docs/game-design.md, "Areas must read as areas"). Each area type carries a
 // glyph saying what it does: a force area flows arrows along its push, a
-// killzone is stamped with skulls.
+// killzone is stamped with skulls. Hook-only anchor geometry is pass-through in
+// the same way (only the hook touches it) and falls under the same rule: it is
+// punched with a grate lattice so it never reads as something to stand on.
 //
 // The glyphs are emitted as polygons into a `PolyPath` sink rather than drawn,
 // so the canvas renderer, the level editor and the headless SVG snapshot all
@@ -32,6 +35,10 @@ export interface PolyPath {
 const GLYPH_SPACING = 0.42; // nominal gap between glyph centres
 const ARROW_LEN = 0.26;
 const SKULL_SIZE = 0.3; // total height
+// A grate is a mesh rather than a stamp, so it gets its own, much finer pitch:
+// holes on a 16 cm lattice leave 5 cm of bar between them.
+const GRATE_SPACING = 0.16;
+const GRATE_BAR = 0.05;
 // Perf guard for a level-sized area. Past this the lattice is thinned (glyphs
 // keep their size); it only bites well beyond a screenful.
 const MAX_GLYPHS = 1200;
@@ -52,11 +59,12 @@ function lattice(
   circle: boolean,
   driftMetres: number,
   visit: (x: number, y: number) => void,
+  spacing: number = GLYPH_SPACING,
 ): void {
   if (half.x <= 0 || half.y <= 0) return;
   const spanX = half.x * 2;
   const spanY = half.y * 2;
-  let step = GLYPH_SPACING;
+  let step = spacing;
   const wanted = Math.round(spanX / step) * Math.round(spanY / step);
   if (wanted > MAX_GLYPHS) step *= Math.sqrt(wanted / MAX_GLYPHS);
 
@@ -177,4 +185,28 @@ export function forceAreaGlyphs(
 // and a moving stamp would imply it does.
 export function killZoneGlyphs(p: PolyPath, half: Vec2, circle: boolean): void {
   lattice(half, circle, 0, (x, y) => skullGlyph(p, x, y));
+}
+
+// A square hole, one cell of a grate.
+function holeGlyph(p: PolyPath, cx: number, cy: number, size: number): void {
+  const h = size * 0.5;
+  p.moveTo(cx - h, cy - h);
+  p.lineTo(cx + h, cy - h);
+  p.lineTo(cx + h, cy + h);
+  p.lineTo(cx - h, cy + h);
+  p.closePath();
+}
+
+// The grate mesh of a hook-only anchor body, in its local frame. Under the
+// even-odd rule the holes are cutouts, so the backdrop is literally visible
+// through the body — which is exactly what it is: scenery the player passes
+// through and only the hook catches on. Static: a grate does not flow.
+export function anchorGlyphs(p: PolyPath, half: Vec2, circle: boolean): void {
+  lattice(
+    half,
+    circle,
+    0,
+    (x, y) => holeGlyph(p, x, y, GRATE_SPACING - GRATE_BAR),
+    GRATE_SPACING,
+  );
 }

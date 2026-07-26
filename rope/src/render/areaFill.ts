@@ -1,5 +1,6 @@
-// Canvas fill for non-body areas: the area's colour with its glyph stamped out
-// of it (see `areaGlyphs.ts` for what the glyphs are and why areas carry them).
+// Canvas fill for everything the player passes through — areas and hook-only
+// anchor geometry: the shape's colour with its glyph stamped out of it (see
+// `areaGlyphs.ts` for what the glyphs are and why these shapes carry them).
 //
 // The fill is a single even-odd path — outline plus glyph polygons — so the
 // glyphs are cutouts showing whatever is behind the area rather than a colour
@@ -10,7 +11,7 @@
 // what play shows.
 
 import { Vec2 } from "../engine/vec2";
-import { forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "./areaGlyphs";
+import { anchorGlyphs, forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "./areaGlyphs";
 
 // `half` is the area's half-extents (a circle passes its radius in both axes).
 function fillWithCutouts(
@@ -74,6 +75,21 @@ export function fillForceArea(
 ): void {
   fillWithCutouts(ctx, center, rotation, half, circle, fillStyle, (p) =>
     forceAreaGlyphs(p, half, circle, magnitude, timeMs),
+  );
+}
+
+// A hook-only anchor body: a grate mesh, its holes showing the backdrop
+// through the body so it reads as scenery rather than a surface.
+export function fillAnchor(
+  ctx: CanvasRenderingContext2D,
+  center: Vec2,
+  rotation: number,
+  half: Vec2,
+  circle: boolean,
+  fillStyle: string,
+): void {
+  fillWithCutouts(ctx, center, rotation, half, circle, fillStyle, (p) =>
+    anchorGlyphs(p, half, circle),
   );
 }
 

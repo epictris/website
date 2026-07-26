@@ -11,11 +11,15 @@
 // Body kinds a level can contain:
 // - static:      immovable geometry the rope wraps and bodies collide with.
 // - impermeable: static, but hooks are destroyed on contact instead of attaching.
+// - anchor:      the mirror image of impermeable — the hook attaches to it, but
+//                nothing collides with it and the rope never wraps it. Scenery
+//                the player swings from and passes through (a background grate,
+//                a girder, a chandelier).
 // - killzone:    an Area2D that resets the level when the avatar enters it.
 // - rigid:       a dynamic RigidBody2D (gravity + collisions), authored in place.
 // - force:       an Area2D that accelerates every body inside it along the
 //                area's own rotation (a river current, wind, an updraft).
-export type BodyKind = "static" | "impermeable" | "killzone" | "rigid" | "force";
+export type BodyKind = "static" | "impermeable" | "anchor" | "killzone" | "rigid" | "force";
 
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }

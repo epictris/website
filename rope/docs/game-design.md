@@ -42,23 +42,27 @@ Circles are the **only** shape that the physics engine may move. A circle can:
 Circles are the sole dynamic bodies. Any object that needs to be pushed around,
 swung, or dragged by the rope must be a circle.
 
-## Areas must read as areas
+## Pass-through geometry must read as pass-through
 
-A level contains two categories of thing, and they behave nothing alike:
+A level contains things that stop you and things that do not, and they behave
+nothing alike:
 
-- **Bodies** — collision geometry. You stand on them, the rope wraps them, they
-  stop you.
+- **Solid bodies** — collision geometry. You stand on them, the rope wraps them,
+  they stop you.
 - **Areas** — regions. Nothing rests on them, the rope passes straight through,
   and they act on whatever is inside (a killzone resets the level, a force area
   accelerates you).
+- **Hook-only anchors** — scenery. Nothing collides with them and the rope never
+  wraps them; only the hook catches on them, so they are something to swing
+  from rather than something to land on.
 
-An area must **never** be mistakable for a body. Fill colour alone does not
-carry that distinction: colour is authored per-body, so an author can — and will
-— give a killzone the same grey as a wall. The rule is therefore stronger than
-"pick a different colour":
+Pass-through geometry must **never** be mistakable for a solid body. Fill colour
+alone does not carry that distinction: colour is authored per-body, so an author
+can — and will — give a killzone the same grey as a wall. The rule is therefore
+stronger than "pick a different colour":
 
-> Every area type carries a **glyph that names what it does**, stamped across its
-> whole extent, and no body type carries one.
+> Everything the player passes through carries a **glyph that names what it
+> does**, stamped across its whole extent, and no solid body carries one.
 
 The test is a screenshot with no legend and no interaction. Someone looking at a
 still of the level — a bug report, an `cli render` snapshot, a design review —
@@ -67,7 +71,7 @@ by walking into it has failed.
 
 Consequences for how the glyphs are drawn:
 
-- **Cutouts, not overlays.** The glyph is punched out of the area's fill as an
+- **Cutouts, not overlays.** The glyph is punched out of the shape's fill as an
   even-odd hole, so it shows whatever is behind. An overlay needs a contrast
   colour that some authored fill will always defeat; a hole cannot be hidden by
   the fill it is cut from.
@@ -80,11 +84,19 @@ Consequences for how the glyphs are drawn:
 - **One source of geometry.** The glyph polygons live in `render/areaGlyphs.ts`
   and are emitted into an abstract path sink, so the game canvas, the level
   editor and the headless SVG snapshot all stamp identical marks. A renderer
-  that skips areas is a bug, not a simplification — the snapshot is exactly the
+  that skips them is a bug, not a simplification — the snapshot is exactly the
   case this rule exists for.
 
-Current glyphs: `killzone` → skulls, `force` → flow arrows. A new area type must
-bring its own before it ships.
+Current glyphs: `killzone` → skulls, `force` → flow arrows, `anchor` → a grate
+mesh (holes you can see the backdrop through, which is what the body is). A new
+pass-through type must bring its own before it ships.
+
+The mirror-image pair is worth stating outright, because the two are one bit
+apart and confusing them would be lethal to a level: an **`impermeable`** body is
+solid but hook-proof (the hook bounces off it), an **`anchor`** body is
+hook-only but not solid (everything else passes through it). They are drawn to
+be unmistakable — the first keeps a full solid fill with a dashed steel edge,
+the second is punched through with holes.
 
 ## Convex-only polygons; compound bodies
 
