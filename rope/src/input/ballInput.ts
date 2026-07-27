@@ -316,21 +316,33 @@ export class BallInputSource implements IInputSource {
     return this.aimOrigin().add(this.aimLocal);
   }
 
-  sample(): FrameInput {
+  // Refresh the stick-driven aim from the live gamepad state. The mouse and the
+  // on-screen joystick write `aimLocal` from their own events, so they move the
+  // reticle the moment the device does; a gamepad has no events, so this poll is
+  // the only thing that moves it. It must run once per *rendered* frame rather
+  // than only inside sample(): sample() runs on the fixed 1/60 step, so on a
+  // display faster than the sim (144 Hz) most frames would redraw the reticle at
+  // an unchanged aim, and unevenly — the stick aim visibly stutters while mouse
+  // aim stays smooth. Render-rate polling can't affect the sim: it only moves
+  // `aimLocal` forward in time, and sample() still encodes whatever it holds at
+  // the physics frame.
+  pollAim(): void {
     const pad = readGamepad();
-    let padFire = false;
-    let restart = false;
     this.padAim = null;
-    if (pad) {
-      const stick = new Vec2(pad.axis(0), pad.axis(1));
-      if (stick.length() > AIM_DEADZONE) {
-        this.padAim = stick.normalized();
-        this.aimLocal = this.padAim.mul(AIM_DISTANCE);
-        this.aimSource = "pad";
-      }
-      padFire = pad.pressed(PAD_RB);
-      restart = pad.pressed(PAD_Y);
+    if (!pad) return;
+    const stick = new Vec2(pad.axis(0), pad.axis(1));
+    if (stick.length() > AIM_DEADZONE) {
+      this.padAim = stick.normalized();
+      this.aimLocal = this.padAim.mul(AIM_DISTANCE);
+      this.aimSource = "pad";
     }
+  }
+
+  sample(): FrameInput {
+    this.pollAim();
+    const pad = readGamepad();
+    const padFire = pad ? pad.pressed(PAD_RB) : false;
+    const restart = pad ? pad.pressed(PAD_Y) : false;
 
     // "Not aiming" sentinel: the ball's own position (BallPlayer treats a
     // zero-length aim vector as physics-driven rotation).

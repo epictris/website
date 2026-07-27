@@ -1133,6 +1133,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         testLevel instanceof BallLevel
           ? ballCameraPosition(camera, testLevel.cameraPosition)
           : testLevel.cameraPosition;
+      // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
+      ballInput?.pollAim();
+      liveInput?.pollAim();
       if (testLevel instanceof BallLevel) {
         renderBall(ctx, dpr, cssW, cssH, testLevel, camera, fps, ballInput?.aimPoint() ?? null);
       } else {

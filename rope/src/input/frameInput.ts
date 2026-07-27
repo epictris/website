@@ -45,4 +45,8 @@ export function button(held: boolean, prev: ButtonInput): ButtonInput {
 
 export interface IInputSource {
   sample(): FrameInput;
+  // Optional render-rate refresh of poll-based aim devices (gamepad sticks).
+  // Event-driven devices need none, and replay sources have no live device at
+  // all, so only the live sources implement it. See LiveInputSource.pollAim.
+  pollAim?(): void;
 }

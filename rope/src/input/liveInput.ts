@@ -131,18 +131,34 @@ export class LiveInputSource implements IInputSource {
     return this.padAimWorld;
   }
 
-  sample(): FrameInput {
+  // Refresh the stick-driven aim (and the crosshair point) from the live gamepad
+  // state. The mouse moves aim from its own events; a gamepad has no events, so
+  // this poll is the only thing that moves the crosshair. It must run once per
+  // *rendered* frame rather than only inside sample(): sample() runs on the fixed
+  // 1/60 step, so on a display faster than the sim (144 Hz) most frames would
+  // redraw the crosshair at an unchanged aim, and unevenly — it visibly stutters
+  // while mouse aim stays smooth. Render-rate polling can't affect the sim: it
+  // only moves the stored aim forward in time, and sample() still encodes
+  // whatever it holds at the physics frame.
+  pollAim(): void {
     const pad = pollGamepad();
     if (pad.aim) {
       this.padAimDir = pad.aim;
       this.aimSource = "pad";
     }
-
-    const aim =
+    this.padAimWorld =
       this.aimSource === "pad"
         ? this.aimOrigin().add(this.padAimDir.mul(AIM_DISTANCE))
-        : screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y);
-    this.padAimWorld = this.aimSource === "pad" ? aim : null;
+        : null;
+  }
+
+  sample(): FrameInput {
+    const pad = pollGamepad();
+    this.pollAim();
+
+    const aim =
+      this.padAimWorld ??
+      screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y);
 
     const b = (held: boolean, prev: ButtonInput) => button(held, prev);
     const p = this.prev;

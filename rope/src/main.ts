@@ -132,6 +132,11 @@ function frame(now: number): void {
       ? ballCameraPosition(camera, level.cameraPosition)
       : level.cameraPosition;
 
+  // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
+  // physics step, so the reticle/crosshair moves at display rate on a monitor
+  // faster than the 60 Hz sim.
+  input.pollAim?.();
+
   const dpr = window.devicePixelRatio || 1;
   if (level instanceof BallLevel) {
     renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps, ballInput!.aimPoint());
