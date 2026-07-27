@@ -36,9 +36,9 @@ const GLYPH_SPACING = 0.42; // nominal gap between glyph centres
 const ARROW_LEN = 0.26;
 const SKULL_SIZE = 0.3; // total height
 // A grate is a mesh rather than a stamp, so it gets its own, much finer pitch:
-// holes on a 16 cm lattice leave 5 cm of bar between them.
-const GRATE_SPACING = 0.16;
-const GRATE_BAR = 0.05;
+// holes on a 10 cm lattice leave 3 cm of bar between them.
+const GRATE_SPACING = 0.1;
+const GRATE_BAR = 0.03;
 // Perf guard for a level-sized area. Past this the lattice is thinned (glyphs
 // keep their size); it only bites well beyond a screenful.
 const MAX_GLYPHS = 1200;

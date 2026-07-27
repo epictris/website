@@ -101,10 +101,22 @@ Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 RigidBody2D (rolls via the opt-in `contactFriction` field on RigidBody2D;
 default 0 keeps old replays bit-identical). The chain reuses the Rope wrap
 solver: its start contact sits on the ball's edge in the ball's local frame, so
-it rotates with the ball, winds around it, and applies torque. The chain end is
-a `BallHook` — a RigidBody2D projectile (gravity arcs its flight, unlike the
-straight-line grapple Hook) that anchors to the first surface it contacts,
-flying or dangling. At the absolute max length
+it rotates with the ball, winds around it, and applies torque. The chain solve
+runs *after* `World.integrate` (see `BallLevel.physicsProcess`), and `Rope`
+writes its positional correction straight onto a rigid body — only the grapple
+avatar sweeps — so the ball frame ends with `World.depenetrateRigid(ball)`, a
+position-only push-out of static geometry. Without it a point-blank anchor on
+the far side of a surface hauls the ball a little deeper every frame until it is
+buried in the scenery. The chain end is
+a `BallHook` — a RigidBody2D projectile that anchors to the first surface it
+contacts, flying or dangling.
+The throw is a **straight line**: the hook carries `gravityScale = 0` for the
+deploy and `BallHook.endFlight()` switches gravity back on the moment the throw
+ends, so the shot goes exactly where it was aimed and only then falls. Every
+ending calls it — the hook attaching, a bounce off an impermeable (the deflected
+remainder does arc), the chain snagging geometry, and the chain running out of
+length (so the dangling tip swings instead of hanging in the air).
+At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it
 touches a surface and anchors, or is released. A deploying chain
@@ -434,7 +446,7 @@ row count so one row lies on the widest chord. Force arrows drift along the flow
 proportional to the magnitude (clamped), driven by the wall clock — decoration that can never
 reach the fixed-step sim; killzone skulls are static, since a killzone does not flow. The SVG
 snapshot pins the phase at 0 so a frame render never depends on the wall clock. An anchor's
-grate is the same machinery on a much finer pitch (11 cm holes on a 16 cm lattice, so 5 cm
+grate is the same machinery on a much finer pitch (7 cm holes on a 10 cm lattice, so 3 cm
 bars) and static —
 its holes are literally holes, so the backdrop shows through the body.
 

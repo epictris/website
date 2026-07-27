@@ -40,8 +40,9 @@ A gamepad (standard mapping) works too, merged with keyboard/mouse:
 
 An alternate character controller at `?level=BALL`: you are a rolling ball that
 throws a hooked chain (absolute max length) from the loop on its rim. The hook
-flies in a gravity arc and anchors to the first surface it touches; a miss
-leaves it dangling at full length until it lands or is released.
+flies in a straight line - gravity only takes hold once it hits something - and
+anchors to the first surface it touches; a miss leaves it dangling at full
+length until it lands or is released.
 Gamepad only for now:
 
 | Input | Action |

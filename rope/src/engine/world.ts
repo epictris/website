@@ -347,6 +347,43 @@ export class World {
     }
   }
 
+  // Positional-only push-out of one rigidbody's circles from static geometry.
+  // Velocity and rotation are untouched — this is not a contact solve but the
+  // "geometry wins" pass a constraint solver that runs AFTER integrate needs.
+  // Rope writes its positional correction straight onto a rigid body (only the
+  // grapple avatar sweeps, see Rope.applyCorrectionMotion, which is written
+  // assuming the world depenetrates everything else); the ball's chain solves
+  // after World.integrate, so nothing else in its frame can undo a correction
+  // that pulls the ball into a surface. Iterated so a body wedged in a corner
+  // settles out of both faces rather than sliding along one into the other.
+  depenetrateRigid(body: RigidBody2D, iterations = 2): void {
+    if (body.removed || !body.hasShape()) return;
+    for (let i = 0; i < iterations; i++) {
+      let moved = false;
+      for (const bshape of body.getShapes()) {
+        if (bshape.shape.kind !== "circle") continue;
+        const r = bshape.shape.radius;
+        // Offset from the body centre to this circle. Rotation does not change
+        // in this pass, so the offset is fixed and the circle's centre can be
+        // re-derived after every push — each overlap test sees where the body
+        // actually is, including pushes applied a moment ago.
+        const offset = bshape.globalPosition.sub(body.globalPosition);
+        for (const other of this.bodies) {
+          if (other === body || other.removed || !other.hasShape()) continue;
+          if (body.exceptions.has(other.id)) continue;
+          if (!(other instanceof StaticBody2D)) continue;
+          for (const oshape of other.getShapes()) {
+            const ov = circleOverlap(body.globalPosition.add(offset), r, oshape);
+            if (!ov) continue;
+            body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
+            moved = true;
+          }
+        }
+      }
+      if (!moved) return;
+    }
+  }
+
   private resolveDynamicCollisions(dt: number): void {
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;

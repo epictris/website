@@ -1,10 +1,16 @@
-// BallHook — the ball & chain controller's chain-end projectile. Unlike the
-// grapple Hook (a CharacterBody2D flying in a straight line), this is a
-// RigidBody2D: gravity bends its flight into an arc. It attaches to the first
-// surface it contacts — during flight or later while dangling at full chain
-// length — via a swept ray for fast motion plus an overlap probe for
-// slow/resting contact. "Surface" includes hook-only `AnchorBody` scenery,
-// which nothing else in the sim collides with.
+// BallHook - the ball & chain controller's chain-end projectile. It is a
+// RigidBody2D, but it flies in a straight line: gravity is switched off for
+// the deploy (`gravityScale = 0`) and switched back on the moment the throw
+// ends, so the shot goes exactly where it was aimed and only then starts to
+// fall. Anything that stops the flight counts: the hook contacting a surface
+// (attach, or a bounce off an impermeable), the chain snagging scene geometry,
+// or the chain running out of length - the last two are BallPlayer's calls,
+// which is why `endFlight` is public.
+//
+// It attaches to the first surface it contacts - during flight or later while
+// dangling at full chain length - via a swept ray for fast motion plus an
+// overlap probe for slow/resting contact. "Surface" includes hook-only
+// `AnchorBody` scenery, which nothing else in the sim collides with.
 
 import {
   AnchorBody,
@@ -37,6 +43,15 @@ export class BallHook extends RigidBody2D {
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.
     this.restitution = 0.0375;
+    // The deploy is a straight line: no gravity until the throw ends (see the
+    // file header). `endFlight` restores it.
+    this.gravityScale = 0;
+  }
+
+  // The throw is over — the hook falls from here on. Idempotent, and safe to
+  // call for any of the endings: attach, bounce, snag, out of length.
+  endFlight(): void {
+    this.gravityScale = 1;
   }
 
   registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
@@ -45,6 +60,7 @@ export class BallHook extends RigidBody2D {
 
   private attach(body: PhysicsBody2D, point: Vec2): void {
     this.armed = false;
+    this.endFlight();
     for (const cb of this.attachmentCallbacks) cb(body, point);
     this.world?.remove(this);
   }
@@ -126,6 +142,8 @@ export class BallHook extends RigidBody2D {
   // following World.integrate step carries it away rather than back into the
   // wall. The deploy is NOT stopped: the hook stays armed and keeps flying, so
   // a chain can be skipped along a hook-proof wall into whatever lies past it.
+  // It has collided, though, so the straight-line phase is over and the
+  // deflected remainder of the throw arcs under gravity.
   //
   // How much speed survives is |n × d| — the sine of the angle between the
   // surface normal and the hook's travel direction, i.e. how glancing the hit
@@ -135,6 +153,7 @@ export class BallHook extends RigidBody2D {
   // scaling smoothly. The reflection about the normal happens first, so the
   // surviving speed points away from the wall.
   private bounce(normal: Vec2, seatPos: Vec2): void {
+    this.endFlight();
     const speed = this.linearVelocity.length();
     const vn = this.linearVelocity.dot(normal);
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {

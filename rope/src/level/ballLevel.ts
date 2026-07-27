@@ -98,6 +98,14 @@ export class BallLevel {
     if (this.ball.chainAnchored && this.ball.chain) {
       const speedBefore = this.ball.linearVelocity.length();
       this.ball.chain.physicsStep(this.bodies, delta);
+      // The solve just wrote a positional correction straight onto the ball
+      // (Rope sweeps only for the grapple avatar) and it runs after
+      // World.integrate, so this is the frame's last chance to keep the ball
+      // out of the scenery. Without it a short anchor on the far side of a
+      // surface — a point-blank shot into the block you are resting against —
+      // hauls the ball a little deeper every frame until it is buried in the
+      // geometry (session-1048f: 5 cm in, for 49 frames).
+      this.world.depenetrateRigid(this.ball);
       this.anchorKickSpeedGain = anchoredThisFrame
         ? this.ball.linearVelocity.length() - speedBefore
         : null;

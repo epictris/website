@@ -22,7 +22,9 @@ export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
   // this length has missed, and an attachment beyond it snaps the chain.
   static readonly CHAIN_MAX_LENGTH = 1.8;
-  static readonly HOOK_SPEED = 12; // m/s launch speed (gravity arcs the flight)
+  // m/s launch speed. The throw is a straight line — the hook carries no
+  // gravity until it (or the chain) hits something, or the chain runs out.
+  static readonly HOOK_SPEED = 12;
   // Attachments longer than max by more than this snap the chain; within it
   // they clamp to max instead. Must cover the dangling state's solver
   // tolerance (~1 px over) — a deployed tip that finally lands attaches at
@@ -189,6 +191,10 @@ export class BallPlayer extends RigidBody2D {
     const hook = this.hookInFlight;
     const chain = this.chain;
     if (!hook || !chain) return;
+
+    // The straight-line throw is over, so the tip falls from here: it swings
+    // and dangles on the chain instead of hanging in the air where it stopped.
+    hook.endFlight();
 
     // Pull any overshoot back along the final span so the deployed length is
     // exactly targetLength.
