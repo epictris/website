@@ -45,10 +45,16 @@ export const CAMERA_FOLLOW_TAU = 0.15;
 // Default region cross-fade, seconds. A region may override it with `blend`.
 export const CAMERA_BLEND_TIME = 0.7;
 
-// How far outside a region the avatar must travel before the region lets go.
-// Without it, hovering exactly on a boundary re-triggers the cross-fade every
-// frame and the camera stutters.
-const REGION_EXIT_MARGIN = 0.15; // metres
+// How far outside a region the avatar must travel before the region lets go,
+// when the region does not author a `buffer` of its own. Without it, hovering
+// exactly on a boundary re-triggers the cross-fade every frame and the camera
+// stutters, so it is sized for jitter and nothing more.
+export const REGION_EXIT_MARGIN = 0.15; // metres
+
+// The buffer a region actually holds by: its own, or the jitter default.
+export function regionBuffer(r: CameraRegionData): number {
+  return r.buffer ?? REGION_EXIT_MARGIN;
+}
 
 export interface CameraTarget {
   pos: Vec2;
@@ -65,11 +71,24 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin = 0): boolean
   return Math.abs(l.x) <= r.shape.w / 2 + margin && Math.abs(l.y) <= r.shape.h / 2 + margin;
 }
 
+
 // The region governing the camera for an avatar at `p`. Highest `priority`
 // among the containing regions wins; a tie goes to the later one, so the
 // authoring order breaks it. `current` (the region in force last frame) keeps
-// its grip until the avatar leaves it by REGION_EXIT_MARGIN, unless a region of
-// strictly higher priority has taken over.
+// its grip anywhere inside its own buffer zone (its volume grown by
+// `regionBuffer`), unless a region of strictly higher priority has taken over.
+//
+// Entering is deliberately *not* buffered: a region takes over the moment the
+// avatar is inside it, and only giving it up is delayed. That asymmetry is what
+// makes the buffer authorable as "how far out of this room I may stray without
+// the camera changing its mind" — a swing that leaves through one wall and
+// comes straight back keeps one camera for the whole arc, where a buffer on
+// entry would instead grab the region early from outside.
+//
+// Priority still overrides the grip, and is the escape hatch for the case a
+// wide buffer creates: a small, deliberately-framed volume sitting inside a big
+// buffered one needs some way to take the camera, and saying so explicitly is
+// better than shrinking the buffer until the overlap happens to work out.
 export function activeCameraRegion(
   regions: readonly CameraRegionData[],
   p: Vec2,
@@ -83,7 +102,7 @@ export function activeCameraRegion(
   if (
     current &&
     regions.includes(current) &&
-    pointInRegion(current, p, REGION_EXIT_MARGIN) &&
+    pointInRegion(current, p, regionBuffer(current)) &&
     (!best || (best.priority ?? 0) <= (current.priority ?? 0))
   ) {
     return current;
@@ -139,6 +158,14 @@ export class CameraController {
   private zoomRatio = 1;
   private s = 1;
   private dur = CAMERA_BLEND_TIME;
+
+  // The region actually in force, for the debug overlay. It cannot be
+  // recomputed there: the grip depends on which region held the camera last
+  // frame, so a recomputed answer disagrees with the camera for the whole width
+  // of the buffer, which is exactly what the overlay is opened to see.
+  get activeRegion(): CameraRegionData | null {
+    return this.region;
+  }
 
   // Drop the easing for one frame — the camera arrives at its target instantly.
   // Used on level start/reset, where easing in from the last frame's position

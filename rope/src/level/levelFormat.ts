@@ -93,6 +93,13 @@ export interface CameraRegionData {
   // Seconds to hand the camera in and out of this region; absent = the
   // controller's CAMERA_BLEND_TIME.
   blend?: number;
+  // Metres (pixels on disk) the avatar must travel *outside* this region before
+  // it will let the camera go: the region keeps its grip anywhere within its
+  // own volume grown by this much. Absent = the controller's
+  // REGION_EXIT_MARGIN, which is only wide enough to stop boundary jitter.
+  // Authored wider, it is what lets a swing that leaves the region and comes
+  // straight back keep one camera the whole time.
+  buffer?: number;
   // Overlap tie-break: the containing region with the highest priority wins
   // (later in the list wins a tie). Absent = 0.
   priority?: number;
@@ -185,8 +192,8 @@ export interface LevelData {
 // an acceleration (length/s²) so it scales too; `friction` is dimensionless and
 // passes through. Returns a fresh copy so the caller's data stays pristine.
 export function scaleLevelData(data: LevelData, factor: number): LevelData {
-  // A camera region's positions, extents, offsets and locks are lengths;
-  // viewportScale, blend (seconds) and priority are not.
+  // A camera region's positions, extents, offsets, locks and buffer are
+  // lengths; viewportScale, blend (seconds) and priority are not.
   const regions = data.cameraRegions?.map((r) => ({
     x: r.x * factor,
     y: r.y * factor,
@@ -201,6 +208,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     ...(r.lockX !== undefined ? { lockX: r.lockX * factor } : {}),
     ...(r.lockY !== undefined ? { lockY: r.lockY * factor } : {}),
     ...(r.blend !== undefined ? { blend: r.blend } : {}),
+    ...(r.buffer !== undefined ? { buffer: r.buffer * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
   }));
   // A note's placement, box and glyph height are lengths; its text is not.

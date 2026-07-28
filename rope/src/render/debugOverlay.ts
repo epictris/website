@@ -16,7 +16,8 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Surface } from "../lib/surface";
 import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
-import { activeCameraRegion } from "./cameraController";
+import type { CameraRegionData } from "../level/levelFormat";
+import { activeCameraRegion, regionBuffer } from "./cameraController";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -176,8 +177,14 @@ const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
 // Camera regions are invisible in play by design, so a camera that offsets,
 // zooms or pins has no on-screen cause. The overlay draws every region's volume
 // and fills the one currently in force, which is the whole diagnosis.
-function drawCameraRegions(ctx: CanvasRenderingContext2D, level: Level): void {
-  const active = activeCameraRegion(level.cameraRegions, level.cameraPosition);
+function drawCameraRegions(
+  ctx: CanvasRenderingContext2D,
+  level: Level,
+  held: CameraRegionData | null,
+): void {
+  // The live region when the caller has a camera controller to hand; recomputed
+  // only for a caller that has none, where a first-order answer beats nothing.
+  const active = held ?? activeCameraRegion(level.cameraRegions, level.cameraPosition);
   for (const r of level.cameraRegions) {
     ctx.save();
     ctx.translate(r.x, r.y);
@@ -195,12 +202,37 @@ function drawCameraRegions(ctx: CanvasRenderingContext2D, level: Level): void {
     ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.stroke();
     ctx.setLineDash([]);
+    // The buffer zone of whichever region holds the camera. Only that one: a
+    // region keeps its grip out to here, so this is the boundary that explains
+    // why the camera has not changed hands, and drawing every region's would
+    // bury it in overlapping outlines that mean nothing until the region is in
+    // force.
+    if (r !== active) continue;
+    const b = regionBuffer(r);
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(r.rot);
+    ctx.beginPath();
+    if (r.shape.kind === "circle") ctx.arc(0, 0, r.shape.r + b, 0, Math.PI * 2);
+    else {
+      ctx.rect(-r.shape.w / 2 - b, -r.shape.h / 2 - b, r.shape.w + 2 * b, r.shape.h + 2 * b);
+    }
+    ctx.restore();
+    ctx.lineWidth = PX;
+    ctx.setLineDash([2 * PX, 5 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 
-export function drawDebugOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
+export function drawDebugOverlay(
+  ctx: CanvasRenderingContext2D,
+  level: Level,
+  // The region the camera controller currently holds; null = recompute it.
+  heldCameraRegion: CameraRegionData | null = null,
+): void {
   drawLedgeOverlay(ctx, level);
   drawContactNormals(ctx, level);
   drawPlayerCollider(ctx, level);
-  drawCameraRegions(ctx, level);
+  drawCameraRegions(ctx, level, heldCameraRegion);
 }

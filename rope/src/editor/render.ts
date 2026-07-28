@@ -119,6 +119,29 @@ function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
   }
 }
 
+// A camera region's buffer zone: the volume grown by `buffer` on every side,
+// which is where the region keeps its grip on the camera. Grown per axis rather
+// than as a Minkowski sum, because that is exactly what `pointInRegion` tests -
+// a rect's buffer has square corners, not rounded ones.
+export function pathRegionBuffer(
+  ctx: CanvasRenderingContext2D,
+  body: EdItem,
+  buffer: number,
+): void {
+  ctx.beginPath();
+  if (body.shape.kind === "circle") {
+    ctx.arc(body.pos.x, body.pos.y, body.shape.r + buffer, 0, Math.PI * 2);
+  } else {
+    const hw = body.shape.w / 2 + buffer;
+    const hh = body.shape.h / 2 + buffer;
+    ctx.save();
+    ctx.translate(body.pos.x, body.pos.y);
+    ctx.rotate(body.rot);
+    ctx.rect(-hw, -hh, hw * 2, hh * 2);
+    ctx.restore();
+  }
+}
+
 function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
   const s = HANDLE_SIZE_PX;
   ctx.fillStyle = HANDLE_FILL;
@@ -153,6 +176,7 @@ export function cameraRegionLabel(r: EdItem): string {
   const lock = `${r.cam.lockX !== null ? "x" : ""}${r.cam.lockY !== null ? "y" : ""}`;
   if (lock) parts.push(`lock ${lock}`);
   if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
+  if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
   if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
   return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
 }
@@ -448,6 +472,18 @@ export function drawEditor(
     ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.stroke();
     ctx.setLineDash([]);
+    // The buffer zone, when one is authored: the region holds the camera
+    // anywhere inside it, so a region drawn without it looks like it lets go at
+    // its own edge. Finer dots and a thinner line than the region's own border,
+    // since it is the region's reach rather than a second volume.
+    if (r.cam.buffer !== null && r.cam.buffer > 0) {
+      pathRegionBuffer(ctx, r, r.cam.buffer);
+      ctx.strokeStyle = CAMERA_REGION_COLOR;
+      ctx.lineWidth = worldLine;
+      ctx.setLineDash([2 * PX, 5 * PX]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     drawLockMarks(ctx, r, worldLine);
   }
 

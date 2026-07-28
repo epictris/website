@@ -23,6 +23,7 @@ import { KillZone } from "../classes/killZone";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
+import type { CameraRegionData } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
@@ -283,6 +284,8 @@ export function render(
   // drawn between its previous and current sim transform. 1 = draw the sim
   // state exactly (what a caller with no fixed-step accumulator wants).
   alpha = 1,
+  // The camera region in force, for the debug overlay (see drawDebugOverlay).
+  heldCameraRegion: CameraRegionData | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
@@ -345,7 +348,7 @@ export function render(
   if (gamepadAim) drawCrosshair(ctx, gamepadAim);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
-  if (showDebug) drawDebugOverlay(ctx, level);
+  if (showDebug) drawDebugOverlay(ctx, level, heldCameraRegion);
 
   // Debug overlay.
   for (const cmd of Debug.cmds) {

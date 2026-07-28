@@ -169,6 +169,7 @@ function frame(now: number): void {
       showDebug,
       liveInput!.gamepadAim(),
       alpha,
+      cameraCtl.activeRegion,
     );
   }
 

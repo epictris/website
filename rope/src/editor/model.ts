@@ -41,13 +41,15 @@ export type EdShape =
   | { kind: "circle"; r: number };
 
 // Camera-layer properties (see CameraRegionData for the semantics). `lockX/Y`
-// null = that axis follows the avatar; `blend` null = the controller default.
+// null = that axis follows the avatar; `blend` and `buffer` null = the
+// controller's defaults.
 export interface EdCamera {
   offset: Vec2; // metres
   viewportScale: number;
   lockX: number | null; // metres
   lockY: number | null; // metres
   blend: number | null; // seconds
+  buffer: number | null; // metres; null = the controller's REGION_EXIT_MARGIN
   priority: number;
 }
 
@@ -127,6 +129,7 @@ export const defaultCamera = (): EdCamera => ({
   lockX: null,
   lockY: null,
   blend: null,
+  buffer: null,
   priority: 0,
 });
 
@@ -218,6 +221,7 @@ function fromLevelData(data: LevelData): EdModel {
       lockX: r.lockX ?? null,
       lockY: r.lockY ?? null,
       blend: r.blend ?? null,
+      buffer: r.buffer ?? null,
       priority: r.priority ?? 0,
     },
     note: defaultNote(),
@@ -284,6 +288,7 @@ export function toLevelData(model: EdModel): LevelData {
       ...(i.cam.lockX !== null ? { lockX: i.cam.lockX } : {}),
       ...(i.cam.lockY !== null ? { lockY: i.cam.lockY } : {}),
       ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
+      ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
     }));
 

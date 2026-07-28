@@ -5,7 +5,11 @@
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { ballZoom, GRAPPLE_ZOOM, screenToWorld, type Camera } from "../render/camera";
-import { CAMERA_BLEND_TIME, CameraController } from "../render/cameraController";
+import {
+  CAMERA_BLEND_TIME,
+  CameraController,
+  REGION_EXIT_MARGIN,
+} from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
@@ -932,6 +936,21 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         placeholder: String(CAMERA_BLEND_TIME),
         onEmpty: () => {
           for (const b of regions) b.cam.blend = null;
+        },
+      },
+    );
+    // How far outside the region the avatar may travel before it gives the
+    // camera up. Blank = the controller's jitter margin (REGION_EXIT_MARGIN),
+    // which is what every region authored before this field had.
+    num(
+      "buffer",
+      (b) => (b.cam.buffer ?? NaN) * M2PX,
+      (b, v) => (b.cam.buffer = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: String(Math.round(REGION_EXIT_MARGIN * M2PX)),
+        onEmpty: () => {
+          for (const b of regions) b.cam.buffer = null;
         },
       },
     );
