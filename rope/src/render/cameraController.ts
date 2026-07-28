@@ -12,11 +12,22 @@
 //  1. **Follow lag** (CAMERA_FOLLOW_TAU, ~0.15 s) — an exponential ease of the
 //     camera toward its target. This is the "not rigidly locked to the player"
 //     part; it is short enough to never feel like the camera is behind.
-//  2. **Region cross-fade** (CAMERA_BLEND_TIME, ~0.7 s, per-region override) —
-//     a smoothstep between the *targets* of the outgoing and incoming regions.
-//     Both targets are evaluated live every frame, so the avatar keeps being
-//     tracked all the way through a transition instead of the camera dragging
-//     from a stale point.
+//  2. **Region hand-off** (CAMERA_BLEND_TIME, ~0.7 s, per-region override) -
+//     when the governing region changes, the gap between what the outgoing
+//     region wanted and what the incoming one wants is *frozen* at that instant
+//     and smoothstepped to zero on top of the incoming (live) target.
+//
+// Freezing that delta is the whole point. The camera aims at the correct
+// position for the region it is now in, displaced by a decaying constant, so
+// two very different configurations that happen to agree at the crossing hand
+// over invisibly - the delta is simply zero. Cross-fading the two *live*
+// targets instead, as this used to, keeps the outgoing region tracking the
+// avatar for the whole blend, so its decaying share hauls the camera off the
+// correct position and then lets it snap back: rubber banding whose size has
+// nothing to do with how far apart the two cameras actually are.
+//
+// The avatar is still tracked live throughout, because the delta rides on the
+// incoming target rather than replacing it.
 //
 // A single mechanism covers default→region, region→region and region→default:
 // "no region" is just the null region, whose target is the plain follow point.
@@ -118,9 +129,14 @@ export class CameraController {
   private zoom = 1;
   private started = false;
 
-  // Cross-fade state: `from` → `to` over `dur`, with `s` the eased progress.
-  private from: CameraRegionData | null = null;
-  private to: CameraRegionData | null = null;
+  // The region in force last frame.
+  private region: CameraRegionData | null = null;
+
+  // Hand-off state: the target gap frozen when the region last changed - the
+  // outgoing position minus the incoming one, and the outgoing zoom over the
+  // incoming one - decayed to nothing over `dur`, with `s` the raw progress.
+  private offset = Vec2.ZERO;
+  private zoomRatio = 1;
   private s = 1;
   private dur = CAMERA_BLEND_TIME;
 
@@ -138,41 +154,54 @@ export class CameraController {
     regions: readonly CameraRegionData[],
     baseZoom: number,
   ): void {
-    const next = activeCameraRegion(regions, follow, this.to);
-    if (next !== this.to) {
-      // An interrupted cross-fade restarts from the region it was heading to.
-      // The blended target can jump by the unfinished remainder, but the follow
-      // ease below low-passes it, so the camera itself stays continuous.
-      this.from = this.to;
-      this.to = next;
-      this.s = 0;
-      // Entering a region uses its blend; leaving one back to the default uses
-      // the blend of the region being left, so a handoff feels symmetric.
-      this.dur = next?.blend ?? this.from?.blend ?? CAMERA_BLEND_TIME;
-    }
-    this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
-
-    const a = cameraRegionTarget(this.from, follow, baseZoom);
-    const b = cameraRegionTarget(this.to, follow, baseZoom);
-    const k = smoothstep(this.s);
-    const target: CameraTarget = {
-      pos: a.pos.add(b.pos.sub(a.pos).mul(k)),
-      zoom: lerpZoom(a.zoom, b.zoom, k),
-    };
+    const next = activeCameraRegion(regions, follow, this.region);
+    const target = cameraRegionTarget(next, follow, baseZoom);
 
     if (!this.started) {
       this.started = true;
+      this.region = next;
+      this.offset = Vec2.ZERO;
+      this.zoomRatio = 1;
       this.s = 1;
-      this.from = this.to;
-      this.pos = cameraRegionTarget(this.to, follow, baseZoom).pos;
-      this.zoom = cameraRegionTarget(this.to, follow, baseZoom).zoom;
-    } else {
-      // Frame-rate independent exponential ease: the same time constant on a
-      // 60 Hz and a 144 Hz display.
-      const t = 1 - Math.exp(-Math.max(0, dt) / CAMERA_FOLLOW_TAU);
-      this.pos = this.pos.add(target.pos.sub(this.pos).mul(t));
-      this.zoom = lerpZoom(this.zoom, target.zoom, t);
+      this.pos = target.pos;
+      this.zoom = target.zoom;
+      camera.position = this.pos;
+      camera.zoom = this.zoom;
+      return;
     }
+
+    if (next !== this.region) {
+      // The discrepancy is measured between the two *targets*, not against
+      // where the camera is: aiming at the camera's own position would drop its
+      // velocity to nothing for an instant, which reads as a hitch. Taken this
+      // way the aim point is unchanged on the crossing frame, so the camera
+      // carries its follow lag straight through and only the delta decays.
+      // Any remainder of an interrupted hand-off is folded in, which keeps that
+      // case continuous too.
+      const prev = cameraRegionTarget(this.region, follow, baseZoom);
+      const rest = 1 - smoothstep(this.s);
+      this.offset = prev.pos.add(this.offset.mul(rest)).sub(target.pos);
+      this.zoomRatio = (prev.zoom * this.zoomRatio ** rest) / target.zoom;
+      this.s = 0;
+      // Entering a region uses its blend; leaving one back to the default uses
+      // the blend of the region being left, so a handoff feels symmetric.
+      this.dur = next?.blend ?? this.region?.blend ?? CAMERA_BLEND_TIME;
+      this.region = next;
+    }
+    this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
+
+    // What is left of the hand-off discrepancy, laid on top of the live target.
+    const k = 1 - smoothstep(this.s);
+    const aim: CameraTarget = {
+      pos: target.pos.add(this.offset.mul(k)),
+      zoom: target.zoom * this.zoomRatio ** k,
+    };
+
+    // Frame-rate independent exponential ease: the same time constant on a
+    // 60 Hz and a 144 Hz display.
+    const t = 1 - Math.exp(-Math.max(0, dt) / CAMERA_FOLLOW_TAU);
+    this.pos = this.pos.add(aim.pos.sub(this.pos).mul(t));
+    this.zoom = lerpZoom(this.zoom, aim.zoom, t);
 
     camera.position = this.pos;
     camera.zoom = this.zoom;

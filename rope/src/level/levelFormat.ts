@@ -90,8 +90,8 @@ export interface CameraRegionData {
   // World coordinate to pin the camera to on that axis; absent = follow.
   lockX?: number;
   lockY?: number;
-  // Seconds to cross-fade in and out of this region; absent = the controller's
-  // CAMERA_BLEND_TIME.
+  // Seconds to hand the camera in and out of this region; absent = the
+  // controller's CAMERA_BLEND_TIME.
   blend?: number;
   // Overlap tie-break: the containing region with the highest priority wins
   // (later in the list wins a tie). Absent = 0.

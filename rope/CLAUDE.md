@@ -431,10 +431,14 @@ The default framing puts the avatar **dead centre** for both controllers — the
 Two smoothings run at deliberately different timescales:
 
 - **Follow lag** (`CAMERA_FOLLOW_TAU`, 0.15 s) — an exponential ease of the camera toward its target, `1 - exp(-dt/tau)` so a 60 Hz and a 144 Hz display behave identically. This is the "not rigidly locked to the player" part.
-- **Region cross-fade** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) — a smoothstep between the *targets* of the outgoing and incoming regions. Both targets are evaluated live every frame, so the avatar keeps being tracked through a transition instead of the camera dragging from a stale point.
+- **Region hand-off** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) - when the governing region changes, the gap between what the outgoing region wanted and what the incoming one wants is **frozen** at that instant and smoothstepped to zero on top of the incoming target, which goes on being evaluated live.
 
+Freezing that delta is the point of the mechanism.
+The camera aims at the *correct* position for the region it is now in, displaced by a decaying constant, so two very different configurations that happen to agree at the crossing hand over invisibly - the delta is simply zero.
+Cross-fading the two *live* targets instead, as this used to, keeps the outgoing region tracking the avatar for the whole blend, so its decaying share hauls the camera off the correct position and then lets it snap back: rubber banding whose size has nothing to do with how far apart the two cameras actually are.
+The delta is measured between the two targets rather than against where the camera *is*: aiming the camera at its own position would drop its velocity to nothing for a frame, which reads as a hitch.
+Taken this way the aim point is unchanged on the crossing frame, so the camera carries its follow lag straight through and only the delta decays; a hand-off interrupted part-way folds its remainder into the new delta, so that case is continuous too.
 One mechanism therefore covers default→region, region→region and region→default: "no region" is just the null region, whose target is the plain follow point.
-An interrupted cross-fade restarts from the region it was heading to, so the *target* can jump by the unfinished remainder — the follow ease low-passes it, so the camera itself stays continuous.
 `CameraController.snap()` drops the easing for one frame (level start and reset), where easing in from the last frame's position would be a swoop across the level.
 
 ### Render interpolation
