@@ -6,6 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
+import { fillBackground } from "../render/background";
 import { fillAnchor, fillForceArea, fillKillZone } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import {
@@ -27,6 +28,14 @@ const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const SELECT = "#f4a460";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
+// Editor-only outline of a background panel. In game a background is drawn with
+// no border at all — that is what keeps it from reading as an object — but an
+// author still has to see where a dark or near-transparent panel ends, and has
+// to be able to find one to click. Dashed, like every other volume that is not
+// a body, and a saturated teal rather than a grey: the outline has to carry
+// against both the pale grid backdrop and whatever the panel is filled with,
+// and a neutral edge disappears into one or the other.
+const BACKGROUND_EDGE = "#4ec9b0";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
 
@@ -312,6 +321,34 @@ export function drawEditor(
   ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
+  // Backgrounds first, exactly as the game draws them: decoration is under
+  // everything, so nothing the player can touch is ever hidden behind it.
+  const backgrounds = visibleLayers.has("background")
+    ? model.items.filter((i) => i.layer === "background")
+    : [];
+  for (const g of backgrounds) {
+    fillBackground(
+      ctx,
+      g.pos,
+      g.rot,
+      halfExtents(g),
+      g.shape.kind === "circle",
+      hexToRgba(g.color, g.opacity),
+    );
+    if (selectedIds.has(g.id)) {
+      pathBody(ctx, g);
+      ctx.strokeStyle = SELECT;
+      ctx.lineWidth = worldLine * 5;
+      ctx.stroke();
+    }
+    pathBody(ctx, g);
+    ctx.strokeStyle = BACKGROUND_EDGE;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // Every visible layer draws at full strength, whether or not it is the one
   // being edited: a dimmed layer is harder to read against the geometry it
   // annotates, and the toolbar's layer list already says which one a click

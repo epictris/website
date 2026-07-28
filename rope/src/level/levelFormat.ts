@@ -98,6 +98,42 @@ export interface CameraRegionData {
   priority?: number;
 }
 
+// Default appearance of a background panel: an opaque dark slate, deliberately
+// distinct from the geometry grey so a fresh backdrop does not read as a wall.
+export const DEFAULT_BACKGROUND_COLOR = "#313244";
+export const DEFAULT_BACKGROUND_OPACITY = 1;
+
+// A background panel: a shape drawn behind the level as pure decoration.
+// Deliberately NOT a body and NOT an area — it has no collision, nothing wraps
+// it, no force acts through it and the sim never sees it, so it lives in its own
+// list exactly as camera regions and notes do rather than gaining a `BodyKind`
+// every physics path would have to exclude.
+//
+// Unlike a note it *is* drawn in play — it is the one editor layer whose output
+// the player sees — which is what makes its z-order and its lack of a border
+// load-bearing rather than cosmetic: a background draws first, behind every
+// body, and with no outline at all. A border is what makes a shape read as an
+// object; a backdrop has none, and anything the player can touch is drawn over
+// it with one. See "Backgrounds" in docs/game-design.md.
+//
+// Planned, not implemented: an image fill, which lands here as
+//   image?: string;                    // asset path
+//   fit?: "scale" | "crop" | "tile";   // how it maps into the shape
+//   tile?: number;                     // fit "tile": tile width in scene pixels
+// read by `drawBackground` alongside the colour, which stays underneath as the
+// panel's backing. Nothing else moves: the placement, the shape, the layer and
+// the whole editor plumbing are already shared with every other item, so images
+// are a change to one draw function and one inspector section.
+export interface BackgroundData {
+  x: number;
+  y: number;
+  rot: number;
+  shape: ShapeData;
+  // Optional appearance (hex colour + 0..1 fill opacity). Absent = the defaults.
+  color?: string;
+  opacity?: number;
+}
+
 // Default glyph height of a text note, in scene pixels.
 export const DEFAULT_NOTE_TEXT_SIZE = 12;
 
@@ -132,6 +168,10 @@ export interface NoteData {
 export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
+  // Decoration drawn behind the level (see BackgroundData). Absent = a level
+  // whose only visible shapes are its bodies, which is every level authored
+  // before this field.
+  backgrounds?: BackgroundData[];
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
   cameraRegions?: CameraRegionData[];
@@ -174,7 +214,21 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     ...(n.text !== undefined ? { text: n.text } : {}),
     ...(n.size !== undefined ? { size: n.size * factor } : {}),
   }));
+  // A background panel is placement and extent and nothing else; its colour and
+  // opacity are dimensionless.
+  const backgrounds = data.backgrounds?.map((g) => ({
+    x: g.x * factor,
+    y: g.y * factor,
+    rot: g.rot,
+    shape:
+      g.shape.kind === "rect"
+        ? ({ kind: "rect", w: g.shape.w * factor, h: g.shape.h * factor } as const)
+        : ({ kind: "circle", r: g.shape.r * factor } as const),
+    ...(g.color !== undefined ? { color: g.color } : {}),
+    ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
+  }));
   return {
+    ...(backgrounds ? { backgrounds } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(notes ? { notes } : {}),
     player: {

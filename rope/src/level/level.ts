@@ -15,7 +15,12 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type CameraRegionData, type LevelData } from "./levelFormat";
+import {
+  scaleLevelData,
+  type BackgroundData,
+  type CameraRegionData,
+  type LevelData,
+} from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
@@ -45,11 +50,15 @@ export class Level {
   // Camera-behaviour volumes, in metres. Read by the render-side
   // CameraController; the sim never touches them.
   readonly cameraRegions: CameraRegionData[];
+  // Decoration drawn behind the level, in metres. Read only by the renderer;
+  // like the camera regions, the sim never touches them.
+  readonly backgrounds: BackgroundData[];
   onReset: (() => void) | null = null;
 
   constructor(rawData: LevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
+    this.backgrounds = data.backgrounds ?? [];
     this.player = new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);

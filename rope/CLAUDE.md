@@ -329,14 +329,15 @@ the current model and run it inline (with the real camera, so a camera region is
 
 ### Layers
 
-The model is a flat list of `EdItem`s, each carrying a **`layer`**: `geometry` (the scene bodies), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below); background images are the next one to land here.
+The model is a flat list of `EdItem`s, each carrying a **`layer`**, listed in draw order: `background` (decoration behind the level, see below), `geometry` (the scene bodies), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
 Only the **active** layer is hit-testable and drawn into — the others are click-through — because a camera region blankets the geometry it governs, so a click has to mean one or the other and the layer switch is what says which.
 Every visible layer nevertheless draws at **full opacity**, active or not: dimming made a layer harder to read against the geometry it annotates, the layer list already says which one a click will hit, and visibility is the control for getting a layer out of the way.
 The toolbar's layer list picks it (**Tab** cycles) and carries a visibility toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
 The list stacks **vertically**, with the toggles in a column of eye icons down the left - open when the layer draws, a dimmed closed lid when it does not - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
 The eye is inline SVG (`eyeIcon`) rather than an emoji or a font glyph, so it inherits the toolbar colour through `currentColor`, stays crisp at any DPI, and looks the same on every platform.
 A selection therefore never spans layers, which is what lets the inspector pick one layer's panel instead of reconciling a mixed one, and a paste switches the active layer to the clipboard's rather than dropping items somewhere unclickable.
-The draw tools are per-layer too (`LAYER_TOOLS`): `geometry`/`camera` offer `+Rect`/`+Circle`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
+The draw tools are per-layer too (`LAYER_TOOLS`): `background`/`geometry`/`camera` offer `+Rect`/`+Circle`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
+A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `background` and `geometry` start at their authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s` and `priority`.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` means the controller default.
@@ -344,6 +345,21 @@ A region draws as a dashed violet volume labelled with what it does (`cam · off
 
 One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
 The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.
+
+### Background
+
+The **background** layer is decoration: shapes drawn behind the level with an authored colour and opacity, and **no interaction of any kind** - nothing collides with them, the rope never wraps them, no force reaches through them, and the sim never sees them.
+That is why they are not a `BodyKind` but their own `backgrounds` list (`BackgroundData` in `levelFormat.ts`), for the same reason camera regions are: a pass-through `BodyKind` would have to be excluded by every physics path, one call site at a time.
+
+It is the one editor layer besides `geometry` whose output the **player sees**, which makes two rules load-bearing rather than cosmetic (`render/background.ts` is the single implementation of both, shared by the editor and both game renderers, so what is authored is what plays):
+
+- A panel is **drawn before every body**, so nothing the player can touch is ever hidden behind decoration.
+- A panel is **never stroked**. A border is what makes a shape read as an object; a backdrop has none, and every body draws over it with one. This is how a background stays distinguishable from a wall without a glyph - see **Backgrounds** in `docs/game-design.md`, which is the amendment to the pass-through rule that lets it off carrying one.
+
+The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a panel that is dark, huge or nearly transparent. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the panel's own fill, whichever it was picked to contrast with.
+
+The inspector panel is exactly the transform plus the fill (`color` + `opacity`); a background has no kind, no friction and no behaviour to configure.
+**Images** (a source, plus `scale` / `crop` / `tile`) are designed for but not implemented: they land as three optional fields on `BackgroundData` read by `fillBackground`, and one more inspector section. Nothing else moves, because the placement, the shape, the layer and the entire editor pipeline are already shared with every other item.
 
 ### Notes
 

@@ -11,7 +11,12 @@ import { World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type CameraRegionData, type LevelData } from "./levelFormat";
+import {
+  scaleLevelData,
+  type BackgroundData,
+  type CameraRegionData,
+  type LevelData,
+} from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
@@ -24,6 +29,8 @@ export class BallLevel {
   cameraPosition = Vec2.ZERO;
   // Camera-behaviour volumes, in metres (see Level.cameraRegions).
   readonly cameraRegions: CameraRegionData[];
+  // Decoration drawn behind the level, in metres (see Level.backgrounds).
+  readonly backgrounds: BackgroundData[];
   onReset: (() => void) | null = null;
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
@@ -42,6 +49,7 @@ export class BallLevel {
   constructor(rawData: LevelData) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
+    this.backgrounds = data.backgrounds ?? [];
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);

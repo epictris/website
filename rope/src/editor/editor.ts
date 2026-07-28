@@ -13,8 +13,6 @@ import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
-  DEFAULT_BODY_COLOR,
-  DEFAULT_BODY_OPACITY,
   DEFAULT_FORCE_MAGNITUDE,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
@@ -22,8 +20,6 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
-  CAMERA_REGION_COLOR,
-  CAMERA_REGION_OPACITY,
   defaultCamera,
   defaultNote,
   ED_LAYERS,
@@ -31,15 +27,14 @@ import {
   groupBounds,
   halfExtents,
   isArrowNote,
+  LAYER_STYLE,
   MIN_ARROW_LENGTH,
   modelFromDisk,
   modelToDisk,
   newBodyId,
   NOTE_ARROW_BAND,
-  NOTE_COLOR,
   NOTE_DEFAULT_ARROW_LENGTH,
   NOTE_DEFAULT_SIZE,
-  NOTE_OPACITY,
   pointInBody,
   setArrowEnds,
   toWorld,
@@ -66,9 +61,23 @@ type Tool = "select" | "rect" | "circle" | "text" | "arrow";
 // toolbar shows only the applicable ones and switching layer drops a tool that
 // no longer applies.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
+  background: ["select", "rect", "circle"],
   geometry: ["select", "rect", "circle"],
   camera: ["select", "rect", "circle"],
   notes: ["select", "text", "arrow"],
+};
+
+// What the inspector says when nothing is selected: what the active layer is
+// for, and how to put something on it.
+const EMPTY_HINTS: Record<EdLayer, string> = {
+  background:
+    "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out. Tab switches layer.",
+  geometry:
+    "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.",
+  camera:
+    "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer.",
+  notes:
+    "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out. Notes are editor-only and never appear in play. Tab switches layer.",
 };
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
@@ -507,9 +516,15 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // standing warning; an unnamed one keeps it until the first Save names it.
     const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
     const count = (l: EdLayer) => model.items.filter((i) => i.layer === l).length;
-    const regions = count("camera");
-    const notes = count("notes");
-    const extra = `${regions ? ` · ${regions} cam` : ""}${notes ? ` · ${notes} notes` : ""}`;
+    // Only the layers that have anything on them are named, so the title stays
+    // short on a level that only uses geometry.
+    const extra = ([
+      ["background", "bg"],
+      ["camera", "cam"],
+      ["notes", "notes"],
+    ] as const)
+      .map(([l, name]) => (count(l) ? ` · ${count(l)} ${name}` : ""))
+      .join("");
     title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("geometry")} bodies${extra}`;
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
@@ -646,6 +661,39 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
   }
 
+  // Authored appearance: a colour swatch plus a fill opacity. Shared by the
+  // geometry and background panels — the two layers whose look is saved and
+  // played, as against the fixed colours of the editor-only furniture.
+  function addFillFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
+    const cw = el("label", "ed-field");
+    cw.textContent = "color";
+    const ci = document.createElement("input");
+    ci.type = "color";
+    ci.className = "ed-color";
+    // A colour input has no mixed state; it shows the first item's and writes
+    // to all of them, which is the only sane reading of "set the colour".
+    ci.value = items[0]!.color;
+    ci.addEventListener("focus", () => beginAction());
+    ci.addEventListener("input", () => {
+      for (const b of items) b.color = ci.value;
+      markDirty();
+    });
+    cw.appendChild(ci);
+    g.appendChild(cw);
+    num("opacity", (b) => b.opacity, (b, v) => (b.opacity = Math.min(1, Math.max(0, v))), 0.1);
+  }
+
+  // Every layer's panel ends the same way: the two actions that apply to any
+  // selection, whatever it is made of.
+  function addActionsRow(g: HTMLElement): void {
+    const row = el("div", "ed-row");
+    row.append(
+      button("Duplicate", () => duplicateSelected()),
+      button("Delete", () => deleteSelected()),
+    );
+    g.appendChild(row);
+  }
+
   // One panel for the whole selection: every property the group has in common
   // is editable and writes to all of them. A lone body is just the N=1 case, so
   // single and multi editing can't drift apart.
@@ -704,29 +752,31 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
 
-    const cw = el("label", "ed-field");
-    cw.textContent = "color";
-    const ci = document.createElement("input");
-    ci.type = "color";
-    ci.className = "ed-color";
-    // A colour input has no mixed state; it shows the first body's and writes
-    // to all of them, which is the only sane reading of "set the colour".
-    ci.value = bodies[0]!.color;
-    ci.addEventListener("focus", () => beginAction());
-    ci.addEventListener("input", () => {
-      for (const b of bodies) b.color = ci.value;
-      markDirty();
-    });
-    cw.appendChild(ci);
-    g.appendChild(cw);
-    num("opacity", (b) => b.opacity, (b, v) => (b.opacity = Math.min(1, Math.max(0, v))), 0.1);
+    addFillFields(g, num, bodies);
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
 
-    const row = el("div", "ed-row");
-    row.append(
-      button("Duplicate", () => duplicateSelected()),
-      button("Delete", () => deleteSelected()),
+  // Background-layer panel. A background is a placed shape and an appearance and
+  // nothing else — it has no kind, no friction and no behaviour of any sort —
+  // so the panel is exactly the transform plus the fill. An image fill (scale /
+  // crop / tile) is the one section still to come.
+  function buildBackgroundGroup(items: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(
+        items.length === 1 ? `Background #${items[0]!.id}` : `${items.length} backgrounds selected`,
+      ),
     );
-    g.appendChild(row);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Decoration only: drawn behind every body, with nothing to collide with, wrap or stand on. Images are not implemented yet.";
+    g.appendChild(hint);
+
+    const num = groupNum(g, items);
+    addTransformFields(num, items);
+    addFillFields(g, num, items);
+    addActionsRow(g);
     inspector.appendChild(g);
   }
 
@@ -804,12 +854,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     );
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
-    const row = el("div", "ed-row");
-    row.append(
-      button("Duplicate", () => duplicateSelected()),
-      button("Delete", () => deleteSelected()),
-    );
-    g.appendChild(row);
+    addActionsRow(g);
     inspector.appendChild(g);
   }
 
@@ -873,12 +918,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       num("text px", (b) => b.note.size * M2PX, (b, v) => (b.note.size = Math.max(4, v) * PX), 1);
     }
 
-    const row = el("div", "ed-row");
-    row.append(
-      button("Duplicate", () => duplicateSelected()),
-      button("Delete", () => deleteSelected()),
-    );
-    g.appendChild(row);
+    addActionsRow(g);
     inspector.appendChild(g);
   }
 
@@ -897,18 +937,14 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const sel = selectedBodies();
     if (!sel.length) {
       const hint = el("div", "ed-hint");
-      hint.textContent =
-        activeLayer === "camera"
-          ? "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer."
-          : activeLayer === "notes"
-            ? "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out. Notes are editor-only and never appear in play. Tab switches layer."
-            : "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
+      hint.textContent = EMPTY_HINTS[activeLayer];
       inspector.appendChild(hint);
       return;
     }
     // A selection never spans layers (only the active one is pickable), so the
     // panel is chosen by the layer rather than reconciled across it.
-    if (sel[0]!.layer === "camera") buildCameraGroup(sel);
+    if (sel[0]!.layer === "background") buildBackgroundGroup(sel);
+    else if (sel[0]!.layer === "camera") buildCameraGroup(sel);
     else if (sel[0]!.layer === "notes") buildNotesGroup(sel);
     else buildBodyGroup(sel);
   }
@@ -948,12 +984,15 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // the same type, so this only picks the appearance and the starting size —
   // the drag that follows resizes it identically whatever it is.
   function newDrawnItem(t: Exclude<Tool, "select">, start: Vec2): EdItem {
+    const style = LAYER_STYLE[activeLayer];
     const base = {
       id: newBodyId(),
       layer: activeLayer,
       pos: start,
       rot: 0,
       kind: newKind,
+      color: style.color,
+      opacity: style.opacity,
       friction: DEFAULT_SURFACE_FRICTION,
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
@@ -965,8 +1004,6 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (t === "text" || t === "arrow") {
       const item: EdItem = {
         ...base,
-        color: NOTE_COLOR,
-        opacity: NOTE_OPACITY,
         shape:
           t === "arrow"
             ? { kind: "rect", w: NOTE_DEFAULT_ARROW_LENGTH, h: NOTE_ARROW_BAND }
@@ -983,11 +1020,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       }
       return item;
     }
-    const isCamera = activeLayer === "camera";
     return {
       ...base,
-      color: isCamera ? CAMERA_REGION_COLOR : DEFAULT_BODY_COLOR,
-      opacity: isCamera ? CAMERA_REGION_OPACITY : DEFAULT_BODY_OPACITY,
       shape:
         t === "rect"
           ? { kind: "rect", w: gridStep, h: gridStep }

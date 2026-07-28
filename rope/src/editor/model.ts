@@ -13,6 +13,8 @@
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
+  DEFAULT_BACKGROUND_COLOR,
+  DEFAULT_BACKGROUND_OPACITY,
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
   DEFAULT_NOTE_TEXT_SIZE,
@@ -20,17 +22,19 @@ import {
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
   scaleLevelData,
+  type BackgroundData,
   type BodyKind,
   type CameraRegionData,
   type LevelData,
   type NoteData,
 } from "../level/levelFormat";
 
-// Editor layers. `geometry` is the scene bodies, `camera` the camera-behaviour
-// volumes, `notes` the authoring annotations (invisible in play); background
-// images are the next one to land here.
-export type EdLayer = "geometry" | "camera" | "notes";
-export const ED_LAYERS: EdLayer[] = ["geometry", "camera", "notes"];
+// Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
+// `background` is decoration behind the level, `geometry` the scene bodies,
+// `camera` the camera-behaviour volumes and `notes` the authoring annotations
+// (invisible in play).
+export type EdLayer = "background" | "geometry" | "camera" | "notes";
+export const ED_LAYERS: EdLayer[] = ["background", "geometry", "camera", "notes"];
 
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
@@ -62,8 +66,10 @@ export interface EdItem {
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
+  // Geometry and background layers author these; camera regions and notes take
+  // the fixed editor-furniture colours below.
   color: string; // hex fill colour
-  opacity: number; // 0..1 fill opacity (border draws fully opaque)
+  opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
   // Geometry layer:
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
@@ -137,6 +143,15 @@ export const CAMERA_REGION_OPACITY = 0.12;
 export const NOTE_COLOR = "#98c379";
 export const NOTE_OPACITY = 0.08;
 
+// Appearance a freshly drawn item starts with, per layer. Geometry and
+// background are authored from here on; the other two are fixed furniture.
+export const LAYER_STYLE: Record<EdLayer, { color: string; opacity: number }> = {
+  background: { color: DEFAULT_BACKGROUND_COLOR, opacity: DEFAULT_BACKGROUND_OPACITY },
+  geometry: { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY },
+  camera: { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY },
+  notes: { color: NOTE_COLOR, opacity: NOTE_OPACITY },
+};
+
 // Default box of a freshly placed text note, in metres. A text note is usually
 // placed with a click rather than dragged out, so it needs a size worth typing
 // into from the start.
@@ -163,6 +178,23 @@ function fromLevelData(data: LevelData): EdModel {
     opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
     friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
     force: b.force ?? 0,
+    cam: defaultCamera(),
+    note: defaultNote(),
+  }));
+  const backgrounds: EdItem[] = (data.backgrounds ?? []).map((g) => ({
+    id: newBodyId(),
+    layer: "background",
+    kind: "static", // unused on this layer; keeps the field total
+    pos: new Vec2(g.x, g.y),
+    rot: g.rot,
+    shape:
+      g.shape.kind === "rect"
+        ? { kind: "rect", w: g.shape.w, h: g.shape.h }
+        : { kind: "circle", r: g.shape.r },
+    color: g.color ?? DEFAULT_BACKGROUND_COLOR,
+    opacity: g.opacity ?? DEFAULT_BACKGROUND_OPACITY,
+    friction: DEFAULT_SURFACE_FRICTION,
+    force: 0,
     cam: defaultCamera(),
     note: defaultNote(),
   }));
@@ -210,7 +242,7 @@ function fromLevelData(data: LevelData): EdModel {
   }));
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
-    items: [...bodies, ...regions, ...notes],
+    items: [...backgrounds, ...bodies, ...regions, ...notes],
   };
 }
 
@@ -221,6 +253,19 @@ export function toLevelData(model: EdModel): LevelData {
     i.shape.kind === "rect"
       ? ({ kind: "rect", w: i.shape.w, h: i.shape.h } as const)
       : ({ kind: "circle", r: i.shape.r } as const);
+
+  const backgrounds: BackgroundData[] = model.items
+    .filter((i) => i.layer === "background")
+    .map((i) => ({
+      x: i.pos.x,
+      y: i.pos.y,
+      rot: i.rot,
+      shape: shapeOf(i),
+      // Appearance is the whole point of a background, so it is always written
+      // rather than omitted at its default.
+      color: i.color,
+      opacity: i.opacity,
+    }));
 
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera")
@@ -277,7 +322,8 @@ export function toLevelData(model: EdModel): LevelData {
         ...(b.kind === "force" ? { force: b.force } : {}),
       })),
     // An empty list is the same as no list, and the absent field keeps levels
-    // authored before camera regions (or notes) byte-identical.
+    // authored before backgrounds (or camera regions, or notes) byte-identical.
+    ...(backgrounds.length ? { backgrounds } : {}),
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(notes.length ? { notes } : {}),
   };

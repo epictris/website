@@ -24,6 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { Camera } from "./camera";
 import { drawTrainingGrid } from "./trainingGrid";
+import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
 import { hexToRgba } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
@@ -294,6 +295,10 @@ export function render(
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
+  // Authored decoration, under everything: nothing the player can touch may be
+  // hidden behind a backdrop.
+  drawBackgrounds(ctx, level.backgrounds);
+
   // Hook-only scenery is background the player passes through, so it goes down
   // first and solid geometry draws over it.
   for (const body of level.world.bodies) {
@@ -499,6 +504,9 @@ export function renderBall(
   // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
+
+  // Authored decoration under everything (see `render`).
+  drawBackgrounds(ctx, level.backgrounds);
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
   for (const body of level.world.bodies) {

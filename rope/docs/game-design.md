@@ -98,6 +98,32 @@ hook-only but not solid (everything else passes through it). They are drawn to
 be unmistakable — the first keeps a full solid fill with a dashed steel edge,
 the second is punched through with holes.
 
+### Backgrounds
+
+A **background** is the one thing the player sees that carries no glyph, and it
+is worth being explicit about why the rule above does not reach it. Every type
+the rule covers is a body or a region: it *does* something to whatever is inside
+or against it, and the glyph names that behaviour. A background does nothing at
+all — no collision, no wrap, no force, no reset. It is not a region the player
+can be inside; it is paint. There is no behaviour to name, and stamping a glyph
+over authored artwork would defeat the only thing the layer is for.
+
+What it must still carry is that it is **not a body**, and that is supplied
+compositionally rather than by a mark, which is why both halves are in one place
+(`render/background.ts`) and shared by the editor and the game:
+
+- **Drawn under everything.** Backgrounds go down before any body, so nothing
+  the player can touch is ever occluded by decoration. Anything drawn over a
+  background is real.
+- **Never stroked.** A border is what makes a shape read as an object; a
+  backdrop has none, and every body draws over it with one. A bordered panel is
+  the failure mode this forbids — that is exactly a wall that isn't there.
+
+The still-frame test is met the same way as before: in a screenshot, everything
+outlined is a body, everything flat and behind them is paint. The editor draws
+its own dashed teal outline on a panel, which is editor chrome (it also draws
+handles, marquees and camera guides) and never reaches the game.
+
 ## Convex-only polygons; compound bodies
 
 Every polygon primitive is **convex**. Concave polygons are never allowed as a
