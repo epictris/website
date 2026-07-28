@@ -20,18 +20,28 @@ import {
   type BodyKind,
 } from "../level/levelFormat";
 import {
+  arrowEnds,
   bodyIntersectsRect,
   CAMERA_REGION_COLOR,
   CAMERA_REGION_OPACITY,
   defaultCamera,
+  defaultNote,
   ED_LAYERS,
   emptyModel,
   groupBounds,
   halfExtents,
+  isArrowNote,
+  MIN_ARROW_LENGTH,
   modelFromDisk,
   modelToDisk,
   newBodyId,
+  NOTE_ARROW_BAND,
+  NOTE_COLOR,
+  NOTE_DEFAULT_ARROW_LENGTH,
+  NOTE_DEFAULT_SIZE,
+  NOTE_OPACITY,
   pointInBody,
+  setArrowEnds,
   toWorld,
   type EdItem,
   type EdLayer,
@@ -49,7 +59,17 @@ import {
 } from "../sim/trace";
 import type { LevelData } from "../level/levelFormat";
 
-type Tool = "select" | "rect" | "circle";
+type Tool = "select" | "rect" | "circle" | "text" | "arrow";
+
+// Which tools each layer offers. A shape tool has no meaning on the notes layer
+// (a note is a text box or an arrow, never a circle) and vice versa, so the
+// toolbar shows only the applicable ones and switching layer drops a tool that
+// no longer applies.
+const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
+  geometry: ["select", "rect", "circle"],
+  camera: ["select", "rect", "circle"],
+  notes: ["select", "text", "arrow"],
+};
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
@@ -67,6 +87,8 @@ type Drag =
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
   | { mode: "rotate"; body: EdItem }
+  // One end of an arrow note follows the pointer; the other stays put.
+  | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -134,14 +156,20 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
 
   // --- undo/redo ------------------------------------------------------------
-  // Snapshots of the whole model. Shapes are mutated in place, so clone them;
-  // Vec2 is immutable, so its refs are safe to share.
+  // Snapshots of the whole model. Shapes, camera framing and note bodies are
+  // mutated in place, so clone them; Vec2 is immutable, so its refs are safe to
+  // share.
   const HISTORY_MAX = 50; // undo steps retained
   const history: EdModel[] = [];
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
     player: { pos: m.player.pos, radius: m.player.radius },
-    items: m.items.map((b) => ({ ...b, shape: { ...b.shape }, cam: { ...b.cam } })),
+    items: m.items.map((b) => ({
+      ...b,
+      shape: { ...b.shape },
+      cam: { ...b.cam },
+      note: { ...b.note },
+    })),
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -362,6 +390,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     select: button("Select", () => setTool("select")),
     rect: button("+ Rect", () => setTool("rect")),
     circle: button("+ Circle", () => setTool("circle")),
+    text: button("+ Text", () => setTool("text")),
+    arrow: button("+ Arrow", () => setTool("arrow")),
   };
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
@@ -384,57 +414,75 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
   });
   const kindWrap = labelWrap("kind", kindSel);
-  toolRow.append(toolBtns.select, toolBtns.rect, toolBtns.circle, kindWrap);
+  toolRow.append(
+    toolBtns.select,
+    toolBtns.rect,
+    toolBtns.circle,
+    toolBtns.text,
+    toolBtns.arrow,
+    kindWrap,
+  );
 
-  // Layer row: which layer is being edited (Tab cycles), plus a visibility
+  // Layer list: which layer is being edited (Tab cycles), plus a visibility
   // toggle each. Visibility is independent of active — a hidden active layer
   // would be an invisible edit target, so hiding one also moves the edit focus.
-  const layerRow = el("div", "ed-row");
-  bar.appendChild(layerRow);
+  // It stacks vertically, with the visibility boxes in a column down the left:
+  // a layer stack is a fixed, ordered set you read down, not a row of toolbar
+  // buttons, and one row per layer leaves room for a name of any length.
+  const layerList = el("div", "ed-layers");
+  bar.appendChild(layerList);
+  const layerHeading = el("div", "ed-layer-label");
+  layerHeading.textContent = "layer";
+  layerList.appendChild(layerHeading);
   const layerBtns = {} as Record<EdLayer, HTMLButtonElement>;
-  const layerChks = {} as Record<EdLayer, HTMLInputElement>;
+  const layerEyes = {} as Record<EdLayer, HTMLButtonElement>;
   for (const l of ED_LAYERS) {
+    const row = el("div", "ed-layer-row");
+    const eye = document.createElement("button");
+    eye.className = "ed-eye";
+    eye.addEventListener("click", () => setLayerVisible(l, !visibleLayers.has(l)));
+    layerEyes[l] = eye;
     const b = button(l, () => setLayer(l));
+    b.classList.add("ed-layer-btn");
     b.title = `Edit the ${l} layer (Tab cycles)`;
     layerBtns[l] = b;
-    const wrap = el("label", "ed-check");
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = true;
-    box.title = `Show the ${l} layer`;
-    box.addEventListener("change", () => {
-      if (box.checked) {
-        visibleLayers.add(l);
-        return;
-      }
-      // Hiding everything leaves a blank canvas nothing can be clicked on, so
-      // the last visible layer refuses to go.
-      if (visibleLayers.size === 1) {
-        box.checked = true;
-        return;
-      }
-      visibleLayers.delete(l);
-      // Never leave the edit target invisible.
-      if (activeLayer === l) setLayer(ED_LAYERS.find((o) => visibleLayers.has(o))!);
-    });
-    layerChks[l] = box;
-    wrap.appendChild(box);
-    layerRow.append(b, wrap);
+    row.append(eye, b);
+    layerList.appendChild(row);
+    setLayerVisible(l, true); // paints the icon and its tooltip
   }
-  layerRow.prepend(document.createTextNode("layer"));
+
+  // Show or hide a layer. Hiding everything would leave a blank canvas nothing
+  // can be clicked on, so the last visible layer refuses to go; hiding the one
+  // being edited moves the edit focus rather than leaving an invisible target.
+  function setLayerVisible(l: EdLayer, visible: boolean): void {
+    if (!visible && visibleLayers.size === 1) return;
+    if (visible) visibleLayers.add(l);
+    else visibleLayers.delete(l);
+    const eye = layerEyes[l];
+    eye.innerHTML = eyeIcon(visible);
+    eye.classList.toggle("off", !visible);
+    eye.title = `${visible ? "Hide" : "Show"} the ${l} layer`;
+    eye.setAttribute("aria-pressed", String(visible));
+    if (!visible && activeLayer === l) {
+      setLayer(ED_LAYERS.find((o) => visibleLayers.has(o))!);
+    }
+  }
 
   function setLayer(l: EdLayer): void {
-    if (!visibleLayers.has(l)) {
-      visibleLayers.add(l);
-      layerChks[l].checked = true;
-    }
+    if (!visibleLayers.has(l)) setLayerVisible(l, true);
     activeLayer = l;
     // A selection never spans layers, so switching drops it rather than leaving
     // items selected that can no longer be clicked.
     selectedIds.clear();
     for (const [k, b] of Object.entries(layerBtns)) b.classList.toggle("active", k === l);
-    // `kind` is a geometry property; a camera region has none.
+    // `kind` is a geometry property; a camera region and a note have none.
     kindWrap.style.display = l === "geometry" ? "" : "none";
+    // Only this layer's draw tools are offered, and a tool the new layer cannot
+    // draw falls back to Select rather than lingering as an armed dead button.
+    for (const [k, b] of Object.entries(toolBtns)) {
+      b.style.display = LAYER_TOOLS[l].includes(k as Tool) ? "" : "none";
+    }
+    if (!LAYER_TOOLS[l].includes(tool)) setTool("select");
     rebuildInspector();
   }
 
@@ -458,16 +506,18 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // A named level autosaves, so `*` is a brief in-flight marker rather than a
     // standing warning; an unnamed one keeps it until the first Save names it.
     const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
-    const bodies = model.items.filter((i) => i.layer === "geometry").length;
-    const regions = model.items.length - bodies;
-    const cams = regions ? ` · ${regions} cam` : "";
-    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${bodies} bodies${cams}`;
+    const count = (l: EdLayer) => model.items.filter((i) => i.layer === l).length;
+    const regions = count("camera");
+    const notes = count("notes");
+    const extra = `${regions ? ` · ${regions} cam` : ""}${notes ? ` · ${notes} notes` : ""}`;
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("geometry")} bodies${extra}`;
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
     canvas.style.cursor = tool === "select" ? "default" : "crosshair";
   }
   function setTool(t: Tool): void {
+    if (!LAYER_TOOLS[activeLayer].includes(t)) return;
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -578,6 +628,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (items.every((b) => b.shape.kind === "rect" || (b.layer === "geometry" && b.kind === "force"))) {
       num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
     }
+    // An arrow is stored as a box, but its height is only a pick band and its
+    // width is its length — the notes panel exposes that instead.
+    if (items.some(isArrowNote)) return;
     // Size is per-shape, so it only appears when the group is all one shape.
     if (items.every((b) => b.shape.kind === "rect")) {
       num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
@@ -760,8 +813,78 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     inspector.appendChild(g);
   }
 
+  // The live note textarea, so a freshly placed text note can be typed into
+  // without a trip to the inspector. Null whenever the panel shows no single
+  // text note.
+  let noteText: HTMLTextAreaElement | null = null;
+
+  // Notes-layer panel. A note's whole point is its prose, so the text box leads;
+  // everything below it is placement.
+  function buildNotesGroup(notes: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(notes.length === 1 ? `Note #${notes[0]!.id}` : `${notes.length} notes selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Editor-only: notes record why geometry is placed as it is, so it isn't later removed as arbitrary. They never appear in play.";
+    g.appendChild(hint);
+
+    const allText = notes.every((n) => n.note.kind === "text");
+    const allArrows = notes.every((n) => n.note.kind === "arrow");
+    if (allText && notes.length === 1) {
+      const n = notes[0]!;
+      const ta = document.createElement("textarea");
+      ta.className = "ed-text";
+      ta.rows = 4;
+      ta.value = n.note.text;
+      ta.placeholder = "Why is this here?";
+      // One undo step per editing session, snapshotted on the first keystroke
+      // rather than on focus: placing a note focuses it, and a focus-time
+      // snapshot would make the first Ctrl+Z a visible no-op.
+      let edited = false;
+      ta.addEventListener("blur", () => (edited = false));
+      ta.addEventListener("input", () => {
+        if (!edited) {
+          beginAction();
+          edited = true;
+        }
+        n.note.text = ta.value;
+        markDirty();
+      });
+      noteText = ta;
+      g.appendChild(ta);
+    } else if (allText) {
+      // Merging prose across a group has no sane meaning, so the text stays a
+      // single-selection edit while placement stays group-wide.
+      const many = el("div", "ed-hint");
+      many.textContent = "Select one note to edit its text.";
+      g.appendChild(many);
+    }
+
+    const num = groupNum(g, notes);
+    addTransformFields(num, notes);
+    if (allArrows) {
+      num("length", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "rect") b.shape.w = Math.max(MIN_ARROW_LENGTH, v * PX);
+      });
+    }
+    if (allText) {
+      num("text px", (b) => b.note.size * M2PX, (b, v) => (b.note.size = Math.max(4, v) * PX), 1);
+    }
+
+    const row = el("div", "ed-row");
+    row.append(
+      button("Duplicate", () => duplicateSelected()),
+      button("Delete", () => deleteSelected()),
+    );
+    g.appendChild(row);
+    inspector.appendChild(g);
+  }
+
   function rebuildInspector(): void {
     fields.length = 0;
+    noteText = null;
     inspector.innerHTML = "";
 
     const player = el("div", "ed-group");
@@ -777,13 +900,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       hint.textContent =
         activeLayer === "camera"
           ? "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer."
-          : "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
+          : activeLayer === "notes"
+            ? "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out. Notes are editor-only and never appear in play. Tab switches layer."
+            : "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
       inspector.appendChild(hint);
       return;
     }
     // A selection never spans layers (only the active one is pickable), so the
     // panel is chosen by the layer rather than reconciled across it.
     if (sel[0]!.layer === "camera") buildCameraGroup(sel);
+    else if (sel[0]!.layer === "notes") buildNotesGroup(sel);
     else buildBodyGroup(sel);
   }
 
@@ -805,6 +931,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       pos: b.pos.add(offset),
       shape: { ...b.shape },
       cam: { ...b.cam },
+      note: { ...b.note },
     }));
 
   // Add freshly created bodies to the model and leave them selected, so the
@@ -815,6 +942,57 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     for (const b of bodies) selectedIds.add(b.id);
     markDirty();
     rebuildInspector();
+  }
+
+  // A fresh item for the draw tool, on the active layer. Every layer's item is
+  // the same type, so this only picks the appearance and the starting size —
+  // the drag that follows resizes it identically whatever it is.
+  function newDrawnItem(t: Exclude<Tool, "select">, start: Vec2): EdItem {
+    const base = {
+      id: newBodyId(),
+      layer: activeLayer,
+      pos: start,
+      rot: 0,
+      kind: newKind,
+      friction: DEFAULT_SURFACE_FRICTION,
+      // Only meaningful on a force area, but a new one needs a non-zero pull
+      // or it would draw no arrows and do nothing until the field is touched.
+      force: DEFAULT_FORCE_MAGNITUDE * PX,
+      // A fresh region is a no-op until a framing field is authored.
+      cam: defaultCamera(),
+      note: defaultNote(),
+    };
+    if (t === "text" || t === "arrow") {
+      const item: EdItem = {
+        ...base,
+        color: NOTE_COLOR,
+        opacity: NOTE_OPACITY,
+        shape:
+          t === "arrow"
+            ? { kind: "rect", w: NOTE_DEFAULT_ARROW_LENGTH, h: NOTE_ARROW_BAND }
+            : { kind: "rect", w: NOTE_DEFAULT_SIZE.x, h: NOTE_DEFAULT_SIZE.y },
+        note: { ...base.note, kind: t },
+      };
+      // A note is usually placed with a click rather than dragged out, so it
+      // starts at a size worth writing in: a box growing down-right from the
+      // click, or an arrow pointing right from it. A drag overrides both.
+      if (t === "arrow") {
+        setArrowEnds(item, start, start.add(new Vec2(NOTE_DEFAULT_ARROW_LENGTH, 0)));
+      } else {
+        item.pos = start.add(NOTE_DEFAULT_SIZE.mul(0.5));
+      }
+      return item;
+    }
+    const isCamera = activeLayer === "camera";
+    return {
+      ...base,
+      color: isCamera ? CAMERA_REGION_COLOR : DEFAULT_BODY_COLOR,
+      opacity: isCamera ? CAMERA_REGION_OPACITY : DEFAULT_BODY_OPACITY,
+      shape:
+        t === "rect"
+          ? { kind: "rect", w: gridStep, h: gridStep }
+          : { kind: "circle", r: gridStep },
+    };
   }
 
   function deleteSelected(): void {
@@ -859,7 +1037,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function copySelection(): void {
     const sel = selectedBodies();
     if (!sel.length) return;
-    clipboard = sel.map((b) => ({ ...b, shape: { ...b.shape }, cam: { ...b.cam } }));
+    clipboard = sel.map((b) => ({
+      ...b,
+      shape: { ...b.shape },
+      cam: { ...b.cam },
+      note: { ...b.note },
+    }));
   }
   function pasteClipboard(): void {
     if (!clipboard.length) return;
@@ -1001,6 +1184,18 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const s = selected();
     if (!s) return null;
     const h = computeHandles(camera, s);
+    if (h.ends) {
+      // Head first, so a zero-length arrow (a click that never dragged) still
+      // has an end that grows it rather than two coincident ones.
+      const { tail, head } = arrowEnds(s);
+      if (scr.distanceTo(h.ends[1]!) <= HANDLE_HIT_PX) {
+        return { mode: "arrowEnd", body: s, fixed: tail, movingIsHead: true };
+      }
+      if (scr.distanceTo(h.ends[0]!) <= HANDLE_HIT_PX) {
+        return { mode: "arrowEnd", body: s, fixed: head, movingIsHead: false };
+      }
+      return null;
+    }
     if (h.rotate && scr.distanceTo(h.rotate) <= HANDLE_HIT_PX) return { mode: "rotate", body: s };
     if (h.radius && scr.distanceTo(h.radius) <= HANDLE_HIT_PX) return { mode: "radius", body: s };
     if (s.shape.kind === "rect") {
@@ -1041,32 +1236,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
-    if (tool === "rect" || tool === "circle") {
+    if (tool !== "select") {
       beginAction();
       dragPushed = true;
       const start = snapVec(world);
-      const isCamera = activeLayer === "camera";
-      const style = {
-        layer: activeLayer,
-        kind: newKind,
-        color: isCamera ? CAMERA_REGION_COLOR : DEFAULT_BODY_COLOR,
-        opacity: isCamera ? CAMERA_REGION_OPACITY : DEFAULT_BODY_OPACITY,
-        friction: DEFAULT_SURFACE_FRICTION,
-        // Only meaningful on a force area, but a new one needs a non-zero pull
-        // or it would draw no arrows and do nothing until the field is touched.
-        force: DEFAULT_FORCE_MAGNITUDE * PX,
-        // A fresh region is a no-op until a framing field is authored.
-        cam: defaultCamera(),
-      };
-      const body: EdItem =
-        tool === "rect"
-          ? { id: newBodyId(), pos: start, rot: 0, shape: { kind: "rect", w: gridStep, h: gridStep }, ...style }
-          : { id: newBodyId(), pos: start, rot: 0, shape: { kind: "circle", r: gridStep }, ...style };
+      const body = newDrawnItem(tool, start);
       model.items.push(body);
       setSelection([body.id]);
       drag = { mode: "draw", body, start };
       markDirty();
       rebuildInspector();
+      // A text note is placed to be written in, so the caret goes there rather
+      // than making the first act after every note a trip to the inspector.
+      noteText?.focus();
       return;
     }
     // 3. Player spawn marker (small target — needs pointer within its radius).
@@ -1142,10 +1324,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         markDirty();
         refreshFields();
         break;
+      case "arrowEnd": {
+        const p = snapVec(world);
+        if (drag.movingIsHead) setArrowEnds(drag.body, drag.fixed, p);
+        else setArrowEnds(drag.body, p, drag.fixed);
+        markDirty();
+        refreshFields();
+        break;
+      }
       case "draw": {
         const b = drag.body;
         const p = snapVec(world);
-        if (b.shape.kind === "rect") {
+        if (isArrowNote(b)) {
+          // An arrow is dragged out tail-first, exactly as an endpoint handle
+          // moves it afterwards.
+          setArrowEnds(b, drag.start, p);
+          markDirty();
+          refreshFields();
+        } else if (b.shape.kind === "rect") {
           const w = Math.max(gridStep, Math.abs(p.x - drag.start.x));
           const h = Math.max(gridStep, Math.abs(p.y - drag.start.y));
           b.shape.w = w;
@@ -1260,6 +1456,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       (focused instanceof HTMLInputElement &&
         focused.type !== "checkbox" &&
         focused.type !== "radio") ||
+      focused instanceof HTMLTextAreaElement ||
       focused instanceof HTMLSelectElement;
     if (typing) return;
     // Arrows before the Ctrl block: Ctrl+Arrow is the fine nudge, not a combo.
@@ -1309,6 +1506,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
+    else if (e.code === "KeyT") setTool("text");
+    else if (e.code === "KeyA") setTool("arrow");
   });
 
   // Releasing an arrow closes the nudge run, so the next press starts a fresh
@@ -1382,7 +1581,6 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         model,
         selectedIds,
         marqueeRect(),
-        activeLayer,
         visibleLayers,
       );
     }
@@ -1427,6 +1625,22 @@ function labelWrap(label: string, control: HTMLElement): HTMLElement {
   wrap.appendChild(control);
   return wrap;
 }
+// Layer visibility icon: an open eye when the layer draws, a closed lid when it
+// does not. Inline SVG rather than an emoji or a glyph, so it inherits the
+// toolbar's colour through `currentColor`, stays crisp at any DPI, and looks the
+// same on every platform (👁 does not).
+function eyeIcon(open: boolean): string {
+  const svg = (body: string) =>
+    `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  return open
+    ? svg('<path d="M1 8s2.6-4.4 7-4.4S15 8 15 8s-2.6 4.4-7 4.4S1 8 1 8Z"/><circle cx="8" cy="8" r="1.9"/>')
+    : // The same almond, shut: the lid curve plus three lashes, so a hidden
+      // layer reads as "closed" and not merely as a missing icon.
+      svg(
+        '<path d="M1.4 6.6S4 10.4 8 10.4s6.6-3.8 6.6-3.8"/><path d="M3.1 9.3 1.9 11"/><path d="M8 10.4V12.5"/><path d="M12.9 9.3 14.1 11"/>',
+      );
+}
+
 function heading(text: string): HTMLElement {
   const h = el("div", "ed-heading");
   h.textContent = text;
@@ -1464,9 +1678,24 @@ function injectStyles(): void {
   .ed-select, .ed-num { background: #1f2430; color: #cbccc6; border: 1px solid #3c445c;
     font-family: monospace; font-size: 13px; padding: 2px 4px; border-radius: 2px; }
   .ed-num { width: 64px; }
+  .ed-text { background: #1f2430; color: #cbccc6; border: 1px solid #3c445c;
+    font-family: monospace; font-size: 13px; padding: 4px; border-radius: 2px;
+    width: 100%; box-sizing: border-box; resize: vertical; }
   .ed-color { width: 44px; height: 22px; padding: 0; background: #1f2430;
     border: 1px solid #3c445c; border-radius: 2px; cursor: pointer; }
   .ed-inline, .ed-check { display: inline-flex; gap: 4px; align-items: center; color: #9aa0ac; }
+  .ed-layers { display: flex; flex-direction: column; gap: 4px; align-self: flex-start; }
+  .ed-layer-label { color: #9aa0ac; }
+  .ed-layer-row { display: flex; gap: 6px; align-items: center; }
+  /* One width for every layer, so the list reads as a column rather than as
+     buttons that happen to be stacked - but sized to its own longest name, not
+     stretched across the whole toolbar. */
+  .ed-layer-btn { min-width: 96px; text-align: left; }
+  .ed-eye { display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 22px; padding: 0; background: transparent; color: #cbccc6;
+    border: 1px solid transparent; border-radius: 2px; cursor: pointer; }
+  .ed-eye:hover { background: #2a2f3d; border-color: #3c445c; }
+  .ed-eye.off { color: #5b6172; }
   .ed-title { color: #65bddb; padding-top: 2px; }
   .ed-inspector { position: absolute; top: 8px; right: 8px; width: 190px;
     background: rgba(31,36,48,0.92); border: 1px solid #313244; padding: 8px;

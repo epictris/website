@@ -329,10 +329,14 @@ the current model and run it inline (with the real camera, so a camera region is
 
 ### Layers
 
-The model is a flat list of `EdItem`s, each carrying a **`layer`**: `geometry` (the scene bodies) and `camera` (the camera-behaviour volumes, see **Camera** below); background images are the next one to land here.
-Only the **active** layer is hit-testable and drawn into — the others render at 40% opacity as context and are click-through — because a camera region blankets the geometry it governs, so a click has to mean one or the other and the layer switch is what says which.
-The toolbar's layer row picks it (**Tab** cycles) and carries a visibility toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target.
+The model is a flat list of `EdItem`s, each carrying a **`layer`**: `geometry` (the scene bodies), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below); background images are the next one to land here.
+Only the **active** layer is hit-testable and drawn into — the others are click-through — because a camera region blankets the geometry it governs, so a click has to mean one or the other and the layer switch is what says which.
+Every visible layer nevertheless draws at **full opacity**, active or not: dimming made a layer harder to read against the geometry it annotates, the layer list already says which one a click will hit, and visibility is the control for getting a layer out of the way.
+The toolbar's layer list picks it (**Tab** cycles) and carries a visibility toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
+The list stacks **vertically**, with the toggles in a column of eye icons down the left - open when the layer draws, a dimmed closed lid when it does not - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
+The eye is inline SVG (`eyeIcon`) rather than an emoji or a font glyph, so it inherits the toolbar colour through `currentColor`, stays crisp at any DPI, and looks the same on every platform.
 A selection therefore never spans layers, which is what lets the inspector pick one layer's panel instead of reconciling a mixed one, and a paste switches the active layer to the clipboard's rather than dropping items somewhere unclickable.
+The draw tools are per-layer too (`LAYER_TOOLS`): `geometry`/`camera` offer `+Rect`/`+Circle`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s` and `priority`.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` means the controller default.
@@ -340,6 +344,23 @@ A region draws as a dashed violet volume labelled with what it does (`cam · off
 
 One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
 The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.
+
+### Notes
+
+The **notes** layer is authoring commentary: a text box or an arrow, recording *why* a piece of geometry is where it is so that it is not later removed as arbitrary.
+It is the one part of a level file that is deliberately **invisible in play** — notes serialize to `LevelData.notes` (`NoteData` in `levelFormat.ts`), and no runtime path reads that list, so `Level`/`BallLevel` and the game renderer never see it and `▶ Test` shows a scene with nothing added.
+That is also why it is not a `BodyKind`: a note has no collision, nothing wraps it, and it never reaches the sim.
+
+A note is always a **rectangle** (a circular note has no meaning), so `NoteData` carries `w`/`h` directly rather than a `ShapeData`.
+A text note's box holds its **word-wrapped** text (explicit newlines honoured; a word wider than the box gets its own line rather than being broken mid-identifier, since most of what a note names is an identifier).
+An **arrow** is a segment, but it is stored as that same box — length × a fixed pick band — so it moves, rotates, rubber-bands, duplicates and undoes through exactly the same code as every other item; the shaft runs along the item's local +X from `(-w/2, 0)` to `(+w/2, 0)` with the head at the +X end, so `rot` aims it.
+The one thing it does differently is **editing**: an arrow shows round **endpoint handles** instead of corner boxes and a rotate knob, because dragging one end sets position, length and direction in a single gesture where the box handles would take three (`arrowEnds`/`setArrowEnds` in `model.ts` are the shared conversion, used by both the endpoint drag and the initial draw, so an arrow drawn from scratch and one re-aimed later are identical).
+
+Notes are drawn **above** everything they annotate — commentary hidden behind the geometry it explains would be useless — in green, with a dashed box like every other volume the player passes through so a note can never read as a wall in a screenshot.
+Everything about a note is **world-scaled** — glyph height, box, arrow shaft and head — so an annotation keeps its relationship to the geometry it points at instead of swelling over the level as you zoom out; the glyphs themselves are drawn in screen space at the projected size, which keeps them crisp without changing that.
+An empty note draws a dimmed `(empty note)` placeholder rather than nothing at all.
+Placing a text note focuses the inspector's textarea, so the first act after dropping one is typing rather than a trip to the panel; that textarea snapshots undo on the **first keystroke** rather than on focus, since placing the note focuses it and a focus-time snapshot would make the first Ctrl+Z a visible no-op.
+Prose stays a single-selection edit (merging text across a group has no sane meaning) while placement stays group-wide like every other layer.
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE

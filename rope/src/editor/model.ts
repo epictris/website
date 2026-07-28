@@ -15,18 +15,22 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
+  DEFAULT_NOTE_TEXT_SIZE,
   DEFAULT_SURFACE_FRICTION,
   DEFAULT_VIEWPORT_SCALE,
+  NOTE_ARROW_THICKNESS,
   scaleLevelData,
   type BodyKind,
   type CameraRegionData,
   type LevelData,
+  type NoteData,
 } from "../level/levelFormat";
 
 // Editor layers. `geometry` is the scene bodies, `camera` the camera-behaviour
-// volumes; background images are the next one to land here.
-export type EdLayer = "geometry" | "camera";
-export const ED_LAYERS: EdLayer[] = ["geometry", "camera"];
+// volumes, `notes` the authoring annotations (invisible in play); background
+// images are the next one to land here.
+export type EdLayer = "geometry" | "camera" | "notes";
+export const ED_LAYERS: EdLayer[] = ["geometry", "camera", "notes"];
 
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
@@ -43,6 +47,15 @@ export interface EdCamera {
   priority: number;
 }
 
+// Notes-layer properties (see NoteData). A note is always a rect: for a text
+// note the box holds the wrapped text, for an arrow it is the segment's length
+// and pick band.
+export interface EdNote {
+  kind: "text" | "arrow";
+  text: string;
+  size: number; // metres, glyph height (text notes)
+}
+
 export interface EdItem {
   id: number;
   layer: EdLayer;
@@ -57,6 +70,37 @@ export interface EdItem {
   force: number; // force areas only: m/s² along the item's rotation
   // Camera layer:
   cam: EdCamera;
+  // Notes layer:
+  note: EdNote;
+}
+
+// Is this item an arrow note? Arrows are the one item edited by their endpoints
+// rather than by corner handles, so the test is shared by picking and drawing.
+export function isArrowNote(item: EdItem): boolean {
+  return item.layer === "notes" && item.note.kind === "arrow";
+}
+
+// The endpoints of an arrow note, in world metres: tail (local -X) to head.
+export function arrowEnds(item: EdItem): { tail: Vec2; head: Vec2 } {
+  const half = item.shape.kind === "rect" ? item.shape.w / 2 : item.shape.r;
+  return {
+    tail: toWorld(item, new Vec2(-half, 0)),
+    head: toWorld(item, new Vec2(half, 0)),
+  };
+}
+
+// An arrow shorter than this cannot be aimed (the endpoints coincide), so a
+// click that never dragged still leaves something grabbable.
+export const MIN_ARROW_LENGTH = 0.1;
+
+// Re-derive an arrow's stored box from a pair of endpoints. The box centre is
+// the midpoint and `rot` is the direction, so an endpoint drag and an
+// arrow drawn from scratch produce exactly the same item.
+export function setArrowEnds(item: EdItem, tail: Vec2, head: Vec2): void {
+  const d = head.sub(tail);
+  item.pos = tail.add(head).mul(0.5);
+  item.rot = Math.atan2(d.y, d.x);
+  if (item.shape.kind === "rect") item.shape.w = Math.max(MIN_ARROW_LENGTH, d.length());
 }
 
 export interface EdModel {
@@ -80,10 +124,26 @@ export const defaultCamera = (): EdCamera => ({
   priority: 0,
 });
 
-// Camera regions are editor-only furniture — they are never drawn in game, so
-// their appearance is fixed here rather than authored and saved.
+export const defaultNote = (): EdNote => ({
+  kind: "text",
+  text: "",
+  size: DEFAULT_NOTE_TEXT_SIZE * PX,
+});
+
+// Camera regions and notes are editor-only furniture — they are never drawn in
+// game, so their appearance is fixed here rather than authored and saved.
 export const CAMERA_REGION_COLOR = "#c792ea";
 export const CAMERA_REGION_OPACITY = 0.12;
+export const NOTE_COLOR = "#98c379";
+export const NOTE_OPACITY = 0.08;
+
+// Default box of a freshly placed text note, in metres. A text note is usually
+// placed with a click rather than dragged out, so it needs a size worth typing
+// into from the start.
+export const NOTE_DEFAULT_SIZE = new Vec2(2.4, 0.8);
+// Default length of an arrow placed with a click rather than dragged out.
+export const NOTE_DEFAULT_ARROW_LENGTH = 1.2;
+export const NOTE_ARROW_BAND = NOTE_ARROW_THICKNESS * PX;
 
 // --- conversions ------------------------------------------------------------
 
@@ -104,6 +164,7 @@ function fromLevelData(data: LevelData): EdModel {
     friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
     force: b.force ?? 0,
     cam: defaultCamera(),
+    note: defaultNote(),
   }));
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
     id: newBodyId(),
@@ -127,10 +188,29 @@ function fromLevelData(data: LevelData): EdModel {
       blend: r.blend ?? null,
       priority: r.priority ?? 0,
     },
+    note: defaultNote(),
+  }));
+  const notes: EdItem[] = (data.notes ?? []).map((n) => ({
+    id: newBodyId(),
+    layer: "notes",
+    kind: "static", // unused on this layer; keeps the field total
+    pos: new Vec2(n.x, n.y),
+    rot: n.rot,
+    shape: { kind: "rect", w: n.w, h: n.h },
+    color: NOTE_COLOR,
+    opacity: NOTE_OPACITY,
+    friction: DEFAULT_SURFACE_FRICTION,
+    force: 0,
+    cam: defaultCamera(),
+    note: {
+      kind: n.kind,
+      text: n.text ?? "",
+      size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX,
+    },
   }));
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
-    items: [...bodies, ...regions],
+    items: [...bodies, ...regions, ...notes],
   };
 }
 
@@ -162,6 +242,23 @@ export function toLevelData(model: EdModel): LevelData {
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
     }));
 
+  const notes: NoteData[] = model.items
+    .filter((i) => i.layer === "notes")
+    .map((i) => {
+      const h = halfExtents(i);
+      return {
+        kind: i.note.kind,
+        x: i.pos.x,
+        y: i.pos.y,
+        rot: i.rot,
+        w: h.x * 2,
+        h: h.y * 2,
+        // An arrow carries no text and no glyph height; a text note writes both
+        // so a reopened level shows exactly what was authored.
+        ...(i.note.kind === "text" ? { text: i.note.text, size: i.note.size } : {}),
+      };
+    });
+
   return {
     player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
     bodies: model.items
@@ -180,8 +277,9 @@ export function toLevelData(model: EdModel): LevelData {
         ...(b.kind === "force" ? { force: b.force } : {}),
       })),
     // An empty list is the same as no list, and the absent field keeps levels
-    // authored before camera regions byte-identical.
+    // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
+    ...(notes.length ? { notes } : {}),
   };
 }
 
@@ -280,6 +378,7 @@ export function emptyModel(): EdModel {
         friction: DEFAULT_SURFACE_FRICTION,
         force: 0,
         cam: defaultCamera(),
+        note: defaultNote(),
       },
     ],
   };

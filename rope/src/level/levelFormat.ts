@@ -98,12 +98,46 @@ export interface CameraRegionData {
   priority?: number;
 }
 
+// Default glyph height of a text note, in scene pixels.
+export const DEFAULT_NOTE_TEXT_SIZE = 12;
+
+// Thickness of an arrow note's pick band, in scene pixels. An arrow is a
+// segment, but it is stored as a box (length × this) so it moves, rotates,
+// rubber-bands and hit-tests through exactly the same code as every other item.
+export const NOTE_ARROW_THICKNESS = 20;
+
+// An authoring note: a text box or an arrow, drawn only in the level editor.
+// Notes exist to record *why* a piece of geometry is placed the way it is, so
+// that it is not later removed as arbitrary. Nothing in the simulation or the
+// game renderer reads this list — it is the one part of a level file that is
+// deliberately invisible in play.
+//
+// A note is always a rectangle (a circular note has no meaning), so it carries
+// `w`/`h` directly rather than a ShapeData. For an arrow those are the segment's
+// length and its pick band: the arrow runs along the item's local +X, from
+// (-w/2, 0) to (+w/2, 0), with the head at the +X end, so `rot` aims it.
+export interface NoteData {
+  kind: "text" | "arrow";
+  x: number;
+  y: number;
+  rot: number;
+  w: number;
+  h: number;
+  // Text notes: the note body (may contain newlines). Absent on an arrow.
+  text?: string;
+  // Text notes: glyph height in pixels. Absent = DEFAULT_NOTE_TEXT_SIZE.
+  size?: number;
+}
+
 export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
   cameraRegions?: CameraRegionData[];
+  // Editor-only annotations (see NoteData). Never read by the sim or the game
+  // renderer, so a level plays identically with or without them.
+  notes?: NoteData[];
 }
 
 // Scale every length by `factor` (pass PX = 1 / PIXELS_PER_METER on load, or
@@ -129,8 +163,20 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     ...(r.blend !== undefined ? { blend: r.blend } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
   }));
+  // A note's placement, box and glyph height are lengths; its text is not.
+  const notes = data.notes?.map((n) => ({
+    kind: n.kind,
+    x: n.x * factor,
+    y: n.y * factor,
+    rot: n.rot,
+    w: n.w * factor,
+    h: n.h * factor,
+    ...(n.text !== undefined ? { text: n.text } : {}),
+    ...(n.size !== undefined ? { size: n.size * factor } : {}),
+  }));
   return {
     ...(regions ? { cameraRegions: regions } : {}),
+    ...(notes ? { notes } : {}),
     player: {
       x: data.player.x * factor,
       y: data.player.y * factor,
