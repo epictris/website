@@ -131,9 +131,16 @@ at exactly the chain's reach (`CHAIN_MAX_LENGTH`).
 The mouse has two aim modes behind the `MOTION_AIM` setting in `ballInput.ts`
 (default **off**, overridable per session with `?motionAim=1` / `?motionAim=0` so
 the two can be compared by feel without a rebuild):
-- **position** (default): `aimLocal` is the cursor's position relative to the
-  ball, unbounded - the reticle is exactly where the pointer is, a drawn stand-in
-  for the hidden OS cursor and nothing more.
+- **position** (default): the aim point is the cursor's **screen** position,
+  un-projected through the *current* camera every time it is read
+  (`currentAimLocal`), unbounded - the reticle is exactly where the pointer is, a
+  drawn stand-in for the hidden OS cursor and nothing more.
+  Re-deriving it per read rather than freezing it at mousemove time is what keeps
+  it there: held as an offset from the ball, a camera pan, ease or zoom slid the
+  reticle across the screen with no hand on the mouse - the cursor visibly
+  drifting on its own. Motion aim is exempt (the offset *is* the state, and under
+  pointer lock there may be no cursor on screen), as are stick and joystick aim,
+  which are ball-relative directions by definition.
 - **motion**: `aimLocal` accumulates each mousemove's delta (metres at the
   current zoom) and is held within the reach, and clicking the canvas takes
   **pointer lock** (Esc releases it, the next click takes it back) so the cursor
@@ -318,7 +325,21 @@ borders always drawn fully opaque in the same colour (`DEFAULT_BODY_COLOR`/`_OPA
 way in editor and game via `src/render/color.ts`). Both the editor and the game render
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
-the current model and run it inline; **Esc** returns to editing.
+the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
+
+### Layers
+
+The model is a flat list of `EdItem`s, each carrying a **`layer`**: `geometry` (the scene bodies) and `camera` (the camera-behaviour volumes, see **Camera** below); background images are the next one to land here.
+Only the **active** layer is hit-testable and drawn into — the others render at 40% opacity as context and are click-through — because a camera region blankets the geometry it governs, so a click has to mean one or the other and the layer switch is what says which.
+The toolbar's layer row picks it (**Tab** cycles) and carries a visibility toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target.
+A selection therefore never spans layers, which is what lets the inspector pick one layer's panel instead of reconciling a mixed one, and a paste switches the active layer to the clipboard's rather than dropping items somewhere unclickable.
+
+The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s` and `priority`.
+A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` means the controller default.
+A region draws as a dashed violet volume labelled with what it does (`cam · off 0,-250 · view ×1.8 · lock xy`), and a locked axis draws a gold guide — a line across the region for one axis, a crosshair at the pinned point for both.
+
+One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
+The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
@@ -338,11 +359,58 @@ is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor
 into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
-the generated one — adds the `rigid`, `anchor` and `force` kinds); `levelData.ts` stays
+the generated one — adds the `rigid`, `anchor` and `force` kinds, plus the `cameraRegions`
+list); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
 through the shared `src/level/buildBodies.ts` (statics, killzones, impermeables, anchors,
 force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
+
+## Camera
+
+`render/cameraController.ts` owns the view: an **eased follow** of the avatar, reshaped by the level's **camera regions**.
+It is deliberately render-side, driven by the wall-clock frame `dt` rather than the fixed timestep, so easing it can never change a recorded run.
+(The grapple controller un-projects the cursor through the camera, so the camera does reach the sim as *input* — but the trace records the resulting world point, so replays stay bit-identical.)
+`camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `ballZoom(viewportHeight)` for the ball, re-derived on resize).
+The default framing puts the avatar **dead centre** for both controllers — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
+
+Two smoothings run at deliberately different timescales:
+
+- **Follow lag** (`CAMERA_FOLLOW_TAU`, 0.15 s) — an exponential ease of the camera toward its target, `1 - exp(-dt/tau)` so a 60 Hz and a 144 Hz display behave identically. This is the "not rigidly locked to the player" part.
+- **Region cross-fade** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) — a smoothstep between the *targets* of the outgoing and incoming regions. Both targets are evaluated live every frame, so the avatar keeps being tracked through a transition instead of the camera dragging from a stale point.
+
+One mechanism therefore covers default→region, region→region and region→default: "no region" is just the null region, whose target is the plain follow point.
+An interrupted cross-fade restarts from the region it was heading to, so the *target* can jump by the unfinished remainder — the follow ease low-passes it, so the camera itself stays continuous.
+`CameraController.snap()` drops the easing for one frame (level start and reset), where easing in from the last frame's position would be a swoop across the level.
+
+### Render interpolation
+
+The sim is a fixed 60 Hz, so drawing its raw state on a 120/144 Hz display repeats and skips frames, which reads as jitter - most visible on the ball at the end of a fast swing.
+Every rendered frame therefore draws **between** two sim states: `World.captureRenderTransforms()` runs at the top of each level's `physicsProcess` (before anything moves), and the renderer takes an `alpha` = leftover accumulator ÷ step, clamped to 1 so a frame that hit `MAX_STEPS_PER_FRAME` never extrapolates past the current state.
+`CollisionObject2D.renderPosition/renderRotation/renderShape(alpha)` are the whole interface; rotation interpolates the short way round (`wrapAngle`) so a body crossing ±π does not unwind a full turn.
+The captured transform is **render-only state the sim never reads**, which is what makes this safe: `replay selftest` stays bit-identical.
+
+Derived geometry follows the same rule rather than being lerped as a shape:
+
+- The rope/chain is drawn from its wrap **nodes**, not the resolved spans. A node is a point in its body's local frame (`RopeContact.renderGlobalPosition`), so re-resolving it against the render transform keeps the chain welded to the drawn ball and the drawn hook — resolved spans would leave it visibly detached between steps.
+- The player rig stores its limbs as offsets from the player, so interpolating the whole rig is interpolating one anchor point (`lastP`).
+- The ball's loop (and the chain leaving it) comes from `renderLoopCenter/renderLoopDirection`, the same derivation against the interpolated pose.
+- The camera follows `cameraRenderPosition(alpha)`, not the raw sim position: tracking the 60 Hz position while the avatar draws interpolated would put the jitter straight back, on screen.
+
+The debug overlay (L) deliberately keeps drawing the **exact** sim state — it exists to show what the simulation believes, so a frame of render smoothing has no business in it.
+
+A **camera region** (`CameraRegionData` in `levelFormat.ts`, its own `cameraRegions` list rather than a `BodyKind`, since it has no collision and nothing may wrap it) computes the target per axis:
+
+```
+target.x = lockX ?? (avatar.x + offsetX)
+target.y = lockY ?? (avatar.y + offsetY)
+zoom     = baseZoom / viewportScale
+```
+
+Per-axis locking is what makes one primitive cover all three asks: both axes locked is a fixed camera, one axis locked is a shaft or corridor that pins one and follows the other, neither locked is an offset follow.
+`offsetX/offsetY` only apply to the axes that still follow, and `viewportScale` is *how much world is on screen* (2 = twice as much, zoomed out), so it divides the zoom and blends geometrically — 1→4 passes through 2, not 2.5.
+The containing region with the highest `priority` wins (later in the list breaks a tie), and the region in force keeps its grip until the avatar leaves it by `REGION_EXIT_MARGIN` (15 cm) — without that hysteresis, hovering on a boundary re-triggers the cross-fade every frame and the camera stutters.
+Regions are invisible in play, so the **debug overlay** (L) draws every volume and fills the active one: a camera that offsets, zooms or pins otherwise has no on-screen cause.
 
 ## Hook-only anchor geometry
 

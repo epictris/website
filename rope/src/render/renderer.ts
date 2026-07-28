@@ -81,9 +81,12 @@ function areaHalfExtents(t: ShapeTransform): Vec2 {
     : t.shape.size.mul(0.5);
 }
 
-function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void {
+// `alpha` is the render interpolation factor (see CollisionObject2D.renderShape):
+// every body is drawn between its previous and current sim transform, so motion
+// is smooth on a display faster than the 60 Hz simulation.
+function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha: number): void {
   if (!body.hasShape()) return;
-  const t = body.getShape();
+  const t = body.renderShape(alpha);
   if (body instanceof Player) {
     pathShape(ctx, t);
     ctx.fillStyle = PLAYER;
@@ -97,7 +100,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D): void 
     return;
   }
   if (body instanceof BallPlayer) {
-    const c = body.globalPosition;
+    const c = t.globalPosition;
     const r = body.radius;
     // Cast-iron cannonball: near-black body, subtle off-centre highlight for sheen.
     pathShape(ctx, t);
@@ -275,6 +278,10 @@ export function render(
   fps: number,
   showDebug = false,
   gamepadAim: Vec2 | null = null,
+  // Fraction of a physics step elapsed since the last one: every moving body is
+  // drawn between its previous and current sim transform. 1 = draw the sim
+  // state exactly (what a caller with no fixed-step accumulator wants).
+  alpha = 1,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
@@ -290,14 +297,14 @@ export function render(
   // Hook-only scenery is background the player passes through, so it goes down
   // first and solid geometry draws over it.
   for (const body of level.world.bodies) {
-    if (body instanceof AnchorBody) drawBody(ctx, body);
+    if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
   }
   for (const body of level.world.bodies) {
     if (body instanceof Player) continue; // drawn between the rig layers below
     if (body instanceof AnchorBody) continue; // already drawn, behind
-    drawBody(ctx, body);
+    drawBody(ctx, body, alpha);
   }
-  for (const area of level.world.areas) drawBody(ctx, area);
+  for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -310,17 +317,22 @@ export function render(
     ctx.strokeStyle = HOOK;
     ctx.lineWidth = PX;
     ctx.beginPath();
-    for (const { span } of rope.getSpans()) {
-      ctx.moveTo(span.start.x, span.start.y);
-      ctx.lineTo(span.end.x, span.end.y);
+    // Drawn from the wrap NODES rather than the resolved spans: a node is a
+    // point in its body's local frame, so re-resolving it against the render
+    // transform keeps the rope attached to the drawn bodies at both ends.
+    for (const { from, to } of rope.getSpans()) {
+      const a = from.contact.renderGlobalPosition(alpha);
+      const b = to.contact.renderGlobalPosition(alpha);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
     }
     ctx.stroke();
   }
 
   // Player sandwich over the rope: far-side limbs, body, near-side limbs.
-  updatePlayerRig(level);
+  updatePlayerRig(level, alpha);
   drawPlayerRigBack(ctx);
-  drawBody(ctx, level.player);
+  drawBody(ctx, level.player, alpha);
   drawPlayerRigFront(ctx);
 
   // Gamepad crosshair — only while the right stick owns aim (with the mouse,
@@ -474,6 +486,8 @@ export function renderBall(
   camera: Camera,
   fps: number,
   aimWorld: Vec2 | null = null,
+  // See `render`: fraction of a physics step elapsed since the last one.
+  alpha = 1,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
@@ -488,15 +502,15 @@ export function renderBall(
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
   for (const body of level.world.bodies) {
-    if (body instanceof AnchorBody) drawBody(ctx, body);
+    if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
   }
   for (const body of level.world.bodies) {
     if (body instanceof BallPlayer) continue; // drawn over the chain below
     if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
     if (body instanceof AnchorBody) continue; // already drawn, behind
-    drawBody(ctx, body);
+    drawBody(ctx, body, alpha);
   }
-  for (const area of level.world.areas) drawBody(ctx, area);
+  for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
   // ANCHOR toward the ball, then on through the loop into the ball CENTRE
@@ -509,25 +523,33 @@ export function renderBall(
   const chain = ball.chain;
   if (chain) {
     const spans = chain.getSpans();
-    // Node path loop→anchor (loop is spans[0].start, then each span end).
-    const loopToAnchor = [spans[0]!.span.start, ...spans.map((s) => s.span.end)];
+    // Node path loop→anchor (the loop is the first span's `from`, then each
+    // span's `to`). Resolved against the render transforms, so the chain stays
+    // welded to the drawn ball and the drawn hook rather than to their 60 Hz
+    // sim positions — otherwise the chain visibly detaches between steps.
+    const loopToAnchor = [
+      spans[0]!.from.contact.renderGlobalPosition(alpha),
+      ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
+    ];
     // Walk anchor → … → loop → ball centre: reverse to start at the anchor,
     // then extend past the loop into the covered centre at the ball end.
-    const path = [...loopToAnchor.reverse(), ball.globalPosition];
+    const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
     drawChainPolyline(ctx, path);
 
     // Manacle at the chain's far end (flying hook, dangling tip, or anchor).
     // Orient its housing toward the previous chain node.
-    const tip = spans[spans.length - 1]!.span.end;
-    const prev = spans[spans.length - 1]!.span.start;
-    const dir = tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.loopDirection;
+    const last = spans[spans.length - 1]!;
+    const tip = last.to.contact.renderGlobalPosition(alpha);
+    const prev = last.from.contact.renderGlobalPosition(alpha);
+    const dir =
+      tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
     drawManacle(ctx, tip, dir);
   }
-  drawBody(ctx, ball);
+  drawBody(ctx, ball, alpha);
 
   // Steel mounting loop: material point on the rim, rotating with the ball
   // (its aim direction when no chain is out). Drawn on top of the body.
-  const loop = ball.loopCenter;
+  const loop = ball.renderLoopCenter(alpha);
   ctx.strokeStyle = CHAIN;
   ctx.lineWidth = PX;
   ctx.beginPath();

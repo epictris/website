@@ -15,7 +15,7 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type LevelData } from "./levelFormat";
+import { scaleLevelData, type CameraRegionData, type LevelData } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
@@ -42,10 +42,14 @@ export class Level {
   readonly movers: Array<{ body: AnimatableBody2D; script: MoverScript }> = [];
   frame = 0;
   cameraPosition = Vec2.ZERO;
+  // Camera-behaviour volumes, in metres. Read by the render-side
+  // CameraController; the sim never touches them.
+  readonly cameraRegions: CameraRegionData[];
   onReset: (() => void) | null = null;
 
   constructor(rawData: LevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
+    this.cameraRegions = data.cameraRegions ?? [];
     this.player = new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);
@@ -79,10 +83,18 @@ export class Level {
     this.spawnBody(body);
   }
 
+  // Camera target for a render frame: the avatar's interpolated position (see
+  // BallLevel.cameraRenderPosition).
+  cameraRenderPosition(alpha: number): Vec2 {
+    return this.player.renderPosition(alpha);
+  }
+
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     Debug.clear();
     PhysTrace.frame = this.frame;
+    // Snapshot the pre-step transforms the renderer interpolates from.
+    this.world.captureRenderTransforms();
 
     // Scripted movers run first so the player and rope see current-frame
     // transforms with matching per-frame contact velocities.

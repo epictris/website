@@ -8,12 +8,21 @@ import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { fillAnchor, fillForceArea, fillKillZone } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
-import { halfExtents, toWorld, type EdBody, type EdModel } from "./model";
+import {
+  CAMERA_REGION_COLOR,
+  halfExtents,
+  toWorld,
+  type EdItem,
+  type EdLayer,
+  type EdModel,
+} from "./model";
+import { DEFAULT_VIEWPORT_SCALE } from "../level/levelFormat";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const SELECT = "#f4a460";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
+const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
 
@@ -22,7 +31,7 @@ export const HANDLE_HIT_PX = 9; // pointer pick radius
 const ROT_OFFSET_PX = 26; // rotate handle distance beyond the top edge
 
 export interface Handles {
-  body: EdBody;
+  body: EdItem;
   corners: Vec2[]; // screen; rect only (TL, TR, BR, BL)
   rotate: Vec2 | null; // screen
   rotateBase: Vec2 | null; // screen; where the rotate knob's stalk starts
@@ -30,7 +39,7 @@ export interface Handles {
 }
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
-export function computeHandles(cam: Camera, body: EdBody): Handles {
+export function computeHandles(cam: Camera, body: EdItem): Handles {
   // Knob sits above the shape's top edge, along the body's own up axis.
   const up = new Vec2(0, -1).rotated(body.rot).normalized();
   if (body.shape.kind === "circle") {
@@ -59,7 +68,7 @@ export function computeHandles(cam: Camera, body: EdBody): Handles {
   return { body, corners, rotate: topMid.add(up.mul(ROT_OFFSET_PX)), rotateBase: topMid, radius: null };
 }
 
-function pathBody(ctx: CanvasRenderingContext2D, body: EdBody): void {
+function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
   ctx.beginPath();
   if (body.shape.kind === "circle") {
     ctx.arc(body.pos.x, body.pos.y, body.shape.r, 0, Math.PI * 2);
@@ -93,6 +102,61 @@ function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.stroke();
 }
 
+// One-line summary of what a camera region does, drawn above it. Lengths are in
+// scene pixels, matching the inspector's fields. A region with nothing authored
+// says so rather than showing an empty label.
+export function cameraRegionLabel(r: EdItem): string {
+  const px = (v: number) => String(Math.round(v * PIXELS_PER_METER));
+  const parts: string[] = [];
+  if (r.cam.offset.x !== 0 || r.cam.offset.y !== 0) {
+    parts.push(`off ${px(r.cam.offset.x)},${px(r.cam.offset.y)}`);
+  }
+  if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
+    parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
+  }
+  const lock = `${r.cam.lockX !== null ? "x" : ""}${r.cam.lockY !== null ? "y" : ""}`;
+  if (lock) parts.push(`lock ${lock}`);
+  if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
+  if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
+  return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
+}
+
+// Where a locked axis pins the camera. Both axes locked is a point, so it draws
+// a target there (and a leader from the region, since the point may be outside
+// it); one axis locked is a line, drawn across the region's span.
+function drawLockMarks(ctx: CanvasRenderingContext2D, r: EdItem, worldLine: number): void {
+  const { lockX, lockY } = r.cam;
+  if (lockX === null && lockY === null) return;
+  const h = halfExtents(r);
+  const reach = 0.5; // metres the guide lines overhang the region
+  ctx.strokeStyle = CAMERA_LOCK;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([4 * PX, 4 * PX]);
+  ctx.beginPath();
+  if (lockX !== null && lockY !== null) {
+    ctx.moveTo(r.pos.x, r.pos.y);
+    ctx.lineTo(lockX, lockY);
+  } else if (lockX !== null) {
+    ctx.moveTo(lockX, r.pos.y - h.y - reach);
+    ctx.lineTo(lockX, r.pos.y + h.y + reach);
+  } else if (lockY !== null) {
+    ctx.moveTo(r.pos.x - h.x - reach, lockY);
+    ctx.lineTo(r.pos.x + h.x + reach, lockY);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (lockX !== null && lockY !== null) {
+    const s = 0.12;
+    ctx.beginPath();
+    ctx.arc(lockX, lockY, s, 0, Math.PI * 2);
+    ctx.moveTo(lockX - s * 1.8, lockY);
+    ctx.lineTo(lockX + s * 1.8, lockY);
+    ctx.moveTo(lockX, lockY - s * 1.8);
+    ctx.lineTo(lockX, lockY + s * 1.8);
+    ctx.stroke();
+  }
+}
+
 export function drawEditor(
   ctx: CanvasRenderingContext2D,
   dpr: number,
@@ -102,6 +166,8 @@ export function drawEditor(
   model: EdModel,
   selectedIds: ReadonlySet<number>,
   marquee: { min: Vec2; max: Vec2 } | null = null,
+  activeLayer: EdLayer = "geometry",
+  visibleLayers: ReadonlySet<EdLayer> = new Set<EdLayer>(["geometry", "camera"]),
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, cam, w, h);
@@ -113,12 +179,17 @@ export function drawEditor(
   ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
+  // Only the active layer is editable, so every other layer draws dimmed —
+  // present as context, visibly not what a click will hit.
+  const INACTIVE_ALPHA = 0.4;
   // Hook-only anchors first: they are background the player passes through, and
   // the game draws them behind solid geometry too. `sort` is stable, so the
   // authored order is preserved within each group.
-  const ordered = [...model.bodies].sort(
-    (a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"),
-  );
+  const geometry = model.items.filter((i) => i.layer === "geometry");
+  const ordered = visibleLayers.has("geometry")
+    ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
+    : [];
+  ctx.globalAlpha = activeLayer === "geometry" ? 1 : INACTIVE_ALPHA;
   for (const body of ordered) {
     // Areas fill with their glyph cut out of them — the same calls the game
     // makes, so authoring shows exactly what play shows.
@@ -186,6 +257,32 @@ export function drawEditor(
     }
   }
 
+  // Camera regions above the geometry they reshape — they are annotations on a
+  // scene, not part of it.
+  const regions = visibleLayers.has("camera")
+    ? model.items.filter((i) => i.layer === "camera")
+    : [];
+  ctx.globalAlpha = activeLayer === "camera" ? 1 : INACTIVE_ALPHA;
+  for (const r of regions) {
+    pathBody(ctx, r);
+    ctx.fillStyle = hexToRgba(CAMERA_REGION_COLOR, r.opacity);
+    ctx.fill();
+    if (selectedIds.has(r.id)) {
+      ctx.strokeStyle = SELECT;
+      ctx.lineWidth = worldLine * 5;
+      ctx.stroke();
+    }
+    // Dashed border: a camera region is a volume the player passes through, so
+    // nothing about it may read as solid.
+    ctx.strokeStyle = CAMERA_REGION_COLOR;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawLockMarks(ctx, r, worldLine);
+  }
+  ctx.globalAlpha = 1;
+
   // Player spawn marker: ring at the avatar radius + crosshair.
   const p = model.player.pos;
   ctx.strokeStyle = PLAYER;
@@ -203,9 +300,22 @@ export function drawEditor(
 
   ctx.restore();
 
+  // Region labels in screen space: what a region does has to stay readable at
+  // any zoom, and a world-space label would shrink to nothing.
+  ctx.globalAlpha = activeLayer === "camera" ? 1 : INACTIVE_ALPHA;
+  for (const r of regions) {
+    const h = halfExtents(r);
+    const anchor = worldToScreen(cam, r.pos.sub(h));
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = CAMERA_REGION_COLOR;
+    ctx.fillText(cameraRegionLabel(r), anchor.x + 2, anchor.y - 3);
+  }
+  ctx.globalAlpha = 1;
+
   // Handles in screen space so they stay a constant on-screen size. They edit
-  // one body's geometry, so they only appear for a single selection.
-  const selection = model.bodies.filter((b) => selectedIds.has(b.id));
+  // one item's geometry, so they only appear for a single selection.
+  const selection = model.items.filter((b) => selectedIds.has(b.id));
   const selected = selection.length === 1 ? selection[0]! : null;
   if (selected) {
     const hs = computeHandles(cam, selected);

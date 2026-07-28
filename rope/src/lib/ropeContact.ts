@@ -29,6 +29,16 @@ export class RopeContact {
   get globalPosition(): Vec2 {
     return this.obj.globalPosition.add(this.position.rotated(this.obj.globalRotation));
   }
+
+  // `globalPosition` against the body's interpolated render transform. The
+  // contact is stored in the body's local frame, so a wrap node follows the
+  // body it sits on exactly — the drawn rope stays attached to the drawn body
+  // rather than to its 60 Hz sim position.
+  renderGlobalPosition(alpha: number): Vec2 {
+    return this.obj
+      .renderPosition(alpha)
+      .add(this.position.rotated(this.obj.renderRotation(alpha)));
+  }
 }
 
 export abstract class RopeNode {

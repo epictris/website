@@ -11,7 +11,7 @@ import { World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
-import { scaleLevelData, type LevelData } from "./levelFormat";
+import { scaleLevelData, type CameraRegionData, type LevelData } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
 import { PX } from "../engine/units";
 
@@ -22,6 +22,8 @@ export class BallLevel {
   bodies: PhysicsBody2D[] = [];
   frame = 0;
   cameraPosition = Vec2.ZERO;
+  // Camera-behaviour volumes, in metres (see Level.cameraRegions).
+  readonly cameraRegions: CameraRegionData[];
   onReset: (() => void) | null = null;
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
@@ -39,6 +41,7 @@ export class BallLevel {
 
   constructor(rawData: LevelData) {
     const data = scaleLevelData(rawData, PX);
+    this.cameraRegions = data.cameraRegions ?? [];
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);
@@ -55,10 +58,19 @@ export class BallLevel {
     this.bodies.push(body);
   }
 
+  // Camera target for a render frame: the ball's interpolated position, so the
+  // camera tracks exactly what is drawn. Following the raw 60 Hz position while
+  // the ball renders interpolated would put the jitter back, on screen.
+  cameraRenderPosition(alpha: number): Vec2 {
+    return this.ball.renderPosition(alpha);
+  }
+
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     Debug.clear();
     PhysTrace.frame = this.frame;
+    // Snapshot the pre-step transforms the renderer interpolates from.
+    this.world.captureRenderTransforms();
 
     // Restart (top face button → jump field). Replaces this level instance;
     // bail before touching more of the frame.

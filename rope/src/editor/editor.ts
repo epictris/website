@@ -4,13 +4,8 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import {
-  ballCameraPosition,
-  ballZoom,
-  screenToWorld,
-  worldToScreen,
-  type Camera,
-} from "../render/camera";
+import { ballZoom, GRAPPLE_ZOOM, screenToWorld, type Camera } from "../render/camera";
+import { CAMERA_BLEND_TIME, CameraController } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
@@ -26,6 +21,10 @@ import {
 } from "../level/levelFormat";
 import {
   bodyIntersectsRect,
+  CAMERA_REGION_COLOR,
+  CAMERA_REGION_OPACITY,
+  defaultCamera,
+  ED_LAYERS,
   emptyModel,
   groupBounds,
   halfExtents,
@@ -34,7 +33,8 @@ import {
   newBodyId,
   pointInBody,
   toWorld,
-  type EdBody,
+  type EdItem,
+  type EdLayer,
   type EdModel,
 } from "./model";
 import { computeHandles, drawEditor, HANDLE_HIT_PX } from "./render";
@@ -62,12 +62,12 @@ type Drag =
   | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean }
   // The lead body follows the pointer (and the grid); the rest of the
   // selection rides along at a fixed offset from it.
-  | { mode: "move"; lead: EdBody; others: Array<{ body: EdBody; offset: Vec2 }>; grab: Vec2 }
+  | { mode: "move"; lead: EdItem; others: Array<{ body: EdItem; offset: Vec2 }>; grab: Vec2 }
   | { mode: "movePlayer"; grab: Vec2 }
-  | { mode: "corner"; body: EdBody; anchor: Vec2 }
-  | { mode: "radius"; body: EdBody }
-  | { mode: "rotate"; body: EdBody }
-  | { mode: "draw"; body: EdBody; start: Vec2 };
+  | { mode: "corner"; body: EdItem; anchor: Vec2 }
+  | { mode: "radius"; body: EdItem }
+  | { mode: "rotate"; body: EdItem }
+  | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
 const NUDGE_DIRS: Record<string, Vec2 | undefined> = {
@@ -113,6 +113,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const selectedIds = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
+  // Layers. Only the active one is hit-testable and drawable-into (the others
+  // render dimmed as context), so clicking a camera region can never grab the
+  // wall behind it — and the two overlap everywhere by nature. A selection
+  // therefore never spans layers, which is what lets the inspector show one
+  // layer's properties without a mixed-layer case.
+  let activeLayer: EdLayer = "geometry";
+  const visibleLayers = new Set<EdLayer>(ED_LAYERS);
   let snapOn = true;
   const gridStep = 0.1; // snap spacing: fixed 10 cm (matches the backdrop minor grid)
   let currentName: string | null = null;
@@ -134,7 +141,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
     player: { pos: m.player.pos, radius: m.player.radius },
-    bodies: m.bodies.map((b) => ({ ...b, shape: { ...b.shape } })),
+    items: m.items.map((b) => ({ ...b, shape: { ...b.shape }, cam: { ...b.cam } })),
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -162,14 +169,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function afterHistoryChange(): void {
     drag = null;
     nudging = false;
-    const live = new Set(model.bodies.map((b) => b.id));
+    const live = new Set(model.items.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     rebuildInspector();
     markDirty(); // an undo/redo is a change like any other - it autosaves too
   }
 
   // Model order, so a group keeps its z-order through copy/duplicate.
-  const selectedBodies = () => model.bodies.filter((b) => selectedIds.has(b.id));
+  const selectedBodies = () => model.items.filter((b) => selectedIds.has(b.id));
+  // The items a click, a rubber-band or a paste may touch: the active layer.
+  const layerItems = () => model.items.filter((b) => b.layer === activeLayer);
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   function setSelection(ids: readonly number[]): void {
     if (ids.length === selectedIds.size && ids.every((id) => selectedIds.has(id))) return;
@@ -190,7 +199,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const snapLen = (v: number) => Math.max(gridStep, snap(v));
   // Snap a would-be centre so the body's top-left corner lands on the grid
   // (moves snap the corner rather than the centre).
-  const snapCorner = (b: EdBody, center: Vec2) => {
+  const snapCorner = (b: EdItem, center: Vec2) => {
     const off = halfExtents(b);
     return snapVec(center.sub(off)).add(off);
   };
@@ -213,6 +222,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
+  // The test run's camera (eased follow + camera regions). Separate from the
+  // editor's own camera handling, which is a direct pan/zoom.
+  const testCameraCtl = new CameraController();
 
   // Full-session recording of the current test run — press P to download a
   // self-contained replay bundle (embeds the tested geometry, since an
@@ -230,8 +242,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     testData = pixelData;
     recFrames.length = 0;
     recDigests.length = 0;
+    // The camera controller owns the zoom from here (base framing × the active
+    // region's viewportScale), and re-derives it every frame, so a resize
+    // mid-test needs no separate handling.
+    testCameraCtl.snap();
     if (controller === "ball") {
-      camera.zoom = ballZoom(camera.viewportHeight);
       testLevel = new BallLevel(pixelData);
       ballInput ??= new BallInputSource(canvas, camera, () =>
         testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO,
@@ -271,13 +286,6 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     a.click();
     URL.revokeObjectURL(url);
   }
-
-  // A resize mid-test re-derives the ball zoom from the new viewport height,
-  // matching the game. Registered here rather than inside resize() because the
-  // test state it reads is declared below resize()'s first call.
-  window.addEventListener("resize", () => {
-    if (mode === "test" && testController === "ball") camera.zoom = ballZoom(camera.viewportHeight);
-  });
 
   function stopTest(): void {
     mode = "edit";
@@ -375,7 +383,60 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       rebuildInspector();
     }
   });
-  toolRow.append(toolBtns.select, toolBtns.rect, toolBtns.circle, labelWrap("kind", kindSel));
+  const kindWrap = labelWrap("kind", kindSel);
+  toolRow.append(toolBtns.select, toolBtns.rect, toolBtns.circle, kindWrap);
+
+  // Layer row: which layer is being edited (Tab cycles), plus a visibility
+  // toggle each. Visibility is independent of active — a hidden active layer
+  // would be an invisible edit target, so hiding one also moves the edit focus.
+  const layerRow = el("div", "ed-row");
+  bar.appendChild(layerRow);
+  const layerBtns = {} as Record<EdLayer, HTMLButtonElement>;
+  const layerChks = {} as Record<EdLayer, HTMLInputElement>;
+  for (const l of ED_LAYERS) {
+    const b = button(l, () => setLayer(l));
+    b.title = `Edit the ${l} layer (Tab cycles)`;
+    layerBtns[l] = b;
+    const wrap = el("label", "ed-check");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.title = `Show the ${l} layer`;
+    box.addEventListener("change", () => {
+      if (box.checked) {
+        visibleLayers.add(l);
+        return;
+      }
+      // Hiding everything leaves a blank canvas nothing can be clicked on, so
+      // the last visible layer refuses to go.
+      if (visibleLayers.size === 1) {
+        box.checked = true;
+        return;
+      }
+      visibleLayers.delete(l);
+      // Never leave the edit target invisible.
+      if (activeLayer === l) setLayer(ED_LAYERS.find((o) => visibleLayers.has(o))!);
+    });
+    layerChks[l] = box;
+    wrap.appendChild(box);
+    layerRow.append(b, wrap);
+  }
+  layerRow.prepend(document.createTextNode("layer"));
+
+  function setLayer(l: EdLayer): void {
+    if (!visibleLayers.has(l)) {
+      visibleLayers.add(l);
+      layerChks[l].checked = true;
+    }
+    activeLayer = l;
+    // A selection never spans layers, so switching drops it rather than leaving
+    // items selected that can no longer be clicked.
+    selectedIds.clear();
+    for (const [k, b] of Object.entries(layerBtns)) b.classList.toggle("active", k === l);
+    // `kind` is a geometry property; a camera region has none.
+    kindWrap.style.display = l === "geometry" ? "" : "none";
+    rebuildInspector();
+  }
 
   const testRow = el("div", "ed-row");
   bar.appendChild(testRow);
@@ -397,7 +458,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // A named level autosaves, so `*` is a brief in-flight marker rather than a
     // standing warning; an unnamed one keeps it until the first Save names it.
     const state = saveError ? " · SAVE FAILED" : dirty ? " *" : "";
-    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${model.bodies.length} bodies`;
+    const bodies = model.items.filter((i) => i.layer === "geometry").length;
+    const regions = model.items.length - bodies;
+    const cams = regions ? ` · ${regions} cam` : "";
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${bodies} bodies${cams}`;
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
@@ -426,18 +490,36 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     set: (v: number) => void,
     step = 1,
     mixable = false, // can the selected bodies disagree on this value?
-  ): void {
+    // `placeholder` overrides the "mixed" hint (an optional field shows its
+    // default there instead); `onEmpty` makes clearing the field meaningful —
+    // without it a blank input is simply ignored.
+    opts: {
+      placeholder?: string;
+      onEmpty?: () => void;
+      disabled?: boolean;
+      // A control that sits between the label and the number (the lock toggle).
+      prefix?: HTMLElement;
+    } = {},
+  ): HTMLInputElement {
     const wrap = el("label", "ed-field");
     wrap.textContent = label;
+    if (opts.prefix) wrap.appendChild(opts.prefix);
     const input = document.createElement("input");
     input.type = "number";
     input.className = "ed-num";
     input.step = String(step);
     input.value = fmtOrBlank(get());
-    if (mixable) input.placeholder = "mixed";
+    if (opts.placeholder !== undefined) input.placeholder = opts.placeholder;
+    else if (mixable) input.placeholder = "mixed";
+    if (opts.disabled) input.disabled = true;
     // One undo step per editing session (snapshot on focus, before any edit).
     input.addEventListener("focus", () => beginAction());
     input.addEventListener("input", () => {
+      if (input.value.trim() === "" && opts.onEmpty) {
+        opts.onEmpty();
+        markDirty();
+        return;
+      }
       const v = parseFloat(input.value);
       if (Number.isFinite(v)) {
         set(v);
@@ -447,10 +529,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     wrap.appendChild(input);
     parent.appendChild(wrap);
     fields.push({ input, get, set });
+    return input;
   }
 
   // The value every body in the group agrees on, or null if they differ.
-  function shared(bodies: readonly EdBody[], get: (b: EdBody) => number): number | null {
+  function shared(bodies: readonly EdItem[], get: (b: EdItem) => number): number | null {
     const first = get(bodies[0]!);
     return bodies.every((b) => get(b) === first) ? first : null;
   }
@@ -458,13 +541,62 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // Nothing rests on a region or on hook-only scenery, so neither carries a
   // friction. A force area does carry a direction, hence a rot° even when it is
   // a circle (whose rotation is otherwise invisible).
-  const frictionless = (b: EdBody) =>
+  const frictionless = (b: EdItem) =>
     b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
+
+  // A number field bound to one panel and one selection: it shows the value the
+  // group agrees on (blank if they differ) and writes to every member.
+  function groupNum(g: HTMLElement, items: EdItem[]) {
+    return (
+      label: string,
+      get: (b: EdItem) => number,
+      set: (b: EdItem, v: number) => void,
+      step?: number,
+      opts?: { placeholder?: string; onEmpty?: () => void },
+    ): HTMLInputElement =>
+      numField(
+        g,
+        label,
+        () => shared(items, get),
+        (v) => {
+          for (const b of items) set(b, v);
+        },
+        step,
+        items.length > 1,
+        opts,
+      );
+  }
+  type GroupNum = ReturnType<typeof groupNum>;
+
+  // Placement and size. Shared by every layer's panel: whatever layer an item
+  // lives on, it is a placed shape and moves, rotates and resizes the same way.
+  function addTransformFields(num: GroupNum, items: EdItem[]): void {
+    num("x", (b) => b.pos.x * M2PX, (b, v) => (b.pos = b.pos.withX(v * PX)));
+    num("y", (b) => b.pos.y * M2PX, (b, v) => (b.pos = b.pos.withY(v * PX)));
+    // A circle's rotation is invisible, so it only gets the field where it aims
+    // something (a force area's current).
+    if (items.every((b) => b.shape.kind === "rect" || (b.layer === "geometry" && b.kind === "force"))) {
+      num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
+    }
+    // Size is per-shape, so it only appears when the group is all one shape.
+    if (items.every((b) => b.shape.kind === "rect")) {
+      num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "rect") b.shape.w = Math.max(1, v) * PX;
+      });
+      num("h", (b) => (b.shape.kind === "rect" ? b.shape.h * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "rect") b.shape.h = Math.max(1, v) * PX;
+      });
+    } else if (items.every((b) => b.shape.kind === "circle")) {
+      num("radius", (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
+      });
+    }
+  }
 
   // One panel for the whole selection: every property the group has in common
   // is editable and writes to all of them. A lone body is just the N=1 case, so
   // single and multi editing can't drift apart.
-  function buildBodyGroup(bodies: EdBody[]): void {
+  function buildBodyGroup(bodies: EdItem[]): void {
     const g = el("div", "ed-group");
     g.appendChild(
       heading(bodies.length === 1 ? `Body #${bodies[0]!.id}` : `${bodies.length} bodies selected`),
@@ -508,41 +640,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     kw.appendChild(ks);
     g.appendChild(kw);
 
-    const num = (
-      label: string,
-      get: (b: EdBody) => number,
-      set: (b: EdBody, v: number) => void,
-      step?: number,
-    ): void =>
-      numField(
-        g,
-        label,
-        () => shared(bodies, get),
-        (v) => {
-          for (const b of bodies) set(b, v);
-        },
-        step,
-        bodies.length > 1,
-      );
-
-    num("x", (b) => b.pos.x * M2PX, (b, v) => (b.pos = b.pos.withX(v * PX)));
-    num("y", (b) => b.pos.y * M2PX, (b, v) => (b.pos = b.pos.withY(v * PX)));
-    if (bodies.every((b) => b.shape.kind === "rect" || b.kind === "force")) {
-      num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
-    }
-    // Size is per-shape, so it only appears when the group is all one shape.
-    if (bodies.every((b) => b.shape.kind === "rect")) {
-      num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
-        if (b.shape.kind === "rect") b.shape.w = Math.max(1, v) * PX;
-      });
-      num("h", (b) => (b.shape.kind === "rect" ? b.shape.h * M2PX : 0), (b, v) => {
-        if (b.shape.kind === "rect") b.shape.h = Math.max(1, v) * PX;
-      });
-    } else if (bodies.every((b) => b.shape.kind === "circle")) {
-      num("radius", (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
-        if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
-      });
-    }
+    const num = groupNum(g, bodies);
+    addTransformFields(num, bodies);
     if (bodies.every((b) => b.kind === "force")) {
       // Acceleration along rot°, authored in px/s² like every other length.
       // Negative reverses the flow, so it is deliberately not clamped at 0.
@@ -578,6 +677,89 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     inspector.appendChild(g);
   }
 
+  // Camera-layer panel. Same shape as the body panel — group-wide edits, blank
+  // for a value the group disagrees on — over the region's framing properties.
+  function buildCameraGroup(regions: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(
+        regions.length === 1 ? `Camera region #${regions[0]!.id}` : `${regions.length} regions selected`,
+      ),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "While the avatar is inside, the camera offsets, rescales the viewport, or pins to a locked axis. Every change eases in.";
+    g.appendChild(hint);
+
+    const num = groupNum(g, regions);
+    addTransformFields(num, regions);
+
+    num("off x", (b) => b.cam.offset.x * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withX(v * PX)), 10);
+    num("off y", (b) => b.cam.offset.y * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withY(v * PX)), 10);
+    // How much world is on screen: 2 = twice as much (zoomed out).
+    num(
+      "view ×",
+      (b) => b.cam.viewportScale,
+      (b, v) => (b.cam.viewportScale = Math.min(10, Math.max(0.1, v))),
+      0.1,
+    );
+
+    // A locked axis pins the camera at a world coordinate and ignores that
+    // axis's offset; the checkbox seeds the lock from the region's own centre,
+    // which is the sane starting point for "frame this room".
+    const lockField = (label: string, axis: "lockX" | "lockY", centre: (b: EdItem) => number): void => {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      const locked = regions.map((b) => b.cam[axis] !== null);
+      box.checked = locked.every(Boolean);
+      box.indeterminate = !box.checked && locked.some(Boolean);
+      box.addEventListener("change", () => {
+        beginAction();
+        for (const b of regions) b.cam[axis] = box.checked ? centre(b) : null;
+        markDirty();
+        rebuildInspector(); // enables/disables the value field
+      });
+      numField(
+        g,
+        label,
+        // An unlocked axis has no value: NaN never equals itself, so `shared`
+        // reports it as "no agreed value" and the field shows blank.
+        () => shared(regions, (b) => (b.cam[axis] ?? NaN) * M2PX),
+        (v) => {
+          for (const b of regions) b.cam[axis] = v * PX;
+        },
+        10,
+        regions.length > 1,
+        { disabled: !box.checked, placeholder: box.checked ? "mixed" : "follow", prefix: box },
+      );
+    };
+    lockField("lock x", "lockX", (b) => b.pos.x);
+    lockField("lock y", "lockY", (b) => b.pos.y);
+
+    // Blank = the controller's default cross-fade (CAMERA_BLEND_TIME).
+    num(
+      "blend s",
+      (b) => b.cam.blend ?? NaN,
+      (b, v) => (b.cam.blend = Math.max(0, v)),
+      0.1,
+      {
+        placeholder: String(CAMERA_BLEND_TIME),
+        onEmpty: () => {
+          for (const b of regions) b.cam.blend = null;
+        },
+      },
+    );
+    num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
+
+    const row = el("div", "ed-row");
+    row.append(
+      button("Duplicate", () => duplicateSelected()),
+      button("Delete", () => deleteSelected()),
+    );
+    g.appendChild(row);
+    inspector.appendChild(g);
+  }
+
   function rebuildInspector(): void {
     fields.length = 0;
     inspector.innerHTML = "";
@@ -593,11 +775,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (!sel.length) {
       const hint = el("div", "ed-hint");
       hint.textContent =
-        "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
+        activeLayer === "camera"
+          ? "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer."
+          : "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.";
       inspector.appendChild(hint);
       return;
     }
-    buildBodyGroup(sel);
+    // A selection never spans layers (only the active one is pickable), so the
+    // panel is chosen by the layer rather than reconciled across it.
+    if (sel[0]!.layer === "camera") buildCameraGroup(sel);
+    else buildBodyGroup(sel);
   }
 
   // Refresh field values after a canvas drag, without disturbing a focused input.
@@ -611,13 +798,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // --- editing ops ----------------------------------------------------------
   // Detached copies of the given bodies, each with a fresh id and shifted by
   // `offset`. Shapes are mutated in place, so clone them.
-  const cloneBodies = (bodies: readonly EdBody[], offset: Vec2): EdBody[] =>
-    bodies.map((b) => ({ ...b, id: newBodyId(), pos: b.pos.add(offset), shape: { ...b.shape } }));
+  const cloneBodies = (bodies: readonly EdItem[], offset: Vec2): EdItem[] =>
+    bodies.map((b) => ({
+      ...b,
+      id: newBodyId(),
+      pos: b.pos.add(offset),
+      shape: { ...b.shape },
+      cam: { ...b.cam },
+    }));
 
   // Add freshly created bodies to the model and leave them selected, so the
   // group can immediately be dragged or pasted again.
-  function addAndSelect(bodies: EdBody[]): void {
-    model.bodies.push(...bodies);
+  function addAndSelect(bodies: EdItem[]): void {
+    model.items.push(...bodies);
     selectedIds.clear();
     for (const b of bodies) selectedIds.add(b.id);
     markDirty();
@@ -627,7 +820,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function deleteSelected(): void {
     if (!selectedIds.size) return;
     beginAction();
-    model.bodies = model.bodies.filter((b) => !selectedIds.has(b.id));
+    model.items = model.items.filter((b) => !selectedIds.has(b.id));
     selectedIds.clear();
     markDirty();
     rebuildInspector();
@@ -661,15 +854,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // --- clipboard ------------------------------------------------------------
   // Copies detached from the model (so later edits or an undo can't mutate
   // them); paste re-centres the group's bounding box on the cursor.
-  let clipboard: EdBody[] = [];
+  let clipboard: EdItem[] = [];
 
   function copySelection(): void {
     const sel = selectedBodies();
     if (!sel.length) return;
-    clipboard = sel.map((b) => ({ ...b, shape: { ...b.shape } }));
+    clipboard = sel.map((b) => ({ ...b, shape: { ...b.shape }, cam: { ...b.cam } }));
   }
   function pasteClipboard(): void {
     if (!clipboard.length) return;
+    // Pasted items keep the layer they were copied from — a camera region can't
+    // become a body — so the edit focus follows them rather than dropping them
+    // somewhere unclickable.
+    if (clipboard[0]!.layer !== activeLayer) setLayer(clipboard[0]!.layer);
     const box = groupBounds(clipboard);
     let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
     // Land the group's top-left corner on the grid, as a move does.
@@ -843,24 +1040,29 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       drag = h;
       return;
     }
-    // 2. Draw tool: create a new body and drag out its size.
+    // 2. Draw tool: create a new item on the active layer and drag out its size.
     if (tool === "rect" || tool === "circle") {
       beginAction();
       dragPushed = true;
       const start = snapVec(world);
+      const isCamera = activeLayer === "camera";
       const style = {
-        color: DEFAULT_BODY_COLOR,
-        opacity: DEFAULT_BODY_OPACITY,
+        layer: activeLayer,
+        kind: newKind,
+        color: isCamera ? CAMERA_REGION_COLOR : DEFAULT_BODY_COLOR,
+        opacity: isCamera ? CAMERA_REGION_OPACITY : DEFAULT_BODY_OPACITY,
         friction: DEFAULT_SURFACE_FRICTION,
         // Only meaningful on a force area, but a new one needs a non-zero pull
         // or it would draw no arrows and do nothing until the field is touched.
         force: DEFAULT_FORCE_MAGNITUDE * PX,
+        // A fresh region is a no-op until a framing field is authored.
+        cam: defaultCamera(),
       };
-      const body: EdBody =
+      const body: EdItem =
         tool === "rect"
-          ? { id: newBodyId(), kind: newKind, pos: start, rot: 0, shape: { kind: "rect", w: gridStep, h: gridStep }, ...style }
-          : { id: newBodyId(), kind: newKind, pos: start, rot: 0, shape: { kind: "circle", r: gridStep }, ...style };
-      model.bodies.push(body);
+          ? { id: newBodyId(), pos: start, rot: 0, shape: { kind: "rect", w: gridStep, h: gridStep }, ...style }
+          : { id: newBodyId(), pos: start, rot: 0, shape: { kind: "circle", r: gridStep }, ...style };
+      model.items.push(body);
       setSelection([body.id]);
       drag = { mode: "draw", body, start };
       markDirty();
@@ -872,9 +1074,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
-    // 4. Topmost body under the pointer.
-    for (let i = model.bodies.length - 1; i >= 0; i--) {
-      const b = model.bodies[i]!;
+    // 4. Topmost item under the pointer, on the active layer only — a camera
+    // region blankets the geometry it governs, so a click has to mean one or
+    // the other, and the layer switch is what says which.
+    const pickable = layerItems();
+    for (let i = pickable.length - 1; i >= 0; i--) {
+      const b = pickable[i]!;
       if (!pointInBody(b, world)) continue;
       if (e.shiftKey) {
         // Shift+click only edits the selection — no drag, so it can't nudge
@@ -1011,7 +1216,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       const box = marqueeRect();
       if (box) {
         // Touch semantics: anything the band overlaps is caught.
-        const hits = model.bodies
+        const hits = layerItems()
           .filter((b) => bodyIntersectsRect(b, box.min, box.max))
           .map((b) => b.id);
         setSelection(drag.additive ? [...new Set([...selectedIds, ...hits])] : hits);
@@ -1090,6 +1295,14 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       e.preventDefault();
       return;
     }
+    if (e.code === "Tab") {
+      // Cycle the edit layer. Preventing the default keeps focus on the canvas
+      // rather than walking the toolbar.
+      const i = ED_LAYERS.indexOf(activeLayer);
+      setLayer(ED_LAYERS[(i + 1) % ED_LAYERS.length]!);
+      e.preventDefault();
+      return;
+    }
     if (e.code === "Delete" || e.code === "Backspace") {
       deleteSelected();
       e.preventDefault();
@@ -1129,26 +1342,56 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         accumulator -= STEP;
         steps++;
       }
-      camera.position =
-        testLevel instanceof BallLevel
-          ? ballCameraPosition(camera, testLevel.cameraPosition)
-          : testLevel.cameraPosition;
+      // Same camera the game runs (eased follow + the level's camera regions),
+      // so a region authored here is tested exactly as it will play.
+      // Render interpolation factor, as in main.ts: the sim is a fixed 60 Hz,
+      // so bodies are drawn between steps rather than snapping to the newest.
+      const alpha = Math.min(1, accumulator / STEP);
+      testCameraCtl.update(
+        camera,
+        dt,
+        testLevel.cameraRenderPosition(alpha),
+        testLevel.cameraRegions,
+        testController === "ball" ? ballZoom(camera.viewportHeight) : GRAPPLE_ZOOM,
+      );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();
       liveInput?.pollAim();
       if (testLevel instanceof BallLevel) {
-        renderBall(ctx, dpr, cssW, cssH, testLevel, camera, fps, ballInput?.aimPoint() ?? null);
+        renderBall(
+          ctx,
+          dpr,
+          cssW,
+          cssH,
+          testLevel,
+          camera,
+          fps,
+          ballInput?.aimPoint() ?? null,
+          alpha,
+        );
       } else {
-        render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim());
+        render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha);
       }
     } else {
-      drawEditor(ctx, dpr, cssW, cssH, camera, model, selectedIds, marqueeRect());
+      drawEditor(
+        ctx,
+        dpr,
+        cssW,
+        cssH,
+        camera,
+        model,
+        selectedIds,
+        marqueeRect(),
+        activeLayer,
+        visibleLayers,
+      );
     }
     requestAnimationFrame(frame);
   }
 
   // --- boot -----------------------------------------------------------------
   camera.position = model.player.pos;
+  setLayer("geometry");
   rebuildInspector();
   updateTitle();
   refreshLevelList();

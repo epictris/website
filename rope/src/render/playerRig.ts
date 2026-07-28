@@ -348,7 +348,7 @@ function poseKind(player: Player): string {
 // Advance the rig one render frame: compute pose targets and smooth toward
 // them. Called before the rope is drawn so the rope can originate from the
 // right hand's current position.
-export function updatePlayerRig(level: Level): void {
+export function updatePlayerRig(level: Level, alpha = 1): void {
   const player = level.player;
   const p = player.globalPosition;
   const targets = poseTargets(player);
@@ -399,7 +399,10 @@ export function updatePlayerRig(level: Level): void {
       cur === null || cur.distanceTo(target) > SNAP_DISTANCE ? target : cur.lerp(target, SMOOTH);
   }
   prevPos = p;
-  lastP = p;
+  // Limbs are stored as offsets from the player, so interpolating the rig is
+  // interpolating this one anchor point: the whole pose rides the drawn body
+  // instead of snapping to its 60 Hz sim position.
+  lastP = player.renderPosition(alpha);
 }
 
 

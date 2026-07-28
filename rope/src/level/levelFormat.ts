@@ -57,9 +57,53 @@ export interface LevelBodyData {
   force?: number;
 }
 
+// Default framing of a camera region: no offset, unchanged viewport, no lock.
+// A region with all of these is a no-op, so a freshly drawn one changes nothing
+// until a field is authored.
+export const DEFAULT_VIEWPORT_SCALE = 1;
+
+// A camera region: a volume that reshapes the camera while the avatar is inside
+// it. Deliberately NOT a body — it has no collision, nothing wraps it and the
+// sim never sees it, so it lives in its own list rather than gaining a
+// pass-through `BodyKind` that every physics path would have to exclude.
+//
+// The camera's target point is computed per axis, so a region can pin one axis
+// and keep following on the other (a vertical shaft that locks x, a side-on
+// corridor that locks y):
+//
+//   target.x = lockX ?? (avatar.x + offsetX)
+//   target.y = lockY ?? (avatar.y + offsetY)
+//
+// `offsetX/offsetY` therefore only apply to the axes that still follow.
+export interface CameraRegionData {
+  x: number;
+  y: number;
+  rot: number;
+  shape: ShapeData;
+  // Metres (pixels on disk) added to the avatar position on the axes that follow.
+  offsetX?: number;
+  offsetY?: number;
+  // How much world the viewport shows, as a multiple of the controller's base
+  // framing: 2 = twice as much world (zoomed out), 0.5 = half (zoomed in).
+  // Absent = DEFAULT_VIEWPORT_SCALE.
+  viewportScale?: number;
+  // World coordinate to pin the camera to on that axis; absent = follow.
+  lockX?: number;
+  lockY?: number;
+  // Seconds to cross-fade in and out of this region; absent = the controller's
+  // CAMERA_BLEND_TIME.
+  blend?: number;
+  // Overlap tie-break: the containing region with the highest priority wins
+  // (later in the list wins a tie). Absent = 0.
+  priority?: number;
+}
+
 export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
+  // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
+  // follows the avatar, which is what every level authored before this field did.
+  cameraRegions?: CameraRegionData[];
 }
 
 // Scale every length by `factor` (pass PX = 1 / PIXELS_PER_METER on load, or
@@ -67,7 +111,26 @@ export interface LevelData {
 // an acceleration (length/s²) so it scales too; `friction` is dimensionless and
 // passes through. Returns a fresh copy so the caller's data stays pristine.
 export function scaleLevelData(data: LevelData, factor: number): LevelData {
+  // A camera region's positions, extents, offsets and locks are lengths;
+  // viewportScale, blend (seconds) and priority are not.
+  const regions = data.cameraRegions?.map((r) => ({
+    x: r.x * factor,
+    y: r.y * factor,
+    rot: r.rot,
+    shape:
+      r.shape.kind === "rect"
+        ? ({ kind: "rect", w: r.shape.w * factor, h: r.shape.h * factor } as const)
+        : ({ kind: "circle", r: r.shape.r * factor } as const),
+    ...(r.offsetX !== undefined ? { offsetX: r.offsetX * factor } : {}),
+    ...(r.offsetY !== undefined ? { offsetY: r.offsetY * factor } : {}),
+    ...(r.viewportScale !== undefined ? { viewportScale: r.viewportScale } : {}),
+    ...(r.lockX !== undefined ? { lockX: r.lockX * factor } : {}),
+    ...(r.lockY !== undefined ? { lockY: r.lockY * factor } : {}),
+    ...(r.blend !== undefined ? { blend: r.blend } : {}),
+    ...(r.priority !== undefined ? { priority: r.priority } : {}),
+  }));
   return {
+    ...(regions ? { cameraRegions: regions } : {}),
     player: {
       x: data.player.x * factor,
       y: data.player.y * factor,

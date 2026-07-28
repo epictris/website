@@ -96,6 +96,14 @@ export class World {
     }
   }
 
+  // Snapshot every body's transform for render interpolation. Called at the top
+  // of a level's physics step, before anything moves; render-only state, so it
+  // cannot affect the simulation (see CollisionObject2D.captureRenderTransform).
+  captureRenderTransforms(): void {
+    for (const b of this.bodies) b.captureRenderTransform();
+    for (const a of this.areas) a.captureRenderTransform();
+  }
+
   remove(body: CollisionObject2D): void {
     body.removed = true;
     const i = this.bodies.indexOf(body as PhysicsBody2D);

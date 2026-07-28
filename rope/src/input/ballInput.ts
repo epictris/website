@@ -20,9 +20,11 @@
 //
 // The mouse has two aim modes, chosen by the MOTION_AIM setting below:
 //
-//   position (default) — `aimLocal` is the cursor's own position relative to the
-//     ball, unbounded: the reticle is exactly where the pointer is, a drawn
-//     stand-in for the hidden OS cursor and nothing more.
+//   position (default) — the aim point is the cursor's own screen position,
+//     un-projected through the *current* camera every time it is read (see
+//     `currentAimLocal`), unbounded: the reticle is exactly where the pointer
+//     is, a drawn stand-in for the hidden OS cursor and nothing more, and a
+//     camera pan or ease never moves it.
 //   motion — `aimLocal` accumulates each mousemove's delta (metres at the
 //     current zoom) and is held within the chain's reach, and the canvas takes
 //     pointer lock so the cursor stays in the window. Clamping a *position*
@@ -310,10 +312,31 @@ export class BallInputSource implements IInputSource {
   // released stick means "physics owns rotation"). The renderer draws the aim
   // reticle here; sample() encodes null as the ball's own position.
   aimPoint(): Vec2 | null {
-    if (!this.aimLocal) return null;
+    const local = this.currentAimLocal();
+    if (!local) return null;
     if (this.aimSource === "pad" && !this.padAim) return null;
     if (this.aimSource === "touch" && !this.joyAim) return null;
-    return this.aimOrigin().add(this.aimLocal);
+    return this.aimOrigin().add(local);
+  }
+
+  // The aim offset as it stands *now*. Position-mode mouse aim is re-derived
+  // from the cursor's screen position through the CURRENT camera each time it is
+  // read, instead of being frozen at mousemove time: the reticle stands in for
+  // the hidden OS cursor, so it has to stay under the pointer when the camera
+  // pans, eases or changes zoom while the mouse holds still. Frozen as an offset
+  // from the ball, it slid across the screen on its own every time the camera
+  // moved — the cursor appearing to drift with no hand on the mouse.
+  // Motion aim is deliberately exempt: there the offset IS the state, integrated
+  // from the mouse's own travel, and the cursor may not even be on screen
+  // (pointer lock). Stick and joystick aim are ball-relative directions by
+  // definition, so they are exempt too.
+  private currentAimLocal(): Vec2 | null {
+    if (this.aimSource === "mouse" && !MOTION_AIM && this.mouseScreen) {
+      return screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y).sub(
+        this.aimOrigin(),
+      );
+    }
+    return this.aimLocal;
   }
 
   // Refresh the stick-driven aim from the live gamepad state. The mouse and the

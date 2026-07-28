@@ -130,6 +130,19 @@ export class BallPlayer extends RigidBody2D {
     return this.globalPosition.add(this.loopDirection.mul(this.radius + BallPlayer.LOOP_GAP));
   }
 
+  // `loopDirection` / `loopCenter` against the interpolated render transform,
+  // so the loop and the chain leaving it track the drawn ball rather than its
+  // 60 Hz sim pose (render-only — see CollisionObject2D.renderPosition).
+  renderLoopDirection(alpha: number): Vec2 {
+    return new Vec2(0, -1).rotated(this.renderRotation(alpha));
+  }
+
+  renderLoopCenter(alpha: number): Vec2 {
+    return this.renderPosition(alpha).add(
+      this.renderLoopDirection(alpha).mul(this.radius + BallPlayer.LOOP_GAP),
+    );
+  }
+
   resolveInput(input: FrameInput): void {
     // Aim steering: rotate the ball so the loop faces the aim point — also
     // with the chain out (winding it around the ball). An aim point at the

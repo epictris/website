@@ -16,6 +16,7 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Surface } from "../lib/surface";
 import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
+import { activeCameraRegion } from "./cameraController";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -170,8 +171,36 @@ function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
   ctx.stroke();
 }
 
+const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
+
+// Camera regions are invisible in play by design, so a camera that offsets,
+// zooms or pins has no on-screen cause. The overlay draws every region's volume
+// and fills the one currently in force, which is the whole diagnosis.
+function drawCameraRegions(ctx: CanvasRenderingContext2D, level: Level): void {
+  const active = activeCameraRegion(level.cameraRegions, level.cameraPosition);
+  for (const r of level.cameraRegions) {
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(r.rot);
+    ctx.beginPath();
+    if (r.shape.kind === "circle") ctx.arc(0, 0, r.shape.r, 0, Math.PI * 2);
+    else ctx.rect(-r.shape.w / 2, -r.shape.h / 2, r.shape.w, r.shape.h);
+    ctx.restore();
+    if (r === active) {
+      ctx.fillStyle = "rgba(199,146,234,0.12)";
+      ctx.fill();
+    }
+    ctx.strokeStyle = CAMERA_REGION;
+    ctx.lineWidth = 1.5 * PX;
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
 export function drawDebugOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
   drawLedgeOverlay(ctx, level);
   drawContactNormals(ctx, level);
   drawPlayerCollider(ctx, level);
+  drawCameraRegions(ctx, level);
 }

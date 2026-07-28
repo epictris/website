@@ -6,7 +6,8 @@ import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { render, renderBall } from "./render/renderer";
-import { ballCameraPosition, ballZoom, type Camera } from "./render/camera";
+import { ballZoom, GRAPPLE_ZOOM, type Camera } from "./render/camera";
+import { CameraController } from "./render/cameraController";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import { digest, digestBall, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
@@ -20,10 +21,14 @@ const ctx = canvas.getContext("2d")!;
 
 const camera: Camera = {
   position: Vec2.ZERO,
-  zoom: 2,
+  zoom: GRAPPLE_ZOOM,
   viewportWidth: window.innerWidth,
   viewportHeight: window.innerHeight,
 };
+// The camera is driven by the controller (eased follow + camera regions);
+// `camera.zoom` is its output, so the framing scale lives here instead.
+const cameraCtl = new CameraController();
+let baseZoom = GRAPPLE_ZOOM;
 
 let cssWidth = window.innerWidth;
 let cssHeight = window.innerHeight;
@@ -37,7 +42,8 @@ function resize(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   camera.viewportWidth = cssWidth;
   camera.viewportHeight = cssHeight;
-  if (isBall) camera.zoom = ballZoom(cssHeight);
+  // The ball's base zoom is height-driven, so a resize re-derives it.
+  if (isBall) baseZoom = ballZoom(cssHeight);
 }
 
 // Level selection via ?level=NAME (defaults to DEFAULT_LEVEL).
@@ -59,6 +65,8 @@ let level = makeLevel();
 function reset(): void {
   level = makeLevel();
   level.onReset = reset;
+  // Easing in from wherever the camera died would be a swoop across the level.
+  cameraCtl.snap();
   recFrames.length = 0;
   recDigests.length = 0;
 }
@@ -127,10 +135,19 @@ function frame(now: number): void {
     accumulator -= STEP;
     steps++;
   }
-  camera.position =
-    level instanceof BallLevel
-      ? ballCameraPosition(camera, level.cameraPosition)
-      : level.cameraPosition;
+  // Render interpolation: how far past the last completed physics step this
+  // frame lands. The sim runs at a fixed 60 Hz; drawing its raw state on a
+  // faster display repeats and skips frames, which reads as jitter. Clamped
+  // because a frame that hit MAX_STEPS_PER_FRAME leaves the accumulator over a
+  // full step, and drawing past the current state would be extrapolation.
+  const alpha = Math.min(1, accumulator / STEP);
+
+  // Camera: eased follow of the avatar, reshaped by the level's camera regions.
+  // Driven by the render dt, so it is frame-rate independent and outside the
+  // deterministic fixed step. The default framing centres the avatar; shifting
+  // it is a camera region's job (offsetX/offsetY), not a per-controller rule.
+  // It follows the *interpolated* avatar, so the two never disagree on screen.
+  cameraCtl.update(camera, dt, level.cameraRenderPosition(alpha), level.cameraRegions, baseZoom);
 
   // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
   // physics step, so the reticle/crosshair moves at display rate on a monitor
@@ -139,9 +156,20 @@ function frame(now: number): void {
 
   const dpr = window.devicePixelRatio || 1;
   if (level instanceof BallLevel) {
-    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps, ballInput!.aimPoint());
+    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps, ballInput!.aimPoint(), alpha);
   } else {
-    render(ctx, dpr, cssWidth, cssHeight, level, camera, fps, showDebug, liveInput!.gamepadAim());
+    render(
+      ctx,
+      dpr,
+      cssWidth,
+      cssHeight,
+      level,
+      camera,
+      fps,
+      showDebug,
+      liveInput!.gamepadAim(),
+      alpha,
+    );
   }
 
   requestAnimationFrame(frame);

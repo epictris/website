@@ -101,6 +101,55 @@ export abstract class CollisionObject2D {
 
   // Removed from the world tree (Godot GetParent().RemoveChild(this)).
   removed = false;
+
+  // --- render interpolation -------------------------------------------------
+  // The transform as it was at the start of the current physics step, so the
+  // renderer can draw between two sim states instead of snapping to the newest
+  // one. Without it a body moves only 60 times a second while the display
+  // refreshes at 120 or 144 Hz, and the repeated/skipped frames read as jitter.
+  //
+  // These fields are **render-only**: the sim never reads them, so capturing
+  // and interpolating them cannot change a recorded run.
+  private prevPosition_r: Vec2 = Vec2.ZERO;
+  private prevRotation_r = 0;
+  // False until the first capture — a body spawned mid-frame has no previous
+  // transform, and interpolating from the origin would fling it across the
+  // level for one frame. It simply draws at its current transform instead.
+  private hasPrev_r = false;
+
+  // Called by World once per physics step, before anything moves.
+  captureRenderTransform(): void {
+    this.prevPosition_r = this.globalPosition;
+    this.prevRotation_r = this.globalRotation;
+    this.hasPrev_r = true;
+  }
+
+  // Position to draw at: `alpha` is the fraction of a step elapsed since the
+  // last one (leftover accumulator / step), so 0 is the previous sim state and
+  // 1 the current one.
+  renderPosition(alpha: number): Vec2 {
+    if (!this.hasPrev_r) return this.globalPosition;
+    return this.prevPosition_r.lerp(this.globalPosition, alpha);
+  }
+
+  // Rotation to draw at, taken the short way round so a body crossing ±π
+  // interpolates through the wrap instead of unwinding a full turn.
+  renderRotation(alpha: number): number {
+    if (!this.hasPrev_r) return this.globalRotation;
+    return this.prevRotation_r + wrapAngle(this.globalRotation - this.prevRotation_r) * alpha;
+  }
+
+  // The primary shape at the interpolated transform — what the renderer paths
+  // instead of the live `getShape()`.
+  renderShape(alpha: number): ShapeTransform {
+    const s = this.getShape();
+    const rot = this.renderRotation(alpha);
+    return {
+      shape: s.shape,
+      globalPosition: this.renderPosition(alpha).add(s.localOffset.rotated(rot)),
+      globalRotation: rot,
+    };
+  }
 }
 
 export abstract class PhysicsBody2D extends CollisionObject2D {
