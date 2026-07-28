@@ -8,11 +8,6 @@ evenly spaced segments.
 
 ## Stack
 
-- **Language**: TypeScript, no framework
-- **Bundler / dev server**: Vite
-- **Runtime**: Bun (dev, build, headless tooling)
-- **Rendering**: a single `<canvas>` in the terminal-ish palette (matches tris.sh)
-
 There is **no game engine dependency**. Godot's physics (CharacterBody2D `MoveAndSlide`,
 RigidBody2D dynamics, `PhysicsServer2D` raycasts/shape queries) was reimplemented from
 scratch in `src/engine/` so the simulation is self-contained and deterministic.
@@ -29,20 +24,6 @@ To rescale how large the world appears on screen, change `camera.zoom`; the phys
 
 When adding a constant, classify its dimension: lengths/velocities/accelerations scale by `PX` (Coulomb frictions here are per-frame decelerations - **length**, not coefficients); dimensionless coefficients, gains (1/s), angles, and frame counts do not.
 `levelData.ts` stays authored in Godot pixels (converted at load); `playtests/*.json` world-coordinate/speed fields are in metres.
-
-## Layout
-
-| Path | Purpose |
-|------|---------|
-| `src/engine/` | Godot substitute: `Vec2`, `Mathf`, shapes, body hierarchy (`Static/Rigid/Character/Area`), `World` (swept collision, raycasts, rigidbody integration), `Debug` draw buffer |
-| `src/lib/` | Pure geometry/rope math: `Segment`, `Intersections`, `Catenary`, `RopeGeneration`, `NodeDetachment`, `PathObject`, `RopeContact`, `ShapeGeometry`, `Calc`, `Surface`, `Slide` |
-| `src/classes/` | `Rope` (wrap-point PBD solver), `SlackSimulation`, `Player`, `Hook`, `CannonBall`, `KillZone`, and `states/` (the player state machine) |
-| `src/input/` | `FrameInput`, `LiveInputSource` (keyboard/mouse) |
-| `src/level/` | `Level` (world + one physics frame), `levelData.ts` (auto-generated geometry), `registry.ts` |
-| `src/render/` | Canvas `renderer`, `camera` |
-| `src/sim/` | Deterministic tooling: `trace` (digests, invariants, input serialization), `playtest`, `replay` |
-| `src/tools/cli.ts` | Headless CLI: `play`, `replay`, `selftest` |
-| `scripts/extract-level.ts` | One-off: regenerates `levelData.ts` from a Godot `.tscn` |
 
 ## Determinism & correspondence to the C# source
 

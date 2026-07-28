@@ -169,14 +169,6 @@ toward it — that's what makes the two jaws of a corner face each other.
 | `JAW_DEPTH` | Distance of the throat centre along the corner diagonal from the corner. | Deeper funnel |
 | `JAW_THROAT` | Throat width between the two jaw tips. | Easier pot |
 
-## Rebuild
-
-```sh
-cd client
-bun run build          # -> client/dist
-# or: bun run dev       # Vite HMR
-```
-
 ## Visual-tune the geometry
 
 `render.ts` `drawDebugOverlay` overlays the live collision geometry on the real
