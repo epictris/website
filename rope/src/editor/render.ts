@@ -308,7 +308,7 @@ export function drawEditor(
   cam: Camera,
   model: EdModel,
   selectedIds: ReadonlySet<number>,
-  marquee: { min: Vec2; max: Vec2 } | null = null,
+  marquee: { min: Vec2; max: Vec2; window: boolean } | null = null,
   visibleLayers: ReadonlySet<EdLayer> = new Set<EdLayer>(ED_LAYERS),
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -534,6 +534,10 @@ export function drawEditor(
   }
 
   // Rubber-band box, in screen space so its outline stays one pixel at any zoom.
+  // The two selection modes have to be told apart *while dragging*, since which
+  // one is live depends on a drag direction the box itself cannot show: a solid
+  // edge is a window (encloses), a dashed one a crossing (touches) — the CAD
+  // convention, so it reads the same way as in Fusion 360 or AutoCAD.
   if (marquee) {
     const a = worldToScreen(cam, marquee.min);
     const b = worldToScreen(cam, marquee.max);
@@ -541,7 +545,7 @@ export function drawEditor(
     ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.strokeStyle = SELECT;
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
+    if (!marquee.window) ctx.setLineDash([4, 3]);
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.setLineDash([]);
   }

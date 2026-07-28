@@ -390,6 +390,34 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
   return true;
 }
 
+// Is an item *wholly* inside an axis-aligned world rect? The window half of the
+// CAD-style rubber band (dragged left→right); `bodyIntersectsRect` is the
+// crossing half (dragged right→left).
+export function bodyWithinRect(item: EdItem, min: Vec2, max: Vec2): boolean {
+  if (item.shape.kind === "circle") {
+    const r = item.shape.r;
+    return (
+      item.pos.x - r >= min.x &&
+      item.pos.x + r <= max.x &&
+      item.pos.y - r >= min.y &&
+      item.pos.y + r <= max.y
+    );
+  }
+  // A box is the convex hull of its corners, so all four corners inside is
+  // exactly "the whole box is inside" — rotation included.
+  const h = halfExtents(item);
+  const corners = [
+    new Vec2(-h.x, -h.y),
+    new Vec2(h.x, -h.y),
+    new Vec2(h.x, h.y),
+    new Vec2(-h.x, h.y),
+  ];
+  return corners.every((c) => {
+    const w = toWorld(item, c);
+    return w.x >= min.x && w.x <= max.x && w.y >= min.y && w.y <= max.y;
+  });
+}
+
 // A point in the item's local (unrotated) frame, origin at the item centre.
 export function toLocal(item: EdItem, world: Vec2): Vec2 {
   return world.sub(item.pos).rotated(-item.rot);

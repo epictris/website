@@ -20,6 +20,7 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
+  bodyWithinRect,
   defaultCamera,
   defaultNote,
   ED_LAYERS,
@@ -73,7 +74,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
   background:
     "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out. Tab switches layer.",
   geometry:
-    "No selection. Click a body, drag to rubber-band select, or pick +Rect / +Circle and drag on the canvas.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer.",
   notes:
@@ -144,13 +145,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const selectedIds = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
-  // Layers. Only the active one is hit-testable and drawable-into (the others
-  // render dimmed as context), so clicking a camera region can never grab the
-  // wall behind it — and the two overlap everywhere by nature. A selection
-  // therefore never spans layers, which is what lets the inspector show one
-  // layer's properties without a mixed-layer case.
+  // Layers. Every *visible* layer is hit-testable, so a selection may span them
+  // and the inspector shows one panel per layer it contains. The active layer is
+  // what new items are drawn onto, and it breaks the pick: a camera region
+  // blankets the geometry it governs, so a click that could mean either takes
+  // the active layer's item. Hidden layers are excluded from picking entirely —
+  // an item that cannot be seen must not be selectable.
   let activeLayer: EdLayer = "geometry";
   const visibleLayers = new Set<EdLayer>(ED_LAYERS);
+  // Locked layers still draw — that is the point, they are the reference you are
+  // working against — but nothing on them can be picked, drawn or edited. Lock
+  // and visibility are independent: one keeps a layer out of the way, the other
+  // keeps it on screen and out of harm's way.
+  const lockedLayers = new Set<EdLayer>();
   let snapOn = true;
   const gridStep = 0.1; // snap spacing: fixed 10 cm (matches the backdrop minor grid)
   let currentName: string | null = null;
@@ -214,8 +221,24 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   // Model order, so a group keeps its z-order through copy/duplicate.
   const selectedBodies = () => model.items.filter((b) => selectedIds.has(b.id));
-  // The items a click, a rubber-band or a paste may touch: the active layer.
-  const layerItems = () => model.items.filter((b) => b.layer === activeLayer);
+  // The items a click or a rubber-band may touch: everything on a layer that is
+  // both visible and unlocked.
+  const pickableItems = () =>
+    model.items.filter((b) => visibleLayers.has(b.layer) && !lockedLayers.has(b.layer));
+  // The same set in click order, bottom-first (callers walk it backwards to take
+  // the topmost hit): draw order — layer, then model order — with the active
+  // layer lifted above the rest, so a camera region drawn over a wall does not
+  // swallow the click while geometry is the layer being edited.
+  const pickOrder = (): EdItem[] =>
+    pickableItems()
+      .map((b, i) => ({ b, i }))
+      .sort(
+        (p, q) =>
+          Number(p.b.layer === activeLayer) - Number(q.b.layer === activeLayer) ||
+          ED_LAYERS.indexOf(p.b.layer) - ED_LAYERS.indexOf(q.b.layer) ||
+          p.i - q.i,
+      )
+      .map((p) => p.b);
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   function setSelection(ids: readonly number[]): void {
     if (ids.length === selectedIds.size && ids.every((id) => selectedIds.has(id))) return;
@@ -271,9 +294,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const recFrames: SerializedFrame[] = [];
   const recDigests: Digest[] = [];
 
-  function startTest(controller: "grapple" | "ball"): void {
+  // `spawn` (world metres) overrides the level's own spawn marker for this run
+  // only — the model is untouched, so a spot-check from the cursor never edits
+  // the level. It is baked into the data the test level is built from, so a
+  // reset (and the exported bundle) respawns at the same place.
+  function startTest(controller: "grapple" | "ball", spawn?: Vec2): void {
     if (mode === "test") stopTest();
     const pixelData = modelToDisk(model);
+    if (spawn) {
+      pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
+    }
     savedCam = { pos: camera.position, zoom: camera.zoom };
     testController = controller;
     testData = pixelData;
@@ -294,7 +324,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         testLevel instanceof Level ? testLevel.player.globalPosition : Vec2.ZERO,
       );
     }
-    testLevel.onReset = () => startTest(controller);
+    testLevel.onReset = () => startTest(controller, spawn);
     accumulator = 0;
     lastNow = -1;
     mode = "test";
@@ -445,19 +475,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   layerList.appendChild(layerHeading);
   const layerBtns = {} as Record<EdLayer, HTMLButtonElement>;
   const layerEyes = {} as Record<EdLayer, HTMLButtonElement>;
+  const layerLocks = {} as Record<EdLayer, HTMLButtonElement>;
   for (const l of ED_LAYERS) {
     const row = el("div", "ed-layer-row");
     const eye = document.createElement("button");
     eye.className = "ed-eye";
     eye.addEventListener("click", () => setLayerVisible(l, !visibleLayers.has(l)));
     layerEyes[l] = eye;
+    const lock = document.createElement("button");
+    lock.className = "ed-eye ed-lock";
+    lock.addEventListener("click", () => setLayerLocked(l, !lockedLayers.has(l)));
+    layerLocks[l] = lock;
     const b = button(l, () => setLayer(l));
     b.classList.add("ed-layer-btn");
     b.title = `Edit the ${l} layer (Tab cycles)`;
     layerBtns[l] = b;
-    row.append(eye, b);
+    row.append(eye, lock, b);
     layerList.appendChild(row);
     setLayerVisible(l, true); // paints the icon and its tooltip
+    setLayerLocked(l, false); // ditto
   }
 
   // Show or hide a layer. Hiding everything would leave a blank canvas nothing
@@ -472,35 +508,71 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     eye.classList.toggle("off", !visible);
     eye.title = `${visible ? "Hide" : "Show"} the ${l} layer`;
     eye.setAttribute("aria-pressed", String(visible));
+    if (!visible) {
+      // Nothing hidden stays selected: it can no longer be seen or clicked, but
+      // a nudge, an inspector edit or a Delete would still reach it.
+      let dropped = false;
+      for (const b of model.items) {
+        if (b.layer === l && selectedIds.delete(b.id)) dropped = true;
+      }
+      if (dropped) rebuildInspector();
+    }
     if (!visible && activeLayer === l) {
       setLayer(ED_LAYERS.find((o) => visibleLayers.has(o))!);
     }
   }
 
+  // Lock or unlock a layer. A locked layer keeps drawing and keeps its place in
+  // the stack; what it loses is every edit path — picking, drawing into it, and
+  // any selection it was part of, since a selected item on it would still be
+  // reached by a nudge, an inspector field or a Delete.
+  function setLayerLocked(l: EdLayer, locked: boolean): void {
+    if (locked) lockedLayers.add(l);
+    else lockedLayers.delete(l);
+    const lock = layerLocks[l];
+    lock.innerHTML = lockIcon(locked);
+    lock.classList.toggle("on", locked);
+    lock.title = `${locked ? "Unlock" : "Lock"} the ${l} layer`;
+    lock.setAttribute("aria-pressed", String(locked));
+    if (locked) {
+      let dropped = false;
+      for (const b of model.items) {
+        if (b.layer === l && selectedIds.delete(b.id)) dropped = true;
+      }
+      if (dropped) rebuildInspector();
+    }
+    // The toolbar has to stop offering what the layer no longer accepts.
+    if (l === activeLayer) refreshToolButtons();
+  }
+
+  // Which draw tools the toolbar offers: the active layer's own set, and none at
+  // all while it is locked. An armed tool the new state cannot draw falls back to
+  // Select rather than lingering as a lit dead button.
+  function refreshToolButtons(): void {
+    const tools: Tool[] = lockedLayers.has(activeLayer) ? ["select"] : LAYER_TOOLS[activeLayer];
+    for (const [k, b] of Object.entries(toolBtns)) {
+      b.style.display = tools.includes(k as Tool) ? "" : "none";
+    }
+    if (!tools.includes(tool)) setTool("select");
+  }
+
   function setLayer(l: EdLayer): void {
     if (!visibleLayers.has(l)) setLayerVisible(l, true);
     activeLayer = l;
-    // A selection never spans layers, so switching drops it rather than leaving
-    // items selected that can no longer be clicked.
-    selectedIds.clear();
+    // The selection survives: every visible layer is pickable, so items on the
+    // outgoing layer are still selectable and still shown by the inspector.
     for (const [k, b] of Object.entries(layerBtns)) b.classList.toggle("active", k === l);
     // `kind` is a geometry property; a camera region and a note have none.
     kindWrap.style.display = l === "geometry" ? "" : "none";
-    // Only this layer's draw tools are offered, and a tool the new layer cannot
-    // draw falls back to Select rather than lingering as an armed dead button.
-    for (const [k, b] of Object.entries(toolBtns)) {
-      b.style.display = LAYER_TOOLS[l].includes(k as Tool) ? "" : "none";
-    }
-    if (!LAYER_TOOLS[l].includes(tool)) setTool("select");
+    refreshToolButtons();
     rebuildInspector();
   }
 
   const testRow = el("div", "ed-row");
   bar.appendChild(testRow);
-  testRow.append(
-    button("▶ Test Grapple", () => startTest("grapple")),
-    button("▶ Test Ball", () => startTest("ball")),
-  );
+  const btnTestBall = button("▶ Test Ball", () => startTest("ball"));
+  btnTestBall.title = "Test from the level's spawn (B tests from the cursor)";
+  testRow.append(button("▶ Test Grapple", () => startTest("grapple")), btnTestBall);
   const snapChk = checkbox("snap 10cm", snapOn, (v) => (snapOn = v));
   testRow.append(snapChk);
 
@@ -533,6 +605,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
+    // A locked layer accepts no new geometry either, so its draw tools cannot be
+    // armed by the keyboard shortcuts any more than by the (hidden) buttons.
+    if (t !== "select" && lockedLayers.has(activeLayer)) return;
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -684,8 +759,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
 
   // Every layer's panel ends the same way: the two actions that apply to any
-  // selection, whatever it is made of.
+  // selection, whatever it is made of. Duplicate and Delete act on the *whole*
+  // selection, so a cross-layer one carries a single shared row above the
+  // per-layer panels instead of one per panel that would each claim to be about
+  // its own layer while reaching outside it.
+  let selectionSpansLayers = false;
   function addActionsRow(g: HTMLElement): void {
+    if (selectionSpansLayers) return;
+    appendActions(g);
+  }
+  function appendActions(g: HTMLElement): void {
     const row = el("div", "ed-row");
     row.append(
       button("Duplicate", () => duplicateSelected()),
@@ -705,7 +788,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (bodies.length > 1) {
       const hint = el("div", "ed-hint");
       hint.textContent =
-        "Edits apply to all of them. Shift+click adds or removes; drag empty space to rubber-band.";
+        "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches.";
       g.appendChild(hint);
     }
 
@@ -863,6 +946,17 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // text note.
   let noteText: HTMLTextAreaElement | null = null;
 
+  // Put the caret in that textarea, at the end of whatever is already written.
+  // It is scrolled into view because the inspector is a scrolling stack of
+  // per-layer panels, so the note's panel need not be on screen.
+  function focusNoteText(): void {
+    if (!noteText) return;
+    noteText.scrollIntoView({ block: "nearest" });
+    noteText.focus();
+    const end = noteText.value.length;
+    noteText.setSelectionRange(end, end);
+  }
+
   // Notes-layer panel. A note's whole point is its prose, so the text box leads;
   // everything below it is placement.
   function buildNotesGroup(notes: EdItem[]): void {
@@ -937,16 +1031,36 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const sel = selectedBodies();
     if (!sel.length) {
       const hint = el("div", "ed-hint");
-      hint.textContent = EMPTY_HINTS[activeLayer];
+      // A locked layer explains itself first: with nothing pickable on it, the
+      // usual "click a body" hint would read as the editor being broken.
+      hint.textContent = lockedLayers.has(activeLayer)
+        ? `The ${activeLayer} layer is locked: it still draws, but nothing on it can be picked, drawn or edited. Use the padlock in the layer list to unlock it.`
+        : EMPTY_HINTS[activeLayer];
       inspector.appendChild(hint);
       return;
     }
-    // A selection never spans layers (only the active one is pickable), so the
-    // panel is chosen by the layer rather than reconciled across it.
-    if (sel[0]!.layer === "background") buildBackgroundGroup(sel);
-    else if (sel[0]!.layer === "camera") buildCameraGroup(sel);
-    else if (sel[0]!.layer === "notes") buildNotesGroup(sel);
-    else buildBodyGroup(sel);
+    // A selection may span layers, and their properties have nothing in common
+    // (a note has no kind, a camera region no fill), so it gets one panel per
+    // layer rather than a reconciled mixed one. Panels come in layer order, so
+    // the same selection always reads the same way down the inspector.
+    const layers = ED_LAYERS.filter((l) => sel.some((b) => b.layer === l));
+    selectionSpansLayers = layers.length > 1;
+    if (selectionSpansLayers) {
+      const g = el("div", "ed-group");
+      g.appendChild(heading(`${sel.length} items across ${layers.length} layers`));
+      const hint = el("div", "ed-hint");
+      hint.textContent = `${layers.join(", ")} — each layer's properties are edited in its own panel below. Duplicate and Delete apply to all of them.`;
+      g.appendChild(hint);
+      appendActions(g);
+      inspector.appendChild(g);
+    }
+    for (const l of layers) {
+      const items = sel.filter((b) => b.layer === l);
+      if (l === "background") buildBackgroundGroup(items);
+      else if (l === "camera") buildCameraGroup(items);
+      else if (l === "notes") buildNotesGroup(items);
+      else buildBodyGroup(items);
+    }
   }
 
   // Refresh field values after a canvas drag, without disturbing a focused input.
@@ -1081,9 +1195,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function pasteClipboard(): void {
     if (!clipboard.length) return;
     // Pasted items keep the layer they were copied from — a camera region can't
-    // become a body — so the edit focus follows them rather than dropping them
-    // somewhere unclickable.
-    if (clipboard[0]!.layer !== activeLayer) setLayer(clipboard[0]!.layer);
+    // become a body — so a paste reveals and unlocks any layer it lands on
+    // rather than dropping items where they can be neither seen nor clicked.
+    for (const l of new Set(clipboard.map((i) => i.layer))) {
+      setLayerVisible(l, true);
+      setLayerLocked(l, false);
+    }
     const box = groupBounds(clipboard);
     let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
     // Land the group's top-left corner on the grid, as a move does.
@@ -1282,7 +1399,14 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       rebuildInspector();
       // A text note is placed to be written in, so the caret goes there rather
       // than making the first act after every note a trip to the inspector.
-      noteText?.focus();
+      // The default mousedown action moves focus to the document *after* this
+      // listener, which would blur the textarea the moment it was focused, so a
+      // note placement is the one canvas press that suppresses it. Every other
+      // press keeps the default, since clicking the canvas has to blur whatever
+      // inspector field was being typed into — otherwise the keyboard shortcuts
+      // would stay swallowed by it.
+      if (noteText) e.preventDefault();
+      focusNoteText();
       return;
     }
     // 3. Player spawn marker (small target — needs pointer within its radius).
@@ -1290,10 +1414,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
-    // 4. Topmost item under the pointer, on the active layer only — a camera
-    // region blankets the geometry it governs, so a click has to mean one or
-    // the other, and the layer switch is what says which.
-    const pickable = layerItems();
+    // 4. Topmost item under the pointer, over every visible layer — the active
+    // layer wins a tie (see `pickOrder`), so the layer switch still says which
+    // of two stacked items a click means.
+    const pickable = pickOrder();
     for (let i = pickable.length - 1; i >= 0; i--) {
       const b = pickable[i]!;
       if (!pointInBody(b, world)) continue;
@@ -1315,6 +1439,26 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // 5. Empty space: rubber-band select. A click that never moves deselects
     // (shift keeps the selection, so a miss doesn't undo the picking so far).
     drag = { mode: "marquee", start: world, current: world, additive: e.shiftKey };
+  });
+
+  // Double-clicking a text note opens its prose for editing — the gesture every
+  // other canvas editor uses for "edit this thing's content". The text itself
+  // still lives in the inspector's textarea (one editor for it, not two that
+  // could disagree), so this selects the note alone and drops the caret in.
+  canvas.addEventListener("dblclick", (e) => {
+    if (mode !== "edit" || e.button !== 0 || tool !== "select") return;
+    const world = screenToWorld(camera, pointerScreen(e).x, pointerScreen(e).y);
+    const pickable = pickOrder();
+    for (let i = pickable.length - 1; i >= 0; i--) {
+      const b = pickable[i]!;
+      if (!pointInBody(b, world)) continue;
+      // Only the topmost item under the pointer is considered: a note behind
+      // something else is not what was double-clicked.
+      if (b.layer !== "notes" || b.note.kind !== "text") return;
+      setSelection([b.id]);
+      focusNoteText();
+      return;
+    }
   });
 
   window.addEventListener("mousemove", (e) => {
@@ -1431,23 +1575,29 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   // The in-progress rubber-band, as a sorted world-space box (null unless one is
   // actually being dragged out — a click that never moves draws nothing).
-  function marqueeRect(): { min: Vec2; max: Vec2 } | null {
+  // The rubber band, plus which of the two CAD selection modes the drag
+  // direction asks for: left→right is a **window** (only what it fully encloses),
+  // right→left a **crossing** (anything it touches). Same convention as Fusion
+  // 360 and AutoCAD. A drag with no horizontal travel counts as a window, so the
+  // stricter mode is the one a degenerate drag falls into.
+  function marqueeBand(): { min: Vec2; max: Vec2; window: boolean } | null {
     if (!drag || drag.mode !== "marquee" || !dragMoved) return null;
     const { start, current } = drag;
     return {
       min: new Vec2(Math.min(start.x, current.x), Math.min(start.y, current.y)),
       max: new Vec2(Math.max(start.x, current.x), Math.max(start.y, current.y)),
+      window: current.x >= start.x,
     };
   }
 
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
     if (drag.mode === "marquee") {
-      const box = marqueeRect();
+      const box = marqueeBand();
       if (box) {
-        // Touch semantics: anything the band overlaps is caught.
-        const hits = layerItems()
-          .filter((b) => bodyIntersectsRect(b, box.min, box.max))
+        const caught = box.window ? bodyWithinRect : bodyIntersectsRect;
+        const hits = pickableItems()
+          .filter((b) => caught(b, box.min, box.max))
           .map((b) => b.id);
         setSelection(drag.additive ? [...new Set([...selectedIds, ...hits])] : hits);
       } else if (!drag.additive) {
@@ -1537,6 +1687,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (e.code === "Delete" || e.code === "Backspace") {
       deleteSelected();
       e.preventDefault();
+    } else if (e.code === "KeyB") {
+      // Spot-check a spot: test the ball from wherever the cursor is, without
+      // moving the level's own spawn marker.
+      startTest("ball", pointerWorld());
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
@@ -1614,7 +1768,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         camera,
         model,
         selectedIds,
-        marqueeRect(),
+        marqueeBand(),
         visibleLayers,
       );
     }
@@ -1675,6 +1829,20 @@ function eyeIcon(open: boolean): string {
       );
 }
 
+// Padlock for the layer list, drawn the same way as the eye (inline SVG on
+// `currentColor`, so it takes the toolbar's colour and stays crisp at any DPI).
+// The open state lifts the shackle off the case and hangs it to one side — an
+// upright shackle that merely failed to meet the case reads as a rendering
+// glitch rather than as "open".
+function lockIcon(locked: boolean): string {
+  const svg = (body: string) =>
+    `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  const body = '<rect x="2.8" y="7" width="9" height="6.2" rx="1.2"/>';
+  return locked
+    ? svg(`${body}<path d="M5 7V4.9a2.3 2.3 0 0 1 4.6 0V7"/>`)
+    : svg(`${body}<path d="M9.6 7V4.9a2.3 2.3 0 0 1 4.6 0"/>`);
+}
+
 function heading(text: string): HTMLElement {
   const h = el("div", "ed-heading");
   h.textContent = text;
@@ -1730,10 +1898,19 @@ function injectStyles(): void {
     border: 1px solid transparent; border-radius: 2px; cursor: pointer; }
   .ed-eye:hover { background: #2a2f3d; border-color: #3c445c; }
   .ed-eye.off { color: #5b6172; }
+  /* The padlock's resting state is *unlocked*, so it is the dim one: a row of
+     lit padlocks would read as "everything is locked". Locked is amber rather
+     than the accent blue, which the layer list already spends on "active". */
+  .ed-lock { color: #5b6172; }
+  .ed-lock.on { color: #e5c07b; }
   .ed-title { color: #65bddb; padding-top: 2px; }
+  /* A cross-layer selection stacks one panel per layer, so the inspector can
+     outgrow the viewport — it scrolls rather than running off the bottom. */
   .ed-inspector { position: absolute; top: 8px; right: 8px; width: 190px;
     background: rgba(31,36,48,0.92); border: 1px solid #313244; padding: 8px;
-    border-radius: 2px; display: flex; flex-direction: column; gap: 10px; }
+    border-radius: 2px; display: flex; flex-direction: column; gap: 10px;
+    max-height: calc(100vh - 16px); overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: #3c445c transparent; }
   .ed-group { display: flex; flex-direction: column; gap: 4px; }
   .ed-heading { color: #65bddb; border-bottom: 1px solid #313244; padding-bottom: 2px; margin-bottom: 2px; }
   .ed-field { display: flex; justify-content: space-between; align-items: center; color: #9aa0ac; }

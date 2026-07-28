@@ -290,7 +290,10 @@ stable id per body) and manipulates it with the mouse: pan (**middle**-button dr
 right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies.
 Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and dragging any member moves the whole group (the grabbed body leads the snap; the rest keep their offsets).
-Dragging from empty space rubber-bands a **rectangle selection** - anything the band touches is caught (a rotated box is tested with SAT, a circle by its nearest point), so it need not enclose a body; **Shift** unions the hits into the current selection instead of replacing it, and a click that never moves clears it.
+Dragging from empty space rubber-bands a **rectangle selection**, and the drag *direction* picks between the two CAD selection modes, as in Fusion 360 and AutoCAD: left→right is a **window** (only what the band fully encloses - every rotated corner inside, a circle by its extremes), right→left a **crossing** (anything it touches - a rotated box by SAT, a circle by its nearest point).
+The mode has to be legible while the drag is still live, and the box alone cannot show a direction, so the band draws **solid** for a window and **dashed** for a crossing - the CAD convention, so it reads the same way it does there.
+A drag with no horizontal travel counts as a window, so a degenerate one falls into the stricter mode.
+**Shift** unions the hits into the current selection instead of replacing it, and a click that never moves clears it.
 That is why pan is on the middle button: the left button belongs to the band.
 Resize handles only appear for a *single* selection, but the inspector is a **group panel** at
 any size: every property the selection has in common is shown and every edit applies to all of
@@ -326,16 +329,26 @@ way in editor and game via `src/render/color.ts`). Both the editor and the game 
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
+**B** is the same ball test but spawned **at the cursor**, so a corner of the level can be spot-checked without walking the spawn marker over to it and back.
+The override is baked into the `LevelData` the test level is built from rather than into the model, so it never edits the level, and a reset (and the exported P bundle) respawns at the same point.
 
 ### Layers
 
 The model is a flat list of `EdItem`s, each carrying a **`layer`**, listed in draw order: `background` (decoration behind the level, see below), `geometry` (the scene bodies), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
-Only the **active** layer is hit-testable and drawn into — the others are click-through — because a camera region blankets the geometry it governs, so a click has to mean one or the other and the layer switch is what says which.
+Every layer that is **visible and unlocked** is hit-testable, so a selection may span layers; the other two states are excluded from picking entirely, and both drop their items from the current selection when they are entered, rather than leaving things selected that a nudge, an inspector field or a Delete would still reach.
+The **active** layer is what new items are drawn onto, and it breaks a tie in the pick (`pickOrder`): a camera region blankets the geometry it governs, so a click that could mean either takes the active layer's item, and the layer switch is what says which.
 Every visible layer nevertheless draws at **full opacity**, active or not: dimming made a layer harder to read against the geometry it annotates, the layer list already says which one a click will hit, and visibility is the control for getting a layer out of the way.
-The toolbar's layer list picks it (**Tab** cycles) and carries a visibility toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
-The list stacks **vertically**, with the toggles in a column of eye icons down the left - open when the layer draws, a dimmed closed lid when it does not - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
-The eye is inline SVG (`eyeIcon`) rather than an emoji or a font glyph, so it inherits the toolbar colour through `currentColor`, stays crisp at any DPI, and looks the same on every platform.
-A selection therefore never spans layers, which is what lets the inspector pick one layer's panel instead of reconciling a mixed one, and a paste switches the active layer to the clipboard's rather than dropping items somewhere unclickable.
+The toolbar's layer list picks it (**Tab** cycles) and carries a **visibility** and a **lock** toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
+The two toggles are deliberately independent: hiding gets a layer *out of the way*, locking keeps it **on screen but out of harm's way** — the reference you are working against.
+So a locked layer draws exactly as before and only loses the edit paths: picking, being drawn into (`refreshToolButtons` offers Select alone while the active layer is locked, and `setTool` refuses a draw tool there so the keyboard shortcuts cannot arm one either), and membership of the selection.
+With nothing pickable on it, the empty inspector says the layer is locked rather than repeating the usual "click a body", which would read as the editor being broken.
+A paste unlocks the layers it lands on for the same reason it un-hides them.
+The list stacks **vertically**, with the toggles in two icon columns down the left - eye then padlock - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
+Both are inline SVG (`eyeIcon`, `lockIcon`) rather than emoji or font glyphs, so they inherit the toolbar colour through `currentColor`, stay crisp at any DPI, and look the same on every platform.
+The eye is open when the layer draws and a dimmed closed lid when it does not; the padlock's *resting* state is unlocked, so it is the dim one (a row of lit padlocks would read as "everything is locked") and locked is amber, the layer list having already spent the accent blue on "active".
+A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 backgrounds" panel that also deleted the selected notes would be lying about its scope.
+The inspector scrolls, because that stack can outgrow the viewport.
+A paste keeps each item on the layer it was copied from and reveals (and unlocks) any layer it lands on, rather than dropping items where they can be neither seen nor clicked.
 The draw tools are per-layer too (`LAYER_TOOLS`): `background`/`geometry`/`camera` offer `+Rect`/`+Circle`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
 A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `background` and `geometry` start at their authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
 
@@ -376,6 +389,10 @@ Notes are drawn **above** everything they annotate — commentary hidden behind 
 Everything about a note is **world-scaled** — glyph height, box, arrow shaft and head — so an annotation keeps its relationship to the geometry it points at instead of swelling over the level as you zoom out; the glyphs themselves are drawn in screen space at the projected size, which keeps them crisp without changing that.
 An empty note draws a dimmed `(empty note)` placeholder rather than nothing at all.
 Placing a text note focuses the inspector's textarea, so the first act after dropping one is typing rather than a trip to the panel; that textarea snapshots undo on the **first keystroke** rather than on focus, since placing the note focuses it and a focus-time snapshot would make the first Ctrl+Z a visible no-op.
+**Double-clicking** a text note opens the same textarea with the caret at the end of what is written - the gesture every canvas editor uses for "edit this thing's content" - and scrolls it into view, since the inspector is a scrolling stack of per-layer panels.
+The prose deliberately keeps living in that one textarea rather than gaining a second, in-canvas editor that could disagree with it; the double-click only selects the note and moves the caret.
+Both paths go through `focusNoteText`, and the placement one has to `preventDefault` its mousedown: the default action moves focus to the document *after* the listener runs, so without it the textarea was blurred the instant it was focused (which is why placement focus never actually worked).
+It is the one canvas press that suppresses the default - every other one must keep it, or clicking the canvas would leave an inspector field focused and the keyboard shortcuts swallowed by it.
 Prose stays a single-selection edit (merging text across a group has no sane meaning) while placement stays group-wide like every other layer.
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
