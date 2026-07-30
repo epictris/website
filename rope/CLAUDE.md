@@ -100,51 +100,28 @@ avatar's steering branch inside it) stays bit-identical to recorded replays.
 
 ## Known simplifications (candidates for follow-up)
 
-- `World` rigidbody dynamics are approximate (no stacking solver, one Gauss-Seidel pass per
-  frame); the rope drives attached bodies directly, so this mostly affects free-falling
-  debris. Polygon contacts do get a real two-point manifold (above); circles remain single-point.
-  Rigid-vs-rigid contacts still take the approximate path, and its sharpest limitation is that
-  **the two bodies never exchange momentum**: each independently cancels its own approach at
-  the shared contact, and neither drives the other. A body landing on another therefore stops
-  it rather than knocking it round - the struck body's own rotation is arrested by the contact,
-  which is the opposite of what an impact should do (`session-120f`, where the top of two
-  compound groups lands square on the bottom one and the bottom one's spin is cancelled from
-  0.10 to -0.06 rad/s by the very contact that should have driven it). Fixing that properly
-  means a real pair solver - one impulse computed once for the pair and applied equal and
-  opposite - rather than the two independent passes below.
-  The approximation is: half the push-out, half the
-  approach velocity, each body resolving its own `RIGID_PAIR_SHARE` of the contact with no
-  knowledge of the other's pass - but they are no longer *torque-free*: in `resolveRigidLoop`
-  the normal impulse goes through the coupled linear/angular effective mass, per manifold
-  point, so an off-centre contact turns the body. It used to read `linearVelocity` alone and
-  write back into `linearVelocity` alone, which a circle can survive (its normal passes
-  through its centre, so there is no lever) and a vertex shape cannot: resting on another
-  rigid body it could be pushed but never turned, so a body balanced on a corner of one had
-  no way to fall off it. A long sliver cantilevered out into thin air over the corner of
-  another polygon turned at 0.2 rad/s, on the crumb of friction torque that was the only kind
-  reaching it, where it should have whipped round in a fraction of a second - it now peaks at
-  3.5 (`session-166f`).
-  Positional recovery is no longer part of any of that: the contact routines solve **velocity**
-  and `resolveDynamicCollisions` closes the step with a scene-wide sweep of `depenetrateRigid`
-  (`DEPENETRATION_PASSES` passes over every rigid body) that solves **position**.
-  See **Positional recovery** below.
-  They are no longer *frictionless* either: `applyRigidContactFriction`
-  gives them the same Coulomb-capped kinetic friction and `contactDamp` the static path
-  applies, minus the stiction and the stick anchor, which pin a body to a surface that is
-  not going anywhere and would fight the other body's own resolution pass, and minus any
-  reading of the *other* body's motion: it writes only to `body`, so it is not one half of a
-  reciprocal pair and slip taken relative to another dynamic body is invented energy.
-  Slip is measured against the world there, which makes the contact a brake and never a
-  motor. See **Force areas and surface friction**.
-  Without it, resting on a rigid body was resting on ice — a circle's `contactFriction`
-  did nothing at all against a polygon — so gravity did work down a rigid slope for ever,
-  and a chain to carry that away made it a motor: a ball hanging on a rigid polygon's face
-  slid the pair across the level and, left to run, accelerated to **68 m/s** over eleven
-  metres (`session-431f`).
-  The other half of that - a rigid body against the **static** geometry it stands on - was
-  frictionless for the separate reason that `RigidBody2D`'s coefficients default to 0 and
-  nothing but the two avatars ever set them; authored `rigid` bodies now get theirs from
-  `buildBodies.ts`. See **Force areas and surface friction**.
+- **Static contacts are not in the constraint solver.** Rigid-vs-rigid goes through the pair
+  solver (see **The contact solver** below); body-vs-static still runs on the per-body
+  routines, so a scene's contacts are solved as *two* systems rather than one. The cost is
+  that a load path running through a static contact cannot converge: a four-box pile shears
+  apart and lands spread across the floor, because within a frame the second box presses on a
+  bottom box the pair solver believes is unsupported and the floor corrects it only
+  afterwards, so the error reverses every frame and sawtooths. Iteration count makes no
+  difference at all (8, 32 and 128 land within 5 cm of each other), which is what says
+  under-convergence is not the problem. `cli contacts` `stack` is the case, and it is red on
+  purpose. Folding statics into the same list is the known follow-up, and the valuable one:
+  warm-started static manifolds are where a standard engine's resting-stack quality comes
+  from, and several of the resting-contact patches below (the damp, the iteration tuning)
+  exist to compensate for its absence. `settle`'s triangle, which holds a 0.203 deg limit
+  cycle for ever, is the same story on one body.
+- `World` rigidbody dynamics carry no broadphase, no islands and no sleeping; the pair loop is
+  O(n²), which at this scene scale is complexity with no payoff. Sleeping is the standard
+  answer to "momentum transfer destabilises settled piles", and is the wheel to import if that
+  ever bites harder than `settle`/`stack` tolerate — rather than more damping.
+- No CCD, no speculative *sweeps*, no sub-stepping. Body speeds are bounded by the invariants
+  and tunnelling has never been the failure mode; the rope's failure modes are geometric and
+  have their own tooling. (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
+- Circles remain single-point; polygon contacts get a real two-point manifold (above).
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
   `slackSimulation` field unused; the rope renders straight spans.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is
@@ -465,6 +442,7 @@ recordings serialize and `cli replay`/`cli bundles` work unchanged
 bun run replay selftest                       # determinism + replay round-trip check
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
+bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
 bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
@@ -542,7 +520,7 @@ launches, mover misbehavior):
    wound onto the ball drew as blank space for want of one `floor` (see
    `drawChainPolyline`), and every CLI tool called that run perfectly healthy,
    because it was.
-5. **Verify.** `cli bundles` green + all playtests + `bun run replay selftest`
+5. **Verify.** `cli bundles` green + all playtests + `cli contacts` + `bun run replay selftest`
    (must stay bit-identical — static-path behavior may never change; mobile
    behavior is gated behind `isMobile`/`isRotating` branches). To confirm a fix
    actually changed the felt behaviour — which plain replay *cannot* show once
@@ -1036,10 +1014,9 @@ just gravity's bite (g·cosθ·dt), so it cancels the *velocity* gravity adds ea
 never the *step* the integrator already took with it - a box on a 5° ramp still walked 21 cm
 in fifteen seconds and was not slowing.
 Holding a slope is what the **stick anchor** does, and `staticFriction` is what arms it.
-The cost is real and is the reason `applyRigidContactFriction` refuses stiction against
-another *rigid* body: the anchor pins the body's along-surface position, so anything else
-writing that position - a chain hauling the crate, or the other body's own resolution pass -
-is undone every frame.
+The cost is real and is the reason stiction is a body-versus-**static** idea and stays one:
+the anchor pins the body's along-surface position, so anything else writing that position - a
+chain hauling the crate, or the other body's own resolution pass - undoes it every frame.
 Against a **static** surface the pin has no rival, and the grip releases the moment the body
 moves at all (`STICK_SPEED`), so a chain with any real pull on it still drags the crate;
 both bundles with a chain anchored to a rigid polygon stay healthy, with the chain's
@@ -1077,31 +1054,23 @@ The per-point normal impulses are what resist rotation - which is what a two-poi
 falls.
 The grip stays what it is meant to be: a brake on translation, not a lock on pose.
 
-The second is that **rigid-rigid contact friction may not read the other body's motion**.
-`applyRigidContactFriction` measured slip the way the static path does, relative to the surface
-the other body presents, and for a static body or a scripted mover that is right - an
-infinite-mass surface whose motion is a given, which a body resting on it is dragged along by,
-and that is the whole point.
-Two *dynamic* bodies are a different situation, and the difference is that this routine is not
-one half of a reciprocal impulse pair: it only ever writes to `body`, and the other direction is
-a separate call on a separate pass, sized independently from its own mass and its own normal
-budget.
-Nothing makes the two equal and opposite, so any impulse taken from `other`'s motion is energy
-the contact invented - which did not matter while level rigid bodies had `contactFriction = 0`
-and the routine did nothing at all, and became a **motor** the moment they did not.
-The ball is the worst possible thing to read a surface velocity from: its spin is kinematic (the
-aim rewrites it every frame, so nothing the contact does can slow it) and its linear velocity is
-whatever the chain solve last credited it, which for a wedged ball is metres per second of motion
-the geometry is refusing.
-Either one reads as a surface sliding under the crate, and Coulomb friction dutifully drags the
-crate along with it - at a dead-steady 2.4 mm a frame, for ever, because the crate's own grip on
-the floor is resolved earlier in the same pass and cannot answer a drive that lands after it.
+The second is that **rigid-rigid contact friction may not read a motion it cannot answer**.
+The one-sided routine measured slip relative to the surface the other body presents, which for a
+static body or a scripted mover is right - an infinite-mass surface whose motion is a given, and
+being dragged along by it is the whole point.
+Two *dynamic* bodies were a different situation, because that routine was not one half of a
+reciprocal impulse pair: it wrote only to `body`, and the other direction was a separate call on
+a separate pass, sized independently. Nothing made the two equal and opposite, so any impulse
+taken from the other body's motion was energy the contact invented, and it became a **motor** the
+moment level rigid bodies stopped having `contactFriction = 0`.
 A ball merely *hanging* on a chain walked its anchor **3.6 m** across the level that way
-(`session-611f`).
-Slip is now measured against the **world**, so the impulse can only oppose the body's own motion:
-the contact is a brake and never a motor, which is what the routine was added to be and all
-`session-431f` ever needed.
-The two bodies still shove each other through the normal channel, which *is* solved as a pair.
+(`session-611f`), at a dead-steady 2.4 mm a frame, for ever.
+
+The pair solver makes relative slip legitimate again, and that is the point of it: an equal and
+opposite impulse means the reaction is real, so two crates now grip each other properly.
+What does **not** come back is reading a velocity the contact has no authority over - the ball's
+kinematic spin - which is a motor whoever solves it. See `frictionVelocity` under **The contact
+solver**.
 
 What is left is longer *legitimate* blocks, because that is what removing the relief valve
 means: geometry that no longer slides out from under a taut chain holds it until the ball
@@ -1110,10 +1079,28 @@ The corpus ceiling went 11 → 46 frames (`session-431f`, over which `maxRopeLen
 move at all and the lease is repaid to exactly zero), so `CHAIN_STALL_FRAMES_TOLERANCE` is 60.
 `rope-grew` holds the gap the blunter count leaves.
 
+The pair solver moved that ceiling again, and left **little headroom**: the worst run in the
+corpus is now `session-1195f` at **56** frames against the tolerance of 60, where it was 8.
+The rest of the corpus barely moved - second worst 21 against 18 before, median 2 against 1 -
+so this is one outlier and not a shift, and the block is real: over the whole run the ball is at
+a dead stop, wedged against the face of the rigid polygon its 0.2 m chain is anchored to, with
+the chain coiled on its own rim; `maxRopeLength` does not grow (180 cm, against 184.5 before)
+and the lease is released at f451. A converged solver holds the crate still better, and a
+chain anchored to a crate that stays put is blocked until the *ball* settles.
+Do not raise the tolerance to buy room. The margin is a signal that the next change to touch
+contact velocities should measure this distribution before it lands, which is what
+`scripts/abtest.sh` and the numbers above are for.
+
 ## Positional recovery
 
 The contact routines in `World.resolveDynamicCollisions` solve **velocity**.
 Position is recovered separately, by a scene-wide sweep at the end of the step: `DEPENETRATION_PASSES` passes, each giving every rigid body one `depenetrateRigid` pass.
+The pair solver inherits that split unchanged - it changes velocity resolution only - and keeps a per-pair push of its own (`separatePairs`, one push per `(shape, shape)` pair at that pair's deepest point, split by inverse mass so a light body against a heavy one is the one that gives way).
+Leaning on the sweep alone is not equivalent, for the reason below: it resolves only the two deepest overlaps per body per pass.
+A speculative contact is skipped there - it is not overlapping, and pushing along a negative depth would drag the pair together.
+
+The standard alternative, if `penetration` ever regresses, is a nonlinear Gauss-Seidel position pass over the *same* `ContactConstraint` list - per-contact, correcting only penetration beyond a slop and only a fraction of it per iteration - which is gentler and converges piles the two-deepest heuristic cannot.
+It is also, not coincidentally, what would stop the sweep injecting a same-sign positional drift into a settled pile, which is one of the things `stack` is still measuring.
 
 They used to do both, pushing out per `(shape, shape)` pair along that pair's own deepest contact and in ignorance of every other pair.
 That is the wedge failure `moveAndCollide` and `depenetrateRigid` were each fixed for, in their own words - pushing fully out of one surface can push straight into another, and whichever pair was handled last wins - and the fix was simply never applied here, so a body touching two things at once could not settle against either.
@@ -1138,10 +1125,49 @@ A ball resting on the floor with a slab landing on it was shoved 33 mm up out of
 The two demands are mutually exclusive, so the branch now **equalises** them: move along the deeper normal by half the difference, leaving both faces at the mean depth and a body already centred between them exactly where it is.
 Resolving the *static* side in full instead, on the argument that a static surface cannot get out of the way and a rigid one can, is the tempting refinement and it is wrong - it re-buries the body in the rigid face and the next pass pushes it straight back, which is the same ping-pong under a better motive.
 
+## The contact solver
+
+Rigid-vs-rigid contacts go through **`World.solveContacts`**: the sequential impulse solver (Catto, GDC 2006), the formulation Box2D uses and effectively every 2D engine has converged on.
+Nothing about these rigid bodies is novel, so the answer to a design question here is "what does Box2D do" unless the rope gives a specific reason otherwise.
+The novel mechanic is the rope, and the rope is exactly the part this does not touch: it stays a PBD pass after `World.integrate`, reading the velocities the contact solve leaves.
+
+`collectContacts` flattens the scene into one `ContactConstraint` per manifold point, over **ordered pairs** (`i < j`).
+That is the whole point.
+The routines this replaced looped over bodies and, for each body, over every other, so the pair A-B was visited **twice** - once with each as the subject - and each visit wrote only to itself and took `RIGID_PAIR_SHARE` of the contact in ignorance of the other.
+Two one-sided solves are not an impulse pair: nothing makes them equal and opposite, so momentum was neither conserved nor transferred, and a body landing on another **stopped** it rather than knocking it round (`session-120f`, where the top of two compound groups lands square on the bottom one and the bottom one's spin is cancelled from 0.10 to -0.06 rad/s by the very contact that should have driven it).
+One impulse, computed once, applied both ways: `cli contacts` `momentum` went from an error of 2.4e-3 against a 1.5e-8 tolerance to **4.5e-18**, which is machine precision.
+
+Order is a pure function of body index, shape index and point index; nothing is ordered out of a map or a set.
+`a` is chosen without reference to list order - the dynamic body, or the lower id when both are - so adding or removing a body mid-run cannot flip an existing pair's roles and miss every warm-start key it has.
+
+Four things about it are load-bearing.
+
+**Warm starting.** Each constraint begins from last frame's accumulated impulses, matched on `(a, b, shapeA, shapeB, featureId)`, applied equal and opposite before the first iteration.
+This is not an optimisation. Cold started, the iterations have to re-derive a pile's entire support load from scratch every frame and with any finite budget never quite get there, which is the class of residual-jitter bug the resting-contact work below has been chasing one symptom at a time.
+A cached impulse is a *starting guess* and never a claim about state, so a stale entry is simply dropped, a wrong guess costs iterations and not correctness, and the rope rewriting the ball's velocity after the solve does not invalidate it.
+
+**`CONTACT_SLOP`, and why a resting pile has no contacts without it.**
+A pile at rest is pushed to exactly zero overlap, and then every body in it falls by the same gravity step - so the interfaces between them never re-penetrate at all.
+At a strict "overlap > 0" a resting stack's own contacts *vanish from the set* on the frames it needs them most: the four-box pile's contact count flickered between 0 and 3 of an expected 6, warm starting had nothing to hold across a frame, and the noise from re-deriving the pile every time its contacts flickered back walked it apart across the floor.
+Points within the band are kept as **speculative** contacts carrying a *negative* depth; they ask for no impulse unless something is approaching fast enough to close the gap within the step, and above all they persist. The stack now holds 6/6 contacts with 6/6 warm-start hits.
+`shapeContacts`'s `slop` defaults to 0, and must: a caller that pushes bodies out along `depth` would otherwise push a separated pair *together*, which is every positional-recovery site.
+
+**A contact may not read a velocity it cannot affect.**
+A body whose rotation is driven externally (the ball's aim steering, which overwrites `angularVelocity` every frame) has infinite rotational inertia here, because no impulse applied to its spin survives the next frame.
+A friction constraint that still reads that spin as surface motion is not a brake but a **motor**, and an unbounded one: on an icy floor a spinning ball drove a crate to a dead-steady 0.78 m/s and 15.5 m in twenty seconds - the `session-611f` mechanism exactly, in the one place the pair solve re-opened it.
+`frictionVelocity` takes the kinematic spin out of the tangential slip, which brings that to 6 cm. `cli contacts` `spin-drive` is the guard, and it fails loudly without it.
+Only friction: the normal constraint reads the true velocity, since it cannot do sustained work and so is not a motor.
+
+**Only contacts that pushed back count as contact.**
+`contactDamp` is applied once per body per frame, to the bodies that met something - and a speculative contact carries no impulse, so it is not something met.
+Damping a body for being merely *near* another is a permanent brake on something that is not touching anything: a ball hanging on a chain a centimetre clear of a crate was slowed 2% every frame, the chain read that refusal as a block, and the winch stall paid out slack against it for ever - 1.7 m of chain grown to 3.7 and never released.
+
+Body-vs-static stays on `resolveRigidLoop` / `resolveRigidCircle`, which keeps the ball's steering branch and its centred-circle path bit-identical to every recorded replay, and keeps stiction and the stick anchor where they belong (a position pin has no rival against an immovable surface, and would fight another rigid body's own pass).
+The consequence is that a scene is solved as two systems rather than one - see the first entry under **Known simplifications**, which is where `stack` is red.
+
 ## Resting contacts
 
-A manifold's normal impulses are solved as **one system**: accumulated per point, iterated `NORMAL_SOLVER_ITERATIONS` times, with each point's *running total* clamped at zero rather than each increment clamped on its own.
-Both the static and the rigid-rigid branch do it; `RIGID_PAIR_SHARE` still scales what a body takes from a rigid pair, since the other body meets that contact again on its own pass.
+A manifold's normal impulses are solved as **one system**: accumulated per point, iterated `NORMAL_SOLVER_ITERATIONS` times on the static path (`VELOCITY_ITERATIONS`, Box2D's 8, over the scene-wide constraint list), with each point's *running total* clamped at zero rather than each increment clamped on its own.
 
 Solved once each behind a `vn < 0` gate, the two points of a resting face cannot converge, and the reason is structural rather than a matter of tuning.
 Point A's impulse acts through a lever, so it rotates the body and pushes point B in; B's impulse pushes A in; and because neither may ever *pull*, the pass ends with the pair having overshot in opposite directions.

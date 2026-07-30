@@ -1,5 +1,34 @@
 # Plan: a real rigid-vs-rigid pair solver
 
+> **Status: landed** (phases 0-6), except the two items below.
+> The narrative here is kept as written, because it is the reasoning the change was made
+> from; `CLAUDE.md` (**The contact solver**) is the description of what the code now does.
+>
+> What the plan did not anticipate, both found by measurement:
+>
+> - **`CONTACT_SLOP`.** A pile at rest is pushed to exactly zero overlap and then every body
+>   in it falls by the same gravity step, so its interfaces never re-penetrate: at a strict
+>   `depth > 0` a resting stack's contacts vanish from the set and warm starting has nothing
+>   to hold. Contacts within a band are kept as speculative ones carrying a negative depth.
+> - **`frictionVelocity`.** Phase 3 predicted that relative slip would re-open the
+>   ball-drives-crate path and asked for it to be asserted. It does: on an icy floor a
+>   spinning ball drove a crate to a dead-steady 0.78 m/s. A contact may not read a velocity
+>   it cannot affect, so the kinematic spin comes out of the tangential slip. `spin-drive`
+>   is the case.
+>
+> Still open, both structural and both named in the plan:
+>
+> - **`stack` is red.** A four-box pile cannot converge while static contacts sit outside the
+>   constraint list - the bottom box's floor contact is solved in a different system from its
+>   box-above contact, so the error reverses every frame. Iteration count makes no difference
+>   (8, 32 and 128 land within 5 cm). This is the Phase 5 follow-up, and the plan already says
+>   why it is the valuable one.
+> - **`settle` is red.** A triangle holds a 0.203 deg limit cycle. Pure static path.
+>
+> One number to carry forward: the worst chain-stall run went 18 -> 56 frames against a
+> tolerance of 60 (see **Phase 6** and the stall section in `CLAUDE.md`). The block is real
+> and the tolerance was not moved, but the headroom is thin.
+
 ## The defect
 
 Rigid-vs-rigid contacts never exchange momentum.
