@@ -197,12 +197,26 @@ constraint and its drawing, and nothing else:
 
 - It **holds** the pair. A rigid body on either end hangs, swings and is hauled
   by it; a static (or an `anchor`) is infinite mass and simply holds.
-- It **wraps** scene geometry, through the ordinary solver, so a chain laid over
-  a corner catches on it.
 - It is **not collision geometry**. Nothing stands on a chain, nothing collides
   with it, and another rope does not wrap it. Those would need the chain to be a
   body per link, which is a different mechanism with its own stacking and contact
   problems - and none of the scenarios above requires it.
+
+Every chain is authored in one of two **planes**, and the plane decides both what
+it draws in front of and what it may touch:
+
+- **Foreground.** In the play space. Drawn over the geometry, and solved against
+  the whole scene: it wraps corners, drapes over rigid bodies, and the avatar and
+  its hook can push into it and be caught by it.
+- **Background.** Scenery. Drawn behind the geometry, faded, and solved against
+  nothing but its own two bodies: it hangs, swings and hauls those two, and passes
+  straight through the level, the avatar and the hook.
+
+Those are deliberately one setting rather than two. A chain hanging visibly behind
+a wall that could still snag the player is a level lying to the player about what
+is solid, and the cheapest way to make that impossible is to leave no way to
+express it. The default is foreground - a chain in the play space is the one that
+does something, and scenery has to be asked for.
 
 A chain's anchor is a point on a body's **surface**, never in its interior. That
 is what fastening a chain to something means, and it is also the only form the

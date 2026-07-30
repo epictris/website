@@ -681,10 +681,16 @@ export function drawEditor(
       const color = c.color ?? CHAIN_DEFAULT_COLOR;
       ctx.strokeStyle = color;
       ctx.lineWidth = worldLine * 2;
+      // A background chain is drawn broken, the same way every editor marks a
+      // thing that is there but cannot be touched: it hangs behind the level and
+      // passes through it, the player and the hook (see `ChainLayer`). The
+      // anchor rings stay solid - those are still real, editable points.
+      if (c.chainLayer === "background") ctx.setLineDash([7 * worldLine, 5 * worldLine]);
       ctx.beginPath();
       ctx.moveTo(ends.a.x, ends.a.y);
       ctx.lineTo(ends.b.x, ends.b.y);
       ctx.stroke();
+      ctx.setLineDash([]);
       // A ring at each anchor: the chain is pinned to a point on a body, and the
       // point is what an author places, so it has to be findable under the fill.
       ctx.fillStyle = color;

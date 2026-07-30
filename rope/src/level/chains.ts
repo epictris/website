@@ -12,22 +12,45 @@
 // rope does not wrap it. It is a constraint between two bodies plus the drawing
 // of that constraint. (Both would need the chain to be a body per link - see
 // docs/game-design.md.)
+//
+// What a chain touches is its layer, and the layer is one decision, not two: a
+// background chain is drawn behind the level AND solved against nothing but its
+// own two bodies, a foreground chain is drawn over it AND solved against the
+// whole scene. Splitting those apart would let a level author a chain that hangs
+// visibly behind a wall and still snags the player on the way past.
 
 import { Vec2 } from "../engine/vec2";
 import type { CollisionObject2D, PhysicsBody2D } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
-import type { ChainData, LevelData } from "./levelFormat";
+import { DEFAULT_CHAIN_LAYER, type ChainData, type ChainLayer, type LevelData } from "./levelFormat";
+
+// The wrap-candidate list a background chain solves against: nothing. Its two
+// anchor bodies are already the ends of every span, and `Rope.regeneratePath`
+// never wraps a span around the bodies that span starts and finishes on, so an
+// empty scene is exactly "hangs between its two bodies and touches nothing else".
+const NOTHING: PhysicsBody2D[] = [];
 
 export class SceneChain {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
   readonly color: string | null;
+  // Which plane the chain lives in - see `ChainLayer`. The renderer reads it to
+  // decide whether to draw the chain under or over the level's geometry, and
+  // `physicsStep` reads it to decide what the chain is allowed to touch.
+  readonly layer: ChainLayer;
 
-  constructor(a: RopeContact, b: RopeContact, length: number, color: string | null) {
+  constructor(
+    a: RopeContact,
+    b: RopeContact,
+    length: number,
+    color: string | null,
+    layer: ChainLayer,
+  ) {
     this.rope = new Rope(a, b, null, length);
     this.color = color;
+    this.layer = layer;
   }
 
   // One frame of the chain. Called after `World.integrate`, so the constraint
@@ -36,7 +59,7 @@ export class SceneChain {
   // integration ends every fast frame over-length by |v|·dt).
   physicsStep(bodies: PhysicsBody2D[], delta: number): void {
     this.rope.beginFrame();
-    this.rope.physicsStep(bodies, delta);
+    this.rope.physicsStep(this.layer === "background" ? NOTHING : bodies, delta);
   }
 }
 
@@ -90,5 +113,6 @@ function buildOne(
     RopeContact.at(objB, worldB),
     length,
     c.color ?? null,
+    c.layer ?? DEFAULT_CHAIN_LAYER,
   );
 }

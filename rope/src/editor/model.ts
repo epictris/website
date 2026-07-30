@@ -25,6 +25,7 @@ import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
   DEFAULT_NOTE_TEXT_SIZE,
+  DEFAULT_CHAIN_LAYER,
   DEFAULT_SURFACE_FRICTION,
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
@@ -33,6 +34,7 @@ import {
   type BodyKind,
   type CameraRegionData,
   type ChainData,
+  type ChainLayer,
   type LevelData,
   type NoteData,
   type ShapeData,
@@ -168,6 +170,11 @@ export interface EdChain {
   length: number | null;
   // Hex link colour; null = the renderer's own forged-iron pair.
   color: string | null;
+  // Which plane the chain lives in - what it draws in front of and what it is
+  // allowed to touch, which are one decision (see `ChainLayer`). Note this is
+  // NOT the editor's own `EdLayer`: a chain is authored on the geometry layer
+  // whichever plane it ends up hanging in.
+  chainLayer: ChainLayer;
 }
 
 export interface EdModel {
@@ -333,6 +340,7 @@ function fromLevelData(data: LevelData): EdModel {
       b: { itemId: b.id, local: toLocal(b, new Vec2(c.b.x, c.b.y)) },
       length: c.length ?? null,
       color: c.color ?? null,
+      chainLayer: c.layer ?? DEFAULT_CHAIN_LAYER,
     });
   }
 
@@ -425,6 +433,9 @@ export function toLevelData(model: EdModel): LevelData {
       // Omitted = taut between the anchors, which the loader re-derives.
       ...(c.length !== null ? { length: c.length } : {}),
       ...(c.color !== null ? { color: c.color } : {}),
+      // Omitted at the default, so a level of ordinary foreground chains keeps
+      // the shape it had before the field existed.
+      ...(c.chainLayer !== DEFAULT_CHAIN_LAYER ? { layer: c.chainLayer } : {}),
     });
   }
 

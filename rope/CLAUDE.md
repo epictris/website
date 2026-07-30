@@ -550,6 +550,22 @@ of a compound body, which sends those same resolvers round a vertex loop the spa
 never touches, so the rope runs clean through the piece it is anchored to
 (`session-234f` — see "A `RopeContact`'s `shapeIndex`" under Shapes).
 
+Three more, all from `session-735f`, all of them things that were *invisible while
+every body carried one shape and every rope was handed the whole world*:
+**contact velocity measured at the body centre instead of the contact point** -
+`resolveRigidCircle` built its approach velocity from `linearVelocity` alone,
+which is exactly right for a centred circle (ω × r is purely tangential there and
+contributes nothing) and wrong for every offset one, so a compound body's second
+circle could not see the spin the first circle's impulse had just added and had no
+way to cancel it; two circles resting flat on a floor torqued each other in turn
+for ever, a 2 px rock at 6 Hz that never damped;
+**a wrap node on a removed body** - every regeneration re-emits the existing wraps
+before it looks for new ones, so nothing else ever takes such a node out, and a
+chain the hook flew through kept one welded to the spot the hook was destroyed at
+for 400 frames (`Rope.dropWrapsOnGoneBodies`);
+and **a solve that corrects position for bodies it never credits velocity to**
+(see "Chains" - the `moved` set).
+
 That last one is also a reminder that a geometric bug can be **completely silent
 to the invariants** — `session-234f` replays HEALTHY, with no NaN, no runaway, no
 over-length and no embedding, because nothing about it is a velocity. Reach for
@@ -726,11 +742,18 @@ The headless SVG snapshot still draws the pieces separately - it is a diagnostic
 
 **+Chain** (**K**) drags a chain from one body to another: press on the first body, release on the second.
 A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), stepped once a frame after `World.integrate` by both level drivers, so a rigid body on either end hangs, swings and is hauled by it while a static or an `anchor` is infinite mass and simply holds.
-Its span wraps scene geometry through the ordinary solver, so a chain laid over a corner catches on it.
 There is deliberately **no new physics**: `Rope` already models a rope between two `RopeContact`s on arbitrary bodies, and a scene chain is that class with neither end being a hook in flight.
 
 What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
 Both would need the chain to be a body per link, which is a different mechanism.
+
+Every chain has a **plane** (`ChainData.layer`, the inspector's `plane` picker), and the plane is *one* decision, not two - what the chain is drawn in front of and what it is allowed to touch are the same statement, because a chain hanging visibly behind the level that still snagged the player would be a lie the level tells.
+
+- `foreground` (the default, and what a chain authored before the field was) is in the play space: drawn over the geometry, solved against the whole scene, so its span wraps corners, drapes over rigid bodies, and the avatar and its hook can push into it and be caught by it.
+- `background` is scenery: drawn behind the geometry at 55% alpha, and solved against **nothing** - `SceneChain.physicsStep` hands the rope an empty candidate list, so it hangs, swings and hauls its own two bodies and passes through everything else. The editor draws it dashed and `cli render` dashes it too, so a snapshot never reads a chain lying across a body as a chain caught on it.
+
+The empty list is exactly right rather than a special case: `Rope.regeneratePath` never wraps a span around the bodies that span starts and ends on, so "the scene is empty" and "only the two anchors exist" are the same solve.
+It is also why `Rope.physicsStep` derives its **own** set of bodies to pay for the correction (`moved` = the scene it was handed ∪ the bodies on its path) rather than crediting the list it was given: a background chain is handed none of the scene, and a body whose position the solve corrects but whose velocity nothing credits keeps every frame's gravity - a wrecking ball on a background chain sat perfectly still at **119 m/s** by the twelfth second, waiting for the first frame that gave it slack.
 
 Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).

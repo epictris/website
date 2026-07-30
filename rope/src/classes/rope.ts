@@ -405,9 +405,27 @@ export class Rope {
     this.topologyCreditScale =
       lengthError > 0 ? 1 - Mathf.clamp(this.topologyJump / lengthError, 0, 1) : 1;
 
+    // Every body this solve may move, for the velocity books below: the scene it
+    // was handed, plus any body on the rope's OWN path that the scene left out.
+    //
+    // The two lists are the same for a rope handed the whole world, which is
+    // every caller that predates scene chains. They are not the same for a rope
+    // handed a restricted scene - a background chain wraps nothing, so it is
+    // handed none of it - and the difference is not cosmetic: the solve corrects
+    // the position of whatever hangs on the chain either way, and a body whose
+    // position is corrected but never credited keeps every frame's gravity. A
+    // wrecking ball hanging from a background chain therefore sat perfectly still
+    // while its velocity climbed 0.16 m/s a frame, to 119 m/s by the twelfth
+    // second, waiting to be released by the first frame that gave it any slack.
+    const moved: PhysicsBody2D[] = bodies.slice();
+    for (const node of this.path()) {
+      const obj = node.contact.obj;
+      if (obj instanceof PhysicsBody2D && !moved.includes(obj)) moved.push(obj);
+    }
+
     const prePositions = new Map<PhysicsBody2D, Vec2>();
     const preRotations = new Map<PhysicsBody2D, number>();
-    for (const b of bodies) {
+    for (const b of moved) {
       prePositions.set(b, b.globalPosition);
       preRotations.set(b, b.globalRotation);
     }
@@ -438,7 +456,7 @@ export class Rope {
       // Friction impulse may push the rope past its max length; re-solve.
       this.resolveLengthConstraint();
 
-      for (const body of bodies) {
+      for (const body of moved) {
         const dynamicBody = this.getDynamicBodyState(body);
         if (dynamicBody) {
           // Scaled by `topologyCreditScale`: the share of this frame's length
@@ -655,6 +673,23 @@ export class Rope {
     return null;
   }
 
+  // Wrap nodes riding a body that has since left the world. Every regeneration
+  // re-emits the existing wraps (they are the `from` of their span) before it
+  // looks for new ones, so nothing else ever takes such a node out: a wrap on a
+  // removed body is welded to the position that body was destroyed at and stays
+  // there for the rest of the level, bending the rope around a corner of thin
+  // air. A scene chain the ball's hook flew through kept one for 400 frames
+  // after the hook was gone (session-735f).
+  //
+  // Dropped here rather than when the body is removed because a body does not
+  // know which ropes hold nodes on it, and a rope is regenerated every frame
+  // anyway - the check costs one pass over a list that is almost always empty.
+  private dropWrapsOnGoneBodies(): void {
+    if (this.wraps.some((w) => w.contact.obj.removed)) {
+      this.wraps = this.wraps.filter((w) => !w.contact.obj.removed);
+    }
+  }
+
   private resolveNodeSelfIntersections(): void {
     const newNodes: RopeWrap[] = [];
     for (const span of this.regenerateSpans()) {
@@ -687,6 +722,7 @@ export class Rope {
   }
 
   private regeneratePath(bodies: PhysicsBody2D[]): void {
+    this.dropWrapsOnGoneBodies();
     this.resolveNodeSelfIntersections();
     const newNodes: RopeWrap[] = [];
 

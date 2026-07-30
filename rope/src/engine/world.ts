@@ -681,7 +681,23 @@ export class World {
       // exactly -r·n (offset is zero), so the torque lever below vanishes.
       const rContact = offset.add(ov.normal.mul(-r));
       const contactPoint = body.globalPosition.add(rContact);
-      const rel = body.linearVelocity.sub(other.velocityAtPoint(contactPoint));
+      // Approach velocity AT THE CONTACT POINT, spin included. A centred circle's
+      // lever is exactly -r·n, so ω × r is purely tangential and contributes
+      // nothing to `vn`; the gate keeps that arithmetic out of the legacy path
+      // rather than relying on the two cross terms cancelling bit-for-bit.
+      //
+      // An offset circle's lever is not radial, so the term is real, and leaving
+      // it out is what made a compound body unable to settle: the first circle's
+      // impulse spins the body, and the second circle then measured an approach
+      // that ignored the spin it was there to cancel. Two circles resting flat on
+      // a floor therefore torqued each other in turn and rocked forever
+      // (session-735f).
+      const rel = (centered
+        ? body.linearVelocity
+        : body.linearVelocity.add(
+            new Vec2(-body.angularVelocity * rContact.y, body.angularVelocity * rContact.x),
+          )
+      ).sub(other.velocityAtPoint(contactPoint));
       const vn = rel.dot(ov.normal);
       // Rotation may be kinematically driven (aim steering overwrites the ball's
       // angular velocity every frame); then contacts must not feed angular

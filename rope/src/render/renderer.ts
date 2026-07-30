@@ -24,7 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
-import type { CameraRegionData } from "../level/levelFormat";
+import type { CameraRegionData, ChainLayer } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
@@ -414,6 +414,10 @@ export function render(
   // hidden behind a backdrop.
   drawBackgrounds(ctx, level.backgrounds);
 
+  // Background chains hang among the decoration, behind every solid thing -
+  // which is the same statement as their passing through it (see `ChainLayer`).
+  drawSceneChains(ctx, level.sceneChains, "background", alpha);
+
   // Hook-only scenery is background the player passes through, so it goes down
   // first and solid geometry draws over it.
   for (const body of level.world.bodies) {
@@ -426,9 +430,9 @@ export function render(
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
-  // Authored chains over the geometry they are strung between, under the rope
+  // Foreground chains over the geometry they are strung between, under the rope
   // and the avatar.
-  drawSceneChains(ctx, level.sceneChains, alpha);
+  drawSceneChains(ctx, level.sceneChains, "foreground", alpha);
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -552,27 +556,43 @@ function drawChainPolyline(
   }
 }
 
-// Authored scene chains: the same forged links, laid along each chain's wrap
-// path. Drawn from the wrap NODES against the render transforms, exactly as the
-// rope and the ball's chain are, so a chain stays welded to the drawn bodies at
-// both ends instead of to their 60 Hz sim positions.
+// How far a background chain's links are pushed toward the backdrop: the fill
+// they are drawn at, so they read as the same iron seen through the level's own
+// haze rather than as a different, thinner chain.
+const BACKGROUND_CHAIN_ALPHA = 0.55;
+
+// Authored scene chains of one layer: the same forged links, laid along each
+// chain's wrap path. Drawn from the wrap NODES against the render transforms,
+// exactly as the rope and the ball's chain are, so a chain stays welded to the
+// drawn bodies at both ends instead of to their 60 Hz sim positions.
+//
+// Called twice a frame, once per layer, because the two layers sit on opposite
+// sides of the level's geometry - that is the whole visible half of what the
+// layer means (the other half is what the chain is solved against; see
+// `SceneChain.physicsStep`).
 function drawSceneChains(
   ctx: CanvasRenderingContext2D,
   chains: readonly SceneChain[],
+  layer: ChainLayer,
   alpha: number,
 ): void {
+  const background = layer === "background";
   for (const chain of chains) {
+    if (chain.layer !== layer) continue;
     const spans = chain.rope.getSpans();
     if (!spans.length) continue;
     const path = [
       spans[0]!.from.contact.renderGlobalPosition(alpha),
       ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
     ];
+    ctx.save();
+    if (background) ctx.globalAlpha *= BACKGROUND_CHAIN_ALPHA;
     drawChainPolyline(
       ctx,
       path,
       chain.color ? { broad: chain.color, narrow: shade(chain.color, 0.65) } : undefined,
     );
+    ctx.restore();
   }
 }
 
@@ -659,6 +679,9 @@ export function renderBall(
   // Authored decoration under everything (see `render`).
   drawBackgrounds(ctx, level.backgrounds);
 
+  // Background chains behind the solid geometry they pass through (see `render`).
+  drawSceneChains(ctx, level.sceneChains, "background", alpha);
+
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
   for (const body of level.world.bodies) {
     if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
@@ -671,8 +694,8 @@ export function renderBall(
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
-  // Authored chains over the geometry, under the ball's own chain.
-  drawSceneChains(ctx, level.sceneChains, alpha);
+  // Foreground chains over the geometry, under the ball's own chain.
+  drawSceneChains(ctx, level.sceneChains, "foreground", alpha);
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
   // ANCHOR toward the ball, then on through the loop into the ball CENTRE
