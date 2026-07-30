@@ -86,6 +86,16 @@ avatar's steering branch inside it) stays bit-identical to recorded replays.
 - `World` rigidbody dynamics are approximate (no stacking solver, one Gauss-Seidel pass per
   frame); the rope drives attached bodies directly, so this mostly affects free-falling
   debris. Polygon contacts do get a real two-point manifold (above); circles remain single-point.
+  Rigid-vs-rigid contacts still take the approximate path — half the push-out, half the
+  approach velocity — but they are no longer *frictionless*: `applyRigidContactFriction`
+  gives them the same Coulomb-capped kinetic friction and `contactDamp` the static path
+  applies, minus the stiction and the stick anchor, which pin a body to a surface that is
+  not going anywhere and would fight the other body's own resolution pass.
+  Without it, resting on a rigid body was resting on ice — a circle's `contactFriction`
+  did nothing at all against a polygon — so gravity did work down a rigid slope for ever,
+  and a chain to carry that away made it a motor: a ball hanging on a rigid polygon's face
+  slid the pair across the level and, left to run, accelerated to **68 m/s** over eleven
+  metres (`session-431f`).
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
   `slackSimulation` field unused; the rope renders straight spans.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is
@@ -144,9 +154,24 @@ solved, so re-basing only inside the solve left a point-blank anchor over its
 length every single frame.
 `Rope.unwindOverLength()` runs between the two, and is the reason the stall stays
 rare enough to be safe.
-The stall is a **ratchet** — it only lets chain out, and whatever re-blocks the
-correction next frame reads as a fresh stall — so nothing may sit behind it
+The stall lets chain out and never pulls it in, so nothing may sit behind it
 feeding it a blocked correction every frame.
+What it lets out is a **lease** (`Rope.blockedSlack`), not a payment into
+`maxRopeLength`: it is re-derived from the present geometry every frame and
+released, at a bounded rate, the moment the block eases.
+`Rope.constraintLength` (`maxRopeLength + blockedSlack`) is what the solver
+enforces; `maxRopeLength` stays the length the chain actually has, which is what
+retract/extend and the growth invariant are about.
+That distinction is the whole thing, because a blocked correction is rarely a
+one-off.
+Paid into the length, each frame's instalment became the baseline the next frame
+measured against, so a chain held over its length by something that was not going
+away grew by that much *again* every frame, forever.
+All it took was gravity's own 2.7 mm integration step being refused by the
+surface the ball was resting on: 16 cm of chain per second, out of a ball hanging
+perfectly still (`session-537f`).
+Held as a lease the same persistent block costs the same fixed slack every frame,
+and across the whole ball corpus permanent growth is now exactly zero.
 The aim steering did: it is *kinematic* (it overwrites `angularVelocity`, so
 nothing the solver does can stop the ball winding on more chain than it has).
 Winding it on is the point, and while the solve can pay for it by hauling the
@@ -175,27 +200,29 @@ full step can swing the contact past its tangent point where the rate flips sign
 and undamped it oscillates between two equally bad angles and lands back where it
 started.
 Bounding the correction leaves the rest of the over-length for the stall, and
-what made *that* survivable is the third piece: the solve books its velocity as
-Δposition/Δt **before** the push-out, so a correction the push-out immediately
-takes back leaves the ball holding speed for a move it never made.
-`BallLevel` hands that back.
-Un-refunded it compounds: a wound-up ball on the floor gained a little more
-sideways speed every frame until it was crawling out from under its own chain,
-over-length by a fresh centimetre a frame for the stall to cover.
-What goes back is only the credit **along the push-out**, and only the part of it
-that pointed into the surface: the push-out is a contact normal, it cancels the
-correction's normal component and nothing else, so the tangential credit is real
-and stays.
-Refunding a *share of the whole correction vector* instead — the obvious reading
-of "30 % of it was undone" — pays back sideways velocity that was never undone,
-and that is a sideways kick re-applied every frame.
-It is invisible until the correction has a large tangential component, which is
-why it only bit sometimes: a ball that creeps up to its ceiling is corrected
-almost straight along the normal and holds, while one that arrives still carrying
-2.9 m/s along the surface gets the kick and rolls 24 cm out from under its chain
-(`session-458f`, whose two wind-ups differ in nothing else).
-The refund only reaches the ball, though, and the solve moves **every** body on
-the chain's path — so it settles the ball's spin partly by hauling the far end,
+what made *that* survivable is the **frame order**.
+The rope pays itself velocity for the correction it writes, Δposition over Δt —
+a standard PBD velocity update, and honest, but only if the correction is the
+last word on where the body ends up.
+The push-out used to run *after* it, so it was not: part of the correction was
+undone while the credit for it was kept, and a ball hauled into a surface it was
+resting against banked a little more speed every frame and dragged its whole
+assembly across the level.
+That single mistake was found four separate times — `session-394f`,
+`session-458f`, `session-431f`, `session-726f` — each time in a new disguise,
+and refunding the difference was tried each time and cannot be made to work: the
+credit is taken along the correction and has to be handed back along the contact
+normal, so a refund big enough to stop the compounding also injects velocity
+sideways, and one small enough not to leaves the compounding.
+So the push-out runs **first**: the ball is pushed clear at the top of the chain
+phase and the rope moves it last.
+A rope correction can still bury the ball for one frame; the next frame's leading
+push-out clears it before anything measures a length or a velocity against it,
+and `BallLevel` closes the phase by setting the ball's velocity to
+`velocityBeforeChain + (realised Δposition)/Δt` — the PBD update taken over where
+the frame really ends, both push-outs included, so the ball can never bank speed
+for a move that was undone and there is nothing to refund.
+The solve moves **every** body on the chain's path — so it settles the ball's spin partly by hauling the far end,
 and an anchor that is a rigid body keeps whatever it was given.
 That is the fourth piece: the spin is a *kinematic* input with no force behind it
 and the unwind is about to refuse it anyway, so `BallLevel` measures how much of
@@ -211,12 +238,87 @@ Refusing the spin *before* the solve instead is the tempting simplification and
 it is wrong — the solve paying for the spin by winching the ball in is exactly the
 winding mechanic, and pre-refusing it cancelled 197 radians of legitimate spin in
 a ten-second wind-up and left the ball at zero wraps.
+
+The fifth piece is that the frame may not *end* with the chain driving the ball
+through a surface.
+`World.depenetrateRigid` returns the outward normals it pushed along, and
+`BallLevel` cancels any component of the chain phase's derived velocity that
+points into one — the same statement as the push-out itself, made in velocity
+instead of position.
+Leaving it in does not merely look wrong, it powers a drive.
+Next frame's `integrate` kills that velocity at the contact and sizes the Coulomb
+friction budget from it (`maxImpulse = μ·m·(vnKilled + gravityBite)`), and the
+ball is spinning under kinematic aim steering, so the budget is spent *driving*.
+A ball held against a ceiling by a taut chain therefore funded its own traction
+out of the constraint pulling it up there: +1.2 m/s of Δv per frame, sideways,
+which the chain solve then removed and the next frame re-earned.
+It slid along the ceiling until it ran out of ceiling, ratcheting 2 mm of chain
+out per frame on the way (`session-537f`).
+Cancelling it restores the rule the wall case already obeyed: once resting, a
+surface gravity does not press the ball into gives no traction, so a spinning
+ball cannot climb a wall — or drive along a ceiling.
+A constraint is not a force here and may not act like one.
+### The coil
+
+Rope wound onto the circular body the rope *starts* on — the ball winding its own
+chain around itself — is carried as an **angle**, not as a run of wrap nodes
+(`Rope.syncCoil`).
+
+Everywhere else a wrap is a discrete decision about one corner, and that is the
+right model: the rope either bends around that corner or it does not. A coil is
+not that. It is one continuous quantity, and representing it as a run of twenty
+tangent points made every frame's answer a fresh stack of twenty independent
+decisions that did not agree frame to frame. `cullDetachedNodes` drops a wrap
+once the rope stops bending around it — correct per node, and it **cascades**:
+the tail node goes, the one before it inherits the new outgoing span and goes
+too. In `session-458f` three went at once and the measured path fell 18.6 cm with
+nothing having moved, which the solve "corrected" by snapping the bodies several
+centimetres while the winch stall covered the rest.
+
+Three things determine a coil, and each is continuous on its own:
+
+- the material point the rope leaves the body from (`start`), which rotates with
+  the body;
+- the tangent point it leaves *at*, which is geometry — where a taut line from
+  the next node touches the circle — and slides smoothly as that node moves;
+- how many whole turns are in between, the only thing that has to be remembered,
+  and remembered by **unwrapping** the angle against last frame's rather than
+  re-deriving it.
+
+Winding past a full turn and unwinding back through zero are then both ordinary
+arithmetic on one number. There is no create, no cull, nothing to cascade. The
+nodes are re-derived from the angle at `COIL_NODE_ARC` every regeneration, which
+is a *rendering* resolution — only the last of them reaches the length solve,
+since `generatePathObjects` already collapses a run of same-circle wraps into the
+one that leaves the body.
+
+The coil is also why `regenerateAndMeasure` takes its baseline **after** a coil
+sync: the coil's nodes ride the body, so between frames they carry its rotation
+with them and the stored path is a turn's worth out of date. Sync first and the
+difference is the node set changing; sync after and a ball spinning at 46 rad/s
+reads as a 13 cm "discontinuity" that is really just the ball having moved.
+
+Two supporting pieces:
+
+- `Rope.spanLength` measures a span between two nodes on the same circle as the
+  **arc**, not the chord. Rope lying on a circle is an arc; chords understate it,
+  and by more the coarser the sampling.
+- `Rope.topologyCreditScale` is the backstop for whatever discontinuity is left
+  anywhere else in the path: the share of a frame's length error that a
+  regeneration put there is corrected in position but earns no velocity.
+  Δposition over Δt is how half a metre of phantom error once became a 96 m/s
+  launch (`session-1474f`).
+
+Across the whole ball corpus this leaves **one** frame with a path discontinuity
+over a centimetre, at 1.6 cm — against roughly twenty-five frames reaching
+19.7 cm before.
+
 Two invariants back this up (`checkBallInvariants`). `rope-grew` bounds the chain
 against the length it anchored at, but only loosely: a single discontinuous jump
 in the wrap path can be most of the total on its own (26 cm in one frame in
 `session-284f`), which is not this bug. `rope-stalling` is the sharp one — a
 *run* of blocked frames is the shape of every chain runaway there has been, and
-the corpus splits cleanly, 5 frames at most when healthy against 79, 51, 36, 32
+the corpus splits cleanly, 17 frames at most when healthy against 79, 51, 36, 32
 and 28 for the runaways.
 A hard ceiling on the stall itself is **not** an option, tempting as it looks:
 a point-blank anchor is legitimately held over its length by the geometry it is

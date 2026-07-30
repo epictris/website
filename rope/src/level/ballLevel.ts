@@ -128,6 +128,39 @@ export class BallLevel {
 
     this.world.integrate(delta);
 
+    // Push the ball clear of the scenery before anything measures against it,
+    // and before the chain solve rather than after.
+    //
+    // The rope writes positional corrections straight onto rigid bodies (it
+    // sweeps only for the grapple avatar) and pays itself velocity for them,
+    // Δposition over Δt — a standard PBD velocity update, and honest, but only
+    // if the correction is the last word on where the body ends up. Push out
+    // afterwards and it is not: the correction is partly undone while the credit
+    // for it is kept, so a ball being hauled into a surface it is resting
+    // against banked a little more speed every frame and dragged its whole
+    // assembly across the level — `session-394f`, `session-458f`,
+    // `session-431f`, `session-726f`, the same bug found four times.
+    //
+    // Refunding the difference is what each of those fixes tried, and it cannot
+    // be made to work: the credit is taken along the correction and has to be
+    // handed back along the contact normal, so a refund big enough to stop the
+    // compounding also injects velocity sideways, and one small enough not to
+    // leaves the compounding. Ordering the frame so the question never arises is
+    // the fix — the rope moves the ball last, its credit is exactly the motion
+    // the frame ends with, and there is nothing to refund.
+    //
+    // A rope correction can still bury the ball for one frame; this clears it at
+    // the top of the next, before anything measures a length or a velocity
+    // against it. That is what keeps a point-blank anchor on the far side of a
+    // surface from hauling the ball a little deeper every frame until it is
+    // buried in the geometry (session-1048f: 5 cm in, for 49 frames).
+    //
+    // Unconditional, not only while a chain is anchored: `World.integrate`
+    // resolves a circle against one shape at a time, so a ball wedged between
+    // two of them keeps a residual that only this simultaneous two-normal solve
+    // clears — 3.3 cm of it in session-726f, with no chain out at all.
+    this.world.depenetrateRigid(this.ball);
+
     // Chain logic runs AFTER integration — the ball is a RigidBody2D, so
     // integration moves it; solving afterwards leaves the frame's final state
     // within the length constraint (solve-then-integrate ended every fast
@@ -145,13 +178,17 @@ export class BallLevel {
     if (this.ball.chainAnchored && this.ball.chain) {
       if (anchoredThisFrame) this.chainAnchorLength = this.ball.chain.maxRopeLength;
       const speedBefore = this.ball.linearVelocity.length();
+      const positionBeforeChain = this.ball.globalPosition;
+      const velocityBeforeChain = this.ball.linearVelocity;
+
       // How much of the over-length the solve is about to see is the ball's own
       // kinematic aim spin, which `unwindOverLength` will refuse below. The rest
       // is real motion — gravity, momentum, a swing going taut — and is the
       // solve's proper business.
+      this.ball.chain.beginFrame();
       this.ball.chain.syncWraps(this.bodies);
       const overLengthBeforeSolve =
-        this.ball.chain.getCurrentLength() - this.ball.chain.maxRopeLength;
+        this.ball.chain.getCurrentLength() - this.ball.chain.constraintLength;
       const spinLength =
         Math.abs(this.ball.globalRotation - ballRotationAtFrameStart) *
         Math.abs(this.ball.chain.lengthPerRadian(this.ball));
@@ -173,7 +210,10 @@ export class BallLevel {
       // the ball, and the unwind pays for it in rotation instead. A frame with
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
-      const haulAtSolve = new Map<RigidBody2D, { position: Vec2; velocity: Vec2; rotation: number; spin: number }>();
+      const haulAtSolve = new Map<
+        RigidBody2D,
+        { position: Vec2; velocity: Vec2; rotation: number; spin: number }
+      >();
       if (spinShare > 0) {
         for (const body of this.bodies) {
           if (body instanceof RigidBody2D && body !== this.ball) {
@@ -186,7 +226,6 @@ export class BallLevel {
           }
         }
       }
-      const positionBeforeSolve = this.ball.globalPosition;
       this.ball.chain.physicsStep(this.bodies, delta);
       for (const [body, before] of haulAtSolve) {
         body.globalPosition = body.globalPosition.sub(
@@ -198,43 +237,14 @@ export class BallLevel {
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
       }
-      // The solve just wrote a positional correction straight onto the ball
-      // (Rope sweeps only for the grapple avatar) and it runs after
-      // World.integrate, so this is the frame's last chance to keep the ball
-      // out of the scenery. Without it a short anchor on the far side of a
-      // surface — a point-blank shot into the block you are resting against —
-      // hauls the ball a little deeper every frame until it is buried in the
-      // geometry (session-1048f: 5 cm in, for 49 frames).
-      const positionAfterSolve = this.ball.globalPosition;
-      this.world.depenetrateRigid(this.ball);
-      // The solve pays itself velocity for the correction it wrote (Δposition
-      // over Δt, inside Rope.physicsStep) — but it books that before the
-      // push-out, so a correction the push-out immediately takes back leaves the
-      // ball holding speed for a move it never made. Hand that part back. A ball
-      // wound up against its anchor is exactly this case every frame: the solve
-      // hauls it towards the anchor, the surface it is resting on refuses, and
-      // un-refunded the credit accumulated until the ball was crawling sideways
-      // along the floor under its own chain, over-length by a fresh centimetre a
-      // frame for the winch stall to cover (session-394f).
-      //
-      // Only the credit *along the push-out* goes back, and only the part of it
-      // that pointed into the surface. The push-out is a contact normal: it
-      // cancels the correction's normal component and nothing else, so the
-      // tangential credit is real and stays. Refunding a share of the whole
-      // correction vector instead — the obvious reading of "30% of it was undone"
-      // — pays back sideways velocity that was never undone, and a ball that
-      // reaches its ceiling still carrying speed along it gets that sideways
-      // kick re-applied every frame and rolls away under its own chain
-      // (session-458f).
-      const correction = positionAfterSolve.sub(positionBeforeSolve);
-      const pushOut = this.ball.globalPosition.sub(positionAfterSolve);
-      if (pushOut.lengthSquared() > 0) {
-        const outward = pushOut.normalized();
-        const intoSurface = Mathf.min(correction.dot(outward), 0);
-        this.ball.linearVelocity = this.ball.linearVelocity.sub(
-          outward.mul(intoSurface / delta),
-        );
-      }
+      // A rope correction is still free to shove the ball into something on its
+      // way; push out again so the frame does not *end* inside the scenery, and
+      // then set the chain phase's velocity contribution to the displacement it
+      // actually produced, both push-outs included. This is the PBD velocity
+      // update the rope does for itself (Δposition over Δt), just taken over
+      // where the frame really ends — so the ball can never bank speed for a
+      // move that was undone, and there is nothing left to refund.
+      const pushedOutOf = this.world.depenetrateRigid(this.ball);
       // Whatever length the frame still owes after that, take it out of the
       // ball's spin before anything else sees it. Winding chain onto the ball is
       // meant to work, and while the solve can pay for it by hauling the ball
@@ -244,13 +254,48 @@ export class BallLevel {
       // turn, so a wound-up ball stalls rather than unwinding itself
       // (session-394f).
       this.ball.chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta);
-      // The push-out just moved the ball after the chain had solved, so the
-      // frame can end over-length through geometry the solver could not fight.
-      // That is the winch stall, and it has to be absorbed here rather than
-      // inside the solve: a point-blank anchor otherwise leaves the chain
-      // permanently over its length, every frame, for as long as the ball is
-      // held off the surface it is anchored to.
-      this.ball.chain.absorbBlockedLength();
+      // The unwind just turned the ball, and the ball is not only a circle — it
+      // carries its mounting loop out on the rim, so a rotation can swing that
+      // into geometry the push-out had already cleared. Clear it again; the
+      // velocity below is derived after both, so neither costs anything.
+      pushedOutOf.push(...this.world.depenetrateRigid(this.ball));
+      // Discounted the same way the solve discounts its own credit: a length
+      // error a wrap node appearing put there is corrected in position but earns
+      // no velocity (see Rope.topologyCreditScale).
+      this.ball.linearVelocity = velocityBeforeChain.add(
+        this.ball.globalPosition
+          .sub(positionBeforeChain)
+          .div(delta)
+          .mul(this.ball.chain.topologyCreditScale),
+      );
+      // A surface the frame had to push the ball out of is one the ball is
+      // resting against, so the frame must not *end* with the chain driving it
+      // through that surface. The push-out already undid the motion in position;
+      // this is the same statement in velocity, and without it the frame ends
+      // with a velocity the geometry has already refused.
+      //
+      // That refused velocity is not inert. Next frame's integrate kills it at
+      // the contact and sizes the Coulomb friction budget from it — and the ball
+      // is spinning under kinematic aim steering, so that budget is spent
+      // *driving*. A ball held against a ceiling by a taut chain therefore
+      // funded its own traction out of the constraint pulling it up there, drove
+      // itself sideways at ~1.2 m/s per frame of Δv, and ratcheted the chain 2mm
+      // longer each frame through `absorbBlockedLength` as the solve tried and
+      // failed to haul it back — 11% chain growth in 30 frames, and a ball that
+      // slides along the ceiling until it runs out of ceiling (session-537f).
+      //
+      // Cancelling it restores the rule the wall case already obeys: once
+      // resting, a surface gravity does not press the ball into gives no
+      // traction, so a spinning ball cannot climb a wall — or drive along a
+      // ceiling. A constraint is not a force here, and it may not act like one.
+      for (const normal of pushedOutOf) {
+        const into = this.ball.linearVelocity.dot(normal);
+        if (into < 0) this.ball.linearVelocity = this.ball.linearVelocity.sub(normal.mul(into));
+      }
+      // Whatever the solve could not reach is the winch stall: a point-blank
+      // anchor is held over its length by the geometry the ball is resting on,
+      // and re-basing lets the constraint settle there instead of winding up.
+      this.ball.chain.absorbBlockedLength(delta);
       this.chainStallFrames =
         this.ball.chain.stalledLength > BallLevel.STALL_EPSILON ? this.chainStallFrames + 1 : 0;
       const gain = this.ball.linearVelocity.length() - speedBefore;

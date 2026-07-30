@@ -399,11 +399,17 @@ export class World {
   // finally emerged the wrap path it should have been taking all along appeared
   // at full size in a single frame — half a metre of length error, which the
   // solver converted straight into a 96 m/s launch (session-1474f).
-  depenetrateRigid(body: RigidBody2D, iterations = 2): void {
-    if (body.removed || !body.hasShape()) return;
+  //
+  // Returns the outward normals it pushed along. A surface a body had to be
+  // pushed out of is a surface that body is resting against, and a caller that
+  // derives velocity from the frame's displacement (see BallLevel) needs that
+  // set to refuse itself credit for driving into one.
+  depenetrateRigid(body: RigidBody2D, iterations = 2): Vec2[] {
+    const pushedOutOf: Vec2[] = [];
+    if (body.removed || !body.hasShape()) return pushedOutOf;
     for (let pass = 0; pass < iterations; pass++) {
       const [a, b] = this.gatherDepenetration(body);
-      if (!a) return;
+      if (!a) return pushedOutOf;
       // Resolve the two deepest overlaps *together* rather than one after the
       // other. Pushing fully out of one surface can push straight into another,
       // and a sequential pushout then ping-pongs deeper into the pair every pass
@@ -422,12 +428,15 @@ export class World {
         body.globalPosition = body.globalPosition
           .add(a.normal.mul((a.depth - c * b.depth) * inv))
           .add(b.normal.mul((b.depth - c * a.depth) * inv));
+        pushedOutOf.push(a.normal, b.normal);
       } else {
         // One overlap, or a true crush whose denominator explodes as c → -1:
         // push out of the deepest and accept a residual.
         body.globalPosition = body.globalPosition.add(a.normal.mul(a.depth));
+        pushedOutOf.push(a.normal);
       }
     }
+    return pushedOutOf;
   }
 
   // The two deepest overlaps of `body` against the solid geometry around it, at
@@ -538,9 +547,19 @@ export class World {
       for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
       body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth * 0.5));
       const rel = body.linearVelocity.dot(deepest.normal);
+      let vnKilled = 0;
       if (rel < 0) {
         body.linearVelocity = body.linearVelocity.sub(deepest.normal.mul(rel * 0.5));
+        vnKilled = -rel * 0.5;
       }
+      this.applyRigidContactFriction(
+        body,
+        other,
+        deepest.point.sub(body.globalPosition),
+        deepest.normal,
+        vnKilled,
+        dt,
+      );
       return false;
     }
 
@@ -829,10 +848,66 @@ export class World {
     } else {
       // Rigid-rigid: split the push, damp approach velocity (approximate).
       body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth * 0.5));
+      const rContact = offset.add(ov.normal.mul(-r));
       const rel = body.linearVelocity.dot(ov.normal);
-      if (rel < 0) body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(rel * 0.5));
+      let vnKilled = 0;
+      if (rel < 0) {
+        body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(rel * 0.5));
+        vnKilled = -rel * 0.5;
+      }
+      this.applyRigidContactFriction(body, other, rContact, ov.normal, vnKilled, dt);
       return false;
     }
+  }
+
+  // Tangential friction and damping for a contact with another *rigid* body,
+  // where the static path's Coulomb solve does not reach.
+  //
+  // Resting on a rigid body used to be resting on ice: the branch split the
+  // push-out and killed the approach velocity and stopped there, so a circle's
+  // `contactFriction` and `contactDamp` — which decide everything about how it
+  // behaves on a static floor — did nothing at all against a polygon. Gravity
+  // then does work down a rigid slope for ever, and with a chain to carry it
+  // away that is a motor: a ball hanging on a rigid polygon's face slid the pair
+  // across the level at a steady 0.7 m/s and never slowed (session-431f).
+  //
+  // Deliberately the simple half of the static solve — Coulomb-capped kinetic
+  // friction and the contact damp, no stiction and no stick anchor. Those pin a
+  // body to a surface that is not going anywhere, which is not true of a rigid
+  // body, and the pinning would fight the other body's own resolution pass.
+  private applyRigidContactFriction(
+    body: RigidBody2D,
+    other: PhysicsBody2D,
+    rContact: Vec2,
+    normal: Vec2,
+    vnKilled: number,
+    dt: number,
+  ): void {
+    const grip = other.surfaceFriction;
+    const kineticMu = body.contactFriction * grip;
+    if (kineticMu > 0) {
+      const invI = body.kinematicRotation ? 0 : body.inverseInertia;
+      const contactPoint = body.globalPosition.add(rContact);
+      const tangent = new Vec2(-normal.y, normal.x);
+      const pointVel = body.linearVelocity.add(
+        new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity),
+      );
+      const surfSpeed = pointVel.sub(other.velocityAtPoint(contactPoint)).dot(tangent);
+      const rCrossT = rContact.cross(tangent);
+      const invEff = body.inverseMass + rCrossT * rCrossT * invI;
+      if (invEff > 1e-9) {
+        const g = GRAVITY.mul(body.gravityScale);
+        const gravityBite = Math.max(0, g.mul(dt).dot(normal.mul(-1)));
+        const maxImpulse = kineticMu * body.mass * (vnKilled + gravityBite);
+        let j = -surfSpeed / invEff;
+        j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
+        if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
+        body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
+        body.angularVelocity += rCrossT * j * invI;
+      }
+    }
+    const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
+    body.linearVelocity = body.linearVelocity.mul(damp);
   }
 
   private notifyAreas(): void {

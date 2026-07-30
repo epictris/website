@@ -164,17 +164,20 @@ const ANCHOR_KICK_TOLERANCE = 0.6;
 const CHAIN_SOLVE_KICK_TOLERANCE = 4;
 // How much longer than the length it anchored at the ball's chain may get.
 // Nothing pays chain out once it is anchored, so the only source of growth is
-// `Rope.absorbBlockedLength` covering a correction that geometry blocked — real
-// and legitimate, but it is a ratchet, and anything driving it every frame grows
-// the chain without limit. The total is a blunt measure of that (a single
-// discontinuous jump in the wrap path can be most of it on its own — 26 cm in
-// one frame in session-284f), so it is set loose enough to clear those and only
-// catch a genuine runaway: session-475f's wound-up ball reached +349 cm.
-const CHAIN_GROWTH_TOLERANCE = 0.5;
+// `Rope.absorbBlockedLength` letting the constraint sit where geometry is
+// actually holding the far end — real and legitimate, and now a lease rather
+// than a payment, so none of it is permanent: measured on `maxRopeLength` alone
+// the whole ball corpus grows by exactly zero. What this measures is the lease,
+// `constraintLength`, which is the honest answer to "how much chain is out right
+// now" and still the thing that would run away if the lease stopped being
+// released. The corpus peaks at 43 cm (session-726f, a ball wedged well past its
+// chain length), so 0.6 leaves headroom over anything legitimate while catching
+// a runaway by a wide margin — session-475f's wound-up ball reached +349 cm.
+const CHAIN_GROWTH_TOLERANCE = 0.6;
 // Consecutive frames the winch stall may keep letting length out. This is the
 // sharp measure, because a *run* of stalls is the shape of every chain runaway
 // there has been, and one blocked frame is not. Across the whole ball corpus
-// legitimate stalls run 5 frames at most, while the runaways ran 79, 51, 36, 32
+// legitimate stalls run 11 frames at most, while the runaways ran 79, 51, 36, 32
 // and 28 — nothing sits between.
 const CHAIN_STALL_FRAMES_TOLERANCE = 20;
 // A chain span may graze a corner (endpoints on a surface), but its interior
@@ -348,22 +351,22 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   }
   if (b.chain) {
     const len = b.chain.getCurrentLength();
-    if (b.chainAnchored && len > b.chain.maxRopeLength + 0.05) {
+    if (b.chainAnchored && len > b.chain.constraintLength + 0.05) {
       out.push({
         frame,
         kind: "rope-over-length",
-        detail: `len=${len.toFixed(1)} > max=${b.chain.maxRopeLength.toFixed(1)}`,
+        detail: `len=${len.toFixed(1)} > max=${b.chain.constraintLength.toFixed(1)}`,
       });
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "chain length NaN" });
     if (
       level.chainAnchorLength !== null &&
-      b.chain.maxRopeLength > level.chainAnchorLength + CHAIN_GROWTH_TOLERANCE
+      b.chain.constraintLength > level.chainAnchorLength + CHAIN_GROWTH_TOLERANCE
     ) {
       out.push({
         frame,
         kind: "rope-grew",
-        detail: `max=${b.chain.maxRopeLength.toFixed(2)} vs ${level.chainAnchorLength.toFixed(2)} at anchor`,
+        detail: `max=${b.chain.constraintLength.toFixed(2)} vs ${level.chainAnchorLength.toFixed(2)} at anchor`,
       });
     }
     if (level.chainStallFrames > CHAIN_STALL_FRAMES_TOLERANCE) {
@@ -437,11 +440,11 @@ export function checkInvariants(level: Level): Violation[] {
     // the path length every frame and the hook moves after the rope step, so the
     // length legitimately exceeds it — only meaningful once the rope is anchored.
     const anchored = !(p.rope.end.contact.obj instanceof Hook);
-    if (anchored && len > p.rope.maxRopeLength + 0.05) {
+    if (anchored && len > p.rope.constraintLength + 0.05) {
       out.push({
         frame,
         kind: "rope-over-length",
-        detail: `len=${len.toFixed(1)} > max=${p.rope.maxRopeLength.toFixed(1)}`,
+        detail: `len=${len.toFixed(1)} > max=${p.rope.constraintLength.toFixed(1)}`,
       });
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "rope length NaN" });

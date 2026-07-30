@@ -93,13 +93,61 @@ export class Rope {
   // along the radius rather than the tangent — and rotating it would ask for a
   // wild angle to buy a millimetre. Metres per radian.
   private static readonly MIN_SPOOL_RATE = 0.001;
+  // Arc between re-sampled coil nodes, radians. Only the last one carries any
+  // physics; the rest are what the chain is drawn along, so this is a rendering
+  // resolution. ~14° puts a link every 3 cm on the ball & chain's rim.
+  private static readonly COIL_NODE_ARC = 0.25;
+  // Below this the coil has spooled off and the rope leaves the body straight.
+  private static readonly MIN_COIL_ANGLE = 1e-4;
+  // How fast a blocked-correction lease is handed back once the block eases,
+  // metres per second. Releasing it all at once puts the whole surplus into the
+  // next solve's length error, and the solve converts length error to velocity
+  // (Δposition over Δt), so that is a kick. 0.5 m/s gives back 8 mm a frame —
+  // faster than any block accrues, slow enough to read as the rope reeling in.
+  private static readonly SLACK_RELEASE_RATE = 0.5;
 
   maxRopeLength = 10;
   maxIterations = 10;
-  // What the last `absorbBlockedLength` had to let out — how badly the frame's
-  // length correction was blocked. Zero on any frame the solve got what it
-  // asked for.
+  // Metres of path length that the last `regeneratePath` added or removed *with
+  // the bodies held still* — a wrap node appearing or being culled.
+  topologyJump = 0;
+  // What fraction of the last solve's velocity credit was earned, 0..1.
+  //
+  // The path is a polyline through the wrap nodes, and the moment a node is
+  // added the polyline is longer: the span A→B becomes A→W→B, and |AW| + |WB| >
+  // |AB| by however far the span had already cut into the body before the
+  // regeneration noticed. That is a discretisation artefact — with a smaller
+  // step the wrap would have appeared with no deflection at all — and its size
+  // grows with how fast things are moving. A ball spinning at 31 rad/s sweeps a
+  // new wrap into being every frame, 9.5 cm of "length error" at a time
+  // (session-265f), and the ball & chain's whole path can jump half a metre in
+  // one frame (session-1474f).
+  //
+  // The constraint still has to be satisfied, so the *position* correction is
+  // made in full. What must not happen is the rope paying itself velocity for
+  // it: Δposition over Δt turns half a metre into a 96 m/s launch, and the rope
+  // did not accelerate anything — the description of it changed. So the credit
+  // is scaled by the share of the length error that bodies actually moving put
+  // there, which on an ordinary frame is all of it and this is 1.
+  topologyCreditScale = 1;
+  private frameBegun = false;
+  // What `absorbBlockedLength` has had to let out, accumulated — how badly the
+  // frame's length correction was blocked. It accumulates rather than
+  // overwrites because the stall runs more than once in a ball frame (once at
+  // the end of `physicsStep`, once after the push-out), and only the caller
+  // knows where its frame begins; `BallLevel` zeroes it there.
   stalledLength = 0;
+  // Extra length geometry is currently forcing on the constraint: the gap
+  // between where the solve wants the far end and where a surface will actually
+  // let it sit. Added to `maxRopeLength` to give `constraintLength`, the length
+  // the solver actually enforces.
+  //
+  // This is a *lease*, not a payment. It is re-derived from the present geometry
+  // every frame and released once the block eases, so `maxRopeLength` stays the
+  // length the rope really has and a persistent block costs a fixed amount of
+  // slack instead of a fresh instalment every frame. See `absorbBlockedLength`.
+  blockedSlack = 0;
+  private slackReleasedThisFrame = false;
   frictionCoefficient = 0.4;
 
   start: RopeAttachment;
@@ -107,6 +155,11 @@ export class Rope {
   wraps: RopeWrap[];
 
   private frameStartDistanceLookup = new Map<RopeNode, number>();
+  // Angle of rope wound onto the body the rope starts on, radians, *unwrapped*
+  // so it counts whole turns rather than resetting at each one. Null when no
+  // coil is on. See `syncCoil`.
+  private coilWindAngle: number | null = null;
+  private coilWrapDir: WrapDirection | null = null;
 
   constructor(
     start: RopeContact,
@@ -121,8 +174,16 @@ export class Rope {
     this.maxRopeLength = initialLength ?? this.calculateRopePathLength();
   }
 
+  // The length the solver enforces: the rope's own length plus whatever slack
+  // geometry is currently forcing on it. Everything that asks "is the rope over
+  // its length" reads this; `maxRopeLength` alone is what the rope *has*, which
+  // is what retract/extend and the growth invariant are about.
+  get constraintLength(): number {
+    return this.maxRopeLength + this.blockedSlack;
+  }
+
   get isTaut(): boolean {
-    return this.calculateRopePathLength() > this.maxRopeLength - 3 * PX;
+    return this.calculateRopePathLength() > this.constraintLength - 3 * PX;
   }
 
   retract(amount = PX): void {
@@ -168,8 +229,35 @@ export class Rope {
   // length solve — the same path regeneration physicsStep does first, exposed so
   // a caller can measure the true (wrapped) path length before the solver runs.
   syncWraps(bodies: PhysicsBody2D[]): void {
+    this.regenerateAndMeasure(bodies);
+  }
+
+  // Regenerate the wrap path and record what the regeneration alone did to the
+  // measured length, with the bodies held still. Accumulates across every
+  // regeneration in a frame, because the ball controller syncs the path once
+  // before the solve and `physicsStep` regenerates again — see
+  // `topologyCreditScale`.
+  private regenerateAndMeasure(bodies: PhysicsBody2D[]): void {
+    // Baseline taken *after* a coil sync, not before. The coil's nodes ride the
+    // body, so between frames they carry its rotation with them and the stored
+    // path is a turn's worth out of date; bringing the coil to the current
+    // geometry first is what makes the difference below the node set changing
+    // rather than the body having moved.
+    this.syncCoil();
+    const before = this.calculateRopePathLength();
     this.uncrossAdjacentNodes();
     this.regeneratePath(bodies);
+    this.topologyJump += Math.abs(this.calculateRopePathLength() - before);
+  }
+
+  // Zero the per-frame accounting. Callers that touch the rope more than once a
+  // frame (the ball controller syncs, solves, unwinds and re-bases) call this at
+  // the top of their frame; `physicsStep` does it for callers that do not.
+  beginFrame(): void {
+    this.stalledLength = 0;
+    this.topologyJump = 0;
+    this.slackReleasedThisFrame = false;
+    this.frameBegun = true;
   }
 
   // Wrap detection for a still-deploying ball chain. While the hook is in
@@ -265,7 +353,7 @@ export class Rope {
     const lowRotation = Mathf.min(startRotation, rotationAtFrameStart);
     const highRotation = Mathf.max(startRotation, rotationAtFrameStart);
     let bestRotation = startRotation;
-    let bestExcess = this.calculateRopePathLength() - this.maxRopeLength;
+    let bestExcess = this.calculateRopePathLength() - this.constraintLength;
 
     for (let i = 0; i < Rope.UNWIND_ITERATIONS && bestExcess > 0; i++) {
       body.globalRotation = bestRotation;
@@ -277,7 +365,7 @@ export class Rope {
         const candidate = Mathf.clamp(bestRotation + step, lowRotation, highRotation);
         if (candidate === bestRotation) break;
         body.globalRotation = candidate;
-        const excess = this.calculateRopePathLength() - this.maxRopeLength;
+        const excess = this.calculateRopePathLength() - this.constraintLength;
         if (excess < bestExcess) {
           bestRotation = candidate;
           bestExcess = excess;
@@ -308,8 +396,12 @@ export class Rope {
   }
 
   physicsStep(bodies: PhysicsBody2D[], delta: number): void {
-    this.uncrossAdjacentNodes();
-    this.regeneratePath(bodies);
+    if (!this.frameBegun) this.beginFrame();
+    this.frameBegun = false;
+    this.regenerateAndMeasure(bodies);
+    const lengthError = this.calculateRopePathLength() - this.constraintLength;
+    this.topologyCreditScale =
+      lengthError > 0 ? 1 - Mathf.clamp(this.topologyJump / lengthError, 0, 1) : 1;
 
     const prePositions = new Map<PhysicsBody2D, Vec2>();
     const preRotations = new Map<PhysicsBody2D, number>();
@@ -347,25 +439,33 @@ export class Rope {
       for (const body of bodies) {
         const dynamicBody = this.getDynamicBodyState(body);
         if (dynamicBody) {
+          // Scaled by `topologyCreditScale`: the share of this frame's length
+          // error that a wrap appearing or vanishing put there is corrected in
+          // position but earns no velocity.
           dynamicBody.addVelocity(
-            body.globalPosition.sub(prePositions.get(body)!).div(delta),
+            body.globalPosition
+              .sub(prePositions.get(body)!)
+              .div(delta)
+              .mul(this.topologyCreditScale),
           );
-          dynamicBody.addRotation((body.globalRotation - preRotations.get(body)!) / delta);
+          dynamicBody.addRotation(
+            ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale,
+          );
           // (Godot pushed the mutated transform back into the physics server here;
           // in this engine the body transform is already authoritative.)
         }
       }
     }
 
-    this.absorbBlockedLength();
+    this.absorbBlockedLength(delta);
   }
 
   // Winch stall: if scene geometry blocked the correction (a pinned player
-  // while retracting), the rope cannot actually shorten. Grow the max back to
-  // the settled length so the constraint doesn't wind up and catapult the player
-  // the moment the obstruction clears. A converged solve leaves length <= max,
-  // so this only bites when the solver was blocked, and it only ever *raises*
-  // the max — it can never pull anything tighter.
+  // while retracting), the rope cannot actually shorten, and the constraint has
+  // to be told so — otherwise it winds up against the obstruction and catapults
+  // whatever it is holding the moment that obstruction clears. A converged solve
+  // leaves length <= the constraint length, so this only bites when the solver
+  // was blocked, and it only ever lets rope out.
   //
   // Exposed because `physicsStep` is not always the last thing to move the
   // bodies: the ball controller depenetrates the ball afterwards (see
@@ -375,16 +475,31 @@ export class Rope {
   // anchor, since the ball was shoved back out after the solve had already
   // written its books.
   //
-  // It is a ratchet, and deliberately so — it can only ever let rope out, and
-  // whatever re-blocks the correction next frame is read as a fresh stall. That
-  // makes it the wrong thing to sit behind: anything feeding it a blocked
-  // correction every frame grows the rope without limit, which is how a ball
-  // winding its chain onto itself ended up with twenty times the chain it
-  // started with (see BallPlayer.clampToChainSpool, session-475f).
-  absorbBlockedLength(): void {
+  // What it lets out is a *lease* (`blockedSlack`), not a payment into
+  // `maxRopeLength`. The difference is everything, because a blocked correction
+  // is rarely a one-off. Paid into the length, each frame's instalment became
+  // the baseline the next frame measured against, so a rope held over its length
+  // by something that is not going away grew by that much again every frame,
+  // forever: a ball hanging from a ceiling, where all it takes is gravity's own
+  // 2.7 mm integration step being refused by the surface the ball is resting on,
+  // let 16 cm of chain out per second and ended up sliding away on the surplus
+  // (session-537f). Held as a lease it is re-derived from the present geometry
+  // instead, so the same persistent block costs the same fixed slack every
+  // frame, and the moment it eases the slack is released — at a bounded rate, so
+  // the rope reels back in rather than snapping to length. `maxRopeLength` is
+  // left meaning what it says: the length the rope actually has.
+  //
+  // Released once per frame however many times the frame stalls; `beginFrame`
+  // opens the next one.
+  absorbBlockedLength(delta: number): void {
     const settledLength = this.calculateRopePathLength();
-    this.stalledLength = Mathf.max(settledLength - this.maxRopeLength, 0);
-    if (settledLength > this.maxRopeLength) this.maxRopeLength = settledLength;
+    const blocked = Mathf.max(settledLength - this.maxRopeLength, 0);
+    this.stalledLength += Mathf.max(blocked - this.blockedSlack, 0);
+    const released = this.slackReleasedThisFrame
+      ? this.blockedSlack
+      : this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta;
+    this.blockedSlack = Mathf.max(Mathf.max(blocked, released), 0);
+    this.slackReleasedThisFrame = true;
   }
 
   private regenerateSpans(): RopePath[] {
@@ -691,6 +806,114 @@ export class Rope {
     this.wraps = newNodes;
     this.cullDuplicateNodes();
     this.wraps = cullDetachedNodes(this.start, this.end, this.wraps);
+    this.syncCoil();
+  }
+
+  // The coil: rope wound onto the circular body the rope *starts* on — the ball
+  // winding its own chain around itself.
+  //
+  // Everywhere else a wrap is a discrete decision about one corner, and that is
+  // the right model: the rope either bends around that corner or it does not.
+  // A coil is not that. It is one continuous quantity, the angle of rope lying
+  // on the circle, and representing it as a run of twenty tangent points made
+  // every frame's answer a fresh stack of twenty independent decisions. They do
+  // not agree frame to frame. `cullDetachedNodes` drops a wrap once the rope
+  // stops bending around it, which is correct per node and *cascades*: the tail
+  // node goes, the one before it inherits the new outgoing span and goes too. In
+  // session-458f three went at once and the measured path fell 18.6 cm with
+  // nothing having moved — which the solver dutifully "corrected" by snapping
+  // the bodies several centimetres, and the winch stall covered the rest.
+  //
+  // So the coil is carried as the angle instead, and the nodes are re-derived
+  // from it. Three things determine it, and each is continuous on its own:
+  //
+  //   * the material point the rope leaves the body from (`start`), which simply
+  //     rotates with the body;
+  //   * the tangent point the rope leaves *at*, which is geometry — where a
+  //     taut line from the next node touches the circle — and slides smoothly as
+  //     that node moves;
+  //   * how many whole turns are in between, which is the only thing that has to
+  //     be remembered, and is remembered by unwrapping the angle against last
+  //     frame's rather than re-deriving it.
+  //
+  // Winding past a full turn, and unwinding back through zero, are then both
+  // ordinary arithmetic on one number. There is no create, no cull, and nothing
+  // to cascade.
+  private syncCoil(): void {
+    const body = this.start.contact.obj;
+    const shape = this.start.contact.shape;
+    const shapeIndex = this.start.contact.shapeIndex;
+    const onCoilShape = (node: RopeNode): boolean =>
+      node.contact.obj === body && node.contact.shapeIndex === shapeIndex;
+
+    if (shape.shape.kind !== "circle" || !shape.wrappable) {
+      this.coilWindAngle = null;
+      return;
+    }
+    // How far the leading run of self-wraps reaches. A coil *starts* when the
+    // generator puts one there; once it exists it is kept alive by its angle,
+    // not by the run, so that a frame where the run momentarily collapses
+    // cannot lose the turns that are wound on.
+    let runLength = 0;
+    while (runLength < this.wraps.length && onCoilShape(this.wraps[runLength]!)) runLength++;
+    if (runLength === 0 && this.coilWindAngle === null) return;
+    const wrapDir = runLength > 0 ? this.wraps[0]!.wrapDir : this.coilWrapDir;
+    if (wrapDir === null) {
+      this.coilWindAngle = null;
+      return;
+    }
+
+    const centre = shape.globalPosition;
+    const radius = shape.shape.radius;
+    const exitTowards = (this.wraps[runLength] ?? this.end).contact.globalPosition;
+    // No tangent exists to a point inside the circle — a degenerate frame, and
+    // not one to re-derive an angle from. Leave the coil as it stands.
+    if (radius <= 0 || exitTowards.distanceTo(centre) <= radius) return;
+
+    const tangentPoint = RopeGeneration.calculateCircleTangentPoint(
+      shape,
+      wrapDir,
+      exitTowards,
+      GenerationDirection.Reversed,
+    );
+    const fromDirection = centre.directionTo(this.start.contact.globalPosition);
+    const rawAngle = Calc.absoluteAngle(
+      fromDirection,
+      centre.directionTo(tangentPoint),
+      wrapDir,
+    );
+    // Unwrap: pick the whole number of turns that keeps the angle nearest last
+    // frame's, so the measure runs continuously through 0 and through 2π instead
+    // of jumping a full turn at either.
+    let windAngle = rawAngle;
+    if (this.coilWindAngle !== null) {
+      const turns = Math.round((this.coilWindAngle - rawAngle) / Mathf.Tau);
+      windAngle = rawAngle + turns * Mathf.Tau;
+    }
+    if (windAngle <= Rope.MIN_COIL_ANGLE) {
+      // Spooled off. The rope leaves the body straight from its start point.
+      this.coilWindAngle = null;
+      this.coilWrapDir = null;
+      this.wraps = this.wraps.slice(runLength);
+      return;
+    }
+    this.coilWindAngle = windAngle;
+    this.coilWrapDir = wrapDir;
+
+    // Re-sample the arc. The last sample is the tangent point exactly, which is
+    // the only one the length solve reads (`generatePathObjects` collapses a run
+    // of same-circle wraps into the one that leaves the body); the rest carry the
+    // drawn chain round the rim.
+    const steps = Math.max(1, Math.ceil(windAngle / Rope.COIL_NODE_ARC));
+    const coilNodes: RopeWrap[] = [];
+    for (let i = 1; i <= steps; i++) {
+      const swept = (windAngle * i) / steps;
+      const point = centre.add(fromDirection.rotated(swept * (wrapDir as number)).mul(radius));
+      coilNodes.push(
+        new RopeWrap(new RopeContact(body, point.sub(body.globalPosition), shapeIndex), wrapDir),
+      );
+    }
+    this.wraps = [...coilNodes, ...this.wraps.slice(runLength)];
   }
 
   // Uncross segments adjacent to corner nodes of oppositely-wrapped shapes.
@@ -784,10 +1007,52 @@ export class Rope {
     return [start, ...pathWraps, end];
   }
 
+  // Length of one span of the path. A span between two nodes riding the same
+  // circle is rope lying *on* that circle, so it is the arc, not the chord.
+  //
+  // This is what makes the path length continuous as wrap nodes come and go. A
+  // coil is stored as a run of discrete tangent points, and the generator's
+  // create/cull decisions for the ones at the tail of the run are marginal — in
+  // session-458f four of them were dropped in a single regeneration and the
+  // measured path fell 19.8 cm with nothing having moved, which the solver then
+  // "corrected" by snapping the bodies several centimetres and the winch stall
+  // covered whatever it could not reach. Measured as arcs there is nothing to
+  // correct: dropping an intermediate node leaves r·(θ₃−θ₁) exactly as it was,
+  // where dropping it from a chord sum does not. Chords also *understate* a
+  // coil, and by more the coarser the node spacing, so the arc is the more
+  // faithful measure besides being the stable one.
+  //
+  // Only the length changes. The solver still works in spans: tension acts along
+  // the chord's tangent, and that geometry is unaffected.
+  private spanLength(from: RopeNode, to: RopeNode): number {
+    const chord = from.contact.globalPosition.distanceTo(to.contact.globalPosition);
+    if (from.contact.obj !== to.contact.obj) return chord;
+    const shape = from.contact.shape;
+    if (shape.shape.kind !== "circle" || to.contact.shape !== shape) return chord;
+    // The sweep direction comes from whichever end is a wrap; a run of coil
+    // nodes shares it, and a span between two ends that are not wraps at all is
+    // not a coil.
+    const wrapDir =
+      to instanceof RopeWrap ? to.wrapDir : from instanceof RopeWrap ? from.wrapDir : null;
+    if (wrapDir === null) return chord;
+    const centre = shape.globalPosition;
+    const radius = shape.shape.radius;
+    if (radius <= 0) return chord;
+    const swept = Calc.absoluteAngle(
+      centre.directionTo(from.contact.globalPosition),
+      centre.directionTo(to.contact.globalPosition),
+      wrapDir,
+    );
+    // A near-half-turn or more between adjacent nodes is not a coil step — the
+    // rope is crossing the body, not lying on it — so trust the chord there.
+    if (swept > Mathf.Pi) return chord;
+    return radius * swept;
+  }
+
   private calculateRopePathLength(): number {
     let cumulativeLength = 0;
     for (const span of this.regenerateSpans()) {
-      cumulativeLength += span.span.start.distanceTo(span.span.end);
+      cumulativeLength += this.spanLength(span.from, span.to);
     }
     if (this.start.contact.obj instanceof Player) {
       cumulativeLength -= this.start.contact.obj.radialCoMOffset;
@@ -874,10 +1139,10 @@ export class Rope {
 
   private correctShapePositionAndRotation(): number | null {
     const currentLength = this.calculateRopePathLength();
-    if (currentLength <= this.maxRopeLength) return null;
+    if (currentLength <= this.constraintLength) return null;
 
     const pathObjects = this.generatePathObjects();
-    const lengthError = currentLength - this.maxRopeLength;
+    const lengthError = currentLength - this.constraintLength;
     let totalEffectiveInverseInertia = 0;
     const dynamicPathObjects: PathObject[] = [];
 
@@ -957,8 +1222,9 @@ export class Rope {
     let cumulativeLength = 0;
     for (const node of this.path()) {
       if (node instanceof RopeWrap) {
-        const distanceToPrev = node.contact.globalPosition.distanceTo(prev.contact.globalPosition);
-        cumulativeLength += distanceToPrev;
+        // Arc, not chord, for a coil step — the same measure the length solve
+        // uses, so friction distances stay consistent with it.
+        cumulativeLength += this.spanLength(prev, node);
         lookup.set(node, cumulativeLength);
         prev = node;
       }
