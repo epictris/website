@@ -472,6 +472,52 @@ function caseMomentum(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// rigid-ramp-hold: `ramp-hold`, with the ramp made of scenery instead of world.
+//
+// Identical geometry, identical coefficients; the only difference is that the
+// ramp is a rigid body, so the resting contact gets no position pin. RED, and
+// the next piece of work: the pin is what holds a slope at all, because kinetic
+// friction cancels the velocity gravity adds each frame and never the *step* the
+// integrator already took with it, and this engine integrates before it solves.
+// The per-frame leak is g*sin(theta)*dt^2, which at 5 degrees comes to the 22 cm
+// measured here almost exactly.
+//
+// It stays body-versus-static today because a pin writes position, and against
+// another dynamic body the honest form is a pin on the pair's RELATIVE position,
+// split by inverse mass - along with an answer to what "gripped" even means for
+// two bodies that are both free to move. The pair solver is what makes that
+// possible (the old objection, that the pin would fight the other body's own
+// resolution pass, no longer applies - there is no other pass), but it is a
+// design question and not a port of the static one.
+//
+// Getting it wrong is worse than the creep: a grip that holds everything is a
+// weld, and a welded body is immovable by anything that lands on it.
+// ---------------------------------------------------------------------------
+function caseRigidRampHold(sims: Sim[]): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  for (const deg of [5, 20]) {
+    const sim = new Sim(`rigid ramp ${deg}deg`, 120);
+    sims.push(sim);
+    const th = deg * DEG;
+    // A heavy, gravity-free slab: it stands in for scenery that stays put, so
+    // the case measures the resting contact and not the ramp falling over.
+    const ramp = sim.addRigid(rectShape(40, 1), Vec2.ZERO, th);
+    ramp.mass *= 50;
+    ramp.inertia *= 50;
+    ramp.gravityScale = 0;
+    const box = sim.addRigid(rectShape(0.8, 0.5), new Vec2(0, -0.75).rotated(th), th);
+    const start = box.globalPosition;
+    sim.step(900);
+    const drift = box.globalPosition.distanceTo(start);
+    const good = drift < 0.1;
+    passed &&= good;
+    details.push(`${good ? "ok  " : "BAD "} ${deg}deg: drift=${(drift * 100).toFixed(1)}cm in 15s`);
+  }
+  return ok("rigid-ramp-hold — a box holds a ramp made of scenery", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // spin-drive: a spinning ball resting on a crate must not drive it away.
 //
 // The sibling `impact-transfer` needs, and the one case the pair solver makes
@@ -551,6 +597,7 @@ export function runContactCases(): ContactResult[] {
     caseStack(sims),
     caseRampHold(sims),
     caseRampBreak(sims),
+    caseRigidRampHold(sims),
     caseTopple(sims),
     casePivot(sims),
     caseImpactTransfer(sims),

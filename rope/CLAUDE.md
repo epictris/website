@@ -94,26 +94,27 @@ The remaining `primaryShape()` callers are a body asking about **itself** where 
 Rigid bodies may be any of the three. A polygon resolves through a **contact manifold**
 (`engine/manifold.ts`: SAT plus incident-face clipping, up to two points) rather than the
 single point a circle produces — one point cannot resist a rotation about itself, so a box
-would teeter on a corner instead of settling. `World.resolveRigidLoop` is a sibling of
-`resolveRigidCircle` rather than a generalisation of it, so the circle path (and the ball
-avatar's steering branch inside it) stays bit-identical to recorded replays.
+would teeter on a corner instead of settling. Those manifolds feed `World.solveContacts`
+(see **The contact solver**); `resolveRigidCircle` is kept as a separate path rather than
+generalised, so the circle-against-static case (and the ball avatar's steering branch inside
+it) stays bit-identical to recorded replays.
 
 ## Known simplifications (candidates for follow-up)
 
-- **Static contacts are not in the constraint solver.** Rigid-vs-rigid goes through the pair
-  solver (see **The contact solver** below); body-vs-static still runs on the per-body
-  routines, so a scene's contacts are solved as *two* systems rather than one. The cost is
-  that a load path running through a static contact cannot converge: a four-box pile shears
-  apart and lands spread across the floor, because within a frame the second box presses on a
-  bottom box the pair solver believes is unsupported and the floor corrects it only
-  afterwards, so the error reverses every frame and sawtooths. Iteration count makes no
-  difference at all (8, 32 and 128 land within 5 cm of each other), which is what says
-  under-convergence is not the problem. `cli contacts` `stack` is the case, and it is red on
-  purpose. Folding statics into the same list is the known follow-up, and the valuable one:
-  warm-started static manifolds are where a standard engine's resting-stack quality comes
-  from, and several of the resting-contact patches below (the damp, the iteration tuning)
-  exist to compensate for its absence. `settle`'s triangle, which holds a 0.203 deg limit
-  cycle for ever, is the same story on one body.
+- **A body resting on another RIGID body has no position pin, so it creeps down a slope.**
+  Stiction is still body-versus-static (`applyStaticGrip`). Kinetic friction cancels the
+  velocity gravity adds each frame and never the *step* the integrator already took with it,
+  and this engine integrates before it solves - so the leak is `g*sin(theta)*dt^2` per frame,
+  and a box on a 5 deg rigid ramp walks 22 cm in fifteen seconds while the same box on a
+  static ramp does not move at all. A ball is far worse (10 m), because friction turns its
+  slide into a roll and nothing pins it. `cli contacts` `rigid-ramp-hold` is the case, and it
+  is red on purpose.
+  The pair solver is what makes the fix possible - the old objection, that a pin would fight
+  the other body's own resolution pass, no longer applies, because there is no other pass -
+  but it is a design question rather than a port: the honest form is a pin on the pair's
+  *relative* position split by inverse mass, plus an answer to what "gripped" means when both
+  bodies can move. Getting it wrong is worse than the creep, since a grip that holds
+  everything is a weld and a welded body is immovable by whatever lands on it.
 - `World` rigidbody dynamics carry no broadphase, no islands and no sleeping; the pair loop is
   O(n²), which at this scene scale is complexity with no payoff. Sleeping is the standard
   answer to "momentum transfer destabilises settled piles", and is the wheel to import if that
@@ -1032,7 +1033,7 @@ angular half of the normal impulse solved just above it, so the linear approach 
 was cancelling survives - and the push-out then hides it.
 A crate settled flat on a floor sat at a perfectly stable position while reporting a
 permanent 0.275 m/s into the ground, re-earned and re-pushed-out every frame.
-`resolveRigidLoop` now keeps only the *separating* part; the circle path deals in a single
+The manifold path now keeps only the *separating* part; the circle path deals in a single
 contact whose normal impulse is not split, so it is left bit-for-bit alone.
 
 Two more things stiction-on-scenery broke, and both come from the same root: the grip was
@@ -1048,7 +1049,7 @@ rotation written after the contact solve is kept in full and re-frozen next fram
 that turns the body a fraction of a degree per tug ratchets it round for good.
 That is what `session-1195f` reported: a polygon group a chain had walked from -13° to -22.8°
 stayed there with the chain gone, reading as gravity having been switched off for it.
-`resolveRigidLoop` now leaves rotation alone.
+The manifold path now leaves rotation alone.
 The per-point normal impulses are what resist rotation - which is what a two-point manifold is
 *for* - and a body that really is toppling spins past `STICK_SPIN`, releases the grip and
 falls.
@@ -1079,8 +1080,8 @@ The corpus ceiling went 11 → 46 frames (`session-431f`, over which `maxRopeLen
 move at all and the lease is repaid to exactly zero), so `CHAIN_STALL_FRAMES_TOLERANCE` is 60.
 `rope-grew` holds the gap the blunter count leaves.
 
-The pair solver moved that ceiling again, and left **little headroom**: the worst run in the
-corpus is now `session-1195f` at **56** frames against the tolerance of 60, where it was 8.
+The pair solver moved that ceiling again, and left **thin headroom**: the worst run in the
+corpus is now `session-1195f` at **53** frames against the tolerance of 60, where it was 8.
 The rest of the corpus barely moved - second worst 21 against 18 before, median 2 against 1 -
 so this is one outlier and not a shift, and the block is real: over the whole run the ball is at
 a dead stop, wedged against the face of the rigid polygon its 0.2 m chain is anchored to, with
@@ -1162,8 +1163,17 @@ Only friction: the normal constraint reads the true velocity, since it cannot do
 `contactDamp` is applied once per body per frame, to the bodies that met something - and a speculative contact carries no impulse, so it is not something met.
 Damping a body for being merely *near* another is a permanent brake on something that is not touching anything: a ball hanging on a chain a centimetre clear of a crate was slowed 2% every frame, the chain read that refusal as a block, and the winch stall paid out slack against it for ever - 1.7 m of chain grown to 3.7 and never released.
 
-Body-vs-static stays on `resolveRigidLoop` / `resolveRigidCircle`, which keeps the ball's steering branch and its centred-circle path bit-identical to every recorded replay, and keeps stiction and the stick anchor where they belong (a position pin has no rival against an immovable surface, and would fight another rigid body's own pass).
-The consequence is that a scene is solved as two systems rather than one - see the first entry under **Known simplifications**, which is where `stack` is red.
+**Static contacts are in the same list.**
+They enter as one-sided constraints with zero inverse mass and inertia, which is what lets one solver handle both without a branch - and it is not a tidiness argument, it is the difference between a pile converging and not.
+A load path runs *through* a static contact: a four-box pile carries the top box's weight down to the floor and the floor's reaction back up. Solved in two separate systems, the bottom box is pressed on by the box above while the pair solve believes it is unsupported, and the floor corrects it only afterwards - so the error reverses every frame and sawtooths. The pile sheared apart and landed spread over a metre and a half of floor, a triangle resting on the floor held a 0.203 deg limit cycle for ever, and two compound groups leaning on each other jittered at 0.033 rad/s indefinitely while the ball resting on one of them was ratcheted 13 cm downhill by the vibration (`session-298f`).
+In one system all three settle to **exactly zero**.
+That the answer now responds to `VELOCITY_ITERATIONS` at all is the tell: while the systems were split, 8, 32 and 128 iterations landed within 5 cm of each other.
+
+The one contact that stays out is a **circle against static geometry**.
+`resolveRigidCircle` carries the ball & chain avatar's steering branch and a centred-circle path that is bit-identical to every recorded replay, and it solves that contact whole - normal, friction, grip and pin - so routing it through the list as well would solve it twice.
+Vertex shapes have no such path left: `applyStaticGrip` is all that remains of `resolveRigidLoop`, and it is only the position pin.
+The *velocity* half of stiction is gone, because it was always a Coulomb-capped tangential impulse solved at the contact points, which is exactly what the tangential constraint is; keeping a second copy would apply friction twice.
+What no velocity constraint can remove is gravity's per-frame integration *step*, since this engine integrates before it solves - so the pin stays, as the honest patch for that ordering rather than as a leftover.
 
 ## Resting contacts
 

@@ -1,0 +1,149 @@
+{
+  "chains": [
+    {
+      "a": {
+        "body": 4,
+        "x": 300,
+        "y": -180
+      },
+      "b": {
+        "body": 5,
+        "x": 620,
+        "y": 9.999999999999998
+      }
+    },
+    {
+      "a": {
+        "body": 1,
+        "x": -638.2623387455467,
+        "y": 330
+      },
+      "b": {
+        "body": 6,
+        "x": 860.0144148012207,
+        "y": 398.9262326550096
+      }
+    }
+  ],
+  "player": {
+    "x": -450,
+    "y": 120,
+    "radius": 8
+  },
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 0,
+      "y": 600,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 2400,
+        "h": 40
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "static",
+      "x": -600,
+      "y": 300,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 400,
+        "h": 60
+      },
+      "color": "#6b7280",
+      "opacity": 0.5,
+      "friction": 1,
+      "group": "g306"
+    },
+    {
+      "kind": "static",
+      "x": -430,
+      "y": 180,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 60,
+        "h": 300
+      },
+      "color": "#6b7280",
+      "opacity": 0.5,
+      "friction": 1,
+      "group": "g306"
+    },
+    {
+      "kind": "static",
+      "x": -300,
+      "y": 40,
+      "rot": 0.5235987755982988,
+      "shape": {
+        "kind": "rect",
+        "w": 220.00000000000003,
+        "h": 60
+      },
+      "color": "#6b7280",
+      "opacity": 0.5,
+      "friction": 1,
+      "group": "g306"
+    },
+    {
+      "kind": "static",
+      "x": 300,
+      "y": -200,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 300,
+        "h": 40
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1
+    },
+    {
+      "kind": "rigid",
+      "x": 620,
+      "y": 60,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 50
+      },
+      "color": "#8a5a44",
+      "opacity": 0.7,
+      "friction": 1
+    },
+    {
+      "kind": "rigid",
+      "x": 900,
+      "y": 400,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 40
+      },
+      "color": "#4a6b8a",
+      "opacity": 0.7,
+      "friction": 1,
+      "group": "g312"
+    },
+    {
+      "kind": "rigid",
+      "x": 990,
+      "y": 400,
+      "rot": 0,
+      "shape": {
+        "kind": "circle",
+        "r": 40
+      },
+      "color": "#4a6b8a",
+      "opacity": 0.7,
+      "friction": 1,
+      "group": "g312"
+    }
+  ]
+}
