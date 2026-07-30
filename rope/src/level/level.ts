@@ -22,6 +22,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
+import { buildSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 
 // Scripted-mover update: sets the body's transform for the given sim time.
@@ -53,6 +54,9 @@ export class Level {
   // Decoration drawn behind the level, in metres. Read only by the renderer;
   // like the camera regions, the sim never touches them.
   readonly backgrounds: BackgroundData[];
+  // Chains strung between authored bodies, solved every frame after the world
+  // integrates (see SceneChain).
+  readonly sceneChains: SceneChain[];
   onReset: (() => void) | null = null;
 
   constructor(rawData: LevelData, init?: (level: Level) => void) {
@@ -65,7 +69,9 @@ export class Level {
     this.world.add(this.player);
     this.bodies.push(this.player);
 
-    this.bodies.push(...buildLevelBodies(this.world, data, () => this.onReset?.()));
+    const built = buildLevelBodies(this.world, data, () => this.onReset?.());
+    this.bodies.push(...built.wrapBodies);
+    this.sceneChains = buildSceneChains(data, built.byIndex);
 
     init?.(this);
 
@@ -134,6 +140,12 @@ export class Level {
 
     // Godot integrates dynamic bodies after _physics_process.
     this.world.integrate(delta);
+
+    // Scene chains solve last, after integration has moved the bodies they hold
+    // - so the frame ends inside the constraint rather than |v|·dt outside it.
+    // A level with no chains does nothing here, which is what keeps every
+    // recorded replay bit-identical.
+    for (const chain of this.sceneChains) chain.physicsStep(this.bodies, delta);
 
     this.cameraPosition = this.player.globalPosition;
   }

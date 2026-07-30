@@ -26,6 +26,12 @@ export class CollisionShape2D implements ShapeTransform {
     public owner: CollisionObject2D,
     public shape: Shape,
     public localOffset: Vec2 = Vec2.ZERO,
+    // Rotation of the shape *within* the body's local frame, radians. A compound
+    // body is authored as several pieces at their own angles - an L of two rects
+    // meeting at 45°, a hull of polygons - and one body rotation cannot express
+    // that. The default 0 makes a shape's rotation exactly the body's, which is
+    // what every single-shape body (and every recorded replay) has.
+    public localRotation = 0,
   ) {}
   get globalPosition(): Vec2 {
     return this.owner.globalPosition.add(
@@ -33,7 +39,7 @@ export class CollisionShape2D implements ShapeTransform {
     );
   }
   get globalRotation(): number {
-    return this.owner.globalRotation;
+    return this.owner.globalRotation + this.localRotation;
   }
 }
 
@@ -81,9 +87,10 @@ export abstract class CollisionObject2D {
     return s;
   }
 
-  // Mount an extra shape offset in the body's local frame (rotates with it).
-  addShape(shape: Shape, localOffset: Vec2): CollisionShape2D {
-    const s = new CollisionShape2D(this, shape, localOffset);
+  // Mount an extra shape offset (and optionally turned) in the body's local
+  // frame; both ride the body's transform.
+  addShape(shape: Shape, localOffset: Vec2, localRotation = 0): CollisionShape2D {
+    const s = new CollisionShape2D(this, shape, localOffset, localRotation);
     this.collisionShapes.push(s);
     return s;
   }
@@ -153,12 +160,24 @@ export abstract class CollisionObject2D {
   // The primary shape at the interpolated transform — what the renderer paths
   // instead of the live `getShape()`.
   renderShape(alpha: number): ShapeTransform {
-    const s = this.getShape();
     const rot = this.renderRotation(alpha);
+    return this.placeShape(this.getShape(), this.renderPosition(alpha), rot);
+  }
+
+  // Every shape at the interpolated transform, primary first. A compound body is
+  // several pieces on one transform, so the renderer draws them all rather than
+  // only the one `renderShape` returns.
+  renderShapes(alpha: number): ShapeTransform[] {
+    const pos = this.renderPosition(alpha);
+    const rot = this.renderRotation(alpha);
+    return this.collisionShapes.map((s) => this.placeShape(s, pos, rot));
+  }
+
+  private placeShape(s: CollisionShape2D, pos: Vec2, rot: number): ShapeTransform {
     return {
       shape: s.shape,
-      globalPosition: this.renderPosition(alpha).add(s.localOffset.rotated(rot)),
-      globalRotation: rot,
+      globalPosition: pos.add(s.localOffset.rotated(rot)),
+      globalRotation: rot + s.localRotation,
     };
   }
 }

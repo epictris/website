@@ -12,17 +12,27 @@ import { hexToRgba } from "../render/color";
 import {
   arrowEnds,
   CAMERA_REGION_COLOR,
+  chainEnds,
   ED_LAYERS,
+  groupBounds,
+  groupCentroid,
+  groupMembers,
   halfExtents,
   isArrowNote,
   NOTE_COLOR,
   toWorld,
+  type EdChain,
   type EdItem,
   type EdLayer,
   type EdModel,
 } from "./model";
 import { DEFAULT_VIEWPORT_SCALE } from "../level/levelFormat";
-import { pathOutline, pathOutlineGrown, type Outline } from "../render/shapePath";
+import {
+  pathOutline,
+  pathOutlineGrown,
+  pathOutlineInto,
+  type Outline,
+} from "../render/shapePath";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -39,6 +49,18 @@ const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the re
 const BACKGROUND_EDGE = "#4ec9b0";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
+
+// Chains. Forged iron rather than a saturated editor colour: a chain is played,
+// not editor furniture, so it is drawn as the thing it will be and only its
+// handles are chrome. `CHAIN_DEFAULT_COLOR` is what an unauthored chain shows in
+// the inspector's colour well - the same steel the game's links are drawn in.
+export const CHAIN_DEFAULT_COLOR = "#8a94a6";
+export const CHAIN_HIT_PX = 7; // pointer pick band, half-width in screen px
+const CHAIN_ANCHOR_R_PX = 3.5;
+// Compound bodies. A dashed hull and spokes to the centre of mass - the point
+// the built body's origin sits at and the point it rotates about, so it has to
+// be visible while a group is being laid out.
+const GROUP_MARK = "#7fd6a8";
 
 export const HANDLE_SIZE_PX = 8; // drawn square side
 export const HANDLE_HIT_PX = 9; // pointer pick radius
@@ -124,6 +146,36 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   };
 }
 
+// Screen positions of a chain's two anchor handles, or null if either body it
+// was tied to has gone.
+export function computeChainHandles(
+  cam: Camera,
+  model: EdModel,
+  chain: EdChain,
+): { a: Vec2; b: Vec2 } | null {
+  const ends = chainEnds(model, chain);
+  if (!ends) return null;
+  return { a: worldToScreen(cam, ends.a), b: worldToScreen(cam, ends.b) };
+}
+
+// The rotate knob for a whole compound body: above the group's bounding box, on
+// the world's up axis. Deliberately not on any one member's up axis - the pieces
+// have their own angles and the body as a whole has none, so the knob is placed
+// by the group's extent and the drag measures how far the pointer swings rather
+// than snapping something to the cursor.
+export function computeGroupHandles(
+  cam: Camera,
+  items: readonly EdItem[],
+): { rotate: Vec2; rotateBase: Vec2; centre: Vec2 } {
+  const box = groupBounds(items);
+  const topMid = worldToScreen(cam, new Vec2((box.min.x + box.max.x) / 2, box.min.y));
+  return {
+    rotate: topMid.add(new Vec2(0, -ROT_OFFSET_PX)),
+    rotateBase: topMid,
+    centre: worldToScreen(cam, groupCentroid(items)),
+  };
+}
+
 // The item's outline — one description, shared with the game renderer, the
 // backdrop pass and the SVG snapshot, so an authored shape is drawn by exactly
 // the same geometry that plays.
@@ -149,6 +201,49 @@ export function pathRegionBuffer(
 ): void {
   ctx.beginPath();
   pathOutlineGrown(ctx, body.pos, body.rot, outlineOf(body), buffer);
+}
+
+// Every piece of a compound body accumulated into one path, so it can be filled
+// as their union (nonzero) rather than one fill per piece.
+function unionPath(items: readonly EdItem[]): Path2D {
+  const p = new Path2D();
+  for (const i of items) pathOutlineInto(p, i.pos, i.rot, outlineOf(i));
+  return p;
+}
+
+// Stroke each piece only where it lies outside every sibling - the compound
+// body's real outline. `style` sets the stroke before each piece, so the same
+// walk serves the selection halo and the body's own border. Mirrors
+// `drawCompoundGeometry` in render/renderer.ts, including why the siblings are
+// clipped one at a time: a single even-odd clip keeps the region inside two of
+// them, which is exactly where an interior seam sits.
+function strokeCompoundOutline(
+  ctx: CanvasRenderingContext2D,
+  items: readonly EdItem[],
+  style: () => void,
+): void {
+  const box = groupBounds(items);
+  const pad = 1;
+  for (let i = 0; i < items.length; i++) {
+    ctx.save();
+    for (let j = 0; j < items.length; j++) {
+      if (i === j) continue;
+      const outside = new Path2D();
+      outside.rect(
+        box.min.x - pad,
+        box.min.y - pad,
+        box.max.x - box.min.x + 2 * pad,
+        box.max.y - box.min.y + 2 * pad,
+      );
+      pathOutlineInto(outside, items[j]!.pos, items[j]!.rot, outlineOf(items[j]!));
+      ctx.clip(outside, "evenodd");
+    }
+    const own = new Path2D();
+    pathOutlineInto(own, items[i]!.pos, items[i]!.rot, outlineOf(items[i]!));
+    style();
+    ctx.stroke(own);
+    ctx.restore();
+  }
 }
 
 function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
@@ -349,6 +444,52 @@ function drawNoteText(ctx: CanvasRenderingContext2D, cam: Camera, item: EdItem):
   ctx.restore();
 }
 
+// Compound-body marks. Every group gets a diamond at its centre of mass - the
+// origin its built body will have, and the point it rotates about - and a
+// selected one adds spokes to each piece plus a dashed hull, which is what says
+// "these are one body" rather than "these shapes happen to overlap".
+function drawGroupMarks(
+  ctx: CanvasRenderingContext2D,
+  geometry: readonly EdItem[],
+  selectedIds: ReadonlySet<number>,
+  worldLine: number,
+): void {
+  const groups = new Set<number>();
+  for (const b of geometry) if (b.group !== null) groups.add(b.group);
+  for (const id of groups) {
+    const members = groupMembers(geometry, id);
+    if (members.length < 2) continue;
+    const centre = groupCentroid(members);
+    const selected = members.some((m) => selectedIds.has(m.id));
+    ctx.strokeStyle = GROUP_MARK;
+    if (selected) {
+      const box = groupBounds(members);
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.setLineDash([6 * PX, 4 * PX]);
+      ctx.strokeRect(box.min.x, box.min.y, box.max.x - box.min.x, box.max.y - box.min.y);
+      ctx.setLineDash([]);
+      ctx.lineWidth = worldLine;
+      ctx.beginPath();
+      for (const m of members) {
+        ctx.moveTo(centre.x, centre.y);
+        ctx.lineTo(m.pos.x, m.pos.y);
+      }
+      ctx.stroke();
+    }
+    // The centre-of-mass diamond, always: a group has to be identifiable as one
+    // without being selected first.
+    const r = 5 * worldLine;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.beginPath();
+    ctx.moveTo(centre.x, centre.y - r);
+    ctx.lineTo(centre.x + r, centre.y);
+    ctx.lineTo(centre.x, centre.y + r);
+    ctx.lineTo(centre.x - r, centre.y);
+    ctx.closePath();
+    ctx.stroke();
+  }
+}
+
 export function drawEditor(
   ctx: CanvasRenderingContext2D,
   dpr: number,
@@ -363,6 +504,12 @@ export function drawEditor(
   // pointer is, so the outline is visible while it is being drawn rather than
   // only once it closes.
   polyDraft: { verts: readonly Vec2[]; cursor: Vec2 } | null = null,
+  // Chains carry their own selection (see `selectedChainIds` in editor.ts).
+  selectedChainIds: ReadonlySet<number> = new Set<number>(),
+  // A chain being strung out: where it started and where the pointer is, plus
+  // whether it is currently over a body it could land on - so the gesture says
+  // in advance whether releasing will make a chain or drop it.
+  chainDraft: { from: Vec2; to: Vec2; valid: boolean } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, cam, w, h);
@@ -406,7 +553,43 @@ export function drawEditor(
   const ordered = visibleLayers.has("geometry")
     ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
     : [];
+  // Compound bodies draw as one object rather than as their pieces - union fill,
+  // and a border only where a piece is not covered by a sibling. Drawn piece by
+  // piece instead, the overlaps fill twice (a darker patch) and the joins get a
+  // border each (a crack across a solid wall), neither of which is in the level.
+  // Anchors keep the per-shape path: their fill is a grate lattice punched out of
+  // each piece, which has no union form.
+  const drawnAsGroup = new Set<number>();
   for (const body of ordered) {
+    if (body.group === null || body.kind === "anchor" || drawnAsGroup.has(body.id)) continue;
+    const members = groupMembers(ordered, body.group).filter((m) => m.kind !== "anchor");
+    if (members.length < 2) continue;
+    for (const m of members) drawnAsGroup.add(m.id);
+    const union = unionPath(members);
+    ctx.fillStyle = hexToRgba(body.color, body.opacity);
+    ctx.fill(union);
+    if (members.some((m) => selectedIds.has(m.id))) {
+      strokeCompoundOutline(ctx, members, () => {
+        ctx.strokeStyle = SELECT;
+        ctx.lineWidth = worldLine * 5;
+        ctx.setLineDash([]);
+      });
+    }
+    strokeCompoundOutline(ctx, members, () => {
+      if (body.kind === "impermeable") {
+        ctx.strokeStyle = IMPERMEABLE_EDGE;
+        ctx.lineWidth = worldLine * 2;
+        ctx.setLineDash([5 * PX, 3 * PX]);
+      } else {
+        ctx.strokeStyle = body.color;
+        ctx.lineWidth = worldLine;
+        ctx.setLineDash([]);
+      }
+    });
+    ctx.setLineDash([]);
+  }
+  for (const body of ordered) {
+    if (drawnAsGroup.has(body.id)) continue;
     // Areas fill with their glyph cut out of them — the same calls the game
     // makes, so authoring shows exactly what play shows.
     if (body.kind === "force") {
@@ -468,6 +651,62 @@ export function drawEditor(
       ctx.lineWidth = worldLine;
       ctx.stroke();
     }
+  }
+
+  // Compound-body marks, over the geometry they describe. A group is one body,
+  // and nothing about the drawn shapes says so on their own - they are simply
+  // several shapes touching - so the marks are what make the seam rule visible
+  // while a level is being laid out.
+  if (visibleLayers.has("geometry")) {
+    drawGroupMarks(ctx, geometry, selectedIds, worldLine);
+  }
+
+  // Chains over the bodies they hold. Drawn STRAIGHT, because that is what the
+  // solver renders: a chain's span is a straight line between wrap nodes, and
+  // drawing a guessed sag here would be a drawing of something the level does
+  // not contain.
+  if (visibleLayers.has("geometry")) {
+    for (const c of model.chains) {
+      const ends = chainEnds(model, c);
+      if (!ends) continue;
+      const selected = selectedChainIds.has(c.id);
+      if (selected) {
+        ctx.strokeStyle = SELECT;
+        ctx.lineWidth = worldLine * 5;
+        ctx.beginPath();
+        ctx.moveTo(ends.a.x, ends.a.y);
+        ctx.lineTo(ends.b.x, ends.b.y);
+        ctx.stroke();
+      }
+      const color = c.color ?? CHAIN_DEFAULT_COLOR;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = worldLine * 2;
+      ctx.beginPath();
+      ctx.moveTo(ends.a.x, ends.a.y);
+      ctx.lineTo(ends.b.x, ends.b.y);
+      ctx.stroke();
+      // A ring at each anchor: the chain is pinned to a point on a body, and the
+      // point is what an author places, so it has to be findable under the fill.
+      ctx.fillStyle = color;
+      for (const p of [ends.a, ends.b]) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // The chain being strung out, if any: dashed while it has nowhere to land,
+  // solid the moment it is over a body it can attach to.
+  if (chainDraft) {
+    ctx.strokeStyle = chainDraft.valid ? CHAIN_DEFAULT_COLOR : SELECT;
+    ctx.lineWidth = worldLine * 2;
+    if (!chainDraft.valid) ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.beginPath();
+    ctx.moveTo(chainDraft.from.x, chainDraft.from.y);
+    ctx.lineTo(chainDraft.to.x, chainDraft.to.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Camera regions above the geometry they reshape — they are annotations on a
@@ -600,6 +839,35 @@ export function drawEditor(
   // Handles in screen space so they stay a constant on-screen size. They edit
   // one item's geometry, so they only appear for a single selection.
   const selection = model.items.filter((b) => selectedIds.has(b.id));
+  // A selected chain is edited by its two anchors: round, like every other
+  // handle that is dragged somewhere rather than sizing a box.
+  for (const c of model.chains) {
+    if (!selectedChainIds.has(c.id)) continue;
+    const hs = computeChainHandles(cam, model, c);
+    if (!hs) continue;
+    circleHandle(ctx, hs.a);
+    circleHandle(ctx, hs.b);
+  }
+  // A whole compound body turns as one, so it gets a rotate knob where a lone
+  // shape does - placed by the group's extent, with the centre of mass it turns
+  // about marked at the other end of the stalk.
+  const groupSel =
+    selection.length > 1 &&
+    selection[0]!.group !== null &&
+    selection.every((b) => b.group === selection[0]!.group) &&
+    groupMembers(model.items, selection[0]!.group!).length === selection.length
+      ? selection
+      : null;
+  if (groupSel) {
+    const gh = computeGroupHandles(cam, groupSel);
+    ctx.strokeStyle = HANDLE;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(gh.rotateBase.x, gh.rotateBase.y);
+    ctx.lineTo(gh.rotate.x, gh.rotate.y);
+    ctx.stroke();
+    circleHandle(ctx, gh.rotate);
+  }
   const selected = selection.length === 1 ? selection[0]! : null;
   if (selected) {
     const hs = computeHandles(cam, selected);

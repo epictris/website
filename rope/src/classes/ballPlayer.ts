@@ -268,9 +268,10 @@ export class BallPlayer extends RigidBody2D {
         this.releaseChain();
         return;
       }
-      this.chain.end = new RopeAttachment(
-        new RopeContact(body, point.sub(body.globalPosition)),
-      );
+      // `RopeContact.at` rather than the primary shape: on a compound body the
+      // hook anchors on whichever piece it struck, and the wrap resolvers walk
+      // the piece the contact names (see RopeContact.at).
+      this.chain.end = new RopeAttachment(RopeContact.at(body, point));
       // Regenerate wraps now so the length below is the true wrapped path. The
       // solver (chain.physicsStep) will wrap it this same frame regardless; if we
       // measured the straight span here, clamping to it would leave the wrapped

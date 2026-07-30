@@ -1,6 +1,7 @@
 // RopeContact + rope-path node types, ported from classes/RopeContact.cs.
 
 import { Vec2 } from "../engine/vec2";
+import { nearestShapeIndex } from "../engine/shapes";
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { WrapDirection } from "./types";
 
@@ -21,6 +22,26 @@ export class RopeContact {
     this.obj = obj;
     this.position = position.rotated(-obj.globalRotation);
     this.shapeIndex = shapeIndex;
+  }
+
+  // A contact where the rope has just landed on a body, at a world point, with
+  // the shape index resolved from that point rather than defaulted to the
+  // primary. This is what every *attachment* to scene geometry has to use: a
+  // hook anchors on whichever piece of a compound body it hit, and a contact
+  // that says shape 0 while resting on shape 1 sends `resolveSelfIntersection*`
+  // round the wrong vertex loop - it tests the span against a piece the span
+  // never touches, finds no overlap, and the rope runs straight through the
+  // piece it is actually anchored to instead of bending around its corner.
+  //
+  // A single-shape body resolves to 0, so this is exactly the old behaviour
+  // everywhere except on a compound body, which is the only place the old
+  // behaviour was wrong.
+  static at(obj: CollisionObject2D, world: Vec2): RopeContact {
+    return new RopeContact(
+      obj,
+      world.sub(obj.globalPosition),
+      nearestShapeIndex(obj.getShapes(), world),
+    );
   }
 
   // Rebuild from already-local data (snapshot restore path — no re-rotation).

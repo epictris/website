@@ -208,14 +208,16 @@ export class Rope {
     const endObj = this.end.contact.obj;
     if (endObj instanceof Hook) {
       endObj.registerAttachmentCallback((body, point) => {
-        this.end = new RopeAttachment(new RopeContact(body, point.sub(body.globalPosition)));
+        // `RopeContact.at`: the hook anchors on whichever piece of the body it
+        // hit, and the wrap resolvers walk the piece the contact names.
+        this.end = new RopeAttachment(RopeContact.at(body, point));
         this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
       });
     }
     const startObj = this.start.contact.obj;
     if (startObj instanceof Hook) {
       startObj.registerAttachmentCallback((body, point) => {
-        this.start = new RopeAttachment(new RopeContact(body, point.sub(body.globalPosition)));
+        this.start = new RopeAttachment(RopeContact.at(body, point));
         this.maxRopeLength = Mathf.max(this.maxRopeLength, this.calculateRopePathLength());
       });
     }

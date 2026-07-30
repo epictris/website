@@ -62,6 +62,57 @@ export interface LevelBodyData {
   // scaled), applied along the body's own rotation — rot 0 flows right, so
   // rotating the area steers the current. Negative reverses it.
   force?: number;
+  // Compound-body tag. Every entry sharing the same non-empty `group` becomes
+  // ONE engine body carrying all their shapes (`addShape`), placed at the
+  // group's combined centre of mass with each piece keeping its authored offset
+  // and angle. Absent = a body of its own, which is every body authored before
+  // this field.
+  //
+  // The point is not to save entries - several overlapping bodies already look
+  // identical - but that the pieces are then *one* body, which is what makes a
+  // concave form behave like a solid: the rope refuses to wrap a vertex buried
+  // inside another shape of the same body (`isSeamVertex`) and ledge detection
+  // refuses to grab one (`isSeamOccluded`), so a span crossing the join runs
+  // straight instead of snagging where the real surface is smooth. See
+  // "Convex-only polygons; compound bodies" in docs/game-design.md.
+  //
+  // The group's kind, colour, opacity, friction and force are taken from its
+  // FIRST entry: a body has one of each, so the rest are ignored (the editor
+  // keeps them in sync so a file never disagrees with what it draws).
+  group?: string;
+}
+
+// A chain strung between two bodies: the same wrap-point rope the grapple and
+// the ball & chain use, authored into the level and solved every frame.
+//
+// It constrains the pair - a rigid body on either end hangs, swings and is
+// hauled by it, while a static (or an `anchor`) is infinite mass and simply
+// holds. Its span wraps scene geometry through the ordinary solver, so a chain
+// laid over a corner catches on it.
+//
+// The anchor points are authored in WORLD coordinates (scene pixels on disk),
+// not in the body's local frame: a grouped body's origin is its combined centre
+// of mass, which moves as pieces are added, and a world point is what the editor
+// actually has under the pointer. `buildSceneChains` converts each into the
+// engine body's local frame once, at load.
+export interface ChainAnchorData {
+  // Index into `LevelData.bodies` of the body this end is tied to. Two ends may
+  // name entries of the same group - that is one body, and a chain tied to
+  // itself at both ends, so the editor refuses it.
+  body: number;
+  x: number;
+  y: number;
+}
+
+export interface ChainData {
+  a: ChainAnchorData;
+  b: ChainAnchorData;
+  // Chain length. Absent = the distance between the two anchor points as
+  // authored, i.e. a chain that starts exactly taut.
+  length?: number;
+  // Optional appearance. Absent = the renderer's own chain colours (the same
+  // forged-iron links the ball & chain hangs on).
+  color?: string;
 }
 
 // Default framing of a camera region: no offset, unchanged viewport, no lock.
@@ -192,6 +243,9 @@ export interface LevelData {
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
+  // Chains strung between pairs of bodies (see ChainData). Absent = a level with
+  // no chains, which is every level authored before this field.
+  chains?: ChainData[];
 }
 
 // Scale every length by `factor` (pass PX = 1 / PIXELS_PER_METER on load, or
@@ -245,10 +299,19 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     ...(g.color !== undefined ? { color: g.color } : {}),
     ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
   }));
+  // A chain's anchor points and its length are lengths; the body indices and the
+  // colour are not.
+  const chains = data.chains?.map((c) => ({
+    a: { body: c.a.body, x: c.a.x * factor, y: c.a.y * factor },
+    b: { body: c.b.body, x: c.b.x * factor, y: c.b.y * factor },
+    ...(c.length !== undefined ? { length: c.length * factor } : {}),
+    ...(c.color !== undefined ? { color: c.color } : {}),
+  }));
   return {
     ...(backgrounds ? { backgrounds } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     ...(notes ? { notes } : {}),
+    ...(chains ? { chains } : {}),
     player: {
       x: data.player.x * factor,
       y: data.player.y * factor,
@@ -264,6 +327,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
+      ...(b.group !== undefined ? { group: b.group } : {}),
     })),
   };
 }

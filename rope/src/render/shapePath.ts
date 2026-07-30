@@ -75,6 +75,49 @@ export function pathOutline(
   ctx.restore();
 }
 
+// The subset of the canvas path interface a `Path2D` also offers. `pathOutline`
+// above places its outline with the context's transform stack, which a Path2D
+// has none of, so the world placement is baked into the emitted points instead.
+export interface OutlineSink {
+  moveTo(x: number, y: number): void;
+  lineTo(x: number, y: number): void;
+  closePath(): void;
+  arc(x: number, y: number, radius: number, startAngle: number, endAngle: number): void;
+}
+
+// Append the outline to a Path2D-style sink, in world coordinates. This is what
+// lets the several pieces of a compound body be accumulated into ONE path and
+// filled as their union - a body is one object, and filling its pieces
+// separately double-darkens wherever two of them overlap.
+export function pathOutlineInto(
+  p: OutlineSink,
+  center: Vec2,
+  rot: number,
+  o: Outline,
+): void {
+  if (o.kind === "circle") {
+    p.moveTo(center.x + o.radius, center.y);
+    p.arc(center.x, center.y, o.radius, 0, Math.PI * 2);
+    p.closePath();
+    return;
+  }
+  const local =
+    o.kind === "rect"
+      ? [
+          new Vec2(-o.half.x, -o.half.y),
+          new Vec2(o.half.x, -o.half.y),
+          new Vec2(o.half.x, o.half.y),
+          new Vec2(-o.half.x, o.half.y),
+        ]
+      : o.verts;
+  local.forEach((v, i) => {
+    const w = center.add(v.rotated(rot));
+    if (i === 0) p.moveTo(w.x, w.y);
+    else p.lineTo(w.x, w.y);
+  });
+  p.closePath();
+}
+
 // The outline grown by `margin` on every side — the shape of a camera region's
 // buffer zone, and the one place its geometry is decided.
 //

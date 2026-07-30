@@ -260,6 +260,20 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     }
   }
 
+  // Authored scene chains, in a cooler steel than the avatar's rope so the two
+  // are never confused in a snapshot. Same treatment otherwise: the wrap-node
+  // polyline, with the nodes marked, since a chain catching a corner is exactly
+  // what a geometric snapshot is opened to check.
+  for (const chain of level.sceneChains) {
+    const nodes = chain.rope.path().map((n) => n.contact.globalPosition);
+    for (const n of nodes) grow(box, n.x * M, n.y * M, 4);
+    const pts = nodes.map((n) => `${(n.x * M).toFixed(1)},${(n.y * M).toFixed(1)}`).join(" ");
+    ropeEls.push(`<polyline points="${pts}" fill="none" stroke="#8fa3b8" stroke-width="2"/>`);
+    for (let i = 1; i < nodes.length - 1; i++) {
+      ropeEls.push(`<circle cx="${(nodes[i]!.x * M).toFixed(1)}" cy="${(nodes[i]!.y * M).toFixed(1)}" r="3" fill="#8fa3b8"/>`);
+    }
+  }
+
   if (!Number.isFinite(box.minX)) {
     box.minX = -100;
     box.minY = -100;

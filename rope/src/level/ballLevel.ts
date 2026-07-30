@@ -18,6 +18,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
+import { buildSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -32,6 +33,8 @@ export class BallLevel {
   readonly cameraRegions: CameraRegionData[];
   // Decoration drawn behind the level, in metres (see Level.backgrounds).
   readonly backgrounds: BackgroundData[];
+  // Chains strung between authored bodies (see Level.sceneChains).
+  readonly sceneChains: SceneChain[];
   onReset: (() => void) | null = null;
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
@@ -78,7 +81,9 @@ export class BallLevel {
     this.world.add(this.ball);
     this.bodies.push(this.ball);
 
-    this.bodies.push(...buildLevelBodies(this.world, data, () => this.onReset?.()));
+    const built = buildLevelBodies(this.world, data, () => this.onReset?.());
+    this.bodies.push(...built.wrapBodies);
+    this.sceneChains = buildSceneChains(data, built.byIndex);
 
     this.cameraPosition = this.ball.globalPosition;
   }
@@ -127,6 +132,12 @@ export class BallLevel {
     this.bodies = this.bodies.filter((b) => !b.removed);
 
     this.world.integrate(delta);
+
+    // Scene chains solve straight after integration, before the ball's own chain
+    // phase opens: whatever they move is then part of the state that phase
+    // measures itself against, rather than a body shifting under its books. A
+    // level with no chains does nothing here, so recorded replays are unchanged.
+    for (const chain of this.sceneChains) chain.physicsStep(this.bodies, delta);
 
     // Push the ball clear of the scenery before anything measures against it,
     // and before the chain solve rather than after.

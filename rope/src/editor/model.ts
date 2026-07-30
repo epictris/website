@@ -11,7 +11,13 @@
 // its layer does not use, so nothing meaningless reaches disk.
 
 import { Vec2 } from "../engine/vec2";
-import { isConvexLoop, polyCentroid, polySignedArea2 } from "../engine/shapes";
+import {
+  isConvexLoop,
+  nearestOnCircle,
+  nearestOnOutline,
+  polyCentroid,
+  polySignedArea2,
+} from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
   DEFAULT_BACKGROUND_COLOR,
@@ -26,6 +32,7 @@ import {
   type BackgroundData,
   type BodyKind,
   type CameraRegionData,
+  type ChainData,
   type LevelData,
   type NoteData,
   type ShapeData,
@@ -74,6 +81,14 @@ export interface EdNote {
 export interface EdItem {
   id: number;
   layer: EdLayer;
+  // Compound-body membership (geometry layer only): items sharing a group id
+  // build into ONE engine body carrying all their shapes, so the rope and ledge
+  // detection treat the join between two pieces as an interior seam rather than
+  // as a corner (see `LevelBodyData.group`). Null = a body of its own.
+  //
+  // The id is editor-local and never leaves it: `toLevelData` writes a `g<id>`
+  // tag, and loading mints fresh ids from whatever tags a file carries.
+  group: number | null;
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
@@ -130,9 +145,35 @@ export function setArrowEnds(item: EdItem, tail: Vec2, head: Vec2): void {
   if (item.shape.kind === "rect") item.shape.w = Math.max(MIN_ARROW_LENGTH, d.length());
 }
 
+// One end of a chain: the item it is tied to, and where on that item, in the
+// item's own local (unrotated) frame. Local rather than world so the anchor
+// rides its body through every move, rotate and resize - the same reason a
+// `RopeContact` is stored in its body's frame at runtime.
+export interface EdChainEnd {
+  itemId: number;
+  local: Vec2; // metres, item-local
+}
+
+// A chain strung between two geometry items (see `ChainData`). It is not an
+// `EdItem`: it has no shape, no placement of its own and nothing to resize -
+// everything about it is derived from the two bodies it holds - so it lives in
+// its own list and carries its own selection rather than being forced through
+// the item machinery.
+export interface EdChain {
+  id: number;
+  a: EdChainEnd;
+  b: EdChainEnd;
+  // Metres. Null = exactly taut between the two anchors, re-derived at load, so
+  // a chain dragged out between two bodies stays taut as they are moved.
+  length: number | null;
+  // Hex link colour; null = the renderer's own forged-iron pair.
+  color: string | null;
+}
+
 export interface EdModel {
   player: { pos: Vec2; radius: number };
   items: EdItem[];
+  chains: EdChain[];
 }
 
 let nextId = 1;
@@ -195,9 +236,21 @@ function edShape(s: ShapeData): EdShape {
 
 // Metre-space LevelData → editor model.
 function fromLevelData(data: LevelData): EdModel {
+  // On-disk group tags are arbitrary strings; the editor works in numeric ids,
+  // so each distinct tag mints one.
+  const groupIds = new Map<string, number>();
+  const groupIdFor = (tag: string | undefined): number | null => {
+    if (!tag) return null;
+    const existing = groupIds.get(tag);
+    if (existing !== undefined) return existing;
+    const id = newBodyId();
+    groupIds.set(tag, id);
+    return id;
+  };
   const bodies: EdItem[] = data.bodies.map((b) => ({
     id: newBodyId(),
     layer: "geometry",
+    group: groupIdFor(b.group),
     kind: b.kind,
     pos: new Vec2(b.x, b.y),
     rot: b.rot,
@@ -212,6 +265,7 @@ function fromLevelData(data: LevelData): EdModel {
   const backgrounds: EdItem[] = (data.backgrounds ?? []).map((g) => ({
     id: newBodyId(),
     layer: "background",
+    group: null, // grouping is a geometry-layer notion; keeps the field total
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(g.x, g.y),
     rot: g.rot,
@@ -226,6 +280,7 @@ function fromLevelData(data: LevelData): EdModel {
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
     id: newBodyId(),
     layer: "camera",
+    group: null, // grouping is a geometry-layer notion; keeps the field total
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(r.x, r.y),
     rot: r.rot,
@@ -248,6 +303,7 @@ function fromLevelData(data: LevelData): EdModel {
   const notes: EdItem[] = (data.notes ?? []).map((n) => ({
     id: newBodyId(),
     layer: "notes",
+    group: null, // grouping is a geometry-layer notion; keeps the field total
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(n.x, n.y),
     rot: n.rot,
@@ -263,9 +319,27 @@ function fromLevelData(data: LevelData): EdModel {
       size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX,
     },
   }));
+  // Chains name bodies by their index in `data.bodies`, which is exactly the
+  // order `bodies` was just built in. A chain whose index is out of range (a
+  // hand-edited file) is dropped rather than left dangling.
+  const chains: EdChain[] = [];
+  for (const c of data.chains ?? []) {
+    const a = bodies[c.a.body];
+    const b = bodies[c.b.body];
+    if (!a || !b) continue;
+    chains.push({
+      id: newBodyId(),
+      a: { itemId: a.id, local: toLocal(a, new Vec2(c.a.x, c.a.y)) },
+      b: { itemId: b.id, local: toLocal(b, new Vec2(c.b.x, c.b.y)) },
+      length: c.length ?? null,
+      color: c.color ?? null,
+    });
+  }
+
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
     items: [...backgrounds, ...bodies, ...regions, ...notes],
+    chains,
   };
 }
 
@@ -329,28 +403,56 @@ export function toLevelData(model: EdModel): LevelData {
       };
     });
 
+  const geometry = model.items.filter((i) => i.layer === "geometry");
+  // Chains name their bodies by index into the list written below, so the two
+  // are derived from the same array in the same order.
+  const indexOfItem = new Map(geometry.map((b, i) => [b.id, i]));
+
+  const chains: ChainData[] = [];
+  for (const c of model.chains) {
+    const a = model.items.find((i) => i.id === c.a.itemId);
+    const b = model.items.find((i) => i.id === c.b.itemId);
+    const ia = indexOfItem.get(c.a.itemId);
+    const ib = indexOfItem.get(c.b.itemId);
+    // A chain whose body has been deleted (or is no longer geometry) has nothing
+    // to hold and is simply not written.
+    if (!a || !b || ia === undefined || ib === undefined) continue;
+    const wa = toWorld(a, c.a.local);
+    const wb = toWorld(b, c.b.local);
+    chains.push({
+      a: { body: ia, x: wa.x, y: wa.y },
+      b: { body: ib, x: wb.x, y: wb.y },
+      // Omitted = taut between the anchors, which the loader re-derives.
+      ...(c.length !== null ? { length: c.length } : {}),
+      ...(c.color !== null ? { color: c.color } : {}),
+    });
+  }
+
   return {
     player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
-    bodies: model.items
-      .filter((i) => i.layer === "geometry")
-      .map((b) => ({
-        kind: b.kind,
-        x: b.pos.x,
-        y: b.pos.y,
-        rot: b.rot,
-        shape: shapeOf(b),
-        color: b.color,
-        opacity: b.opacity,
-        friction: b.friction,
-        // Only force areas carry a magnitude; omitting it elsewhere keeps saved
-        // levels free of a field that would read as meaningful.
-        ...(b.kind === "force" ? { force: b.force } : {}),
-      })),
+    bodies: geometry.map((b) => ({
+      kind: b.kind,
+      x: b.pos.x,
+      y: b.pos.y,
+      rot: b.rot,
+      shape: shapeOf(b),
+      color: b.color,
+      opacity: b.opacity,
+      friction: b.friction,
+      // Only force areas carry a magnitude; omitting it elsewhere keeps saved
+      // levels free of a field that would read as meaningful.
+      ...(b.kind === "force" ? { force: b.force } : {}),
+      // The tag is only meaningful against the other members, so it is written
+      // as a plain `g<id>` rather than carrying the editor's numbering onto disk
+      // as something to be interpreted.
+      ...(b.group !== null ? { group: `g${b.group}` } : {}),
+    })),
     // An empty list is the same as no list, and the absent field keeps levels
     // authored before backgrounds (or camera regions, or notes) byte-identical.
     ...(backgrounds.length ? { backgrounds } : {}),
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(notes.length ? { notes } : {}),
+    ...(chains.length ? { chains } : {}),
   };
 }
 
@@ -558,15 +660,132 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
   return true;
 }
 
+// --- groups -----------------------------------------------------------------
+
+// Every item of `group`, in model order. An item with no group is its own body,
+// so a null group has no members - callers pass a concrete id.
+export function groupMembers(items: readonly EdItem[], group: number): EdItem[] {
+  return items.filter((i) => i.group === group);
+}
+
+// The selection an item click means: the whole compound body it belongs to, or
+// just the item when it is ungrouped. A group IS one body, so picking one piece
+// of it and picking it are the same act.
+export function pickGroupOf(items: readonly EdItem[], item: EdItem): EdItem[] {
+  return item.group === null ? [item] : groupMembers(items, item.group);
+}
+
+// Area of an item's shape, in m². Mass is proportional to area everywhere in
+// this project (`ShapeGeometry.computeMass` is area/1000 for every kind), so
+// this is what weights a group's centre of mass.
+export function shapeArea(item: EdItem): number {
+  if (item.shape.kind === "circle") return Math.PI * item.shape.r * item.shape.r;
+  if (item.shape.kind === "rect") return item.shape.w * item.shape.h;
+  return Math.abs(polySignedArea2(item.shape.verts)) / 2;
+}
+
+// A group's centre of mass - the point `buildLevelBodies` puts the compound
+// body's origin at, and therefore the point it rotates about. Weighted by area,
+// not the bounding-box centre: every rigid-body lever arm in the engine is
+// measured from the body origin, so the two have to agree.
+export function groupCentroid(items: readonly EdItem[]): Vec2 {
+  let total = 0;
+  let acc = Vec2.ZERO;
+  for (const i of items) {
+    const a = shapeArea(i);
+    total += a;
+    acc = acc.add(i.pos.mul(a));
+  }
+  if (total > 0) return acc.div(total);
+  // Degenerate (zero-area) shapes: fall back to the plain mean so the answer is
+  // still inside the group rather than NaN.
+  return items.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, items.length));
+}
+
+// Turn a whole group about `centre` by `delta` radians: each piece's placement
+// swings round the centre and its own angle follows. That is exactly what
+// rotating the built body does, since a piece is mounted at a local offset and
+// a local angle off that origin.
+export function rotateGroupAbout(items: readonly EdItem[], centre: Vec2, delta: number): void {
+  for (const i of items) {
+    i.pos = centre.add(i.pos.sub(centre).rotated(delta));
+    i.rot += delta;
+  }
+}
+
+// Body-level properties a compound body has exactly one of. When several items
+// build into one body only the first member's are used, so the editor copies
+// the lead's onto the rest rather than letting a file disagree with what it
+// draws.
+export function syncGroupProps(lead: EdItem, members: readonly EdItem[]): void {
+  for (const m of members) {
+    if (m === lead) continue;
+    m.kind = lead.kind;
+    m.color = lead.color;
+    m.opacity = lead.opacity;
+    m.friction = lead.friction;
+    m.force = lead.force;
+  }
+}
+
+// --- chains -----------------------------------------------------------------
+
+export function cloneChain(c: EdChain): EdChain {
+  return { ...c, a: { ...c.a }, b: { ...c.b } };
+}
+
+// A world point pushed onto the item's own surface, returned in the item's local
+// frame - where a chain anchor actually goes. A chain is bolted to a surface, so
+// this is what clicking a body to anchor one means; it is also what the solver
+// needs, since an anchor in a body's interior leaves the chain's span starting
+// *inside* that body and the wrap generator resolves that as a self-intersection
+// (see `snapToSurface` in level/chains.ts, which applies the same rule at load
+// so a hand-edited file cannot author the degenerate case either).
+export function nearestSurfaceLocal(item: EdItem, world: Vec2): Vec2 {
+  const local = toLocal(item, world);
+  if (item.shape.kind === "circle") return nearestOnCircle(item.shape.r, local);
+  return nearestOnOutline(localVertices(item), local);
+}
+
+// Where a chain end currently sits in the world, or null if its item is gone.
+export function chainEndWorld(model: EdModel, end: EdChainEnd): Vec2 | null {
+  const item = model.items.find((i) => i.id === end.itemId);
+  return item ? toWorld(item, end.local) : null;
+}
+
+// Both ends in the world, or null if either item is gone (a chain in that state
+// is dropped on save and drawn as nothing).
+export function chainEnds(model: EdModel, c: EdChain): { a: Vec2; b: Vec2 } | null {
+  const a = chainEndWorld(model, c.a);
+  const b = chainEndWorld(model, c.b);
+  return a && b ? { a, b } : null;
+}
+
+// Distance from a world point to the chain's straight span, for picking. The
+// editor draws a chain straight - how it drapes and what it wraps is a runtime
+// answer the solver gives, and drawing a guess at it would be a drawing of
+// something that is not the level.
+export function distanceToChain(model: EdModel, c: EdChain, world: Vec2): number {
+  const ends = chainEnds(model, c);
+  if (!ends) return Infinity;
+  const d = ends.b.sub(ends.a);
+  const len2 = d.lengthSquared();
+  if (len2 < 1e-12) return world.distanceTo(ends.a);
+  const t = Math.min(1, Math.max(0, world.sub(ends.a).dot(d) / len2));
+  return world.distanceTo(ends.a.add(d.mul(t)));
+}
+
 // A blank level: a single wide floor under a spawn point so it is immediately
 // testable.
 export function emptyModel(): EdModel {
   return {
     player: { pos: new Vec2(0, -1), radius: 0.08 },
+    chains: [],
     items: [
       {
         id: newBodyId(),
         layer: "geometry",
+        group: null,
         kind: "static",
         pos: new Vec2(0, 0),
         rot: 0,

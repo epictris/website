@@ -73,6 +73,13 @@ scanning path iterates them: the character sweep, raycasts, area overlap, ledge 
 and the rope's wrap scan (whose candidates are shapes, not bodies, so a `RopeContact`
 carries a `shapeIndex`). `CollisionShape2D.wrappable` is the one opt-out: solid, but not
 rope geometry (the ball's mounting loop).
+A `RopeContact`'s `shapeIndex` must name the piece it actually sits on, and an **attachment** to scene geometry has to resolve it from the contact point (`RopeContact.at`) rather than defaulting to the primary.
+Defaulting was invisible while every attachable body had one shape, and silently wrong the moment compound bodies became authorable: `resolveSelfIntersectionAtStart`/`AtEnd` test the span against `contact.shape`, so a hook anchored on piece 1 but indexed at piece 0 tested a piece the span never touches, found no overlap, and let the chain run **straight through** the polygon it was anchored to instead of bending around its corner (`session-234f`).
+The failure has no velocity signature at all - the run is healthy on every invariant - so it is only visible through `cli render` / `cli chainpath`.
+A mounted shape carries a `localOffset` **and** a `localRotation`, both in the body's own frame.
+The rotation exists because a compound body is authored as pieces at their own angles (an L of two rects meeting at 45°) and one body rotation cannot express that; the default 0 makes a shape's rotation exactly the body's, which is what every single-shape body has, so it is bit-identical for every level that predates it.
+The body's origin is the pieces' combined **centre of mass** and its mass/inertia are the sum with the parallel-axis term (`buildBodies.ts`), because every rigid-body lever arm in the engine is measured from `globalPosition`.
+Levels author this with the `group` tag on `LevelBodyData` - see **Compound bodies** under the level editor.
 
 Rigid bodies may be any of the three. A polygon resolves through a **contact manifold**
 (`engine/manifold.ts`: SAT plus incident-face clipping, up to two points) rather than the
@@ -538,7 +545,16 @@ resolvers permanently: a contact stored in its body's local frame sits on the
 surface for ever, so "the span is inside the body" is true on every span touching
 that anchor, and the resolvers' "already on this vertex, step one place round the
 loop" rule then jumps the wrap to whatever corner is next — 1.54 m away on a 3 m
-polygon (`session-284f` again).
+polygon (`session-284f` again), and a **rope contact indexed at the wrong shape**
+of a compound body, which sends those same resolvers round a vertex loop the span
+never touches, so the rope runs clean through the piece it is anchored to
+(`session-234f` — see "A `RopeContact`'s `shapeIndex`" under Shapes).
+
+That last one is also a reminder that a geometric bug can be **completely silent
+to the invariants** — `session-234f` replays HEALTHY, with no NaN, no runaway, no
+over-length and no embedding, because nothing about it is a velocity. Reach for
+`cli render` and `cli chainpath` the moment a report is about where the rope *is*
+rather than about how fast something is going.
 
 Those last two share a shape, and it generalises into a rule worth applying before
 reaching for the solver: **a one-frame velocity spike is almost never the solver
@@ -683,6 +699,50 @@ Both paths go through `focusNoteText`, and the placement one has to `preventDefa
 It is the one canvas press that suppresses the default - every other one must keep it, or clicking the canvas would leave an inspector field focused and the keyboard shortcuts swallowed by it.
 Prose stays a single-selection edit (merging text across a group has no sane meaning) while placement stays group-wide like every other layer.
 
+### Compound bodies
+
+**Ctrl+G** welds the selected geometry into one **compound body** (**Ctrl+Shift+G** splits it again); the pieces keep their placement exactly, and what changes is that they now build as a single engine body carrying all their shapes.
+That is the whole point, and it is not about saving entries - several overlapping bodies already look the same.
+It is that the joins between the pieces stop being corners: the rope refuses to wrap a vertex buried inside a sibling shape of the same body (`isSeamVertex`) and ledge detection refuses to grab one (`isSeamOccluded`), so a span crossing an L's inner corner runs straight instead of snagging where the real surface is smooth.
+See **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for why a concave form has to be authored this way at all.
+
+On disk it is a `group` tag on each member (`LevelBodyData.group`), and members are matched by tag alone, so the format stays a flat body list.
+A body has one kind, one fill, one friction and one force, so the group takes its **first member's** and the editor keeps the rest in step (`syncGroupProps`) - a file can never disagree with what it draws.
+Areas are deliberately not groupable: `World.integrate` tests area overlap against `getShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
+
+Because a group is one body, it is **selected and moved as one**: clicking any piece selects all of them, a rubber band that touches one piece takes the whole body (`withWholeGroups`), and **Alt+click** reaches past that to a single piece when its own shape needs editing.
+It also **rotates as one**, about the group's area-weighted **centre of mass** - which is where `buildLevelBodies` puts the built body's origin, so the editor's rotation and the body's are the same operation.
+A whole-group selection therefore gets its own rotate knob (placed by the group's extent, since the pieces have their own angles and the body as a whole has none) and its `rot°` field applies a *delta* to the group rather than writing each piece's own angle.
+Every group draws a small centre-of-mass diamond so it is identifiable as one body without being selected first, and a selected one adds a dashed hull and spokes to that centre.
+
+A compound body is drawn as **one object**, not as its pieces: the shapes are filled as a union with the nonzero rule (so an overlap contributes one layer of the authored opacity rather than one each) and each piece is stroked only where it lies **outside every sibling**, which is the body's real outline.
+Drawn piece by piece it read as a darker patch at every overlap and a crack at every join - a wall with a line down it.
+The clip is applied one sibling at a time on purpose: a single even-odd clip keeps the region inside *two* of them, which is exactly where an interior seam sits.
+`drawCompoundGeometry` (game) and `strokeCompoundOutline` (editor) are the two implementations of that one rule.
+Hook-only anchors keep the per-shape path, since their fill is a grate lattice punched out of each piece and a lattice has no union form.
+The headless SVG snapshot still draws the pieces separately - it is a diagnostic view, and there the decomposition is the thing worth seeing.
+
+### Chains
+
+**+Chain** (**K**) drags a chain from one body to another: press on the first body, release on the second.
+A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), stepped once a frame after `World.integrate` by both level drivers, so a rigid body on either end hangs, swings and is hauled by it while a static or an `anchor` is infinite mass and simply holds.
+Its span wraps scene geometry through the ordinary solver, so a chain laid over a corner catches on it.
+There is deliberately **no new physics**: `Rope` already models a rope between two `RopeContact`s on arbitrary bodies, and a scene chain is that class with neither end being a hook in flight.
+
+What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
+Both would need the chain to be a body per link, which is a different mechanism.
+
+Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
+Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
+That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.
+The loader applies the same rule rather than trusting the file, so a hand-edited level cannot author the degenerate case either.
+
+`length` absent means **taut** between the two anchors as they land, re-derived at load, which is what dragging one out gives; the inspector's `length` field authors slack, with a live readout of how much.
+A chain naming the same engine body at both ends (two members of one compound group, say) is refused in the editor and dropped at load - it has nothing to constrain.
+Chains carry their own selection, exclusive with the item selection: a chain has no shape, no placement and no properties in common with an item, so a mixed selection would have nothing an inspector panel could say about it.
+They are picked by a screen-space band around their span and edited by two round endpoint handles; dragging one lands it on whatever body is under the pointer, so moving an anchor along its own body and moving it to a different one are the same gesture.
+In game they draw with the same forged links the ball & chain hangs on, laid along the wrap path and resolved against the render transforms; the editor draws them **straight**, because a span between wrap nodes *is* straight and a guessed sag would be a drawing of something the level does not contain.
+
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
 /api/levels[/<name>]`) added by the `levelApi` Vite plugin in `vite.config.ts`. The built
@@ -701,8 +761,8 @@ is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor
 into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
-the generated one — adds the `rigid`, `anchor` and `force` kinds, plus the `cameraRegions`
-list); `levelData.ts` stays
+the generated one — adds the `rigid`, `anchor` and `force` kinds, the `cameraRegions` and
+`chains` lists, and the per-body `group` tag); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
 through the shared `src/level/buildBodies.ts` (statics, killzones, impermeables, anchors,
 force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.

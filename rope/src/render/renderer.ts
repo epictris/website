@@ -22,13 +22,19 @@ import { Hook } from "../classes/hook";
 import { KillZone } from "../classes/killZone";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
+import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
 import type { CameraRegionData } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
-import { outlineOfShape, pathOutline } from "./shapePath";
-import { hexToRgba } from "./color";
+import {
+  outlineHalfExtents,
+  outlineOfShape,
+  pathOutline,
+  pathOutlineInto,
+} from "./shapePath";
+import { hexToRgba, shade } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
   drawPlayerRigBack,
@@ -73,6 +79,10 @@ function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
 function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha: number): void {
   if (!body.hasShape()) return;
   const t = body.renderShape(alpha);
+  // The avatars are drawn from their primary shape alone and return below: the
+  // ball's auxiliary rim circle is its mounting loop, drawn as a loop by
+  // `renderBall` rather than as a second cannonball. Level geometry falls
+  // through to the compound loop at the end, which draws every piece.
   if (body instanceof Player) {
     pathShape(ctx, t);
     ctx.fillStyle = PLAYER;
@@ -106,6 +116,128 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
     ctx.fill();
     return;
   }
+  // Authored level geometry: every shape the body carries, so a compound body
+  // (several convex pieces on one transform) draws as all of its pieces rather
+  // than only the primary one.
+  const shapes = body.renderShapes(alpha);
+  // A compound body is ONE object, and drawing it piece by piece says otherwise:
+  // the overlaps fill twice and read as a darker patch, and the joins get a
+  // border each and read as cracks across a solid wall. So its pieces are filled
+  // as a union and outlined only where they are not covered by a sibling - which
+  // is exactly the body's real outline. Areas and hook-only anchors stay
+  // per-shape: their fill is a glyph lattice punched out of each piece, and a
+  // lattice has no union form.
+  if (shapes.length > 1 && !(body instanceof Area2D) && !(body instanceof AnchorBody)) {
+    drawCompoundGeometry(ctx, body, shapes);
+    return;
+  }
+  for (const s of shapes) drawGeometryShape(ctx, body, s);
+}
+
+// How a body's geometry is painted: the same choices `drawGeometryShape` makes,
+// pulled out so the compound path cannot drift from the single-shape one.
+function geometryStyle(
+  body: CollisionObject2D,
+): { fill: string | null; stroke: string; width: number; dash: number[] } {
+  if (body instanceof ImpermeableBody) {
+    return {
+      fill: body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : null,
+      stroke: IMPERMEABLE_EDGE,
+      width: 2 * PX,
+      dash: [5 * PX, 3 * PX],
+    };
+  }
+  if (body.fillColor) {
+    return {
+      fill: hexToRgba(body.fillColor, body.fillOpacity),
+      stroke: body.fillColor,
+      width: PX,
+      dash: [],
+    };
+  }
+  const fill =
+    body instanceof RigidBody2D
+      ? DYNAMIC_FILL
+      : body instanceof AnimatableBody2D
+        ? MOVER_FILL
+        : GEOMETRY_FILL;
+  return { fill, stroke: GEOMETRY_STROKE, width: PX, dash: [] };
+}
+
+function unionPath(shapes: readonly ShapeTransform[]): Path2D {
+  const p = new Path2D();
+  for (const s of shapes) {
+    pathOutlineInto(p, s.globalPosition, s.globalRotation, outlineOfShape(s.shape));
+  }
+  return p;
+}
+
+// A world box comfortably containing `shapes` - the outer ring of an even-odd
+// "everything outside this shape" clip. Only ever used with a stroke a pixel or
+// two wide, so a metre of margin is generous.
+function shapesBounds(shapes: readonly ShapeTransform[]): { x: number; y: number; w: number; h: number } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const s of shapes) {
+    const h = outlineHalfExtents(outlineOfShape(s.shape));
+    const r = Math.hypot(h.x, h.y); // rotation-proof: the enclosing disc
+    minX = Math.min(minX, s.globalPosition.x - r);
+    minY = Math.min(minY, s.globalPosition.y - r);
+    maxX = Math.max(maxX, s.globalPosition.x + r);
+    maxY = Math.max(maxY, s.globalPosition.y + r);
+  }
+  const pad = 1;
+  return { x: minX - pad, y: minY - pad, w: maxX - minX + 2 * pad, h: maxY - minY + 2 * pad };
+}
+
+function drawCompoundGeometry(
+  ctx: CanvasRenderingContext2D,
+  body: CollisionObject2D,
+  shapes: readonly ShapeTransform[],
+): void {
+  const style = geometryStyle(body);
+  // Filled as one path with the nonzero rule, so overlapping pieces contribute
+  // one layer of the authored opacity rather than one each.
+  if (style.fill) {
+    ctx.fillStyle = style.fill;
+    ctx.fill(unionPath(shapes));
+  }
+  const box = shapesBounds(shapes);
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = style.width;
+  ctx.setLineDash(style.dash);
+  for (let i = 0; i < shapes.length; i++) {
+    ctx.save();
+    // Clip away each sibling in turn. Clips intersect, so after the loop what is
+    // left is "outside every other piece" - which is where this piece's edge is
+    // a real edge of the body rather than an interior seam. One combined
+    // even-odd clip would not do: a point inside two siblings crosses three
+    // rings and comes out odd, i.e. wrongly kept.
+    for (let j = 0; j < shapes.length; j++) {
+      if (i === j) continue;
+      const outside = new Path2D();
+      outside.rect(box.x, box.y, box.w, box.h);
+      const s = shapes[j]!;
+      pathOutlineInto(outside, s.globalPosition, s.globalRotation, outlineOfShape(s.shape));
+      ctx.clip(outside, "evenodd");
+    }
+    const own = new Path2D();
+    const s = shapes[i]!;
+    pathOutlineInto(own, s.globalPosition, s.globalRotation, outlineOfShape(s.shape));
+    ctx.stroke(own);
+    ctx.restore();
+  }
+  ctx.setLineDash([]);
+}
+
+// One piece of level geometry, drawn in the style its body's kind asks for.
+function drawGeometryShape(
+  ctx: CanvasRenderingContext2D,
+  body: CollisionObject2D,
+  t: ShapeTransform,
+): void {
   // Impermeable (hook-proof) surfaces: authored fill, but a dashed steel border
   // instead of the plain one so they read as chain-repelling — it's clear why
   // the hook bounces off them rather than anchoring.
@@ -294,6 +426,10 @@ export function render(
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
+  // Authored chains over the geometry they are strung between, under the rope
+  // and the avatar.
+  drawSceneChains(ctx, level.sceneChains, alpha);
+
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
   // the right hand's centre, but the offset between the hand and the sim
@@ -368,6 +504,10 @@ function drawChainLink(
   a: Vec2,
   b: Vec2,
   phase = 0,
+  // Link colours. The defaults are the forged-iron pair the ball & chain hangs
+  // on; an authored scene chain passes its own, darkened for the narrow links so
+  // the alternation still reads as interlocking loops.
+  colors: { broad: string; narrow: string } = { broad: CHAIN, narrow: CHAIN_DARK },
 ): { phase: number; remainder: number } {
   const total = a.distanceTo(b);
   if (total < 1e-3 * PX) return { phase, remainder: 0 };
@@ -380,7 +520,7 @@ function drawChainLink(
     const mid = a.add(dir.mul((i + 0.5) * CHAIN_LINK_LEN));
     const broad = (i + phase) % 2 === 0; // alternate link orientation
     const w = broad ? CHAIN_LINK_W : CHAIN_LINK_W * 0.5;
-    ctx.strokeStyle = broad ? CHAIN : CHAIN_DARK;
+    ctx.strokeStyle = broad ? colors.broad : colors.narrow;
     ctx.beginPath();
     // Oval link as a rounded capsule: two side arcs are approximated by an
     // ellipse aligned to the span.
@@ -398,13 +538,41 @@ function drawChainLink(
 // (the anchor). The sub-link remainder falls at the far end (the ball centre,
 // hidden under the body), so reeling consumes links into the ball rather than
 // rescaling the whole chain.
-function drawChainPolyline(ctx: CanvasRenderingContext2D, points: Vec2[]): void {
+function drawChainPolyline(
+  ctx: CanvasRenderingContext2D,
+  points: Vec2[],
+  colors?: { broad: string; narrow: string },
+): void {
   let phase = 0;
   for (let i = 0; i + 1 < points.length; i++) {
-    const r = drawChainLink(ctx, points[i]!, points[i + 1]!, phase);
+    const r = drawChainLink(ctx, points[i]!, points[i + 1]!, phase, colors);
     phase = r.phase;
     // (Per-segment remainder is small and lands at wrap corners / the covered
     // ball centre; the visible run from the anchor stays world-pinned.)
+  }
+}
+
+// Authored scene chains: the same forged links, laid along each chain's wrap
+// path. Drawn from the wrap NODES against the render transforms, exactly as the
+// rope and the ball's chain are, so a chain stays welded to the drawn bodies at
+// both ends instead of to their 60 Hz sim positions.
+function drawSceneChains(
+  ctx: CanvasRenderingContext2D,
+  chains: readonly SceneChain[],
+  alpha: number,
+): void {
+  for (const chain of chains) {
+    const spans = chain.rope.getSpans();
+    if (!spans.length) continue;
+    const path = [
+      spans[0]!.from.contact.renderGlobalPosition(alpha),
+      ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
+    ];
+    drawChainPolyline(
+      ctx,
+      path,
+      chain.color ? { broad: chain.color, narrow: shade(chain.color, 0.65) } : undefined,
+    );
   }
 }
 
@@ -502,6 +670,9 @@ export function renderBall(
     drawBody(ctx, body, alpha);
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
+
+  // Authored chains over the geometry, under the ball's own chain.
+  drawSceneChains(ctx, level.sceneChains, alpha);
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
   // ANCHOR toward the ball, then on through the loop into the ball CENTRE

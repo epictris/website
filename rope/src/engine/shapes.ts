@@ -134,6 +134,74 @@ export function shapeVertices(shape: Shape): readonly Vec2[] {
   return verts;
 }
 
+// --- surface projection ------------------------------------------------------
+// Where a point lands when pushed onto a shape's boundary. Used to bolt a chain
+// anchor to the surface it is drawn on rather than to a body's centre: a rope
+// contact at the centre of a circle has the span starting *inside* the body, so
+// the wrap generator resolves it as a self-intersection and the chain winds
+// around its own anchor - a hanging weight authored at rest reached 31 m/s that
+// way. A chain is fastened to a surface in any case, so the projection is the
+// physical statement as well as the numerically safe one.
+
+// The point on a vertex loop nearest `p`, both in the loop's own frame.
+export function nearestOnOutline(verts: readonly Vec2[], p: Vec2): Vec2 {
+  let best = verts[0] ?? p;
+  let bestSq = Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % verts.length]!;
+    const ab = b.sub(a);
+    const len2 = ab.lengthSquared();
+    const t = len2 > 1e-18 ? Math.min(1, Math.max(0, p.sub(a).dot(ab) / len2)) : 0;
+    const c = a.add(ab.mul(t));
+    const d = c.sub(p).lengthSquared();
+    if (d < bestSq) {
+      bestSq = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+// The point on a circle of `radius` nearest `p`, both centred on the origin. A
+// point exactly at the centre has no nearest direction, so it takes local +X -
+// arbitrary, but deterministic, which is what the sim needs.
+export function nearestOnCircle(radius: number, p: Vec2): Vec2 {
+  const len = p.length();
+  return len > 1e-12 ? p.div(len).mul(radius) : new Vec2(radius, 0);
+}
+
+// The two above, in world space against a placed shape.
+export function nearestSurfacePoint(t: ShapeTransform, world: Vec2): Vec2 {
+  const local = world.sub(t.globalPosition).rotated(-t.globalRotation);
+  const near =
+    t.shape.kind === "circle"
+      ? nearestOnCircle(t.shape.radius, local)
+      : nearestOnOutline(shapeVertices(t.shape), local);
+  return t.globalPosition.add(near.rotated(t.globalRotation));
+}
+
+// Which of a body's shapes a world point sits on: the one whose surface it is
+// nearest. A contact point is always on some piece's surface, so this recovers
+// *which* piece from the point alone.
+//
+// A single-shape body always answers 0, which is what every caller used to
+// assume outright - the assumption only became wrong when compound bodies became
+// authorable, and a contact indexed at the primary while resting on an auxiliary
+// makes every shape-aware query walk the wrong vertex loop.
+export function nearestShapeIndex(shapes: readonly ShapeTransform[], world: Vec2): number {
+  let best = 0;
+  let bestSq = Infinity;
+  for (let i = 0; i < shapes.length; i++) {
+    const d = nearestSurfacePoint(shapes[i]!, world).sub(world).lengthSquared();
+    if (d < bestSq) {
+      bestSq = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 // Outward unit normal of the edge leaving vertex `i` of a vertex loop. The one
 // place the winding contract above is cashed out, so a consumer never has to
 // remember which way round `orthogonal()` goes. Zero for a degenerate edge.

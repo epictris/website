@@ -174,6 +174,43 @@ rope geometry, which is what the ball & chain avatar's mounting loop is — the
 chain deploys through it, so wrapping it would double-count the one piece of
 geometry the chain is already threaded through.
 
+The second form is what the level editor authors: selecting several shapes and
+pressing Ctrl+G tags them into one `group`, and `buildLevelBodies` builds the
+group as a single body whose origin is the pieces' combined centre of mass, each
+piece mounted at its own local offset and angle. Choosing between the two forms
+is a real decision and not a preference. Several bodies are several bodies: the
+rope wraps the corner where two of them meet, and ledge detection offers it as a
+grab. One body with several shapes is one body: that corner is an interior seam,
+and both refuse it. Author the form that matches what the geometry *is* - a wall
+with a buttress against it is two bodies, an L-shaped ledge is one.
+
+A compound body is also drawn as one object - its shapes filled as a union, and
+outlined only where a piece is not covered by a sibling. This is the same rule as
+the seam rule, stated in pixels: if the rope will not catch on a join, the join
+is not an edge of the body and must not be drawn as one.
+
+## Chains between bodies
+
+A **chain** is a rope strung between two authored bodies and solved every frame
+by the same wrap-point solver the grapple and the ball & chain use. It is a
+constraint and its drawing, and nothing else:
+
+- It **holds** the pair. A rigid body on either end hangs, swings and is hauled
+  by it; a static (or an `anchor`) is infinite mass and simply holds.
+- It **wraps** scene geometry, through the ordinary solver, so a chain laid over
+  a corner catches on it.
+- It is **not collision geometry**. Nothing stands on a chain, nothing collides
+  with it, and another rope does not wrap it. Those would need the chain to be a
+  body per link, which is a different mechanism with its own stacking and contact
+  problems - and none of the scenarios above requires it.
+
+A chain's anchor is a point on a body's **surface**, never in its interior. That
+is what fastening a chain to something means, and it is also the only form the
+solver can hold: a contact inside a body leaves the span starting inside it,
+which the wrap generator resolves as a self-intersection and winds the chain
+around its own anchor. Both the editor and the loader project an authored anchor
+onto the nearest surface point rather than trusting it.
+
 ## Mobility classification
 
 "Physics-driven" (above) is a *separate* axis from "can this shape move at all".

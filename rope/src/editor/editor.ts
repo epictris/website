@@ -24,14 +24,20 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
+  chainEnds,
+  chainEndWorld,
+  cloneChain,
   cloneShape,
   convexHull,
   bodyWithinRect,
   defaultCamera,
   defaultNote,
+  distanceToChain,
   ED_LAYERS,
   emptyModel,
   groupBounds,
+  groupCentroid,
+  groupMembers,
   halfExtents,
   isArrowNote,
   LAYER_STYLE,
@@ -42,15 +48,28 @@ import {
   NOTE_ARROW_BAND,
   NOTE_DEFAULT_ARROW_LENGTH,
   NOTE_DEFAULT_SIZE,
+  nearestSurfaceLocal,
+  pickGroupOf,
   pointInBody,
+  rotateGroupAbout,
   setArrowEnds,
   setPolyVerts,
+  syncGroupProps,
   toWorld,
+  type EdChain,
   type EdItem,
   type EdLayer,
   type EdModel,
 } from "./model";
-import { computeHandles, drawEditor, HANDLE_HIT_PX } from "./render";
+import {
+  computeChainHandles,
+  computeGroupHandles,
+  computeHandles,
+  drawEditor,
+  CHAIN_DEFAULT_COLOR,
+  CHAIN_HIT_PX,
+  HANDLE_HIT_PX,
+} from "./render";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
   digest,
@@ -62,18 +81,25 @@ import {
 } from "../sim/trace";
 import type { LevelData } from "../level/levelFormat";
 
-type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow";
+type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow" | "chain";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
 // toolbar shows only the applicable ones and switching layer drops a tool that
-// no longer applies.
+// no longer applies. `+Chain` is geometry-only: a chain is strung between two
+// bodies, and no other layer has any.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
   background: ["select", "rect", "circle", "poly"],
-  geometry: ["select", "rect", "circle", "poly"],
+  geometry: ["select", "rect", "circle", "poly", "chain"],
   camera: ["select", "rect", "circle", "poly"],
   notes: ["select", "text", "arrow"],
 };
+
+// Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
+// off a killzone or a current - so the chain tool passes straight through one.
+const CHAINABLE_KINDS: BodyKind[] = ["static", "impermeable", "anchor", "rigid"];
+const chainable = (b: EdItem): boolean =>
+  b.layer === "geometry" && CHAINABLE_KINDS.includes(b.kind);
 
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
@@ -81,7 +107,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
   background:
     "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out, or +Poly and click out an outline. Tab switches layer.",
   geometry:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). +Chain drags a chain from one body to another. Ctrl+G welds several shapes into one compound body (Ctrl+Shift+G splits it; Alt+click picks one piece out). Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   notes:
@@ -110,6 +136,19 @@ type Drag =
   | { mode: "polyVertex"; body: EdItem; index: number; accepted: Vec2 }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
+  // A whole compound body turns about its centre of mass - the point its built
+  // body's origin sits at, so the drag is the body's own rotation and not a
+  // per-piece one. `grabAngle` is where the pointer was when the drag started,
+  // so the group turns by how far the pointer has swung rather than snapping its
+  // (arbitrary) first member's angle to the cursor.
+  | { mode: "rotateGroup"; items: EdItem[]; centre: Vec2; grabAngle: number; applied: number }
+  // Stringing a new chain out from a body: the anchor is fixed in `from`'s local
+  // frame, and the free end follows the pointer until it is dropped on a body.
+  | { mode: "chainDraw"; from: EdItem; local: Vec2; cursor: Vec2 }
+  // Re-anchoring one end of an existing chain. It follows the pointer and lands
+  // on whatever body it is dropped on, so moving a chain end and moving it to a
+  // different body are one gesture.
+  | { mode: "chainEnd"; chain: EdChain; end: "a" | "b"; cursor: Vec2 }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -154,6 +193,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // Selection is a set: plain click selects one, shift+click toggles a body in
   // or out. Handles and the per-body inspector only apply to a lone selection.
   const selectedIds = new Set<number>();
+  // Chains carry their own selection, and the two are mutually exclusive: a
+  // chain has no shape, no placement and no properties in common with an item,
+  // so a mixed selection would have nothing an inspector panel could say about
+  // it and nothing a nudge or a resize could mean.
+  const selectedChainIds = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
@@ -201,6 +245,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       cam: { ...b.cam },
       note: { ...b.note },
     })),
+    chains: m.chains.map(cloneChain),
   });
   const resetHistory = (): void => {
     history.length = 0;
@@ -230,6 +275,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     nudging = false;
     const live = new Set(model.items.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
+    const liveChains = new Set(model.chains.map((c) => c.id));
+    for (const id of selectedChainIds) if (!liveChains.has(id)) selectedChainIds.delete(id);
     rebuildInspector();
     markDirty(); // an undo/redo is a change like any other - it autosaves too
   }
@@ -255,17 +302,45 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       )
       .map((p) => p.b);
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
+  const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
   function setSelection(ids: readonly number[]): void {
-    if (ids.length === selectedIds.size && ids.every((id) => selectedIds.has(id))) return;
+    const unchanged =
+      ids.length === selectedIds.size &&
+      ids.every((id) => selectedIds.has(id)) &&
+      selectedChainIds.size === 0;
+    if (unchanged) return;
     selectedIds.clear();
+    selectedChainIds.clear();
     for (const id of ids) selectedIds.add(id);
     nudging = false;
     rebuildInspector();
   }
+  function setChainSelection(ids: readonly number[]): void {
+    selectedIds.clear();
+    selectedChainIds.clear();
+    for (const id of ids) selectedChainIds.add(id);
+    nudging = false;
+    rebuildInspector();
+  }
   function toggleSelection(id: number): void {
+    selectedChainIds.clear();
     if (!selectedIds.delete(id)) selectedIds.add(id);
     nudging = false;
     rebuildInspector();
+  }
+  // The items a click on `hit` selects: its whole compound body, since a group
+  // IS one body. Alt reaches past that to the single piece, which is what the
+  // per-vertex and per-shape edits need.
+  const clickTargets = (hit: EdItem, alt: boolean): EdItem[] =>
+    alt ? [hit] : pickGroupOf(model.items, hit);
+  // Expand a set of item ids so no group is ever half-selected - a rubber band
+  // that touches one piece of a body has touched the body.
+  function withWholeGroups(ids: Iterable<number>): number[] {
+    const out = new Set<number>(ids);
+    const groups = new Set<number>();
+    for (const b of model.items) if (out.has(b.id) && b.group !== null) groups.add(b.group);
+    for (const b of model.items) if (b.group !== null && groups.has(b.group)) out.add(b.id);
+    return [...out];
   }
 
   const snap = (v: number) => (snapOn ? Math.round(v / gridStep) * gridStep : v);
@@ -447,7 +522,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     poly: button("+ Poly", () => setTool("poly")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
+    chain: button("+ Chain", () => setTool("chain")),
   };
+  toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
   for (const k of BODY_KINDS) {
@@ -477,6 +554,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     toolBtns.poly,
     toolBtns.text,
     toolBtns.arrow,
+    toolBtns.chain,
     kindWrap,
   );
 
@@ -608,13 +686,21 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const count = (l: EdLayer) => model.items.filter((i) => i.layer === l).length;
     // Only the layers that have anything on them are named, so the title stays
     // short on a level that only uses geometry.
-    const extra = ([
-      ["background", "bg"],
-      ["camera", "cam"],
-      ["notes", "notes"],
-    ] as const)
-      .map(([l, name]) => (count(l) ? ` · ${count(l)} ${name}` : ""))
-      .join("");
+    const groups = new Set(
+      model.items.filter((i) => i.group !== null).map((i) => i.group),
+    ).size;
+    const extra =
+      ([
+        ["background", "bg"],
+        ["camera", "cam"],
+        ["notes", "notes"],
+      ] as const)
+        .map(([l, name]) => (count(l) ? ` · ${count(l)} ${name}` : ""))
+        .join("") +
+      (groups ? ` · ${groups} grouped` : "") +
+      (model.chains.length
+        ? ` · ${model.chains.length} chain${model.chains.length === 1 ? "" : "s"}`
+        : "");
     const draft = polyDraft
       ? ` · polygon: ${polyDraft.length} ${polyDraft.length === 1 ? "vertex" : "vertices"}${polyDraft.length >= 3 ? " · Enter to close" : ""}`
       : "";
@@ -712,8 +798,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
 
   // A number field bound to one panel and one selection: it shows the value the
-  // group agrees on (blank if they differ) and writes to every member.
-  function groupNum(g: HTMLElement, items: EdItem[]) {
+  // group agrees on (blank if they differ) and writes to every member. `after`
+  // runs once per write - the geometry panel uses it to keep a compound body's
+  // members in agreement when only one piece of it is selected.
+  function groupNum(g: HTMLElement, items: EdItem[], after?: () => void) {
     return (
       label: string,
       get: (b: EdItem) => number,
@@ -727,6 +815,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         () => shared(items, get),
         (v) => {
           for (const b of items) set(b, v);
+          after?.();
         },
         step,
         items.length > 1,
@@ -734,6 +823,17 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       );
   }
   type GroupNum = ReturnType<typeof groupNum>;
+
+  // Is this set of items exactly one whole compound body of several pieces? The
+  // properties a body has one of - most visibly its rotation - are edited on the
+  // group when it is, and per item when it is not.
+  function wholeGroup(items: readonly EdItem[]): EdItem[] | null {
+    if (items.length < 2) return null;
+    const g = items[0]!.group;
+    if (g === null || !items.every((b) => b.group === g)) return null;
+    const members = groupMembers(model.items, g);
+    return members.length === items.length ? [...items] : null;
+  }
 
   // Placement and size. Shared by every layer's panel: whatever layer an item
   // lives on, it is a placed shape and moves, rotates and resizes the same way.
@@ -747,7 +847,23 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         (b) => b.shape.kind !== "circle" || (b.layer === "geometry" && b.kind === "force"),
       )
     ) {
-      num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
+      const whole = wholeGroup(items);
+      if (whole) {
+        // A compound body has ONE rotation, about the centre of mass its built
+        // body's origin sits at. Turning each piece about its own centre would
+        // pull the body apart, so the field is a delta applied to the group -
+        // shown against the first member's angle, which is the built body's own
+        // frame of reference.
+        const lead = whole[0]!;
+        numField(
+          g,
+          "rot°",
+          () => (lead.rot * 180) / Math.PI,
+          (v) => rotateGroupAbout(whole, groupCentroid(whole), (v * Math.PI) / 180 - lead.rot),
+        );
+      } else {
+        num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
+      }
     }
     // An arrow is stored as a box, but its height is only a pick band and its
     // width is its length — the notes panel exposes that instead.
@@ -789,7 +905,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // Authored appearance: a colour swatch plus a fill opacity. Shared by the
   // geometry and background panels — the two layers whose look is saved and
   // played, as against the fixed colours of the editor-only furniture.
-  function addFillFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
+  function addFillFields(
+    g: HTMLElement,
+    num: GroupNum,
+    items: EdItem[],
+    after?: () => void,
+  ): void {
     const cw = el("label", "ed-field");
     cw.textContent = "color";
     const ci = document.createElement("input");
@@ -801,6 +922,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     ci.addEventListener("focus", () => beginAction());
     ci.addEventListener("input", () => {
       for (const b of items) b.color = ci.value;
+      after?.();
       markDirty();
     });
     cw.appendChild(ci);
@@ -874,7 +996,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     kw.appendChild(ks);
     g.appendChild(kw);
 
-    const num = groupNum(g, bodies);
+    const sync = () => syncEditedGroups(bodies);
+    const num = groupNum(g, bodies, sync);
     addTransformFields(g, num, bodies);
     if (bodies.every((b) => b.kind === "force")) {
       // Acceleration along rot°, authored in px/s² like every other length.
@@ -885,8 +1008,124 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
 
-    addFillFields(g, num, bodies);
+    addFillFields(g, num, bodies, sync);
+    addGroupSection(g, bodies);
     addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
+  // Compound-body controls. A group is one engine body carrying several convex
+  // shapes: the pieces share a transform, and the joins between them stop being
+  // corners - the rope will not wrap a vertex buried inside a sibling shape, and
+  // ledge detection will not grab one. That is the whole reason to group, so the
+  // panel says it rather than offering a bare button.
+  function addGroupSection(g: HTMLElement, bodies: EdItem[]): void {
+    const groups = new Set(bodies.map((b) => b.group).filter((x): x is number => x !== null));
+    const row = el("div", "ed-row");
+    // Areas are single-shape everywhere they are used, so they are not groupable
+    // (see `groupable` in buildBodies.ts) and the button would be a lie.
+    const eligible = bodies.filter((b) => b.kind !== "killzone" && b.kind !== "force");
+    if (eligible.length > 1) {
+      const b = button("Group", () => groupSelected());
+      b.title = "Weld these shapes into one compound body (Ctrl+G)";
+      row.appendChild(b);
+    }
+    if (groups.size) {
+      const b = button("Ungroup", () => ungroupSelected());
+      b.title = "Split this compound body back into independent ones (Ctrl+Shift+G)";
+      row.appendChild(b);
+    }
+    if (!row.childElementCount) return;
+    g.appendChild(row);
+    const hint = el("div", "ed-hint");
+    if (groups.size === 1 && bodies.every((b) => b.group !== null)) {
+      const members = groupMembers(model.items, bodies[0]!.group!).length;
+      hint.textContent = `One compound body of ${members} shapes: they share a transform, and the rope and ledge grabs treat the seams between them as interior. Alt+click a piece to edit it alone.`;
+    } else {
+      hint.textContent =
+        "Grouping builds these as ONE body, so the rope runs straight over the seams between them instead of snagging. Kind, fill and friction collapse onto the first one's.";
+    }
+    g.appendChild(hint);
+  }
+
+  // Chain panel. A chain has no placement of its own - both ends are points on
+  // bodies - so the panel is what it holds, how long it is, and its colour.
+  function buildChainGroup(chains: EdChain[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(chains.length === 1 ? `Chain #${chains[0]!.id}` : `${chains.length} chains selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it.";
+    g.appendChild(hint);
+
+    // Slack is what a chain is for, so the length is authored in scene pixels
+    // like every other length. Blank = exactly taut between the two anchors,
+    // re-derived on load, which is what dragging one out gives.
+    numField(
+      g,
+      "length",
+      () => {
+        const first = chains[0]!.length;
+        return chains.every((c) => c.length === first) ? (first ?? NaN) * M2PX : null;
+      },
+      (v) => {
+        for (const c of chains) c.length = Math.max(0, v * PX);
+      },
+      10,
+      chains.length > 1,
+      {
+        placeholder: "taut",
+        onEmpty: () => {
+          for (const c of chains) c.length = null;
+        },
+      },
+    );
+
+    // A "slack" readout: how much longer than the straight gap the chain is, so
+    // the number above can be set by eye against the drape it produces.
+    const slack = (): string => {
+      const c = chains[0]!;
+      const ends = chainEnds(model, c);
+      if (!ends || chains.length > 1) return "-";
+      const straight = ends.a.distanceTo(ends.b);
+      const len = c.length ?? straight;
+      return `${Math.round((len - straight) * M2PX)} px`;
+    };
+    const srow = el("label", "ed-field");
+    srow.textContent = "slack";
+    const sval = document.createElement("span");
+    sval.textContent = slack();
+    srow.appendChild(sval);
+    g.appendChild(srow);
+    readouts.push({ el: sval, get: slack });
+
+    const cw = el("label", "ed-field");
+    cw.textContent = "color";
+    const ci = document.createElement("input");
+    ci.type = "color";
+    ci.className = "ed-color";
+    ci.value = chains[0]!.color ?? CHAIN_DEFAULT_COLOR;
+    ci.addEventListener("focus", () => beginAction());
+    ci.addEventListener("input", () => {
+      for (const c of chains) c.color = ci.value;
+      markDirty();
+    });
+    cw.appendChild(ci);
+    g.appendChild(cw);
+
+    const row = el("div", "ed-row");
+    row.append(
+      button("Reset color", () => {
+        beginAction();
+        for (const c of chains) c.color = null;
+        markDirty();
+        rebuildInspector();
+      }),
+      button("Delete", () => deleteSelected()),
+    );
+    g.appendChild(row);
     inspector.appendChild(g);
   }
 
@@ -1094,6 +1333,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     numField(player, "radius", () => model.player.radius * M2PX, (v) => (model.player.radius = Math.max(1, v) * PX));
     inspector.appendChild(player);
 
+    // Chains carry their own, exclusive selection (see `selectedChainIds`).
+    const chains = selectedChains();
+    if (chains.length) {
+      buildChainGroup(chains);
+      return;
+    }
+
     const sel = selectedBodies();
     if (!sel.length) {
       const hint = el("div", "ed-hint");
@@ -1140,35 +1386,176 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   // --- editing ops ----------------------------------------------------------
   // Detached copies of the given bodies, each with a fresh id and shifted by
-  // `offset`. Shapes are mutated in place, so clone them.
-  const cloneBodies = (bodies: readonly EdItem[], offset: Vec2): EdItem[] =>
-    bodies.map((b) => ({
-      ...b,
-      id: newBodyId(),
-      pos: b.pos.add(offset),
-      shape: cloneShape(b.shape),
-      cam: { ...b.cam },
-      note: { ...b.note },
-    }));
+  // `offset`. Shapes are mutated in place, so clone them. Group ids are remapped
+  // too: a duplicated compound body is a NEW body, not a second set of pieces
+  // welded into the one it was copied from. `idOf` maps old id → new, which is
+  // what lets the chains between them be copied along with the bodies.
+  function cloneBodies(
+    bodies: readonly EdItem[],
+    offset: Vec2,
+  ): { items: EdItem[]; idOf: Map<number, number> } {
+    const groups = new Map<number, number>();
+    const idOf = new Map<number, number>();
+    const items = bodies.map((b) => {
+      const id = newBodyId();
+      idOf.set(b.id, id);
+      let group = b.group;
+      if (group !== null) {
+        let mapped = groups.get(group);
+        if (mapped === undefined) {
+          mapped = newBodyId();
+          groups.set(group, mapped);
+        }
+        group = mapped;
+      }
+      return {
+        ...b,
+        id,
+        group,
+        pos: b.pos.add(offset),
+        shape: cloneShape(b.shape),
+        cam: { ...b.cam },
+        note: { ...b.note },
+      };
+    });
+    return { items, idOf };
+  }
+
+  // Copies of the chains whose BOTH ends landed in the copied set. A chain with
+  // one end outside it would be a chain to a body that is not there, so it is
+  // left behind rather than silently re-pointed at the original.
+  function cloneChainsWithin(
+    chains: readonly EdChain[],
+    idOf: ReadonlyMap<number, number>,
+  ): EdChain[] {
+    const out: EdChain[] = [];
+    for (const c of chains) {
+      const a = idOf.get(c.a.itemId);
+      const b = idOf.get(c.b.itemId);
+      if (a === undefined || b === undefined) continue;
+      out.push({
+        ...cloneChain(c),
+        id: newBodyId(),
+        a: { ...c.a, itemId: a },
+        b: { ...c.b, itemId: b },
+      });
+    }
+    return out;
+  }
 
   // Add freshly created bodies to the model and leave them selected, so the
   // group can immediately be dragged or pasted again.
-  function addAndSelect(bodies: EdItem[]): void {
+  function addAndSelect(bodies: EdItem[], chains: EdChain[] = []): void {
     model.items.push(...bodies);
+    model.chains.push(...chains);
     selectedIds.clear();
+    selectedChainIds.clear();
     for (const b of bodies) selectedIds.add(b.id);
     markDirty();
     rebuildInspector();
   }
 
+  // --- groups ---------------------------------------------------------------
+  // Weld the selected geometry into one compound body. The pieces keep their
+  // placement exactly; what changes is that they now build as a single engine
+  // body, so the rope refuses to wrap the seams between them and ledge detection
+  // refuses to grab one. Body-level properties (kind, fill, friction, force)
+  // collapse onto the first member's, since a body has only one of each.
+  function groupSelected(): void {
+    const sel = selectedBodies().filter((b) => b.layer === "geometry" && b.kind !== "killzone" && b.kind !== "force");
+    if (sel.length < 2) return;
+    beginAction();
+    const id = newBodyId();
+    // Absorb any group the selection already had: grouping a body and a loose
+    // shape means one body, not a body holding a body.
+    const absorbed = new Set(sel.map((b) => b.group).filter((g): g is number => g !== null));
+    for (const b of model.items) {
+      if (b.group !== null && absorbed.has(b.group)) b.group = id;
+    }
+    for (const b of sel) b.group = id;
+    const members = groupMembers(model.items, id);
+    syncGroupProps(sel[0]!, members);
+    setSelection(members.map((b) => b.id));
+    markDirty();
+    rebuildInspector();
+  }
+
+  // Break the selected compound bodies back into independent ones. Nothing else
+  // changes - the pieces stay exactly where they are, and only stop sharing a
+  // transform and a seam rule.
+  function ungroupSelected(): void {
+    const sel = selectedBodies().filter((b) => b.group !== null);
+    if (!sel.length) return;
+    beginAction();
+    const groups = new Set(sel.map((b) => b.group!));
+    for (const b of model.items) if (b.group !== null && groups.has(b.group)) b.group = null;
+    markDirty();
+    rebuildInspector();
+  }
+
+  // Keep a compound body's members in agreement after an edit to one of them.
+  // Only the lead's body-level properties are built, so this is what stops a
+  // file from disagreeing with what the editor draws.
+  function syncEditedGroups(edited: readonly EdItem[]): void {
+    const seen = new Set<number>();
+    for (const b of edited) {
+      if (b.group === null || seen.has(b.group)) continue;
+      seen.add(b.group);
+      const members = groupMembers(model.items, b.group);
+      syncGroupProps(members[0]!, members);
+    }
+  }
+
+  // --- chains ---------------------------------------------------------------
+  // String a chain between two bodies, anchored where each end was placed. A
+  // chain to the body you started on (or to another piece of the same compound
+  // body) is a chain tied to itself and is refused.
+  function addChain(from: EdItem, fromLocal: Vec2, to: EdItem, world: Vec2): void {
+    if (!chainable(to)) return;
+    if (to.id === from.id) return;
+    if (from.group !== null && to.group === from.group) return;
+    beginAction();
+    const chain: EdChain = {
+      id: newBodyId(),
+      a: { itemId: from.id, local: fromLocal },
+      b: { itemId: to.id, local: nearestSurfaceLocal(to, world) },
+      length: null, // taut as drawn
+      color: null,
+    };
+    model.chains.push(chain);
+    setChainSelection([chain.id]);
+    markDirty();
+  }
+
+  // Drop chains that no longer have two bodies to hold. Called after any item
+  // deletion, so a chain can never outlive what it was tied to.
+  function pruneChains(): void {
+    const live = new Set(model.items.filter((i) => i.layer === "geometry").map((i) => i.id));
+    model.chains = model.chains.filter((c) => live.has(c.a.itemId) && live.has(c.b.itemId));
+  }
+
+  // A group of one is not a compound body - it builds exactly as a lone shape
+  // would - so a deletion that leaves one member behind clears the tag rather
+  // than leaving the item claiming a group that no longer means anything.
+  function pruneGroups(): void {
+    const counts = new Map<number, number>();
+    for (const b of model.items) {
+      if (b.group !== null) counts.set(b.group, (counts.get(b.group) ?? 0) + 1);
+    }
+    for (const b of model.items) {
+      if (b.group !== null && counts.get(b.group) === 1) b.group = null;
+    }
+  }
+
   // A fresh item for the draw tool, on the active layer. Every layer's item is
   // the same type, so this only picks the appearance and the starting size —
   // the drag that follows resizes it identically whatever it is.
-  function newDrawnItem(t: Exclude<Tool, "select">, start: Vec2): EdItem {
+  function newDrawnItem(t: Exclude<Tool, "select" | "chain">, start: Vec2): EdItem {
     const style = LAYER_STYLE[activeLayer];
     const base = {
       id: newBodyId(),
       layer: activeLayer,
+      group: null, // a fresh shape is its own body until it is grouped
       pos: start,
       rot: 0,
       kind: newKind,
@@ -1265,10 +1652,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
 
   function deleteSelected(): void {
-    if (!selectedIds.size) return;
+    if (!selectedIds.size && !selectedChainIds.size) return;
     beginAction();
     model.items = model.items.filter((b) => !selectedIds.has(b.id));
+    model.chains = model.chains.filter((c) => !selectedChainIds.has(c.id));
+    // A chain whose body has just gone has nothing left to hold, and a compound
+    // body down to its last piece is no longer compound.
+    pruneChains();
+    pruneGroups();
     selectedIds.clear();
+    selectedChainIds.clear();
     markDirty();
     rebuildInspector();
   }
@@ -1295,13 +1688,17 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const sel = selectedBodies();
     if (!sel.length) return;
     beginAction();
-    addAndSelect(cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2)));
+    const copy = cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2));
+    addAndSelect(copy.items, cloneChainsWithin(model.chains, copy.idOf));
   }
 
   // --- clipboard ------------------------------------------------------------
   // Copies detached from the model (so later edits or an undo can't mutate
   // them); paste re-centres the group's bounding box on the cursor.
   let clipboard: EdItem[] = [];
+  // Chains whose two ends are both inside `clipboard`, so a copied assembly
+  // (two bodies and the chain between them) pastes as the assembly.
+  let clipboardChains: EdChain[] = [];
 
   function copySelection(): void {
     const sel = selectedBodies();
@@ -1312,6 +1709,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       cam: { ...b.cam },
       note: { ...b.note },
     }));
+    const copied = new Set(sel.map((b) => b.id));
+    clipboardChains = model.chains
+      .filter((c) => copied.has(c.a.itemId) && copied.has(c.b.itemId))
+      .map(cloneChain);
   }
   function pasteClipboard(): void {
     if (!clipboard.length) return;
@@ -1327,7 +1728,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // Land the group's top-left corner on the grid, as a move does.
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
     beginAction();
-    addAndSelect(cloneBodies(clipboard, delta));
+    const copy = cloneBodies(clipboard, delta);
+    addAndSelect(copy.items, cloneChainsWithin(clipboardChains, copy.idOf));
   }
 
   // --- disk -----------------------------------------------------------------
@@ -1459,6 +1861,38 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
   function pickHandle(scr: Vec2, alt = false): Drag | "consumed" | null {
+    // A selected chain is edited by its two end handles and nothing else.
+    const chains = selectedChains();
+    if (chains.length === 1) {
+      const ends = computeChainHandles(camera, model, chains[0]!);
+      if (ends) {
+        for (const end of ["a", "b"] as const) {
+          const p = ends[end];
+          if (scr.distanceTo(p) <= HANDLE_HIT_PX) {
+            return { mode: "chainEnd", chain: chains[0]!, end, cursor: p };
+          }
+        }
+      }
+      return null;
+    }
+    // A whole compound body turns as one, about the centre of mass its built
+    // body's origin sits at, so it gets a rotate knob where a lone shape does.
+    const whole = wholeGroup(selectedBodies());
+    if (whole) {
+      const gh = computeGroupHandles(camera, whole);
+      if (scr.distanceTo(gh.rotate) <= HANDLE_HIT_PX) {
+        const centre = groupCentroid(whole);
+        const world = screenToWorld(camera, scr.x, scr.y).sub(centre);
+        return {
+          mode: "rotateGroup",
+          items: whole,
+          centre,
+          grabAngle: Math.atan2(world.y, world.x),
+          applied: 0,
+        };
+      }
+      return null;
+    }
     const s = selected();
     if (!s) return null;
     const h = computeHandles(camera, s);
@@ -1562,6 +1996,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       updateTitle();
       return;
     }
+    // 1c. Chain tool: a chain is not a shape to drag out but a link between two
+    // bodies, so the gesture is a drag FROM one body TO another. Pressing
+    // anywhere else does nothing rather than dropping a chain with one end in
+    // mid-air.
+    if (tool === "chain") {
+      const from = topmostAt(world, (b) => chainable(b));
+      if (from) {
+        // The anchor lands on the body's surface, not where the pointer happens
+        // to be inside it (see `nearestSurfaceLocal`).
+        drag = { mode: "chainDraw", from, local: nearestSurfaceLocal(from, world), cursor: world };
+      }
+      return;
+    }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
     if (tool !== "select") {
       beginAction();
@@ -1592,30 +2039,74 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
     // 4. Topmost item under the pointer, over every visible layer — the active
     // layer wins a tie (see `pickOrder`), so the layer switch still says which
-    // of two stacked items a click means.
-    const pickable = pickOrder();
-    for (let i = pickable.length - 1; i >= 0; i--) {
-      const b = pickable[i]!;
-      if (!pointInBody(b, world)) continue;
+    // of two stacked items a click means. A grouped item selects its whole
+    // compound body, since a group IS one body; Alt reaches past that to the
+    // single piece.
+    const hit = topmostAt(world);
+    if (hit) {
+      const targets = clickTargets(hit, e.altKey);
       if (e.shiftKey) {
         // Shift+click only edits the selection — no drag, so it can't nudge
         // geometry while picking bodies out of a group.
-        toggleSelection(b.id);
+        if (targets.length === 1) toggleSelection(hit.id);
+        else setSelection(withWholeGroups([...selectedIds, ...targets.map((t) => t.id)]));
         drag = null;
         return;
       }
       // Clicking inside an existing multi-selection drags the whole group.
-      if (!selectedIds.has(b.id)) setSelection([b.id]);
+      if (!targets.every((t) => selectedIds.has(t.id))) {
+        setSelection(targets.map((t) => t.id));
+      }
       const others = selectedBodies()
-        .filter((o) => o !== b)
-        .map((o) => ({ body: o, offset: o.pos.sub(b.pos) }));
-      drag = { mode: "move", lead: b, others, grab: b.pos.sub(world) };
+        .filter((o) => o !== hit)
+        .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+      drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
       return;
     }
-    // 5. Empty space: rubber-band select. A click that never moves deselects
+    // 5. A chain under the pointer. Tested after the bodies, since a chain is
+    // strung over the geometry it holds and its ends sit inside those bodies -
+    // picking it first would swallow every click near an anchor.
+    const chain = topmostChainAt(world);
+    if (chain) {
+      setChainSelection([chain.id]);
+      drag = null;
+      return;
+    }
+    // 6. Empty space: rubber-band select. A click that never moves deselects
     // (shift keeps the selection, so a miss doesn't undo the picking so far).
     drag = { mode: "marquee", start: world, current: world, additive: e.shiftKey };
   });
+
+  // Topmost pickable item at a world point (optionally filtered), or null.
+  function topmostAt(world: Vec2, accept?: (b: EdItem) => boolean): EdItem | null {
+    const pickable = pickOrder();
+    for (let i = pickable.length - 1; i >= 0; i--) {
+      const b = pickable[i]!;
+      if (!pointInBody(b, world)) continue;
+      if (accept && !accept(b)) continue;
+      return b;
+    }
+    return null;
+  }
+
+  // The chain nearest a world point, within the pick band, or null. Chains are
+  // only pickable while the geometry layer is one a click can reach - they are
+  // geometry-layer furniture, and a hidden or locked layer must not be editable
+  // through them.
+  function topmostChainAt(world: Vec2): EdChain | null {
+    if (!visibleLayers.has("geometry") || lockedLayers.has("geometry")) return null;
+    const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
+    let best: EdChain | null = null;
+    let bestD = band;
+    for (const c of model.chains) {
+      const d = distanceToChain(model, c, world);
+      if (d <= bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return best;
+  }
 
   // Double-clicking a text note opens its prose for editing — the gesture every
   // other canvas editor uses for "edit this thing's content". The text itself
@@ -1646,8 +2137,15 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     dragMoved = true;
 
     // Snapshot once, on the first movement of a model-mutating drag (pan and
-    // marquee don't touch the model; draw already snapshotted at mousedown).
-    if (!dragPushed && drag.mode !== "pan" && drag.mode !== "marquee") {
+    // marquee don't touch the model; draw already snapshotted at mousedown;
+    // a chain being strung out has not created anything yet, and takes its
+    // snapshot in `addChain` when it lands).
+    if (
+      !dragPushed &&
+      drag.mode !== "pan" &&
+      drag.mode !== "marquee" &&
+      drag.mode !== "chainDraw"
+    ) {
       beginAction();
       dragPushed = true;
     }
@@ -1759,8 +2257,50 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         refreshFields();
         break;
       }
+      case "rotateGroup": {
+        // How far the pointer has swung since the grab, applied to the whole
+        // body about its centre of mass. Tracked as a total rather than a
+        // per-move delta so snapping cannot accumulate rounding across a drag.
+        const d = world.sub(drag.centre);
+        const wanted = snapAngle(Math.atan2(d.y, d.x) - drag.grabAngle);
+        rotateGroupAbout(drag.items, drag.centre, wanted - drag.applied);
+        drag.applied = wanted;
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "chainDraw":
+        drag.cursor = world;
+        break;
+      case "chainEnd": {
+        drag.cursor = world;
+        // Land on whatever body is under the pointer, so moving an end along its
+        // own body and moving it onto a different one are the same gesture.
+        const over = topmostAt(world, (b) => chainable(b));
+        const c = drag.chain;
+        const other = drag.end === "a" ? c.b : c.a;
+        const otherItem = itemOf(other.itemId);
+        const sameBody =
+          over !== null &&
+          (over.id === other.itemId ||
+            (over.group !== null && over.group === otherItem?.group));
+        if (over && !sameBody) {
+          c[drag.end] = { itemId: over.id, local: nearestSurfaceLocal(over, world) };
+        } else {
+          // Off any body (or over the one the other end already holds): slide the
+          // anchor around the body it has, so the drag never leaves the chain
+          // tied to nothing.
+          const own = itemOf(c[drag.end].itemId);
+          if (own) c[drag.end] = { itemId: own.id, local: nearestSurfaceLocal(own, world) };
+        }
+        markDirty();
+        refreshFields();
+        break;
+      }
     }
   });
+
+  const itemOf = (id: number): EdItem | null => model.items.find((i) => i.id === id) ?? null;
 
   // The in-progress rubber-band, as a sorted world-space box (null unless one is
   // actually being dragged out — a click that never moves draws nothing).
@@ -1788,10 +2328,20 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         const hits = pickableItems()
           .filter((b) => caught(b, box.min, box.max))
           .map((b) => b.id);
-        setSelection(drag.additive ? [...new Set([...selectedIds, ...hits])] : hits);
+        // No group is ever half-caught: a band that touches one piece of a
+        // compound body has touched the body.
+        setSelection(
+          withWholeGroups(drag.additive ? [...selectedIds, ...hits] : hits),
+        );
       } else if (!drag.additive) {
         setSelection([]); // a plain click on empty space clears
       }
+    }
+    if (drag.mode === "chainDraw") {
+      // A chain lands only on a body: released over empty space the gesture is
+      // simply abandoned, rather than leaving one end in mid-air.
+      const to = topmostAt(drag.cursor, (b) => chainable(b));
+      if (to) addChain(drag.from, drag.local, to, drag.cursor);
     }
     drag = null;
     applyToolCursor();
@@ -1854,6 +2404,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         case "KeyD":
           duplicateSelected();
           break;
+        case "KeyG":
+          // Ctrl+G welds the selection into one compound body; Ctrl+Shift+G
+          // breaks one back up - the pairing every editor uses.
+          if (e.shiftKey) ungroupSelected();
+          else groupSelected();
+          break;
         case "KeyC":
           copySelection();
           break;
@@ -1892,6 +2448,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     else if (e.code === "KeyP") setTool("poly");
     else if (e.code === "KeyT") setTool("text");
     else if (e.code === "KeyA") setTool("arrow");
+    else if (e.code === "KeyK") setTool("chain");
   });
 
   // Releasing an arrow closes the nudge run, so the next press starts a fresh
@@ -1899,6 +2456,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   window.addEventListener("keyup", (e) => {
     if (NUDGE_DIRS[e.code]) nudging = false;
   });
+
+  // The chain being strung out, as the renderer wants it: the fixed anchor, the
+  // pointer, and whether releasing here would actually make a chain.
+  function chainDraftView(): { from: Vec2; to: Vec2; valid: boolean } | null {
+    if (!drag || drag.mode !== "chainDraw") return null;
+    const from = toWorld(drag.from, drag.local);
+    const to = topmostAt(drag.cursor, (b) => chainable(b));
+    const valid =
+      to !== null &&
+      to.id !== drag.from.id &&
+      !(drag.from.group !== null && to.group === drag.from.group);
+    return { from, to: drag.cursor, valid };
+  }
 
   // --- loop -----------------------------------------------------------------
   let accumulator = 0;
@@ -1967,6 +2537,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         marqueeBand(),
         visibleLayers,
         polyDraft ? { verts: polyDraft, cursor: pointerWorld() } : null,
+        selectedChainIds,
+        chainDraftView(),
       );
     }
     requestAnimationFrame(frame);
