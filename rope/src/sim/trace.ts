@@ -521,21 +521,23 @@ export class StuckDetector {
 // The invariant therefore arms only while the sim is UNFORCED: no held button
 // and no aim. In those spans nothing may go up but noise.
 
-// Sized against the two numbers that matter, both measured rather than guessed.
+// Sized as a SPEED rather than as a number of joules, and taken against the
+// ball's own mass: an unforced span may gain no more energy than the ball
+// carries at 0.8 m/s (0.5·m·v², about 17 J for the 52 kg cast-iron ball). That
+// is the same bar the old 1e-4 J was - it was set at exactly this speed, back
+// when a body's mass was its area over a thousand and the ball weighed a third
+// of a gram - written so it cannot go stale when a mass does. Solver noise is
+// float error on the energies themselves, so it scales with them; a tolerance
+// pinned to a joule count does not, and a rewrite that makes the scene heavier
+// silently turns the invariant into either an assertion about nothing or a
+// permanent failure.
 //
-// The floor: across the whole corpus an unforced span gains at most 2.1e-5 J of
-// solver noise (three spans in session-1195f; every other span is exactly zero).
-// The signal: the ball's mass is 3.3e-4 kg, so it carries 1.6e-4 J at 1 m/s -
-// this simulation's energies are small in absolute terms, and a tolerance
-// written in "sensible" round joules would sit above every quantity in the
-// scene and detect nothing at all.
-//
-// 1e-4 J is five times the noise floor and about the kinetic energy of a ball at
-// 0.8 m/s, so a refund-class bug - which banks speed every frame until the
-// assembly is crossing the level - trips it long before it is visible. The
+// 0.8 m/s is five times the measured noise floor of the corpus and far below
+// anything visible, so a refund-class bug - which banks speed every frame until
+// the assembly is crossing the level - trips it long before it is felt. The
 // relative term covers a fast swing, where the same fractional noise is a larger
 // number.
-const ENERGY_ABS_TOLERANCE = 1e-4; // J
+const ENERGY_TOLERANCE_SPEED = 0.8; // m/s of ball motion, converted to J per span
 const ENERGY_REL_TOLERANCE = 0.05; // plus 5% of the largest kinetic energy in the span
 // An unforced span shorter than this is not worth judging: a body still landing
 // when the player lets go is exchanging energy with contacts at full rate.
@@ -614,7 +616,8 @@ export class EnergyMonitor {
     }
     this.span++;
     if (this.span < ENERGY_MIN_SPAN) return null;
-    const tolerance = ENERGY_ABS_TOLERANCE + ENERGY_REL_TOLERANCE * this.peakKinetic;
+    const floor = 0.5 * level.ball.mass * ENERGY_TOLERANCE_SPEED * ENERGY_TOLERANCE_SPEED;
+    const tolerance = floor + ENERGY_REL_TOLERANCE * this.peakKinetic;
     if (energy <= this.baseline + tolerance) return null;
     const gain = energy - this.baseline;
     const span = this.span;

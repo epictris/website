@@ -429,11 +429,18 @@ export class RigidBody2D extends PhysicsBody2D {
   // slope). 0 disables it and MUST stay the default: recorded replays predate
   // this field.
   staticFriction = 0;
-  // World-space anchor held while static friction has the body gripped: its
+  // The anchor held while static friction has the body gripped: its
   // along-surface position is pinned here so gravity cannot ratchet it downhill
   // one integration step at a time. Null when not gripped; cleared the first
   // frame the body has no sticking contact (so it never snaps back after
   // leaving the ground).
+  //
+  // Stored in the SURFACE's frame (`stickBody`) rather than in the world's,
+  // because the surface may be another rigid body and then the anchor is a
+  // material point of it - the pin holds the two bodies together along their
+  // shared face, which is a statement about them and not about the world. For a
+  // static surface the frame never moves and the two are the same thing.
+  stickBody: PhysicsBody2D | null = null;
   stickAnchor: Vec2 | null = null;
   // Consecutive frames the body has had no gripping contact. The anchor is only
   // dropped once this passes `STICK_RELEASE_FRAMES`: a single frame's flicker of
@@ -446,6 +453,37 @@ export class RigidBody2D extends PhysicsBody2D {
   // does not work: it is a geometric point that slides along the contacting face
   // as the body settles, so it drifts even when nothing is sliding.
   stickLocal: Vec2 = Vec2.ZERO;
+  // The surface normal the grip took hold along, or null when not gripped. It is
+  // what splits the depenetration sweep's correction into the part the anchor
+  // must follow (out of the surface) and the part it must not (along it, which
+  // is the drift the pin exists to cancel).
+  stickNormal: Vec2 | null = null;
+
+  // Take hold at `worldPoint` on `surface`, storing the anchor in that surface's
+  // frame. Every writer goes through this rather than assigning `stickAnchor`
+  // directly, so an anchor can never be left naming one body while holding
+  // another's coordinates.
+  setStickAnchor(surface: PhysicsBody2D, worldPoint: Vec2): void {
+    this.stickBody = surface;
+    this.stickAnchor = worldPoint
+      .sub(surface.globalPosition)
+      .rotated(-surface.globalRotation);
+  }
+
+  // Where the anchor is now, in world space - which for a rigid surface is
+  // wherever that surface has carried it since.
+  stickAnchorWorld(): Vec2 | null {
+    if (this.stickAnchor === null || this.stickBody === null) return null;
+    return this.stickBody.globalPosition.add(
+      this.stickAnchor.rotated(this.stickBody.globalRotation),
+    );
+  }
+
+  releaseStick(): void {
+    this.stickAnchor = null;
+    this.stickBody = null;
+    this.stickNormal = null;
+  }
 
   override get isMobile(): boolean {
     return true;

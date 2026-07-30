@@ -104,8 +104,16 @@ export class Player extends CharacterBody2D {
     if (!this.hasShape()) this.setShape(circleShape(radius));
   }
 
+  // A person, not a ball of something 8 cm across: the avatar's collision circle
+  // is a stand-in for a body and its radius says nothing about what that body
+  // weighs, so this is stated outright rather than derived from the shape like
+  // every rigid body's is. It reaches exactly one place - the shove the avatar
+  // gives a rigid body it walks into (`applyCharacterPush`), which is a
+  // comparison against that body's mass, so the number has to be a real one for
+  // the comparison to mean anything.
+  static readonly MASS = 70; // kg
   override get mass(): number {
-    return ShapeGeometry.computeMass(this.primaryShape());
+    return Player.MASS;
   }
   get inertia(): number {
     return ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);

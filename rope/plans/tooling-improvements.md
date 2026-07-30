@@ -7,19 +7,21 @@
 > What the plan did not anticipate, all of it found by running the new tools:
 >
 > - **A tolerance has to be sized against measured numbers, not sensible ones.**
->   The ball's mass is 3.3e-4 kg, so the whole scene's kinetic energy is measured in tens of microjoules;
+>   The ball's mass was 3.3e-4 kg when this was written, so the whole scene's kinetic energy was measured in tens of microjoules;
 >   the energy invariant's first tolerance (1 mJ, which reads as small) sat above every quantity in the sim and detected nothing.
->   It is 1e-4 J now, five times the corpus's measured noise floor of 2.1e-5 J.
+>   It was then 1e-4 J, five times the corpus's measured noise floor of 2.1e-5 J.
+>   Masses are physical now (the ball is 52 kg of cast iron - see **Mass and materials** in `CLAUDE.md`), which is the second half of the lesson: a tolerance written as a number of joules goes stale the moment a mass changes, so it is written as a **speed** against the ball's own mass and re-derives itself.
 > - **The energy invariant's arming gate was the whole problem.**
 >   Deploy is hold-to-keep, so gating on "any button held" disarmed it for 90% of every recorded session;
 >   it arms on the *forced* actions (retract/extend) and on a kinematic spin that is actually turning the ball.
 > - **The A/B cannot reach back past its own imports.**
 >   `cli compare` runs current tooling against old physics, which stops working at revisions predating `bodyOverlapCircle` and `World.collectContacts` - which is where several of the historical defects live.
 >   Two acceptance tests here were written assuming otherwise (Phase 5's pre-reorder refund, Phase 4's original `1474f` launch frames) and had to be demonstrated by local defect re-introduction and by an equivalent finding instead.
-> - **Three findings the tools produced immediately**, all still open and none of them what anyone was looking for:
->   a resting ball carries a permanent ~21 mm/s that its stick anchor cancels positionally;
->   a rigid body resting on the ball keeps a permanent ~0.2 m/s into it, because the ball's own static contact is solved outside the constraint list (the one contact still excluded);
->   and gripped polygons in `session-326f`/`255f`/`166f` slide 0.5 to 2.7 mm per frame at zero velocity, with the stick anchor riding along with them.
+> - **Three findings the tools produced immediately**, none of them what anyone was looking for, and all three now **closed** (see **The contact solver**, **The position pin** and **Resting contacts** in `CLAUDE.md` for the fixes):
+>   a resting ball carried a permanent ~21 mm/s that its stick anchor cancelled positionally - restitution applied to a resting contact, which the circle path alone did not gate on approach speed; a settled scene read 1.2e-2 J of kinetic energy and now reads 1e-32;
+>   a rigid body resting on the ball kept a permanent ~0.2 m/s into it, because the ball's own static contact was solved outside the constraint list (the one contact still excluded) - folded in, it reads exactly zero, and the circle path is left with the steering alone;
+>   and gripped polygons in `session-326f`/`255f`/`166f` slid 0.5 to 2.7 mm per frame at zero velocity, with the stick anchor riding along with them - the pin is relative and anchored in the surface's frame now, Coulomb-capped and offered from both sides of a pair, which takes those three bundles from 662, 529 and 168 mm of settled drift to 8, 8 and 16 mm and turns `cli contacts` `rigid-ramp-hold` from red-on-purpose to green.
+>   Finding the first two took one `cli query` each and finding the third took `cli trace`, once it could attribute a *position* change to a phase - which it could not when these were written, and which is the one tool change this list caused.
 >
 > Distilled from a meta-analysis of the 2026-07-30 debugging sessions.
 > The finding: the debugging itself was empirical, but every loop leaked time in the same four places - verification that could not see the bug ("bit-identical" meant the avatar alone), quantitative questions that each required editing code, throwaway probes rebuilt every session, and fixes that only a manual playtest could accept.

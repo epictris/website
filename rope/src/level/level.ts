@@ -12,7 +12,7 @@ import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
-import { ShapeGeometry } from "../lib/shapeGeometry";
+import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import type { FrameInput } from "../input/frameInput";
@@ -93,7 +93,10 @@ export class Level {
   private spawnCircle(radius: number, position: Vec2): void {
     const body = new RigidBody2D();
     body.setShape(circleShape(radius));
-    body.mass = ShapeGeometry.computeMass(body.primaryShape());
+    // Rock: the sandbox's loose circles are boulders, so a 20 cm one is 10 kg
+    // and the avatar shoves it aside, while the 80 cm one is 640 kg and barely
+    // shifts. That spread is the point of having two of them.
+    body.mass = ShapeGeometry.computeMass(body.primaryShape(), Density.STONE);
     body.inertia = ShapeGeometry.computeMomentOfInertia(body.primaryShape(), body.mass);
     body.globalPosition = position;
     this.spawnBody(body);

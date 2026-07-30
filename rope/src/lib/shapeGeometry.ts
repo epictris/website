@@ -14,6 +14,48 @@ export const LEDGE_MAX_INTERIOR_ANGLE = Mathf.degToRad(100);
 // Interior angles are rotation-invariant — computed once per Shape and cached.
 const interiorAngleCache = new WeakMap<Shape, number[]>();
 
+// How thick a slab of scenery is, in metres. A rect or polygon is a flat piece
+// cut from the world - a platform, a crate, a plank - so its mass is its area
+// times this depth times its density. Circles do NOT use it (see `computeMass`).
+export const SCENE_DEPTH = 0.2;
+
+// Real material densities, kg/m³. A body's mass is a physical quantity here, not
+// a tuning number: the ball is cast iron and weighs what a cast-iron ball of its
+// size weighs, and everything else is sized against the same table rather than
+// against it. Ratios are what the simulation feels - a ball that outweighs the
+// crate it hits by 20× behaves that way whatever the units - but getting the
+// absolute scale right is what makes those ratios checkable against reality
+// instead of against each other.
+export const Density = {
+  CAST_IRON: 7200,
+  STEEL: 7850,
+  // Oak: generic scene props - crates, planks, the movable slabs levels author
+  // as `rigid`. Level geometry carries no material of its own yet, so this is
+  // what an authored rigid body is made of.
+  WOOD: 700,
+  // Rock/rubble: the loose circles the grapple sandbox spawns.
+  STONE: 2400,
+  // The grapple avatar. A body is mostly water, and its mass only ever sizes the
+  // push it gives a rigid body it walks into (`applyCharacterPush`) - it is a
+  // CharacterBody2D and nothing pushes back.
+  FLESH: 1000,
+} as const;
+
+// What a body is made of when nothing says otherwise: an authored `rigid` level
+// body is a wooden crate or plank until the level format can name its material.
+export const DEFAULT_DENSITY = Density.WOOD;
+
+// The two volume rules, exposed for callers that hold a radius or an area rather
+// than a shape (the editor's group centre of mass), so there is one statement of
+// each in the project.
+export function sphereMass(radius: number, density: number = DEFAULT_DENSITY): number {
+  return (4 / 3) * Mathf.Pi * radius * radius * radius * density;
+}
+
+export function slabMass(area: number, density: number = DEFAULT_DENSITY): number {
+  return area * SCENE_DEPTH * density;
+}
+
 export const ShapeGeometry = {
   createRectangle(width: number, height: number): Shape {
     return rectShape(width, height);
@@ -132,19 +174,43 @@ export const ShapeGeometry = {
     return [inNormal, outNormal];
   },
 
-  // Mass is area / 1000 for every shape — one density for the whole project, so
-  // a polygon weighs exactly what the rect or circle covering the same area does.
-  computeMass(shape: ShapeTransform): number {
+  // Mass in KILOGRAMS: the shape's real volume times its material's density
+  // (see `Density` / `SCENE_DEPTH` above). The sim runs in metres and seconds,
+  // so mass is the third SI unit and every derived quantity - momentum,
+  // impulses, kinetic energy - is a real one too.
+  //
+  // A circle is a SPHERE and a rect/poly is a prism of `SCENE_DEPTH`, which is
+  // the one place this file is deliberately not a single extrusion: the round
+  // things here are balls (the cast-iron ball, its hook, a cannonball, a rock)
+  // and the flat ones are slabs cut from the scenery. Extruding a ball to the
+  // slab depth makes small balls absurdly heavy - a 4 cm hook would outweigh a
+  // 5 cm rock by six times - so each kind gets the volume its shape actually
+  // has.
+  computeMass(shape: ShapeTransform, density: number = DEFAULT_DENSITY): number {
     const s = shape.shape;
-    if (s.kind === "circle") return (Mathf.Pi * s.radius * s.radius) / 1000;
-    if (s.kind === "poly") return polyArea(s.verts) / 1000;
-    return (s.size.x * s.size.y) / 1000;
+    if (s.kind === "circle") return sphereMass(s.radius, density);
+    if (s.kind === "poly") return slabMass(polyArea(s.verts), density);
+    return slabMass(s.size.x * s.size.y, density);
   },
 
   // Second moment about the shape's own origin. For a polygon that origin must
   // be the area centroid — the loader re-centres authored vertices onto it
   // (`polyShapeCentred`) precisely because every RigidBody2D lever arm in the
   // engine is measured from `globalPosition`.
+  //
+  // A circle's second moment stays the DISC's (1/2·m·r²) even though its mass is
+  // now a sphere's, and the mismatch is deliberate. Every rotation in this engine
+  // is planar - one angle about z, contact and rope lever arms measured in the
+  // plane - so a circle spins as the disc it is drawn as; the sphere is only how
+  // much stuff is in it.
+  //
+  // Measured rather than assumed: switching to 2/5·m·r² makes the ball a fifth
+  // easier to spin up for the same chain torque, and `ball-wind-up`'s chain
+  // growth goes from 1.3 cm to 6.7 cm over the same 580-frame wind-up (the
+  // solver settling the spin it cannot afford by leasing chain instead). The
+  // mass change is behaviour-neutral - a uniform scale on every mass leaves an
+  // acceleration-driven sim exactly where it was, and the playtest reproduces to
+  // four digits - and this would not have been.
   computeMomentOfInertia(shape: ShapeTransform, mass: number): number {
     const s = shape.shape;
     if (s.kind === "circle") return 0.5 * mass * s.radius * s.radius;

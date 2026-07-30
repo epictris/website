@@ -12,7 +12,7 @@ import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
 import { ImpermeableBody, RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
-import { ShapeGeometry } from "../lib/shapeGeometry";
+import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
@@ -48,10 +48,13 @@ export class BallPlayer extends RigidBody2D {
   // circle) and the renderer so the solid loop matches the drawn one.
   static readonly LOOP_RADIUS = 2 * PX;
   static readonly LOOP_GAP = 1.5 * PX;
-  // Density relative to the default sim material (computeMass ≈ water). The
-  // ball is cast iron: ρ ≈ 7200 kg/m³ vs water 1000 → 7.2× the base mass.
-  // Higher = heavier, more sluggish response to aim-kicks, chain tugs, impacts.
-  static readonly MASS_SCALE = 7.2;
+  // The ball is a solid cast-iron sphere and weighs what one weighs: at the
+  // level's 0.12 m radius, ρ·(4/3)πr³ ≈ 52 kg. That number is the feel - a
+  // wrecking ball, sluggish under aim-kicks and chain tugs and hard for
+  // anything it hits to move - and it is the same number a real one has, so the
+  // masses it is compared against (a wooden slab it hauls, its own steel hook)
+  // can be judged against reality rather than against it.
+  static readonly DENSITY = Density.CAST_IRON;
   // Braking friction follows an exponential falloff in speed:
   //   brake = MIN + (1 - MIN) * exp(-speed / DECAY_SPEED)
   // DECAY_SPEED is the e-folding speed — the higher it is, the longer friction
@@ -90,10 +93,10 @@ export class BallPlayer extends RigidBody2D {
     // one piece of geometry the chain is threaded through, and treating the rim
     // ring as a second obstacle would double-count it.
     loop.wrappable = false;
-    // Heavy ball: mass scaled up so aim-kicks, chain tugs, and collisions move
-    // it less (F = ma) — sluggish, momentum-carrying feel. Gravity is
+    // Cast iron: heavy, so aim-kicks, chain tugs and collisions move it less
+    // (F = ma) — sluggish, momentum-carrying feel. Gravity is
     // acceleration-based, so this does not change fall speed.
-    this.mass = ShapeGeometry.computeMass(this.primaryShape()) * BallPlayer.MASS_SCALE;
+    this.mass = ShapeGeometry.computeMass(this.primaryShape(), BallPlayer.DENSITY);
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Coulomb friction coefficient — ground contact gradually converts slide
     // into roll; capped by normal force, so no wall-climbing traction.

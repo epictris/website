@@ -25,6 +25,21 @@ To rescale how large the world appears on screen, change `camera.zoom`; the phys
 When adding a constant, classify its dimension: lengths/velocities/accelerations scale by `PX` (Coulomb frictions here are per-frame decelerations - **length**, not coefficients); dimensionless coefficients, gains (1/s), angles, and frame counts do not.
 `levelData.ts` stays authored in Godot pixels (converted at load); `playtests/*.json` world-coordinate/speed fields are in metres.
 
+## Mass and materials
+
+The third SI unit is the **kilogram**, and a body weighs what its size and its material say it weighs (`lib/shapeGeometry.ts`).
+`Density` is a table of real densities in kg/m³ - cast iron 7200 for the ball, steel 7850 for its hook, stone 2400 for the sandbox's loose boulders, oak 700 for anything a level authors as `rigid` - and `computeMass` turns one into a mass by the shape's real **volume**: a circle is a sphere, a rect or polygon a slab `SCENE_DEPTH` (0.2 m) thick.
+The two kinds are deliberately not one extrusion, because the round things here are balls and the flat ones are cut from scenery; extruding a ball to the slab depth makes small ones absurd (a 4 cm hook outweighing a 5 cm rock six times over).
+The avatar is the one body that states its mass outright (`Player.MASS`, 70 kg): its collision circle stands in for a person and its radius says nothing about what that person weighs.
+
+The point of the absolute scale is that ratios become **checkable**. The ball is a 24 cm cast-iron sphere at 52 kg, its hook is 0.26 kg, the slab it hauls is 63 kg - and each of those is a number a person can hold against the real object rather than only against the other bodies in the scene.
+The scale itself is behaviour-neutral: gravity is an acceleration and every constraint here is written in mass *ratios*, so multiplying every mass by 1.6e5 (which is what this change did) leaves the sim where it was. Before it, masses were "area in m² over a thousand" and the ball was a third of a gram.
+
+What is **not** neutral is anything written in units that carry a mass: an impulse (`CannonBall`'s explosion), an energy tolerance (the `energy-gained` invariant, `cli settle`'s at-rest bar), a momentum floor.
+Each of those was restated in terms it can keep - a target speed, a fraction of the ball's kinetic energy - rather than rescaled to a new constant, so the next mass change does not silently turn a check into an assertion about nothing.
+A circle's **moment of inertia** stays the disc's `1/2·m·r²` rather than the sphere's `2/5`: rotation in this engine is planar, and the sphere's figure is a fifth easier to spin, which measurably loosens the wind-up (see the note on `computeMomentOfInertia`).
+Level geometry carries no material of its own yet - a `rigid` body is oak until `LevelBodyData` can name one.
+
 ## Determinism & correspondence to the C# source
 
 The sim is a **fixed 1/60 timestep**; input is sampled once per physics frame. It is
@@ -95,26 +110,20 @@ Rigid bodies may be any of the three. A polygon resolves through a **contact man
 (`engine/manifold.ts`: SAT plus incident-face clipping, up to two points) rather than the
 single point a circle produces — one point cannot resist a rotation about itself, so a box
 would teeter on a corner instead of settling. Those manifolds feed `World.solveContacts`
-(see **The contact solver**); `resolveRigidCircle` is kept as a separate path rather than
-generalised, so the circle-against-static case (and the ball avatar's steering branch inside
-it) stays bit-identical to recorded replays.
+(see **The contact solver**), which is where **every** contact is solved - circles against
+static geometry included. What is left outside it is the ball avatar's aim **steering**
+(`applySteeringGrip`), which is a kinematic control input rather than a contact.
 
 ## Known simplifications (candidates for follow-up)
 
-- **A body resting on another RIGID body has no position pin, so it creeps down a slope.**
-  Stiction is still body-versus-static (`applyStaticGrip`). Kinetic friction cancels the
-  velocity gravity adds each frame and never the *step* the integrator already took with it,
-  and this engine integrates before it solves - so the leak is `g*sin(theta)*dt^2` per frame,
-  and a box on a 5 deg rigid ramp walks 22 cm in fifteen seconds while the same box on a
-  static ramp does not move at all. A ball is far worse (10 m), because friction turns its
-  slide into a roll and nothing pins it. `cli contacts` `rigid-ramp-hold` is the case, and it
-  is red on purpose.
-  The pair solver is what makes the fix possible - the old objection, that a pin would fight
-  the other body's own resolution pass, no longer applies, because there is no other pass -
-  but it is a design question rather than a port: the honest form is a pin on the pair's
-  *relative* position split by inverse mass, plus an answer to what "gripped" means when both
-  bodies can move. Getting it wrong is worse than the creep, since a grip that holds
-  everything is a weld and a welded body is immovable by whatever lands on it.
+- **Positional corrections do no energy bookkeeping.** The depenetration sweep and the
+  position pin move bodies without asking what that costs, which is standard (position and
+  velocity are recovered separately here as in every impulse engine) but means the pin is
+  tuned rather than derived: `PIN_RELAX` is how much of the along-surface error it removes
+  per frame, and it is 0.15 because 1.0 makes a resting pile buzz against its own recovery
+  and 0.05 leaves creep in. The Coulomb cap is what keeps it honest - see **The position
+  pin** - but a solver that corrected position through pseudo-velocities would not need the
+  number at all.
 - `World` rigidbody dynamics carry no broadphase, no islands and no sleeping; the pair loop is
   O(n²), which at this scene scale is complexity with no payoff. Sleeping is the standard
   answer to "momentum transfer destabilises settled piles", and is the wheel to import if that
@@ -345,8 +354,16 @@ against the length it anchored at, but only loosely: a single discontinuous jump
 in the wrap path can be most of the total on its own (26 cm in one frame in
 `session-284f`), which is not this bug. `rope-stalling` is the sharp one — a
 *run* of blocked frames is the shape of every chain runaway there has been, and
-the corpus splits cleanly, 17 frames at most when healthy against 79, 51, 36, 32
-and 28 for the runaways.
+the corpus split cleanly when it was written, 17 frames at most when healthy
+against 79, 51, 36, 32 and 28 for the runaways.
+**That margin is now thin**: a healthy `session-431f` runs 59 blocked frames
+against the invariant's 60, up from 6, and the rise is what a properly held ball
+looks like rather than a runaway - a chain pulling the ball into a surface it is
+resting on is now refused *consistently* instead of intermittently, and the run's
+chain ends at exactly the length it anchored at (zero growth) in every case.
+The counter is a proxy for the runaway and it has drifted toward the thing it
+measures against; before trusting it again, re-measure the split across the
+corpus and re-derive the bar from what healthy actually reads.
 A hard ceiling on the stall itself is **not** an option, tempting as it looks:
 a point-blank anchor is legitimately held over its length by the geometry it is
 anchored to, and capping the stall leaves the solver fighting the push-out every
@@ -501,9 +518,13 @@ spin source, so the invariant arms only while the sim is unforced; holding
 `deploy` is not a source, and gating on "any button held" disarmed it across
 almost every recorded session, which is how it was first written and why it
 detected nothing.
-It is sized against measured numbers rather than round ones: the corpus noise
-floor is 2.1e-5 J and the ball carries 1.6e-4 J at 1 m/s, so the tolerance is
-1e-4 J plus 5% of the span's peak kinetic energy.
+It is sized against measured numbers rather than round ones, and it is sized as a
+**speed** so that it cannot go stale when a mass changes: a span may gain no more
+than the ball's kinetic energy at 0.8 m/s (five times the corpus's measured noise
+floor), plus 5% of the span's peak kinetic energy.
+Solver noise is float error on the energies themselves, so it scales with them;
+a tolerance pinned to a joule count does not, and the same bar was written as
+1e-4 J while the ball weighed a third of a gram (see **Mass and materials**).
 This is the class of bug that was found late four times as the rope refund and
 once more as a friction motor, every time by hand.
 
@@ -579,16 +600,24 @@ launches, mover misbehavior):
    `vx=0.0` runs under held input, state thrash (Grounded↔Airborne flicker),
    or position drifting against input.
 3b. **Attribute it to a phase.** A one-frame velocity is never explained by its
-   size, only by which part of the frame wrote it. `cli trace bundle.json --from
-   A --to B [--body ID] [--out t.jsonl]` prints per-phase `Δv`/`Δω` per body:
+   size, only by which part of the frame wrote it - and neither is a one-frame
+   *movement*, which is the harder case, because a body can be moved by a phase
+   that gives it no velocity at all. `cli trace bundle.json --from
+   A --to B [--body ID] [--out t.jsonl]` prints per-phase `Δv`/`Δω` **and `Δp` in
+   millimetres** per body:
    `aim`, `gravity`, `contacts` (with per-contact normal and tangent impulses and
    whether they were at the Coulomb limit), `grip`, `circle-contacts`,
-   `contact-damp`, and the chain phase broken into `push-out`, `rope-solve`,
+   `contact-damp`, `depenetrate`, and the chain phase broken into `push-out`, `rope-solve`,
    `spin-rollback`, `unwind`, `chain-velocity`, `refuse-into-surface` and
    `stall-lease`.
    That breakdown is the part no other tool shows and the part every rope bug has
    needed: "the contact solve re-earns 1.2 m/s sideways every frame and the chain
    solve removes it" is a thing you read here rather than instrument for.
+   The position column is the same statement for the creeps, which are the bugs
+   with no velocity signature at all: "gravity drops it 2.7 mm, the recovery pushes
+   it out along an inclined normal and 0.6 mm of that is sideways, every frame" is
+   read straight off the `depenetrate` line. Without it, a body crossing the level
+   at 1e-8 m/s is a scan flag with nowhere to go next.
 4. **Inspect.** `cli continue bundle.json --from F --hold left --frames 120
    --trace t.jsonl` replays to frame F, then takes over with scripted held
    input (fed through the input deserializer so pressed/released edges are
@@ -1357,9 +1386,13 @@ A load path runs *through* a static contact: a four-box pile carries the top box
 In one system all three settle to **exactly zero**.
 That the answer now responds to `VELOCITY_ITERATIONS` at all is the tell: while the systems were split, 8, 32 and 128 iterations landed within 5 cm of each other.
 
-The one contact that stays out is a **circle against static geometry**.
-`resolveRigidCircle` carries the ball & chain avatar's steering branch and a centred-circle path that is bit-identical to every recorded replay, and it solves that contact whole - normal, friction, grip and pin - so routing it through the list as well would solve it twice.
-Vertex shapes have no such path left: `applyStaticGrip` is all that remains of `resolveRigidLoop`, and it is only the position pin.
+**No contact stays out**, and the last one that did was a load path.
+A circle against static geometry used to be solved whole by `resolveRigidCircle` - normal, friction, grip and pin - in its own pass after the constraint solve.
+So a rigid slab resting on the ball was solved against a ball the solver believed was free to move, because the floor holding that ball up was in the other system: the slab pressed, the ball gave way on paper, the circle pass then stopped the ball against the floor, and the slab kept a permanent **0.229 m/s** into a ball that was going nowhere, for as long as it sat there, with the depenetration sweep quietly absorbing the difference every frame.
+It is the same argument as the four-box pile, one shape kind later, and it was found by `cli query` on the `ball-wedge` mechanic scene rather than by anything going visibly wrong.
+Folded in, that slab reads exactly zero.
+What is left of the circle path is `applySteeringGrip`, which is not a contact solve: the aim steering drives the ball's rotation kinematically, with full authority and no force behind it, so the roll it implies is written as a velocity after the solve and cannot be expressed as an impulse the cone would cap.
+Vertex shapes have no such path left either: `applyStaticGrip` is all that remains of `resolveRigidLoop`, and it is only the position pin.
 The *velocity* half of stiction is gone, because it was always a Coulomb-capped tangential impulse solved at the contact points, which is exactly what the tangential constraint is; keeping a second copy would apply friction twice.
 What no velocity constraint can remove is gravity's per-frame integration *step*, since this engine integrates before it solves - so the pin stays, as the honest patch for that ordering rather than as a leftover.
 
@@ -1371,6 +1404,11 @@ Solved once each behind a `vn < 0` gate, the two points of a resting face cannot
 Point A's impulse acts through a lever, so it rotates the body and pushes point B in; B's impulse pushes A in; and because neither may ever *pull*, the pass ends with the pair having overshot in opposite directions.
 What is left over is a spin, and next frame it returns with the sign flipped.
 A polygon lying still on the floor sawtoothed between -0.07 and +0.11 rad/s for as long as it rested there, wobbling about a third of a degree - some millimetres at the end of a long body, which is what reads as vibration (`session-255f`).
+
+**Restitution is gated on the approach speed** (`RESTITUTION_THRESHOLD`, 1 m/s), everywhere and not only in the pair solver.
+A resting contact closes at whatever gravity integrated this frame - 0.163 m/s - and bouncing that back is a bounce that never ends.
+The ball is 0.15 elastic, and its own contact path had no such gate, so a ball sitting perfectly still on the floor carried a permanent **21 mm/s upward**: it fell 2.7 mm, was thrown back at 24 mm/s, and did it again every frame for as long as it rested.
+Nothing moved - the stick anchor pinned the position it was bobbing around - which is exactly why it survived every check the suite had, while putting the scene's at-rest kinetic energy three orders of magnitude above zero (`cli settle` read 1.2e-2 J for a scene where nothing was moving; it now reads 1e-32).
 
 Accumulating is what buys the fix: a later iteration may hand back part of an earlier one, as long as the point's total stays non-negative, so the pair settles on the load split that actually holds the body still instead of each over-correcting for the other.
 This is the standard sequential-impulse formulation, and it is the one thing the resting case genuinely needs.
@@ -1406,6 +1444,28 @@ Releasing on a single miss re-seeded the anchor wherever the body had drifted to
 Two things were tried first and are worth not repeating.
 **Widening the manifold** so a point within a few mm of the surface stays in it does not help: the second corner of a resting face is not flickering at the micron scale, it is genuinely rocking 3-7.6 mm off the ground, so a slop band only moves the threshold the flicker happens at.
 **Damping spin inside the stiction grip** is worse than the disease - it is the pose lock in a softer form, stalling a body part-way through a topple and leaving it to creep, and it took a clean settle from 0.2° to 7.8°.
+
+### The position pin
+
+The pin is **relative**, and its anchor is a material point of the SURFACE, held in the surface's own frame.
+Against a static that is the same statement as a world-space anchor, since a static never moves; against another rigid body it is the only statement that means anything, and holding one was the missing piece.
+A body resting on a rigid body had no pin at all, so it kept the whole of gravity's integration step every frame: the velocity solve cancels the velocity gravity added and never the *step* already taken with it, and the recovery then resolves that step along the contact face - which on an inclined one turns a 2.7 mm fall into 0.6 mm of **sideways** travel.
+Nothing accelerated the body into that motion and nothing ever takes it back, so it is a ratchet: slabs slid 53 cm and 66 cm across `255f` and `326f` while reporting velocities of 1e-8 m/s, which is to say invisibly to every check the suite had.
+`cli contacts` `rigid-ramp-hold` was the same thing written down as a case, and carried an `expectedFail` marker until this closed it.
+
+Four things make a relative pin friction rather than a weld, and each of them was a red case first:
+
+- **Coulomb, in position.** The correction is capped at `mu_s` times the normal impulse the contact actually carried this frame, as a displacement: `mu*Pn*(1/m_eff)*dt`. Uncapped, a pin whose anchor had gone stale hauled a struck slab 200 mm *inside* the body that struck it.
+- **Asking for more than the cone allows means it slipped**, so the capped correction is applied and the anchor is re-seeded where the body now is. Remembering the excess is the pin hauling a body toward a place it slid away from frames ago - 3 mm of positional work per frame in `298f`, which the energy invariant reads (correctly) as 17 J invented out of nothing.
+- **Split by inverse mass, applied to both bodies**, so a light body on a heavy one is the one that gives way.
+- **One pin per body, to whichever surface carries it** - the pair with the largest normal impulse, offered from *both* sides of every pair. Which body leads a constraint is an id ordering and nothing more, so pinning only the leader pinned whichever of two stacked slabs happened to be built first, and taking the first pair instead of the loaded one let a crate being shoved by a spinning ball anchor itself to the **ball** and let go of the floor (`cli contacts` spin-drive).
+
+The anchor rides along with the **normal** part of what the depenetration sweep moves the body by, and with none of the tangential part.
+It has to follow the normal push or the two fight - the grip dragging the body back to an anchor the recovery had just found to be inside something, which buzzed a resting polygon 4 cm back and forth for as long as it sat there (`session-255f`).
+Along the surface it is the opposite: the anchor *is* the grip, and carrying it sideways is the same as not being pinned in the direction that moved.
+`PIN_RELAX` removes 0.15 of the remaining along-surface error per frame rather than all of it, because a pin at full strength fights the recovery hard enough to leave a settled four-box pile spinning at 0.02 rad/s; at 0.15 the pile reads 0.003 and the creep is gone.
+
+Across the corpus this takes settled drift from 529, 662 and 168 mm (`255f`, `326f`, `166f`) to 8, 8 and 16 mm, and what is left is bodies with a real velocity under the scan's threshold rather than bodies moving with none.
 
 ### Area glyphs
 

@@ -1,5 +1,5 @@
-// Per-phase velocity attribution: which part of the frame gave this body this
-// velocity.
+// Per-phase velocity and POSITION attribution: which part of the frame gave this
+// body this velocity, and which part moved it.
 //
 // Some form of this was written by hand in every debugging session there has
 // been (`rbtrace.ts`, `_stage2.ts`, `probe*.ts`, `_diag1474a-e`) and thrown away
@@ -13,7 +13,14 @@
 // land on the same body within a few lines of each other, and every ball bug so
 // far has been an argument about which of them was right.
 //
-// Nothing here writes to the sim. It reads velocities at phase boundaries and
+// Position is carried alongside velocity because the ratchets are positional:
+// depenetration, the grip pin and the rope's correction all move a body without
+// touching its velocity, so a body creeping across the level at 0.6 mm/frame
+// reports itself at rest to every velocity-shaped tool there is (the settled
+// drift `cli scan` flags in `255f`/`326f`/`166f` is exactly this, and the
+// question it leaves - which phase moved it - had no answer before).
+//
+// Nothing here writes to the sim. It reads state at phase boundaries and
 // subtracts; with `enabled` false it is one boolean test per boundary.
 
 import type { Vec2 } from "./vec2";
@@ -29,11 +36,19 @@ export interface PhaseDelta {
   dvx: number;
   dvy: number;
   dw: number;
-  // The velocity the phase LEFT, so a record is readable without summing the
-  // ones before it.
+  // Metres and radians the phase MOVED the body, without necessarily having
+  // given it any velocity to move by.
+  dx: number;
+  dy: number;
+  drot: number;
+  // The velocity and pose the phase LEFT, so a record is readable without
+  // summing the ones before it.
   vx: number;
   vy: number;
   w: number;
+  px: number;
+  py: number;
+  rot: number;
 }
 
 export interface ContactImpulse {
@@ -59,14 +74,27 @@ interface Snapshot {
   vx: number;
   vy: number;
   w: number;
+  px: number;
+  py: number;
+  rot: number;
 }
 
-function velocityOf(body: PhysicsBody2D): Snapshot | null {
+function stateOf(body: PhysicsBody2D): Snapshot | null {
+  const pose = {
+    px: body.globalPosition.x,
+    py: body.globalPosition.y,
+    rot: body.globalRotation,
+  };
   if (body instanceof RigidBody2D) {
-    return { vx: body.linearVelocity.x, vy: body.linearVelocity.y, w: body.angularVelocity };
+    return {
+      vx: body.linearVelocity.x,
+      vy: body.linearVelocity.y,
+      w: body.angularVelocity,
+      ...pose,
+    };
   }
   if (body instanceof CharacterBody2D) {
-    return { vx: body.velocity.x, vy: body.velocity.y, w: 0 };
+    return { vx: body.velocity.x, vy: body.velocity.y, w: 0, ...pose };
   }
   return null;
 }
@@ -77,7 +105,7 @@ export const PhaseTrace = {
   // Build indices to watch, or null for every body that can carry a velocity.
   watch: null as Set<number> | null,
   records: [] as PhaseRecord[],
-  // Last-seen velocity per watched body, so a phase reports the change it made
+  // Last-seen state per watched body, so a phase reports the change it made
   // rather than the state it left.
   last: new Map<number, Snapshot>(),
 
@@ -100,19 +128,19 @@ export const PhaseTrace = {
     this.last.clear();
     for (const body of world.bodies) {
       if (body.removed || !this.watches(body)) continue;
-      const v = velocityOf(body);
+      const v = stateOf(body);
       if (v) this.last.set(body.buildIndex, v);
     }
   },
 
-  // Close off a phase: emit one record per watched body whose velocity the phase
-  // changed. Bodies it left alone emit nothing, so a trace is the phases that
-  // actually did something.
+  // Close off a phase: emit one record per watched body whose velocity OR pose
+  // the phase changed. Bodies it left alone emit nothing, so a trace is the
+  // phases that actually did something.
   mark(phase: string, world: World): void {
     if (!this.enabled) return;
     for (const body of world.bodies) {
       if (body.removed || !this.watches(body)) continue;
-      const v = velocityOf(body);
+      const v = stateOf(body);
       if (!v) continue;
       const prev = this.last.get(body.buildIndex);
       this.last.set(body.buildIndex, v);
@@ -120,7 +148,10 @@ export const PhaseTrace = {
       const dvx = v.vx - prev.vx;
       const dvy = v.vy - prev.vy;
       const dw = v.w - prev.w;
-      if (dvx === 0 && dvy === 0 && dw === 0) continue;
+      const dx = v.px - prev.px;
+      const dy = v.py - prev.py;
+      const drot = v.rot - prev.rot;
+      if (dvx === 0 && dvy === 0 && dw === 0 && dx === 0 && dy === 0 && drot === 0) continue;
       this.records.push({
         f: this.frame,
         t: "phase",
@@ -130,9 +161,15 @@ export const PhaseTrace = {
         dvx,
         dvy,
         dw,
+        dx,
+        dy,
+        drot,
         vx: v.vx,
         vy: v.vy,
         w: v.w,
+        px: v.px,
+        py: v.py,
+        rot: v.rot,
       });
     }
   },

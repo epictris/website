@@ -26,7 +26,7 @@ import {
   nearestSurfacePoint,
 } from "../engine/shapes";
 import { bodyOverlapCircle, bodySweepCircle } from "../engine/collision";
-import { ShapeGeometry } from "../lib/shapeGeometry";
+import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
 export class BallHook extends RigidBody2D {
@@ -42,7 +42,11 @@ export class BallHook extends RigidBody2D {
     super();
     this.name = "BallHook";
     this.setShape(circleShape(2 * PX));
-    this.mass = ShapeGeometry.computeMass(this.primaryShape());
+    // Steel, like the chain it ends: a 4 cm head is ~0.26 kg, a two-hundredth
+    // of the cast-iron ball throwing it. That ratio is what makes the throw a
+    // throw - the hook is what the ball flicks out and reels back, not a second
+    // weight the chain has to swing.
+    this.mass = ShapeGeometry.computeMass(this.primaryShape(), Density.STEEL);
     this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.

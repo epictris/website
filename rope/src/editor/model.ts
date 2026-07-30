@@ -19,6 +19,7 @@ import {
   polySignedArea2,
 } from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import { slabMass, sphereMass } from "../lib/shapeGeometry";
 import {
   DEFAULT_BACKGROUND_COLOR,
   DEFAULT_BACKGROUND_OPACITY,
@@ -675,24 +676,32 @@ export function pickGroupOf(items: readonly EdItem[], item: EdItem): EdItem[] {
   return item.group === null ? [item] : groupMembers(items, item.group);
 }
 
-// Area of an item's shape, in m². Mass is proportional to area everywhere in
-// this project (`ShapeGeometry.computeMass` is area/1000 for every kind), so
-// this is what weights a group's centre of mass.
+// Area of an item's shape, in m².
 export function shapeArea(item: EdItem): number {
   if (item.shape.kind === "circle") return Math.PI * item.shape.r * item.shape.r;
   if (item.shape.kind === "rect") return item.shape.w * item.shape.h;
   return Math.abs(polySignedArea2(item.shape.verts)) / 2;
 }
 
+// Mass of an item's shape, in kg - the same answer `ShapeGeometry.computeMass`
+// gives the built body, asked through the same function rather than restated
+// here. Area is NOT a stand-in for it: a circle is a sphere and a rect or
+// polygon a slab of `SCENE_DEPTH`, so the two stopped being proportional the
+// moment masses became physical.
+export function shapeMass(item: EdItem): number {
+  if (item.shape.kind === "circle") return sphereMass(item.shape.r);
+  return slabMass(shapeArea(item));
+}
+
 // A group's centre of mass - the point `buildLevelBodies` puts the compound
-// body's origin at, and therefore the point it rotates about. Weighted by area,
+// body's origin at, and therefore the point it rotates about. Weighted by mass,
 // not the bounding-box centre: every rigid-body lever arm in the engine is
 // measured from the body origin, so the two have to agree.
 export function groupCentroid(items: readonly EdItem[]): Vec2 {
   let total = 0;
   let acc = Vec2.ZERO;
   for (const i of items) {
-    const a = shapeArea(i);
+    const a = shapeMass(i);
     total += a;
     acc = acc.add(i.pos.mul(a));
   }

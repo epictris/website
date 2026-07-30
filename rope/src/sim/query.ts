@@ -206,6 +206,7 @@ function bodyViews(world: World): BodyView[] {
     // against, and a scripted mover's pose is a legitimate question. They simply
     // carry no velocity.
     const vel = rigid ? rigid.linearVelocity : character ? character.velocity : Vec2.ZERO;
+    const stickAnchor = rigid ? rigid.stickAnchorWorld() : null;
     out.push({
       id: bodyId(body, i),
       name: body.name,
@@ -221,7 +222,7 @@ function bodyViews(world: World): BodyView[] {
       kinematicRotation: rigid ? rigid.kinematicRotation : false,
       shapes: body.getShapes().map((s) => shapeView(s.shape)),
       embed: rigid || character ? deepestEmbedding(world, body) : null,
-      stickAnchor: rigid?.stickAnchor ? { x: rigid.stickAnchor.x, y: rigid.stickAnchor.y } : null,
+      stickAnchor: stickAnchor ? { x: stickAnchor.x, y: stickAnchor.y } : null,
       ungrippedFrames: rigid ? rigid.ungrippedFrames : 0,
     });
   }

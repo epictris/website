@@ -171,6 +171,11 @@ function ok(name: string, passed: boolean, details: string[]): ContactResult {
 }
 
 // As `ok`, for a case whose failure is a known gap rather than a regression.
+// No case carries this today - `rigid-ramp-hold` was the last one, and the
+// relative position pin closed it. It stays because the rule it encodes is what
+// makes marking the next gap safe: the runner counts an expected failure as a
+// pass and FAILS on one that passes, so a marker cannot outlive the gap it
+// documents.
 function expectedFail(name: string, passed: boolean, details: string[]): ContactResult {
   return { name, passed, details, expectedFail: true };
 }
@@ -525,12 +530,15 @@ function caseRigidRampHold(sims: Sim[]): ContactResult {
     passed &&= good;
     details.push(`${good ? "ok  " : "BAD "} ${deg}deg: drift=${(drift * 100).toFixed(1)}cm in 15s`);
   }
-  // Marked expected-fail rather than deleted or loosened: the case is the
-  // specification of the missing piece, and the marker is what lets the suite's
-  // exit code gate a change while the gap is open. Closing it means deleting the
-  // marker in the same change - the runner fails on a case that passes while
-  // still carrying one.
-  return expectedFail("rigid-ramp-hold — a box holds a ramp made of scenery", passed, details);
+  // Green since the position pin became a RELATIVE one (`applyStaticGrip`): the
+  // anchor is a material point of the surface, in the surface's own frame, so it
+  // says the same thing about a rigid ramp that it always said about a static
+  // one, and the correction is split by inverse mass and capped at mu times the
+  // frame's normal impulse so it stays friction rather than a weld. It carried an
+  // `expectedFail` marker for as long as the gap was open, and the marker came
+  // off in the change that closed it - the runner fails a case that passes while
+  // still carrying one, because a stale marker is a lie about coverage.
+  return ok("rigid-ramp-hold — a box holds a ramp made of scenery", passed, details);
 }
 
 // ---------------------------------------------------------------------------

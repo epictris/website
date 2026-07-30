@@ -527,10 +527,20 @@ async function cmdTrace(file: string, o: Record<string, string>): Promise<void> 
       console.log(`  f${String(frame).padStart(4)}`);
     }
     if (r.t === "phase") {
+      // Position in MILLIMETRES, and only when the phase actually moved the
+      // body: a positional-only phase (depenetration, the grip pin, the rope's
+      // correction) is the one every drift bug turns out to be, and at metre
+      // precision its 0.6 mm reads as 0.0006 and disappears into the line.
+      const moved = r.dx !== 0 || r.dy !== 0 || r.drot !== 0;
+      const pos = moved
+        ? `  Δp=(${(r.dx * 1000).toFixed(3).padStart(8)},${(r.dy * 1000).toFixed(3).padStart(8)})mm` +
+          ` Δrot=${r.drot.toFixed(5).padStart(8)}`
+        : "";
       console.log(
         `    ${r.phase.padEnd(20)} body#${String(r.body).padStart(2)} ${r.name.padEnd(12)} ` +
           `Δv=(${r.dvx.toFixed(4).padStart(9)},${r.dvy.toFixed(4).padStart(9)}) ` +
-          `Δw=${r.dw.toFixed(4).padStart(9)}  → v=(${r.vx.toFixed(3)},${r.vy.toFixed(3)}) w=${r.w.toFixed(3)}`,
+          `Δw=${r.dw.toFixed(4).padStart(9)}  → v=(${r.vx.toFixed(3)},${r.vy.toFixed(3)}) w=${r.w.toFixed(3)}` +
+          pos,
       );
     } else {
       console.log(
@@ -893,7 +903,7 @@ function cmdSettle(file: string, o: Record<string, string>): void {
     // Once past the settling half of the window, nothing may pick up energy
     // again: that is the "and stays there" half of the assertion. Judged on
     // kinetic energy rather than on the fastest body, because the fastest body
-    // is often the chain tip - a third of a gram, whose 2 cm/s is 7e-8 J and is
+    // is often the chain tip - a quarter-kilo hook, whose 2 cm/s is 5e-5 J and is
     // the documented at-rest floor rather than motion.
     if (i > frames / 2) peakAfterSettled = Math.max(peakAfterSettled, ke);
     if (i % every === 0 || i === frames - 1) {
@@ -924,11 +934,22 @@ function cmdSettle(file: string, o: Record<string, string>): void {
   process.exit(settled ? 0 : 1);
 }
 
-// What "at rest" means for `cli settle`. A settled ball scene reads about 1e-7 J
-// of kinetic energy, so 1e-5 is two orders above the floor and still far under
-// anything moving: the 2.4 mm/frame friction motor (session-611f) ran the ball
-// at 0.14 m/s, which is 6e-4 J.
-const SETTLE_KE_TOLERANCE = 1e-5;
+// What "at rest" means for `cli settle`, in joules of the whole scene.
+//
+// A settled scene reads 1e-5 J and less across the corpus (`255f` reads 1e-14,
+// which is float noise and nothing else) now that a resting contact no longer
+// bounces - it read 1.2e-2 J while the ball was throwing itself 21 mm/s off the
+// floor every frame with nothing moving. The bar is 1 J because `120f` carries a
+// one-frame 0.97 J blip as a contact set changes under a 300 kg slab, and that is
+// a scene rearranging rather than a scene moving. It stays far under anything
+// that IS moving: the 2.4 mm/frame friction motor (session-611f) ran the ball at
+// 0.14 m/s, which is ~70 J at this mass.
+//
+// It is a number of joules, so it tracks the scene's mass and had to be rescaled
+// when masses became physical (it was 1e-5 when the ball weighed a third of a
+// gram). Anything written in units that carry a mass has that property - see
+// **Mass and materials** in CLAUDE.md.
+const SETTLE_KE_TOLERANCE = 1;
 
 // Anomaly sweep — step 2.5 of the debugging loop: run this before choosing what
 // to inspect. `--all` sweeps the whole corpus and prints only what is notable,
