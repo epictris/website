@@ -10,6 +10,7 @@
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
+//   bun run src/tools/cli.ts contacts
 //
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
@@ -22,6 +23,7 @@ import { PhysTrace } from "../engine/physTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
 import { runLedgeMatrix } from "../sim/ledgeMatrix";
 import { runCornerCases } from "../sim/cornerCases";
+import { runContactCases } from "../sim/contactCases";
 import { replayRecording, levelFromRecording } from "../sim/replay";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
@@ -407,10 +409,29 @@ switch (cmd) {
   case "corners":
     cmdCorners();
     break;
+  case "contacts":
+    cmdContacts();
+    break;
   default:
     fail(
-      "usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges|corners> [file] [options]",
+      "usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges|corners|contacts> [file] [options]",
     );
+}
+
+// Rigid-body contact cases (src/sim/contactCases.ts). Pure physics — a world,
+// some geometry and a fixed number of steps — so they need no level, no input
+// trace and no bundle, and a regression reads as a number rather than as a rope
+// in a wall four hundred frames into a recording.
+function cmdContacts(): void {
+  const results = runContactCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[contacts] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 // Corner-exposure geometry cases (src/sim/cornerCases.ts). Pure geometry, so it

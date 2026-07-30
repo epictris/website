@@ -76,8 +76,8 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
 // Slab-of-scenery numbers, not the rolling ball's: μ_s ≥ μ_k, as for a body that
 // slides rather than rolls, and μ_s = 0.7 puts the breakaway angle at
 // atan(0.7) ≈ 35°, so a crate holds a shallow ramp and lets go of a steep one.
-const RIGID_KINETIC_FRICTION = 0.6;
-const RIGID_STATIC_FRICTION = 0.7;
+export const RIGID_KINETIC_FRICTION = 0.6;
+export const RIGID_STATIC_FRICTION = 0.7;
 
 // What `buildLevelBodies` hands back.
 export interface BuiltBodies {
