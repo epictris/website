@@ -224,7 +224,7 @@ export class SlackSimulation {
       for (let i = this.slackNodes.length - 1; i >= 0; i--) {
         const node = this.slackNodes[i]!;
         if (
-          Intersections.intersectsPoint(this.end.obj.getShape(), node.position) ===
+          Intersections.intersectsPoint(this.end.obj.primaryShape(), node.position) ===
           IntersectionStatus.Overlap
         ) {
           nodesToIgnore.add(node);
@@ -238,55 +238,59 @@ export class SlackSimulation {
       slackNode.contactSurfaceNormal = null;
       if (nodesToIgnore.has(slackNode)) continue;
       for (const body of bodies) {
-        const bodyShape = body.getShape();
-        if (
-          Intersections.intersectsPoint(bodyShape, slackNode.position) !==
-          IntersectionStatus.Overlap
-        ) {
-          continue;
-        }
-        if (bodyShape.shape.kind === "circle") {
-          const circleCenter = bodyShape.globalPosition;
-          const circleRadius = bodyShape.shape.radius;
-          const delta = slackNode.position.sub(circleCenter);
-          const dist = delta.length();
-          if (dist < 0.001 * PX) {
-            slackNode.position = circleCenter.add(Vec2.UP.mul(circleRadius));
-            slackNode.contactSurfaceNormal = Vec2.UP;
+        // Every piece the body carries. A compound body is one body of several
+        // convex shapes, and pushing a slack node out of only the first left the
+        // drawn rope lying through the rest of it.
+        for (const bodyShape of body.getShapes()) {
+          if (
+            Intersections.intersectsPoint(bodyShape, slackNode.position) !==
+            IntersectionStatus.Overlap
+          ) {
+            continue;
+          }
+          if (bodyShape.shape.kind === "circle") {
+            const circleCenter = bodyShape.globalPosition;
+            const circleRadius = bodyShape.shape.radius;
+            const delta = slackNode.position.sub(circleCenter);
+            const dist = delta.length();
+            if (dist < 0.001 * PX) {
+              slackNode.position = circleCenter.add(Vec2.UP.mul(circleRadius));
+              slackNode.contactSurfaceNormal = Vec2.UP;
+            } else {
+              slackNode.position = circleCenter.add(delta.div(dist).mul(circleRadius));
+              slackNode.contactSurfaceNormal = delta.normalized();
+            }
+          } else if (bodyShape.shape.kind === "poly") {
+            // Convex polygon: the depenetration normal/depth of a zero-radius
+            // circle is exactly the push-out this branch computes by hand for a
+            // rect (which keeps its ported closed form, above).
+            const ov = circleOverlap(slackNode.position, 0, bodyShape);
+            if (ov) {
+              const push = ov.normal.mul(ov.depth);
+              slackNode.position = slackNode.position.add(push);
+              slackNode.contactSurfaceNormal = push;
+            }
           } else {
-            slackNode.position = circleCenter.add(delta.div(dist).mul(circleRadius));
-            slackNode.contactSurfaceNormal = delta.normalized();
-          }
-        } else if (bodyShape.shape.kind === "poly") {
-          // Convex polygon: the depenetration normal/depth of a zero-radius
-          // circle is exactly the push-out this branch computes by hand for a
-          // rect (which keeps its ported closed form, above).
-          const ov = circleOverlap(slackNode.position, 0, bodyShape);
-          if (ov) {
-            const push = ov.normal.mul(ov.depth);
-            slackNode.position = slackNode.position.add(push);
-            slackNode.contactSurfaceNormal = push;
-          }
-        } else {
-          const hw = bodyShape.shape.size.x * 0.5;
-          const hh = bodyShape.shape.size.y * 0.5;
-          const local = slackNode.position
-            .sub(bodyShape.globalPosition)
-            .rotated(-bodyShape.globalRotation);
-          const dRight = hw - local.x;
-          const dLeft = hw + local.x;
-          const dBottom = hh - local.y;
-          const dTop = hh + local.y;
-          const minPen = Mathf.min(Mathf.min(dRight, dLeft), Mathf.min(dBottom, dTop));
+            const hw = bodyShape.shape.size.x * 0.5;
+            const hh = bodyShape.shape.size.y * 0.5;
+            const local = slackNode.position
+              .sub(bodyShape.globalPosition)
+              .rotated(-bodyShape.globalRotation);
+            const dRight = hw - local.x;
+            const dLeft = hw + local.x;
+            const dBottom = hh - local.y;
+            const dTop = hh + local.y;
+            const minPen = Mathf.min(Mathf.min(dRight, dLeft), Mathf.min(dBottom, dTop));
 
-          let localPush: Vec2;
-          if (minPen === dRight) localPush = new Vec2(dRight, 0);
-          else if (minPen === dLeft) localPush = new Vec2(-dLeft, 0);
-          else if (minPen === dBottom) localPush = new Vec2(0, dBottom);
-          else localPush = new Vec2(0, -dTop);
+            let localPush: Vec2;
+            if (minPen === dRight) localPush = new Vec2(dRight, 0);
+            else if (minPen === dLeft) localPush = new Vec2(-dLeft, 0);
+            else if (minPen === dBottom) localPush = new Vec2(0, dBottom);
+            else localPush = new Vec2(0, -dTop);
 
-          slackNode.position = slackNode.position.add(localPush.rotated(bodyShape.globalRotation));
-          slackNode.contactSurfaceNormal = localPush.rotated(bodyShape.globalRotation);
+            slackNode.position = slackNode.position.add(localPush.rotated(bodyShape.globalRotation));
+            slackNode.contactSurfaceNormal = localPush.rotated(bodyShape.globalRotation);
+          }
         }
       }
     }

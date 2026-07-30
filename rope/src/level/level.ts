@@ -92,8 +92,8 @@ export class Level {
   private spawnCircle(radius: number, position: Vec2): void {
     const body = new RigidBody2D();
     body.setShape(circleShape(radius));
-    body.mass = ShapeGeometry.computeMass(body.getShape());
-    body.inertia = ShapeGeometry.computeMomentOfInertia(body.getShape(), body.mass);
+    body.mass = ShapeGeometry.computeMass(body.primaryShape());
+    body.inertia = ShapeGeometry.computeMomentOfInertia(body.primaryShape(), body.mass);
     body.globalPosition = position;
     this.spawnBody(body);
   }

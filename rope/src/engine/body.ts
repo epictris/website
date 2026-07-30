@@ -3,6 +3,7 @@
 
 import { Vec2 } from "./vec2";
 import { wrapAngle } from "./mathf";
+import { isExposedCorner, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
@@ -41,6 +42,43 @@ export class CollisionShape2D implements ShapeTransform {
   get globalRotation(): number {
     return this.owner.globalRotation + this.localRotation;
   }
+
+  // This shape's vertex `i` in world space. Circles have none.
+  globalVertex(i: number): Vec2 | null {
+    const v = shapeVertices(this.shape)[i];
+    return v ? this.globalPosition.add(v.rotated(this.globalRotation)) : null;
+  }
+
+  // Is vertex `i` still a corner of the BODY, rather than a join swallowed by a
+  // sibling piece? The rope may only bend around the first kind and the player
+  // may only hang from the first kind (see `isExposedCorner`).
+  //
+  // Computed once and cached, because it is a property of how the body's pieces
+  // are ARRANGED, and that arrangement is rigid: every piece rides the body's
+  // transform, so moving or turning the body carries them all together and
+  // cannot expose or bury a corner. Asking per query instead is what let three
+  // separate call sites each answer it their own way, and each get it wrong.
+  //
+  // Invalidated when the body's shape set changes. Mutating a mounted shape's
+  // `localOffset` / `localRotation` after build would not invalidate it, and
+  // nothing does: pieces are placed once, by `mountPieces`.
+  isVertexExposed(i: number): boolean {
+    if (this.shape.kind === "circle") return false;
+    if (!this.exposedVertices) {
+      const siblings = this.owner.getShapes();
+      this.exposedVertices = shapeVertices(this.shape).map((_, k) => {
+        const v = this.globalVertex(k);
+        return v !== null && isExposedCorner(v, siblings);
+      });
+    }
+    return this.exposedVertices[i] ?? false;
+  }
+
+  private exposedVertices: boolean[] | null = null;
+
+  invalidateExposure(): void {
+    this.exposedVertices = null;
+  }
 }
 
 let nextId = 1;
@@ -60,8 +98,8 @@ export abstract class CollisionObject2D {
   // Bitmask of layers this body occupies (default layer 1, matching the project).
   collisionLayer = LAYER_SOLID;
   // A body can carry more than one collision shape (a compound body). The first
-  // is the primary, centred shape that `getShape()` returns for the many call
-  // sites that assume a single shape; the rest are offset auxiliaries.
+  // is what `primaryShape()` returns for the few call sites that legitimately
+  // mean exactly that shape; the rest are offset auxiliaries.
   collisionShapes: CollisionShape2D[] = [];
   // Bodies excused from colliding with this one (Godot AddCollisionExceptionWith).
   readonly exceptions = new Set<number>();
@@ -87,17 +125,38 @@ export abstract class CollisionObject2D {
     return s;
   }
 
+  // Corner exposure is a property of the whole shape set, so adding or replacing
+  // a shape invalidates every piece's cache, not just the new one's.
+  private invalidateExposure(): void {
+    for (const s of this.collisionShapes) s.invalidateExposure();
+  }
+
   // Mount an extra shape offset (and optionally turned) in the body's local
   // frame; both ride the body's transform.
   addShape(shape: Shape, localOffset: Vec2, localRotation = 0): CollisionShape2D {
     const s = new CollisionShape2D(this, shape, localOffset, localRotation);
     this.collisionShapes.push(s);
+    this.invalidateExposure();
     return s;
   }
 
-  // The primary (centred) shape. Used by every query that assumes a single
-  // shape — the rope solver, mass/inertia, the character sweep's moving shape.
-  getShape(): CollisionShape2D {
+  // The primary (first-mounted) shape, and ONLY that one.
+  //
+  // Named for what it returns rather than for what a single-shape body happens
+  // to make it mean. It used to be `getShape()`, and every caller that read it
+  // as "this body's shape" went on believing the rest of a compound body was not
+  // there: the hook's swept attach test flew straight through the second piece
+  // of a three-piece wall, and the embedding invariants could not see a chain
+  // buried in one either (`session-306f`).
+  //
+  // Legitimate uses are a body asking about ITSELF where it is known to carry
+  // one shape - mass and inertia at construction, the avatar's own radius, the
+  // character sweep's moving shape - and areas, which are single-shape by
+  // construction (`World.integrate` tests overlap against this, which is exactly
+  // why grouping an area is refused). Anything asking about *another* body's
+  // geometry wants `getShapes()`, or one of the whole-body queries in
+  // `engine/collision.ts` that iterate it for you.
+  primaryShape(): CollisionShape2D {
     const s = this.collisionShapes[0];
     if (!s) throw new Error(`No shape found for body ${this.name}`);
     return s;
@@ -158,10 +217,10 @@ export abstract class CollisionObject2D {
   }
 
   // The primary shape at the interpolated transform — what the renderer paths
-  // instead of the live `getShape()`.
+  // instead of the live `primaryShape()`.
   renderShape(alpha: number): ShapeTransform {
     const rot = this.renderRotation(alpha);
-    return this.placeShape(this.getShape(), this.renderPosition(alpha), rot);
+    return this.placeShape(this.primaryShape(), this.renderPosition(alpha), rot);
   }
 
   // Every shape at the interpolated transform, primary first. A compound body is

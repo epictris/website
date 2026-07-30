@@ -3,7 +3,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
-import type { PhysicsBody2D } from "../engine/body";
+import type { CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { Segment } from "./segment";
 import { WrapDirection } from "./types";
 
@@ -64,9 +64,20 @@ export class PathWrap extends PathObject {
   previous: Segment;
   next: Segment;
   wrapDir: WrapDirection;
+  // The piece of `body` the rope is actually bent around. A compound body has
+  // several, and whether the wrap produces torque depends on the piece the rope
+  // is on rather than on whichever piece the body lists first.
+  shape: CollisionShape2D;
 
-  constructor(previous: Segment, next: Segment, body: PhysicsBody2D, wrapDir: WrapDirection) {
+  constructor(
+    previous: Segment,
+    next: Segment,
+    body: PhysicsBody2D,
+    wrapDir: WrapDirection,
+    shape: CollisionShape2D,
+  ) {
     super(body);
+    this.shape = shape;
     this.previous = previous;
     this.next = next;
     this.directionToPrevious = previous.direction().mul(-1);

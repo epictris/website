@@ -57,7 +57,7 @@ export class RopeContact {
   // shape set has shrunk under it (a removed auxiliary), so a stale index can
   // never throw mid-solve.
   get shape(): CollisionShape2D {
-    return this.obj.getShapes()[this.shapeIndex] ?? this.obj.getShape();
+    return this.obj.getShapes()[this.shapeIndex] ?? this.obj.primaryShape();
   }
 
   genIdentifier(): string {

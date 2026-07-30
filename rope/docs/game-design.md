@@ -140,9 +140,19 @@ Consequence for vertices: a reflex ("inward") corner only ever exists at a
 **seam between two convex pieces**, never inside a single primitive. Seam
 vertices are not ledge candidates (see below) — they are an artefact of the
 decomposition, not a real grabbable edge of the body. The rope holds the mirror
-of that rule: a wrap candidate lying inside another shape of the same body is a
-seam and never becomes a wrap node, so a span crossing the join runs straight
-instead of snagging where the real surface is smooth.
+of that rule: a wrap candidate at a seam never becomes a wrap node, so a span
+crossing the join runs straight instead of snagging where the real surface is
+smooth.
+
+What makes a vertex a seam is that the body has closed the outside off around it,
+and that is a question about **angle**, not about how near the neighbouring
+pieces are. Standing at the vertex, each piece covering it blocks off an arc of
+directions; the vertex is still a corner of the body exactly when what is left
+over is more than a half turn. A flat point has exactly half a turn left, a
+reflex one less, a buried one none at all - and the outer corner of an L, which
+two grid-snapped pieces may both own, has three quarters of a turn and is as real
+a corner as any. Proximity would call that last one a seam, and did: the rope ran
+straight through a wall until the hook happened to anchor to it.
 
 The rule is enforced where the shape is *made*, not where it is used. Both
 `polyShape` (the engine) and `setPolyVerts` (the editor) refuse a non-convex

@@ -132,29 +132,33 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   const anchorEls: string[] = [];
   for (const b of level.world.bodies) {
     if (!(b instanceof AnchorBody) || b.removed || !b.hasShape()) continue;
-    const s = b.getShape();
-    const cx = s.globalPosition.x * M;
-    const cy = s.globalPosition.y * M;
-    const shape = outlineOfShape(s.shape);
-    const circle = shape.kind === "circle";
-    const half = outlineHalfExtents(shape);
-    const hw = half.x * M;
-    const hh = half.y * M;
-    const ext = circle ? { x: hw, y: hh } : rotatedHalfExtents(hw, hh, s.globalRotation);
-    growXY(box, cx, cy, ext.x, ext.y);
+    // Every piece an anchor carries: grouping makes `anchor` bodies compound
+    // like any other, and a snapshot that drew only the first piece would show
+    // the hook catching on scenery that is not in the picture.
+    b.getShapes().forEach((s, i) => {
+      const cx = s.globalPosition.x * M;
+      const cy = s.globalPosition.y * M;
+      const shape = outlineOfShape(s.shape);
+      const circle = shape.kind === "circle";
+      const half = outlineHalfExtents(shape);
+      const hw = half.x * M;
+      const hh = half.y * M;
+      const ext = circle ? { x: hw, y: hh } : rotatedHalfExtents(hw, hh, s.globalRotation);
+      growXY(box, cx, cy, ext.x, ext.y);
 
-    const glyphs = new SvgPolyPath();
-    anchorGlyphs(glyphs, half, circle);
-    const outline = outlinePath(shape);
-    const deg = (s.globalRotation * 180) / Math.PI;
-    const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
-    const clipId = `anchor${b.id}`;
-    defsEls.push(`<clipPath id="${clipId}"><path d="${outline}"/></clipPath>`);
-    anchorEls.push(
-      `<g transform="translate(${f1(cx)} ${f1(cy)})${rot}">` +
-        `<path d="${outline} ${glyphs}" fill-rule="evenodd" fill="${b.fillColor ?? "#7a8c9b"}" fill-opacity="${b.fillColor ? b.fillOpacity : 0.38}" clip-path="url(#${clipId})"/>` +
-        `</g>`,
-    );
+      const glyphs = new SvgPolyPath();
+      anchorGlyphs(glyphs, half, circle);
+      const outline = outlinePath(shape);
+      const deg = (s.globalRotation * 180) / Math.PI;
+      const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
+      const clipId = `anchor${b.id}_${i}`;
+      defsEls.push(`<clipPath id="${clipId}"><path d="${outline}"/></clipPath>`);
+      anchorEls.push(
+        `<g transform="translate(${f1(cx)} ${f1(cy)})${rot}">` +
+          `<path d="${outline} ${glyphs}" fill-rule="evenodd" fill="${b.fillColor ?? "#7a8c9b"}" fill-opacity="${b.fillColor ? b.fillOpacity : 0.38}" clip-path="url(#${clipId})"/>` +
+          `</g>`,
+      );
+    });
   }
 
   // Collect geometry as SVG elements while accumulating the bounding box.
@@ -202,7 +206,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   const areaEls: string[] = [];
   for (const area of level.world.areas) {
     if (area.removed || !area.hasShape()) continue;
-    const s = area.getShape();
+    const s = area.primaryShape();
     const cx = s.globalPosition.x * M;
     const cy = s.globalPosition.y * M;
     const shape = outlineOfShape(s.shape);

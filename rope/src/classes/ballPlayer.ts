@@ -93,8 +93,8 @@ export class BallPlayer extends RigidBody2D {
     // Heavy ball: mass scaled up so aim-kicks, chain tugs, and collisions move
     // it less (F = ma) — sluggish, momentum-carrying feel. Gravity is
     // acceleration-based, so this does not change fall speed.
-    this.mass = ShapeGeometry.computeMass(this.getShape()) * BallPlayer.MASS_SCALE;
-    this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
+    this.mass = ShapeGeometry.computeMass(this.primaryShape()) * BallPlayer.MASS_SCALE;
+    this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Coulomb friction coefficient — ground contact gradually converts slide
     // into roll; capped by normal force, so no wall-climbing traction.
     this.contactFriction = BallPlayer.ROLL_FRICTION;
@@ -109,7 +109,7 @@ export class BallPlayer extends RigidBody2D {
   }
 
   get radius(): number {
-    const shape = this.getShape().shape;
+    const shape = this.primaryShape().shape;
     return shape.kind === "circle" ? shape.radius : 0;
   }
 

@@ -9,6 +9,7 @@
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
 //   bun run src/tools/cli.ts selftest
+//   bun run src/tools/cli.ts corners
 //
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
@@ -20,6 +21,7 @@ import { LEVELS, DEFAULT_LEVEL } from "../level/registry";
 import { PhysTrace } from "../engine/physTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
 import { runLedgeMatrix } from "../sim/ledgeMatrix";
+import { runCornerCases } from "../sim/cornerCases";
 import { replayRecording, levelFromRecording } from "../sim/replay";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
@@ -402,8 +404,27 @@ switch (cmd) {
   case "ledges":
     cmdLedges();
     break;
+  case "corners":
+    cmdCorners();
+    break;
   default:
-    fail("usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges> [file] [options]");
+    fail(
+      "usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges|corners> [file] [options]",
+    );
+}
+
+// Corner-exposure geometry cases (src/sim/cornerCases.ts). Pure geometry, so it
+// needs no level and runs instantly - and it is what decides whether the rope may
+// bend around a compound body's vertex at all.
+function cmdCorners(): void {
+  const results = runCornerCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok ? "" : ` (exposed=${r.got}, want ${r.want})`}`);
+    if (!r.ok) failed++;
+  }
+  console.log(`[corners] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).

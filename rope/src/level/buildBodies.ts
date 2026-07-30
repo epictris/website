@@ -56,7 +56,7 @@ export interface BuiltBodies {
 }
 
 // Areas are single-shape everywhere they are used - `World.integrate` tests
-// overlap against `area.getShape()`, not `getShapes()` - so a grouped area would
+// overlap against `area.primaryShape()`, not `getShapes()` - so a grouped area would
 // silently act through its first piece alone. Grouping is geometry-only; an area
 // tagged into a group is built as its own body instead.
 function groupable(kind: LevelBodyData["kind"]): boolean {

@@ -18,8 +18,8 @@ export class CannonBall extends RigidBody2D {
     super();
     this.name = "CannonBall";
     if (!this.hasShape()) this.setShape(circleShape(0.04));
-    this.mass = ShapeGeometry.computeMass(this.getShape());
-    this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
+    this.mass = ShapeGeometry.computeMass(this.primaryShape());
+    this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
   }
 
   explode(): void {

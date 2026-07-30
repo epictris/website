@@ -6,7 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import { CollisionObject2D, CollisionShape2D, PhysicsBody2D, RigidBody2D } from "../engine/body";
-import { circleOverlap } from "../engine/collision";
+import { isExposedCorner } from "../engine/shapes";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
@@ -36,11 +36,29 @@ function isPassThrough(obj: CollisionObject2D): boolean {
 // A candidate the rope may wrap: one convex shape of one body. Compound bodies
 // are the reason this is not simply the body — a body made of several convex
 // pieces catches on whichever piece the span crosses, and the tangent walk needs
-// that piece's own vertex loop and centre.
+// that piece's own vertex loop and centre. The body rides along because a
+// `RopeContact` names a body and a piece of it, not a piece on its own.
 interface WrapCandidate {
   body: PhysicsBody2D;
   shape: CollisionShape2D;
   shapeIndex: number;
+}
+
+// The scene as the flat list of surfaces the rope may bend around. Every span in
+// a regeneration scans the same list, so the body→shape flattening happens once
+// per frame rather than once per span, and - the reason it exists - the scan
+// downstream of it deals only in `WrapCandidate`. Handing that loop a body and a
+// shape at the same time is what made "is this the surface my span ends on?"
+// answerable by the wrong one.
+function wrappableSurfaces(bodies: readonly PhysicsBody2D[]): WrapCandidate[] {
+  const out: WrapCandidate[] = [];
+  for (const body of bodies) {
+    if (isPassThrough(body)) continue;
+    body.getShapes().forEach((shape, shapeIndex) => {
+      if (shape.wrappable) out.push({ body, shape, shapeIndex });
+    });
+  }
+  return out;
 }
 
 // Is this vertex an interior seam of a compound body — a corner that exists only
@@ -53,15 +71,18 @@ interface WrapCandidate {
 // this the rope snags on the join where the real surface is smooth. Only the
 // body's *own* other shapes are consulted; a corner buried in a neighbouring
 // body is a different situation, and the rope has always been free to catch it.
-const SEAM_EPSILON = 0.005;
-function isSeamVertex(body: PhysicsBody2D, shapeIndex: number, vertex: Vec2): boolean {
-  const shapes = body.getShapes();
-  if (shapes.length < 2) return false;
-  for (let i = 0; i < shapes.length; i++) {
-    if (i === shapeIndex) continue;
-    if (circleOverlap(vertex, SEAM_EPSILON, shapes[i]!)) return true;
-  }
-  return false;
+//
+// "Interior" is decided by `CollisionShape2D.isVertexExposed`, which asks how
+// much of the turn around the vertex the body's pieces cover between them, once,
+// at build time. Proximity to a sibling is NOT the test: two pieces whose
+// corners land on the same grid point share a vertex that is the outer corner of
+// the body, with three quarters of a turn of outside around it (`session-410f`).
+//
+// Single-shape bodies are answered without asking. Their vertices are all the
+// body's own corners by construction, and short-circuiting keeps a collinear
+// vertex of a lone convex polygon reading exactly as it always has.
+function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): boolean {
+  return shape.owner.getShapes().length > 1 && !shape.isVertexExposed(vertexIndex);
 }
 
 export class RopePath {
@@ -709,7 +730,7 @@ export class Rope {
 
   private shouldIgnorePathCollisions(span: RopePath): boolean {
     return (
-      span.from.contact.obj === span.to.contact.obj ||
+      span.from.contact.shape === span.to.contact.shape ||
       span.span.start.distanceTo(span.span.end) < PX
     );
   }
@@ -725,33 +746,39 @@ export class Rope {
     this.dropWrapsOnGoneBodies();
     this.resolveNodeSelfIntersections();
     const newNodes: RopeWrap[] = [];
+    // The scene as SURFACES, flattened once. Past this line the scan holds no
+    // `PhysicsBody2D` at all, which is the point: every one of these bugs was a
+    // question about a surface asked of a body, and both are in scope at the
+    // same time in the shape-at-a-time form. A body appears again only where a
+    // body is genuinely what is meant - building a `RopeContact`, which names a
+    // body and a piece of it, and the seam test, which is about how a body's
+    // pieces are arranged.
+    const surfaces = wrappableSurfaces(bodies);
 
     for (const span of this.regenerateSpans()) {
       if (span.from instanceof RopeWrap) newNodes.push(span.from);
       if (this.shouldIgnorePathCollisions(span)) continue;
 
-      // Candidates are SHAPES, not bodies: a compound body is several convex
-      // pieces sharing a transform, and the rope catches on whichever piece the
-      // span actually crosses. A single-shape body contributes exactly one
-      // candidate, so this is the same scan it always was for scene geometry.
-      const colliders: WrapCandidate[] = [];
-      for (const body of bodies) {
-        if (body === span.from.contact.obj || body === span.to.contact.obj) continue;
-        if (isPassThrough(body)) continue;
-        body.getShapes().forEach((shape, shapeIndex) => {
-          if (!shape.wrappable) return;
-          if (
-            this.isPointOutsideBoundingStrip(shape.globalPosition, span.span) &&
-            (Intersections.intersectsPoint(shape, span.span.start) === IntersectionStatus.Overlap ||
-              Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap)
-          ) {
-            return;
-          }
-          if (Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap) {
-            colliders.push({ body, shape, shapeIndex });
-          }
-        });
-      }
+      const colliders = surfaces.filter(({ shape }) => {
+        // The span's own endpoints are excluded by SHAPE, not by body. A span
+        // ending on a shape always reports overlap against it, and wrapping the
+        // thing you are tied to is the self-intersection resolvers' job, not
+        // this scan's - but a *sibling* piece of that same body is ordinary
+        // scenery in the span's way. Excluding the whole body made a compound
+        // wall stop existing for every span touching any of it: once the chain
+        // wrapped the rotated slab, the vertical post it then cut straight
+        // through was invisible, because the post and the slab happen to be one
+        // body (`session-358f`).
+        if (shape === span.from.contact.shape || shape === span.to.contact.shape) return false;
+        if (
+          this.isPointOutsideBoundingStrip(shape.globalPosition, span.span) &&
+          (Intersections.intersectsPoint(shape, span.span.start) === IntersectionStatus.Overlap ||
+            Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap)
+        ) {
+          return false;
+        }
+        return Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap;
+      });
 
       colliders.sort(
         (a, b) =>
@@ -829,7 +856,7 @@ export class Rope {
             span.span
               .getClosestPointOnLine(corners[vertexIndex]!)
               .distanceTo(corners[vertexIndex]!) > Rope.MIN_WRAP_DEFLECTION &&
-            !isSeamVertex(body, shapeIndex, corners[vertexIndex]!)
+            !isSeamVertex(bodyShape, vertexIndex)
           ) {
             newNodes.push(
               new RopeWrap(
@@ -1018,8 +1045,12 @@ export class Rope {
       const nodeB = p[i + 1]!;
       if (nodeA instanceof RopeWrap) {
         const shape = nodeA.contact.shape;
+        // A run of coil nodes on ONE circle collapses into the single wrap that
+        // leaves it; two nodes on two different pieces of one compound body are
+        // two wraps, not a coil, so the comparison is by shape (`spanLength`
+        // measures the same run the same way, and by shape for the same reason).
         if (
-          nodeA.contact.obj !== nodeB.contact.obj ||
+          nodeB.contact.shape !== shape ||
           shape.shape.kind !== "circle" ||
           nodeB === this.end
         ) {
@@ -1028,7 +1059,13 @@ export class Rope {
             nodeB.contact.globalPosition,
           );
           pathWraps.push(
-            new PathWrap(prevSegment, nextSegment, nodeA.contact.obj as PhysicsBody2D, nodeA.wrapDir),
+            new PathWrap(
+              prevSegment,
+              nextSegment,
+              nodeA.contact.obj as PhysicsBody2D,
+              nodeA.wrapDir,
+              shape,
+            ),
           );
           prevSegment = nextSegment;
         }
@@ -1116,26 +1153,33 @@ export class Rope {
     return cumulativeCorrectionImpulse;
   }
 
-  // Perpendicular lever from the body's centre of rotation to the correction force.
+  // Perpendicular lever from the body's centre of rotation to the correction
+  // force. That centre is the BODY's origin, which this engine keeps at the
+  // centre of mass - not the primary shape's origin, which is the same point
+  // only while the body has one shape. A compound body's first piece is mounted
+  // at an offset, so measuring from it gave every lever an extra arm the body
+  // does not have.
   private calculateTorqueArm(segment: PathObject): number {
     const correctionDir = segment.resolveCorrectionDir();
+    const centre = segment.body.globalPosition;
 
     if (segment instanceof PathStart) {
       if (segment.body instanceof Player) return 0;
-      const shape = segment.body.getShape();
       const leverArm = segment.selfWrap
-        ? segment.selfWrap.next.start.sub(shape.globalPosition)
-        : segment.next.start.sub(shape.globalPosition);
+        ? segment.selfWrap.next.start.sub(centre)
+        : segment.next.start.sub(centre);
       return leverArm.cross(correctionDir);
     }
     if (segment instanceof PathEnd) {
-      const shape = segment.body.getShape();
       const leverArm = segment.selfWrap
-        ? segment.selfWrap.previous.end.sub(shape.globalPosition)
-        : segment.previous.end.sub(shape.globalPosition);
+        ? segment.selfWrap.previous.end.sub(centre)
+        : segment.previous.end.sub(centre);
       return leverArm.cross(correctionDir);
     }
-    if (segment instanceof PathWrap && segment.body.getShape().shape.kind !== "circle") {
+    // A wrapped circle passes its force through its own centre and produces no
+    // torque, but that is a fact about the PIECE the rope is bent around, not
+    // about the body: a rect welded to a circle is still a rect to wrap.
+    if (segment instanceof PathWrap && segment.shape.shape.kind !== "circle") {
       const leverArm = segment.wrapStartPosition.sub(segment.body.globalPosition);
       const torqueFromStart = leverArm.cross(segment.directionToPrevious);
       const torqueFromEnd = leverArm.cross(segment.directionToNext);

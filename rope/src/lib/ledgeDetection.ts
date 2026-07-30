@@ -12,6 +12,7 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { PhysicsBody2D, RigidBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
+import { CORNER_EPSILON, isExposedCorner, type ShapeTransform } from "../engine/shapes";
 import { PhysTrace } from "../engine/physTrace";
 import { ShapeGeometry } from "./shapeGeometry";
 import { Surface } from "./surface";
@@ -21,10 +22,6 @@ import { SurfaceType } from "./types";
 // covers lateral near-misses; the swept segment covers fast approaches.
 // Also sets the hang rest depth (centre on the grab-radius edge).
 export const GRAB_REACH_MARGIN = 0.05;
-
-// A vertex sitting this deep on/inside another blocking body is a
-// compound-body seam (game-design.md) — never grabbable.
-const SEAM_EPSILON = 0.005;
 
 // Everything the states need to grab a corner. Normals are the *current*
 // world-space face normals — recompute via grabInfo every frame for movers.
@@ -110,34 +107,53 @@ export const LedgeDetection = {
     };
   },
 
-  // Compound-body seam filter (game-design.md): a vertex lying on/inside
-  // another blocking body is an interior seam corner, not a real ledge.
-  // Rigid debris (circles) is ignored — a ball resting on a lip must not
-  // switch the ledge off.
+  // Compound-body seam filter (game-design.md): a corner the surrounding
+  // geometry has filled in is an interior seam, not a real ledge. Rigid debris
+  // (circles) is ignored - a ball resting on a lip must not switch the ledge
+  // off.
+  //
+  // A compound body seams against ITSELF as well as against its neighbours: an
+  // L-shape built from two convex pieces has its reflex corner where the two
+  // overlap, and that corner belongs to no outside surface at all. The owner's
+  // own shapes therefore go into the same union as everyone else's, including
+  // the one the vertex is a corner of - that shape is what establishes there is
+  // a corner there, and the rest can only ever fill it in.
+  //
+  // The test is `isExposedCorner`, i.e. how much of the turn around the vertex
+  // the blocking geometry covers between it all. Mere proximity is not the test
+  // and never was the right one: two grid-snapped pieces whose corners land on
+  // the same point share the OUTER corner of the body, which is a ledge (and,
+  // for the rope, a corner to bend around - `session-410f`).
   isSeamOccluded(
     bodies: readonly PhysicsBody2D[],
     owner: PhysicsBody2D,
     ownerShapeIndex: number,
+    ownerVertexIndex: number,
     vertex: Vec2,
   ): boolean {
-    // A compound body seams against ITSELF as well as against its neighbours: an
-    // L-shape built from two convex pieces has its reflex corner where the two
-    // overlap, and that corner belongs to no outside surface at all. The owner is
-    // therefore not skipped wholesale — only the shape the vertex is a corner of.
-    for (const shape of owner.getShapes()) {
-      if (shape === owner.getShapes()[ownerShapeIndex]) continue;
-      if (circleOverlap(vertex, SEAM_EPSILON, shape)) return true;
-    }
+    // The owner's own pieces are a fixed arrangement, so whether they have
+    // buried this corner is settled at build time and cached on the shape.
+    // Coverage only ever grows as more geometry is added, so a corner its own
+    // body has already closed off cannot be reopened by a neighbour - which
+    // makes this both the cheap answer and a complete one.
+    const ownShape = owner.getShapes()[ownerShapeIndex];
+    if (ownShape && !ownShape.isVertexExposed(ownerVertexIndex)) return true;
+
+    // Neighbouring bodies are not a fixed arrangement - a mover slides past a
+    // ledge - so their contribution is asked for now, against the same union.
+    const shapes: ShapeTransform[] = [...owner.getShapes()];
     for (const body of bodies) {
       if (body === owner || body.removed || !body.hasShape()) continue;
       if (body instanceof RigidBody2D) continue;
       if (!(body instanceof PhysicsBody2D)) continue;
       if (!body.isSolid) continue; // hook-only scenery blocks nothing, seams included
+      // Only geometry actually reaching the vertex can fill its corner in, and
+      // the whole level is scanned per candidate, so this cheap reject stays.
       for (const shape of body.getShapes()) {
-        if (circleOverlap(vertex, SEAM_EPSILON, shape)) return true;
+        if (circleOverlap(vertex, CORNER_EPSILON, shape)) shapes.push(shape);
       }
     }
-    return false;
+    return !isExposedCorner(vertex, shapes);
   },
 
   // The nearest grabbable corner along the player's swept path, or null.
@@ -192,7 +208,7 @@ export const LedgeDetection = {
             miss("out-of-reach");
             continue;
           }
-          if (LedgeDetection.isSeamOccluded(bodies, body, si, info.vertex)) {
+          if (LedgeDetection.isSeamOccluded(bodies, body, si, vi, info.vertex)) {
             miss("seam");
             continue;
           }

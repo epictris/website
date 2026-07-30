@@ -16,6 +16,7 @@
 import { Vec2 } from "./vec2";
 import { polyEdgeNormal, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
+import type { CollisionObject2D } from "./body";
 
 const EPS = 1e-6;
 
@@ -627,4 +628,58 @@ export function shapeSupport(t: ShapeTransform, worldDir: Vec2): Vec2 {
     }
   }
   return t.globalPosition.add(best.rotated(t.globalRotation));
+}
+
+// --- whole-body queries ------------------------------------------------------
+// The same three questions, asked of a BODY rather than of one of its shapes.
+//
+// They exist because "ask the body" is what every caller actually meant, and the
+// shape-at-a-time form let them mean it while only ever testing the first piece.
+// A compound body is one body of several convex shapes (see "Convex-only
+// polygons; compound bodies" in docs/game-design.md), and a query that stops at
+// the primary treats the rest of it as empty space: the ball hook's swept attach
+// test flew clean through the second piece of a three-piece wall, and the
+// embedding invariants could not see a chain buried in one (`session-306f`).
+//
+// A single-shape body runs exactly the call it always ran, once.
+
+// Deepest overlap of a probe circle against any shape `body` carries, or null.
+// Deepest rather than first, because the piece the probe is furthest inside is
+// the one whose normal actually pushes it out.
+export function bodyOverlapCircle(
+  body: CollisionObject2D,
+  center: Vec2,
+  radius: number,
+): { normal: Vec2; depth: number } | null {
+  let best: { normal: Vec2; depth: number } | null = null;
+  for (const s of body.getShapes()) {
+    const ov = circleOverlap(center, radius, s);
+    if (ov && (!best || ov.depth > best.depth)) best = ov;
+  }
+  return best;
+}
+
+// Earliest swept-circle hit against any shape `body` carries, or null. Earliest
+// because a sweep stops at first contact, and which piece that is depends on the
+// direction of travel, not on the order the pieces were mounted.
+export function bodySweepCircle(
+  body: CollisionObject2D,
+  from: Vec2,
+  motion: Vec2,
+  radius: number,
+): SweepHit | null {
+  let best: SweepHit | null = null;
+  for (const s of body.getShapes()) {
+    const hit = sweepCircle(from, motion, radius, s);
+    if (hit && (!best || hit.t < best.t)) best = hit;
+  }
+  return best;
+}
+
+// Is `p` inside any shape `body` carries?
+export function bodyContainsPoint(body: CollisionObject2D, p: Vec2): boolean {
+  for (const s of body.getShapes()) {
+    if (circleOverlap(p, 0, s)) return true;
+  }
+  return false;
 }

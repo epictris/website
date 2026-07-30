@@ -137,7 +137,7 @@ export class World {
     motion: Vec2,
     testOnly: boolean,
   ): KinematicCollision2D | null {
-    const shape = body.getShape().shape;
+    const shape = body.primaryShape().shape;
     if (shape.kind !== "circle") return null; // characters are circles here
     const r = shape.radius;
     const start = body.globalPosition;
@@ -360,7 +360,7 @@ export class World {
       if (!(area instanceof ForceArea) || area.removed || !area.hasShape()) continue;
       if (area.magnitude === 0) continue;
       const dv = area.acceleration.mul(dt);
-      const ashape = area.getShape();
+      const ashape = area.primaryShape();
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
         if (!body.getShapes().some((s) => shapesOverlap(ashape, s))) continue;
@@ -932,7 +932,7 @@ export class World {
       const inside: CollisionObject2D[] = [];
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
-        if (body.getShapes().some((s) => shapesOverlap(area.getShape(), s))) inside.push(body);
+        if (body.getShapes().some((s) => shapesOverlap(area.primaryShape(), s))) inside.push(body);
       }
       area.notifyOverlaps(inside);
     }

@@ -13,7 +13,7 @@
 import { Vec2 } from "../../engine/vec2";
 import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
-import { circleOverlap } from "../../engine/collision";
+import { bodyOverlapCircle } from "../../engine/collision";
 import type { PhysicsBody2D } from "../../engine/body";
 import { GRAB_REACH_MARGIN, LedgeDetection, type LedgeGrabInfo } from "../../lib/ledgeDetection";
 import type { Player } from "../player";
@@ -133,10 +133,11 @@ export class LedgeHangState extends PlayerState {
     const newLateral = lateralDist > 0 ? lateralVec.mul(newLateralDist / lateralDist) : Vec2.ZERO;
 
     let position = face.add(along.mul(newDepth)).add(newLateral);
-    if (this.body.hasShape()) {
-      const overlap = circleOverlap(position, radius, this.body.getShape());
-      if (overlap) position = position.add(overlap.normal.mul(overlap.depth));
-    }
+    // The whole ledge body, not its primary piece: a compound body is one body
+    // of several convex shapes, and settling clear of only the first of them
+    // leaves the player inside one of the others.
+    const overlap = bodyOverlapCircle(this.body, position, radius);
+    if (overlap) position = position.add(overlap.normal.mul(overlap.depth));
     player.globalPosition = position;
     // Only the down-the-wall momentum survives the catch, decayed by grip.
     player.velocity = along.mul(momentum * CATCH_DAMPING);

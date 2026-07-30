@@ -84,7 +84,7 @@ export class LedgeClimbState extends PlayerState {
     const info = LedgeDetection.grabInfo(this.body, this.shapeIndex, this.vertexIndex);
     if (!info) return this; // update() already scheduled the release
 
-    const shape = player.getShape().shape;
+    const shape = player.primaryShape().shape;
     const radius = shape.kind === "circle" ? shape.radius : 0;
     const target = LedgeDetection.climbTarget(info, radius);
 

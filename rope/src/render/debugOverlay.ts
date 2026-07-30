@@ -72,7 +72,7 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
         drawTick(ctx, vertex, outNormal, FACE_COLORS[Surface.getSurfaceType(outNormal, body.isRotating)]);
 
         const info = LedgeDetection.grabInfo(body, si, i);
-        const seam = info !== null && LedgeDetection.isSeamOccluded(bodies, body, si, vertex);
+        const seam = info !== null && LedgeDetection.isSeamOccluded(bodies, body, si, i, vertex);
 
         if (seam) {
           ctx.strokeStyle = SEAM;
@@ -168,7 +168,7 @@ const COLLIDER = "#ffe14d";
 // The player's actual circle collider — the rendered body is a narrower
 // capsule, so the debug view shows the true collision bounds.
 function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
-  const t = level.player.getShape();
+  const t = level.player.primaryShape();
   if (t.shape.kind !== "circle") return;
   ctx.strokeStyle = COLLIDER;
   ctx.lineWidth = PX;

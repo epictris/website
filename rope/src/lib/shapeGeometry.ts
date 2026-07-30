@@ -5,7 +5,6 @@ import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
 import { circleShape, polyArea, polyShape, rectShape, shapeVertices } from "../engine/shapes";
 import type { Shape, ShapeTransform } from "../engine/shapes";
-import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 
 // Ledge candidacy (game-design.md, vertex angles): a vertex is a candidate when
 // its interior angle is at/below this threshold. Rect 90° corners qualify;
@@ -16,10 +15,6 @@ export const LEDGE_MAX_INTERIOR_ANGLE = Mathf.degToRad(100);
 const interiorAngleCache = new WeakMap<Shape, number[]>();
 
 export const ShapeGeometry = {
-  getShape(body: CollisionObject2D): CollisionShape2D {
-    return body.getShape();
-  },
-
   createRectangle(width: number, height: number): Shape {
     return rectShape(width, height);
   },

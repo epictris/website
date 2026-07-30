@@ -20,8 +20,12 @@ import {
   type PhysicsBody2D,
 } from "../engine/body";
 import { PX } from "../engine/units";
-import { circleShape } from "../engine/shapes";
-import { circleOverlap, sweepCircle } from "../engine/collision";
+import {
+  circleShape,
+  nearestShapeIndex,
+  nearestSurfacePoint,
+} from "../engine/shapes";
+import { bodyOverlapCircle, bodySweepCircle } from "../engine/collision";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
 
@@ -38,8 +42,8 @@ export class BallHook extends RigidBody2D {
     super();
     this.name = "BallHook";
     this.setShape(circleShape(2 * PX));
-    this.mass = ShapeGeometry.computeMass(this.getShape());
-    this.inertia = ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
+    this.mass = ShapeGeometry.computeMass(this.primaryShape());
+    this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.
     this.restitution = 0.0375;
@@ -74,10 +78,18 @@ export class BallHook extends RigidBody2D {
   // which merely deflects it (a stray bounce, and a max-length hook then whips
   // off). The contact is exact, so the hook never anchors to geometry it isn't
   // touching.
+  //
+  // Swept against every shape a body carries, not its primary. A compound body
+  // is one body with several convex pieces, and testing only the first left the
+  // sweep blind to the rest: a hook thrown at the rotated slab of a three-piece
+  // wall flew through it as if it were not there, and only the overlap probe
+  // below - which is a whole frame later, and stops at the hook's centre rather
+  // than on the surface - ever caught it, so the chain ended up anchored 2 cm
+  // off the corner it was aimed at (`session-306f`).
   physicsStep(dt: number): void {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
-    const shape = this.getShape().shape;
+    const shape = this.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const motion = this.linearVelocity.mul(dt);
 
@@ -93,7 +105,7 @@ export class BallHook extends RigidBody2D {
         continue;
       }
       if (!body.hasShape()) continue;
-      const sweep = sweepCircle(from, motion, r, body.getShape());
+      const sweep = bodySweepCircle(body, from, motion, r);
       if (sweep && sweep.t <= 1 && (!best || sweep.t < best.t)) {
         best = { t: sweep.t, normal: sweep.normal, collider: body };
       }
@@ -118,13 +130,13 @@ export class BallHook extends RigidBody2D {
   probeContact(): void {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
-    const shape = this.getShape().shape;
+    const shape = this.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const probeR = r + 0.5 * PX;
     for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
       if (body instanceof ImpermeableBody) {
-        const ov = circleOverlap(from, probeR, body.getShape());
+        const ov = bodyOverlapCircle(body, from, probeR);
         if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
         return;
       }
@@ -133,7 +145,14 @@ export class BallHook extends RigidBody2D {
       ) {
         continue;
       }
-      this.attach(body, from);
+      // Anchor ON the surface, exactly as the swept path does, rather than at
+      // the hook's own centre: the probe fires while the hook is up to its own
+      // radius plus the probe margin clear of the geometry, and anchoring at the
+      // centre leaves the chain visibly ending short of the corner it caught and
+      // the contact's `shapeIndex` resolved from a point that is on nothing.
+      const shapes = body.getShapes();
+      const s = shapes[nearestShapeIndex(shapes, from)];
+      this.attach(body, s ? nearestSurfacePoint(s, from) : from);
       return;
     }
   }

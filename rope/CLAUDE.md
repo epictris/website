@@ -79,7 +79,17 @@ The failure has no velocity signature at all - the run is healthy on every invar
 A mounted shape carries a `localOffset` **and** a `localRotation`, both in the body's own frame.
 The rotation exists because a compound body is authored as pieces at their own angles (an L of two rects meeting at 45°) and one body rotation cannot express that; the default 0 makes a shape's rotation exactly the body's, which is what every single-shape body has, so it is bit-identical for every level that predates it.
 The body's origin is the pieces' combined **centre of mass** and its mass/inertia are the sum with the parallel-axis term (`buildBodies.ts`), because every rigid-body lever arm in the engine is measured from `globalPosition`.
+That includes the rope's: `Rope.calculateTorqueArm` measures from `body.globalPosition`, never from a shape's, since the primary shape's origin is the body's only while the body has one shape.
 Levels author this with the `group` tag on `LevelBodyData` - see **Compound bodies** under the level editor.
+
+**Asking a body for "its shape" is almost always a bug**, and the accessor is called **`primaryShape()`** so that reads as the narrow thing it is.
+It answers the *first-mounted* shape, which is the whole body only for the single-shape bodies that were once all of them, and code that reads it as "this body's geometry" goes on believing the rest of the body is not there.
+`session-306f` was three of these at once: `BallHook`'s swept attach test flew the hook clean through the rotated slab of a three-piece wall because it swept only the wall's first piece; the overlap probe that eventually caught it anchored at the hook's own **centre** rather than on the surface, leaving the chain ending 2 cm off the corner it caught; and the `chain-clip` and `player-embedded` **invariants** were themselves primary-only, so the whole thing replayed HEALTHY.
+
+Whole-body geometry now goes through **`bodyOverlapCircle` / `bodySweepCircle` / `bodyContainsPoint`** (`engine/collision.ts`), which iterate the shape set for you: deepest overlap, earliest sweep hit.
+"Forgot to loop" stops being something a caller can express, and the three hand-rolled copies of that loop (the hook's, the invariants', the ledge hang's) collapse into one.
+The remaining `primaryShape()` callers are a body asking about **itself** where it is known single-shape (mass/inertia at construction, the avatar's own radius, the character sweep's moving shape) and areas, which are single-shape by construction - which is exactly why grouping an area is refused outright.
+`ShapeGeometry.getShape` was deleted rather than renamed: an alias re-exposing it under the old name is the hole reopening.
 
 Rigid bodies may be any of the three. A polygon resolves through a **contact manifold**
 (`engine/manifold.ts`: SAT plus incident-face clipping, up to two points) rather than the
@@ -422,6 +432,7 @@ recordings serialize and `cli replay`/`cli bundles` work unchanged
 ```sh
 bun run replay selftest                       # determinism + replay round-trip check
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
+bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
 bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
@@ -565,6 +576,34 @@ chain the hook flew through kept one welded to the spot the hook was destroyed a
 for 400 frames (`Rope.dropWrapsOnGoneBodies`);
 and **a solve that corrects position for bodies it never credits velocity to**
 (see "Chains" - the `moved` set).
+
+The broadest of that family, from `session-306f`: **a query that reads
+`primaryShape()` on another body**, which sees the first-mounted piece and treats
+the rest of a compound body as empty space. It shows up as tunnelling, as an
+anchor floating off the geometry, or - when it is an invariant doing it - as
+nothing at all. See "Asking a body for its shape is almost always a bug" under
+Shapes; whole-body geometry goes through `bodyOverlapCircle` / `bodySweepCircle`
+/ `bodyContainsPoint` now, so the loop cannot be forgotten.
+
+Its twin, from `session-358f`: **an exclusion written by body where it means
+shape**. The wrap scan skipped `body === span.from.contact.obj ||
+body === span.to.contact.obj`, which is right for the piece the span is tied to
+and wrong for that piece's siblings - so the moment the chain wrapped one piece
+of a compound wall, every other piece of that wall stopped existing for the
+adjacent spans and the chain cut straight through the one in its way. Now
+excluded by `contact.shape`; `shouldIgnorePathCollisions` and the coil-run test
+in `generatePathObjects` were the same mistake and are shape-level too.
+The general rule: **`obj` identity answers "does this move as one rigid piece
+with that", `shape` identity answers "is this the same surface"** - and every
+collision question is the second one. `lengthPerRadian` and the self-wrap tests
+in `generatePathObjects` are genuinely the first, and stay by body.
+
+Structurally, the rope's wrap scan now flattens the scene into a list of
+`WrapCandidate` **surfaces** once per regeneration (`wrappableSurfaces`) and
+filters that per span, so past that line there is no `PhysicsBody2D` in scope for
+the comparison to be written against. A body reappears only where a body is what
+is meant: building a `RopeContact`, which names a body *and* a piece of it, and
+the seam test, which is about how a body's pieces are arranged.
 
 That last one is also a reminder that a geometric bug can be **completely silent
 to the invariants** — `session-234f` replays HEALTHY, with no NaN, no runaway, no
@@ -719,12 +758,25 @@ Prose stays a single-selection edit (merging text across a group has no sane mea
 
 **Ctrl+G** welds the selected geometry into one **compound body** (**Ctrl+Shift+G** splits it again); the pieces keep their placement exactly, and what changes is that they now build as a single engine body carrying all their shapes.
 That is the whole point, and it is not about saving entries - several overlapping bodies already look the same.
-It is that the joins between the pieces stop being corners: the rope refuses to wrap a vertex buried inside a sibling shape of the same body (`isSeamVertex`) and ledge detection refuses to grab one (`isSeamOccluded`), so a span crossing an L's inner corner runs straight instead of snagging where the real surface is smooth.
+It is that the joins between the pieces stop being corners: the rope refuses to wrap a seam vertex (`isSeamVertex`) and ledge detection refuses to grab one (`isSeamOccluded`), so a span crossing an L's inner corner runs straight instead of snagging where the real surface is smooth.
 See **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for why a concave form has to be authored this way at all.
+
+Both of those ask **`isExposedCorner`** (`engine/shapes.ts`), and it decides by **angle, not proximity**.
+Every shape covering the vertex contributes the arc of directions pointing *into* it - a wedge at one of its own corners, a half-plane along one of its faces, the whole turn if the vertex is inside it - and the vertex is a real corner exactly when the union of those arcs leaves more than a half-turn uncovered.
+That is what a corner *is*: a flat point is covered by exactly half a turn, a reflex one by more, a buried one by all of it.
+The vertex's own shape goes into the union with the rest, since it is what establishes there is a corner there at all.
+
+Proximity was the old test - "is the vertex within an epsilon of a sibling" - and it is wrong in the arrangement a snap grid produces most: two pieces whose corners land on the same point.
+That point is the **outer** corner of an L, with three quarters of a turn of outside around it, and calling it a seam sent the rope clean through a wall for seven frames (`session-410f`).
+`cli corners` runs the arrangements with the answers written down (`sim/cornerCases.ts`) - it is pure geometry, so it is checked directly rather than through a level, where a wrong answer only surfaces as a rope inside a wall several hundred frames later.
+
+Neither caller asks it per query any more. Exposure is a property of how a body's pieces are **arranged**, and that arrangement is rigid - every piece rides the body's transform, so moving or turning the body carries them all and cannot expose or bury a corner.
+So it is settled once and cached on the shape (`CollisionShape2D.isVertexExposed`, invalidated when the shape set changes), and `isSeamVertex` is a lookup by vertex index.
+`isSeamOccluded` takes that as its first answer and only then asks the *dynamic* half - neighbouring bodies, which do move relative to the corner. That decomposition is exact rather than an optimisation: coverage only grows as geometry is added, so a corner its own body has already closed off cannot be reopened by a neighbour.
 
 On disk it is a `group` tag on each member (`LevelBodyData.group`), and members are matched by tag alone, so the format stays a flat body list.
 A body has one kind, one fill, one friction and one force, so the group takes its **first member's** and the editor keeps the rest in step (`syncGroupProps`) - a file can never disagree with what it draws.
-Areas are deliberately not groupable: `World.integrate` tests area overlap against `getShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
+Areas are deliberately not groupable: `World.integrate` tests area overlap against `primaryShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
 
 Because a group is one body, it is **selected and moved as one**: clicking any piece selects all of them, a rubber band that touches one piece takes the whole body (`withWholeGroups`), and **Alt+click** reaches past that to a single piece when its own shape needs editing.
 It also **rotates as one**, about the group's area-weighted **centre of mass** - which is where `buildLevelBodies` puts the built body's origin, so the editor's rotation and the body's are the same operation.

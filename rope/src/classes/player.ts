@@ -105,10 +105,10 @@ export class Player extends CharacterBody2D {
   }
 
   override get mass(): number {
-    return ShapeGeometry.computeMass(this.getShape());
+    return ShapeGeometry.computeMass(this.primaryShape());
   }
   get inertia(): number {
-    return ShapeGeometry.computeMomentOfInertia(this.getShape(), this.mass);
+    return ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
   }
 
   resolveMouseActions(input: FrameInput): void {
@@ -136,7 +136,7 @@ export class Player extends CharacterBody2D {
   }
 
   get radius(): number {
-    const shape = this.getShape().shape;
+    const shape = this.primaryShape().shape;
     return shape.kind === "circle" ? shape.radius : 0;
   }
 

@@ -59,7 +59,7 @@ export class OnWallState extends PlayerState {
   // null on static walls so the static path runs the exact pre-inheritance math.
   private carriedVelocity(player: Player): Vec2 | null {
     if (!this.supportBody?.isMobile) return null;
-    const shape = player.getShape().shape;
+    const shape = player.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 0;
     return this.supportBody.velocityAtPoint(player.globalPosition.sub(this.surfaceNormal.mul(r)));
   }

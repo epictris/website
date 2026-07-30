@@ -4,8 +4,8 @@
 // assert bit-for-bit reproduction; invariants catch physical nonsense.
 
 import { Vec2 } from "../engine/vec2";
-import { StaticBody2D } from "../engine/body";
-import { circleOverlap, shapeRadius } from "../engine/collision";
+import { StaticBody2D, type PhysicsBody2D } from "../engine/body";
+import { bodyOverlapCircle, shapeRadius } from "../engine/collision";
 import { Hook } from "../classes/hook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { LedgeHangState } from "../classes/states/ledgeHangState";
@@ -148,6 +148,7 @@ export interface Violation {
 
 const RUNAWAY_SPEED = 1e3;
 const EMBED_TOLERANCE = 0.03;
+
 // Slack above numerical/geometry noise for the anchor-kick check. Legit anchors
 // brake (negative gain); a point-blank shot into a wall the ball is already
 // hitting nudges it a few tenths of m/s as it depenetrates. The tip-anchor bug
@@ -215,7 +216,7 @@ function mobileBodyNear(level: Level): boolean {
   for (const body of level.world.bodies) {
     if (body === p || body.removed || !body.isMobile || !body.hasShape()) continue;
     if (body instanceof Hook) continue;
-    const s = body.getShape().shape;
+    const s = body.primaryShape().shape;
     // The rect form is spelled out rather than routed through `shapeRadius` so
     // the expression stays literally what every recorded run was checked with.
     const bound =
@@ -390,7 +391,10 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       for (let k = 1; k < CHAIN_CLIP_SAMPLES && !clip; k++) {
         const p = a.add(d.mul(k / CHAIN_CLIP_SAMPLES));
         for (const body of statics) {
-          const ov = circleOverlap(p, 0, body.getShape());
+          // The whole body, not its primary piece: a compound wall is one body of
+          // several convex shapes, and a check that only ever looked at the first
+          // could not see a chain buried in any of the others (`session-306f`).
+          const ov = bodyOverlapCircle(body, p, 0);
           if (ov && ov.depth > CHAIN_CLIP_TOLERANCE) {
             clip = { depth: ov.depth, name: body.name || "static" };
             break;
@@ -408,7 +412,7 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   }
   for (const body of level.world.bodies) {
     if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
-    const ov = circleOverlap(b.globalPosition, b.radius, body.getShape());
+    const ov = bodyOverlapCircle(body, b.globalPosition, b.radius);
     if (ov && ov.depth > EMBED_TOLERANCE) {
       out.push({
         frame,
@@ -449,11 +453,11 @@ export function checkInvariants(level: Level): Violation[] {
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "rope length NaN" });
   }
-  const shape = p.getShape().shape;
+  const shape = p.primaryShape().shape;
   if (shape.kind === "circle") {
     for (const body of level.world.bodies) {
       if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
-      const ov = circleOverlap(p.globalPosition, shape.radius, body.getShape());
+      const ov = bodyOverlapCircle(body, p.globalPosition, shape.radius);
       if (ov && ov.depth > EMBED_TOLERANCE) {
         out.push({
           frame,
