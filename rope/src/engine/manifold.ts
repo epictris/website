@@ -22,9 +22,32 @@ export interface Contact {
   readonly depth: number;
   // World-space contact point on the boundary.
   readonly point: Vec2;
+  // Which pair of features produced this point — the reference face, the
+  // incident edge, which side owned the reference face, and which end of the
+  // clipped segment this is. Box2D's `b2ContactID`, and the reason it exists is
+  // the same: the geometry moves a little every frame, but as long as the same
+  // two faces are meeting, this is the same contact, so last frame's accumulated
+  // impulse is a good starting guess for this one's (see the warm start in
+  // `World.solveContacts`).
+  //
+  // Stability is the only requirement — the number is a key, never an index into
+  // anything — so a wrong guess costs iterations and never correctness.
+  readonly featureId: number;
 }
 
 const EPS = 1e-9;
+
+// A circle has no faces to key on, and only ever produces one contact point, so
+// every circle contact against a given pair of shapes is the same feature.
+export const CIRCLE_FEATURE = -1;
+
+// Pack (which shape owned the reference face, reference face, incident edge,
+// which end of the clip) into one small integer. Vertex counts are single
+// digits in practice and the fields are given four to eight bits each, so this
+// stays well inside an exact double.
+function featureId(useB: boolean, refIndex: number, incIndex: number, slot: number): number {
+  return (useB ? 0x100000 : 0) | (refIndex << 12) | (incIndex << 4) | slot;
+}
 
 // A shape's vertex loop in world space.
 function worldVerts(t: ShapeTransform): Vec2[] {
@@ -133,10 +156,12 @@ function loopVsLoop(a: ShapeTransform, b: ShapeTransform): Contact[] {
   // of whichever shape owns the reference face.
   const normal = useB ? refNormal : refNormal.neg();
   const out: Contact[] = [];
-  for (const p of [p0, p1]) {
+  [p0, p1].forEach((p, slot) => {
     const depth = -refNormal.dot(p.sub(refA));
-    if (depth > 0) out.push({ normal, depth, point: p });
-  }
+    if (depth > 0) {
+      out.push({ normal, depth, point: p, featureId: featureId(useB, refIndex, incIndex, slot) });
+    }
+  });
   return out;
 }
 
@@ -173,7 +198,9 @@ function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number): Contact[
     dist > EPS
       ? closest.sub(centre).div(dist).mul(inside ? -1 : 1)
       : Vec2.UP;
-  return [{ normal, depth: inside ? radius + dist : radius - dist, point: closest }];
+  return [
+    { normal, depth: inside ? radius + dist : radius - dist, point: closest, featureId: CIRCLE_FEATURE },
+  ];
 }
 
 // Contacts between `a` (a rect or convex polygon) and `b` (any shape), with

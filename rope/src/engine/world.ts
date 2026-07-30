@@ -114,6 +114,44 @@ function isSolidTarget(body: PhysicsBody2D): boolean {
   return body instanceof StaticBody2D || body instanceof RigidBody2D;
 }
 
+// One manifold point, solved once for the PAIR that shares it.
+//
+// The contact routines this replaces are written per body: each visits the pair
+// A-B on its own pass, writes only to itself, and takes `RIGID_PAIR_SHARE` of the
+// contact in ignorance of what the other pass will do. Two independent one-sided
+// solves are not an impulse pair - nothing makes them equal and opposite - so
+// momentum is not conserved and none of it is transferred. A constraint is the
+// unit that fixes that: one impulse, computed once, applied both ways.
+export interface ContactConstraint {
+  // Always dynamic. `b` may be dynamic or static, and a static `b` is simply one
+  // with zero inverse mass and inertia, which is what lets the same solver handle
+  // both without a branch.
+  readonly a: RigidBody2D;
+  readonly b: PhysicsBody2D;
+  // Which shape of each body the contact is on. Part of the warm-start key: a
+  // compound body's pieces meet quite different contacts.
+  readonly shapeA: number;
+  readonly shapeB: number;
+  readonly point: Vec2;
+  // Out of `b`, toward `a` — the same orientation `circleOverlap` and
+  // `shapeContacts` report, fixed here so the solver never has to ask which way
+  // round a given pair came out.
+  readonly normal: Vec2;
+  readonly depth: number;
+  // Stable frame to frame while the same features are meeting: the warm-start
+  // matching key (see `Contact.featureId`).
+  readonly featureId: number;
+  // Solver state, accumulated during the solve.
+  normalImpulse: number;
+  tangentImpulse: number;
+}
+
+// A circle pair has no faces to key on and produces exactly one point, so every
+// contact between one given pair of circles is the same feature. Distinct from
+// `CIRCLE_FEATURE` (a circle against a vertex shape) only for tidiness; the two
+// can never be produced for the same shape pair.
+const CIRCLE_PAIR_FEATURE = -2;
+
 export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
@@ -514,6 +552,107 @@ export class World {
       }
     }
     return [a, b];
+  }
+
+  // Every contact in the scene, as one constraint per manifold point.
+  //
+  // Three things this has to get right, and each of them is a defect in the
+  // per-body routines it replaces:
+  //
+  // **Each pair appears once.** The ordered loop (`i < j`) is the whole point.
+  // Iterating "every body against every other" visits A-B twice, once with each
+  // as the subject, and each visit solves half the contact with no knowledge of
+  // the other — which is exactly why `RIGID_PAIR_SHARE` had to exist and exactly
+  // why it does not need to any more.
+  //
+  // **The order is a pure function of body index, shape index and point index.**
+  // Nothing here is ordered by a map or a set. The sim is deterministic and
+  // `replay selftest` must stay bit-identical, so the solve order has to be
+  // reproducible; the warm-start cache is keyed lookup only, never iteration.
+  //
+  // **`a` is chosen without reference to list order.** It is the dynamic body,
+  // or the lower id when both are. If it were "whichever came first in
+  // `this.bodies`", adding or removing a body mid-run would flip the roles of an
+  // existing pair, and every warm-start key for that pair would miss.
+  //
+  // Statics stay in the list as one-sided constraints rather than being split
+  // off: with zero inverse mass and inertia they fall out of the same arithmetic,
+  // which is what removes the static/dynamic branch split rather than doubling
+  // it. The O(n²) loop stays too — at this scene scale a broadphase is complexity
+  // with no payoff.
+  collectContacts(): ContactConstraint[] {
+    const out: ContactConstraint[] = [];
+    const n = this.bodies.length;
+    for (let i = 0; i < n; i++) {
+      const bi = this.bodies[i]!;
+      if (bi.removed || !bi.hasShape() || !isSolidTarget(bi)) continue;
+      for (let j = i + 1; j < n; j++) {
+        const bj = this.bodies[j]!;
+        if (bj.removed || !bj.hasShape() || !isSolidTarget(bj)) continue;
+        if (bi.exceptions.has(bj.id)) continue;
+        const iLeads =
+          bi instanceof RigidBody2D && (!(bj instanceof RigidBody2D) || bi.id < bj.id);
+        const a = iLeads ? bi : bj;
+        const b = iLeads ? bj : bi;
+        // Neither side can move: two statics touching is not a contact.
+        if (!(a instanceof RigidBody2D)) continue;
+        const as = a.getShapes();
+        const bs = b.getShapes();
+        for (let si = 0; si < as.length; si++) {
+          for (let sj = 0; sj < bs.length; sj++) {
+            this.gatherShapePair(out, a, si, as[si]!, b, sj, bs[sj]!);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // The constraints for one (shape, shape) pair, with normals normalised to the
+  // out-of-`b`-toward-`a` convention.
+  private gatherShapePair(
+    out: ContactConstraint[],
+    a: RigidBody2D,
+    shapeA: number,
+    sa: ShapeTransform,
+    b: PhysicsBody2D,
+    shapeB: number,
+    sb: ShapeTransform,
+  ): void {
+    const push = (normal: Vec2, depth: number, point: Vec2, featureId: number): void => {
+      out.push({
+        a,
+        b,
+        shapeA,
+        shapeB,
+        point,
+        normal,
+        depth,
+        featureId,
+        normalImpulse: 0,
+        tangentImpulse: 0,
+      });
+    };
+    if (sa.shape.kind !== "circle") {
+      // `shapeContacts(x, y)` reports normals out of `y` toward `x`, which is
+      // already the convention.
+      for (const c of shapeContacts(sa, sb)) push(c.normal, c.depth, c.point, c.featureId);
+      return;
+    }
+    if (sb.shape.kind !== "circle") {
+      // The vertex shape has to lead, so the normals come out the other way.
+      for (const c of shapeContacts(sb, sa)) push(c.normal.neg(), c.depth, c.point, c.featureId);
+      return;
+    }
+    const ov = circleOverlap(sa.globalPosition, sa.shape.radius, sb);
+    if (!ov) return;
+    // A circle's contact point is on its own rim, back along the normal.
+    push(
+      ov.normal,
+      ov.depth,
+      sa.globalPosition.sub(ov.normal.mul(sa.shape.radius)),
+      CIRCLE_PAIR_FEATURE,
+    );
   }
 
   private resolveDynamicCollisions(dt: number): void {
