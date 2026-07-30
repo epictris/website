@@ -171,10 +171,21 @@ const CHAIN_SOLVE_KICK_TOLERANCE = 4;
 // the whole ball corpus grows by exactly zero. What this measures is the lease,
 // `constraintLength`, which is the honest answer to "how much chain is out right
 // now" and still the thing that would run away if the lease stopped being
-// released. The corpus peaks at 43 cm (session-726f, a ball wedged well past its
-// chain length), so 0.6 leaves headroom over anything legitimate while catching
-// a runaway by a wide margin — session-475f's wound-up ball reached +349 cm.
-const CHAIN_GROWTH_TOLERANCE = 0.6;
+// released.
+//
+// The corpus peaks at 63 cm (session-611f), then 44, 37, 25, 25, 25, 13, 11 - so
+// 1.0 clears the top of that by half again while still catching a runaway by a
+// wide margin: session-475f's wound-up ball reached +349 cm.
+//
+// It read 43 cm and 0.6 before the contact solve learned to hold a resting body
+// still, and the ceiling moved for a reason worth recording rather than being
+// quietly accommodated. 611f's ball is wedged in the notch between two polygons
+// with its chain anchored point-blank, and a solve that no longer lets a loaded
+// contact buzz its way loose is a solve that *keeps* it wedged. The geometry
+// therefore refuses more chain than it used to, which is the block being real,
+// not the lease running away: `maxRopeLength` does not move a millimetre through
+// any of it, and the lease is re-derived from the present geometry every frame.
+const CHAIN_GROWTH_TOLERANCE = 1.0;
 // Consecutive frames the winch stall may keep letting length out. This is the
 // sharp measure, because a *run* of stalls is the shape of every chain runaway
 // there has been, and one blocked frame is not. The runaways ran 79, 51, 36, 32

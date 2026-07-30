@@ -71,6 +71,11 @@ const RIGID_PAIR_SHARE = 0.5;
 // every rigid body one depenetration pass, so a pile settles together instead of
 // whichever body the loop reached last winning its overlap outright.
 const DEPENETRATION_PASSES = 3;
+// Gauss-Seidel iterations over a manifold's normal impulses. Two points of a
+// resting face push each other in through their levers, so a single pass leaves
+// them having overshot in opposite directions; iterating with accumulated
+// impulses lets the pair converge on the load split that actually holds still.
+const NORMAL_SOLVER_ITERATIONS = 4;
 
 // Static friction only grabs a body moving slower than this (m/s) and spinning
 // slower than this (rad/s); a faster body slides/rolls under kinetic friction
@@ -79,6 +84,10 @@ const DEPENETRATION_PASSES = 3;
 // once the aim settles (ω → 0).
 const STICK_SPEED = 0.3;
 const STICK_SPIN = 0.5;
+// Consecutive frames without a gripping contact before the stick anchor is
+// dropped. The grip flickers frame to frame on the spin gate, and releasing the
+// anchor on a single miss re-seeds it wherever the body has drifted to.
+const STICK_RELEASE_FRAMES = 6;
 // Static-friction slip threshold (m/s): a steered contact grips (no-slip roll)
 // only while the relative velocity between the ball's contact point and the
 // surface stays below this. Rotate/move slowly and the contact sticks — precise
@@ -545,9 +554,21 @@ export class World {
           }
         }
       }
-      // Released (or never gripped) this frame: drop the anchor so it can move
-      // freely and never snaps back to a stale spot after leaving the ground.
-      if (!stuck) body.stickAnchor = null;
+      // Released this frame - but not on the strength of one frame.
+      //
+      // The anchor has to go eventually, or a body that has left the ground snaps
+      // back to a stale spot. It must NOT go on a single ungripped frame, though,
+      // because the grip flickers: the normal solve leaves a little spin, and
+      // every eighth frame or so it crosses `STICK_SPIN` and the gate says no. Each
+      // of those dropped the anchor and re-seeded it wherever the body had drifted
+      // to in the meantime, and the drift is always downhill - so a crate ratcheted
+      // 21 cm down a 30° slope it is meant to hold, a few tenths of a millimetre at
+      // a time.
+      if (stuck) {
+        body.ungrippedFrames = 0;
+      } else if (++body.ungrippedFrames > STICK_RELEASE_FRAMES) {
+        body.stickAnchor = null;
+      }
     }
 
     // Position is recovered for the whole scene AFTER every body's contacts have
@@ -646,21 +667,34 @@ export class World {
       for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
       body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth * 0.5));
       const invI = body.kinematicRotation ? 0 : body.inverseInertia;
+      // Accumulated and iterated exactly as the static branch is, and for the
+      // same reason: a pile of polygons resting on each other is the resting case
+      // too, and one pass per point leaves the pair of a face overshooting against
+      // each other into a residual spin. `RIGID_PAIR_SHARE` still scales what this
+      // body takes, since the other one meets this contact again on its own pass.
+      const totals = contacts.map(() => 0);
       let vnKilled = 0;
-      for (const c of contacts) {
-        const rContact = c.point.sub(body.globalPosition);
-        const vn = body.linearVelocity
-          .add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity))
-          .sub(other.velocityAtPoint(c.point))
-          .dot(c.normal);
-        if (vn >= 0) continue;
-        const rCrossN = rContact.cross(c.normal);
-        const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
-        const jn = invEffN > 1e-9 ? (-vn * RIGID_PAIR_SHARE) / invEffN : 0;
-        body.linearVelocity = body.linearVelocity.add(c.normal.mul(jn * body.inverseMass));
-        body.angularVelocity += rCrossN * jn * invI;
-        vnKilled += jn * body.inverseMass;
+      for (let it = 0; it < NORMAL_SOLVER_ITERATIONS; it++) {
+        for (let i = 0; i < contacts.length; i++) {
+          const c = contacts[i]!;
+          const r = c.point.sub(body.globalPosition);
+          const rCrossN = r.cross(c.normal);
+          const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
+          if (invEffN <= 1e-9) continue;
+          const vn = body.linearVelocity
+            .add(new Vec2(-r.y, r.x).mul(body.angularVelocity))
+            .sub(other.velocityAtPoint(c.point))
+            .dot(c.normal);
+          const wanted = (-vn * RIGID_PAIR_SHARE) / invEffN;
+          const before = totals[i]!;
+          totals[i] = Math.max(0, before + wanted);
+          const applied = totals[i]! - before;
+          if (applied === 0) continue;
+          body.linearVelocity = body.linearVelocity.add(c.normal.mul(applied * body.inverseMass));
+          body.angularVelocity += rCrossN * applied * invI;
+        }
       }
+      for (const t of totals) vnKilled += t * body.inverseMass;
       // Friction and the contact damp stay a once-per-contact-pair affair, at the
       // deepest point: `applyRigidContactFriction` ends with `contactDamp`, and
       // calling it per manifold point would apply that damp once per point.
@@ -696,93 +730,231 @@ export class World {
     const share = 1 / contacts.length;
     const g = GRAVITY.mul(body.gravityScale);
     let stuck = false;
-    for (const c of contacts) {
-      const rContact = c.point.sub(body.globalPosition);
-      const surfaceVel = other.velocityAtPoint(c.point);
-      const pointVel = (): Vec2 =>
-        body.linearVelocity.add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity));
 
-      const vn = pointVel().sub(surfaceVel).dot(c.normal);
-      let vnKilled = 0;
-      if (vn < 0) {
-        const rCrossN = rContact.cross(c.normal);
+    // Solve the manifold's normal impulses as ONE system, iterated, with the
+    // impulse *accumulated* per point and the running total clamped at zero
+    // rather than each increment clamped on its own.
+    //
+    // Solved once each with a `vn < 0` gate, the two points of a resting face
+    // cannot converge, and the reason is structural rather than a matter of
+    // tuning: point A's impulse acts through a lever, so it rotates the body and
+    // pushes point B in; B's impulse pushes A in; and because neither may ever
+    // pull, the pass ends with the pair having overshot in opposite directions.
+    // The leftover is a spin. Next frame it comes back with the sign flipped,
+    // and a polygon lying still on the floor sawtoothed between -0.07 and +0.11
+    // rad/s for as long as it rested there, wobbling about a third of a degree -
+    // some millimetres at the end of a long body, which is what reads as
+    // vibration (session-255f).
+    //
+    // Accumulating is what buys the fix. A later iteration may hand back part of
+    // an earlier one (a negative increment) as long as the point's total stays
+    // non-negative, so the pair can settle on the split of the load that actually
+    // holds the body still, instead of each repeatedly over-correcting for the
+    // other. This is the standard sequential-impulse formulation and it is the
+    // one thing the resting case genuinely needs.
+    //
+    // Restitution is taken from the approach velocity measured *before* any of
+    // this, not re-derived per iteration - re-applying a bounce to a velocity
+    // that already contains it is how an iterated solver invents energy.
+    const totals = contacts.map(() => 0);
+    const bounce = contacts.map((c) => {
+      const r = c.point.sub(body.globalPosition);
+      const v = body.linearVelocity
+        .add(new Vec2(-r.y, r.x).mul(body.angularVelocity))
+        .sub(other.velocityAtPoint(c.point))
+        .dot(c.normal);
+      return v < 0 ? -v * body.restitution : 0;
+    });
+    for (let it = 0; it < NORMAL_SOLVER_ITERATIONS; it++) {
+      for (let i = 0; i < contacts.length; i++) {
+        const c = contacts[i]!;
+        const r = c.point.sub(body.globalPosition);
+        const rCrossN = r.cross(c.normal);
         const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
-        const jn = invEffN > 1e-9 ? (-vn * (1 + body.restitution)) / invEffN : 0;
-        body.linearVelocity = body.linearVelocity.add(c.normal.mul(jn * body.inverseMass));
-        body.angularVelocity += rCrossN * jn * invI;
-        vnKilled = jn * body.inverseMass;
+        if (invEffN <= 1e-9) continue;
+        const vn = body.linearVelocity
+          .add(new Vec2(-r.y, r.x).mul(body.angularVelocity))
+          .sub(other.velocityAtPoint(c.point))
+          .dot(c.normal);
+        const wanted = (-(vn - bounce[i]!)) / invEffN;
+        const before = totals[i]!;
+        totals[i] = Math.max(0, before + wanted);
+        const applied = totals[i]! - before;
+        if (applied === 0) continue;
+        body.linearVelocity = body.linearVelocity.add(c.normal.mul(applied * body.inverseMass));
+        body.angularVelocity += rCrossN * applied * invI;
       }
+    }
 
-      // Stiction: a nearly-stopped body on a slope gentler than its breakaway
-      // angle is pinned rather than left to creep downhill one integration step
-      // at a time. Same rule and the same anchor the circle path uses, but
-      // deliberately NOT the same authority over rotation - see below.
-      const gN = -g.dot(c.normal);
-      const rel = body.linearVelocity.sub(surfaceVel);
-      if (
-        staticMu > 0 &&
-        !other.isMobile &&
-        gN > 1e-6 &&
-        rel.length() < STICK_SPEED &&
-        Math.abs(body.angularVelocity) < STICK_SPIN &&
-        g.sub(c.normal.mul(g.dot(c.normal))).length() <= staticMu * gN
-      ) {
-        const tanVel = surfaceVel.sub(c.normal.mul(surfaceVel.dot(c.normal)));
-        // Keep the normal component only where it *separates*. A gripped body is
-        // at rest against the surface, so a velocity pointing into it is one it
-        // can never realise, and this manifold path is the one that leaves such a
-        // component behind: zeroing the spin here discards the angular half of
-        // the normal impulse solved a few lines above, so the linear approach it
-        // was cancelling survives. The push-out then hides it - a crate settled
-        // flat on a floor sat at a perfectly stable position while reporting a
-        // permanent 0.275 m/s into the ground, re-earned and re-pushed-out every
-        // frame. Nothing on this path is load-bearing for a recorded replay (no
-        // ball bundle predates the manifold solve), and the circle path deals in
-        // a single contact whose normal impulse is not split, so it is left
-        // bit-for-bit alone.
-        const vnKeep = Math.max(0, body.linearVelocity.dot(c.normal));
-        body.linearVelocity = c.normal.mul(vnKeep).add(tanVel);
-        // Rotation is left alone. The circle path zeroes it here, and for a
-        // circle that is free: rotation cannot change which part of the shape is
-        // holding it up, so a settled ball simply should not be spinning. A
-        // vertex shape's orientation IS its balance, and zeroing the spin of a
-        // gripped one holds it in whatever pose it is in by fiat - gravity gets
-        // no say, so a slab tipped up on a corner can never topple back down.
-        // Worse, nothing here anchors the *angle* the way `stickAnchor` anchors
-        // the position, so any rotation written after this solve is kept in full
-        // and re-frozen next frame: a chain that turns the body a fraction of a
-        // degree per tug ratchets it round for good. That is how a polygon group
-        // a chain had rotated to -22.8° stayed there with the chain gone, reading
-        // as gravity having been switched off for it (session-1195f).
-        //
-        // Left free, the normal impulses solved per manifold point above are what
-        // resist rotation - which is what they are a two-point manifold *for* -
-        // and a body that really is toppling spins past `STICK_SPIN`, releases
-        // the grip, and falls. The grip stays what it is meant to be: a brake on
-        // translation, not a lock on pose.
-        if (body.stickAnchor === null) {
-          body.stickAnchor = body.globalPosition;
+    // Stiction is decided for the BODY, not per contact point: it is one
+    // statement about whether this whole contact is slipping, and the manifold's
+    // points share a normal, so testing it per point only asked the same question
+    // twice and let one point grip while its twin ran the kinetic path.
+    const n0 = deepest.normal;
+    const gN = -g.dot(n0);
+    // The speed gate reads the TANGENTIAL slip at the contact, not the whole
+    // relative velocity of the body's centre. Stiction is a statement about
+    // sliding, and the normal component is not sliding: it is the settling the
+    // solve above has just dealt with, and a body pivoting about its contact has
+    // a moving centre by definition. Counting either toward the gate makes a body
+    // that is plainly not sliding fail it - a crate resting on a 30° ramp read
+    // 0.31 m/s against the 0.3 threshold on the frames gravity had just topped
+    // up, dropped the grip, and re-seeded its anchor a little further downhill
+    // each time, so it ratcheted 21 cm down a slope it is meant to hold.
+    const t0 = new Vec2(-n0.y, n0.x);
+    const r0 = deepest.point.sub(body.globalPosition);
+    const slip0 = Math.abs(
+      body.linearVelocity
+        .add(new Vec2(-r0.y, r0.x).mul(body.angularVelocity))
+        .sub(other.velocityAtPoint(deepest.point))
+        .dot(t0),
+    );
+    const gripped =
+      staticMu > 0 &&
+      !other.isMobile &&
+      gN > 1e-6 &&
+      slip0 < STICK_SPEED &&
+      Math.abs(body.angularVelocity) < STICK_SPIN &&
+      g.sub(n0.mul(g.dot(n0))).length() <= staticMu * gN;
+
+    if (gripped) {
+      // Static friction cancels the slip at every CONTACT POINT, iterated as one
+      // system exactly like the normal impulses above, and for the same reason:
+      // solved once each the points fight through their levers and leave a
+      // residue behind.
+      //
+      // Two things about this were wrong before and are worth keeping straight.
+      // It used to *overwrite* the body's velocity, which throws away the linear
+      // half of the normal impulse the accumulated solve had just computed - that
+      // solve splits one impulse into a Δv and a Δω through the coupled effective
+      // mass, and discarding the Δv leaves the Δω as an unbalanced torque, a few
+      // thousandths of a rad/s freshly minted every frame with nothing to answer
+      // it.
+      //
+      // And it cancelled the velocity of the body's *centre*. Static friction
+      // forbids the contact from sliding and says nothing about the centre; a
+      // body pivoting about its contact point must have a moving centre, since
+      // that motion is precisely what holds the contact point still. Forcing the
+      // centre still while rotation ran free therefore made the contact slide by
+      // construction, and the position pin then held the centre while the shape
+      // ground through it - a polygon resting on a corner turned 27° over four
+      // seconds at a steady creep that neither settled nor fell over
+      // (session-390f).
+      //
+      // Read at the contact points and solved together, a genuine pivot has no
+      // slip and this costs nothing, a sliding body is held, and a body wanting
+      // to topple spins past `STICK_SPIN` and stops being gripped at all.
+      //
+      // Capped by the Coulomb cone. Static friction is a *limited* force - it can
+      // supply up to mu_s times the normal load and no more - and without the cap
+      // this grip supplied whatever was asked, which welds a resting body to the
+      // ground. Anything landing on it then found it immovable: the top of two
+      // compound groups dropped square onto the bottom one and the bottom one
+      // barely turned, because holding it still cost the contact 1.5x to 7x more
+      // tangential impulse than friction there could ever have provided
+      // (session-120f).
+      //
+      // The cap is written against the same quantity the kinetic path uses - this
+      // frame's normal impulse plus gravity's bite - so the two agree about how
+      // much load a contact is carrying, and a body resting on a slope is
+      // unaffected: its tangential demand is m*g*sin(theta) against a cone of
+      // mu_s*m*g*cos(theta), so it holds exactly while tan(theta) <= mu_s, which
+      // is the breakaway angle the grip already advertised.
+      let slipped = false;
+      const tangentials = contacts.map(() => 0);
+      for (let it = 0; it < NORMAL_SOLVER_ITERATIONS; it++) {
+        for (let i = 0; i < contacts.length; i++) {
+          const c = contacts[i]!;
+          const r = c.point.sub(body.globalPosition);
+          const tangent = new Vec2(-c.normal.y, c.normal.x);
+          const rCrossT = r.cross(tangent);
+          const invEffT = body.inverseMass + rCrossT * rCrossT * invI;
+          if (invEffT <= 1e-9) continue;
+          const slip = body.linearVelocity
+            .add(new Vec2(-r.y, r.x).mul(body.angularVelocity))
+            .sub(other.velocityAtPoint(c.point))
+            .dot(tangent);
+          const gravityBite = Math.max(0, g.mul(dt).dot(c.normal.mul(-1)));
+          const cone = staticMu * (totals[i]! + body.mass * gravityBite * share);
+          const before = tangentials[i]!;
+          const wanted = before - slip / invEffT;
+          tangentials[i] = Math.max(-cone, Math.min(cone, wanted));
+          if (tangentials[i] !== wanted) slipped = true;
+          const applied = tangentials[i]! - before;
+          if (applied === 0) continue;
+          body.linearVelocity = body.linearVelocity.add(tangent.mul(applied * body.inverseMass));
+          body.angularVelocity += rCrossT * applied * invI;
+        }
+      }
+      // Asked for more than the cone could give: this contact is sliding, so it
+      // gets no position pin and does not count as a grip. The impulses above are
+      // already Coulomb friction at the limit, which is what a sliding contact
+      // should feel, so there is nothing further to apply.
+      if (slipped) {
+        stuck = false;
+      } else {
+      // Pin the along-surface position of the CONTACT POINT, not of the body.
+      // Without a pin the body still slides one integration step of gravity every
+      // frame (move, then freeze), creeping downhill; this undoes that drift while
+      // leaving the normal direction free to settle onto the surface.
+      //
+      // Anchoring the body's own centre is the same mistake the velocity half of
+      // this grip used to make, and it survives here for the same reason it was
+      // easy to miss there: a body pivoting about its contact point *must* move
+      // its centre, and holding the centre still is therefore an instruction to
+      // slide. The contact point is what static friction actually holds, and it is
+      // stationary under a pivot by definition, so anchoring it lets a body turn
+      // on its corner freely while still refusing to let that corner travel.
+      //
+      // Held by the centre, a slab settled on one corner had its spin bled away
+      // geometrically - 0.021, 0.013, 0.008, 0.005 rad/s, about a third gone every
+      // frame - with no contact anywhere near it doing the braking. It simply
+      // stopped mid-turn and stood there (session-1426f).
+      //
+      // The anchor needs no local frame: the contact point is re-derived from the
+      // manifold each frame, so comparing it against the anchor asks exactly "has
+      // the surface this body is gripping moved along itself", which is the
+      // question.
+      //
+      // Rotation is still not anchored. Zeroing or freezing it holds the body's
+      // pose by fiat - gravity gets no say, so a slab tipped up on a corner can
+      // never topple back down, and any rotation written after this solve is kept
+      // in full and re-frozen next frame, so a chain that turns the body a
+      // fraction of a degree per tug ratchets it round for good (session-1195f).
+      // The normal impulses are what resist rotation, which is what a two-point
+      // manifold is *for*.
+      if (body.stickAnchor === null) {
+          body.stickAnchor = deepest.point;
+          body.stickLocal = deepest.point.sub(body.globalPosition).rotated(-body.globalRotation);
         } else {
-          const d = body.globalPosition.sub(body.stickAnchor);
-          body.globalPosition = body.stickAnchor.add(c.normal.mul(d.dot(c.normal)));
+          const held = body.globalPosition.add(body.stickLocal.rotated(body.globalRotation));
+          const d = held.sub(body.stickAnchor);
+          body.globalPosition = body.globalPosition.sub(d.sub(n0.mul(d.dot(n0))));
         }
         stuck = true;
-        continue;
       }
-
-      if (kineticMu <= 0) continue;
-      const tangent = new Vec2(-c.normal.y, c.normal.x);
-      const surfSpeed = pointVel().sub(surfaceVel).dot(tangent);
-      const rCrossT = rContact.cross(tangent);
-      const invEff = body.inverseMass + rCrossT * rCrossT * invI;
-      if (invEff <= 1e-9) continue;
-      const gravityBite = Math.max(0, g.mul(dt).dot(c.normal.mul(-1)));
-      const maxImpulse = kineticMu * body.mass * (vnKilled + gravityBite * share);
-      let j = -surfSpeed / invEff;
-      j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
-      if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
-      body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
-      body.angularVelocity += rCrossT * j * invI;
+    } else if (kineticMu > 0) {
+      // Slipping: Coulomb-capped kinetic friction, per point, capped by that
+      // point's share of the normal impulse the solve above settled on.
+      for (let i = 0; i < contacts.length; i++) {
+        const c = contacts[i]!;
+        const rContact = c.point.sub(body.globalPosition);
+        const tangent = new Vec2(-c.normal.y, c.normal.x);
+        const rCrossT = rContact.cross(tangent);
+        const invEff = body.inverseMass + rCrossT * rCrossT * invI;
+        if (invEff <= 1e-9) continue;
+        const surfSpeed = body.linearVelocity
+          .add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity))
+          .sub(other.velocityAtPoint(c.point))
+          .dot(tangent);
+        const gravityBite = Math.max(0, g.mul(dt).dot(c.normal.mul(-1)));
+        const maxImpulse = kineticMu * body.mass * (totals[i]! * body.inverseMass + gravityBite * share);
+        let j = -surfSpeed / invEff;
+        j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
+        if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
+        body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
+        body.angularVelocity += rCrossT * j * invI;
+      }
     }
 
     const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;

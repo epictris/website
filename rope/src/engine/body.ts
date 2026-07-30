@@ -429,6 +429,17 @@ export class RigidBody2D extends PhysicsBody2D {
   // frame the body has no sticking contact (so it never snaps back after
   // leaving the ground).
   stickAnchor: Vec2 | null = null;
+  // Consecutive frames the body has had no gripping contact. The anchor is only
+  // dropped once this passes `STICK_RELEASE_FRAMES`: a single frame's flicker of
+  // the grip is not the body leaving the surface, and dropping the anchor on one
+  // re-seeds it wherever the body has drifted to, which ratchets.
+  ungrippedFrames = 0;
+  // The gripped contact point in the BODY's own frame. `stickAnchor` records
+  // where that material point was when the grip took hold; this is what finds it
+  // again after the body has turned. Anchoring the raw manifold point instead
+  // does not work: it is a geometric point that slides along the contacting face
+  // as the body settles, so it drifts even when nothing is sliding.
+  stickLocal: Vec2 = Vec2.ZERO;
 
   override get isMobile(): boolean {
     return true;

@@ -103,7 +103,16 @@ avatar's steering branch inside it) stays bit-identical to recorded replays.
 - `World` rigidbody dynamics are approximate (no stacking solver, one Gauss-Seidel pass per
   frame); the rope drives attached bodies directly, so this mostly affects free-falling
   debris. Polygon contacts do get a real two-point manifold (above); circles remain single-point.
-  Rigid-vs-rigid contacts still take the approximate path - half the push-out, half the
+  Rigid-vs-rigid contacts still take the approximate path, and its sharpest limitation is that
+  **the two bodies never exchange momentum**: each independently cancels its own approach at
+  the shared contact, and neither drives the other. A body landing on another therefore stops
+  it rather than knocking it round - the struck body's own rotation is arrested by the contact,
+  which is the opposite of what an impact should do (`session-120f`, where the top of two
+  compound groups lands square on the bottom one and the bottom one's spin is cancelled from
+  0.10 to -0.06 rad/s by the very contact that should have driven it). Fixing that properly
+  means a real pair solver - one impulse computed once for the pair and applied equal and
+  opposite - rather than the two independent passes below.
+  The approximation is: half the push-out, half the
   approach velocity, each body resolving its own `RIGID_PAIR_SHARE` of the contact with no
   knowledge of the other's pass - but they are no longer *torque-free*: in `resolveRigidLoop`
   the normal impulse goes through the coupled linear/angular effective mass, per manifold
@@ -1129,9 +1138,50 @@ A ball resting on the floor with a slab landing on it was shoved 33 mm up out of
 The two demands are mutually exclusive, so the branch now **equalises** them: move along the deeper normal by half the difference, leaving both faces at the mean depth and a body already centred between them exactly where it is.
 Resolving the *static* side in full instead, on the argument that a static surface cannot get out of the way and a rigid one can, is the tempting refinement and it is wrong - it re-buries the body in the rigid face and the next pass pushes it straight back, which is the same ping-pong under a better motive.
 
-**Still open.** A resting polygon's *rotation* wobbles about ±0.15°, a few mm at the end of a long body.
-The normal impulse is gated on `vn < 0`, so at a settled contact it fires intermittently rather than holding a steady standing force, and the two points of a manifold solve Gauss-Seidel against each other's leftovers.
-Position is stable to well under a millimetre, so this is a shimmer rather than the 49 mm buzz above; closing it properly needs a resting-contact bias term, which nothing here has yet.
+## Resting contacts
+
+A manifold's normal impulses are solved as **one system**: accumulated per point, iterated `NORMAL_SOLVER_ITERATIONS` times, with each point's *running total* clamped at zero rather than each increment clamped on its own.
+Both the static and the rigid-rigid branch do it; `RIGID_PAIR_SHARE` still scales what a body takes from a rigid pair, since the other body meets that contact again on its own pass.
+
+Solved once each behind a `vn < 0` gate, the two points of a resting face cannot converge, and the reason is structural rather than a matter of tuning.
+Point A's impulse acts through a lever, so it rotates the body and pushes point B in; B's impulse pushes A in; and because neither may ever *pull*, the pass ends with the pair having overshot in opposite directions.
+What is left over is a spin, and next frame it returns with the sign flipped.
+A polygon lying still on the floor sawtoothed between -0.07 and +0.11 rad/s for as long as it rested there, wobbling about a third of a degree - some millimetres at the end of a long body, which is what reads as vibration (`session-255f`).
+
+Accumulating is what buys the fix: a later iteration may hand back part of an earlier one, as long as the point's total stays non-negative, so the pair settles on the load split that actually holds the body still instead of each over-correcting for the other.
+This is the standard sequential-impulse formulation, and it is the one thing the resting case genuinely needs.
+Restitution is taken from the approach velocity measured **before** any of it, never re-derived per iteration - re-applying a bounce to a velocity that already contains it is how an iterated solver invents energy.
+
+Bodies now go properly to sleep: a settled polygon holds `|ω|` around 0.0007 where it used to hold 0.1, a dropped-and-settled pile finishes at exactly zero velocity, and a stack resting on itself wobbles 0.16° / 1.4 mm against 0.28° / 5.7 mm before.
+
+Static friction is **Coulomb-capped**, at `mu_s` times this frame's normal impulse plus gravity's bite - the same quantity the kinetic path caps against, so the two agree about how much load a contact carries.
+It is a limited force, and unclamped it supplied whatever was asked, which welds a resting body to the ground: measured at 1.5x to 7x more tangential impulse than friction there could ever have provided (`session-120f`).
+A body resting on a slope is unaffected, since its demand is `m*g*sin(theta)` against a cone of `mu_s*m*g*cos(theta)` - it holds exactly while `tan(theta) <= mu_s`, which is the breakaway angle the grip already advertised.
+Asking for more than the cone gives means the contact is sliding, so it gets no position pin and does not count as a grip; the clamped impulses are already Coulomb friction at the limit, which is what a sliding contact should feel.
+
+Static friction is otherwise solved the same way as the normal impulses, and is a decision about the **body** rather than about each point - it is one statement about whether this contact is slipping, and the manifold's points share a normal, so asking per point only let one point grip while its twin ran the kinetic path.
+Two things about it were wrong and are worth keeping straight.
+
+It used to **overwrite** the body's velocity, which throws away the linear half of the normal impulse the accumulated solve had just computed: that solve splits one impulse into a Δv and a Δω through the coupled effective mass, and discarding the Δv leaves the Δω behind as an unbalanced torque, a few thousandths of a rad/s freshly minted every frame with nothing to answer it.
+
+And it cancelled the velocity of the body's **centre**.
+Static friction forbids the *contact* from sliding and says nothing about the centre; a body pivoting about its contact point must have a moving centre, since that motion is precisely what holds the contact point still.
+Forcing the centre still while rotation ran free therefore made the contact slide by construction, and the position pin then held the centre while the shape ground through it - a polygon resting on a corner turned 27° over four seconds at a steady creep that neither settled nor fell over (`session-390f`).
+Read at the contact points and solved together, a genuine pivot costs nothing, a sliding body is held, and a body wanting to topple spins past `STICK_SPIN` and stops being gripped at all.
+That body now holds, topples once at -0.68 rad/s, and settles dead.
+
+The **position pin anchors the contact point too**, not the body's centre - the same correction as above, in position rather than velocity, and it survived the velocity fix for the same reason it was easy to miss there.
+A body pivoting about its contact point must move its centre, so holding the centre still is an instruction to slide.
+Held that way, a slab settled on one corner had its spin bled off geometrically - 0.021, 0.013, 0.008, 0.005 rad/s, about a third gone every frame - with no contact anywhere near it doing the braking; it simply stopped mid-turn and stood there (`session-1426f`).
+The anchor is a **material** point of the body (`stickLocal`, the gripped contact in the body's own frame), not the manifold point itself: that one is geometric and slides along the contacting face as the body settles, so anchoring it directly sent bodies drifting 80 cm *up* a ramp.
+
+The **stick anchor survives a few ungripped frames** (`STICK_RELEASE_FRAMES`) rather than being dropped on the first.
+It has to go eventually, or a body that has left the ground snaps back to a stale spot, but the grip flickers: the normal solve leaves a little spin, and every eighth frame or so it crosses `STICK_SPIN` and the gate says no.
+Releasing on a single miss re-seeded the anchor wherever the body had drifted to, and the drift is always downhill, so a crate ratcheted 21 cm down a 30° slope it is meant to hold, a few tenths of a millimetre at a time.
+
+Two things were tried first and are worth not repeating.
+**Widening the manifold** so a point within a few mm of the surface stays in it does not help: the second corner of a resting face is not flickering at the micron scale, it is genuinely rocking 3-7.6 mm off the ground, so a slop band only moves the threshold the flicker happens at.
+**Damping spin inside the stiction grip** is worse than the disease - it is the pose lock in a softer form, stalling a body part-way through a topple and leaving it to creep, and it took a clean settle from 0.2° to 7.8°.
 
 ### Area glyphs
 
