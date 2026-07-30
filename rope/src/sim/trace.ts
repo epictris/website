@@ -162,6 +162,21 @@ const ANCHOR_KICK_TOLERANCE = 0.6;
 // over anything legitimate and still catches the bug by a wide margin.
 // `runaway-speed` never saw it: 96 m/s is far under that 1000 m/s ceiling.
 const CHAIN_SOLVE_KICK_TOLERANCE = 4;
+// How much longer than the length it anchored at the ball's chain may get.
+// Nothing pays chain out once it is anchored, so the only source of growth is
+// `Rope.absorbBlockedLength` covering a correction that geometry blocked — real
+// and legitimate, but it is a ratchet, and anything driving it every frame grows
+// the chain without limit. The total is a blunt measure of that (a single
+// discontinuous jump in the wrap path can be most of it on its own — 26 cm in
+// one frame in session-284f), so it is set loose enough to clear those and only
+// catch a genuine runaway: session-475f's wound-up ball reached +349 cm.
+const CHAIN_GROWTH_TOLERANCE = 0.5;
+// Consecutive frames the winch stall may keep letting length out. This is the
+// sharp measure, because a *run* of stalls is the shape of every chain runaway
+// there has been, and one blocked frame is not. Across the whole ball corpus
+// legitimate stalls run 5 frames at most, while the runaways ran 79, 51, 36, 32
+// and 28 — nothing sits between.
+const CHAIN_STALL_FRAMES_TOLERANCE = 20;
 // A chain span may graze a corner (endpoints on a surface), but its interior
 // must never run deep inside static geometry — that's the chain clipping
 // through the scene. Same 3 cm slack as the embed check.
@@ -341,6 +356,23 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       });
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "chain length NaN" });
+    if (
+      level.chainAnchorLength !== null &&
+      b.chain.maxRopeLength > level.chainAnchorLength + CHAIN_GROWTH_TOLERANCE
+    ) {
+      out.push({
+        frame,
+        kind: "rope-grew",
+        detail: `max=${b.chain.maxRopeLength.toFixed(2)} vs ${level.chainAnchorLength.toFixed(2)} at anchor`,
+      });
+    }
+    if (level.chainStallFrames > CHAIN_STALL_FRAMES_TOLERANCE) {
+      out.push({
+        frame,
+        kind: "rope-stalling",
+        detail: `winch stall has let chain out for ${level.chainStallFrames} frames running`,
+      });
+    }
     // Chain-clip: no span's interior may run deep inside static geometry. A span
     // legitimately touches corners it wraps (endpoints on the surface), so
     // sample interior points and flag only genuine penetration past tolerance.

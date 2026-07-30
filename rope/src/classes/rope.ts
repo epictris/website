@@ -84,9 +84,22 @@ export class Rope {
   // Minimum distance a rect corner must deflect the rope path before it
   // becomes a wrap node (see the grazing-contact gate in regeneratePath).
   private static readonly MIN_WRAP_DEFLECTION = 0.005;
+  // Newton steps, and halvings per step, for unwindOverLength. One step is the
+  // whole correction whenever the local rate holds; the rest cover the contact
+  // moving far enough that it stops holding.
+  private static readonly UNWIND_ITERATIONS = 4;
+  private static readonly UNWIND_BACKTRACKS = 6;
+  // Below this the rope is not really spooled on the body at all — it leaves
+  // along the radius rather than the tangent — and rotating it would ask for a
+  // wild angle to buy a millimetre. Metres per radian.
+  private static readonly MIN_SPOOL_RATE = 0.001;
 
   maxRopeLength = 10;
   maxIterations = 10;
+  // What the last `absorbBlockedLength` had to let out — how badly the frame's
+  // length correction was blocked. Zero on any frame the solve got what it
+  // asked for.
+  stalledLength = 0;
   frictionCoefficient = 0.4;
 
   start: RopeAttachment;
@@ -178,6 +191,112 @@ export class Rope {
     return this.calculateRopePathLength();
   }
 
+  // How fast the rope path grows per radian `body` spins about its own centre,
+  // in metres per radian: positive winds rope *onto* the body, negative unwinds
+  // it. The spool picture, for a body the rope winds onto itself — the ball and
+  // its chain.
+  //
+  // Every node is stored in its body's local frame, so rotating a body carries
+  // its nodes with it. A span with both endpoints on `body` is rigid and its
+  // length cannot change; a span with neither is untouched. Only the spans that
+  // *straddle* the body — the places the rope actually leaves it — contribute,
+  // each as -û·(dq/dθ) with q the moving endpoint and û pointing from it to the
+  // fixed one. For a circle that comes to ±radius per radian, since the rope
+  // leaves tangentially, but the sum is written generally so a body the rope
+  // wraps mid-path measures the same way.
+  lengthPerRadian(body: PhysicsBody2D): number {
+    const centre = body.globalPosition;
+    let rate = 0;
+    for (const span of this.regenerateSpans()) {
+      const fromOnBody = span.from.contact.obj === body;
+      const toOnBody = span.to.contact.obj === body;
+      if (fromOnBody === toOnBody) continue;
+      const moving = fromOnBody ? span.span.start : span.span.end;
+      const fixed = fromOnBody ? span.span.end : span.span.start;
+      if (moving.distanceSquaredTo(fixed) < PX * PX * 1e-4) continue;
+      const lever = moving.sub(centre);
+      // d(v.rotated(θ))/dθ at the current θ is (-v.y, v.x).
+      rate -= moving.directionTo(fixed).dot(new Vec2(-lever.y, lever.x));
+    }
+    return rate;
+  }
+
+  // Give the frame's remaining over-length back to `body`'s spin, and only then
+  // let `absorbBlockedLength` see what is left. For a body the rope spools onto
+  // — the ball and its chain.
+  //
+  // The ball's aim steering is *kinematic*: it overwrites angularVelocity
+  // outright, so nothing the solver does can stop the ball winding more chain
+  // onto itself than the chain has. Winding it on is the point, and while the
+  // solver can pay for it by hauling the ball in towards the anchor it does; the
+  // failure is only at the end of that, wound all the way up with the ball
+  // against its anchor and nowhere left to be hauled. There the length solve
+  // took the error back out as a positional correction that the depenetration
+  // push-out immediately undid, `physicsStep` turned the correction into
+  // velocity, and the stall covered the difference — so the ball flicked itself
+  // along the ground and kept rolling around its anchor while 18 cm of chain
+  // grew to 366 cm and dragged the anchor three metres (session-475f).
+  //
+  // Rotation is the one correction that is always available — a circle sweeps no
+  // new ground as it turns, so there is no geometry to block it and nothing to
+  // push out of afterwards — and it is precisely the motion that overspent. So
+  // it is what pays, and only for the part the chain could not afford: a frame
+  // the solver did settle leaves nothing here to do.
+  //
+  // It pays no more than it spent, though: `rotationAtFrameStart` is where the
+  // body was before this frame turned it, and the correction may walk back
+  // towards that and no further. The rest of any over-length is not the spin's
+  // doing — the frame's biggest source of it is the depenetration push-out — and
+  // charging the spin for that spins the ball *backwards*, which at the top of a
+  // wind-up is a runaway: the correction subtracts angular velocity, the next
+  // frame's push-out leaves a little more over-length, and within ten frames a
+  // ball winding on at +4 rad/s was unwinding itself at -15 (session-394f). What
+  // rotation may not or cannot reach falls through to the winch stall, as it did
+  // before any of this.
+  //
+  // The search is Newton on `lengthPerRadian` with backtracking, and it keeps
+  // the best angle it has seen rather than the last one it tried. Both matter:
+  // the rate is only a local model of a path length that is *not* monotone in
+  // the angle — one full Newton step can swing the contact clean past its
+  // tangent point, which is where the rate flips sign — and undamped that
+  // oscillates between two equally bad angles and returns to where it started.
+  unwindOverLength(body: PhysicsBody2D, rotationAtFrameStart: number, delta: number): void {
+    const startRotation = body.globalRotation;
+    const lowRotation = Mathf.min(startRotation, rotationAtFrameStart);
+    const highRotation = Mathf.max(startRotation, rotationAtFrameStart);
+    let bestRotation = startRotation;
+    let bestExcess = this.calculateRopePathLength() - this.maxRopeLength;
+
+    for (let i = 0; i < Rope.UNWIND_ITERATIONS && bestExcess > 0; i++) {
+      body.globalRotation = bestRotation;
+      const rate = this.lengthPerRadian(body);
+      if (Math.abs(rate) < Rope.MIN_SPOOL_RATE) break;
+      let step = -bestExcess / rate;
+      let improved = false;
+      for (let t = 0; t < Rope.UNWIND_BACKTRACKS; t++, step *= 0.5) {
+        const candidate = Mathf.clamp(bestRotation + step, lowRotation, highRotation);
+        if (candidate === bestRotation) break;
+        body.globalRotation = candidate;
+        const excess = this.calculateRopePathLength() - this.maxRopeLength;
+        if (excess < bestExcess) {
+          bestRotation = candidate;
+          bestExcess = excess;
+          improved = true;
+          break;
+        }
+      }
+      if (!improved) break;
+    }
+
+    body.globalRotation = bestRotation;
+    // Mirror the solve: a rotation the rope imposed is also a change in how fast
+    // the body is turning. Without it a ball held against a wound-up chain is
+    // spun forward by its own angular velocity every frame and rotated back out
+    // here, and the two show up as a stutter. Bounded by the same window as the
+    // rotation, so the chain can stall the spin but never reverse it.
+    this.getDynamicBodyState(body)?.addRotation((bestRotation - startRotation) / delta);
+  }
+
   getDistanceToStartLookup(): Map<RopeNode, number> {
     return this.genDistanceToStartLookup();
   }
@@ -255,8 +374,16 @@ export class Rope {
   // the solve left the frame ending over-length every frame for a point-blank
   // anchor, since the ball was shoved back out after the solve had already
   // written its books.
+  //
+  // It is a ratchet, and deliberately so — it can only ever let rope out, and
+  // whatever re-blocks the correction next frame is read as a fresh stall. That
+  // makes it the wrong thing to sit behind: anything feeding it a blocked
+  // correction every frame grows the rope without limit, which is how a ball
+  // winding its chain onto itself ended up with twenty times the chain it
+  // started with (see BallPlayer.clampToChainSpool, session-475f).
   absorbBlockedLength(): void {
     const settledLength = this.calculateRopePathLength();
+    this.stalledLength = Mathf.max(settledLength - this.maxRopeLength, 0);
     if (settledLength > this.maxRopeLength) this.maxRopeLength = settledLength;
   }
 

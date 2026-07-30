@@ -142,6 +142,87 @@ The `absorbBlockedLength()` call after it is the winch stall (see `Rope`) applie
 where the frame *actually* ends: the push-out moves the ball after the chain has
 solved, so re-basing only inside the solve left a point-blank anchor over its
 length every single frame.
+`Rope.unwindOverLength()` runs between the two, and is the reason the stall stays
+rare enough to be safe.
+The stall is a **ratchet** — it only lets chain out, and whatever re-blocks the
+correction next frame reads as a fresh stall — so nothing may sit behind it
+feeding it a blocked correction every frame.
+The aim steering did: it is *kinematic* (it overwrites `angularVelocity`, so
+nothing the solver does can stop the ball winding on more chain than it has).
+Winding it on is the point, and while the solve can pay for it by hauling the
+ball in towards the anchor it does; the failure is at the end of that, wound all
+the way up with the ball against its anchor and nowhere left to be hauled.
+There the solve's correction was undone by the push-out, `physicsStep` turned the
+correction into velocity, and the stall covered the difference — the ball flicked
+itself along the ground and kept rolling around its anchor while `session-475f`'s
+18 cm of chain grew to 366 cm and dragged the anchor 3 m across the level.
+Rotation is the one correction that is always available (a circle sweeps no new
+ground as it turns, so no geometry blocks it and there is nothing to push out of
+afterwards) and it is exactly the motion that overspent, so it is what pays — and
+only for the part the chain could not afford, which leaves a frame the solver did
+settle untouched.
+It pays no more than it spent, either: the correction may walk the rotation back
+towards where the frame *started* and no further.
+The rest of any over-length is not the spin's doing, and charging the spin for it
+spins the ball backwards — at the top of a wind-up that is its own runaway, the
+correction subtracting angular velocity while the next frame's push-out leaves a
+little more over-length, until a ball winding on at +4 rad/s was unwinding itself
+at −15 and shedding wraps (`session-394f`).
+The search is Newton on `Rope.lengthPerRadian` (±the ball's radius, since the
+chain leaves a circle tangentially) with **backtracking**, keeping the best angle
+seen rather than the last tried: path length is not monotone in the angle, so one
+full step can swing the contact past its tangent point where the rate flips sign,
+and undamped it oscillates between two equally bad angles and lands back where it
+started.
+Bounding the correction leaves the rest of the over-length for the stall, and
+what made *that* survivable is the third piece: the solve books its velocity as
+Δposition/Δt **before** the push-out, so a correction the push-out immediately
+takes back leaves the ball holding speed for a move it never made.
+`BallLevel` hands that back.
+Un-refunded it compounds: a wound-up ball on the floor gained a little more
+sideways speed every frame until it was crawling out from under its own chain,
+over-length by a fresh centimetre a frame for the stall to cover.
+What goes back is only the credit **along the push-out**, and only the part of it
+that pointed into the surface: the push-out is a contact normal, it cancels the
+correction's normal component and nothing else, so the tangential credit is real
+and stays.
+Refunding a *share of the whole correction vector* instead — the obvious reading
+of "30 % of it was undone" — pays back sideways velocity that was never undone,
+and that is a sideways kick re-applied every frame.
+It is invisible until the correction has a large tangential component, which is
+why it only bit sometimes: a ball that creeps up to its ceiling is corrected
+almost straight along the normal and holds, while one that arrives still carrying
+2.9 m/s along the surface gets the kick and rolls 24 cm out from under its chain
+(`session-458f`, whose two wind-ups differ in nothing else).
+The refund only reaches the ball, though, and the solve moves **every** body on
+the chain's path — so it settles the ball's spin partly by hauling the far end,
+and an anchor that is a rigid body keeps whatever it was given.
+That is the fourth piece: the spin is a *kinematic* input with no force behind it
+and the unwind is about to refuse it anyway, so `BallLevel` measures how much of
+the frame's over-length is the spin's (`|Δrotation| × lengthPerRadian` against the
+total) and rolls that share of the solve's correction back off everything but the
+ball, leaving the unwind to pay for it in rotation.
+Hauling the *ball* is untouched: that is the winch, and it is how winding chain
+onto yourself pulls you towards the anchor.
+Without it a chain anchored to a rigid polygon resting on the floor was fed a
+fresh 0.08 m/s every frame and slid 31 cm across the level with the wound-up ball
+riding its corner, peaking at 2.5 m/s instead of 0.5 (`session-265f`).
+Refusing the spin *before* the solve instead is the tempting simplification and
+it is wrong — the solve paying for the spin by winching the ball in is exactly the
+winding mechanic, and pre-refusing it cancelled 197 radians of legitimate spin in
+a ten-second wind-up and left the ball at zero wraps.
+Two invariants back this up (`checkBallInvariants`). `rope-grew` bounds the chain
+against the length it anchored at, but only loosely: a single discontinuous jump
+in the wrap path can be most of the total on its own (26 cm in one frame in
+`session-284f`), which is not this bug. `rope-stalling` is the sharp one — a
+*run* of blocked frames is the shape of every chain runaway there has been, and
+the corpus splits cleanly, 5 frames at most when healthy against 79, 51, 36, 32
+and 28 for the runaways.
+A hard ceiling on the stall itself is **not** an option, tempting as it looks:
+a point-blank anchor is legitimately held over its length by the geometry it is
+anchored to, and capping the stall leaves the solver fighting the push-out every
+frame — over-length, solve-kick and embedding violations in `session-284f` and
+`session-1474f`, whose chain anchors 2 cm from a surface the ball is resting on.
 The push-out resolves its **two deepest overlaps simultaneously**, the same solve
 `moveAndCollide` uses (`d·n1 = depth1`, `d·n2 = depth2`, escaping through the
 wedge mouth). Doing them one after the other is what its own comment warns
