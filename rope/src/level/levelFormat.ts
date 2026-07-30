@@ -21,9 +21,16 @@
 //                area's own rotation (a river current, wind, an updraft).
 export type BodyKind = "static" | "impermeable" | "anchor" | "killzone" | "rigid" | "force";
 
+// A shape as authored on disk. `poly` is a **convex** vertex loop in the item's
+// own local frame, centred on its area centroid (the loader re-centres one that
+// is not, shifting the item's position to compensate, since a body's origin is
+// its centre of mass everywhere in the engine). A rect stays its own kind rather
+// than being written as a four-vertex poly: every recorded replay was simulated
+// through the rect-specific collision routines.
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
-  | { kind: "circle"; r: number };
+  | { kind: "circle"; r: number }
+  | { kind: "poly"; verts: { x: number; y: number }[] };
 
 // Default shape appearance: dark grey fill at 0.5 opacity (borders always draw
 // fully opaque in the same colour). Applied when a body omits color/opacity.
@@ -191,6 +198,15 @@ export interface LevelData {
 // PIXELS_PER_METER on save), leaving rotations and kinds untouched. `force` is
 // an acceleration (length/s²) so it scales too; `friction` is dimensionless and
 // passes through. Returns a fresh copy so the caller's data stays pristine.
+// Every dimension of a shape is a length, whichever kind it is — a polygon's
+// vertices included. One scaler for all three, so a new kind cannot be missed by
+// one of the four lists that carry shapes.
+function scaleShape(s: ShapeData, factor: number): ShapeData {
+  if (s.kind === "rect") return { kind: "rect", w: s.w * factor, h: s.h * factor };
+  if (s.kind === "circle") return { kind: "circle", r: s.r * factor };
+  return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
+}
+
 export function scaleLevelData(data: LevelData, factor: number): LevelData {
   // A camera region's positions, extents, offsets, locks and buffer are
   // lengths; viewportScale, blend (seconds) and priority are not.
@@ -198,10 +214,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     x: r.x * factor,
     y: r.y * factor,
     rot: r.rot,
-    shape:
-      r.shape.kind === "rect"
-        ? ({ kind: "rect", w: r.shape.w * factor, h: r.shape.h * factor } as const)
-        : ({ kind: "circle", r: r.shape.r * factor } as const),
+    shape: scaleShape(r.shape, factor),
     ...(r.offsetX !== undefined ? { offsetX: r.offsetX * factor } : {}),
     ...(r.offsetY !== undefined ? { offsetY: r.offsetY * factor } : {}),
     ...(r.viewportScale !== undefined ? { viewportScale: r.viewportScale } : {}),
@@ -228,10 +241,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     x: g.x * factor,
     y: g.y * factor,
     rot: g.rot,
-    shape:
-      g.shape.kind === "rect"
-        ? ({ kind: "rect", w: g.shape.w * factor, h: g.shape.h * factor } as const)
-        : ({ kind: "circle", r: g.shape.r * factor } as const),
+    shape: scaleShape(g.shape, factor),
     ...(g.color !== undefined ? { color: g.color } : {}),
     ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
   }));
@@ -249,10 +259,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,
-      shape:
-        b.shape.kind === "rect"
-          ? { kind: "rect", w: b.shape.w * factor, h: b.shape.h * factor }
-          : { kind: "circle", r: b.shape.r * factor },
+      shape: scaleShape(b.shape, factor),
       ...(b.color !== undefined ? { color: b.color } : {}),
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),

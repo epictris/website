@@ -1,12 +1,20 @@
 // Analytic collision queries used by the physics substitute:
-//  - swept circle vs {rect, circle}  (for CharacterBody2D.moveAndCollide)
-//  - ray vs {rect, circle}           (for space-state IntersectRay)
+//  - swept circle vs {rect, poly, circle}  (for CharacterBody2D.moveAndCollide)
+//  - ray vs {rect, poly, circle}           (for space-state IntersectRay)
 //  - point/circle overlap + depenetration normal (rest resolution)
 //
 // The player and hook are circles; static geometry and dynamic bodies are
-// circles or body-aligned rectangles. Everything is expressed with Vec2.
+// circles, body-aligned rectangles or convex polygons. Everything is expressed
+// with Vec2.
+//
+// The rect routines are the closed-form slab method and are left exactly as
+// they were: every recorded replay was simulated through them, and a rect
+// re-expressed as a 4-vertex polygon would take the general path below and
+// agree geometrically but not bit-for-bit. Polygons therefore get their own
+// branch throughout rather than the two being merged.
 
 import { Vec2 } from "./vec2";
+import { polyEdgeNormal, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
 
 const EPS = 1e-6;
@@ -55,8 +63,134 @@ function rayCircleT(p: Vec2, d: Vec2, c: Vec2, r: number): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Convex-polygon helpers (local frame)
+// ---------------------------------------------------------------------------
+
+// Closest point to `p` on the segment a→b.
+function closestOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
+  const ab = b.sub(a);
+  const lenSq = ab.dot(ab);
+  if (lenSq < EPS * EPS) return a;
+  const t = Math.max(0, Math.min(1, p.sub(a).dot(ab) / lenSq));
+  return a.add(ab.mul(t));
+}
+
+// Closest point on a convex loop's boundary to `p`, in the same frame.
+function closestOnLoop(p: Vec2, verts: readonly Vec2[]): { point: Vec2; distSq: number } {
+  let best = verts[0]!;
+  let bestSq = Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const c = closestOnSegment(p, verts[i]!, verts[(i + 1) % verts.length]!);
+    const d = p.distanceSquaredTo(c);
+    if (d < bestSq) {
+      bestSq = d;
+      best = c;
+    }
+  }
+  return { point: best, distSq: bestSq };
+}
+
+// The edge whose supporting plane `p` is furthest outside (or least far inside),
+// with that signed distance. Negative everywhere means `p` is inside the loop,
+// and the returned edge is the shallowest one — the minimum-translation face.
+function deepestPlane(p: Vec2, verts: readonly Vec2[]): { edge: number; dist: number } {
+  let edge = 0;
+  let dist = -Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const n = polyEdgeNormal(verts, i);
+    if (n.x === 0 && n.y === 0) continue; // degenerate edge
+    const d = n.dot(p.sub(verts[i]!));
+    if (d > dist) {
+      dist = d;
+      edge = i;
+    }
+  }
+  return { edge, dist };
+}
+
+// Clip the ray p + t·d against a convex loop whose faces are pushed outward by
+// `expand` (the swept circle's radius, or 0 for a plain ray). The n-plane
+// generalisation of the slab method the rect routines use: same tEnter/tExit
+// walk, one plane per edge instead of two axis slabs.
+//
+// Returns null when the ray misses the (expanded) region entirely. `enterEdge`
+// is -1 only when no plane was ever entered, i.e. the direction is degenerate.
+function clipConvex(
+  p: Vec2,
+  d: Vec2,
+  verts: readonly Vec2[],
+  expand: number,
+): { tEnter: number; tExit: number; enterEdge: number } | null {
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  let enterEdge = -1;
+  for (let i = 0; i < verts.length; i++) {
+    const n = polyEdgeNormal(verts, i);
+    if (n.x === 0 && n.y === 0) continue;
+    // Signed distance from p to the outward-offset plane of this edge.
+    const dist = n.dot(p.sub(verts[i]!)) - expand;
+    const denom = n.dot(d);
+    if (Math.abs(denom) < EPS) {
+      if (dist > 0) return null; // parallel to the plane and on its outside
+      continue;
+    }
+    const t = -dist / denom;
+    if (denom < 0) {
+      if (t > tEnter) {
+        tEnter = t;
+        enterEdge = i;
+      }
+    } else if (t < tExit) {
+      tExit = t;
+    }
+    if (tEnter > tExit) return null;
+  }
+  return { tEnter, tExit, enterEdge };
+}
+
+// ---------------------------------------------------------------------------
 // Swept circle vs shapes
 // ---------------------------------------------------------------------------
+
+// Swept circle (centre p0, radius r) moving by d against a convex polygon.
+// Structurally the same as sweepCircleRect: clip against the outward-offset
+// faces, take the entering one when the contact lands within its extent, and
+// otherwise refine against the corner as a circle of radius r.
+function sweepCirclePoly(
+  p0: Vec2,
+  d: Vec2,
+  r: number,
+  center: Vec2,
+  rot: number,
+  verts: readonly Vec2[],
+): SweepHit | null {
+  const p = toLocal(p0, center, rot);
+  const dir = d.rotated(-rot);
+  const clip = clipConvex(p, dir, verts, r);
+  if (!clip || clip.enterEdge < 0) return null;
+  if (clip.tEnter > 1 + EPS || clip.tExit < 0) return null;
+
+  const t = Math.max(clip.tEnter, 0);
+  const hit = p.add(dir.mul(t));
+  const i = clip.enterEdge;
+  const a = verts[i]!;
+  const b = verts[(i + 1) % verts.length]!;
+  const edge = b.sub(a);
+  const len = edge.length();
+  // Where along the entering face the contact sits. Inside the face's extent
+  // the normal is the face normal; past either end it is a corner contact.
+  const s = len > EPS ? edge.dot(hit.sub(a)) / len : 0;
+  if (s >= -EPS && s <= len + EPS) {
+    return { t, normal: toWorldDir(polyEdgeNormal(verts, i), rot) };
+  }
+
+  const corner = s < 0 ? a : b;
+  const ct = rayCircleT(p, dir, corner, r);
+  if (ct === null) return null;
+  const contact = p.add(dir.mul(ct));
+  const n = contact.sub(corner).normalized();
+  return { t: ct, normal: toWorldDir(n, rot) };
+}
 
 // Swept circle (center p0, radius r) moving by d against a body-aligned rect.
 function sweepCircleRect(
@@ -160,6 +294,9 @@ export function sweepCircle(
   if (s.kind === "circle") {
     return sweepCircleCircle(p0, d, r, target.globalPosition, s.radius);
   }
+  if (s.kind === "poly") {
+    return sweepCirclePoly(p0, d, r, target.globalPosition, target.globalRotation, s.verts);
+  }
   return sweepCircleRect(
     p0,
     d,
@@ -190,6 +327,34 @@ export function circleOverlap(
     if (pen <= 0) return null;
     const normal = dist < EPS ? Vec2.UP : delta.div(dist);
     return { normal, depth: pen };
+  }
+  if (s.kind === "poly") {
+    const rot = target.globalRotation;
+    const local = toLocal(p, target.globalPosition, rot);
+    const plane = deepestPlane(local, s.verts);
+    // Every face plane cleared by more than r: no contact is possible, and this
+    // is exact for the plane test even when the true closest feature is a corner
+    // (the plane distance is a lower bound on the boundary distance).
+    if (plane.dist > r) return null;
+    if (plane.dist <= 0) {
+      // Inside the polygon: push out through the shallowest face, as the rect
+      // path pushes out along the axis of least penetration.
+      return {
+        normal: toWorldDir(polyEdgeNormal(s.verts, plane.edge), rot),
+        depth: r - plane.dist,
+      };
+    }
+    const near = closestOnLoop(local, s.verts);
+    if (near.distSq > r * r) return null;
+    if (near.distSq > EPS * EPS) {
+      const dist = Math.sqrt(near.distSq);
+      return {
+        normal: toWorldDir(local.sub(near.point).div(dist), rot),
+        depth: r - dist,
+      };
+    }
+    // Exactly on the boundary — no direction to take from the closest point.
+    return { normal: toWorldDir(polyEdgeNormal(s.verts, plane.edge), rot), depth: r };
   }
   const hw = s.size.x * 0.5;
   const hh = s.size.y * 0.5;
@@ -227,6 +392,17 @@ export function outwardDirection(p: Vec2, target: ShapeTransform): Vec2 {
   if (s.kind === "circle") {
     const delta = p.sub(target.globalPosition);
     return delta.length() < EPS ? Vec2.UP : delta.normalized();
+  }
+  if (s.kind === "poly") {
+    const rot = target.globalRotation;
+    const local = toLocal(p, target.globalPosition, rot);
+    const plane = deepestPlane(local, s.verts);
+    if (plane.dist <= 0) return toWorldDir(polyEdgeNormal(s.verts, plane.edge), rot);
+    const near = closestOnLoop(local, s.verts);
+    if (near.distSq <= EPS * EPS) {
+      return toWorldDir(polyEdgeNormal(s.verts, plane.edge), rot);
+    }
+    return toWorldDir(local.sub(near.point).div(Math.sqrt(near.distSq)), rot);
   }
   const hw = s.size.x * 0.5;
   const hh = s.size.y * 0.5;
@@ -359,6 +535,42 @@ function rayVsRect(
   return { position: worldPos, normal: toWorldDir(localNormal, rot), t };
 }
 
+// Ray vs convex polygon: the n-plane version of rayVsRect's slab walk.
+function rayVsPoly(
+  from: Vec2,
+  to: Vec2,
+  center: Vec2,
+  rot: number,
+  verts: readonly Vec2[],
+  hitFromInside: boolean,
+): RayHit | null {
+  const p = toLocal(from, center, rot);
+  const q = toLocal(to, center, rot);
+  const d = q.sub(p);
+  const clip = clipConvex(p, d, verts, 0);
+  if (!clip) return null;
+
+  let t = clip.tEnter;
+  let edge = clip.enterEdge;
+  if (t < 0 || edge < 0) {
+    if (!hitFromInside) return null;
+    // Origin is inside the polygon — report the exit face instead, recovered
+    // from the exit point (exactly as rayVsRect does for its inside hits).
+    t = clip.tExit;
+    edge = -1;
+  }
+  if (t < 0 || t > 1) return null;
+  const localNormal =
+    edge >= 0
+      ? polyEdgeNormal(verts, edge)
+      : polyEdgeNormal(verts, deepestPlane(p.add(d.mul(t)), verts).edge);
+  return {
+    position: from.add(to.sub(from).mul(t)),
+    normal: toWorldDir(localNormal, rot),
+    t,
+  };
+}
+
 export function rayVsShape(
   from: Vec2,
   to: Vec2,
@@ -368,6 +580,16 @@ export function rayVsShape(
   const s = target.shape;
   if (s.kind === "circle") {
     return rayVsCircle(from, to, target.globalPosition, s.radius, hitFromInside);
+  }
+  if (s.kind === "poly") {
+    return rayVsPoly(
+      from,
+      to,
+      target.globalPosition,
+      target.globalRotation,
+      s.verts,
+      hitFromInside,
+    );
   }
   return rayVsRect(
     from,
@@ -380,6 +602,29 @@ export function rayVsShape(
   );
 }
 
+// Radius of the shape's bounding circle about its own origin.
 export function shapeRadius(s: Shape): number {
-  return s.kind === "circle" ? s.radius : Math.hypot(s.size.x * 0.5, s.size.y * 0.5);
+  if (s.kind === "circle") return s.radius;
+  if (s.kind === "rect") return Math.hypot(s.size.x * 0.5, s.size.y * 0.5);
+  let best = 0;
+  for (const v of s.verts) best = Math.max(best, v.length());
+  return best;
+}
+
+// Support point of a convex shape's vertex loop along a world-space direction —
+// the SAT primitive the polygon contact solver is built from. Circles have no
+// vertices, so the caller handles them separately.
+export function shapeSupport(t: ShapeTransform, worldDir: Vec2): Vec2 {
+  const verts = shapeVertices(t.shape);
+  const local = worldDir.rotated(-t.globalRotation);
+  let best = verts[0]!;
+  let bestDot = -Infinity;
+  for (const v of verts) {
+    const d = v.dot(local);
+    if (d > bestDot) {
+      bestDot = d;
+      best = v;
+    }
+  }
+  return t.globalPosition.add(best.rotated(t.globalRotation));
 }

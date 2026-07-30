@@ -280,8 +280,13 @@ function wallPose(player: Player, state: OnWallState): Vec2[] {
   return pressedPose(player, n);
 }
 
-function ledgePose(player: Player, body: LedgeHangState["body"], vertexIndex: number): Vec2[] {
-  const info = !body.removed ? LedgeDetection.grabInfo(body, vertexIndex) : null;
+function ledgePose(
+  player: Player,
+  body: LedgeHangState["body"],
+  shapeIndex: number,
+  vertexIndex: number,
+): Vec2[] {
+  const info = !body.removed ? LedgeDetection.grabInfo(body, shapeIndex, vertexIndex) : null;
   if (!info) return airbornePose(player);
   const p = player.globalPosition;
   const r = player.radius;
@@ -307,7 +312,7 @@ function poseTargets(player: Player): Vec2[] {
   prevSupportPos = null;
   if (state instanceof OnWallState) return wallPose(player, state);
   if (state instanceof LedgeHangState || state instanceof LedgeClimbState) {
-    return ledgePose(player, state.body, state.vertexIndex);
+    return ledgePose(player, state.body, state.shapeIndex, state.vertexIndex);
   }
   // Airborne against a wall (falling beside it, shoved into it, mid
   // wall-jump launch): brace on it.

@@ -13,7 +13,7 @@ import {
   RigidBody2D,
   StaticBody2D,
 } from "../engine/body";
-import { rectShape, circleShape } from "../engine/shapes";
+import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
 import { World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { KillZone } from "../classes/killZone";
@@ -26,8 +26,16 @@ import {
 } from "./levelFormat";
 import type { CollisionObject2D } from "../engine/body";
 
-function makeShape(shape: LevelBodyData["shape"]) {
-  return shape.kind === "rect" ? rectShape(shape.w, shape.h) : circleShape(shape.r);
+// An authored shape plus the local-frame offset the loader had to remove from
+// it. Only polygons ever carry one: their vertices are re-centred on the area
+// centroid, because a body's origin is its centre of mass everywhere in this
+// engine (every RigidBody2D lever arm is measured from `globalPosition`). The
+// offset goes back onto the body's position, so the geometry lands exactly where
+// it was authored while the origin ends up where the physics needs it.
+function makeShape(shape: LevelBodyData["shape"]): { shape: Shape; offset: Vec2 } {
+  if (shape.kind === "rect") return { shape: rectShape(shape.w, shape.h), offset: Vec2.ZERO };
+  if (shape.kind === "circle") return { shape: circleShape(shape.r), offset: Vec2.ZERO };
+  return polyShapeCentred(shape.verts.map((v) => new Vec2(v.x, v.y)));
 }
 
 function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
@@ -46,8 +54,11 @@ export function buildLevelBodies(
   const wrapBodies: PhysicsBody2D[] = [];
 
   for (const b of data.bodies) {
-    const shape = makeShape(b.shape);
-    const pos = new Vec2(b.x, b.y);
+    const made = makeShape(b.shape);
+    const shape = made.shape;
+    // A re-centred polygon's origin moved; put the geometry back where it was
+    // authored by shifting the body by the (rotated) offset that was removed.
+    const pos = new Vec2(b.x, b.y).add(made.offset.rotated(b.rot));
 
     if (b.kind === "killzone") {
       const kz = new KillZone(onReset);

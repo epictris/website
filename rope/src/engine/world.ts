@@ -17,7 +17,14 @@ import {
   RigidBody2D,
   StaticBody2D,
 } from "./body";
-import { circleOverlap, outwardDirection, rayVsShape, sweepCircle } from "./collision";
+import {
+  circleOverlap,
+  outwardDirection,
+  rayVsShape,
+  shapeRadius,
+  sweepCircle,
+} from "./collision";
+import { shapeContacts } from "./manifold";
 import { PhysTrace } from "./physTrace";
 
 // Trace helper: one record per moveAndCollide hit.
@@ -82,6 +89,13 @@ export interface RayOptions {
   hitFromInside?: boolean;
 }
 
+// Does the world resolve collisions against this body? The allowlist every
+// collision path is written as (see AnchorBody, which is outside it by
+// construction rather than by a special case per site).
+function isSolidTarget(body: PhysicsBody2D): boolean {
+  return body instanceof StaticBody2D || body instanceof RigidBody2D;
+}
+
 export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
@@ -136,30 +150,33 @@ export class World {
       if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
       if (body.exceptions.has(target.id)) continue;
       if (!target.hasShape()) continue;
-      const ts = target.getShape();
-
-      const ov = circleOverlap(start, r, ts);
-      if (ov && ov.depth > SKIN) {
-        if (!overlapHit || ov.depth > overlapHit.depth) {
-          overlapHit = { normal: ov.normal, depth: ov.depth, collider: target };
+      // Every shape the target carries. A compound body (a concave form built
+      // from convex pieces) blocks with all of them; a single-shape body is the
+      // one-iteration case this has always been.
+      for (const ts of target.getShapes()) {
+        const ov = circleOverlap(start, r, ts);
+        if (ov && ov.depth > SKIN) {
+          if (!overlapHit || ov.depth > overlapHit.depth) {
+            overlapHit = { normal: ov.normal, depth: ov.depth, collider: target };
+          }
+          continue;
         }
-        continue;
-      }
 
-      const sweep = sweepCircle(start, motion, r, ts);
-      if (sweep) {
-        // Phantom-contact guards for grazing sweeps that start within the
-        // skin of a thin shape (a rotating blade): the reported normal can
-        // belong to the far face — "hit from inside" — which misclassifies
-        // the surface and resets the player's state.
-        // 1. A real contact opposes the motion.
-        if (sweep.normal.dot(motion) > 1e-9) continue;
-        // 2. The normal must agree with the side of the shape the sweep
-        //    starts on.
-        if (sweep.normal.dot(outwardDirection(start, ts)) < -1e-6) continue;
-      }
-      if (sweep && sweep.t <= 1 && (!sweepHit || sweep.t < sweepHit.t)) {
-        sweepHit = { t: sweep.t, normal: sweep.normal, collider: target };
+        const sweep = sweepCircle(start, motion, r, ts);
+        if (sweep) {
+          // Phantom-contact guards for grazing sweeps that start within the
+          // skin of a thin shape (a rotating blade): the reported normal can
+          // belong to the far face — "hit from inside" — which misclassifies
+          // the surface and resets the player's state.
+          // 1. A real contact opposes the motion.
+          if (sweep.normal.dot(motion) > 1e-9) continue;
+          // 2. The normal must agree with the side of the shape the sweep
+          //    starts on.
+          if (sweep.normal.dot(outwardDirection(start, ts)) < -1e-6) continue;
+        }
+        if (sweep && sweep.t <= 1 && (!sweepHit || sweep.t < sweepHit.t)) {
+          sweepHit = { t: sweep.t, normal: sweep.normal, collider: target };
+        }
       }
     }
 
@@ -190,13 +207,15 @@ export class World {
           if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
           if (body.exceptions.has(target.id)) continue;
           if (!target.hasShape()) continue;
-          const ov = circleOverlap(finalPos, r, target.getShape());
-          if (!ov) continue;
-          if (!a || ov.depth > a.depth) {
-            b = a;
-            a = { normal: ov.normal, depth: ov.depth };
-          } else if (!b || ov.depth > b.depth) {
-            b = { normal: ov.normal, depth: ov.depth };
+          for (const ts of target.getShapes()) {
+            const ov = circleOverlap(finalPos, r, ts);
+            if (!ov) continue;
+            if (!a || ov.depth > a.depth) {
+              b = a;
+              a = { normal: ov.normal, depth: ov.depth };
+            } else if (!b || ov.depth > b.depth) {
+              b = { normal: ov.normal, depth: ov.depth };
+            }
           }
         }
         if (!a || a.depth <= SKIN) break;
@@ -284,10 +303,12 @@ export class World {
       if (body.removed || excludeIds.has(body.id)) continue;
       if (!this.matchesMask(body, opts.collisionMask)) continue;
       if (!body.hasShape()) continue;
-      const hit = rayVsShape(from, to, body.getShape(), opts.hitFromInside ?? false);
-      if (hit && hit.t < bestT) {
-        bestT = hit.t;
-        best = { collider: body, position: hit.position, normal: hit.normal };
+      for (const s of body.getShapes()) {
+        const hit = rayVsShape(from, to, s, opts.hitFromInside ?? false);
+        if (hit && hit.t < bestT) {
+          bestT = hit.t;
+          best = { collider: body, position: hit.position, normal: hit.normal };
+        }
       }
     }
     return best;
@@ -305,7 +326,7 @@ export class World {
     for (const body of this.bodies) {
       if (body.removed || !body.hasShape()) continue;
       // Overlap test: does the probe circle intersect the body's shape?
-      if (shapesOverlap(probe, body.getShape())) {
+      if (body.getShapes().some((s) => shapesOverlap(probe, s))) {
         out.push(body);
         if (out.length >= maxResults) break;
       }
@@ -342,7 +363,7 @@ export class World {
       const ashape = area.getShape();
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
-        if (!shapesOverlap(ashape, body.getShape())) continue;
+        if (!body.getShapes().some((s) => shapesOverlap(ashape, s))) continue;
         if (body instanceof RigidBody2D) {
           body.linearVelocity = body.linearVelocity.add(dv);
         } else if (body instanceof CharacterBody2D) {
@@ -355,7 +376,8 @@ export class World {
     }
   }
 
-  // Positional-only push-out of one rigidbody's circles from static geometry.
+  // Positional-only push-out of one rigidbody's shapes from the solid geometry
+  // around it.
   // Velocity and rotation are untouched — this is not a contact solve but the
   // "geometry wins" pass a constraint solver that runs AFTER integrate needs.
   // Rope writes its positional correction straight onto a rigid body (only the
@@ -364,45 +386,109 @@ export class World {
   // after World.integrate, so nothing else in its frame can undo a correction
   // that pulls the ball into a surface. Iterated so a body wedged in a corner
   // settles out of both faces rather than sliding along one into the other.
+  //
+  // "Solid" here is any body the world collides with — a StaticBody2D *or*
+  // another RigidBody2D — and not only the statics it used to mean. The
+  // narrower version was sufficient only while rects and polygons were never
+  // physics-driven, so the sole thing a rope could haul the ball into was static
+  // scenery. A rigid polygon's surface is exactly as solid, and the failure it
+  // leaves is the one this guard exists to prevent, in the same words: a chain
+  // anchored to one of its faces hauls the ball a little deeper every frame,
+  // because the rope writes position last and wins. Left unguarded the ball
+  // buried itself ~16 cm into a rigid polygon over ~20 frames, and when it
+  // finally emerged the wrap path it should have been taking all along appeared
+  // at full size in a single frame — half a metre of length error, which the
+  // solver converted straight into a 96 m/s launch (session-1474f).
   depenetrateRigid(body: RigidBody2D, iterations = 2): void {
     if (body.removed || !body.hasShape()) return;
-    for (let i = 0; i < iterations; i++) {
-      let moved = false;
-      for (const bshape of body.getShapes()) {
-        if (bshape.shape.kind !== "circle") continue;
-        const r = bshape.shape.radius;
-        // Offset from the body centre to this circle. Rotation does not change
-        // in this pass, so the offset is fixed and the circle's centre can be
-        // re-derived after every push — each overlap test sees where the body
-        // actually is, including pushes applied a moment ago.
-        const offset = bshape.globalPosition.sub(body.globalPosition);
-        for (const other of this.bodies) {
-          if (other === body || other.removed || !other.hasShape()) continue;
-          if (body.exceptions.has(other.id)) continue;
-          if (!(other instanceof StaticBody2D)) continue;
-          for (const oshape of other.getShapes()) {
-            const ov = circleOverlap(body.globalPosition.add(offset), r, oshape);
-            if (!ov) continue;
-            body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth));
-            moved = true;
+    for (let pass = 0; pass < iterations; pass++) {
+      const [a, b] = this.gatherDepenetration(body);
+      if (!a) return;
+      // Resolve the two deepest overlaps *together* rather than one after the
+      // other. Pushing fully out of one surface can push straight into another,
+      // and a sequential pushout then ping-pongs deeper into the pair every pass
+      // — whichever surface was handled last wins. `moveAndCollide` already
+      // solves this for the character sweep, and this is the same solve: for a
+      // converging pair, the translation d with d·n1 = depth1 and d·n2 = depth2
+      // leaves both faces flush, escaping through the wedge mouth.
+      //
+      // A ball resting on the floor beneath a rigid polygon is exactly such a
+      // wedge — floor pushing up, polygon pushing down — and resolved
+      // sequentially it drove the ball ~10 cm into the floor over four frames,
+      // the polygon's push landing last every time (session-284f).
+      const c = b ? a.normal.dot(b.normal) : 1;
+      if (b && c < 0 && c > -0.98) {
+        const inv = 1 / (1 - c * c);
+        body.globalPosition = body.globalPosition
+          .add(a.normal.mul((a.depth - c * b.depth) * inv))
+          .add(b.normal.mul((b.depth - c * a.depth) * inv));
+      } else {
+        // One overlap, or a true crush whose denominator explodes as c → -1:
+        // push out of the deepest and accept a residual.
+        body.globalPosition = body.globalPosition.add(a.normal.mul(a.depth));
+      }
+    }
+  }
+
+  // The two deepest overlaps of `body` against the solid geometry around it, at
+  // its current position. Rotation never changes during a depenetration pass, so
+  // each shape's offset from the body centre is fixed and the overlaps can simply
+  // be re-gathered after every push.
+  private gatherDepenetration(
+    body: RigidBody2D,
+  ): [{ normal: Vec2; depth: number } | null, { normal: Vec2; depth: number } | null] {
+    let a: { normal: Vec2; depth: number } | null = null;
+    let b: { normal: Vec2; depth: number } | null = null;
+    const consider = (ov: { normal: Vec2; depth: number }): void => {
+      if (!a || ov.depth > a.depth) {
+        b = a;
+        a = ov;
+      } else if (!b || ov.depth > b.depth) {
+        b = ov;
+      }
+    };
+    for (const bshape of body.getShapes()) {
+      for (const other of this.bodies) {
+        if (other === body || other.removed || !other.hasShape()) continue;
+        if (body.exceptions.has(other.id)) continue;
+        if (!isSolidTarget(other)) continue;
+        for (const oshape of other.getShapes()) {
+          if (bshape.shape.kind === "circle") {
+            const ov = circleOverlap(bshape.globalPosition, bshape.shape.radius, oshape);
+            if (ov) consider(ov);
+          } else {
+            // A vertex shape contributes its manifold points, same as the
+            // dynamic solver reads them.
+            for (const ct of shapeContacts(bshape, oshape)) consider(ct);
           }
         }
       }
-      if (!moved) return;
     }
+    return [a, b];
   }
 
   private resolveDynamicCollisions(dt: number): void {
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;
-      // Rects/polygons are never physics-driven (game-design.md); circles are
-      // the only dynamic bodies. Resolve every circle the body carries — a
-      // compound body (the ball & chain avatar) adds an offset rim circle for
-      // its loop. The primary circle is centred and keeps the historical
-      // resolution bit-for-bit; offset circles additionally torque the body.
+      // Resolve every shape the body carries — a compound body (the ball &
+      // chain avatar) adds an offset rim circle for its loop. The primary
+      // circle is centred and keeps the historical resolution bit-for-bit;
+      // offset circles additionally torque the body, and a rect or convex
+      // polygon resolves through the manifold path below (a face contact, not a
+      // point, so a box settles on a floor instead of teetering on one corner).
       let stuck = false;
       for (const bshape of body.getShapes()) {
-        if (bshape.shape.kind !== "circle") continue;
+        if (bshape.shape.kind !== "circle") {
+          for (const other of this.bodies) {
+            if (other === body || other.removed || !other.hasShape()) continue;
+            if (body.exceptions.has(other.id)) continue;
+            if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
+            for (const oshape of other.getShapes()) {
+              stuck = this.resolveRigidLoop(body, bshape, other, oshape, dt) || stuck;
+            }
+          }
+          continue;
+        }
         const r = bshape.shape.radius;
         // Local-frame offset from the body centre to this circle's centre. The
         // primary shape is centred, so this is exactly zero (position cancels)
@@ -423,6 +509,123 @@ export class World {
       // freely and never snaps back to a stale spot after leaving the ground.
       if (!stuck) body.stickAnchor = null;
     }
+  }
+
+  // Resolve one of a rigidbody's vertex shapes (a rect or convex polygon)
+  // against a single target shape, through a contact manifold rather than the
+  // single point a circle can produce. Returns whether static friction has the
+  // body gripped.
+  //
+  // Deliberately a sibling of `resolveRigidCircle` rather than a generalisation
+  // of it: that routine carries the ball & chain avatar's steering path and a
+  // centred-circle branch that is bit-identical to every recorded replay, and
+  // folding a manifold through it would put both at risk for no gain — a
+  // polygon never steers, and no replay predates it.
+  private resolveRigidLoop(
+    body: RigidBody2D,
+    bshape: ShapeTransform,
+    other: PhysicsBody2D,
+    oshape: ShapeTransform,
+    dt: number,
+  ): boolean {
+    const contacts = shapeContacts(bshape, oshape);
+    if (contacts.length === 0) return false;
+
+    if (!(other instanceof StaticBody2D)) {
+      // Rigid-rigid: split the push and damp the approach, exactly as the
+      // circle path approximates it.
+      let deepest = contacts[0]!;
+      for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
+      body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth * 0.5));
+      const rel = body.linearVelocity.dot(deepest.normal);
+      if (rel < 0) {
+        body.linearVelocity = body.linearVelocity.sub(deepest.normal.mul(rel * 0.5));
+      }
+      return false;
+    }
+
+    const grip = other.surfaceFriction;
+    const staticMu = body.staticFriction * grip;
+    const kineticMu = body.contactFriction * grip;
+    const invI = body.kinematicRotation ? 0 : body.inverseInertia;
+
+    // Push out along the deepest contact only: the manifold's points share one
+    // normal, so resolving each in turn would push out several times over.
+    let deepest = contacts[0]!;
+    for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
+    body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth));
+
+    // The impulses, on the other hand, are per point — that is the whole reason
+    // for a two-point manifold, since one point cannot resist a rotation about
+    // itself. Each is solved in full against the velocity left by the one
+    // before it (Gauss-Seidel), NOT scaled by 1/count: sharing the normal
+    // impulse leaves a slice of the approach velocity alive every frame, and a
+    // box resting on a flat floor then sits there re-earning gravity forever at
+    // a visible fraction of a metre per second.
+    const share = 1 / contacts.length;
+    const g = GRAVITY.mul(body.gravityScale);
+    let stuck = false;
+    for (const c of contacts) {
+      const rContact = c.point.sub(body.globalPosition);
+      const surfaceVel = other.velocityAtPoint(c.point);
+      const pointVel = (): Vec2 =>
+        body.linearVelocity.add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity));
+
+      const vn = pointVel().sub(surfaceVel).dot(c.normal);
+      let vnKilled = 0;
+      if (vn < 0) {
+        const rCrossN = rContact.cross(c.normal);
+        const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
+        const jn = invEffN > 1e-9 ? (-vn * (1 + body.restitution)) / invEffN : 0;
+        body.linearVelocity = body.linearVelocity.add(c.normal.mul(jn * body.inverseMass));
+        body.angularVelocity += rCrossN * jn * invI;
+        vnKilled = jn * body.inverseMass;
+      }
+
+      // Stiction: a nearly-stopped body on a slope gentler than its breakaway
+      // angle is pinned rather than left to creep downhill one integration step
+      // at a time. Same rule and the same anchor the circle path uses.
+      const gN = -g.dot(c.normal);
+      const rel = body.linearVelocity.sub(surfaceVel);
+      if (
+        staticMu > 0 &&
+        !other.isMobile &&
+        gN > 1e-6 &&
+        rel.length() < STICK_SPEED &&
+        Math.abs(body.angularVelocity) < STICK_SPIN &&
+        g.sub(c.normal.mul(g.dot(c.normal))).length() <= staticMu * gN
+      ) {
+        const tanVel = surfaceVel.sub(c.normal.mul(surfaceVel.dot(c.normal)));
+        body.linearVelocity = c.normal.mul(body.linearVelocity.dot(c.normal)).add(tanVel);
+        body.angularVelocity = 0;
+        if (body.stickAnchor === null) {
+          body.stickAnchor = body.globalPosition;
+        } else {
+          const d = body.globalPosition.sub(body.stickAnchor);
+          body.globalPosition = body.stickAnchor.add(c.normal.mul(d.dot(c.normal)));
+        }
+        stuck = true;
+        continue;
+      }
+
+      if (kineticMu <= 0) continue;
+      const tangent = new Vec2(-c.normal.y, c.normal.x);
+      const surfSpeed = pointVel().sub(surfaceVel).dot(tangent);
+      const rCrossT = rContact.cross(tangent);
+      const invEff = body.inverseMass + rCrossT * rCrossT * invI;
+      if (invEff <= 1e-9) continue;
+      const gravityBite = Math.max(0, g.mul(dt).dot(c.normal.mul(-1)));
+      const maxImpulse = kineticMu * body.mass * (vnKilled + gravityBite * share);
+      let j = -surfSpeed / invEff;
+      j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
+      if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
+      body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
+      body.angularVelocity += rCrossT * j * invI;
+    }
+
+    const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
+    body.linearVelocity = body.linearVelocity.mul(damp);
+    return stuck;
   }
 
   // Resolve one of a rigidbody's circles (centred at `body.globalPosition +
@@ -638,14 +841,14 @@ export class World {
       const inside: CollisionObject2D[] = [];
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
-        if (shapesOverlap(area.getShape(), body.getShape())) inside.push(body);
+        if (body.getShapes().some((s) => shapesOverlap(area.getShape(), s))) inside.push(body);
       }
       area.notifyOverlaps(inside);
     }
   }
 }
 
-// Cheap symmetric overlap test between two shape transforms (circle/rect).
+// Cheap symmetric overlap test between two shape transforms.
 function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {
   if (a.shape.kind === "circle") {
     return circleOverlap(a.globalPosition, a.shape.radius, b) !== null;
@@ -653,9 +856,8 @@ function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {
   if (b.shape.kind === "circle") {
     return circleOverlap(b.globalPosition, b.shape.radius, a) !== null;
   }
-  // rect vs rect: sample via the larger rect's bounding circle then refine with
-  // the min-translation test against one rect (sufficient for the area/explosion
+  // Two vertex shapes: sample via one's bounding circle then refine with the
+  // min-translation test against the other (sufficient for the area/explosion
   // queries the game issues, which always involve a circle in practice).
-  const ar = Math.hypot(a.shape.size.x * 0.5, a.shape.size.y * 0.5);
-  return circleOverlap(a.globalPosition, ar, b) !== null;
+  return circleOverlap(a.globalPosition, shapeRadius(a.shape), b) !== null;
 }

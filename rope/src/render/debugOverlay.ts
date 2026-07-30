@@ -18,6 +18,7 @@ import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
 import type { CameraRegionData } from "../level/levelFormat";
 import { activeCameraRegion, regionBuffer } from "./cameraController";
+import { outlineOfData, pathOutline, pathOutlineGrown } from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -55,55 +56,59 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
     if (body instanceof Player) continue;
     if (!(body instanceof PhysicsBody2D) || !body.hasShape()) continue;
     if (!body.isSolid) continue; // hook-only scenery is never grabbable
-    const t = body.getShape();
-    if (t.shape.kind !== "rect") continue;
+    // One pass per collision shape: a compound body offers the corners of every
+    // piece it is made of, and the overlay has to show exactly the set
+    // LedgeDetection walks.
+    body.getShapes().forEach((t, si) => {
+      if (t.shape.kind === "circle") return;
 
-    const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;
-    for (let i = 0; i < vertexCount; i++) {
-      if (!ShapeGeometry.isLedgeCandidate(t.shape, i)) continue;
+      const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;
+      for (let i = 0; i < vertexCount; i++) {
+        if (!ShapeGeometry.isLedgeCandidate(t.shape, i)) continue;
 
-      const vertex = ShapeGeometry.getVertexWorldPosition(t, i);
-      const [inNormal, outNormal] = ShapeGeometry.getIncidentFaceNormals(t, i);
-      drawTick(ctx, vertex, inNormal, FACE_COLORS[Surface.getSurfaceType(inNormal, body.isRotating)]);
-      drawTick(ctx, vertex, outNormal, FACE_COLORS[Surface.getSurfaceType(outNormal, body.isRotating)]);
+        const vertex = ShapeGeometry.getVertexWorldPosition(t, i);
+        const [inNormal, outNormal] = ShapeGeometry.getIncidentFaceNormals(t, i);
+        drawTick(ctx, vertex, inNormal, FACE_COLORS[Surface.getSurfaceType(inNormal, body.isRotating)]);
+        drawTick(ctx, vertex, outNormal, FACE_COLORS[Surface.getSurfaceType(outNormal, body.isRotating)]);
 
-      const info = LedgeDetection.grabInfo(body, i);
-      const seam = info !== null && LedgeDetection.isSeamOccluded(bodies, body, vertex);
+        const info = LedgeDetection.grabInfo(body, si, i);
+        const seam = info !== null && LedgeDetection.isSeamOccluded(bodies, body, si, vertex);
 
-      if (seam) {
-        ctx.strokeStyle = SEAM;
-        ctx.lineWidth = PX;
+        if (seam) {
+          ctx.strokeStyle = SEAM;
+          ctx.lineWidth = PX;
+          ctx.beginPath();
+          ctx.moveTo(vertex.x - MARKER_RADIUS, vertex.y - MARKER_RADIUS);
+          ctx.lineTo(vertex.x + MARKER_RADIUS, vertex.y + MARKER_RADIUS);
+          ctx.moveTo(vertex.x - MARKER_RADIUS, vertex.y + MARKER_RADIUS);
+          ctx.lineTo(vertex.x + MARKER_RADIUS, vertex.y - MARKER_RADIUS);
+          ctx.stroke();
+          continue;
+        }
+
         ctx.beginPath();
-        ctx.moveTo(vertex.x - MARKER_RADIUS, vertex.y - MARKER_RADIUS);
-        ctx.lineTo(vertex.x + MARKER_RADIUS, vertex.y + MARKER_RADIUS);
-        ctx.moveTo(vertex.x - MARKER_RADIUS, vertex.y + MARKER_RADIUS);
-        ctx.lineTo(vertex.x + MARKER_RADIUS, vertex.y - MARKER_RADIUS);
-        ctx.stroke();
-        continue;
+        ctx.arc(vertex.x, vertex.y, MARKER_RADIUS, 0, Math.PI * 2);
+        if (info) {
+          ctx.fillStyle = GRABBABLE;
+          ctx.fill();
+          // Grab radius: the catch zone — a grab fires when the player's
+          // swept centre path enters this circle (LedgeDetection reach).
+          ctx.strokeStyle = GRABBABLE;
+          ctx.globalAlpha = 0.3;
+          ctx.setLineDash([3 * PX, 3 * PX]);
+          ctx.lineWidth = PX;
+          ctx.beginPath();
+          ctx.arc(vertex.x, vertex.y, level.player.radius + GRAB_REACH_MARGIN, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.strokeStyle = BLOCKED;
+          ctx.lineWidth = PX;
+          ctx.stroke();
+        }
       }
-
-      ctx.beginPath();
-      ctx.arc(vertex.x, vertex.y, MARKER_RADIUS, 0, Math.PI * 2);
-      if (info) {
-        ctx.fillStyle = GRABBABLE;
-        ctx.fill();
-        // Grab radius: the catch zone — a grab fires when the player's
-        // swept centre path enters this circle (LedgeDetection reach).
-        ctx.strokeStyle = GRABBABLE;
-        ctx.globalAlpha = 0.3;
-        ctx.setLineDash([3 * PX, 3 * PX]);
-        ctx.lineWidth = PX;
-        ctx.beginPath();
-        ctx.arc(vertex.x, vertex.y, level.player.radius + GRAB_REACH_MARGIN, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-      } else {
-        ctx.strokeStyle = BLOCKED;
-        ctx.lineWidth = PX;
-        ctx.stroke();
-      }
-    }
+    });
   }
 }
 
@@ -151,7 +156,7 @@ function drawContactNormals(ctx: CanvasRenderingContext2D, level: Level): void {
 
   if (state instanceof LedgeHangState || state instanceof LedgeClimbState) {
     if (state.body.removed) return;
-    const info = LedgeDetection.grabInfo(state.body, state.vertexIndex);
+    const info = LedgeDetection.grabInfo(state.body, state.shapeIndex, state.vertexIndex);
     if (!info) return;
     drawContactArrow(ctx, info.vertex, info.wallNormal, state.body.isRotating);
     drawContactArrow(ctx, info.vertex, info.floorNormal, state.body.isRotating);
@@ -186,13 +191,8 @@ function drawCameraRegions(
   // only for a caller that has none, where a first-order answer beats nothing.
   const active = held ?? activeCameraRegion(level.cameraRegions, level.cameraPosition);
   for (const r of level.cameraRegions) {
-    ctx.save();
-    ctx.translate(r.x, r.y);
-    ctx.rotate(r.rot);
     ctx.beginPath();
-    if (r.shape.kind === "circle") ctx.arc(0, 0, r.shape.r, 0, Math.PI * 2);
-    else ctx.rect(-r.shape.w / 2, -r.shape.h / 2, r.shape.w, r.shape.h);
-    ctx.restore();
+    pathOutline(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape));
     if (r === active) {
       ctx.fillStyle = "rgba(199,146,234,0.12)";
       ctx.fill();
@@ -209,15 +209,8 @@ function drawCameraRegions(
     // force.
     if (r !== active) continue;
     const b = regionBuffer(r);
-    ctx.save();
-    ctx.translate(r.x, r.y);
-    ctx.rotate(r.rot);
     ctx.beginPath();
-    if (r.shape.kind === "circle") ctx.arc(0, 0, r.shape.r + b, 0, Math.PI * 2);
-    else {
-      ctx.rect(-r.shape.w / 2 - b, -r.shape.h / 2 - b, r.shape.w + 2 * b, r.shape.h + 2 * b);
-    }
-    ctx.restore();
+    pathOutlineGrown(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape), b);
     ctx.lineWidth = PX;
     ctx.setLineDash([2 * PX, 5 * PX]);
     ctx.stroke();

@@ -5,7 +5,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { StaticBody2D } from "../engine/body";
-import { circleOverlap } from "../engine/collision";
+import { circleOverlap, shapeRadius } from "../engine/collision";
 import { Hook } from "../classes/hook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { LedgeHangState } from "../classes/states/ledgeHangState";
@@ -153,6 +153,15 @@ const EMBED_TOLERANCE = 0.03;
 // hitting nudges it a few tenths of m/s as it depenetrates. The tip-anchor bug
 // injects ~1.9 m/s — well clear of both.
 const ANCHOR_KICK_TOLERANCE = 0.6;
+// Ceiling on the speed the chain's length solve may add to the ball in a single
+// frame. The solve removes over-length by moving bodies and then converts that
+// displacement to velocity (Δposition/Δt), so a discontinuous jump in the path
+// length becomes a discontinuous jump in speed — a launch. Across the whole ball
+// corpus real play peaks at 2.1 m/s of gain in a frame, while the session-1474f
+// launch was +7.7 m/s (and +93.7 m/s in the recording), so 4 leaves ~2x headroom
+// over anything legitimate and still catches the bug by a wide margin.
+// `runaway-speed` never saw it: 96 m/s is far under that 1000 m/s ceiling.
+const CHAIN_SOLVE_KICK_TOLERANCE = 4;
 // A chain span may graze a corner (endpoints on a surface), but its interior
 // must never run deep inside static geometry — that's the chain clipping
 // through the scene. Same 3 cm slack as the embed check.
@@ -189,7 +198,14 @@ function mobileBodyNear(level: Level): boolean {
     if (body === p || body.removed || !body.isMobile || !body.hasShape()) continue;
     if (body instanceof Hook) continue;
     const s = body.getShape().shape;
-    const bound = s.kind === "circle" ? s.radius : Math.hypot(s.size.x, s.size.y) * 0.5;
+    // The rect form is spelled out rather than routed through `shapeRadius` so
+    // the expression stays literally what every recorded run was checked with.
+    const bound =
+      s.kind === "circle"
+        ? s.radius
+        : s.kind === "rect"
+          ? Math.hypot(s.size.x, s.size.y) * 0.5
+          : shapeRadius(s);
     if (body.globalPosition.distanceTo(p.globalPosition) <= bound + STUCK_MOBILE_DIST) return true;
   }
   return false;
@@ -303,6 +319,16 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       frame,
       kind: "rope-anchor-kick",
       detail: `solve added ${level.anchorKickSpeedGain.toFixed(1)} px/s as the chain anchored`,
+    });
+  }
+  if (
+    level.chainSolveSpeedGain !== null &&
+    level.chainSolveSpeedGain > CHAIN_SOLVE_KICK_TOLERANCE
+  ) {
+    out.push({
+      frame,
+      kind: "rope-solve-kick",
+      detail: `chain solve added ${level.chainSolveSpeedGain.toFixed(1)} m/s in one frame`,
     });
   }
   if (b.chain) {

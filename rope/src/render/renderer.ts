@@ -27,6 +27,7 @@ import type { CameraRegionData } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
+import { outlineOfShape, pathOutline } from "./shapePath";
 import { hexToRgba } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
 import {
@@ -63,24 +64,7 @@ const RETICLE_RADIUS = 5 * PX;
 
 function pathShape(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
   ctx.beginPath();
-  if (t.shape.kind === "circle") {
-    ctx.arc(t.globalPosition.x, t.globalPosition.y, t.shape.radius, 0, Math.PI * 2);
-  } else {
-    const hw = t.shape.size.x * 0.5;
-    const hh = t.shape.size.y * 0.5;
-    ctx.save();
-    ctx.translate(t.globalPosition.x, t.globalPosition.y);
-    ctx.rotate(t.globalRotation);
-    ctx.rect(-hw, -hh, hw * 2, hh * 2);
-    ctx.restore();
-  }
-}
-
-// Half-extents of an area's shape, the form the glyph layout wants.
-function areaHalfExtents(t: ShapeTransform): Vec2 {
-  return t.shape.kind === "circle"
-    ? new Vec2(t.shape.radius, t.shape.radius)
-    : t.shape.size.mul(0.5);
+  pathOutline(ctx, t.globalPosition, t.globalRotation, outlineOfShape(t.shape));
 }
 
 // `alpha` is the render interpolation factor (see CollisionObject2D.renderShape):
@@ -145,10 +129,8 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
   // rather than a solid one, so nothing about it reads as standable. `render`
   // draws these first, behind the solid geometry they sit among.
   if (body instanceof AnchorBody) {
-    const half = areaHalfExtents(t);
-    const circle = t.shape.kind === "circle";
     const fill = body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : ANCHOR_FILL;
-    fillAnchor(ctx, t.globalPosition, t.globalRotation, half, circle, fill);
+    fillAnchor(ctx, t.globalPosition, t.globalRotation, outlineOfShape(t.shape), fill);
     pathShape(ctx, t);
     ctx.strokeStyle = body.fillColor ?? IMPERMEABLE_EDGE;
     ctx.lineWidth = PX;
@@ -166,8 +148,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
       ctx,
       t.globalPosition,
       t.globalRotation,
-      areaHalfExtents(t),
-      t.shape.kind === "circle",
+      outlineOfShape(t.shape),
       body.magnitude,
       body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : FORCE_FILL,
     );
@@ -182,8 +163,7 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
       ctx,
       t.globalPosition,
       t.globalRotation,
-      areaHalfExtents(t),
-      t.shape.kind === "circle",
+      outlineOfShape(t.shape),
       body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : KILLZONE,
     );
     return;

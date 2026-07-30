@@ -3,7 +3,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
-import { circleShape, rectShape } from "../engine/shapes";
+import { circleShape, polyArea, polyShape, rectShape, shapeVertices } from "../engine/shapes";
 import type { Shape, ShapeTransform } from "../engine/shapes";
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 
@@ -26,6 +26,10 @@ export const ShapeGeometry = {
 
   createCircle(radius: number): Shape {
     return circleShape(radius);
+  },
+
+  createPolygon(verts: readonly Vec2[]): Shape {
+    return polyShape(verts);
   },
 
   getRadius(shape: ShapeTransform): number {
@@ -58,20 +62,19 @@ export const ShapeGeometry = {
     ];
   },
 
+  // The placed shape's vertex loop in world space — rect corners or polygon
+  // vertices, [] for a circle. Named "corners" for the C# lineage; it is the
+  // world-space form of `getLocalVertices` and every wrap/SAT walk uses it.
   getGlobalCorners(shape: ShapeTransform): Vec2[] {
-    const local = ShapeGeometry.getLocalCorners(shape);
+    const local = ShapeGeometry.getLocalVertices(shape.shape);
     const pos = shape.globalPosition;
     const rot = shape.globalRotation;
     return local.map((c) => pos.add(c.rotated(rot)));
   },
 
   // Ordered local vertex loop for a shape; [] for circles (no vertices).
-  // Written against the ordered loop so convex polygons can slot in later.
-  getLocalVertices(shape: Shape): Vec2[] {
-    if (shape.kind !== "rect") return [];
-    const hw = shape.size.x * 0.5;
-    const hh = shape.size.y * 0.5;
-    return [new Vec2(-hw, hh), new Vec2(-hw, -hh), new Vec2(hw, -hh), new Vec2(hw, hh)];
+  getLocalVertices(shape: Shape): readonly Vec2[] {
+    return shapeVertices(shape);
   },
 
   // Interior angle (radians) at each vertex, computed once per Shape.
@@ -134,15 +137,37 @@ export const ShapeGeometry = {
     return [inNormal, outNormal];
   },
 
+  // Mass is area / 1000 for every shape — one density for the whole project, so
+  // a polygon weighs exactly what the rect or circle covering the same area does.
   computeMass(shape: ShapeTransform): number {
     const s = shape.shape;
     if (s.kind === "circle") return (Mathf.Pi * s.radius * s.radius) / 1000;
+    if (s.kind === "poly") return polyArea(s.verts) / 1000;
     return (s.size.x * s.size.y) / 1000;
   },
 
+  // Second moment about the shape's own origin. For a polygon that origin must
+  // be the area centroid — the loader re-centres authored vertices onto it
+  // (`polyShapeCentred`) precisely because every RigidBody2D lever arm in the
+  // engine is measured from `globalPosition`.
   computeMomentOfInertia(shape: ShapeTransform, mass: number): number {
     const s = shape.shape;
     if (s.kind === "circle") return 0.5 * mass * s.radius * s.radius;
+    if (s.kind === "poly") {
+      // I = (m/6) · Σ|aᵢ×aᵢ₊₁|(aᵢ·aᵢ + aᵢ·aᵢ₊₁ + aᵢ₊₁·aᵢ₊₁) / Σ|aᵢ×aᵢ₊₁|.
+      // (Reduces to (1/12)m(w²+h²) for a rectangle's four vertices.)
+      let num = 0;
+      let den = 0;
+      const v = s.verts;
+      for (let i = 0; i < v.length; i++) {
+        const a = v[i]!;
+        const b = v[(i + 1) % v.length]!;
+        const c = Mathf.abs(a.cross(b));
+        num += c * (a.dot(a) + a.dot(b) + b.dot(b));
+        den += c;
+      }
+      return den > 0 ? (mass / 6) * (num / den) : 0;
+    }
     return (1 / 12) * mass * (s.size.x * s.size.x + s.size.y * s.size.y);
   },
 };

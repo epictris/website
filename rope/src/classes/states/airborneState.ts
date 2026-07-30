@@ -163,8 +163,8 @@ export class AirborneState extends PlayerState {
       });
       if (grab) {
         return player.velocity.y < 0
-          ? new LedgeClimbState(grab.body, grab.vertexIndex)
-          : new LedgeHangState(grab.body, grab.vertexIndex);
+          ? new LedgeClimbState(grab.body, grab.shapeIndex, grab.vertexIndex)
+          : new LedgeHangState(grab.body, grab.shapeIndex, grab.vertexIndex);
       }
     }
     return newState;

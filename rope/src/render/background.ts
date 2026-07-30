@@ -20,6 +20,7 @@ import {
   type BackgroundData,
 } from "../level/levelFormat";
 import { hexToRgba } from "./color";
+import { outlineHalfExtents, outlineOfData, pathOutline, type Outline } from "./shapePath";
 
 // One panel, in the caller's world transform. Split from `drawBackgrounds` so
 // the editor — which draws an `EdItem`, not a `BackgroundData` — fills through
@@ -28,30 +29,19 @@ export function fillBackground(
   ctx: CanvasRenderingContext2D,
   pos: Vec2,
   rot: number,
-  half: Vec2,
-  circle: boolean,
+  shape: Outline,
   fill: string,
 ): void {
   ctx.beginPath();
-  if (circle) {
-    ctx.arc(pos.x, pos.y, half.x, 0, Math.PI * 2);
-  } else {
-    ctx.save();
-    ctx.translate(pos.x, pos.y);
-    ctx.rotate(rot);
-    ctx.rect(-half.x, -half.y, half.x * 2, half.y * 2);
-    ctx.restore();
-  }
+  pathOutline(ctx, pos, rot, shape);
   ctx.fillStyle = fill;
   ctx.fill();
 }
 
-// Half-extents of a panel's (unrotated) box, in metres — the same measure the
-// editor's `halfExtents` gives an item.
+// Half-extents of a panel's (unrotated) bounding box, in metres — the same
+// measure the editor's `halfExtents` gives an item.
 export function backgroundHalfExtents(g: BackgroundData): Vec2 {
-  return g.shape.kind === "circle"
-    ? new Vec2(g.shape.r, g.shape.r)
-    : new Vec2(g.shape.w / 2, g.shape.h / 2);
+  return outlineHalfExtents(outlineOfData(g.shape));
 }
 
 // Every panel of a (metre-scaled) level, in authored order, in the caller's
@@ -65,8 +55,7 @@ export function drawBackgrounds(
       ctx,
       new Vec2(g.x, g.y),
       g.rot,
-      backgroundHalfExtents(g),
-      g.shape.kind === "circle",
+      outlineOfData(g.shape),
       hexToRgba(g.color ?? DEFAULT_BACKGROUND_COLOR, g.opacity ?? DEFAULT_BACKGROUND_OPACITY),
     );
   }

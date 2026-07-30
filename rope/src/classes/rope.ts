@@ -5,7 +5,8 @@
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
-import { CollisionObject2D, PhysicsBody2D, RigidBody2D } from "../engine/body";
+import { CollisionObject2D, CollisionShape2D, PhysicsBody2D, RigidBody2D } from "../engine/body";
+import { circleOverlap } from "../engine/collision";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
@@ -30,6 +31,37 @@ import { Hook } from "./hook";
 // rather than depending on the caller handing it a pre-filtered body list.
 function isPassThrough(obj: CollisionObject2D): boolean {
   return obj instanceof PhysicsBody2D && !obj.isSolid;
+}
+
+// A candidate the rope may wrap: one convex shape of one body. Compound bodies
+// are the reason this is not simply the body — a body made of several convex
+// pieces catches on whichever piece the span crosses, and the tangent walk needs
+// that piece's own vertex loop and centre.
+interface WrapCandidate {
+  body: PhysicsBody2D;
+  shape: CollisionShape2D;
+  shapeIndex: number;
+}
+
+// Is this vertex an interior seam of a compound body — a corner that exists only
+// because the body is expressed as several convex pieces, and which has no
+// outside for the rope to bend around?
+//
+// The mirror of LedgeDetection.isSeamOccluded, and it exists for the same
+// reason: a concave form is authored as overlapping convex pieces (see
+// "Convex-only polygons; compound bodies" in docs/game-design.md), and without
+// this the rope snags on the join where the real surface is smooth. Only the
+// body's *own* other shapes are consulted; a corner buried in a neighbouring
+// body is a different situation, and the rope has always been free to catch it.
+const SEAM_EPSILON = 0.005;
+function isSeamVertex(body: PhysicsBody2D, shapeIndex: number, vertex: Vec2): boolean {
+  const shapes = body.getShapes();
+  if (shapes.length < 2) return false;
+  for (let i = 0; i < shapes.length; i++) {
+    if (i === shapeIndex) continue;
+    if (circleOverlap(vertex, SEAM_EPSILON, shapes[i]!)) return true;
+  }
+  return false;
 }
 
 export class RopePath {
@@ -206,11 +238,24 @@ export class Rope {
       }
     }
 
-    // Winch stall: if scene geometry blocked the correction (a pinned player
-    // while retracting), the rope cannot actually shorten. Grow the max back
-    // to the settled length so the constraint doesn't wind up and catapult
-    // the player the moment the obstruction clears. A converged solve leaves
-    // length <= max, so this only bites when the solver was blocked.
+    this.absorbBlockedLength();
+  }
+
+  // Winch stall: if scene geometry blocked the correction (a pinned player
+  // while retracting), the rope cannot actually shorten. Grow the max back to
+  // the settled length so the constraint doesn't wind up and catapult the player
+  // the moment the obstruction clears. A converged solve leaves length <= max,
+  // so this only bites when the solver was blocked, and it only ever *raises*
+  // the max — it can never pull anything tighter.
+  //
+  // Exposed because `physicsStep` is not always the last thing to move the
+  // bodies: the ball controller depenetrates the ball afterwards (see
+  // BallLevel.physicsProcess), and that push-out is geometry blocking the
+  // correction just as much as a wall the solver ran into. Re-basing only inside
+  // the solve left the frame ending over-length every frame for a point-blank
+  // anchor, since the ball was shoved back out after the solve had already
+  // written its books.
+  absorbBlockedLength(): void {
     const settledLength = this.calculateRopePathLength();
     if (settledLength > this.maxRopeLength) this.maxRopeLength = settledLength;
   }
@@ -236,19 +281,22 @@ export class Rope {
     if (obj instanceof Hook && fromNode === this.start) return null;
     if (isPassThrough(obj)) return null;
 
-    if (Intersections.intersectsSegment(obj.getShape(), span) !== IntersectionStatus.Overlap) {
+    // The piece of the body this node actually sits on, not merely the body's
+    // primary shape: on a compound body those differ, and the tangent walk has
+    // to run round the loop the rope is resting against.
+    const fromShape = fromNode.contact.shape;
+    const shapeIndex = fromNode.contact.shapeIndex;
+    if (!fromShape.wrappable) return null;
+    if (Intersections.intersectsSegment(fromShape, span) !== IntersectionStatus.Overlap) {
       return null;
     }
-    const wrapDir = span.calculateWrapDirection(obj.globalPosition);
+    const wrapDir = span.calculateWrapDirection(fromShape.globalPosition);
     if (fromNode instanceof RopeWrap && fromNode.wrapDir !== wrapDir) return null;
 
-    const fromShape = obj.getShape();
     if (
       fromShape.shape.kind === "circle" &&
       Intersections.intersectsPoint(fromShape, span.end) === IntersectionStatus.Separate
     ) {
-      const circleCenter = fromShape.globalPosition;
-      const circleRadius = ShapeGeometry.getRadius(fromShape);
       // Mirror of the C#: the else branch is always taken here (guarded by Separate above).
       const tangentPoint = RopeGeneration.calculateCircleTangentPoint(
         fromShape,
@@ -257,17 +305,27 @@ export class Rope {
         GenerationDirection.Reversed,
       );
       if (tangentPoint.distanceTo(span.start) > 5 * PX) {
-        return new RopeWrap(new RopeContact(obj, tangentPoint.sub(circleCenter)), wrapDir);
+        return new RopeWrap(
+          new RopeContact(obj, tangentPoint.sub(obj.globalPosition), shapeIndex),
+          wrapDir,
+        );
       }
-    } else if (fromShape.shape.kind === "rect") {
+    } else if (fromShape.shape.kind !== "circle") {
+      // Angles are measured about this SHAPE's centre, not the body's: on a
+      // compound body they differ, and the walk has to be about the piece the
+      // rope is resting on. Identical for the centred single-shape case.
       const rectCenter = fromShape.globalPosition;
       const corners = ShapeGeometry.getGlobalCorners(fromShape);
+      const n = corners.length;
       let nextVertexIndex = 0;
       let minAngle = Infinity;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < n; i++) {
         const vertex = corners[i]!;
         if (vertex.distanceSquaredTo(fromNode.contact.globalPosition) < 0.01 * PX * PX) {
-          nextVertexIndex = Calc.mod(i + (wrapDir as number), 4);
+          // Already sitting on this vertex: step one place round the loop in the
+          // wrap direction. The step is one *vertex*, not a fixed quarter turn,
+          // which is what makes it right for a loop of any length.
+          nextVertexIndex = Calc.mod(i + (wrapDir as number), n);
           break;
         }
         const angleToVertex = Calc.absoluteAngle(
@@ -282,7 +340,10 @@ export class Rope {
       }
       const nextVertex = corners[nextVertexIndex]!;
       if (Intersections.intersectsPoint(fromShape, span.end) === IntersectionStatus.Separate) {
-        return new RopeWrap(new RopeContact(obj, nextVertex.sub(rectCenter)), wrapDir);
+        return new RopeWrap(
+          new RopeContact(obj, nextVertex.sub(obj.globalPosition), shapeIndex),
+          wrapDir,
+        );
       }
     }
     return null;
@@ -293,17 +354,18 @@ export class Rope {
     if (obj instanceof Hook && toNode === this.end) return null;
     if (isPassThrough(obj)) return null;
 
-    const toShape = obj.getShape();
+    const toShape = toNode.contact.shape;
+    const shapeIndex = toNode.contact.shapeIndex;
+    if (!toShape.wrappable) return null;
     if (Intersections.intersectsSegment(toShape, span) !== IntersectionStatus.Overlap) return null;
 
-    const wrapDir = span.calculateWrapDirection(obj.globalPosition);
+    const wrapDir = span.calculateWrapDirection(toShape.globalPosition);
     if (toNode instanceof RopeWrap && toNode.wrapDir !== wrapDir) return null;
 
     if (
       toShape.shape.kind === "circle" &&
       Intersections.intersectsPoint(toShape, span.start) === IntersectionStatus.Separate
     ) {
-      const circleCenter = toShape.globalPosition;
       const tangentPoint = RopeGeneration.calculateCircleTangentPoint(
         toShape,
         wrapDir,
@@ -311,17 +373,21 @@ export class Rope {
         GenerationDirection.Forward,
       );
       if (tangentPoint.distanceTo(span.end) > 5 * PX) {
-        return new RopeWrap(new RopeContact(obj, tangentPoint.sub(circleCenter)), wrapDir);
+        return new RopeWrap(
+          new RopeContact(obj, tangentPoint.sub(obj.globalPosition), shapeIndex),
+          wrapDir,
+        );
       }
-    } else if (toShape.shape.kind === "rect") {
+    } else if (toShape.shape.kind !== "circle") {
       const rectCenter = toShape.globalPosition;
       const corners = ShapeGeometry.getGlobalCorners(toShape);
+      const n = corners.length;
       let nextVertexIndex = 0;
       let minAngle = Infinity;
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < n; i++) {
         const vertex = corners[i]!;
         if (vertex.distanceSquaredTo(toNode.contact.globalPosition) < 0.01 * PX * PX) {
-          nextVertexIndex = Calc.mod(i - (wrapDir as number), 4);
+          nextVertexIndex = Calc.mod(i - (wrapDir as number), n);
           break;
         }
         const angleToVertex = Calc.absoluteAngle(
@@ -336,7 +402,10 @@ export class Rope {
       }
       const nextVertex = corners[nextVertexIndex]!;
       if (Intersections.intersectsPoint(toShape, span.start) === IntersectionStatus.Separate) {
-        return new RopeWrap(new RopeContact(obj, nextVertex.sub(rectCenter)), wrapDir);
+        return new RopeWrap(
+          new RopeContact(obj, nextVertex.sub(obj.globalPosition), shapeIndex),
+          wrapDir,
+        );
       }
     }
     return null;
@@ -381,32 +450,37 @@ export class Rope {
       if (span.from instanceof RopeWrap) newNodes.push(span.from);
       if (this.shouldIgnorePathCollisions(span)) continue;
 
-      const colliders: PhysicsBody2D[] = [];
+      // Candidates are SHAPES, not bodies: a compound body is several convex
+      // pieces sharing a transform, and the rope catches on whichever piece the
+      // span actually crosses. A single-shape body contributes exactly one
+      // candidate, so this is the same scan it always was for scene geometry.
+      const colliders: WrapCandidate[] = [];
       for (const body of bodies) {
         if (body === span.from.contact.obj || body === span.to.contact.obj) continue;
         if (isPassThrough(body)) continue;
-        const shape = body.getShape();
-        if (
-          this.isPointOutsideBoundingStrip(body.globalPosition, span.span) &&
-          (Intersections.intersectsPoint(shape, span.span.start) === IntersectionStatus.Overlap ||
-            Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap)
-        ) {
-          continue;
-        }
-        if (Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap) {
-          colliders.push(body);
-        }
+        body.getShapes().forEach((shape, shapeIndex) => {
+          if (!shape.wrappable) return;
+          if (
+            this.isPointOutsideBoundingStrip(shape.globalPosition, span.span) &&
+            (Intersections.intersectsPoint(shape, span.span.start) === IntersectionStatus.Overlap ||
+              Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap)
+          ) {
+            return;
+          }
+          if (Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap) {
+            colliders.push({ body, shape, shapeIndex });
+          }
+        });
       }
 
       colliders.sort(
         (a, b) =>
-          span.span.getClosestPointOnLine(a.globalPosition).distanceTo(span.span.start) -
-          span.span.getClosestPointOnLine(b.globalPosition).distanceTo(span.span.start),
+          span.span.getClosestPointOnLine(a.shape.globalPosition).distanceTo(span.span.start) -
+          span.span.getClosestPointOnLine(b.shape.globalPosition).distanceTo(span.span.start),
       );
 
-      for (const body of colliders) {
-        const bodyShape = body.getShape();
-        const wrapDir = span.span.calculateWrapDirection(body.globalPosition);
+      for (const { body, shape: bodyShape, shapeIndex } of colliders) {
+        const wrapDir = span.span.calculateWrapDirection(bodyShape.globalPosition);
 
         if (bodyShape.shape.kind === "circle") {
           let tangentPoint: Vec2;
@@ -424,7 +498,10 @@ export class Rope {
 
           if (tangentPoint.distanceTo(span.span.start) > 5 * PX) {
             newNodes.push(
-              new RopeWrap(new RopeContact(body, tangentPoint.sub(bodyShape.globalPosition)), wrapDir),
+              new RopeWrap(
+                new RopeContact(body, tangentPoint.sub(body.globalPosition), shapeIndex),
+                wrapDir,
+              ),
             );
           }
         } else {
@@ -433,7 +510,7 @@ export class Rope {
           const { entry, exit } = Intersections.getIntersectionsShapeSegment(bodyShape, span.span);
           if ((entry && !exit) || (!entry && exit) || (!entry && !exit)) {
             let maxVertexAngle = 0;
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < corners.length; i++) {
               const vertex = corners[i]!;
               if (
                 this.isPointOutsideBoundingStrip(vertex, span.span) ||
@@ -471,11 +548,12 @@ export class Rope {
             // Only a corner that actually deflects the rope becomes a wrap.
             span.span
               .getClosestPointOnLine(corners[vertexIndex]!)
-              .distanceTo(corners[vertexIndex]!) > Rope.MIN_WRAP_DEFLECTION
+              .distanceTo(corners[vertexIndex]!) > Rope.MIN_WRAP_DEFLECTION &&
+            !isSeamVertex(body, shapeIndex, corners[vertexIndex]!)
           ) {
             newNodes.push(
               new RopeWrap(
-                new RopeContact(body, corners[vertexIndex]!.sub(bodyShape.globalPosition)),
+                new RopeContact(body, corners[vertexIndex]!.sub(body.globalPosition), shapeIndex),
                 wrapDir,
               ),
             );
@@ -512,7 +590,7 @@ export class Rope {
     let previousNode: RopeWrap | null = null;
     let previousNodePosition = this.start.contact.globalPosition;
     for (const node of this.wraps) {
-      const shape = node.contact.obj.getShape();
+      const shape = node.contact.shape;
       // Coincident duplicate: the same corner of the same body wrapped twice
       // in the same direction (adjacent spans can each contribute the corner
       // when it sits exactly on the rope line, e.g. a rotating rect crossing
@@ -528,7 +606,7 @@ export class Rope {
         continue;
       }
       if (
-        shape.shape.kind === "rect" ||
+        shape.shape.kind !== "circle" ||
         node.contact.globalPosition.distanceTo(previousNodePosition) > PX
       ) {
         newNodes.push(node);
@@ -551,10 +629,10 @@ export class Rope {
       const nodeA = p[i]!;
       const nodeB = p[i + 1]!;
       if (nodeA instanceof RopeWrap) {
-        const shape = nodeA.contact.obj.getShape();
+        const shape = nodeA.contact.shape;
         if (
           nodeA.contact.obj !== nodeB.contact.obj ||
-          shape.shape.kind === "rect" ||
+          shape.shape.kind !== "circle" ||
           nodeB === this.end
         ) {
           const nextSegment = new Segment(
@@ -627,7 +705,7 @@ export class Rope {
         : segment.previous.end.sub(shape.globalPosition);
       return leverArm.cross(correctionDir);
     }
-    if (segment instanceof PathWrap && segment.body.getShape().shape.kind === "rect") {
+    if (segment instanceof PathWrap && segment.body.getShape().shape.kind !== "circle") {
       const leverArm = segment.wrapStartPosition.sub(segment.body.globalPosition);
       const torqueFromStart = leverArm.cross(segment.directionToPrevious);
       const torqueFromEnd = leverArm.cross(segment.directionToNext);

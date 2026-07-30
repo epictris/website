@@ -8,6 +8,10 @@
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
 import type { LevelData } from "../level/levelData";
+// The canonical (superset) format, for the cases whose geometry is a convex
+// polygon — `levelData.ts` is generated from a Godot scene and its narrower
+// shape union has no `poly`.
+import type { LevelData as FormatLevelData, ShapeData } from "../level/levelFormat";
 import type { LevelSpec } from "../level/level";
 import { runScript, type HoldRange, type PlaytestScript } from "./playtest";
 
@@ -35,6 +39,32 @@ function topRightCorner(rot: number): { vertex: Vec2; wallNormal: Vec2 } {
     vertex: new Vec2(LEDGE_W / 2, -LEDGE_H / 2).rotated(rot),
     wallNormal: new Vec2(1, 0).rotated(rot),
   };
+}
+
+// The ledge block as a convex polygon rather than a rect, with exactly the same
+// corners. Pinning the two side by side is the point: a polygon corner must be
+// as grabbable as the rect corner it coincides with, and a rect keeps its own
+// closed-form collision routines, so the two are separate code paths that could
+// silently drift apart.
+const LEDGE_POLY: ShapeData = {
+  kind: "poly",
+  verts: [
+    { x: -LEDGE_W / 2, y: LEDGE_H / 2 },
+    { x: -LEDGE_W / 2, y: -LEDGE_H / 2 },
+    { x: LEDGE_W / 2, y: -LEDGE_H / 2 },
+    { x: LEDGE_W / 2, y: LEDGE_H / 2 },
+  ],
+};
+
+function ledgePolyLevel(rot: number, player: { x: number; y: number }): LevelSpec {
+  const data: FormatLevelData = {
+    player: { ...player, radius: PLAYER_RADIUS },
+    bodies: [
+      { kind: "static", x: 0, y: 0, rot, shape: LEDGE_POLY },
+      { kind: "static", x: 0, y: 400, rot: 0, shape: { kind: "rect", w: 3000, h: 40 } },
+    ],
+  };
+  return { data };
 }
 
 export interface MatrixCase {
@@ -163,6 +193,80 @@ export function buildLedgeMatrix(): MatrixCase[] {
     };
     cases.push({
       name: "seam-vertex-never-grabs",
+      spec: { data: seamData },
+      script: {
+        level: "matrix",
+        frames: 300,
+        holds: [{ action: "move_left", from: 1, to: 300 }],
+        asserts: [
+          { neverState: "LedgeHangState" },
+          { neverState: "LedgeClimbState" },
+          { reachState: "GroundedState", byFrame: 300 },
+        ],
+      },
+    });
+  }
+
+  // --- Convex polygons behave as their rect twin. Same corner, same approach,
+  // same outcome — the rect goes through the ported slab routines and the
+  // polygon through the general convex ones, so this is what stops the two
+  // drifting apart.
+  for (const rot of [0, 0.25, -0.25]) {
+    for (const h of [160, 800]) {
+      const { vertex } = topRightCorner(rot);
+      const spawn = new Vec2(vertex.x + PLAYER_RADIUS + 2, vertex.y - h);
+      const cornerFrame = Math.ceil(Math.sqrt((2 * h) / 980) * 60);
+      const holdFrom = Math.max(1, cornerFrame - 4);
+      const frames = cornerFrame + 200;
+      cases.push({
+        name: `poly-fall-grab rot=${rot} h=${h}`,
+        spec: ledgePolyLevel(rot, { x: spawn.x, y: spawn.y }),
+        script: {
+          level: "matrix",
+          frames,
+          holds: [{ action: "move_left", from: holdFrom, to: frames }],
+          asserts: [
+            { reachAnyState: ["LedgeHangState", "LedgeClimbState"], byFrame: frames - 100 },
+            { reachState: "GroundedState", byFrame: frames },
+          ],
+        },
+      });
+    }
+  }
+
+  // --- The same fall past a polygon lip with no input must not grab either.
+  {
+    const { vertex, wallNormal } = topRightCorner(0);
+    const spawn = vertex.add(wallNormal.mul(PLAYER_RADIUS + 2)).add(new Vec2(0, -400));
+    cases.push({
+      name: "poly-fall-no-input-no-grab",
+      spec: ledgePolyLevel(0, { x: spawn.x, y: spawn.y }),
+      script: {
+        level: "matrix",
+        frames: 300,
+        asserts: [
+          { neverState: "LedgeHangState" },
+          { neverState: "LedgeClimbState" },
+          { reachState: "GroundedState", byFrame: 300 },
+        ],
+      },
+    });
+  }
+
+  // --- Polygon seam: the rect seam case with polygon blocks. The interior
+  // corner two flush pieces make is an artefact of the decomposition, whichever
+  // primitive they are built from.
+  {
+    const seamData: FormatLevelData = {
+      player: { x: LEDGE_W / 2 + PLAYER_RADIUS + 2, y: -LEDGE_H, radius: PLAYER_RADIUS },
+      bodies: [
+        { kind: "static", x: 0, y: 0, rot: 0, shape: LEDGE_POLY },
+        { kind: "static", x: 0, y: -LEDGE_H, rot: 0, shape: LEDGE_POLY },
+        { kind: "static", x: 0, y: 400, rot: 0, shape: { kind: "rect", w: 3000, h: 40 } },
+      ],
+    };
+    cases.push({
+      name: "poly-seam-vertex-never-grabs",
       spec: { data: seamData },
       script: {
         level: "matrix",

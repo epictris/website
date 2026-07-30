@@ -84,7 +84,12 @@ export class BallPlayer extends RigidBody2D {
     // (The flying chain hook still ignores it — BallHook skips bodies named
     // "Player".) Mass/inertia stay those of the ball body: the loop is a light
     // steel ring, a collision bump rather than a significant mass.
-    this.addShape(circleShape(BallPlayer.LOOP_RADIUS), this.loopLocalOffset);
+    const loop = this.addShape(circleShape(BallPlayer.LOOP_RADIUS), this.loopLocalOffset);
+    // The chain deploys *through* the loop, so the loop must not also be
+    // something the chain wraps: the ball's own winding already accounts for the
+    // one piece of geometry the chain is threaded through, and treating the rim
+    // ring as a second obstacle would double-count it.
+    loop.wrappable = false;
     // Heavy ball: mass scaled up so aim-kicks, chain tugs, and collisions move
     // it less (F = ma) — sluggish, momentum-carrying feel. Gravity is
     // acceleration-based, so this does not change fall speed.

@@ -224,8 +224,8 @@ export class OnWallState extends PlayerState {
         if (grab) {
           // Moving up transitions into ledge climb, otherwise into ledge hang.
           return player.velocity.y < 0
-            ? new LedgeClimbState(grab.body, grab.vertexIndex)
-            : new LedgeHangState(grab.body, grab.vertexIndex);
+            ? new LedgeClimbState(grab.body, grab.shapeIndex, grab.vertexIndex)
+            : new LedgeHangState(grab.body, grab.shapeIndex, grab.vertexIndex);
         }
       }
 

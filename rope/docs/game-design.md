@@ -139,7 +139,40 @@ independently.
 Consequence for vertices: a reflex ("inward") corner only ever exists at a
 **seam between two convex pieces**, never inside a single primitive. Seam
 vertices are not ledge candidates (see below) — they are an artefact of the
-decomposition, not a real grabbable edge of the body.
+decomposition, not a real grabbable edge of the body. The rope holds the mirror
+of that rule: a wrap candidate lying inside another shape of the same body is a
+seam and never becomes a wrap node, so a span crossing the join runs straight
+instead of snagging where the real surface is smooth.
+
+The rule is enforced where the shape is *made*, not where it is used. Both
+`polyShape` (the engine) and `setPolyVerts` (the editor) refuse a non-convex
+loop outright — the editor stalls the vertex being dragged at its last convex
+position — so no concave primitive ever reaches a solver that would have to cope
+with one. A polygon drawn from scratch is taken as the **convex hull** of the
+clicked points, which is the same shape for a well-drawn outline and the nearest
+convex shape for a badly-drawn one.
+
+Why the rule is load-bearing rather than a simplification: the rope's wrap
+solver decides which side of a body a span passes on from the body's own origin,
+walks the vertex loop **monotonically** to find the tangent vertex, and can
+never hold a taut contact on a reflex corner. A concave loop breaks all three at
+once — the origin can lie outside the material, the walk stops on the wrong
+vertex or fails to terminate, and any wrap generated at a reflex corner is
+immediately culled and immediately regenerated, which is the flip-flop the
+grazing-contact gate exists to suppress. Depenetration has no
+minimum-translation answer for a concave shape either: a deep contact inside a
+notch pushes out through the wrong wall.
+
+A compound body is expressed either as several overlapping bodies (independent
+transforms) or as one body carrying several shapes via
+`CollisionObject2D.addShape` (one transform, so the pieces move and rotate as a
+unit). Every path that scans geometry — the character sweep, raycasts, ledge
+candidacy, rope wrap generation, area overlap — iterates `getShapes()`, so a
+compound body is not a special case anywhere. The exception is deliberate and
+per-shape: `CollisionShape2D.wrappable` marks a shape that is solid but is *not*
+rope geometry, which is what the ball & chain avatar's mounting loop is — the
+chain deploys through it, so wrapping it would double-count the one piece of
+geometry the chain is already threaded through.
 
 ## Mobility classification
 

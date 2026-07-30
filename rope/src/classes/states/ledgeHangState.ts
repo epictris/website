@@ -37,14 +37,19 @@ const SETTLE_TIMEOUT_FRAMES = 45;
 
 export class LedgeHangState extends PlayerState {
   readonly body: PhysicsBody2D;
+  // Which of the body's collision shapes the corner is a vertex of. Carried
+  // alongside the vertex index so a compound body's corner keeps resolving
+  // against the piece it belongs to.
+  readonly shapeIndex: number;
   readonly vertexIndex: number;
   private info: LedgeGrabInfo | null = null;
   private settled = false;
   private settleFrames = 0;
 
-  constructor(body: PhysicsBody2D, vertexIndex: number) {
+  constructor(body: PhysicsBody2D, shapeIndex: number, vertexIndex: number) {
     super();
     this.body = body;
+    this.shapeIndex = shapeIndex;
     this.vertexIndex = vertexIndex;
   }
 
@@ -53,7 +58,7 @@ export class LedgeHangState extends PlayerState {
 
     // Reachability re-verification (game-design.md): the corner must still
     // have a floor top face and a wall hang face this frame.
-    this.info = LedgeDetection.grabInfo(this.body, this.vertexIndex);
+    this.info = LedgeDetection.grabInfo(this.body, this.shapeIndex, this.vertexIndex);
     if (!this.info) return this.release(player);
     const wallNormal = this.info.wallNormal;
 
@@ -72,7 +77,7 @@ export class LedgeHangState extends PlayerState {
     // the wall as far as it carries (resolveCollision), only then does
     // toward-input climb — a fast grab must not flick straight into a climb.
     if (this.settled && player.xInputDirection * wallNormal.x < 0) {
-      return new LedgeClimbState(this.body, this.vertexIndex);
+      return new LedgeClimbState(this.body, this.shapeIndex, this.vertexIndex);
     }
     if (player.xInputDirection * wallNormal.x > 0) {
       return this.release(player);

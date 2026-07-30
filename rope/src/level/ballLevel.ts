@@ -40,6 +40,15 @@ export class BallLevel {
   // value means the solver injected energy — the tip-anchor over-length dump
   // (see checkBallInvariants).
   anchorKickSpeedGain: number | null = null;
+  // The same measurement on EVERY frame the chain solves, not only the anchoring
+  // one. The anchor-kick check above catches a chain that is born over its length;
+  // this catches one that becomes over-length later — the chain's path can jump
+  // discontinuously mid-flight (a wrap appearing on a corner the ball has just
+  // cleared), and the solver removes that whole error in one step, converting it
+  // to velocity as Δposition/Δt. That is a launch, and nothing was watching for
+  // it: 96 m/s in a single frame sits far under the runaway-speed ceiling
+  // (session-1474f).
+  chainSolveSpeedGain: number | null = null;
   private endWasFixed = false;
 
   // The ball plays 1.5× the arena's authored avatar radius — a heftier ball
@@ -126,11 +135,19 @@ export class BallLevel {
       // hauls the ball a little deeper every frame until it is buried in the
       // geometry (session-1048f: 5 cm in, for 49 frames).
       this.world.depenetrateRigid(this.ball);
-      this.anchorKickSpeedGain = anchoredThisFrame
-        ? this.ball.linearVelocity.length() - speedBefore
-        : null;
+      // The push-out just moved the ball after the chain had solved, so the
+      // frame can end over-length through geometry the solver could not fight.
+      // That is the winch stall, and it has to be absorbed here rather than
+      // inside the solve: a point-blank anchor otherwise leaves the chain
+      // permanently over its length, every frame, for as long as the ball is
+      // held off the surface it is anchored to.
+      this.ball.chain.absorbBlockedLength();
+      const gain = this.ball.linearVelocity.length() - speedBefore;
+      this.anchorKickSpeedGain = anchoredThisFrame ? gain : null;
+      this.chainSolveSpeedGain = gain;
     } else {
       this.anchorKickSpeedGain = null;
+      this.chainSolveSpeedGain = null;
     }
     this.endWasFixed = endFixed;
 

@@ -22,6 +22,7 @@ import {
   killZoneGlyphs,
   type PolyPath,
 } from "../render/areaGlyphs";
+import { outlineHalfExtents, outlineOfShape, type Outline } from "../render/shapePath";
 
 const M = PIXELS_PER_METER; // metres → px
 
@@ -47,13 +48,29 @@ class SvgPolyPath implements PolyPath {
 
 const f1 = (v: number): string => v.toFixed(1);
 
-// Outline of an area in its own local frame, in px.
-function outlinePath(hw: number, hh: number, circle: boolean): string {
-  if (circle) {
+// Outline of a shape in its own local frame, in px. The glyph lattice is laid
+// out over the bounding half-extents whichever kind it is (see areaFill), and
+// this path is what clips it back to the real boundary.
+function outlinePath(o: Outline): string {
+  if (o.kind === "circle") {
     // Two half-arcs — an exact circle, no polygon approximation needed here.
-    return `M${f1(-hw)} 0 A${f1(hw)} ${f1(hw)} 0 1 0 ${f1(hw)} 0 A${f1(hw)} ${f1(hw)} 0 1 0 ${f1(-hw)} 0 Z`;
+    const r = o.radius * M;
+    return `M${f1(-r)} 0 A${f1(r)} ${f1(r)} 0 1 0 ${f1(r)} 0 A${f1(r)} ${f1(r)} 0 1 0 ${f1(-r)} 0 Z`;
   }
-  return `M${f1(-hw)} ${f1(-hh)} L${f1(hw)} ${f1(-hh)} L${f1(hw)} ${f1(hh)} L${f1(-hw)} ${f1(hh)} Z`;
+  const verts =
+    o.kind === "poly"
+      ? o.verts
+      : [
+          new Vec2(-o.half.x, -o.half.y),
+          new Vec2(o.half.x, -o.half.y),
+          new Vec2(o.half.x, o.half.y),
+          new Vec2(-o.half.x, o.half.y),
+        ];
+  return (
+    verts
+      .map((v, i) => `${i === 0 ? "M" : "L"}${f1(v.x * M)} ${f1(v.y * M)}`)
+      .join(" ") + " Z"
+  );
 }
 
 interface Box {
@@ -118,11 +135,9 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     const s = b.getShape();
     const cx = s.globalPosition.x * M;
     const cy = s.globalPosition.y * M;
-    const circle = s.shape.kind === "circle";
-    const half =
-      s.shape.kind === "circle"
-        ? new Vec2(s.shape.radius, s.shape.radius)
-        : s.shape.size.mul(0.5);
+    const shape = outlineOfShape(s.shape);
+    const circle = shape.kind === "circle";
+    const half = outlineHalfExtents(shape);
     const hw = half.x * M;
     const hh = half.y * M;
     const ext = circle ? { x: hw, y: hh } : rotatedHalfExtents(hw, hh, s.globalRotation);
@@ -130,7 +145,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
 
     const glyphs = new SvgPolyPath();
     anchorGlyphs(glyphs, half, circle);
-    const outline = outlinePath(hw, hh, circle);
+    const outline = outlinePath(shape);
     const deg = (s.globalRotation * 180) / Math.PI;
     const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
     const clipId = `anchor${b.id}`;
@@ -160,12 +175,23 @@ export function renderFrameSVG(level: Level | BallLevel): string {
         );
         const ext = rotatedHalfExtents(w / 2, h / 2, s.globalRotation);
         growXY(box, cx, cy, ext.x, ext.y);
-      } else {
+      } else if (s.shape.kind === "circle") {
         const rad = s.shape.radius * M;
         shapeEls.push(
           `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="1"/>`,
         );
         grow(box, cx, cy, rad);
+      } else {
+        // Convex polygon: the vertex loop placed by the body's transform, and a
+        // bounding box grown from the placed vertices themselves (a rotated
+        // polygon has no half-extents shortcut worth taking).
+        const pts = s.shape.verts.map((v) =>
+          s.globalPosition.add(v.rotated(s.globalRotation)).mul(M),
+        );
+        for (const p of pts) grow(box, p.x, p.y, 0);
+        shapeEls.push(
+          `<polygon points="${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}" fill="${fill}" fill-opacity="${op}" stroke="${stroke}" stroke-width="1"/>`,
+        );
       }
     }
   }
@@ -179,11 +205,9 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     const s = area.getShape();
     const cx = s.globalPosition.x * M;
     const cy = s.globalPosition.y * M;
-    const circle = s.shape.kind === "circle";
-    const half =
-      s.shape.kind === "circle"
-        ? new Vec2(s.shape.radius, s.shape.radius)
-        : s.shape.size.mul(0.5);
+    const shape = outlineOfShape(s.shape);
+    const circle = shape.kind === "circle";
+    const half = outlineHalfExtents(shape);
     const hw = half.x * M;
     const hh = half.y * M;
     const ext = circle
@@ -199,7 +223,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
       killZoneGlyphs(glyphs, half, circle);
     }
 
-    const outline = outlinePath(hw, hh, circle);
+    const outline = outlinePath(shape);
     const isForce = area instanceof ForceArea;
     const fill = area.fillColor ?? (isForce ? "#65bddb" : "#dc3c50");
     const op = area.fillColor ? area.fillOpacity : isForce ? 0.2 : 0.4;

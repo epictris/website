@@ -39,13 +39,53 @@ Godot idioms that were collapsed in the port:
 - `Node._PhysicsProcess` ordering → `Level.physicsProcess` runs player+rope, then hooks,
   then `World.integrate` (rigidbody gravity/collision), mirroring Godot's frame order.
 
-Only circles and body-aligned rectangles exist (as in the prototype); collision code
-handles just those two shapes.
+## Shapes
+
+Three collision shapes exist: **circles**, body-aligned **rects**, and **convex
+polygons** (`engine/shapes.ts`). A polygon is a vertex loop wound so that consecutive
+edge cross-products are positive (clockwise on screen, y being down), which is what makes
+the outward normal of edge a→b its Godot orthogonal — `polyEdgeNormal` is the one place
+that convention is cashed out. Convexity is a hard rule of the format, enforced at
+construction; see **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for
+why the rope solver cannot survive a reflex vertex, and how a concave form is authored
+instead (several convex pieces, one body or several).
+
+`rect` deliberately stays its own kind rather than being folded into `poly`, even though a
+rect *is* a convex polygon: every collision path has a closed-form slab implementation for
+it and those are what every recorded replay was simulated through. A four-vertex `poly`
+takes the general convex path and agrees geometrically, but not bit-for-bit — so the two
+branches sit side by side throughout `engine/collision.ts` and `lib/intersections.ts`
+rather than being merged. `shapeVertices` / `ShapeGeometry.getLocalVertices` is the single
+accessor every vertex-walking query goes through, so rect and poly share the loop code
+(ledge candidacy, wrap generation, SAT) without sharing the analytic fast paths.
+
+`IntersectionStatus` is a **three-way** answer and the middle value carries weight:
+`Touching` means contact with no penetration, and it is *not* `Overlap`. A polygon query
+must decide between them by how far the query actually reaches inside — the rect routines
+do this by construction (slab clip, then the signed distance at the interior midpoint) and
+the polygon ones mirror it. "Any edge the segment intersects ⇒ Overlap" is the trap,
+because an edge intersection includes a touch, and a rope contact stored in its body's
+local frame sits exactly on the surface for ever: that reads as a permanent overlap and
+leaves the wrap solver armed on every span reaching the anchor (`session-284f`).
+
+A body may carry **several shapes** (`addShape`, `getShapes()`) — a compound body. Every
+scanning path iterates them: the character sweep, raycasts, area overlap, ledge candidacy
+and the rope's wrap scan (whose candidates are shapes, not bodies, so a `RopeContact`
+carries a `shapeIndex`). `CollisionShape2D.wrappable` is the one opt-out: solid, but not
+rope geometry (the ball's mounting loop).
+
+Rigid bodies may be any of the three. A polygon resolves through a **contact manifold**
+(`engine/manifold.ts`: SAT plus incident-face clipping, up to two points) rather than the
+single point a circle produces — one point cannot resist a rotation about itself, so a box
+would teeter on a corner instead of settling. `World.resolveRigidLoop` is a sibling of
+`resolveRigidCircle` rather than a generalisation of it, so the circle path (and the ball
+avatar's steering branch inside it) stays bit-identical to recorded replays.
 
 ## Known simplifications (candidates for follow-up)
 
-- `World` rigidbody dynamics are approximate (no full contact manifold / stacking solver);
-  the rope drives attached bodies directly, so this mostly affects free-falling debris.
+- `World` rigidbody dynamics are approximate (no stacking solver, one Gauss-Seidel pass per
+  frame); the rope drives attached bodies directly, so this mostly affects free-falling
+  debris. Polygon contacts do get a real two-point manifold (above); circles remain single-point.
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
   `slackSimulation` field unused; the rope renders straight spans.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is
@@ -86,9 +126,30 @@ it rotates with the ball, winds around it, and applies torque. The chain solve
 runs *after* `World.integrate` (see `BallLevel.physicsProcess`), and `Rope`
 writes its positional correction straight onto a rigid body — only the grapple
 avatar sweeps — so the ball frame ends with `World.depenetrateRigid(ball)`, a
-position-only push-out of static geometry. Without it a point-blank anchor on
+position-only push-out of the solid geometry around it, followed by
+`Rope.absorbBlockedLength()`. Without the push-out a point-blank anchor on
 the far side of a surface hauls the ball a little deeper every frame until it is
-buried in the scenery. The chain end is
+buried in the scenery.
+"Solid" there means **any** body the world collides with, statics and other
+rigid bodies alike — it meant statics only while rects and polygons were never
+physics-driven, so static scenery was the only thing a chain could haul the ball
+into. A rigid polygon's face is exactly as solid, and left out of the push-out it
+produced the launch in `session-1474f`: the ball buried itself ~16 cm into a
+rigid polygon over ~20 frames, and the instant it emerged, the wrap path it
+should have been taking all along appeared at full size in one frame — half a
+metre of length error, which the solver turned straight into a 96 m/s launch.
+The `absorbBlockedLength()` call after it is the winch stall (see `Rope`) applied
+where the frame *actually* ends: the push-out moves the ball after the chain has
+solved, so re-basing only inside the solve left a point-blank anchor over its
+length every single frame.
+The push-out resolves its **two deepest overlaps simultaneously**, the same solve
+`moveAndCollide` uses (`d·n1 = depth1`, `d·n2 = depth2`, escaping through the
+wedge mouth). Doing them one after the other is what its own comment warns
+against — pushing fully out of one surface can push straight into another, and
+whichever was handled last wins — and a ball resting on the floor beneath a rigid
+polygon is exactly that wedge: sequentially it drove the ball ~10 cm into the
+floor over four frames (`session-284f`).
+The chain end is
 a `BallHook` — a RigidBody2D projectile that anchors to the first surface it
 contacts, flying or dangling.
 The throw is a **straight line**: the hook carries `gravityScale = 0` for the
@@ -186,6 +247,14 @@ Playtest scripts are frame-indexed held-button ranges + mouse aim with asserts
 (`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds). Invariants
 checked every frame: NaN, runaway speed, rope-over-length (once anchored),
 player-embedded-in-geometry.
+Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
+anchored — an anchor born over its length), `rope-solve-kick` (the solve added
+more than 4 m/s in **any** single frame) and `chain-clip` (a span's interior deep
+inside static geometry).
+`rope-solve-kick` exists because `runaway-speed` is a 1000 m/s ceiling and so
+never saw a 96 m/s one-frame launch; the whole ball corpus peaks at 2.1 m/s of
+gain in a frame, so 4 is well clear of real play. It is the general form of
+`rope-anchor-kick`, which only ever watched the anchoring frame.
 
 ## Debugging physics issues
 
@@ -275,9 +344,27 @@ Past root causes worth suspecting again (all found via this loop): absolute
 velocity zeroed instead of surface-relative (PROJECT/CEILING cases), locomotion
 basis stolen by a mover's corner normal (static-floor preference), separating
 depenetration contacts redirecting escape velocity, phantom "hit-from-inside"
-sweep normals on thin rotating shapes (guards in `World.moveAndCollide`), and
+sweep normals on thin rotating shapes (guards in `World.moveAndCollide`),
 near-threshold face classification flapping on rotating bodies (grip grace in
-`lib/surface.ts`).
+`lib/surface.ts`), a body left **embedded** in geometry because a depenetration
+pass did not cover that geometry's kind (`session-1474f`) or resolved a wedge one
+face at a time (`session-284f`) — the rope then pays the whole accumulated path
+debt in one frame the moment it emerges, which reads as a launch — and a
+**touch reported as an overlap**, which arms the rope's self-intersection
+resolvers permanently: a contact stored in its body's local frame sits on the
+surface for ever, so "the span is inside the body" is true on every span touching
+that anchor, and the resolvers' "already on this vertex, step one place round the
+loop" rule then jumps the wrap to whatever corner is next — 1.54 m away on a 3 m
+polygon (`session-284f` again).
+
+Those last two share a shape, and it generalises into a rule worth applying before
+reaching for the solver: **a one-frame velocity spike is almost never the solver
+being wrong about this frame — it is the solver being right about a discontinuity
+that should never have built up.** Look for the state that was allowed to drift
+out of bounds over the preceding frames (an embedded body, a path the rope was
+allowed to route through solid geometry, a contact test that has been answering
+"inside" since the moment the rope attached) rather than for the impulse that
+finally released it.
 
 ## Level editor
 
@@ -288,7 +375,23 @@ DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production
 edits an `EdModel` (positions in world **metres**, one
 stable id per body) and manipulates it with the mouse: pan (**middle**-button drag, or the
 right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
-radius handles to resize, and `+Rect`/`+Circle` tools to draw new bodies.
+radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
+`+Poly` is the one draw tool that is a run of clicks rather than a drag, because a convex
+outline is a vertex list and not a box: each click places a vertex, **Enter** or a click on
+the first vertex closes the loop, **Esc** drops it, and the title carries the count so the
+gesture always says where it is up to.
+The finished outline is the **convex hull** of the clicked points, so a well-drawn shape
+lands exactly as clicked and a dented or out-of-order one becomes the nearest convex shape
+instead of being refused after all the clicking.
+A selected polygon is then edited vertex by vertex - square handles move a corner, the
+smaller round handles at the edge midpoints insert one and drag it in the same gesture, and
+**Alt+click** on a corner removes it (a triangle is the floor). Every one of those goes
+through `setPolyVerts`, which re-centres the loop on its centroid (so `pos` stays the centre
+of mass, which the rigid-body lever arms assume) and **refuses a non-convex result** - the
+vertex being dragged stalls at its last convex position rather than the shape turning inside
+out. There is no `w`/`h` to type for a polygon, so the inspector shows the vertex count
+instead; it is a live readout, refreshed with the number fields, since a drag can change it
+while the panel is deliberately not rebuilt.
 Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and dragging any member moves the whole group (the grabbed body leads the snap; the rest keep their offsets).
 Dragging from empty space rubber-bands a **rectangle selection**, and the drag *direction* picks between the two CAD selection modes, as in Fusion 360 and AutoCAD: left→right is a **window** (only what the band fully encloses - every rotated corner inside, a circle by its extremes), right→left a **crossing** (anything it touches - a rotated box by SAT, a circle by its nearest point).
 The mode has to be legible while the drag is still live, and the box alone cannot show a direction, so the band draws **solid** for a window and **dashed** for a crossing - the CAD convention, so it reads the same way it does there.
@@ -349,13 +452,14 @@ The eye is open when the layer draws and a dimmed closed lid when it does not; t
 A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 backgrounds" panel that also deleted the selected notes would be lying about its scope.
 The inspector scrolls, because that stack can outgrow the viewport.
 A paste keeps each item on the layer it was copied from and reveals (and unlocks) any layer it lands on, rather than dropping items where they can be neither seen nor clicked.
-The draw tools are per-layer too (`LAYER_TOOLS`): `background`/`geometry`/`camera` offer `+Rect`/`+Circle`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
+The draw tools are per-layer too (`LAYER_TOOLS`): `background`/`geometry`/`camera` offer `+Rect`/`+Circle`/`+Poly`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
 A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `background` and `geometry` start at their authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s`, `buffer` and `priority`.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` or `buffer` means the controller default.
 A region draws as a dashed violet volume labelled with what it does (`cam · off 0,-250 · view ×1.8 · lock xy · buf 200`), and a locked axis draws a gold guide — a line across the region for one axis, a crosshair at the pinned point for both.
-An authored `buffer` draws too, as a finely dotted outline of the volume grown by it (grown per axis, square corners and all, since that is exactly the region the camera controller tests): a buffer is the region's real reach over the camera, and it is set by eye against the arc a swing actually takes, so it has to be visible while it is being authored.
+An authored `buffer` draws too, as a finely dotted outline of the volume grown by it: a buffer is the region's real reach over the camera, and it is set by eye against the arc a swing actually takes, so it has to be visible while it is being authored.
+`pathOutlineGrown` (`render/shapePath.ts`) owns that geometry so it can never disagree with `pointInRegion`, and the two shapes grow differently on purpose - a rect grows per axis with **square corners**, since that is literally what its containment test does, while a polygon grows as a true offset with **filleted corners**, since its containment test is a signed distance and a mitred corner would claim reach the region does not have.
 
 One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
 The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.

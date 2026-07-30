@@ -4,7 +4,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { ballZoom, GRAPPLE_ZOOM, screenToWorld, type Camera } from "../render/camera";
+import { ballZoom, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import {
   CAMERA_BLEND_TIME,
   CameraController,
@@ -24,6 +24,8 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
+  cloneShape,
+  convexHull,
   bodyWithinRect,
   defaultCamera,
   defaultNote,
@@ -42,6 +44,7 @@ import {
   NOTE_DEFAULT_SIZE,
   pointInBody,
   setArrowEnds,
+  setPolyVerts,
   toWorld,
   type EdItem,
   type EdLayer,
@@ -59,16 +62,16 @@ import {
 } from "../sim/trace";
 import type { LevelData } from "../level/levelFormat";
 
-type Tool = "select" | "rect" | "circle" | "text" | "arrow";
+type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
 // toolbar shows only the applicable ones and switching layer drops a tool that
 // no longer applies.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  background: ["select", "rect", "circle"],
-  geometry: ["select", "rect", "circle"],
-  camera: ["select", "rect", "circle"],
+  background: ["select", "rect", "circle", "poly"],
+  geometry: ["select", "rect", "circle", "poly"],
+  camera: ["select", "rect", "circle", "poly"],
   notes: ["select", "text", "arrow"],
 };
 
@@ -76,11 +79,11 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   background:
-    "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out. Tab switches layer.",
+    "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out, or +Poly and click out an outline. Tab switches layer.",
   geometry:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
   camera:
-    "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out. Tab switches layer.",
+    "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   notes:
     "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out. Notes are editor-only and never appear in play. Tab switches layer.",
 };
@@ -101,6 +104,10 @@ type Drag =
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
   | { mode: "rotate"; body: EdItem }
+  // One vertex of a convex polygon follows the pointer. `accepted` is the last
+  // position the loop stayed convex at, so a drag that would dent the shape
+  // stalls there instead of writing a concave polygon the rope cannot wrap.
+  | { mode: "polyVertex"; body: EdItem; index: number; accepted: Vec2 }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
   | { mode: "draw"; body: EdItem; start: Vec2 };
@@ -171,6 +178,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let modelRev = 0;
   let saveError: string | null = null;
   let drag: Drag | null = null;
+  // Vertices clicked out so far for a polygon in progress, in world metres.
+  // Drawing a polygon is a run of clicks rather than one drag, so it needs state
+  // that outlives a mouse gesture — unlike every other tool.
+  let polyDraft: Vec2[] | null = null;
   let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
   let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
@@ -186,7 +197,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     player: { pos: m.player.pos, radius: m.player.radius },
     items: m.items.map((b) => ({
       ...b,
-      shape: { ...b.shape },
+      shape: cloneShape(b.shape),
       cam: { ...b.cam },
       note: { ...b.note },
     })),
@@ -433,6 +444,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     select: button("Select", () => setTool("select")),
     rect: button("+ Rect", () => setTool("rect")),
     circle: button("+ Circle", () => setTool("circle")),
+    poly: button("+ Poly", () => setTool("poly")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
   };
@@ -457,10 +469,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
   });
   const kindWrap = labelWrap("kind", kindSel);
+  toolBtns.poly.title = "Click out a convex outline; Enter or the first vertex closes it, Esc cancels";
   toolRow.append(
     toolBtns.select,
     toolBtns.rect,
     toolBtns.circle,
+    toolBtns.poly,
     toolBtns.text,
     toolBtns.arrow,
     kindWrap,
@@ -601,7 +615,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     ] as const)
       .map(([l, name]) => (count(l) ? ` · ${count(l)} ${name}` : ""))
       .join("");
-    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("geometry")} bodies${extra}`;
+    const draft = polyDraft
+      ? ` · polygon: ${polyDraft.length} ${polyDraft.length === 1 ? "vertex" : "vertices"}${polyDraft.length >= 3 ? " · Enter to close" : ""}`
+      : "";
+    title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("geometry")} bodies${extra}${draft}`;
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
@@ -612,6 +629,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     // A locked layer accepts no new geometry either, so its draw tools cannot be
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
+    if (t !== "poly") cancelPolyDraft();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -626,6 +644,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     get: () => number | null;
     set: (v: number) => void;
   }> = [];
+  // Read-only panel values (a polygon's vertex count). They refresh with the
+  // number fields rather than only on a panel rebuild: a canvas drag can change
+  // one — inserting or removing a vertex — and the panel is deliberately not
+  // rebuilt mid-drag, so without this the count silently goes stale.
+  const readouts: Array<{ el: HTMLElement; get: () => string }> = [];
 
   function numField(
     parent: HTMLElement,
@@ -714,12 +737,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   // Placement and size. Shared by every layer's panel: whatever layer an item
   // lives on, it is a placed shape and moves, rotates and resizes the same way.
-  function addTransformFields(num: GroupNum, items: EdItem[]): void {
+  function addTransformFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
     num("x", (b) => b.pos.x * M2PX, (b, v) => (b.pos = b.pos.withX(v * PX)));
     num("y", (b) => b.pos.y * M2PX, (b, v) => (b.pos = b.pos.withY(v * PX)));
     // A circle's rotation is invisible, so it only gets the field where it aims
     // something (a force area's current).
-    if (items.every((b) => b.shape.kind === "rect" || (b.layer === "geometry" && b.kind === "force"))) {
+    if (
+      items.every(
+        (b) => b.shape.kind !== "circle" || (b.layer === "geometry" && b.kind === "force"),
+      )
+    ) {
       num("rot°", (b) => (b.rot * 180) / Math.PI, (b, v) => (b.rot = (v * Math.PI) / 180));
     }
     // An arrow is stored as a box, but its height is only a pick band and its
@@ -737,6 +764,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       num("radius", (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
         if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
       });
+    } else if (items.every((b) => b.shape.kind === "poly")) {
+      // A polygon has no width or height to type: it is edited on the canvas,
+      // vertex by vertex. The panel says so and reports the count, rather than
+      // leaving a gap where every other shape has its size fields.
+      const count = (): string => {
+        const counts = items.map((b) => (b.shape.kind === "poly" ? b.shape.verts.length : 0));
+        return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
+      };
+      const row = el("label", "ed-field");
+      row.textContent = "vertices";
+      const val = document.createElement("span");
+      val.textContent = count();
+      row.appendChild(val);
+      g.appendChild(row);
+      readouts.push({ el: val, get: count });
+      const hint = el("div", "ed-hint");
+      hint.textContent =
+        "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. The outline always stays convex.";
+      g.appendChild(hint);
     }
   }
 
@@ -829,7 +875,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     g.appendChild(kw);
 
     const num = groupNum(g, bodies);
-    addTransformFields(num, bodies);
+    addTransformFields(g, num, bodies);
     if (bodies.every((b) => b.kind === "force")) {
       // Acceleration along rot°, authored in px/s² like every other length.
       // Negative reverses the flow, so it is deliberately not clamped at 0.
@@ -861,7 +907,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     g.appendChild(hint);
 
     const num = groupNum(g, items);
-    addTransformFields(num, items);
+    addTransformFields(g, num, items);
     addFillFields(g, num, items);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -882,7 +928,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     g.appendChild(hint);
 
     const num = groupNum(g, regions);
-    addTransformFields(num, regions);
+    addTransformFields(g, num, regions);
 
     num("off x", (b) => b.cam.offset.x * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withX(v * PX)), 10);
     num("off y", (b) => b.cam.offset.y * M2PX, (b, v) => (b.cam.offset = b.cam.offset.withY(v * PX)), 10);
@@ -1021,7 +1067,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
 
     const num = groupNum(g, notes);
-    addTransformFields(num, notes);
+    addTransformFields(g, num, notes);
     if (allArrows) {
       num("length", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
         if (b.shape.kind === "rect") b.shape.w = Math.max(MIN_ARROW_LENGTH, v * PX);
@@ -1037,6 +1083,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
 
   function rebuildInspector(): void {
     fields.length = 0;
+    readouts.length = 0;
     noteText = null;
     inspector.innerHTML = "";
 
@@ -1088,6 +1135,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       if (document.activeElement === f.input) continue;
       f.input.value = fmtOrBlank(f.get());
     }
+    for (const r of readouts) r.el.textContent = r.get();
   }
 
   // --- editing ops ----------------------------------------------------------
@@ -1098,7 +1146,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       ...b,
       id: newBodyId(),
       pos: b.pos.add(offset),
-      shape: { ...b.shape },
+      shape: cloneShape(b.shape),
       cam: { ...b.cam },
       note: { ...b.note },
     }));
@@ -1153,6 +1201,22 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       }
       return item;
     }
+    if (t === "poly") {
+      // A placeholder triangle; the caller replaces the loop with the drafted
+      // hull immediately. It exists so the item is a well-formed convex polygon
+      // at every instant, never a shape with no vertices.
+      return {
+        ...base,
+        shape: {
+          kind: "poly",
+          verts: [
+            new Vec2(-gridStep, gridStep),
+            new Vec2(0, -gridStep),
+            new Vec2(gridStep, gridStep),
+          ],
+        },
+      };
+    }
     return {
       ...base,
       shape:
@@ -1160,6 +1224,44 @@ export function startEditor(canvas: HTMLCanvasElement): void {
           ? { kind: "rect", w: gridStep, h: gridStep }
           : { kind: "circle", r: gridStep },
     };
+  }
+
+  // How close (in screen px) a click must land to the draft's first vertex to
+  // close the loop rather than adding another vertex.
+  const POLY_CLOSE_PX = 10;
+
+  function cancelPolyDraft(): void {
+    if (!polyDraft) return;
+    polyDraft = null;
+    updateTitle();
+  }
+
+  // Turn the clicked points into an item on the active layer. The outline is
+  // taken as their convex hull (see `convexHull`): a convex polygon is its own
+  // hull, so a well-drawn shape lands exactly as clicked, and a dented or
+  // out-of-order one becomes the nearest convex shape instead of being refused
+  // after all the clicking. Fewer than three non-collinear points is not a
+  // shape at all, so that draft is simply dropped.
+  function commitPolyDraft(): void {
+    const pts = polyDraft;
+    polyDraft = null;
+    if (!pts) return;
+    const hull = convexHull(pts);
+    if (hull.length < 3) {
+      updateTitle();
+      return;
+    }
+    const item = newDrawnItem("poly", hull[0]!);
+    // `setPolyVerts` re-centres the loop and moves `pos` to the centroid, so the
+    // starting position only has to be somewhere sane in the item's own frame.
+    item.pos = Vec2.ZERO;
+    item.shape = { kind: "poly", verts: hull.map((h) => h.clone()) };
+    if (!setPolyVerts(item, hull)) {
+      updateTitle();
+      return;
+    }
+    beginAction();
+    addAndSelect([item]);
   }
 
   function deleteSelected(): void {
@@ -1206,7 +1308,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (!sel.length) return;
     clipboard = sel.map((b) => ({
       ...b,
-      shape: { ...b.shape },
+      shape: cloneShape(b.shape),
       cam: { ...b.cam },
       note: { ...b.note },
     }));
@@ -1350,7 +1452,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       : camera.position;
 
   // Which handle of the selected body (if any) is under the pointer?
-  function pickHandle(scr: Vec2): Drag | null {
+  //
+  // `"consumed"` means the press *was* a handle interaction that finished on the
+  // spot and started no drag — removing a polygon vertex. It has to be
+  // distinguishable from "no handle here": falling through to the body pick
+  // would land on empty space (the vertex just went away) and clear the
+  // selection, so a removal would deselect the shape it edited.
+  function pickHandle(scr: Vec2, alt = false): Drag | "consumed" | null {
     const s = selected();
     if (!s) return null;
     const h = computeHandles(camera, s);
@@ -1365,6 +1473,39 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         return { mode: "arrowEnd", body: s, fixed: head, movingIsHead: false };
       }
       return null;
+    }
+    // Vertices before the rotate knob: on a small polygon the knob can overlap a
+    // corner, and the corner is what the pointer is far more often after.
+    if (h.verts && s.shape.kind === "poly") {
+      for (let i = 0; i < h.verts.length; i++) {
+        if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
+        // Alt+click removes the vertex instead of dragging it — a triangle is
+        // the floor, so the last three are not removable.
+        if (alt) {
+          if (s.shape.verts.length <= 3) return null;
+          beginAction();
+          const rest = s.shape.verts.filter((_, j) => j !== i);
+          if (setPolyVerts(s, rest)) {
+            markDirty();
+            rebuildInspector();
+          }
+          return "consumed";
+        }
+        return { mode: "polyVertex", body: s, index: i, accepted: s.shape.verts[i]! };
+      }
+      // An edge midpoint splits that edge: insert a vertex there and drag it
+      // straight away, so adding a corner and placing it is one gesture.
+      for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
+        if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
+        const verts = s.shape.verts;
+        const mid = verts[i]!.add(verts[(i + 1) % verts.length]!).mul(0.5);
+        const next = [...verts.slice(0, i + 1), mid, ...verts.slice(i + 1)];
+        beginAction();
+        dragPushed = true;
+        if (!setPolyVerts(s, next)) return null;
+        markDirty();
+        return { mode: "polyVertex", body: s, index: i + 1, accepted: mid };
+      }
     }
     if (h.rotate && scr.distanceTo(h.rotate) <= HANDLE_HIT_PX) return { mode: "rotate", body: s };
     if (h.radius && scr.distanceTo(h.radius) <= HANDLE_HIT_PX) return { mode: "radius", body: s };
@@ -1400,9 +1541,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     dragPushed = false;
 
     // 1. Handles of the current selection.
-    const h = pickHandle(scr);
+    const h = pickHandle(scr, e.altKey);
+    if (h === "consumed") return; // handled outright; no drag, selection intact
     if (h) {
       drag = h;
+      return;
+    }
+    // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
+    // vertex again (or Enter) closes the loop; Esc drops it.
+    if (tool === "poly") {
+      const p = snapVec(world);
+      if (polyDraft && polyDraft.length >= 3) {
+        const first = worldToScreen(camera, polyDraft[0]!);
+        if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
+          commitPolyDraft();
+          return;
+        }
+      }
+      polyDraft = [...(polyDraft ?? []), p];
+      updateTitle();
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
@@ -1544,7 +1701,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
           b.shape.w = w;
           b.shape.h = h;
           b.pos = new Vec2((drag.start.x + p.x) / 2, (drag.start.y + p.y) / 2);
-        } else {
+        } else if (b.shape.kind === "circle") {
           b.shape.r = snapLen(drag.start.distanceTo(p));
         }
         markDirty();
@@ -1578,6 +1735,19 @@ export function startEditor(canvas: HTMLCanvasElement): void {
           markDirty();
           refreshFields();
         }
+        break;
+      }
+      case "polyVertex": {
+        const b = drag.body;
+        if (b.shape.kind !== "poly") break;
+        const local = snapVec(world).sub(b.pos).rotated(-b.rot);
+        const index = drag.index;
+        const next = b.shape.verts.map((v, i) => (i === index ? local : v));
+        // A rejected edit leaves the loop exactly as it was, so the vertex stalls
+        // at the last convex position instead of the shape turning inside out.
+        if (setPolyVerts(b, next)) drag.accepted = local;
+        markDirty();
+        refreshFields();
         break;
       }
       case "rotate": {
@@ -1643,6 +1813,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   window.addEventListener("keydown", (e) => {
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
+      else if (polyDraft) cancelPolyDraft();
       else setSelection([]);
       return;
     }
@@ -1703,6 +1874,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       e.preventDefault();
       return;
     }
+    if ((e.code === "Enter" || e.code === "NumpadEnter") && polyDraft) {
+      commitPolyDraft();
+      e.preventDefault();
+      return;
+    }
     if (e.code === "Delete" || e.code === "Backspace") {
       deleteSelected();
       e.preventDefault();
@@ -1713,6 +1889,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     } else if (e.code === "KeyV") setTool("select");
     else if (e.code === "KeyR") setTool("rect");
     else if (e.code === "KeyC") setTool("circle");
+    else if (e.code === "KeyP") setTool("poly");
     else if (e.code === "KeyT") setTool("text");
     else if (e.code === "KeyA") setTool("arrow");
   });
@@ -1789,6 +1966,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         selectedIds,
         marqueeBand(),
         visibleLayers,
+        polyDraft ? { verts: polyDraft, cursor: pointerWorld() } : null,
       );
     }
     requestAnimationFrame(frame);

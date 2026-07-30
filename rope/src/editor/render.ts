@@ -22,6 +22,7 @@ import {
   type EdModel,
 } from "./model";
 import { DEFAULT_VIEWPORT_SCALE } from "../level/levelFormat";
+import { pathOutline, pathOutlineGrown, type Outline } from "../render/shapePath";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -50,6 +51,12 @@ export interface Handles {
   rotateBase: Vec2 | null; // screen; where the rotate knob's stalk starts
   radius: Vec2 | null; // screen; circle only
   ends: Vec2[] | null; // screen; arrow notes only (tail, head)
+  // Screen positions of a polygon's vertices, in loop order. A polygon has no
+  // meaningful width and height to resize, so it is edited vertex by vertex —
+  // the same reason an arrow note is edited by its endpoints rather than by a
+  // box. The midpoints between them are where a new vertex is inserted.
+  verts: Vec2[] | null;
+  vertMids: Vec2[] | null;
 }
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
@@ -57,14 +64,12 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   // An arrow is a segment, so it is edited by its endpoints: dragging either one
   // sets the position, length and direction at once, which is what a corner box
   // plus a rotate knob would take three gestures to do.
+  const none = { corners: [], rotate: null, rotateBase: null, radius: null, ends: null, verts: null, vertMids: null };
   if (isArrowNote(body)) {
     const { tail, head } = arrowEnds(body);
     return {
+      ...none,
       body,
-      corners: [],
-      rotate: null,
-      rotateBase: null,
-      radius: null,
       ends: [worldToScreen(cam, tail), worldToScreen(cam, head)],
     };
   }
@@ -77,12 +82,29 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     const base =
       body.kind === "force" ? worldToScreen(cam, toWorld(body, new Vec2(0, -r))) : null;
     return {
+      ...none,
       body,
-      corners: [],
       rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
       rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
-      ends: null,
+    };
+  }
+  const h = halfExtents(body);
+  const topMid = worldToScreen(cam, toWorld(body, new Vec2(0, -h.y)));
+  if (body.shape.kind === "poly") {
+    // Vertices, and the edge midpoints that split an edge into two. A polygon
+    // has no width/height to drag, so this is its whole resize interface.
+    const world = body.shape.verts.map((v) => toWorld(body, v));
+    const n = world.length;
+    return {
+      ...none,
+      body,
+      rotate: topMid.add(up.mul(ROT_OFFSET_PX)),
+      rotateBase: topMid,
+      verts: world.map((w) => worldToScreen(cam, w)),
+      vertMids: world.map((w, i) =>
+        worldToScreen(cam, w.add(world[(i + 1) % n]!).mul(0.5)),
+      ),
     };
   }
   const hw = body.shape.w / 2;
@@ -93,53 +115,40 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     new Vec2(hw, hh),
     new Vec2(-hw, hh),
   ].map((l) => worldToScreen(cam, toWorld(body, l)));
-  const topMid = worldToScreen(cam, toWorld(body, new Vec2(0, -hh)));
   return {
+    ...none,
     body,
     corners,
     rotate: topMid.add(up.mul(ROT_OFFSET_PX)),
     rotateBase: topMid,
-    radius: null,
-    ends: null,
   };
+}
+
+// The item's outline — one description, shared with the game renderer, the
+// backdrop pass and the SVG snapshot, so an authored shape is drawn by exactly
+// the same geometry that plays.
+function outlineOf(body: EdItem): Outline {
+  if (body.shape.kind === "circle") return { kind: "circle", radius: body.shape.r };
+  if (body.shape.kind === "poly") return { kind: "poly", verts: body.shape.verts };
+  return { kind: "rect", half: new Vec2(body.shape.w / 2, body.shape.h / 2) };
 }
 
 function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
   ctx.beginPath();
-  if (body.shape.kind === "circle") {
-    ctx.arc(body.pos.x, body.pos.y, body.shape.r, 0, Math.PI * 2);
-  } else {
-    const hw = body.shape.w / 2;
-    const hh = body.shape.h / 2;
-    ctx.save();
-    ctx.translate(body.pos.x, body.pos.y);
-    ctx.rotate(body.rot);
-    ctx.rect(-hw, -hh, hw * 2, hh * 2);
-    ctx.restore();
-  }
+  pathOutline(ctx, body.pos, body.rot, outlineOf(body));
 }
 
-// A camera region's buffer zone: the volume grown by `buffer` on every side,
-// which is where the region keeps its grip on the camera. Grown per axis rather
-// than as a Minkowski sum, because that is exactly what `pointInRegion` tests -
-// a rect's buffer has square corners, not rounded ones.
+// A camera region's buffer zone: the volume grown by `buffer`, which is where
+// the region keeps its grip on the camera. `pathOutlineGrown` owns the geometry
+// (square corners for a rect, filleted for a polygon) so what is drawn is
+// exactly what `pointInRegion` tests.
 export function pathRegionBuffer(
   ctx: CanvasRenderingContext2D,
   body: EdItem,
   buffer: number,
 ): void {
   ctx.beginPath();
-  if (body.shape.kind === "circle") {
-    ctx.arc(body.pos.x, body.pos.y, body.shape.r + buffer, 0, Math.PI * 2);
-  } else {
-    const hw = body.shape.w / 2 + buffer;
-    const hh = body.shape.h / 2 + buffer;
-    ctx.save();
-    ctx.translate(body.pos.x, body.pos.y);
-    ctx.rotate(body.rot);
-    ctx.rect(-hw, -hh, hw * 2, hh * 2);
-    ctx.restore();
-  }
+  pathOutlineGrown(ctx, body.pos, body.rot, outlineOf(body), buffer);
 }
 
 function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
@@ -157,6 +166,22 @@ function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.arc(p.x, p.y, HANDLE_SIZE_PX / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+// Edge-midpoint handle of a polygon: a small round one against the square
+// vertex handles, so the two are told apart by shape and size rather than by
+// position along an edge. It carries the same dark fill as every other handle —
+// a hollow or dimmed ring vanishes into the selection halo it sits on top of,
+// which is the one place these handles always are.
+const MID_HANDLE_RADIUS_PX = 3;
+function midHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
+  ctx.fillStyle = HANDLE_FILL;
+  ctx.strokeStyle = HANDLE;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, MID_HANDLE_RADIUS_PX, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 }
@@ -334,6 +359,10 @@ export function drawEditor(
   selectedIds: ReadonlySet<number>,
   marquee: { min: Vec2; max: Vec2; window: boolean } | null = null,
   visibleLayers: ReadonlySet<EdLayer> = new Set<EdLayer>(ED_LAYERS),
+  // A polygon being clicked out: the vertices placed so far plus where the
+  // pointer is, so the outline is visible while it is being drawn rather than
+  // only once it closes.
+  polyDraft: { verts: readonly Vec2[]; cursor: Vec2 } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTrainingGrid(ctx, cam, w, h);
@@ -351,14 +380,7 @@ export function drawEditor(
     ? model.items.filter((i) => i.layer === "background")
     : [];
   for (const g of backgrounds) {
-    fillBackground(
-      ctx,
-      g.pos,
-      g.rot,
-      halfExtents(g),
-      g.shape.kind === "circle",
-      hexToRgba(g.color, g.opacity),
-    );
+    fillBackground(ctx, g.pos, g.rot, outlineOf(g), hexToRgba(g.color, g.opacity));
     if (selectedIds.has(g.id)) {
       pathBody(ctx, g);
       ctx.strokeStyle = SELECT;
@@ -392,8 +414,7 @@ export function drawEditor(
         ctx,
         body.pos,
         body.rot,
-        halfExtents(body),
-        body.shape.kind === "circle",
+        outlineOf(body),
         body.force,
         hexToRgba(body.color, body.opacity),
       );
@@ -402,8 +423,7 @@ export function drawEditor(
         ctx,
         body.pos,
         body.rot,
-        halfExtents(body),
-        body.shape.kind === "circle",
+        outlineOf(body),
         hexToRgba(body.color, body.opacity),
       );
     } else if (body.kind === "anchor") {
@@ -412,8 +432,7 @@ export function drawEditor(
         ctx,
         body.pos,
         body.rot,
-        halfExtents(body),
-        body.shape.kind === "circle",
+        outlineOf(body),
         hexToRgba(body.color, body.opacity),
       );
     } else {
@@ -514,6 +533,39 @@ export function drawEditor(
     ctx.setLineDash([]);
   }
 
+  // Polygon in progress, above the scene it is being drawn over: the placed
+  // vertices as a solid outline, the run back from the pointer dashed, so it is
+  // obvious which edge is still being aimed and which are committed.
+  if (polyDraft && polyDraft.verts.length) {
+    const v = polyDraft.verts;
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 2;
+    ctx.beginPath();
+    v.forEach((q, i) => (i === 0 ? ctx.moveTo(q.x, q.y) : ctx.lineTo(q.x, q.y)));
+    ctx.stroke();
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.beginPath();
+    ctx.moveTo(v[v.length - 1]!.x, v[v.length - 1]!.y);
+    ctx.lineTo(polyDraft.cursor.x, polyDraft.cursor.y);
+    if (v.length >= 2) ctx.lineTo(v[0]!.x, v[0]!.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // A dot per placed vertex, and a ring on the first one: clicking it is what
+    // closes the loop, so it has to be findable.
+    ctx.fillStyle = SELECT;
+    for (const q of v) {
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, worldLine * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (v.length >= 3) {
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.beginPath();
+      ctx.arc(v[0]!.x, v[0]!.y, worldLine * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
   // Player spawn marker: ring at the avatar radius + crosshair.
   const p = model.player.pos;
   ctx.strokeStyle = PLAYER;
@@ -564,6 +616,13 @@ export function drawEditor(
     }
     for (const c of hs.corners) square(ctx, c);
     if (hs.radius) square(ctx, hs.radius);
+    // A polygon is edited vertex by vertex: square handles on the vertices, and
+    // smaller hollow ones at the edge midpoints, which insert a new vertex when
+    // dragged. The midpoints are drawn differently on purpose - a uniform row of
+    // handles would read as "these are all vertices" and hide that the shape has
+    // four corners rather than eight.
+    if (hs.verts) for (const v of hs.verts) square(ctx, v);
+    if (hs.vertMids) for (const m of hs.vertMids) midHandle(ctx, m);
     // An arrow's endpoints are round, so they read as "drag me somewhere"
     // rather than as the corners of a box.
     if (hs.ends) for (const e of hs.ends) circleHandle(ctx, e);

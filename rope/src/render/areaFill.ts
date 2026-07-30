@@ -12,27 +12,22 @@
 
 import { Vec2 } from "../engine/vec2";
 import { anchorGlyphs, forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "./areaGlyphs";
+import { outlineHalfExtents, outlineIsRound, pathOutline, type Outline } from "./shapePath";
 
-// `half` is the area's half-extents (a circle passes its radius in both axes).
+// The glyph lattice is laid out over the shape's bounding half-extents whatever
+// the shape is, and the even-odd clip below trims it to the real outline — so a
+// polygon area is stamped with exactly the same marks at exactly the same pitch
+// as the rect that bounds it, and only the visible count differs.
 function fillWithCutouts(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   rotation: number,
-  half: Vec2,
-  circle: boolean,
+  shape: Outline,
   fillStyle: string,
   glyphs: ((p: PolyPath) => void) | null,
 ): void {
-  const outline = (): void => {
-    if (circle) ctx.arc(center.x, center.y, half.x, 0, Math.PI * 2);
-    else {
-      ctx.save();
-      ctx.translate(center.x, center.y);
-      ctx.rotate(rotation);
-      ctx.rect(-half.x, -half.y, half.x * 2, half.y * 2);
-      ctx.restore();
-    }
-  };
+  const half = outlineHalfExtents(shape);
+  const outline = (): void => pathOutline(ctx, center, rotation, shape);
 
   ctx.fillStyle = fillStyle;
   if (!glyphs || half.x <= 0 || half.y <= 0) {
@@ -67,14 +62,14 @@ export function fillForceArea(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   rotation: number,
-  half: Vec2,
-  circle: boolean,
+  shape: Outline,
   magnitude: number,
   fillStyle: string,
   timeMs: number = performance.now(),
 ): void {
-  fillWithCutouts(ctx, center, rotation, half, circle, fillStyle, (p) =>
-    forceAreaGlyphs(p, half, circle, magnitude, timeMs),
+  const half = outlineHalfExtents(shape);
+  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
+    forceAreaGlyphs(p, half, outlineIsRound(shape), magnitude, timeMs),
   );
 }
 
@@ -84,12 +79,12 @@ export function fillAnchor(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   rotation: number,
-  half: Vec2,
-  circle: boolean,
+  shape: Outline,
   fillStyle: string,
 ): void {
-  fillWithCutouts(ctx, center, rotation, half, circle, fillStyle, (p) =>
-    anchorGlyphs(p, half, circle),
+  const half = outlineHalfExtents(shape);
+  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
+    anchorGlyphs(p, half, outlineIsRound(shape)),
   );
 }
 
@@ -98,11 +93,11 @@ export function fillKillZone(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   rotation: number,
-  half: Vec2,
-  circle: boolean,
+  shape: Outline,
   fillStyle: string,
 ): void {
-  fillWithCutouts(ctx, center, rotation, half, circle, fillStyle, (p) =>
-    killZoneGlyphs(p, half, circle),
+  const half = outlineHalfExtents(shape);
+  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
+    killZoneGlyphs(p, half, outlineIsRound(shape)),
   );
 }

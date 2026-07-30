@@ -1,25 +1,42 @@
 // RopeContact + rope-path node types, ported from classes/RopeContact.cs.
 
 import { Vec2 } from "../engine/vec2";
-import type { CollisionObject2D } from "../engine/body";
+import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
 import { WrapDirection } from "./types";
 
 export class RopeContact {
   obj: CollisionObject2D;
-  // Stored in the body's local frame (pre-rotated), so GlobalPosition re-applies rotation.
+  // Stored in the BODY's local frame (pre-rotated), so GlobalPosition re-applies
+  // rotation. Deliberately the body's frame and not the shape's: a body may
+  // carry several shapes, and one origin for all of them is what keeps a wrap
+  // node welded to the body it rides on however the body is put together.
   position: Vec2;
+  // Which of the body's shapes this contact sits on. 0 — the primary — for
+  // every single-shape body, which is nearly all of them; a compound body's
+  // wraps need it so the tangent walk uses the right vertex loop rather than
+  // whichever shape happens to be first.
+  shapeIndex: number;
 
-  constructor(obj: CollisionObject2D, position: Vec2) {
+  constructor(obj: CollisionObject2D, position: Vec2, shapeIndex = 0) {
     this.obj = obj;
     this.position = position.rotated(-obj.globalRotation);
+    this.shapeIndex = shapeIndex;
   }
 
   // Rebuild from already-local data (snapshot restore path — no re-rotation).
-  static restore(obj: CollisionObject2D, localPosition: Vec2): RopeContact {
+  static restore(obj: CollisionObject2D, localPosition: Vec2, shapeIndex = 0): RopeContact {
     const c = Object.create(RopeContact.prototype) as RopeContact;
     c.obj = obj;
     c.position = localPosition;
+    c.shapeIndex = shapeIndex;
     return c;
+  }
+
+  // The shape this contact is on. Falls back to the primary for a body whose
+  // shape set has shrunk under it (a removed auxiliary), so a stale index can
+  // never throw mid-solve.
+  get shape(): CollisionShape2D {
+    return this.obj.getShapes()[this.shapeIndex] ?? this.obj.getShape();
   }
 
   genIdentifier(): string {

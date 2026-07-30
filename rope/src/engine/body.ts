@@ -11,6 +11,17 @@ import type { World } from "./world";
 // frame (rotates with the body); the default zero keeps single-shape bodies
 // centred, exactly as before.
 export class CollisionShape2D implements ShapeTransform {
+  // May the rope catch on this shape? True for scene geometry — a compound
+  // body's pieces are all real corners the rope wraps. False is for a shape
+  // that exists as a *contact* proxy rather than as rope geometry: the ball &
+  // chain avatar's mounting loop is solid so the ball can rest and tip on it,
+  // but the chain deploys *through* it, so wrapping it would double-count the
+  // one piece of geometry the chain is already threaded through.
+  //
+  // A property of the shape rather than of the body, because a compound body
+  // can legitimately be both at once — which is exactly the ball's case.
+  wrappable = true;
+
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,

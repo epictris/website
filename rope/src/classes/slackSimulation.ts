@@ -7,6 +7,7 @@ import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { Colors, Debug } from "../engine/debug";
+import { circleOverlap } from "../engine/collision";
 import { Intersections } from "../lib/intersections";
 import { IntersectionStatus } from "../lib/types";
 import { RopeContact, type RopeNode } from "../lib/ropeContact";
@@ -255,6 +256,16 @@ export class SlackSimulation {
           } else {
             slackNode.position = circleCenter.add(delta.div(dist).mul(circleRadius));
             slackNode.contactSurfaceNormal = delta.normalized();
+          }
+        } else if (bodyShape.shape.kind === "poly") {
+          // Convex polygon: the depenetration normal/depth of a zero-radius
+          // circle is exactly the push-out this branch computes by hand for a
+          // rect (which keeps its ported closed form, above).
+          const ov = circleOverlap(slackNode.position, 0, bodyShape);
+          if (ov) {
+            const push = ov.normal.mul(ov.depth);
+            slackNode.position = slackNode.position.add(push);
+            slackNode.contactSurfaceNormal = push;
           }
         } else {
           const hw = bodyShape.shape.size.x * 0.5;

@@ -36,6 +36,10 @@ export interface LedgeGrabInfo {
 
 export interface LedgeGrab extends LedgeGrabInfo {
   body: PhysicsBody2D;
+  // Which of the body's collision shapes the corner belongs to. 0 — the primary
+  // — for every single-shape body; a compound body's corners need it so the
+  // grab keeps tracking the right piece as the body moves.
+  shapeIndex: number;
   vertexIndex: number;
 }
 
@@ -79,10 +83,10 @@ export const LedgeDetection = {
   // threshold, one incident face currently a floor (the top), the other a
   // wall (the hang face). Null when the corner is not grabbable this frame.
   // Seam occlusion is a separate, body-set-dependent test (isSeamOccluded).
-  grabInfo(body: PhysicsBody2D, vertexIndex: number): LedgeGrabInfo | null {
-    if (!body.hasShape()) return null;
-    const t = body.getShape();
-    if (t.shape.kind !== "rect") return null; // circles are never grabbable
+  grabInfo(body: PhysicsBody2D, shapeIndex: number, vertexIndex: number): LedgeGrabInfo | null {
+    const t = body.getShapes()[shapeIndex];
+    if (!t) return null;
+    if (t.shape.kind === "circle") return null; // circles are never grabbable
     if (!ShapeGeometry.isLedgeCandidate(t.shape, vertexIndex)) return null;
 
     const [a, b] = ShapeGeometry.getIncidentFaceNormals(t, vertexIndex);
@@ -110,13 +114,28 @@ export const LedgeDetection = {
   // another blocking body is an interior seam corner, not a real ledge.
   // Rigid debris (circles) is ignored — a ball resting on a lip must not
   // switch the ledge off.
-  isSeamOccluded(bodies: readonly PhysicsBody2D[], owner: PhysicsBody2D, vertex: Vec2): boolean {
+  isSeamOccluded(
+    bodies: readonly PhysicsBody2D[],
+    owner: PhysicsBody2D,
+    ownerShapeIndex: number,
+    vertex: Vec2,
+  ): boolean {
+    // A compound body seams against ITSELF as well as against its neighbours: an
+    // L-shape built from two convex pieces has its reflex corner where the two
+    // overlap, and that corner belongs to no outside surface at all. The owner is
+    // therefore not skipped wholesale — only the shape the vertex is a corner of.
+    for (const shape of owner.getShapes()) {
+      if (shape === owner.getShapes()[ownerShapeIndex]) continue;
+      if (circleOverlap(vertex, SEAM_EPSILON, shape)) return true;
+    }
     for (const body of bodies) {
       if (body === owner || body.removed || !body.hasShape()) continue;
       if (body instanceof RigidBody2D) continue;
       if (!(body instanceof PhysicsBody2D)) continue;
       if (!body.isSolid) continue; // hook-only scenery blocks nothing, seams included
-      if (circleOverlap(vertex, SEAM_EPSILON, body.getShape())) return true;
+      for (const shape of body.getShapes()) {
+        if (circleOverlap(vertex, SEAM_EPSILON, shape)) return true;
+      }
     }
     return false;
   },
@@ -134,47 +153,52 @@ export const LedgeDetection = {
       // A corner you cannot stand on is not a ledge: hook-only scenery has no
       // surface to pull up onto, the player passes through it.
       if (!body.isSolid) continue;
-      const t = body.getShape();
-      if (t.shape.kind !== "rect") continue;
-      const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;
+      // Every piece of a compound body offers its own corners; a single-shape
+      // body is the one-iteration case.
+      const shapes = body.getShapes();
+      for (let si = 0; si < shapes.length; si++) {
+        const t = shapes[si]!;
+        if (t.shape.kind === "circle") continue;
+        const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;
 
-      for (let vi = 0; vi < vertexCount; vi++) {
-        const info = LedgeDetection.grabInfo(body, vi);
-        if (!info) continue;
-        const dist = pathDistance(info.vertex, query.path);
-        const near = dist <= query.reach * 2; // near-miss tracing window
-        const miss = (reason: string): void => {
-          if (near && PhysTrace.enabled) {
-            PhysTrace.emit({ t: "ledge", event: "miss", reason, d: Math.round(dist) });
+        for (let vi = 0; vi < vertexCount; vi++) {
+          const info = LedgeDetection.grabInfo(body, si, vi);
+          if (!info) continue;
+          const dist = pathDistance(info.vertex, query.path);
+          const near = dist <= query.reach * 2; // near-miss tracing window
+          const miss = (reason: string): void => {
+            if (near && PhysTrace.enabled) {
+              PhysTrace.emit({ t: "ledge", event: "miss", reason, d: Math.round(dist) });
+            }
+          };
+          if (info.wallNormal.x * query.wallNormalXSign <= 0) {
+            miss("wrong-side");
+            continue;
           }
-        };
-        if (info.wallNormal.x * query.wallNormalXSign <= 0) {
-          miss("wrong-side");
-          continue;
+          if (info.vertex.y > current.y + BELOW_TOLERANCE) {
+            miss("below-player");
+            continue;
+          }
+          // Never grab through the body: the player must be outside at least
+          // one of the corner's incident face half-planes. Only the interior
+          // region (behind the wall face AND under the floor face) is rejected
+          // — "above a tilted corner" is a legitimate approach.
+          const toPlayer = current.sub(info.vertex);
+          if (toPlayer.dot(info.wallNormal) < -PX && toPlayer.dot(info.floorNormal) < -PX) {
+            miss("behind-wall");
+            continue;
+          }
+          if (dist > bestDist) {
+            miss("out-of-reach");
+            continue;
+          }
+          if (LedgeDetection.isSeamOccluded(bodies, body, si, info.vertex)) {
+            miss("seam");
+            continue;
+          }
+          bestDist = dist;
+          best = { ...info, body, shapeIndex: si, vertexIndex: vi };
         }
-        if (info.vertex.y > current.y + BELOW_TOLERANCE) {
-          miss("below-player");
-          continue;
-        }
-        // Never grab through the body: the player must be outside at least
-        // one of the corner's incident face half-planes. Only the interior
-        // region (behind the wall face AND under the floor face) is rejected
-        // — "above a tilted corner" is a legitimate approach.
-        const toPlayer = current.sub(info.vertex);
-        if (toPlayer.dot(info.wallNormal) < -PX && toPlayer.dot(info.floorNormal) < -PX) {
-          miss("behind-wall");
-          continue;
-        }
-        if (dist > bestDist) {
-          miss("out-of-reach");
-          continue;
-        }
-        if (LedgeDetection.isSeamOccluded(bodies, body, info.vertex)) {
-          miss("seam");
-          continue;
-        }
-        bestDist = dist;
-        best = { ...info, body, vertexIndex: vi };
       }
     }
 

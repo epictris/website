@@ -31,21 +31,26 @@ const CLIMB_SPEED = 0.015; // m per frame-step, scaled by 1/delta
 
 export class LedgeClimbState extends PlayerState {
   readonly body: PhysicsBody2D;
+  // Which of the body's collision shapes the corner is a vertex of. Carried
+  // alongside the vertex index so a compound body's corner keeps resolving
+  // against the piece it belongs to.
+  readonly shapeIndex: number;
   readonly vertexIndex: number;
   private surfaceNormal: Vec2 = Vec2.ZERO;
   private supportBody: PhysicsBody2D | null = null;
   private frames = 0;
 
-  constructor(body: PhysicsBody2D, vertexIndex: number) {
+  constructor(body: PhysicsBody2D, shapeIndex: number, vertexIndex: number) {
     super();
     this.body = body;
+    this.shapeIndex = shapeIndex;
     this.vertexIndex = vertexIndex;
     this.supportBody = body;
   }
 
   update(player: Player, _delta: number): PlayerState {
     if (this.body.removed) return this.release(player);
-    const info = LedgeDetection.grabInfo(this.body, this.vertexIndex);
+    const info = LedgeDetection.grabInfo(this.body, this.shapeIndex, this.vertexIndex);
     if (!info) return this.release(player); // corner rotated out mid-climb
 
     // Ledge jump mid-climb (mirrors LedgeHangState): buffered jump launches
@@ -76,7 +81,7 @@ export class LedgeClimbState extends PlayerState {
   }
 
   resolveCollision(player: Player, delta: number): PlayerState {
-    const info = LedgeDetection.grabInfo(this.body, this.vertexIndex);
+    const info = LedgeDetection.grabInfo(this.body, this.shapeIndex, this.vertexIndex);
     if (!info) return this; // update() already scheduled the release
 
     const shape = player.getShape().shape;

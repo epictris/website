@@ -11,6 +11,7 @@
 // its layer does not use, so nothing meaningless reaches disk.
 
 import { Vec2 } from "../engine/vec2";
+import { isConvexLoop, polyCentroid, polySignedArea2 } from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
   DEFAULT_BACKGROUND_COLOR,
@@ -27,6 +28,7 @@ import {
   type CameraRegionData,
   type LevelData,
   type NoteData,
+  type ShapeData,
 } from "../level/levelFormat";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
@@ -36,9 +38,16 @@ import {
 export type EdLayer = "background" | "geometry" | "camera" | "notes";
 export const ED_LAYERS: EdLayer[] = ["background", "geometry", "camera", "notes"];
 
+// `poly` vertices are metres in the item's own local frame, kept **convex** and
+// centred on their area centroid — `setPolyVerts` is the one writer, so no edit
+// path can leave either invariant broken. Convexity is a hard rule of the
+// format (see "Convex-only polygons; compound bodies" in docs/game-design.md);
+// centring is what makes the item's `pos` its centre of mass, which every
+// rigid-body lever arm in the engine assumes.
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
-  | { kind: "circle"; r: number };
+  | { kind: "circle"; r: number }
+  | { kind: "poly"; verts: Vec2[] };
 
 // Camera-layer properties (see CameraRegionData for the semantics). `lockX/Y`
 // null = that axis follows the avatar; `blend` and `buffer` null = the
@@ -82,6 +91,14 @@ export interface EdItem {
   note: EdNote;
 }
 
+// A detached copy of a shape. Undo snapshots, duplicate, copy/paste and the
+// clipboard all need one: shapes are mutated in place, and a polygon carries an
+// array of vertices that a shallow `{...shape}` would leave shared — the bug
+// there is silent (an undo that also rewrites the state it was undoing to).
+export function cloneShape(s: EdShape): EdShape {
+  return s.kind === "poly" ? { kind: "poly", verts: [...s.verts] } : { ...s };
+}
+
 // Is this item an arrow note? Arrows are the one item edited by their endpoints
 // rather than by corner handles, so the test is shared by picking and drawing.
 export function isArrowNote(item: EdItem): boolean {
@@ -90,7 +107,9 @@ export function isArrowNote(item: EdItem): boolean {
 
 // The endpoints of an arrow note, in world metres: tail (local -X) to head.
 export function arrowEnds(item: EdItem): { tail: Vec2; head: Vec2 } {
-  const half = item.shape.kind === "rect" ? item.shape.w / 2 : item.shape.r;
+  // An arrow note is always a rect (its width is the shaft length); the fallback
+  // keeps the accessor total for the other kinds rather than asserting.
+  const half = item.shape.kind === "rect" ? item.shape.w / 2 : halfExtents(item).x;
   return {
     tail: toWorld(item, new Vec2(-half, 0)),
     head: toWorld(item, new Vec2(half, 0)),
@@ -165,6 +184,15 @@ export const NOTE_ARROW_BAND = NOTE_ARROW_THICKNESS * PX;
 
 // --- conversions ------------------------------------------------------------
 
+// On-disk shape → editor shape. A polygon's vertices are copied into Vec2s
+// (they are mutated in place by the vertex handles, so they must not alias the
+// loaded data).
+function edShape(s: ShapeData): EdShape {
+  if (s.kind === "rect") return { kind: "rect", w: s.w, h: s.h };
+  if (s.kind === "circle") return { kind: "circle", r: s.r };
+  return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
+}
+
 // Metre-space LevelData → editor model.
 function fromLevelData(data: LevelData): EdModel {
   const bodies: EdItem[] = data.bodies.map((b) => ({
@@ -173,10 +201,7 @@ function fromLevelData(data: LevelData): EdModel {
     kind: b.kind,
     pos: new Vec2(b.x, b.y),
     rot: b.rot,
-    shape:
-      b.shape.kind === "rect"
-        ? { kind: "rect", w: b.shape.w, h: b.shape.h }
-        : { kind: "circle", r: b.shape.r },
+    shape: edShape(b.shape),
     color: b.color ?? DEFAULT_BODY_COLOR,
     opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
     friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
@@ -190,10 +215,7 @@ function fromLevelData(data: LevelData): EdModel {
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(g.x, g.y),
     rot: g.rot,
-    shape:
-      g.shape.kind === "rect"
-        ? { kind: "rect", w: g.shape.w, h: g.shape.h }
-        : { kind: "circle", r: g.shape.r },
+    shape: edShape(g.shape),
     color: g.color ?? DEFAULT_BACKGROUND_COLOR,
     opacity: g.opacity ?? DEFAULT_BACKGROUND_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
@@ -207,10 +229,7 @@ function fromLevelData(data: LevelData): EdModel {
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(r.x, r.y),
     rot: r.rot,
-    shape:
-      r.shape.kind === "rect"
-        ? { kind: "rect", w: r.shape.w, h: r.shape.h }
-        : { kind: "circle", r: r.shape.r },
+    shape: edShape(r.shape),
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
@@ -253,10 +272,11 @@ function fromLevelData(data: LevelData): EdModel {
 // Editor model → metre-space LevelData. Each layer writes its own list, and
 // only the fields that layer gives meaning to.
 export function toLevelData(model: EdModel): LevelData {
-  const shapeOf = (i: EdItem) =>
-    i.shape.kind === "rect"
-      ? ({ kind: "rect", w: i.shape.w, h: i.shape.h } as const)
-      : ({ kind: "circle", r: i.shape.r } as const);
+  const shapeOf = (i: EdItem): ShapeData => {
+    if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
+    if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
+    return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
+  };
 
   const backgrounds: BackgroundData[] = model.items
     .filter((i) => i.layer === "background")
@@ -346,11 +366,75 @@ export function modelToDisk(model: EdModel): LevelData {
 
 // --- geometry ---------------------------------------------------------------
 
+// An item's local vertex loop — rect corners or polygon vertices, [] for a
+// circle. The ordering matches the engine's winding contract (clockwise on
+// screen), so an item drawn here and the shape it becomes agree edge for edge.
+export function localVertices(item: EdItem): Vec2[] {
+  if (item.shape.kind === "circle") return [];
+  if (item.shape.kind === "poly") return item.shape.verts;
+  const hw = item.shape.w / 2;
+  const hh = item.shape.h / 2;
+  return [new Vec2(-hw, hh), new Vec2(-hw, -hh), new Vec2(hw, -hh), new Vec2(hw, hh)];
+}
+
+export function worldVertices(item: EdItem): Vec2[] {
+  return localVertices(item).map((v) => toWorld(item, v));
+}
+
+// Convex hull of a point set (Andrew's monotone chain), returned in the winding
+// the engine expects. Drawing a polygon runs the clicked points through this
+// rather than rejecting an out-of-order or slightly dented outline: a convex
+// polygon *is* its own hull, so a well-drawn shape comes back exactly as
+// clicked, and a badly-drawn one becomes the nearest convex shape instead of an
+// error message. Returns [] if the points are collinear or too few.
+export function convexHull(points: readonly Vec2[]): Vec2[] {
+  if (points.length < 3) return [];
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const half = (src: Vec2[]): Vec2[] => {
+    const out: Vec2[] = [];
+    for (const p of src) {
+      while (
+        out.length >= 2 &&
+        out[out.length - 1]!.sub(out[out.length - 2]!).cross(p.sub(out[out.length - 1]!)) <= 0
+      ) {
+        out.pop();
+      }
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  const hull = [...half(pts), ...half([...pts].reverse())];
+  if (hull.length < 3) return [];
+  return polySignedArea2(hull) >= 0 ? hull : hull.reverse();
+}
+
+// The only writer of a polygon's vertices. It re-centres them on their centroid
+// and shifts `pos` to compensate, so the drawn geometry does not move while the
+// origin lands where the physics needs it — and it refuses a loop that is not
+// convex, leaving the shape as it was rather than saving something the rope
+// solver cannot wrap. Returns whether the edit was accepted.
+export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
+  if (item.shape.kind !== "poly" || verts.length < 3) return false;
+  const ordered = polySignedArea2(verts) >= 0 ? [...verts] : [...verts].reverse();
+  if (!isConvexLoop(ordered)) return false;
+  const c = polyCentroid(ordered);
+  item.shape.verts = ordered.map((v) => v.sub(c));
+  item.pos = item.pos.add(c.rotated(item.rot));
+  return true;
+}
+
 // Half-extents of an item's (unrotated) bounding box, i.e. centre → top-left.
 export function halfExtents(item: EdItem): Vec2 {
-  return item.shape.kind === "circle"
-    ? new Vec2(item.shape.r, item.shape.r)
-    : new Vec2(item.shape.w / 2, item.shape.h / 2);
+  if (item.shape.kind === "circle") return new Vec2(item.shape.r, item.shape.r);
+  if (item.shape.kind === "rect") return new Vec2(item.shape.w / 2, item.shape.h / 2);
+  let x = 0;
+  let y = 0;
+  for (const v of item.shape.verts) {
+    x = Math.max(x, Math.abs(v.x));
+    y = Math.max(y, Math.abs(v.y));
+  }
+  return new Vec2(x, y);
 }
 
 // Axis-aligned bounds of a group of items, from their unrotated extents (the
@@ -380,6 +464,39 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
     const cy = Math.min(Math.max(item.pos.y, min.y), max.y);
     return item.pos.distanceTo(new Vec2(cx, cy)) <= item.shape.r;
   }
+  if (item.shape.kind === "poly") {
+    // SAT between the band (world axes) and the placed vertex loop.
+    const verts = worldVertices(item);
+    const axes = [new Vec2(1, 0), new Vec2(0, 1)];
+    for (let i = 0; i < verts.length; i++) {
+      const e = verts[(i + 1) % verts.length]!.sub(verts[i]!);
+      if (e.lengthSquared() > 1e-18) axes.push(e.orthogonal().normalized());
+    }
+    const boxCorners = [
+      min,
+      new Vec2(max.x, min.y),
+      max,
+      new Vec2(min.x, max.y),
+    ];
+    for (const axis of axes) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const v of verts) {
+        const p = v.dot(axis);
+        lo = Math.min(lo, p);
+        hi = Math.max(hi, p);
+      }
+      let blo = Infinity;
+      let bhi = -Infinity;
+      for (const c of boxCorners) {
+        const p = c.dot(axis);
+        blo = Math.min(blo, p);
+        bhi = Math.max(bhi, p);
+      }
+      if (lo > bhi || blo > hi) return false;
+    }
+    return true;
+  }
   // SAT between the rect (world axes) and the item's rotated box: four axes,
   // the two world ones and the item's own.
   const ha = max.sub(min).mul(0.5);
@@ -408,19 +525,11 @@ export function bodyWithinRect(item: EdItem, min: Vec2, max: Vec2): boolean {
       item.pos.y + r <= max.y
     );
   }
-  // A box is the convex hull of its corners, so all four corners inside is
-  // exactly "the whole box is inside" — rotation included.
-  const h = halfExtents(item);
-  const corners = [
-    new Vec2(-h.x, -h.y),
-    new Vec2(h.x, -h.y),
-    new Vec2(h.x, h.y),
-    new Vec2(-h.x, h.y),
-  ];
-  return corners.every((c) => {
-    const w = toWorld(item, c);
-    return w.x >= min.x && w.x <= max.x && w.y >= min.y && w.y <= max.y;
-  });
+  // A rect or a convex polygon is the hull of its vertices, so every vertex
+  // inside is exactly "the whole shape is inside" — rotation included.
+  return worldVertices(item).every(
+    (w) => w.x >= min.x && w.x <= max.x && w.y >= min.y && w.y <= max.y,
+  );
 }
 
 // A point in the item's local (unrotated) frame, origin at the item centre.
@@ -436,7 +545,17 @@ export function toWorld(item: EdItem, local: Vec2): Vec2 {
 export function pointInBody(item: EdItem, world: Vec2): boolean {
   if (item.shape.kind === "circle") return world.distanceTo(item.pos) <= item.shape.r;
   const l = toLocal(item, world);
-  return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
+  if (item.shape.kind === "rect") {
+    return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
+  }
+  // Convex polygon: inside every face's half-plane.
+  const verts = item.shape.verts;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const e = verts[(i + 1) % verts.length]!.sub(a);
+    if (e.y * (l.x - a.x) - e.x * (l.y - a.y) > 0) return false;
+  }
+  return true;
 }
 
 // A blank level: a single wide floor under a spawn point so it is immediately

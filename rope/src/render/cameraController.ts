@@ -68,7 +68,25 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin = 0): boolean
     return p.distanceTo(new Vec2(r.x, r.y)) <= r.shape.r + margin;
   }
   const l = p.sub(new Vec2(r.x, r.y)).rotated(-r.rot);
-  return Math.abs(l.x) <= r.shape.w / 2 + margin && Math.abs(l.y) <= r.shape.h / 2 + margin;
+  if (r.shape.kind === "rect") {
+    return Math.abs(l.x) <= r.shape.w / 2 + margin && Math.abs(l.y) <= r.shape.h / 2 + margin;
+  }
+  // Convex polygon: inside every face plane, each pushed out by the margin. A
+  // true offset (rounded corners) rather than the rect's square-cornered growth,
+  // which is why the editor and the debug overlay draw a polygon's buffer with
+  // filleted corners — the drawn zone is exactly the zone tested here.
+  const verts = r.shape.verts;
+  const n = verts.length;
+  for (let i = 0; i < n; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % n]!;
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len = Math.hypot(ex, ey);
+    if (len < 1e-9) continue;
+    if ((ey * (l.x - a.x) - ex * (l.y - a.y)) / len > margin) return false;
+  }
+  return true;
 }
 
 
