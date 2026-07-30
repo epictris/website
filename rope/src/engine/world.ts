@@ -863,10 +863,22 @@ export class World {
   // because at rest that is all a single pass can see of the load; the
   // accumulated normal impulse *is* the support load, warm starting keeps it
   // honest across frames, and adding the estimate on top would double-count it.
+  //
+  // The cap is also the only thing bounding a body whose rotation is driven
+  // externally. The ball's aim steering rewrites `angularVelocity` every frame,
+  // so its spin is an infinite reservoir as far as a contact is concerned, and
+  // the slip it presents at the contact point is a conveyor belt. That is the
+  // INTENDED mechanic - it is how a steered ball rolls, and it has to work
+  // against scenery exactly as it works against the world, or the ball simply
+  // spins on the spot the moment it touches a rigid body. What keeps it honest
+  // is that the drive is Coulomb-capped: a crate with its own grip on the ground
+  // holds, because the cone the ball can spend is `mu` times the ball's weight
+  // while the crate's grip is `mu_s` times the weight of the crate and the ball
+  // together. `spin-drive` asserts exactly that.
   private solveTangent(s: SolverContact): void {
     if (s.friction <= 0 || s.invEffT <= 1e-9) return;
     const { c } = s;
-    const vt = frictionVelocity(c.a, c.point).sub(frictionVelocity(c.b, c.point)).dot(s.tangent);
+    const vt = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(s.tangent);
     // The cone is asymmetric only for an aiming ball: `contactBrakeScale` fades
     // impulses that oppose its travel so reorienting the spin mid-roll cannot
     // shed momentum, while impulses that drive it still land in full. Written on
@@ -1456,31 +1468,6 @@ function applyPairImpulse(s: SolverContact, impulse: Vec2): void {
   if (!s.bRigid) return; // a static `b` has infinite mass: nothing to write
   s.bRigid.linearVelocity = s.bRigid.linearVelocity.sub(impulse.mul(s.bRigid.inverseMass));
   s.bRigid.angularVelocity -= s.rB.cross(impulse) * s.invIB;
-}
-
-// The velocity of `body` at `point` as far as FRICTION is concerned.
-//
-// A body whose rotation is driven externally - the ball's aim steering, which
-// overwrites `angularVelocity` every frame - has infinite rotational inertia in
-// this solver, because no impulse the contact applies to its spin would survive
-// the next frame's steering. A contact that then still reads that spin as
-// surface motion is reading a velocity it can never affect, and a friction
-// constraint that does so is not a brake but a MOTOR: it drives the other body
-// at the cone limit every single frame, and the reaction that should decelerate
-// the drive is discarded along with the rest of the angular impulse.
-//
-// The pair solve makes the linear half of the reaction real, which is what makes
-// relative slip legitimate again for everything else - two crates now grip each
-// other properly. The kinematic spin is the one term that has to come out, and
-// leaving it in is what let a ball merely HANGING on a chain drive its anchor
-// across the level (session-611f); the chain grew a metre over its anchored
-// length and stayed there.
-//
-// Only friction. The normal constraint reads the true velocity: it cannot do
-// sustained work, since penetration is bounded, so it is not a motor.
-function frictionVelocity(body: PhysicsBody2D, point: Vec2): Vec2 {
-  if (body instanceof RigidBody2D && body.kinematicRotation) return body.linearVelocity;
-  return body.velocityAtPoint(point);
 }
 
 // The Coulomb coefficient one body brings to a contact with another: its own

@@ -1069,9 +1069,9 @@ A ball merely *hanging* on a chain walked its anchor **3.6 m** across the level 
 
 The pair solver makes relative slip legitimate again, and that is the point of it: an equal and
 opposite impulse means the reaction is real, so two crates now grip each other properly.
-What does **not** come back is reading a velocity the contact has no authority over - the ball's
-kinematic spin - which is a motor whoever solves it. See `frictionVelocity` under **The contact
-solver**.
+The ball's kinematic spin still drives through friction, and must - that is how a steered ball
+rolls. It is bounded by the Coulomb cone rather than by being read out of the slip; see **A
+kinematic spin is a conveyor belt** under **The contact solver**.
 
 What is left is longer *legitimate* blocks, because that is what removing the relief valve
 means: geometry that no longer slides out from under a taut chain holds it until the ball
@@ -1080,17 +1080,20 @@ The corpus ceiling went 11 → 46 frames (`session-431f`, over which `maxRopeLen
 move at all and the lease is repaid to exactly zero), so `CHAIN_STALL_FRAMES_TOLERANCE` is 60.
 `rope-grew` holds the gap the blunter count leaves.
 
-The pair solver moved that ceiling again, and left **thin headroom**: the worst run in the
-corpus is now `session-1195f` at **53** frames against the tolerance of 60, where it was 8.
-The rest of the corpus barely moved - second worst 21 against 18 before, median 2 against 1 -
-so this is one outlier and not a shift, and the block is real: over the whole run the ball is at
-a dead stop, wedged against the face of the rigid polygon its 0.2 m chain is anchored to, with
-the chain coiled on its own rim; `maxRopeLength` does not grow (180 cm, against 184.5 before)
-and the lease is released at f451. A converged solver holds the crate still better, and a
+The contact solver moved that ceiling again, and there is now **almost no headroom**: the worst
+run in the corpus is `session-1195f` at **58** frames against the tolerance of 60, where it was 8.
+It is one outlier and not a shift - the second worst is 15 - and the block is real: over the whole
+run the ball is at a dead stop, wedged against the face of the rigid polygon its 0.2 m chain is
+anchored to, with the chain coiled on its own rim; `maxRopeLength` does not grow (180 cm, against
+184.5 before) and the lease is released at f455. A converged solver holds scenery still, and a
 chain anchored to a crate that stays put is blocked until the *ball* settles.
-Do not raise the tolerance to buy room. The margin is a signal that the next change to touch
-contact velocities should measure this distribution before it lands, which is what
-`scripts/abtest.sh` and the numbers above are for.
+
+The consequence to face is that **the frame count has lost most of its discriminating power**.
+It was sharp when healthy runs topped out at 17 and the runaways read 79, 51, 36, 32 and 28; a
+legitimate 58 now sits inside that band, so no threshold can separate the two on count alone.
+`rope-grew` is what holds the gap, and it is the invariant to sharpen if a runaway ever slips
+through - raising `CHAIN_STALL_FRAMES_TOLERANCE` buys margin by giving up detection, which is
+the wrong trade in the one place a runaway is still cheap to catch.
 
 ## Positional recovery
 
@@ -1153,11 +1156,15 @@ At a strict "overlap > 0" a resting stack's own contacts *vanish from the set* o
 Points within the band are kept as **speculative** contacts carrying a *negative* depth; they ask for no impulse unless something is approaching fast enough to close the gap within the step, and above all they persist. The stack now holds 6/6 contacts with 6/6 warm-start hits.
 `shapeContacts`'s `slop` defaults to 0, and must: a caller that pushes bodies out along `depth` would otherwise push a separated pair *together*, which is every positional-recovery site.
 
-**A contact may not read a velocity it cannot affect.**
+**A kinematic spin is a conveyor belt, and the cone is the only thing that bounds it.**
 A body whose rotation is driven externally (the ball's aim steering, which overwrites `angularVelocity` every frame) has infinite rotational inertia here, because no impulse applied to its spin survives the next frame.
-A friction constraint that still reads that spin as surface motion is not a brake but a **motor**, and an unbounded one: on an icy floor a spinning ball drove a crate to a dead-steady 0.78 m/s and 15.5 m in twenty seconds - the `session-611f` mechanism exactly, in the one place the pair solve re-opened it.
-`frictionVelocity` takes the kinematic spin out of the tangential slip, which brings that to 6 cm. `cli contacts` `spin-drive` is the guard, and it fails loudly without it.
-Only friction: the normal constraint reads the true velocity, since it cannot do sustained work and so is not a motor.
+The slip it presents at a contact is therefore an infinite reservoir, and friction reading that slip *is* a motor - which is exactly the mechanic: it is how a steered ball rolls, and it has to work against a rigid body just as it does against the world.
+What keeps it honest is that the drive is Coulomb-capped. The ball can spend `mu` times its own weight; a crate's grip on the ground is `mu_s` times the weight of the crate **and** the ball riding it, which is strictly more, so the crate holds.
+
+The tempting fix is to take the kinematic spin out of the friction slip, on the argument that a contact should not read a velocity it cannot affect.
+It is wrong, and the two cases pin it from both sides: it makes `spin-drive` pass by making the ball unable to drive **anything**, which is the same statement as being unable to roll along scenery.
+A ball spinning at 20 rad/s rolled 49.5 m along a static floor and **0.0 cm** along the identical floor made of scenery (`session-314f`).
+`roll-drive` asserts the two agree; `spin-drive` asserts the crate still holds. Neither can be satisfied by weakening the other.
 
 **Only contacts that pushed back count as contact.**
 `contactDamp` is applied once per body per frame, to the bodies that met something - and a speculative contact carries no impulse, so it is not something met.

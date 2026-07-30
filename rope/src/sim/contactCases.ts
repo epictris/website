@@ -530,21 +530,24 @@ function caseRigidRampHold(sims: Sim[]): ContactResult {
 // which is how a ball merely hanging on a chain walked its anchor 3.6 m across a
 // level (session-611f).
 //
-// The floor here is ICE, and that is what makes the case sharp rather than
-// decorative. On a normal floor the crate's own stiction holds it whatever the
-// ball does - the drive is capped at mu times the ball's weight while the grip is
-// capped at mu_s times the weight of the crate AND the ball riding it, which is
-// strictly more - so the scene passes for a reason that has nothing to do with
-// the contact being honest. Take the crate's anchor away and the cone is the only
-// thing left bounding the drive, which is exactly the question.
+// What bounds it is the Coulomb cone, and nothing else can. The ball's spin is an
+// infinite reservoir - the steering refills it every frame regardless of what the
+// contact does - so the slip it presents is a conveyor belt, and that is the
+// INTENDED mechanic (see `roll-drive`). The guard is that the belt is
+// friction-capped: the ball can spend `mu` times its own weight, while the crate's
+// grip on the ground is `mu_s` times the weight of the crate AND the ball riding
+// it, which is strictly more. So the crate holds.
 //
-// The signature to watch for is a DEAD-STEADY terminal speed: a motor pays the
-// same cone every frame for ever, so it does not decay the way a nudge does.
+// Taking the spin out of the friction slip instead is the tempting fix and it is
+// wrong: it makes this case pass by making the ball unable to drive ANYTHING,
+// which is the same statement as being unable to roll along scenery
+// (`session-314f`, where a ball spinning at 20 rad/s on a rigid body sat at a
+// dead stop). The two are one mechanism and cannot be separated.
 // ---------------------------------------------------------------------------
 function caseSpinDrive(sims: Sim[]): ContactResult {
   const sim = new Sim("spin-drive", 60);
   sims.push(sim);
-  sim.addStatic(rectShape(40, 1), Vec2.ZERO, 0, 0);
+  floor(sim);
   const crate = sim.addRigid(rectShape(1, 0.6), new Vec2(0, -0.8));
   const ball = sim.addRigid(circleShape(0.3), new Vec2(0, -1.4));
   ball.kinematicRotation = true;
@@ -557,10 +560,63 @@ function caseSpinDrive(sims: Sim[]): ContactResult {
 
   const drift = Math.abs(crate.globalPosition.x);
   const speed = Math.abs(crate.linearVelocity.x);
-  const good = drift < 0.5 && speed < 0.05;
-  return ok("spin-drive — a spinning ball does not drive the crate under it", good, [
+  const good = drift < 0.1 && speed < 0.05;
+  return ok("spin-drive — a spinning ball does not overpower the crate's own grip", good, [
     `${good ? "ok  " : "BAD "} crate driven ${(drift * 100).toFixed(1)}cm in 20s at a final ` +
-      `${speed.toFixed(4)} m/s (want <50cm, <0.05 m/s)`,
+      `${speed.toFixed(4)} m/s (want <10cm, <0.05 m/s)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// roll-drive: a steered ball must roll along scenery exactly as along the world.
+//
+// The other half of `spin-drive`, and the one it is easy to break while
+// tightening that one. The ball's rotation is a control input with no force
+// behind it, so a contact cannot slow it; friction reading that spin as surface
+// motion is what converts it into travel, and it has to do so against a rigid
+// body just as it does against a static one.
+//
+// Excluding a kinematic spin from the friction slip - on the argument that a
+// contact should not read a velocity it cannot affect - passes `spin-drive` and
+// breaks this outright: the ball rolled 49.5 m along a static floor and 0.0 cm
+// along the identical floor made of scenery, spinning at 20 rad/s the whole way
+// (`session-314f`).
+// ---------------------------------------------------------------------------
+function caseRollDrive(sims: Sim[]): ContactResult {
+  const travel = (rigidFloor: boolean): number => {
+    const sim = new Sim(rigidFloor ? "roll-drive rigid" : "roll-drive static", 60);
+    sims.push(sim);
+    if (rigidFloor) {
+      // Scenery to roll along: heavy and gravity-free, so the case measures the
+      // ball's traction and not the floor being shoved out from under it. It
+      // rests on the static base below, exactly as level scenery does.
+      sim.addStatic(rectShape(200, 1), new Vec2(0, 2));
+      const slab = sim.addRigid(rectShape(200, 1), Vec2.ZERO);
+      slab.mass *= 200;
+      slab.inertia *= 200;
+      slab.gravityScale = 0;
+    } else {
+      sim.addStatic(rectShape(200, 1), Vec2.ZERO);
+    }
+    // The ball's own coefficients, not scenery's - it is a rolling body.
+    const ball = sim.addRigid(circleShape(0.25), new Vec2(0, -0.75));
+    ball.contactFriction = 1.8;
+    ball.staticFriction = 0.58;
+    ball.contactDamp = 0.99;
+    ball.kinematicRotation = true;
+    sim.step(600, () => {
+      ball.angularVelocity = 20;
+    });
+    return ball.globalPosition.x;
+  };
+
+  const onStatic = travel(false);
+  const onRigid = travel(true);
+  // Rolls at all, and within a quarter of what the world gives it.
+  const good = onRigid > 1 && onRigid > onStatic * 0.75;
+  return ok("roll-drive — a steered ball rolls along scenery as it does along the world", good, [
+    `${good ? "ok  " : "BAD "} travelled ${(onRigid * 100).toFixed(0)}cm on a rigid floor ` +
+      `against ${(onStatic * 100).toFixed(0)}cm on a static one, in 10s`,
   ]);
 }
 
@@ -603,6 +659,7 @@ export function runContactCases(): ContactResult[] {
     caseImpactTransfer(sims),
     caseMomentum(sims),
     caseSpinDrive(sims),
+    caseRollDrive(sims),
   ];
   results.push(casePenetration(sims));
   return results;
