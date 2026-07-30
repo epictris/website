@@ -272,11 +272,10 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     const nodes = chain.rope.path().map((n) => n.contact.globalPosition);
     for (const n of nodes) grow(box, n.x * M, n.y * M, 4);
     const pts = nodes.map((n) => `${(n.x * M).toFixed(1)},${(n.y * M).toFixed(1)}`).join(" ");
-    // Background chains dashed: they touch nothing but their own two bodies, so
-    // a snapshot must not read a chain lying across a body as a chain caught on
-    // it (see `ChainLayer`).
-    const dash = chain.layer === "background" ? ` stroke-dasharray="7 5"` : "";
-    ropeEls.push(`<polyline points="${pts}" fill="none" stroke="#8fa3b8" stroke-width="2"${dash}/>`);
+    // Chains dashed: they touch nothing but their own two bodies, so a snapshot
+    // must not read a chain lying across a body as a chain caught on it (see
+    // `SceneChain`).
+    ropeEls.push(`<polyline points="${pts}" fill="none" stroke="#8fa3b8" stroke-width="2" stroke-dasharray="7 5"/>`);
     for (let i = 1; i < nodes.length - 1; i++) {
       ropeEls.push(`<circle cx="${(nodes[i]!.x * M).toFixed(1)}" cy="${(nodes[i]!.y * M).toFixed(1)}" r="3" fill="#8fa3b8"/>`);
     }

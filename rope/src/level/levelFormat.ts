@@ -104,22 +104,6 @@ export interface ChainAnchorData {
   y: number;
 }
 
-// Which plane a chain lives in - what it is drawn in front of, and equally what
-// it is allowed to touch. The two are the same statement: a chain the player can
-// see behind the level is a chain the player cannot run into.
-//
-// "foreground": in the play space. Drawn over the geometry, and solved against
-// every body in the scene - it wraps corners, drapes over rigid bodies, and the
-// avatar and its hook can push into it and be held by it.
-//
-// "background": scenery. Drawn behind the geometry, and solved against nothing
-// but the two bodies it is tied to, so it hangs and swings and hauls those two
-// and passes through everything else. This is what a chain strung across a
-// backdrop wants: it must not silently become a wall the player can snag on.
-export type ChainLayer = "background" | "foreground";
-
-export const DEFAULT_CHAIN_LAYER: ChainLayer = "foreground";
-
 export interface ChainData {
   a: ChainAnchorData;
   b: ChainAnchorData;
@@ -129,9 +113,6 @@ export interface ChainData {
   // Optional appearance. Absent = the renderer's own chain colours (the same
   // forged-iron links the ball & chain hangs on).
   color?: string;
-  // Absent = "foreground", the plane a chain authored before this field was
-  // solved and drawn in.
-  layer?: ChainLayer;
 }
 
 // Default framing of a camera region: no offset, unchanged viewport, no lock.
@@ -318,14 +299,13 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     ...(g.color !== undefined ? { color: g.color } : {}),
     ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
   }));
-  // A chain's anchor points and its length are lengths; the body indices, the
-  // colour and the layer are not.
+  // A chain's anchor points and its length are lengths; the body indices and
+  // the colour are not.
   const chains = data.chains?.map((c) => ({
     a: { body: c.a.body, x: c.a.x * factor, y: c.a.y * factor },
     b: { body: c.b.body, x: c.b.x * factor, y: c.b.y * factor },
     ...(c.length !== undefined ? { length: c.length * factor } : {}),
     ...(c.color !== undefined ? { color: c.color } : {}),
-    ...(c.layer !== undefined ? { layer: c.layer } : {}),
   }));
   return {
     ...(backgrounds ? { backgrounds } : {}),

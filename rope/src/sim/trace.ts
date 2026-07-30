@@ -177,10 +177,27 @@ const CHAIN_SOLVE_KICK_TOLERANCE = 4;
 const CHAIN_GROWTH_TOLERANCE = 0.6;
 // Consecutive frames the winch stall may keep letting length out. This is the
 // sharp measure, because a *run* of stalls is the shape of every chain runaway
-// there has been, and one blocked frame is not. Across the whole ball corpus
-// legitimate stalls run 11 frames at most, while the runaways ran 79, 51, 36, 32
-// and 28 — nothing sits between.
-const CHAIN_STALL_FRAMES_TOLERANCE = 20;
+// there has been, and one blocked frame is not. The runaways ran 79, 51, 36, 32
+// and 28.
+//
+// The legitimate ceiling was 11 frames when this was written and is 46 now
+// (session-431f), and that is not drift - it is scenery having been given
+// friction against the ground it stands on. A stall is the chain being held over
+// its length by geometry, so how long one lasts is how long that geometry takes
+// to stop holding, and a frictionless rigid body relieved every block for free
+// by sliding out from under it. The blocks were short because the level was made
+// of ice. A chain anchored to a crate that stays put is now legitimately blocked
+// until the *ball* settles, which is tens of frames: 431f's runs 46, over which
+// `maxRopeLength` does not move at all and the lease is paid back to exactly
+// zero by f420.
+//
+// The count is correspondingly blunter, and `rope-grew` is what still holds the
+// gap: the one genuine chain runaway this change surfaced (session-1195f, a
+// point-blank anchor on a body the ball had wedged itself against, whose lease
+// climbed to 1.47 m on a 2.9 cm chain) tripped `rope-grew` twenty frames before
+// its stall run would have said anything, because a runaway is measured in
+// metres of chain and only incidentally in frames.
+const CHAIN_STALL_FRAMES_TOLERANCE = 60;
 // A chain span may graze a corner (endpoints on a surface), but its interior
 // must never run deep inside static geometry — that's the chain clipping
 // through the scene. Same 3 cm slack as the embed check.

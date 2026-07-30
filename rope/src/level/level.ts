@@ -145,7 +145,7 @@ export class Level {
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
     // recorded replay bit-identical.
-    for (const chain of this.sceneChains) chain.physicsStep(this.bodies, delta);
+    for (const chain of this.sceneChains) chain.physicsStep(delta);
 
     this.cameraPosition = this.player.globalPosition;
   }

@@ -44,6 +44,41 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
   body.surfaceFriction = b.friction ?? DEFAULT_SURFACE_FRICTION;
 }
 
+// Coulomb coefficients an authored `rigid` body brings to its own contacts.
+// `RigidBody2D`'s class defaults are 0 and have to stay 0 (recorded replays
+// predate the fields, and the avatars that want friction set their own), but a
+// piece of scenery built from a level is exactly the case those defaults are
+// wrong for: with no coefficients the only thing resisting a shove is the 0.98
+// `contactDamp`, which is a pure exponential coast and never grips at all - a
+// crate nudged by the player glided a metre across a flat floor and was still
+// drifting 300 frames later (session-477f).
+//
+// Both coefficients, because kinetic friction alone is not enough to be called
+// friction at all. Coulomb friction is capped at μ × the frame's normal impulse,
+// which on a resting body is just gravity's bite (g·cosθ·dt), so it can cancel
+// the *velocity* gravity adds each frame but never the *step* the integrator
+// already took with it: a box on a 5° ramp still walked 21 cm in fifteen seconds
+// and was not slowing, and at 15° it was 63 cm. Holding a slope is precisely
+// what the stick anchor does, and there is no way to have it without arming the
+// anchor - `staticFriction` is what arms it.
+//
+// That is the cost, and it is a real one: the anchor pins the body's
+// along-surface position, so a chain hauling a crate gently enough to stay under
+// the grip's release speed is pinned back every frame and the chain reads as
+// blocked. `applyRigidContactFriction` refuses stiction for exactly this reason
+// against another *rigid* body, where the pin would also fight that body's own
+// resolution pass. Against a static surface the pin has no such rival, and the
+// grip releases the moment the body is moving at all (`STICK_SPEED`), so a chain
+// with any real pull on it still drags the crate - which is what the two bundles
+// with a chain anchored to a rigid polygon show (session-431f, session-1474f):
+// both stay healthy, with the chain's blocked-length lease paid back to zero.
+//
+// Slab-of-scenery numbers, not the rolling ball's: μ_s ≥ μ_k, as for a body that
+// slides rather than rolls, and μ_s = 0.7 puts the breakaway angle at
+// atan(0.7) ≈ 35°, so a crate holds a shallow ramp and lets go of a steep one.
+const RIGID_KINETIC_FRICTION = 0.6;
+const RIGID_STATIC_FRICTION = 0.7;
+
 // What `buildLevelBodies` hands back.
 export interface BuiltBodies {
   // Everything the rope may wrap: statics and rigids, but not areas (the rope
@@ -216,6 +251,13 @@ function buildOne(
     mountPieces(rb, pieces);
     setCompoundInertia(rb);
     applyStyle(rb, b);
+    // The authored `friction` is the body's material grip, so it scales what the
+    // body brings to a contact as well as what it offers one: an ice block is
+    // slippery to stand on *and* slides on the floor it sits on. The contact
+    // solve multiplies the two sides together, so an ice block on an ice floor
+    // is frictionless from either end, which is the answer either reading gives.
+    rb.contactFriction = RIGID_KINETIC_FRICTION * rb.surfaceFriction;
+    rb.staticFriction = RIGID_STATIC_FRICTION * rb.surfaceFriction;
     world.add(rb);
     return rb;
   }

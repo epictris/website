@@ -24,7 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
-import type { CameraRegionData, ChainLayer } from "../level/levelFormat";
+import type { CameraRegionData } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
@@ -414,9 +414,9 @@ export function render(
   // hidden behind a backdrop.
   drawBackgrounds(ctx, level.backgrounds);
 
-  // Background chains hang among the decoration, behind every solid thing -
-  // which is the same statement as their passing through it (see `ChainLayer`).
-  drawSceneChains(ctx, level.sceneChains, "background", alpha);
+  // Chains hang among the decoration, behind every solid thing - which is the
+  // same statement as their passing through it (see `SceneChain`).
+  drawSceneChains(ctx, level.sceneChains, alpha);
 
   // Hook-only scenery is background the player passes through, so it goes down
   // first and solid geometry draws over it.
@@ -429,10 +429,6 @@ export function render(
     drawBody(ctx, body, alpha);
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
-
-  // Foreground chains over the geometry they are strung between, under the rope
-  // and the avatar.
-  drawSceneChains(ctx, level.sceneChains, "foreground", alpha);
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -495,34 +491,61 @@ export function render(
 const CHAIN_LINK_LEN = 3.8 * PX; // fixed on-screen link length (world metres)
 const CHAIN_LINK_W = 1.8 * PX; // half-width of the broad (in-plane) link
 
-// Metal chain from `a` to `b`: interlocking oval links, alternately rotated
-// 90° so it reads as forged loops. Links are a FIXED world length, laid from
-// `a` — the partial leftover falls at the `b` end. Callers pass the anchored
-// (world-fixed) end as `a` and the ball-side as `b`, so as the chain reels the
-// links stay put in the world and the last one is consumed into the ball
-// rather than the whole chain compressing toward the anchor. `phase` seeds the
-// broad/narrow alternation for continuity across joined segments; returns the
-// next phase and the unused remainder length past the last full link.
-function drawChainLink(
+// Metal chain along a polyline: interlocking oval links of a FIXED world length,
+// alternately rotated 90° so it reads as forged loops. Callers pass the anchored
+// (world-fixed) end FIRST and the ball-side last, so as the chain reels the links
+// stay put in the world and the last one is consumed into the ball rather than
+// the whole chain compressing toward the anchor.
+//
+// Links are laid by ONE continuous arc length measured from `points[0]`, so a
+// link straddles a vertex rather than the run restarting there. That is what a
+// chain of rigid links does over a corner, and it is also the only form that
+// survives a coil: `Rope` re-samples rope wound onto the ball every 0.25 rad,
+// which is a node every ~3.1 mm on the rim and SHORTER than one 3.8 mm link, so
+// laying links segment by segment floored every coil span to `floor(3.1/3.8)` =
+// zero links. The whole wound-on part of the chain drew as nothing, one node at
+// a time as the ball turned - the drawn chain vanishing where it lay on the
+// player.
+//
+// The sub-link remainder falls at the far end (the ball centre, hidden under the
+// body), so reeling consumes links into the ball rather than rescaling the chain.
+function drawChainPolyline(
   ctx: CanvasRenderingContext2D,
-  a: Vec2,
-  b: Vec2,
-  phase = 0,
+  points: Vec2[],
   // Link colours. The defaults are the forged-iron pair the ball & chain hangs
   // on; an authored scene chain passes its own, darkened for the narrow links so
   // the alternation still reads as interlocking loops.
   colors: { broad: string; narrow: string } = { broad: CHAIN, narrow: CHAIN_DARK },
-): { phase: number; remainder: number } {
-  const total = a.distanceTo(b);
-  if (total < 1e-3 * PX) return { phase, remainder: 0 };
-  const dir = a.directionTo(b);
-  const n = Math.floor(total / CHAIN_LINK_LEN);
-  const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
+): void {
+  // Cumulative arc length at each vertex, skipping degenerate repeats (a wrap
+  // node landing on its neighbour) so no link takes its heading from a zero span.
+  const verts: Vec2[] = [];
+  const at: number[] = [];
+  let total = 0;
+  for (const p of points) {
+    const last = verts[verts.length - 1];
+    if (last) {
+      const d = last.distanceTo(p);
+      if (d < 1e-3 * PX) continue;
+      total += d;
+    }
+    verts.push(p);
+    at.push(total);
+  }
+  if (verts.length < 2) return;
 
+  const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
+  const n = Math.floor(total / CHAIN_LINK_LEN);
   ctx.lineWidth = PX;
+  let seg = 0;
   for (let i = 0; i < n; i++) {
-    const mid = a.add(dir.mul((i + 0.5) * CHAIN_LINK_LEN));
-    const broad = (i + phase) % 2 === 0; // alternate link orientation
+    const s = (i + 0.5) * CHAIN_LINK_LEN;
+    while (seg + 2 < verts.length && at[seg + 1]! < s) seg++;
+    const a = verts[seg]!;
+    const b = verts[seg + 1]!;
+    const dir = a.directionTo(b);
+    const mid = a.add(dir.mul(s - at[seg]!));
+    const broad = i % 2 === 0; // alternate link orientation
     const w = broad ? CHAIN_LINK_W : CHAIN_LINK_W * 0.5;
     ctx.strokeStyle = broad ? colors.broad : colors.narrow;
     ctx.beginPath();
@@ -535,50 +558,27 @@ function drawChainLink(
     ctx.restore();
     ctx.stroke();
   }
-  return { phase: phase + n, remainder: total - n * CHAIN_LINK_LEN };
 }
 
-// Lay chain links at fixed spacing along a polyline, measured from points[0]
-// (the anchor). The sub-link remainder falls at the far end (the ball centre,
-// hidden under the body), so reeling consumes links into the ball rather than
-// rescaling the whole chain.
-function drawChainPolyline(
-  ctx: CanvasRenderingContext2D,
-  points: Vec2[],
-  colors?: { broad: string; narrow: string },
-): void {
-  let phase = 0;
-  for (let i = 0; i + 1 < points.length; i++) {
-    const r = drawChainLink(ctx, points[i]!, points[i + 1]!, phase, colors);
-    phase = r.phase;
-    // (Per-segment remainder is small and lands at wrap corners / the covered
-    // ball centre; the visible run from the anchor stays world-pinned.)
-  }
-}
+// How far a chain's links are pushed toward the backdrop: the fill they are
+// drawn at, so they read as the same iron seen through the level's own haze
+// rather than as a different, thinner chain.
+const CHAIN_ALPHA = 0.55;
 
-// How far a background chain's links are pushed toward the backdrop: the fill
-// they are drawn at, so they read as the same iron seen through the level's own
-// haze rather than as a different, thinner chain.
-const BACKGROUND_CHAIN_ALPHA = 0.55;
-
-// Authored scene chains of one layer: the same forged links, laid along each
-// chain's wrap path. Drawn from the wrap NODES against the render transforms,
-// exactly as the rope and the ball's chain are, so a chain stays welded to the
-// drawn bodies at both ends instead of to their 60 Hz sim positions.
+// Authored scene chains: the same forged links, laid along each chain's wrap
+// path. Drawn from the wrap NODES against the render transforms, exactly as the
+// rope and the ball's chain are, so a chain stays welded to the drawn bodies at
+// both ends instead of to their 60 Hz sim positions.
 //
-// Called twice a frame, once per layer, because the two layers sit on opposite
-// sides of the level's geometry - that is the whole visible half of what the
-// layer means (the other half is what the chain is solved against; see
-// `SceneChain.physicsStep`).
+// Drawn behind the level's geometry, which is the visible half of a chain being
+// scenery; the other half is that it is solved against nothing but its own two
+// bodies (see `SceneChain.physicsStep`).
 function drawSceneChains(
   ctx: CanvasRenderingContext2D,
   chains: readonly SceneChain[],
-  layer: ChainLayer,
   alpha: number,
 ): void {
-  const background = layer === "background";
   for (const chain of chains) {
-    if (chain.layer !== layer) continue;
     const spans = chain.rope.getSpans();
     if (!spans.length) continue;
     const path = [
@@ -586,7 +586,7 @@ function drawSceneChains(
       ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
     ];
     ctx.save();
-    if (background) ctx.globalAlpha *= BACKGROUND_CHAIN_ALPHA;
+    ctx.globalAlpha *= CHAIN_ALPHA;
     drawChainPolyline(
       ctx,
       path,
@@ -679,8 +679,8 @@ export function renderBall(
   // Authored decoration under everything (see `render`).
   drawBackgrounds(ctx, level.backgrounds);
 
-  // Background chains behind the solid geometry they pass through (see `render`).
-  drawSceneChains(ctx, level.sceneChains, "background", alpha);
+  // Chains behind the solid geometry they pass through (see `render`).
+  drawSceneChains(ctx, level.sceneChains, alpha);
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
   for (const body of level.world.bodies) {
@@ -693,9 +693,6 @@ export function renderBall(
     drawBody(ctx, body, alpha);
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
-
-  // Foreground chains over the geometry, under the ball's own chain.
-  drawSceneChains(ctx, level.sceneChains, "foreground", alpha);
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
   // ANCHOR toward the ball, then on through the loop into the ball CENTRE

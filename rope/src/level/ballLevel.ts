@@ -137,7 +137,7 @@ export class BallLevel {
     // phase opens: whatever they move is then part of the state that phase
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
-    for (const chain of this.sceneChains) chain.physicsStep(this.bodies, delta);
+    for (const chain of this.sceneChains) chain.physicsStep(delta);
 
     // Push the ball clear of the scenery before anything measures against it,
     // and before the chain solve rather than after.

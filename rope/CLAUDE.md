@@ -103,16 +103,39 @@ avatar's steering branch inside it) stays bit-identical to recorded replays.
 - `World` rigidbody dynamics are approximate (no stacking solver, one Gauss-Seidel pass per
   frame); the rope drives attached bodies directly, so this mostly affects free-falling
   debris. Polygon contacts do get a real two-point manifold (above); circles remain single-point.
-  Rigid-vs-rigid contacts still take the approximate path — half the push-out, half the
-  approach velocity — but they are no longer *frictionless*: `applyRigidContactFriction`
+  Rigid-vs-rigid contacts still take the approximate path - half the push-out, half the
+  approach velocity, each body resolving its own `RIGID_PAIR_SHARE` of the contact with no
+  knowledge of the other's pass - but they are no longer *torque-free*: in `resolveRigidLoop`
+  the normal impulse goes through the coupled linear/angular effective mass, per manifold
+  point, so an off-centre contact turns the body. It used to read `linearVelocity` alone and
+  write back into `linearVelocity` alone, which a circle can survive (its normal passes
+  through its centre, so there is no lever) and a vertex shape cannot: resting on another
+  rigid body it could be pushed but never turned, so a body balanced on a corner of one had
+  no way to fall off it. A long sliver cantilevered out into thin air over the corner of
+  another polygon turned at 0.2 rad/s, on the crumb of friction torque that was the only kind
+  reaching it, where it should have whipped round in a fraction of a second - it now peaks at
+  3.5 (`session-166f`).
+  Positional recovery is no longer part of any of that: the contact routines solve **velocity**
+  and `resolveDynamicCollisions` closes the step with a scene-wide sweep of `depenetrateRigid`
+  (`DEPENETRATION_PASSES` passes over every rigid body) that solves **position**.
+  See **Positional recovery** below.
+  They are no longer *frictionless* either: `applyRigidContactFriction`
   gives them the same Coulomb-capped kinetic friction and `contactDamp` the static path
   applies, minus the stiction and the stick anchor, which pin a body to a surface that is
-  not going anywhere and would fight the other body's own resolution pass.
+  not going anywhere and would fight the other body's own resolution pass, and minus any
+  reading of the *other* body's motion: it writes only to `body`, so it is not one half of a
+  reciprocal pair and slip taken relative to another dynamic body is invented energy.
+  Slip is measured against the world there, which makes the contact a brake and never a
+  motor. See **Force areas and surface friction**.
   Without it, resting on a rigid body was resting on ice — a circle's `contactFriction`
   did nothing at all against a polygon — so gravity did work down a rigid slope for ever,
   and a chain to carry that away made it a motor: a ball hanging on a rigid polygon's face
   slid the pair across the level and, left to run, accelerated to **68 m/s** over eleven
   metres (`session-431f`).
+  The other half of that - a rigid body against the **static** geometry it stands on - was
+  frictionless for the separate reason that `RigidBody2D`'s coefficients default to 0 and
+  nothing but the two avatars ever set them; authored `rigid` bodies now get theirs from
+  `buildBodies.ts`. See **Force areas and surface friction**.
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
   `slackSimulation` field unused; the rope renders straight spans.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is
@@ -500,6 +523,16 @@ launches, mover misbehavior):
    `cli chainpath bundle.json --from A --to B` prints the wrap-node polyline per
    frame in px (node count > 2 means the chain caught a corner). Reach for these
    the moment a bug is about position/shape rather than a stuck/velocity number.
+4c. **See what the *player* sees.** Everything above draws its own picture of the
+   sim state, which is exactly why none of it can see a bug in the drawing. With
+   `bun run dev` up, `/shot.html?bundle=/playtests/bundles/session-1474f.json&frame=300&zoom=9`
+   replays a bundle to one frame and draws it with the **real** renderer, at
+   `alpha = 1` so the grab is reproducible; screenshot it headless
+   (`chromium-browser --headless --screenshot=out.png --window-size=1200,900 --virtual-time-budget=8000 "<url>"`).
+   Reach for it when the report is about what something *looks* like. The chain
+   wound onto the ball drew as blank space for want of one `floor` (see
+   `drawChainPolyline`), and every CLI tool called that run perfectly healthy,
+   because it was.
 5. **Verify.** `cli bundles` green + all playtests + `bun run replay selftest`
    (must stay bit-identical — static-path behavior may never change; mobile
    behavior is gated behind `isMobile`/`isRotating` branches). To confirm a fix
@@ -799,13 +832,15 @@ There is deliberately **no new physics**: `Rope` already models a rope between t
 What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
 Both would need the chain to be a body per link, which is a different mechanism.
 
-Every chain has a **plane** (`ChainData.layer`, the inspector's `plane` picker), and the plane is *one* decision, not two - what the chain is drawn in front of and what it is allowed to touch are the same statement, because a chain hanging visibly behind the level that still snagged the player would be a lie the level tells.
+A chain is **scenery**: drawn behind the level's geometry at 55% alpha, and solved against **nothing** - `SceneChain.physicsStep` hands the rope an empty candidate list, so it hangs, swings and hauls its own two bodies and passes through everything else.
+The editor draws it dashed and `cli render` dashes it too, so a snapshot never reads a chain lying across a body as a chain caught on it.
 
-- `foreground` (the default, and what a chain authored before the field was) is in the play space: drawn over the geometry, solved against the whole scene, so its span wraps corners, drapes over rigid bodies, and the avatar and its hook can push into it and be caught by it.
-- `background` is scenery: drawn behind the geometry at 55% alpha, and solved against **nothing** - `SceneChain.physicsStep` hands the rope an empty candidate list, so it hangs, swings and hauls its own two bodies and passes through everything else. The editor draws it dashed and `cli render` dashes it too, so a snapshot never reads a chain lying across a body as a chain caught on it.
+There was briefly a second, `foreground` plane - in the play space, drawn over the geometry and solved against the whole scene, so the span wrapped corners and the avatar and its hook could be caught by it - and it was **removed**.
+It bought very little that a rigid body on a chain does not already buy, and it charged for that by making every chain a thing the player might silently snag on, and every wrap-and-corner bug in the solver reachable from a piece of decoration.
+If a chain in the play space is ever wanted again, note that the plane has to stay *one* decision and not two: what a chain is drawn in front of and what it is allowed to touch are the same statement, because a chain hanging visibly behind the level that still snagged the player is a lie the level tells.
 
-The empty list is exactly right rather than a special case: `Rope.regeneratePath` never wraps a span around the bodies that span starts and ends on, so "the scene is empty" and "only the two anchors exist" are the same solve.
-It is also why `Rope.physicsStep` derives its **own** set of bodies to pay for the correction (`moved` = the scene it was handed ∪ the bodies on its path) rather than crediting the list it was given: a background chain is handed none of the scene, and a body whose position the solve corrects but whose velocity nothing credits keeps every frame's gravity - a wrecking ball on a background chain sat perfectly still at **119 m/s** by the twelfth second, waiting for the first frame that gave it slack.
+The empty candidate list is exactly right rather than a special case: `Rope.regeneratePath` never wraps a span around the bodies that span starts and ends on, so "the scene is empty" and "only the two anchors exist" are the same solve.
+It is also why `Rope.physicsStep` derives its **own** set of bodies to pay for the correction (`moved` = the scene it was handed ∪ the bodies on its path) rather than crediting the list it was given: a chain is handed none of the scene, and a body whose position the solve corrects but whose velocity nothing credits keeps every frame's gravity - a wrecking ball on a chain sat perfectly still at **119 m/s** by the twelfth second, waiting for the first frame that gave it slack.
 
 Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
@@ -817,6 +852,11 @@ A chain naming the same engine body at both ends (two members of one compound gr
 Chains carry their own selection, exclusive with the item selection: a chain has no shape, no placement and no properties in common with an item, so a mixed selection would have nothing an inspector panel could say about it.
 They are picked by a screen-space band around their span and edited by two round endpoint handles; dragging one lands it on whatever body is under the pointer, so moving an anchor along its own body and moving it to a different one are the same gesture.
 In game they draw with the same forged links the ball & chain hangs on, laid along the wrap path and resolved against the render transforms; the editor draws them **straight**, because a span between wrap nodes *is* straight and a guessed sag would be a drawing of something the level does not contain.
+
+Links are laid by **one continuous arc length** measured from the anchor end (`drawChainPolyline`), never per span.
+A link straddles a wrap node rather than the run restarting there, which is both what a chain of rigid links does over a corner and the only form that survives a coil: `Rope` re-samples rope wound onto the ball every 0.25 rad, a node every ~3.1 mm on the rim and **shorter than one 3.8 mm link**, so laying links span by span floored every coil step to `floor(3.1 / 3.8)` = zero links.
+The entire wound-on part of the chain drew as blank space, one node at a time as the ball turned - read from the game as the chain's nodes being deleted where they lay on the player (`session-1467f`).
+The sim was correct throughout and every invariant, replay and bundle passed; see the frame grabber in the debugging steps.
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
@@ -967,6 +1007,131 @@ not how hard you can push off it.
 A river is the two composed: a `force` area over a low-`friction` bed. On a default rubber
 bed the ground friction (≈7 m/s² of deceleration) swamps a 3 m/s² current and the avatar
 barely drifts; drop the bed to ~0.15 and the same current carries it.
+
+An authored **`rigid`** body reads that same `friction` in *both* directions: it scales what
+the body offers a contact (`surfaceFriction`, as for any body) and, in `buildBodies.ts`, the
+Coulomb coefficients the body itself brings to one.
+A crate is slippery to stand on and slides on the floor it sits on for the one reason, and
+since the contact solve multiplies the two sides together, an ice block on an ice floor is
+frictionless read from either end.
+`RigidBody2D`'s class defaults are 0 and must stay 0 - recorded replays predate the fields,
+and the avatars that want friction set their own - but a piece of level scenery is exactly
+what those defaults are wrong for.
+With no coefficients the only thing resisting a shove is the 0.98 `contactDamp`, which is a
+pure exponential coast and never grips: a crate nudged by the player glided a metre across a
+flat floor and was still drifting three hundred frames later (`session-477f`).
+
+**Both** coefficients, because kinetic friction alone is not enough to be called friction.
+Coulomb friction is capped at μ × the frame's normal impulse, which on a resting body is
+just gravity's bite (g·cosθ·dt), so it cancels the *velocity* gravity adds each frame but
+never the *step* the integrator already took with it - a box on a 5° ramp still walked 21 cm
+in fifteen seconds and was not slowing.
+Holding a slope is what the **stick anchor** does, and `staticFriction` is what arms it.
+The cost is real and is the reason `applyRigidContactFriction` refuses stiction against
+another *rigid* body: the anchor pins the body's along-surface position, so anything else
+writing that position - a chain hauling the crate, or the other body's own resolution pass -
+is undone every frame.
+Against a **static** surface the pin has no rival, and the grip releases the moment the body
+moves at all (`STICK_SPEED`), so a chain with any real pull on it still drags the crate;
+both bundles with a chain anchored to a rigid polygon stay healthy, with the chain's
+blocked-length lease paid back to zero (`session-431f`, `session-1474f`).
+The numbers are a slab of scenery's, not the rolling ball's: μ_s ≥ μ_k, as for a body that
+slides rather than rolls, and μ_s = 0.7 puts the breakaway at atan(0.7) ≈ 35°.
+
+Turning stiction on for scenery also surfaced a defect in the **manifold** stiction path:
+it kept the body's whole normal velocity, including a component pointing *into* the surface,
+which a gripped body can never realise.
+That path is the one that leaves such a component behind - zeroing the spin discards the
+angular half of the normal impulse solved just above it, so the linear approach that impulse
+was cancelling survives - and the push-out then hides it.
+A crate settled flat on a floor sat at a perfectly stable position while reporting a
+permanent 0.275 m/s into the ground, re-earned and re-pushed-out every frame.
+`resolveRigidLoop` now keeps only the *separating* part; the circle path deals in a single
+contact whose normal impulse is not split, so it is left bit-for-bit alone.
+
+Two more things stiction-on-scenery broke, and both come from the same root: the grip was
+written for the **ball**, and a ball is a circle.
+
+The grip **zeroed `angularVelocity`**, which for a circle is free - rotation cannot change
+which part of the shape is holding it up, so a settled ball simply should not be spinning.
+A vertex shape's orientation *is* its balance, and freezing the spin of a gripped one holds
+its pose by fiat: gravity gets no say, and a slab tipped up on a corner can never topple back
+down.
+Worse, nothing anchors the *angle* the way `stickAnchor` anchors the position, so any
+rotation written after the contact solve is kept in full and re-frozen next frame - a chain
+that turns the body a fraction of a degree per tug ratchets it round for good.
+That is what `session-1195f` reported: a polygon group a chain had walked from -13° to -22.8°
+stayed there with the chain gone, reading as gravity having been switched off for it.
+`resolveRigidLoop` now leaves rotation alone.
+The per-point normal impulses are what resist rotation - which is what a two-point manifold is
+*for* - and a body that really is toppling spins past `STICK_SPIN`, releases the grip and
+falls.
+The grip stays what it is meant to be: a brake on translation, not a lock on pose.
+
+The second is that **rigid-rigid contact friction may not read the other body's motion**.
+`applyRigidContactFriction` measured slip the way the static path does, relative to the surface
+the other body presents, and for a static body or a scripted mover that is right - an
+infinite-mass surface whose motion is a given, which a body resting on it is dragged along by,
+and that is the whole point.
+Two *dynamic* bodies are a different situation, and the difference is that this routine is not
+one half of a reciprocal impulse pair: it only ever writes to `body`, and the other direction is
+a separate call on a separate pass, sized independently from its own mass and its own normal
+budget.
+Nothing makes the two equal and opposite, so any impulse taken from `other`'s motion is energy
+the contact invented - which did not matter while level rigid bodies had `contactFriction = 0`
+and the routine did nothing at all, and became a **motor** the moment they did not.
+The ball is the worst possible thing to read a surface velocity from: its spin is kinematic (the
+aim rewrites it every frame, so nothing the contact does can slow it) and its linear velocity is
+whatever the chain solve last credited it, which for a wedged ball is metres per second of motion
+the geometry is refusing.
+Either one reads as a surface sliding under the crate, and Coulomb friction dutifully drags the
+crate along with it - at a dead-steady 2.4 mm a frame, for ever, because the crate's own grip on
+the floor is resolved earlier in the same pass and cannot answer a drive that lands after it.
+A ball merely *hanging* on a chain walked its anchor **3.6 m** across the level that way
+(`session-611f`).
+Slip is now measured against the **world**, so the impulse can only oppose the body's own motion:
+the contact is a brake and never a motor, which is what the routine was added to be and all
+`session-431f` ever needed.
+The two bodies still shove each other through the normal channel, which *is* solved as a pair.
+
+What is left is longer *legitimate* blocks, because that is what removing the relief valve
+means: geometry that no longer slides out from under a taut chain holds it until the ball
+itself settles.
+The corpus ceiling went 11 → 46 frames (`session-431f`, over which `maxRopeLength` does not
+move at all and the lease is repaid to exactly zero), so `CHAIN_STALL_FRAMES_TOLERANCE` is 60.
+`rope-grew` holds the gap the blunter count leaves.
+
+## Positional recovery
+
+The contact routines in `World.resolveDynamicCollisions` solve **velocity**.
+Position is recovered separately, by a scene-wide sweep at the end of the step: `DEPENETRATION_PASSES` passes, each giving every rigid body one `depenetrateRigid` pass.
+
+They used to do both, pushing out per `(shape, shape)` pair along that pair's own deepest contact and in ignorance of every other pair.
+That is the wedge failure `moveAndCollide` and `depenetrateRigid` were each fixed for, in their own words - pushing fully out of one surface can push straight into another, and whichever pair was handled last wins - and the fix was simply never applied here, so a body touching two things at once could not settle against either.
+A slab leaning on another polygon with its lower end on the floor is exactly that wedge, and it stood **165 mm** inside them, buzzing: penetration that deep churns the contact set frame to frame, so the normal impulse fired about one frame in five while contact friction went on torquing the body every frame, and the slab's spin sawtoothed between -0.18 and +0.13 rad/s for as long as it slid (`session-326f`).
+The whole polygon corpus now stands at **5 mm or less**.
+
+Four things about the sweep are load-bearing, and each was found by getting it wrong:
+
+- It runs **after** every body's contacts, not at the end of each body's own pass.
+  Depenetration is a race - whoever moves last wins the overlap - so a body recovered mid-loop is answering a scene that is still half-solved, and a heavier or simply later-listed neighbour walks through it.
+  Interleaved, a falling slab drove the ball a quarter of a metre into the floor; swept afterwards, the two settle against each other.
+- It is **every** rigid body, not only the vertex-shaped ones the bug was visible on, for the same reason: granting the iterated whole-body solve to the polygons alone let them out-muscle the ball by 34 cm.
+- The per-pair push-outs are **kept**. Leaning on the sweep alone is not equivalent, since it resolves only the two deepest overlaps per pass, and removing them left the ball 240 mm inside the ground.
+- A gripped body's **`stickAnchor` rides along with whatever the sweep moves it by**.
+  The anchor is a positional constraint of its own - it is where the surface had hold, and the grip pins the body's along-surface position to it - so putting the position solve after the contact pass took the last word away from it, and the two fought: the grip dragged the body back to an anchor the sweep had already found to be inside something, the sweep pushed it back out, and a polygon resting perfectly still on the floor buzzed **49 mm** back and forth for as long as it sat there (`session-255f`, now 1.2 mm).
+  Carrying the anchor with the correction does not weaken the grip, because what stiction exists to cancel is the tangential *drift* gravity integrates in one step, and that is measured against the anchor and unaffected by moving both.
+  It is the trick the steered-ball coil path already uses, where the anchor advances by the roll the frame intended and only the creep on top is removed.
+
+`depenetrateRigid`'s **crush** branch was the other half.
+Two near-opposite faces have no finite simultaneous solve (the denominator explodes as `c → -1`), and the fallback used to resolve the deepest face in full and accept a residual - which is precisely the sequential pushout the simultaneous solve exists to replace, reintroduced in the one branch where both surfaces are certain to be real, and iterated, so the last pass wins and the error compounds.
+A ball resting on the floor with a slab landing on it was shoved 33 mm up out of the floor, which buried it 47 mm in the slab, which shoved it 47 mm back down - net deeper than it began, every frame, until it was a quarter of a metre underground.
+The two demands are mutually exclusive, so the branch now **equalises** them: move along the deeper normal by half the difference, leaving both faces at the mean depth and a body already centred between them exactly where it is.
+Resolving the *static* side in full instead, on the argument that a static surface cannot get out of the way and a rigid one can, is the tempting refinement and it is wrong - it re-buries the body in the rigid face and the next pass pushes it straight back, which is the same ping-pong under a better motive.
+
+**Still open.** A resting polygon's *rotation* wobbles about ±0.15°, a few mm at the end of a long body.
+The normal impulse is gated on `vn < 0`, so at a settled contact it fires intermittently rather than holding a steady standing force, and the two points of a manifold solve Gauss-Seidel against each other's leftovers.
+Position is stable to well under a millimetre, so this is a shimmer rather than the 49 mm buzz above; closing it properly needs a resting-contact bias term, which nothing here has yet.
 
 ### Area glyphs
 

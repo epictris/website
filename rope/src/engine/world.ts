@@ -62,6 +62,15 @@ export const GRAVITY = new Vec2(0, 9.8);
 const SKIN = 0.0008;
 // Scale on the impulse a pushing character imparts to a rigid circle.
 const CHARACTER_PUSH_FACTOR = 0.5;
+// Share of a rigid-vs-rigid contact each of the two bodies resolves. There is no
+// pair solver here: each body meets the other again on its own pass, with no
+// knowledge of what that pass will do, so each takes half and the contact
+// converges over a couple of frames instead of both resolving it in full.
+const RIGID_PAIR_SHARE = 0.5;
+// Sweeps of the scene-wide positional recovery per physics step. Each sweep gives
+// every rigid body one depenetration pass, so a pile settles together instead of
+// whichever body the loop reached last winning its overlap outright.
+const DEPENETRATION_PASSES = 3;
 
 // Static friction only grabs a body moving slower than this (m/s) and spinning
 // slower than this (rad/s); a faster body slides/rolls under kinetic friction
@@ -429,9 +438,31 @@ export class World {
           .add(a.normal.mul((a.depth - c * b.depth) * inv))
           .add(b.normal.mul((b.depth - c * a.depth) * inv));
         pushedOutOf.push(a.normal, b.normal);
+      } else if (b && c <= -0.98) {
+        // A true crush: two near-opposite faces, whose simultaneous solve has no
+        // finite answer (the denominator explodes as c → -1). The two demands are
+        // mutually exclusive, so the best available position is the one that
+        // **equalises** them: moving along `a.normal` by half the difference
+        // leaves both faces at the mean depth, and leaves a body already centred
+        // between them exactly where it is.
+        //
+        // This used to resolve the deepest face in full and accept a residual,
+        // which is the very thing the simultaneous solve above exists to prevent
+        // - "pushing fully out of one surface can push straight into another, and
+        // whichever was handled last wins" - reintroduced in the one branch where
+        // both surfaces are certain to be real. And it is iterated, so the last
+        // pass wins and the error compounds: a ball resting on the floor with a
+        // falling slab on top of it was shoved 33 mm up out of the floor, which
+        // buried it 47 mm in the slab, which shoved it 47 mm back down, net
+        // deeper than it began. Every frame, until it was a quarter of a metre
+        // inside the ground (session-326f).
+        body.globalPosition = body.globalPosition.add(a.normal.mul((a.depth - b.depth) * 0.5));
+        // Held by both, so both are surfaces this frame drove the body out of -
+        // callers deriving velocity from the frame (see BallLevel) must refuse
+        // themselves credit for driving into either.
+        pushedOutOf.push(a.normal, b.normal);
       } else {
-        // One overlap, or a true crush whose denominator explodes as c → -1:
-        // push out of the deepest and accept a residual.
+        // A single overlap: push out of it.
         body.globalPosition = body.globalPosition.add(a.normal.mul(a.depth));
         pushedOutOf.push(a.normal);
       }
@@ -518,6 +549,57 @@ export class World {
       // freely and never snaps back to a stale spot after leaving the ground.
       if (!stuck) body.stickAnchor = null;
     }
+
+    // Position is recovered for the whole scene AFTER every body's contacts have
+    // been solved, and iterated over all of them together.
+    //
+    // The contact routines above push out per (shape, shape) pair, along that
+    // pair's own deepest contact and in ignorance of the others. That is the
+    // wedge failure `moveAndCollide` and `depenetrateRigid` were both fixed for,
+    // in their own words: pushing fully out of one surface can push straight into
+    // another, and whichever pair was handled last wins. The fix was never
+    // applied here, so a body touching two things at once could not settle
+    // against either. A slab leaning on another polygon with its lower end on the
+    // floor is exactly that wedge, and it stood **165 mm** inside them, buzzing:
+    // penetration that deep churns the contact set frame to frame, so the normal
+    // impulse fired about one frame in five while contact friction went on
+    // torquing the body every frame, and the slab's spin sawtoothed between -0.18
+    // and +0.13 rad/s for as long as it slid (session-326f).
+    //
+    // Sweeping the whole scene rather than recovering each body at the end of its
+    // own pass is what keeps the recovery fair. Depenetration is a race: whoever
+    // moves last wins the overlap, so a body recovered inside another's contact
+    // pass is answering a scene that is still half-solved, and a heavier or
+    // simply later-listed neighbour walks straight through it. Interleaved into
+    // the loop, a falling slab drove the ball a quarter of a metre into the
+    // floor; swept afterwards, the two settle against each other.
+    // A gripped body's `stickAnchor` rides along with whatever this recovery
+    // moves it by.
+    //
+    // The anchor is a *positional* constraint - it is where the surface had hold,
+    // and the grip pins the body's along-surface position to it - so putting the
+    // position solve after the contact pass took the last word away from it. The
+    // two then fought: the grip dragged the body back to an anchor that the
+    // recovery had already found to be inside something, the recovery pushed it
+    // back out, and a polygon resting perfectly still on the floor buzzed 4 cm
+    // back and forth, every frame, for as long as it sat there (session-255f).
+    //
+    // Carrying the anchor with the correction settles it, and does not weaken the
+    // grip: what stiction exists to cancel is the tangential *drift* gravity
+    // integrates in one step, which is measured against the anchor and is
+    // unaffected by moving both. It is the same trick the steered-ball coil path
+    // already uses, where the anchor advances by the roll the frame intended and
+    // only the gravity creep on top is removed.
+    for (let pass = 0; pass < DEPENETRATION_PASSES; pass++) {
+      for (const body of this.bodies) {
+        if (!(body instanceof RigidBody2D) || body.removed) continue;
+        const before = body.globalPosition;
+        this.depenetrateRigid(body, 1);
+        if (body.stickAnchor !== null) {
+          body.stickAnchor = body.stickAnchor.add(body.globalPosition.sub(before));
+        }
+      }
+    }
   }
 
   // Resolve one of a rigidbody's vertex shapes (a rect or convex polygon)
@@ -541,17 +623,47 @@ export class World {
     if (contacts.length === 0) return false;
 
     if (!(other instanceof StaticBody2D)) {
-      // Rigid-rigid: split the push and damp the approach, exactly as the
-      // circle path approximates it.
+      // Rigid-rigid: split the push and damp the approach, as this path has
+      // always approximated it - but through the *coupled* linear/angular
+      // effective mass, and per manifold point, so an off-centre contact torques
+      // the body.
+      //
+      // It used to read `body.linearVelocity.dot(normal)` and write the impulse
+      // back into `linearVelocity` alone, which is a contact with **no torque at
+      // all**. A circle can get away with that (its contact normal passes through
+      // its centre, so there is genuinely no lever), and this branch was written
+      // as the circle path's twin; a vertex shape cannot. Resting on another
+      // rigid body, it could only ever be pushed, never turned, so a body balanced
+      // on a corner of one had no way to fall off it: a long sliver cantilevered
+      // out into thin air over the corner of another polygon rotated at 0.2 rad/s
+      // - a crumb of friction torque, the only kind reaching it - where it should
+      // have whipped round in a fraction of a second (session-166f).
+      //
+      // `RIGID_PAIR_SHARE` is the same halving as before: neither body's solve
+      // knows about the other's, so each takes half and the pair converges over a
+      // couple of frames rather than both resolving the contact in full.
       let deepest = contacts[0]!;
       for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
       body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth * 0.5));
-      const rel = body.linearVelocity.dot(deepest.normal);
+      const invI = body.kinematicRotation ? 0 : body.inverseInertia;
       let vnKilled = 0;
-      if (rel < 0) {
-        body.linearVelocity = body.linearVelocity.sub(deepest.normal.mul(rel * 0.5));
-        vnKilled = -rel * 0.5;
+      for (const c of contacts) {
+        const rContact = c.point.sub(body.globalPosition);
+        const vn = body.linearVelocity
+          .add(new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity))
+          .sub(other.velocityAtPoint(c.point))
+          .dot(c.normal);
+        if (vn >= 0) continue;
+        const rCrossN = rContact.cross(c.normal);
+        const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
+        const jn = invEffN > 1e-9 ? (-vn * RIGID_PAIR_SHARE) / invEffN : 0;
+        body.linearVelocity = body.linearVelocity.add(c.normal.mul(jn * body.inverseMass));
+        body.angularVelocity += rCrossN * jn * invI;
+        vnKilled += jn * body.inverseMass;
       }
+      // Friction and the contact damp stay a once-per-contact-pair affair, at the
+      // deepest point: `applyRigidContactFriction` ends with `contactDamp`, and
+      // calling it per manifold point would apply that damp once per point.
       this.applyRigidContactFriction(
         body,
         other,
@@ -603,7 +715,8 @@ export class World {
 
       // Stiction: a nearly-stopped body on a slope gentler than its breakaway
       // angle is pinned rather than left to creep downhill one integration step
-      // at a time. Same rule and the same anchor the circle path uses.
+      // at a time. Same rule and the same anchor the circle path uses, but
+      // deliberately NOT the same authority over rotation - see below.
       const gN = -g.dot(c.normal);
       const rel = body.linearVelocity.sub(surfaceVel);
       if (
@@ -615,8 +728,38 @@ export class World {
         g.sub(c.normal.mul(g.dot(c.normal))).length() <= staticMu * gN
       ) {
         const tanVel = surfaceVel.sub(c.normal.mul(surfaceVel.dot(c.normal)));
-        body.linearVelocity = c.normal.mul(body.linearVelocity.dot(c.normal)).add(tanVel);
-        body.angularVelocity = 0;
+        // Keep the normal component only where it *separates*. A gripped body is
+        // at rest against the surface, so a velocity pointing into it is one it
+        // can never realise, and this manifold path is the one that leaves such a
+        // component behind: zeroing the spin here discards the angular half of
+        // the normal impulse solved a few lines above, so the linear approach it
+        // was cancelling survives. The push-out then hides it - a crate settled
+        // flat on a floor sat at a perfectly stable position while reporting a
+        // permanent 0.275 m/s into the ground, re-earned and re-pushed-out every
+        // frame. Nothing on this path is load-bearing for a recorded replay (no
+        // ball bundle predates the manifold solve), and the circle path deals in
+        // a single contact whose normal impulse is not split, so it is left
+        // bit-for-bit alone.
+        const vnKeep = Math.max(0, body.linearVelocity.dot(c.normal));
+        body.linearVelocity = c.normal.mul(vnKeep).add(tanVel);
+        // Rotation is left alone. The circle path zeroes it here, and for a
+        // circle that is free: rotation cannot change which part of the shape is
+        // holding it up, so a settled ball simply should not be spinning. A
+        // vertex shape's orientation IS its balance, and zeroing the spin of a
+        // gripped one holds it in whatever pose it is in by fiat - gravity gets
+        // no say, so a slab tipped up on a corner can never topple back down.
+        // Worse, nothing here anchors the *angle* the way `stickAnchor` anchors
+        // the position, so any rotation written after this solve is kept in full
+        // and re-frozen next frame: a chain that turns the body a fraction of a
+        // degree per tug ratchets it round for good. That is how a polygon group
+        // a chain had rotated to -22.8° stayed there with the chain gone, reading
+        // as gravity having been switched off for it (session-1195f).
+        //
+        // Left free, the normal impulses solved per manifold point above are what
+        // resist rotation - which is what they are a two-point manifold *for* -
+        // and a body that really is toppling spins past `STICK_SPIN`, releases
+        // the grip, and falls. The grip stays what it is meant to be: a brake on
+        // translation, not a lock on pose.
         if (body.stickAnchor === null) {
           body.stickAnchor = body.globalPosition;
         } else {
@@ -908,7 +1051,35 @@ export class World {
       const pointVel = body.linearVelocity.add(
         new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity),
       );
-      const surfSpeed = pointVel.sub(other.velocityAtPoint(contactPoint)).dot(tangent);
+      // Slip measured against the WORLD, not against the other body's surface.
+      //
+      // The static path measures relative slip, and must: a scripted mover is an
+      // infinite-mass surface whose motion is a given, so a body resting on one
+      // is dragged along with it and that is the whole point. Two *dynamic*
+      // bodies are a different situation, and the difference is that this routine
+      // is not one half of a reciprocal impulse pair. It only ever writes to
+      // `body`; the other direction is a separate call, on a separate pass, whose
+      // impulse is sized independently from its own mass and its own normal
+      // budget. Nothing makes the two equal and opposite, so any impulse taken
+      // from `other`'s motion is energy the contact invented.
+      //
+      // Read as relative slip, the ball resting against a crate therefore drove
+      // it: the ball's spin is kinematic (the aim rewrites it every frame, so
+      // nothing the contact does can slow it) and its linear velocity is whatever
+      // the chain solve last credited it, which for a wedged ball is metres per
+      // second of motion the geometry is refusing. Either one appears here as a
+      // surface sliding under the crate, and Coulomb friction dutifully drags the
+      // crate along with it - at a dead-steady 2.4 mm a frame, for ever, because
+      // the crate's own grip on the floor is resolved earlier in the same pass
+      // and cannot answer a drive that lands after it. A ball merely hanging on a
+      // chain walked its anchor 3.6 m across the level that way (session-611f).
+      //
+      // Against the world the impulse can only ever oppose the body's own motion,
+      // so the contact is a brake and never a motor - which is what this routine
+      // was added to be, and all `session-431f` (gravity doing work down a rigid
+      // slope for ever) ever needed. The bodies still shove each other through
+      // the normal channel, which *is* solved as a pair.
+      const surfSpeed = pointVel.dot(tangent);
       const rCrossT = rContact.cross(tangent);
       const invEff = body.inverseMass + rCrossT * rCrossT * invI;
       if (invEff > 1e-9) {

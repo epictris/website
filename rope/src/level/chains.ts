@@ -13,53 +13,44 @@
 // of that constraint. (Both would need the chain to be a body per link - see
 // docs/game-design.md.)
 //
-// What a chain touches is its layer, and the layer is one decision, not two: a
-// background chain is drawn behind the level AND solved against nothing but its
-// own two bodies, a foreground chain is drawn over it AND solved against the
-// whole scene. Splitting those apart would let a level author a chain that hangs
-// visibly behind a wall and still snags the player on the way past.
+// A chain is scenery, and scenery is all it is: it is solved against nothing but
+// the two bodies it is tied to, so it hangs and swings and hauls those two and
+// passes through everything else, and it is drawn behind the level's geometry to
+// say so. There was briefly a second, "foreground" kind that the whole scene was
+// solved against - the avatar and its hook could push into it and be held by it -
+// and it was dropped: it bought little that a body does not already buy, and it
+// paid for that by making every chain a thing the player might silently snag on.
 
 import { Vec2 } from "../engine/vec2";
 import type { CollisionObject2D, PhysicsBody2D } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
-import { DEFAULT_CHAIN_LAYER, type ChainData, type ChainLayer, type LevelData } from "./levelFormat";
+import { type ChainData, type LevelData } from "./levelFormat";
 
-// The wrap-candidate list a background chain solves against: nothing. Its two
-// anchor bodies are already the ends of every span, and `Rope.regeneratePath`
-// never wraps a span around the bodies that span starts and finishes on, so an
-// empty scene is exactly "hangs between its two bodies and touches nothing else".
+// The wrap-candidate list a chain solves against: nothing. Its two anchor bodies
+// are already the ends of every span, and `Rope.regeneratePath` never wraps a
+// span around the bodies that span starts and finishes on, so an empty scene is
+// exactly "hangs between its two bodies and touches nothing else".
 const NOTHING: PhysicsBody2D[] = [];
 
 export class SceneChain {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
   readonly color: string | null;
-  // Which plane the chain lives in - see `ChainLayer`. The renderer reads it to
-  // decide whether to draw the chain under or over the level's geometry, and
-  // `physicsStep` reads it to decide what the chain is allowed to touch.
-  readonly layer: ChainLayer;
 
-  constructor(
-    a: RopeContact,
-    b: RopeContact,
-    length: number,
-    color: string | null,
-    layer: ChainLayer,
-  ) {
+  constructor(a: RopeContact, b: RopeContact, length: number, color: string | null) {
     this.rope = new Rope(a, b, null, length);
     this.color = color;
-    this.layer = layer;
   }
 
   // One frame of the chain. Called after `World.integrate`, so the constraint
   // has the last word on where the bodies it holds end up - the same order the
   // ball controller runs its chain in, and for the same reason (solve before
   // integration ends every fast frame over-length by |v|·dt).
-  physicsStep(bodies: PhysicsBody2D[], delta: number): void {
+  physicsStep(delta: number): void {
     this.rope.beginFrame();
-    this.rope.physicsStep(this.layer === "background" ? NOTHING : bodies, delta);
+    this.rope.physicsStep(NOTHING, delta);
   }
 }
 
@@ -113,6 +104,5 @@ function buildOne(
     RopeContact.at(objB, worldB),
     length,
     c.color ?? null,
-    c.layer ?? DEFAULT_CHAIN_LAYER,
   );
 }

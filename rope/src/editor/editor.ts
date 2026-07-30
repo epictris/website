@@ -17,11 +17,9 @@ import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
-  DEFAULT_CHAIN_LAYER,
   DEFAULT_FORCE_MAGNITUDE,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
-  type ChainLayer,
 } from "../level/levelFormat";
 import {
   arrowEnds,
@@ -119,9 +117,6 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
 const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "anchor", "force"];
-
-// Planes offered by the chain panel's picker (see `ChainLayer`).
-const CHAIN_LAYERS: ChainLayer[] = ["foreground", "background"];
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
@@ -1065,44 +1060,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it.";
     g.appendChild(hint);
 
-    // Plane. One control, because what a chain draws in front of and what it is
-    // allowed to touch are the same decision - a chain hanging visibly behind
-    // the level must not still be a wall the player snags on.
-    const lw = el("label", "ed-field");
-    lw.textContent = "plane";
-    const ls = document.createElement("select");
-    ls.className = "ed-select";
-    const sharedLayer = chains.every((c) => c.chainLayer === chains[0]!.chainLayer)
-      ? chains[0]!.chainLayer
-      : null;
-    if (!sharedLayer) {
-      const o = document.createElement("option");
-      o.value = "";
-      o.textContent = "mixed";
-      ls.appendChild(o);
-    }
-    for (const l of CHAIN_LAYERS) {
-      const o = document.createElement("option");
-      o.value = l;
-      o.textContent = l;
-      ls.appendChild(o);
-    }
-    ls.value = sharedLayer ?? "";
-    ls.addEventListener("change", () => {
-      if (!ls.value) return;
-      beginAction();
-      for (const c of chains) c.chainLayer = ls.value as ChainLayer;
-      markDirty();
-      rebuildInspector();
-    });
-    lw.appendChild(ls);
-    g.appendChild(lw);
-
     const planeHint = el("div", "ed-hint");
     planeHint.textContent =
-      sharedLayer === "background"
-        ? "Behind the level, and solved against nothing but its own two bodies: it passes through the geometry, the player and the hook."
-        : "In the play space: drawn over the geometry, wraps corners, and the player and hook can push into it and be caught on it.";
+      "Scenery: drawn behind the level, and solved against nothing but its own two bodies, so it passes through the geometry, the player and the hook.";
     g.appendChild(planeHint);
 
     // Slack is what a chain is for, so the length is authored in scene pixels
@@ -1566,7 +1526,6 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       b: { itemId: to.id, local: nearestSurfaceLocal(to, world) },
       length: null, // taut as drawn
       color: null,
-      chainLayer: DEFAULT_CHAIN_LAYER,
     };
     model.chains.push(chain);
     setChainSelection([chain.id]);
