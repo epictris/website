@@ -223,11 +223,18 @@ function caseSettle(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
-// stack: four boxes dropped into a pile must settle on each other.
+// stack: four boxes dropped into a pile must settle ON EACH OTHER.
 //
 // The rigid-vs-rigid case of `settle`, and the one momentum transfer is most
 // likely to destabilise: a pile that currently sits still because nothing drives
 // it may start moving once the contacts actually exchange impulses.
+//
+// The pile has to be asserted as a PILE, not merely as four settled bodies.
+// Checking |w| and the rotation span alone passes vacuously if the stack blows
+// apart and the pieces come to rest side by side on the floor, which is exactly
+// what a cold-started solver does with it: the boxes shot sideways between f60
+// and f120 and finished spread across a metre and a half of floor, every one of
+// them perfectly still and perfectly level.
 // ---------------------------------------------------------------------------
 function caseStack(sims: Sim[]): ContactResult {
   const sim = new Sim("stack", 480);
@@ -238,6 +245,9 @@ function caseStack(sims: Sim[]): ContactResult {
   const bodies = [-0.76, -1.27, -1.78, -2.29].map((y) =>
     sim.addRigid(rectShape(0.9, 0.5), new Vec2(0, y)),
   );
+  // Where each box belongs once the pile has landed: the floor's top face is at
+  // -0.5 and the boxes are 0.5 tall, so they stack at -0.75, -1.25, -1.75, -2.25.
+  const restY = [-0.75, -1.25, -1.75, -2.25];
 
   const history = bodies.map<number[]>(() => []);
   sim.step(900, (n) => {
@@ -249,9 +259,15 @@ function caseStack(sims: Sim[]): ContactResult {
   bodies.forEach((b, i) => {
     const span = rotationSpan(history[i]!) / DEG;
     const w = Math.abs(b.angularVelocity);
-    const good = w < 0.01 && span < 0.2;
+    const dx = Math.abs(b.globalPosition.x);
+    const dy = Math.abs(b.globalPosition.y - restY[i]!);
+    const held = dx < 0.15 && dy < 0.05;
+    const good = held && w < 0.01 && span < 0.2;
     passed &&= good;
-    details.push(`${good ? "ok  " : "BAD "} box${i}: |w|=${w.toFixed(4)} span=${span.toFixed(3)}deg`);
+    details.push(
+      `${good ? "ok  " : "BAD "} box${i}: |w|=${w.toFixed(4)} span=${span.toFixed(3)}deg ` +
+        `${held ? "held" : "SLID"} off=(${dx.toFixed(2)},${dy.toFixed(2)})m`,
+    );
   });
   return ok("stack — a four-box pile settles on itself", passed, details);
 }
