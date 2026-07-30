@@ -1,6 +1,26 @@
 # Plan: physics debugging tooling
 
-> **Status: proposed.**
+> **Status: landed** (phases 0-10).
+> The narrative here is kept as written, because it is the reasoning the work was done from;
+> `CLAUDE.md` (**Headless tooling** and **Debugging physics issues**) describes what the tools now do.
+>
+> What the plan did not anticipate, all of it found by running the new tools:
+>
+> - **A tolerance has to be sized against measured numbers, not sensible ones.**
+>   The ball's mass is 3.3e-4 kg, so the whole scene's kinetic energy is measured in tens of microjoules;
+>   the energy invariant's first tolerance (1 mJ, which reads as small) sat above every quantity in the sim and detected nothing.
+>   It is 1e-4 J now, five times the corpus's measured noise floor of 2.1e-5 J.
+> - **The energy invariant's arming gate was the whole problem.**
+>   Deploy is hold-to-keep, so gating on "any button held" disarmed it for 90% of every recorded session;
+>   it arms on the *forced* actions (retract/extend) and on a kinematic spin that is actually turning the ball.
+> - **The A/B cannot reach back past its own imports.**
+>   `cli compare` runs current tooling against old physics, which stops working at revisions predating `bodyOverlapCircle` and `World.collectContacts` - which is where several of the historical defects live.
+>   Two acceptance tests here were written assuming otherwise (Phase 5's pre-reorder refund, Phase 4's original `1474f` launch frames) and had to be demonstrated by local defect re-introduction and by an equivalent finding instead.
+> - **Three findings the tools produced immediately**, all still open and none of them what anyone was looking for:
+>   a resting ball carries a permanent ~21 mm/s that its stick anchor cancels positionally;
+>   a rigid body resting on the ball keeps a permanent ~0.2 m/s into it, because the ball's own static contact is solved outside the constraint list (the one contact still excluded);
+>   and gripped polygons in `session-326f`/`255f`/`166f` slide 0.5 to 2.7 mm per frame at zero velocity, with the stick anchor riding along with them.
+>
 > Distilled from a meta-analysis of the 2026-07-30 debugging sessions.
 > The finding: the debugging itself was empirical, but every loop leaked time in the same four places - verification that could not see the bug ("bit-identical" meant the avatar alone), quantitative questions that each required editing code, throwaway probes rebuilt every session, and fixes that only a manual playtest could accept.
 > This plan closes those four holes.

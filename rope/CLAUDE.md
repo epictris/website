@@ -434,31 +434,56 @@ through the `jump`
 FrameInput field so it stays in the recorded input stream (BallLevel calls
 onReset). Ball inputs map onto the existing FrameInput fields
 (aim→mouseWorldPosition, shoot→fire, restart→jump), so
-recordings serialize and `cli replay`/`cli bundles` work unchanged
-(`cli continue` and playtest scripts are not ball-aware yet).
+recordings serialize and every headless tool works unchanged - `cli continue`
+(`--hold deploy`, `--aim X,Y`) and playtest scripts drive the ball through those
+same fields under its own action names.
 
 ## Headless tooling
 
 ```sh
-bun run replay selftest                       # determinism + replay round-trip check
+bun run test                                  # THE suite: typecheck + every check below, one exit code
+bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
+bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
-bun run src/tools/cli.ts bundles              # replay every bundle in playtests/bundles/
+bun run src/tools/cli.ts bundles              # replay playtests/regressions/ + playtests/bundles/
+bun run src/tools/cli.ts scan session.json    # anomaly sweep: spikes, embedding, drift, flicker, stalls
+bun run src/tools/cli.ts scan --all           # the same over the whole corpus, printing only what is notable
+bun run src/tools/cli.ts query session.json --frame 314 [--json]  # the full sim state at a frame
+bun run src/tools/cli.ts trace session.json --from 450 --to 460 --body 0  # per-phase Δv attribution
+bun run src/tools/cli.ts settle session.json --from 500 --frames 600      # continue with zero input, must rest
 bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input table
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
 bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG snapshot of one frame
+bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the REAL renderer, headless
+bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
 bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
-scripts/abtest.sh session.json 979 <oldRef>                             # A/B the current tree vs oldRef from the fork frame
+bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B this tree against a revision
 ```
 
-Playtest scripts are frame-indexed held-button ranges + mouse aim with asserts
-(`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds). Invariants
-checked every frame: NaN, runaway speed, rope-over-length (once anchored),
-player-embedded-in-geometry.
+`bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
+`corners`, `ledges`, every `playtests/*.json`, then the bundle corpus, in that
+order and under one exit code.
+A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
+which the runner counts as a pass and, crucially, **fails on if it ever passes**:
+a stale marker is a lie about coverage, so the fix that closes the gap has to
+remove the marker in the same change.
+
+Playtest scripts are frame-indexed held-button ranges + aim waypoints with
+asserts (`reachState`, per-frame `state`/`maxSpeed`/`hasRope`/position bounds,
+and `window` asserts over a frame range).
+They drive **either controller**: the ball's actions are the same FrameInput
+fields under its own names (`deploy`, `restart`, `aim`), and a script may carry
+its own `data` (an arena authored inline, as a bundle does) and a `spawn`
+override in metres.
+`playtests/ball-*.json` is the mechanic suite that lives on top of that; see
+**What a mechanic test is for** below.
+Invariants checked every frame: NaN, runaway speed, rope-over-length (once
+anchored), player-embedded-in-geometry.
 Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame) and `chain-clip` (a span's interior deep
@@ -467,6 +492,53 @@ inside static geometry).
 never saw a 96 m/s one-frame launch; the whole ball corpus peaks at 2.1 m/s of
 gain in a frame, so 4 is well clear of real play. It is the general form of
 `rope-anchor-kick`, which only ever watched the anchoring frame.
+Ball runs also carry the **energy invariant** (`energy-gained`): over any span
+with no forced input and no kinematic spin, total kinetic plus potential energy
+may not rise beyond a tolerance.
+The gate matters as much as the check.
+Winding the chain in or out does real work and the aim steering is an unbounded
+spin source, so the invariant arms only while the sim is unforced; holding
+`deploy` is not a source, and gating on "any button held" disarmed it across
+almost every recorded session, which is how it was first written and why it
+detected nothing.
+It is sized against measured numbers rather than round ones: the corpus noise
+floor is 2.1e-5 J and the ball carries 1.6e-4 J at 1 m/s, so the tolerance is
+1e-4 J plus 5% of the span's peak kinetic energy.
+This is the class of bug that was found late four times as the rope refund and
+once more as a friction motor, every time by hand.
+
+### Full-world digests
+
+`Digest` is the avatar's and always was, which is why a rigid-pile jitter
+regression once shipped under a "bit-identical" claim (`session-298f`).
+`WorldDigest` (`sim/trace.ts`) carries every body that can move - position,
+rotation, linear velocity and **angular velocity**, which no avatar digest ever
+had - plus the chain's node count, path length, `maxRopeLength` and
+`blockedSlack`.
+Bodies are named by **build order** (`CollisionObject2D.buildIndex`, stamped by
+`World.add`) rather than by the process-global `id`, so two builds of the same
+level agree; `cli replay` reports world divergence separately from avatar
+divergence and names what carried it (`world: body#3 drifted @f412`).
+A P bundle gains an optional `worldDigests` array at the same cadence as
+`digests`, so old bundles replay exactly as before and new ones are compared on
+the whole scene.
+`cli selftest` demands bit-exactness on all of it, for a grapple script *and* for
+a ball script recorded headlessly through `cli record`.
+
+### What a mechanic test is for
+
+`playtests/ball-*.json` asserts the mechanics themselves - winding, the winch,
+rolling, swinging, hanging still, holding a ceiling, wedging - because no
+aggregate can stand in for them: the A/B variant that won every drift and
+runaway number in `session-475f` had simply stopped the chain winding at all.
+Each scenario authors the arena that isolates it inline rather than borrowing the
+authored level, so it cannot fail for reasons that are not the mechanic's, and
+each asserts BOUNDS over a window rather than values at an instant.
+They are the mandatory success criteria for any physics A/B.
+`ball-roll-drive-rigid` is the sharpest of them: it is red at `25d8357` with
+`travelX=0.0000` (the `session-314f` regression, a ball spinning at 20 rad/s
+sitting still on a rigid floor) and green at HEAD at 6.8 m, while its static-floor
+twin passes on both sides.
 
 ## Debugging physics issues
 
@@ -474,18 +546,49 @@ The debugging loop for gameplay/physics bugs (player stuck, frozen input, bad
 launches, mover misbehavior):
 
 1. **Capture.** Reproduce in the browser, press **P** — downloads a bundle
-   (level id + full input trace + per-frame digests). Recording restarts on
-   level reset, so a bundle always replays from frame 0.
+   (level id + full input trace + per-frame avatar and world digests). Recording
+   restarts on level reset, so a bundle always replays from frame 0.
+   A scenario that can be described as a script needs no browser at all:
+   `cli record script.json --out session.json` writes the same format headlessly,
+   which is how a fiddly repro (wound up against a ceiling, wedged under a crate)
+   becomes reproducible rather than performed.
 2. **Make it red.** Drop the bundle into `playtests/bundles/` (gitignored,
-   local corpus) and run `cli bundles`. Every bundle is re-simulated with
+   local scratch; `playtests/regressions/` is the committed corpus) and run
+   `cli bundles`. Every bundle is re-simulated with
    *current* physics and checked against per-frame invariants — the bug should
    show up as violations at the frames where it was felt. If it doesn't,
    the invariants have a blind spot: fix the detector first, then the bug.
    A fix is only "done" when the bundle that reported it goes green.
-3. **Locate.** `cli dump bundle.json --from A --to B --every N` prints a
+2b. **Sweep before choosing where to look.** `cli scan bundle.json` (or
+   `cli scan --all` over the corpus) reports, per body, the top single-frame
+   `|Δv|` and `|Δω|` spikes, the deepest embedding and when it peaked,
+   settled-body drift (a body going nowhere by its own velocity that is
+   nevertheless somewhere else), contact-set flicker while resting, and the
+   chain's stall runs and lease high-water.
+   Those five are the shape of every physics bug there has been, and picking a
+   frame to inspect before running this is guessing.
+3. **Locate.** `cli query bundle.json --frame N` prints the whole sim state at a
+   frame - every body's pose, velocity, spin, embedding depth and stick anchor,
+   the chain's nodes and its length broken into `maxRopeLength`, lease and stall,
+   and the avatar's state - and `--json` makes it a JSONL stream (`--from A --to
+   B --every K`) with stable keys in metres and rad/s.
+   Every quantitative question used to be a code change; this is the answer to
+   all of them, so reach for it before editing anything.
+   `cli dump bundle.json --from A --to B --every N` prints a
    digest+held-input table (re-simulated, not the recorded digests). Look for
    `vx=0.0` runs under held input, state thrash (Grounded↔Airborne flicker),
    or position drifting against input.
+3b. **Attribute it to a phase.** A one-frame velocity is never explained by its
+   size, only by which part of the frame wrote it. `cli trace bundle.json --from
+   A --to B [--body ID] [--out t.jsonl]` prints per-phase `Δv`/`Δω` per body:
+   `aim`, `gravity`, `contacts` (with per-contact normal and tangent impulses and
+   whether they were at the Coulomb limit), `grip`, `circle-contacts`,
+   `contact-damp`, and the chain phase broken into `push-out`, `rope-solve`,
+   `spin-rollback`, `unwind`, `chain-velocity`, `refuse-into-surface` and
+   `stall-lease`.
+   That breakdown is the part no other tool shows and the part every rope bug has
+   needed: "the contact solve re-earns 1.2 m/s sideways every frame and the chain
+   solve removes it" is a thing you read here rather than instrument for.
 4. **Inspect.** `cli continue bundle.json --from F --hold left --frames 120
    --trace t.jsonl` replays to frame F, then takes over with scripted held
    input (fed through the input deserializer so pressed/released edges are
@@ -512,33 +615,52 @@ launches, mover misbehavior):
    frame in px (node count > 2 means the chain caught a corner). Reach for these
    the moment a bug is about position/shape rather than a stuck/velocity number.
 4c. **See what the *player* sees.** Everything above draws its own picture of the
-   sim state, which is exactly why none of it can see a bug in the drawing. With
-   `bun run dev` up, `/shot.html?bundle=/playtests/bundles/session-1474f.json&frame=300&zoom=9`
-   replays a bundle to one frame and draws it with the **real** renderer, at
-   `alpha = 1` so the grab is reproducible; screenshot it headless
-   (`chromium-browser --headless --screenshot=out.png --window-size=1200,900 --virtual-time-budget=8000 "<url>"`).
+   sim state, which is exactly why none of it can see a bug in the drawing.
+   `cli shot bundle.json --frame N --out f.png` draws the frame with the **real**
+   renderer: it starts the dev server, loads `shot.html` (which replays the
+   bundle to that frame at `alpha = 1`, so the grab is reproducible), takes a
+   headless screenshot and tears the server down again.
+   `cli shot --diff before.png after.png` gives a changed-pixel count and a
+   highlight image, which is how a claim about a renderer change is evidenced.
+   Neither makes perceptual quality *assertable* - no number here says whether a
+   settle looks convincing - they make perceptual claims cheap to evidence.
    Reach for it when the report is about what something *looks* like. The chain
    wound onto the ball drew as blank space for want of one `floor` (see
    `drawChainPolyline`), and every CLI tool called that run perfectly healthy,
    because it was.
-5. **Verify.** `cli bundles` green + all playtests + `cli contacts` + `bun run replay selftest`
-   (must stay bit-identical — static-path behavior may never change; mobile
-   behavior is gated behind `isMobile`/`isRotating` branches). To confirm a fix
+4d. **Leave it alone and watch.** `cli settle bundle.json --from N --frames M`
+   continues from a frame with zero input and reports the kinetic-energy
+   trajectory, the fastest body, and the net drift, failing unless the scene
+   comes to rest and stays there.
+   It catches the two opposite failures a replay cannot: energy appearing out of
+   nothing, and a body that reports itself at rest while creeping across the
+   level.
+5. **Verify.** `bun run test` - typecheck, selftest, the case suites, every
+   playtest (the ball mechanic suite included) and the whole bundle corpus, under
+   one exit code. `selftest` must stay bit-identical, for the avatar *and* for
+   the rest of the world (static-path behavior may never change; mobile behavior
+   is gated behind `isMobile`/`isRotating` branches). To confirm a fix
    actually changed the felt behaviour — which plain replay *cannot* show once
    the fix diverges the recorded tail (see Bundle semantics) — use the **A/B
-   fork**: `scripts/abtest.sh bundle.json <forkFrame> <oldRef>` replays the
-   bundle to `forkFrame` under both the current tree and `oldRef`, then traces
-   both past it and diffs. Because the sim is deterministic and a fix only bites
-   at the issue frame, both sides reproduce the *same* pre-issue state, so the
-   diff (and the two before/after SVGs) is exactly the fix's effect. Pick
+   fork**: `cli compare bundle.json --frame <forkFrame> --ref <oldRef>` replays
+   the bundle to the fork frame under both the current tree and `oldRef`, then
+   runs both past it and diffs the full world per frame. Because the sim is
+   deterministic and a fix only bites at the issue frame, both sides reproduce
+   the *same* pre-issue state, so the diff (and the two before/after SVGs) is
+   exactly the fix's effect. Pick
    `oldRef` = the commit just before the fix, and `forkFrame` = a frame where old
-   and new still agree, just before the issue (if they already diverge there, the
-   divergence started earlier — walk `forkFrame` back until the pre-fork lines
-   match). The script runs old *physics* with new *tooling* (it copies the
-   current `src/tools` + `src/sim` into the old worktree), so `cli fork` need not
-   exist in `oldRef`; this holds only while the tooling touches stable physics
-   interfaces (`physicsProcess`, body/rope fields) — if a change alters those,
-   run the two `cli fork`s by hand.
+   and new still agree, just before the issue; if they already diverge there the
+   command says so in as many words rather than presenting the diff as the
+   change's effect. It runs old *physics* with new *tooling* (it copies the
+   current `src/tools` + `src/sim` into a worktree of `oldRef`), so the command
+   need not exist in `oldRef`; this holds only while the tooling touches stable
+   physics interfaces (`physicsProcess`, body/rope fields), and a worktree that
+   cannot run is reported as an error rather than as an empty diff.
+   It also refuses to compare a tree against itself: both sides' identity is
+   always printed (commit plus a hash of any uncommitted diff) and identical
+   trees are named as such. The shell script this replaces did exactly that twice
+   in one day - an empty `git stash` and a wrong cwd - and both times reported
+   "no difference", which reads as a verified fix.
 
 Key invariant — the **`input-frozen` stuck detector** (`src/sim/trace.ts`):
 held direction for 45 frames with a mobile body nearby must produce ≥0.25 m of
@@ -547,6 +669,13 @@ push is displacement, not a freeze — wedge rules). Counts every input-held fra
 state (state thrash must not reset the window); exempt: active rope, ledge
 hang/climb, wall-jump startup, and purely static blockers (pressing into a
 static wall is legit). Runs inside every playtest, replay, and continue.
+
+The corpus lives in two places. `playtests/regressions/` is **committed**
+(gzipped, whole - a bundle replays from frame 0 by design, so trimming one makes
+it a different bug) and holds every bundle a postmortem here cites, so a fresh
+clone can run the same evidence this document argues from. `playtests/bundles/`
+stays gitignored local scratch. Both are replayed by `cli bundles` and by
+`bun run test`.
 
 Bundle semantics: digest divergence in `cli replay`/`cli bundles` is
 **informational, not failure** — a bundle recorded before a physics fix
@@ -640,6 +769,58 @@ out of bounds over the preceding frames (an embedded body, a path the rope was
 allowed to route through solid geometry, a contact test that has been answering
 "inside" since the moment the rope attached) rather than for the impulse that
 finally released it.
+
+### Debugging discipline
+
+Rules distilled from the sessions this loop was built in.
+Each one exists because its absence cost a real debugging day.
+
+- **No fix before a measured cause.**
+  State the root cause with a number from a replay, probe, or trace before editing the solver.
+  A theory that fits the code is not a diagnosis: the rope-refund bug survived four sessions because a plausible neighbour (missing rigid-rigid friction) was fixed instead of the measured energy source (`session-394f`/`458f`/`431f`/`726f`).
+- **Your own evidence beats your own theory.**
+  When a trace contradicts the current hypothesis, the trace wins, immediately.
+  When the corpus passes without a guard, the guard is unnecessary; do not construct a scenario to justify keeping it.
+- **Red then green.**
+  A fix for a reported bundle needs a detector that goes red on that bundle before the fix and green after (step 2 above).
+  Prove it by temporarily reverting the fix: the new detector must catch the original bug on its own.
+- **A second report of the same symptom means audit the class.**
+  Stop fixing instances: enumerate every site that could carry the same blindness (grep for the pattern) and fix or rule out each.
+  The compound-body corner class took four separate user reports (`234f`, `410f`, `306f`, `358f`) because each instance was fixed alone.
+- **Two failed attempts means revert and report.**
+  After two attempts that each trade one measured problem for another, revert to green, write down the diagnosis and what was tried, and stop.
+  A precise diagnosis with no fix is a better deliverable than a half-fix left in the tree (`session-326f`).
+- **Prefer the textbook.**
+  The rigid bodies here are a solved problem; when a patch fights the structure, ask "what does Box2D do" before inventing (see **The contact solver**).
+- **Name what green cannot see.**
+  Before claiming a fix verified, state which of the blind spots below apply and what covered them - a probe, a render, or an explicit "needs a manual playtest for X".
+- **New physics state ships with detectors.**
+  A change that adds simulated state (a new body kind, constraint, or solver path) must extend the digests and invariants to cover that state in the same change, before playtesting.
+  Both polygon launch bugs (`1474f`, `284f`) escaped to manual play because the detectors lagged the feature.
+- **Edit source with the Edit tool, never scripted string replacement.**
+  A `str.replace` that matches nothing silently no-ops and reports success; a real edit with a stale anchor errors.
+  The same rule for baselines: compare against a git rev (`cli compare --ref`), never a `git stash` round-trip - an empty stash silently compares a tree against itself, which is why the command now prints both sides' tree identity and refuses an identical pair outright.
+
+### What the verification suite cannot see
+
+The current blind spots, kept here so "all green" is read with them in mind.
+Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the plan doing that.
+
+- **Digest divergence does not gate.**
+  A behaviour change that stays under every invariant threshold passes silently; only invariants fail a run.
+- **Invariants are velocity-shaped.**
+  Purely geometric wrongness - a rope through a wall, an anchor floating off a surface - replays HEALTHY (`234f`, `306f`); `cli render`/`cli chainpath` plus eyes are the only detectors.
+  `cli scan` covers part of the gap (embedding depth and settled-body drift are geometric), but nothing detects a rope taking a wrong path that is still the right length.
+- **The real renderer has no automatic check.**
+  Every CLI view draws its own picture of the sim, so a bug in the drawing itself (`1467f`) is invisible to all of them.
+  `cli shot` makes the grab and the pixel diff one command each, but nothing runs them for you: a renderer change is evidenced on request, not gated.
+- **Perceptual quality has no oracle.**
+  Whether a rotation or settle looks convincing is judged only by a human or a render; corpus numbers stayed green through three re-reports of unconvincing rotation.
+- **Recorded bundles cannot confirm fixes.**
+  After a physics change the recorded tail legitimately diverges, so only `cli compare` or a scripted scenario shows a fix landed.
+- **The A/B cannot reach far back.**
+  `cli compare` runs current tooling against old physics, which works only while the tooling's imports exist in that revision: it breaks at anything older than `bodyOverlapCircle` and `World.collectContacts`, which is exactly where several of the historical defects live.
+  Re-introducing such a defect locally is then the only way to prove a detector catches it.
 
 ## Level editor
 

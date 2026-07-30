@@ -2,9 +2,21 @@
 //   bun run src/tools/cli.ts play      playtests/retract.json
 //   bun run src/tools/cli.ts replay    bundle.json
 //   bun run src/tools/cli.ts dump      bundle.json [--from A] [--to B] [--every N]
-//   bun run src/tools/cli.ts continue  bundle.json [--from N] [--hold left,jump]
-//                                      [--frames M] [--every K] [--trace out.jsonl]
+//   bun run src/tools/cli.ts query     bundle.json [--frame N | --from A --to B]
+//                                      [--every K] [--body ID] [--json]
+//   bun run src/tools/cli.ts continue  bundle.json [--from N] [--hold left,jump|deploy]
+//                                      [--aim X,Y] [--frames M] [--every K]
+//                                      [--trace out.jsonl]
+//   bun run src/tools/cli.ts record    [<level>] script.json [--out session.json]
+//   bun run src/tools/cli.ts compare   bundle.json --frame N --ref <rev> [--frames M]
+//                                      [--json]
+//   bun run src/tools/cli.ts settle    bundle.json [--from N] [--frames M] [--every K]
+//   bun run src/tools/cli.ts scan      bundle.json | --all   [--top K] [--json]
+//   bun run src/tools/cli.ts trace     bundle.json [--from A] [--to B] [--body ID]
+//                                      [--out t.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
+//   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--out f.png]
+//   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
@@ -15,24 +27,44 @@
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
 
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { gunzipSync } from "node:zlib";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Level } from "../level/level";
-import { LEVELS, DEFAULT_LEVEL } from "../level/registry";
 import { PhysTrace } from "../engine/physTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
-import { runLedgeMatrix } from "../sim/ledgeMatrix";
-import { runCornerCases } from "../sim/cornerCases";
-import { runContactCases } from "../sim/contactCases";
+import { recordScript } from "../sim/record";
 import { replayRecording, levelFromRecording } from "../sim/replay";
+import { frameView, type BodyView, type FrameView } from "../sim/query";
+import { notable, scanRecording } from "../sim/scan";
+import { compareFrame, diffCompareFrames, type CompareFrame } from "../sim/compare";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
+import { RigidBody2D } from "../engine/body";
+import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
 import {
   ACTIONS,
+  checkBallInvariants,
   checkInvariants,
   digest,
+  digestBall,
+  EnergyMonitor,
   inputDeserializer,
+  kineticEnergy,
   StuckDetector,
   type Digest,
   type Recording,
@@ -40,6 +72,10 @@ import {
 } from "../sim/trace";
 
 const [, , cmd, arg, ...rest] = process.argv;
+
+// Where bundles live: the committed regression corpus first, then the local
+// scratch dir (gitignored, and absent in a fresh clone).
+export const BUNDLE_DIRS = ["playtests/regressions", "playtests/bundles"];
 
 function fail(msg: string, code = 2): never {
   console.error(msg);
@@ -56,8 +92,33 @@ function opts(args: string[]): Record<string, string> {
   return out;
 }
 
+// The bare arguments, with every `--flag value` pair removed — a flag's VALUE is
+// not a positional, and reading it as one turned `--out foo.json` into a file
+// the command then tried to read.
+function positionals(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (!a.startsWith("--")) {
+      out.push(a);
+      continue;
+    }
+    if (args[i + 1] && !args[i + 1]!.startsWith("--")) i++;
+  }
+  return out;
+}
+
+// Bundles replay from frame 0 by design, so a committed one is committed whole;
+// `.json.gz` is accepted transparently so the regression corpus can be stored
+// compressed rather than trimmed (a trimmed bundle is a different bug).
 function loadRecording(file: string): Recording {
-  return JSON.parse(readFileSync(file, "utf8")) as Recording;
+  const raw = readFileSync(file);
+  const text = file.endsWith(".gz") ? gunzipSync(raw).toString("utf8") : raw.toString("utf8");
+  return JSON.parse(text) as Recording;
+}
+
+function isBundleFile(f: string): boolean {
+  return f.endsWith(".json") || f.endsWith(".json.gz");
 }
 
 function heldActions(h: number): string {
@@ -98,6 +159,38 @@ function divergenceLine(r: {
   return `bit-exact match with recording`;
 }
 
+// The same summary for the rest of the scene, and it names the body: a
+// regression in scenery has to read as loudly as one in the avatar, which is
+// exactly what an avatar-only digest could not do (session-298f).
+// Null when the bundle predates `worldDigests` — there is nothing to compare.
+function worldDivergenceLine(r: {
+  worldDivergedAtFrame: number | null;
+  worldDivergedName: string | null;
+  worldBitDivergedAtFrame: number | null;
+  worldMaxDrift: number;
+  worldMaxDriftName: string | null;
+  worldComparedFrames: number;
+}): string | null {
+  if (r.worldComparedFrames === 0) return null;
+  const drift = `maxDrift=${(r.worldMaxDrift * 100).toFixed(2)}px${
+    r.worldMaxDriftName ? ` on ${r.worldMaxDriftName}` : ""
+  }`;
+  if (r.worldDivergedAtFrame !== null) {
+    return `world: ${r.worldDivergedName} drifted @f${r.worldDivergedAtFrame} (${drift})`;
+  }
+  if (r.worldBitDivergedAtFrame !== null) {
+    return `world: bit-identical behaviour (${drift} float noise @f${r.worldBitDivergedAtFrame}+)`;
+  }
+  return `world: bit-exact match with recording`;
+}
+
+// How many frames of the run actually had a recorded full-world digest to be
+// compared against — 0 means the bundle predates them and the world lines are
+// silent rather than falsely green.
+function worldComparedFrames(rec: Recording, framesRun: number): number {
+  return Math.min(rec.worldDigests?.length ?? 0, framesRun);
+}
+
 function cmdPlay(file: string): void {
   const script = JSON.parse(readFileSync(file, "utf8")) as PlaytestScript;
   const r = runScript(script);
@@ -113,6 +206,8 @@ function cmdReplay(file: string): void {
   const r = replayRecording(rec);
   console.log(`[replay] ${file} — level=${r.level} frames=${r.framesRun}${rec.git ? ` recorded@${rec.git}` : ""}`);
   console.log("  " + divergenceLine(r));
+  const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
+  if (world) console.log("  " + world);
   printViolations(r.violations);
   // exit 0 healthy, 2 diverged-but-healthy (fix working), 3 invariant violated.
   const code = r.violations.length > 0 ? 3 : r.divergedAtFrame !== null ? 2 : 0;
@@ -130,6 +225,8 @@ function cmdDump(file: string, o: Record<string, string>): void {
   const every = Number(o.every ?? 4);
   console.log(`[dump] ${file} — level=${r.level} frames=${r.framesRun} (current physics)`);
   console.log("  " + divergenceLine(r));
+  const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
+  if (world) console.log("  " + world);
   for (let i = from - 1; i < Math.min(to, r.digests.length); i += every) {
     console.log("  " + digestRow(r.digests[i]!, heldActions(rec.frames[i]?.h ?? 0)));
   }
@@ -142,30 +239,39 @@ function cmdDump(file: string, o: Record<string, string>): void {
 // recording), checking invariants + the stuck detector throughout.
 function cmdContinue(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
-  const spec = LEVELS[rec.level];
-  if (!spec) fail(`Unknown level: ${rec.level}`);
-  if (spec.controller === "ball") fail(`continue does not support ball levels yet (${rec.level})`);
   const from = Math.min(Number(o.from ?? rec.frames.length), rec.frames.length);
   const frames = Number(o.frames ?? 120);
   const every = Number(o.every ?? 3);
   const holdNames = (o.hold ?? "").split(",").filter(Boolean);
+  // The ball controller's actions are the same FrameInput fields under its own
+  // names (aim→mouse, deploy→fire, restart→jump), so both controllers are driven
+  // through one table rather than through two input paths that could disagree.
   const NAME_TO_BIT: Record<string, number> = {
     left: 1 << 0,
     right: 1 << 1,
     jump: 1 << 2,
+    restart: 1 << 2,
     retract: 1 << 3,
     extend: 1 << 4,
     fire: 1 << 5,
+    deploy: 1 << 5,
   };
   let heldBits = 0;
   for (const n of holdNames) {
     if (!(n in NAME_TO_BIT)) fail(`unknown --hold action: ${n} (${Object.keys(NAME_TO_BIT).join("|")})`);
     heldBits |= NAME_TO_BIT[n]!;
   }
+  // Where the ball is told to aim, in metres, or "at itself" (= not aiming),
+  // which is what an unspecified aim has to mean rather than a steer toward the
+  // origin.
+  const aim = o.aim ? o.aim.split(",").map(Number) : null;
+  if (aim && (aim.length !== 2 || aim.some(Number.isNaN))) fail("--aim takes x,y in metres");
 
-  const level = new Level(spec.data, spec.init);
+  const level = levelFromRecording(rec);
+  const ball = level instanceof BallLevel ? level : null;
   const de = inputDeserializer();
   const stuck = new StuckDetector();
+  const energy = new EnergyMonitor();
   const violations: Violation[] = [];
 
   for (let i = 0; i < from; i++) level.physicsProcess(de(rec.frames[i]!), 1 / 60);
@@ -173,20 +279,32 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   if (o.trace) {
     PhysTrace.reset();
     PhysTrace.enabled = true;
-    level.player.stateChanged = (s) => PhysTrace.emit({ t: "transition", to: s.constructor.name });
+    if (!ball) {
+      (level as Level).player.stateChanged = (s) =>
+        PhysTrace.emit({ t: "transition", to: s.constructor.name });
+    }
   }
 
   console.log(`[continue] ${file} — level=${rec.level} from=f${from} hold=${holdNames.join("+") || "-"} frames=${frames}`);
   for (let i = 0; i < frames; i++) {
-    const pos = level.player.globalPosition;
-    const input = de({ h: heldBits, mx: pos.x, my: pos.y });
+    const pos = ball ? ball.ball.globalPosition : (level as Level).player.globalPosition;
+    const aimAt = aim ? new Vec2(aim[0]!, aim[1]!) : pos;
+    const input = de({ h: heldBits, mx: aimAt.x, my: aimAt.y });
     level.physicsProcess(input, 1 / 60);
-    const d = digest(level);
-    violations.push(...checkInvariants(level));
-    const sv = stuck.push(level, input);
-    if (sv) violations.push(sv);
-    if (PhysTrace.enabled) {
-      const s = level.player.state as { supportBody?: { name?: string; constructor: { name: string } } | null };
+    const d = ball ? digestBall(ball) : digest(level as Level);
+    if (ball) {
+      violations.push(...checkBallInvariants(ball));
+      const ev = energy.push(ball, input);
+      if (ev) violations.push(ev);
+    } else {
+      violations.push(...checkInvariants(level as Level));
+      const sv = stuck.push(level as Level, input);
+      if (sv) violations.push(sv);
+    }
+    if (PhysTrace.enabled && !ball) {
+      const s = (level as Level).player.state as {
+        supportBody?: { name?: string; constructor: { name: string } } | null;
+      };
       PhysTrace.emit({
         t: "frame",
         state: d.state,
@@ -281,6 +399,617 @@ function cmdFork(file: string, o: Record<string, string>): void {
   process.exit(0);
 }
 
+// Re-simulate a bundle and print the full sim view at a frame (or over a range),
+// as a human table or as JSONL.
+//
+// This is the standing form of the most-rebuilt probe there is: "what is the
+// ball's angular velocity at f314", "how deep is it in that polygon at f1474",
+// "what is the chain's length made of at f455" were each answered by editing
+// `cli.ts` or writing a scratch script, once per session, and thrown away every
+// time. `--json` is the contract - stable keys, metres and rad/s - so a question
+// that needs arithmetic is a `jq` away rather than a code change.
+function cmdQuery(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const total = rec.frames.length;
+  const single = o.frame !== undefined;
+  const from = single ? Number(o.frame) : Number(o.from ?? 1);
+  const to = single ? Number(o.frame) : Number(o.to ?? total);
+  const every = Number(o.every ?? 1);
+  const bodyFilter = o.body === undefined ? null : Number(o.body);
+  const json = o.json !== undefined;
+  const last = Math.min(to, total);
+  if (!json) console.log(`[query] ${file} — level=${rec.level} frames=${total} (current physics)`);
+
+  for (let i = 0; i < last; i++) {
+    level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+    const n = i + 1;
+    if (n < from || (n - from) % every !== 0) continue;
+    const view = frameView(level);
+    const bodies = bodyFilter === null ? view.bodies : view.bodies.filter((b) => b.id === bodyFilter);
+    if (json) {
+      console.log(JSON.stringify({ ...view, bodies }));
+      continue;
+    }
+    printFrameView(view, bodies);
+  }
+  process.exit(0);
+}
+
+// The human form of a FrameView. Deliberately a separate rendering from the JSON
+// rather than a formatted-string field inside it: a number that has been through
+// `toFixed` is a number a script cannot use.
+function printFrameView(view: FrameView, bodies: BodyView[]): void {
+  const a = view.avatar;
+  console.log(
+    `  f${String(view.frame).padStart(4)} avatar pos=(${a.px.toFixed(3)},${a.py.toFixed(3)}) ` +
+      `vel=(${a.vx.toFixed(3)},${a.vy.toFixed(3)}) |v|=${a.speed.toFixed(3)} ` +
+      `rot=${a.rot.toFixed(3)} w=${a.w.toFixed(3)} ${a.state}` +
+      (a.supportBody ? ` on=${a.supportBody}` : ""),
+  );
+  const c = view.chain;
+  if (c) {
+    console.log(
+      `        chain nodes=${c.nodes.length} len=${c.currentLength.toFixed(4)} ` +
+        `max=${c.maxRopeLength.toFixed(4)} constraint=${c.constraintLength.toFixed(4)} ` +
+        `slack=${c.blockedSlack.toFixed(4)} stalled=${c.stalledLength.toFixed(4)} ` +
+        `stallRun=${c.stallRun} ${c.anchored ? "anchored" : "deploying"}`,
+    );
+    for (const n of c.nodes) {
+      console.log(
+        `          node ${n.span.padEnd(10)} (${n.px.toFixed(3)},${n.py.toFixed(3)}) ` +
+          `on ${n.bodyName}#${n.body}[${n.shapeIndex}]`,
+      );
+    }
+  }
+  for (const b of bodies) {
+    const kinds = b.shapes.map((s) => s.kind).join("+");
+    const embed = b.embed ? ` embed=${(b.embed.depth * 1000).toFixed(2)}mm in ${b.embed.intoName}` : "";
+    const stick = b.stickAnchor
+      ? ` stick=(${b.stickAnchor.x.toFixed(3)},${b.stickAnchor.y.toFixed(3)})`
+      : b.ungrippedFrames > 0
+        ? ` ungripped=${b.ungrippedFrames}f`
+        : "";
+    console.log(
+      `        body#${String(b.id).padStart(3)} ${(b.name || b.type).padEnd(14)} ${kinds.padEnd(8)} ` +
+        `pos=(${b.px.toFixed(3)},${b.py.toFixed(3)}) rot=${b.rot.toFixed(3)} ` +
+        `vel=(${b.vx.toFixed(3)},${b.vy.toFixed(3)}) w=${b.w.toFixed(3)}${embed}${stick}`,
+    );
+  }
+}
+
+// Per-phase velocity attribution across a frame window: which phase of the frame
+// gave this body this velocity (see engine/phaseTrace.ts).
+//
+// The chain phase is the part no other tool shows and the part every rope bug
+// has needed: push-out, rope solve, spin rollback, unwind, the derived-velocity
+// write and the stall lease are separate columns here, so "the contact solve
+// re-earns 1.2 m/s sideways every frame and the chain solve removes it" is a
+// thing you read rather than a thing you instrument for.
+async function cmdTrace(file: string, o: Record<string, string>): Promise<void> {
+  // Imported here rather than at the top of the file on purpose: `cli compare`
+  // copies this tooling into a worktree of an OLD revision, whose engine has
+  // never heard of `phaseTrace`, and a static import would break every command
+  // in the file there - including the one compare actually runs.
+  const { PhaseTrace } = await import("../engine/phaseTrace");
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const total = rec.frames.length;
+  const from = Number(o.from ?? 1);
+  const to = Math.min(Number(o.to ?? total), total);
+  const watch = o.body === undefined ? null : new Set(o.body.split(",").map(Number));
+
+  PhaseTrace.reset();
+  PhaseTrace.watch = watch;
+  console.log(
+    `[trace] ${file} — level=${rec.level} f${from}..${to}` +
+      (watch ? ` body=${[...watch].join(",")}` : " (all bodies)"),
+  );
+  for (let i = 0; i < to; i++) {
+    // Tracing only over the window keeps the record list to the frames asked
+    // for; the frames before it still have to be simulated to get there.
+    PhaseTrace.enabled = i + 1 >= from;
+    level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+  }
+  PhaseTrace.enabled = false;
+
+  if (o.out) {
+    writeFileSync(o.out, PhaseTrace.records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    console.log(`  ${PhaseTrace.records.length} records → ${o.out}`);
+  }
+
+  let frame = -1;
+  for (const r of PhaseTrace.records) {
+    if (r.f !== frame) {
+      frame = r.f;
+      console.log(`  f${String(frame).padStart(4)}`);
+    }
+    if (r.t === "phase") {
+      console.log(
+        `    ${r.phase.padEnd(20)} body#${String(r.body).padStart(2)} ${r.name.padEnd(12)} ` +
+          `Δv=(${r.dvx.toFixed(4).padStart(9)},${r.dvy.toFixed(4).padStart(9)}) ` +
+          `Δw=${r.dw.toFixed(4).padStart(9)}  → v=(${r.vx.toFixed(3)},${r.vy.toFixed(3)}) w=${r.w.toFixed(3)}`,
+      );
+    } else {
+      console.log(
+        `    ${"contact".padEnd(20)} ${r.aName}#${r.a} vs ${r.bName}#${r.b} ` +
+          `Pn=${r.pn.toFixed(5)} Pt=${r.pt.toFixed(5)}${r.slipping ? " (slipping)" : ""} ` +
+          `n=(${r.nx.toFixed(2)},${r.ny.toFixed(2)}) at (${r.px.toFixed(3)},${r.py.toFixed(3)})`,
+      );
+    }
+  }
+  process.exit(0);
+}
+
+// Run a playtest script and write a real bundle: level snapshot, input frames,
+// digests, full-world digests and the revision it was recorded at.
+//
+// Both argument orders work — `cli record script.json` and the longhand
+// `cli record <level> script.json`, where the level overrides whatever the
+// script names.
+function cmdRecord(first: string, o: Record<string, string>, extra: string[]): void {
+  const positional = positionals(extra);
+  const scriptFile = positional[0] ?? first;
+  const levelOverride = positional[0] ? first : o.level;
+  const script = JSON.parse(readFileSync(scriptFile, "utf8")) as PlaytestScript;
+  if (levelOverride) script.level = levelOverride;
+  const { recording, result } = recordScript(script, treeIdentity());
+  const out = o.out ?? `${scriptFile.replace(/\.json$/, "")}.bundle.json`;
+  writeFileSync(out, JSON.stringify(recording));
+  console.log(
+    `[record] ${scriptFile} — level=${recording.level} frames=${result.framesRun} → ${out}`,
+  );
+  for (const a of result.assertResults) console.log(`  ${a.ok ? "PASS" : "FAIL"}  ${a.description}`);
+  printViolations(result.violations);
+  console.log(result.passed ? "RESULT: PASS" : "RESULT: FAIL");
+  process.exit(result.passed ? 0 : 1);
+}
+
+// ---- render diff ------------------------------------------------------------
+// `cli shot` is the one view that draws what the PLAYER sees: `cli render` draws
+// its own SVG picture of the sim state, which is exactly why it cannot see a bug
+// in the drawing. The chain wound onto the ball drew as blank space for want of
+// one `floor`, and every CLI tool called that run perfectly healthy, because it
+// was (session-1467f).
+//
+// This does not make perceptual quality assertable — nothing here judges whether
+// a settle looks convincing. It makes perceptual CLAIMS cheap to evidence: one
+// command for a frame grab, one for a before/after pixel diff.
+const SHOT_PORT = 3179;
+
+function cmdShot(first: string, o: Record<string, string>, extra: string[]): void {
+  if (o.diff !== undefined) {
+    // `--diff a.png b.png` puts the first image in the flag's value slot and the
+    // second in a positional, so the pair is read off the raw arguments: the two
+    // images named anywhere except as `--out`'s value.
+    const [a, b] = extra.filter((x, i) => x.endsWith(".png") && extra[i - 1] !== "--out");
+    if (!a || !b) fail("usage: cli shot --diff a.png b.png [--out diff.png]");
+    const out = o.out ?? "shot-diff.png";
+    // ImageMagick's `compare` already answers both halves of the question: the
+    // absolute count of differing pixels, and an image with them highlighted.
+    // Reimplementing that over a hand-rolled PNG decoder would be a worse
+    // version of a tool the debugging loop already assumes is installed.
+    const r = spawnSync("magick", ["compare", "-metric", "AE", a, b, out], { encoding: "utf8" });
+    // `compare` exits 1 when the images differ, which is not an error here.
+    if (r.status !== 0 && r.status !== 1) fail(`magick compare failed: ${r.stderr.trim()}`, 1);
+    // ImageMagick 7 reports AE as `5.87698e+09 (89677)`: the first number is
+    // scaled by the quantum range and the parenthesised one is the pixel count,
+    // which is the only form of it anybody wants. Version 6 prints the count
+    // alone, so both are read.
+    const raw = (r.stderr || "0").trim();
+    const changed = Number(/\(([\d.eE+-]+)\)/.exec(raw)?.[1] ?? raw.split(/\s+/)[0]);
+    console.log(`[shot] ${a} vs ${b}: ${changed} pixel(s) differ → ${out}`);
+    process.exit(0);
+  }
+
+  const bundle = resolve(first);
+  const frame = Number(o.frame ?? 1);
+  const out = resolve(o.out ?? `${first.replace(/\.json(\.gz)?$/, "")}.f${frame}.png`);
+  const zoom = o.zoom;
+  const size = o.size ?? "1200,900";
+  const port = Number(o.port ?? SHOT_PORT);
+  const chromium = ["chromium-browser", "chromium", "google-chrome"].find(
+    (b) => spawnSync("which", [b]).status === 0,
+  );
+  if (!chromium) fail("no headless chromium found (chromium-browser | chromium | google-chrome)", 1);
+
+  // The page fetches its bundle over HTTP, so the bundle has to be inside the
+  // served tree — and a `.json.gz` from the committed corpus has to be unpacked
+  // first, since the browser would have no reason to gunzip a file it was simply
+  // handed. Written next to the corpus and removed afterwards.
+  const served = join(ROPE_DIR, "playtests", "_shot.json");
+  writeFileSync(served, JSON.stringify(loadRecording(bundle)));
+  const vite = spawn("bunx", ["vite", "--port", String(port), "--strictPort", "--host", "127.0.0.1"], {
+    cwd: ROPE_DIR,
+    stdio: "ignore",
+  });
+  try {
+    waitForServer(port);
+    const url =
+      `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json&frame=${frame}` +
+      (zoom ? `&zoom=${zoom}` : "");
+    const r = spawnSync(
+      chromium,
+      [
+        "--headless",
+        `--screenshot=${out}`,
+        `--window-size=${size}`,
+        // The page replays the bundle to the frame before it draws, so the grab
+        // has to wait for real work rather than for a fixed animation frame.
+        "--virtual-time-budget=20000",
+        url,
+      ],
+      { encoding: "utf8" },
+    );
+    if (r.status !== 0) fail(`chromium failed: ${(r.stderr || "").trim()}`, 1);
+    console.log(`[shot] ${first} @f${frame} → ${out}`);
+  } finally {
+    vite.kill("SIGTERM");
+    rmSync(served, { force: true });
+  }
+  process.exit(0);
+}
+
+// Block until the dev server answers, or give up loudly: a screenshot taken
+// against a server that was not up yet is a blank page, and a blank page is the
+// most misleading possible answer to "what does this frame look like".
+function waitForServer(port: number, timeoutMs = 30000): void {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = spawnSync("curl", ["-sf", "-o", "/dev/null", `http://127.0.0.1:${port}/shot.html`]);
+    if (r.status === 0) return;
+    spawnSync("sleep", ["0.25"]);
+  }
+  fail(`dev server did not come up on port ${port} within ${timeoutMs}ms`, 1);
+}
+
+// ---- A/B against another revision ------------------------------------------
+// `cli compare bundle.json --frame N --ref <rev>` replaces scripts/abtest.sh.
+//
+// The idea is unchanged and is what makes an A/B meaningful at all: the sim is
+// deterministic and a fix only bites at the issue frame, so replaying a bundle
+// to a fork frame under two revisions reproduces the SAME pre-issue state, and
+// the diff past that frame is exactly the change's effect. What is new is that
+// it cannot quietly compare a tree against itself. The shell version did that
+// twice in one day - an empty `git stash` compared HEAD with HEAD, and a wrong
+// cwd ran the same variant twice - and both times reported "no difference",
+// which reads as "the change is safe".
+//
+// So: both sides' tree identity is always printed, identical trees are named as
+// such rather than reported as an empty diff, every path is resolved from the
+// repo root, and a worktree that fails to run is an error rather than a silent
+// fall-through.
+
+// Where this file lives, resolved to the rope directory and the repo root, so no
+// command here depends on the cwd it was launched from.
+const ROPE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+
+function git(args: string[], cwd = ROPE_DIR): string {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (r.status !== 0) fail(`git ${args.join(" ")} failed: ${r.stderr.trim()}`);
+  return r.stdout.trim();
+}
+
+// A tree's identity: the commit, plus a hash of the uncommitted diff when there
+// is one. Two runs that print the same identity ran the same code, which is the
+// claim a "no difference" result depends on and never used to make.
+function treeIdentity(): string {
+  const head = git(["rev-parse", "--short", "HEAD"]);
+  const diff = spawnSync("git", ["diff", "HEAD"], { cwd: ROPE_DIR, encoding: "utf8" }).stdout ?? "";
+  if (diff.trim() === "") return `${head} (clean)`;
+  return `${head}+${createHash("sha1").update(diff).digest("hex").slice(0, 8)} (dirty)`;
+}
+
+function cmdCompare(file: string, o: Record<string, string>): void {
+  if (!o.ref) fail("cli compare requires --ref <rev>");
+  const bundle = resolve(file);
+  const forkFrame = Number(o.frame ?? 0);
+  if (!forkFrame) fail("cli compare requires --frame N (the frame just before the issue)");
+  const window = Number(o.frames ?? 24);
+  const repo = git(["rev-parse", "--show-toplevel"]);
+  const ropeRel = relative(repo, ROPE_DIR);
+  const refCommit = git(["rev-parse", "--short", o.ref]);
+  const here = treeIdentity();
+  const outDir = mkdtempSync(join(tmpdir(), "rope-compare-"));
+  const worktree = mkdtempSync(join(tmpdir(), "rope-worktree-"));
+
+  console.log(`[compare] ${file} @f${forkFrame} +${window} frames`);
+  console.log(`  new: working tree ${here}`);
+  console.log(`  old: ${o.ref} → ${refCommit}`);
+  if (here === `${refCommit} (clean)`) {
+    // The failure mode this command exists to make impossible: two runs of the
+    // same code reporting no difference and being read as a verified fix.
+    console.log("  IDENTICAL TREES — nothing to compare (this is not a result about your change)");
+    process.exit(2);
+  }
+
+  const emit = (dir: string, prefix: string): void => {
+    const r = spawnSync(
+      "bun",
+      [
+        "run",
+        join("src", "tools", "cli.ts"),
+        "compare-emit",
+        bundle,
+        "--frame",
+        String(forkFrame),
+        "--frames",
+        String(window),
+        "--out",
+        prefix,
+      ],
+      { cwd: dir, encoding: "utf8" },
+    );
+    // An old worktree that cannot run is an error, not an empty diff. The usual
+    // cause is a tooling change that reaches past the stable physics interfaces
+    // (physicsProcess, body/rope fields) into something the old revision spells
+    // differently, and the honest answer then is to say so.
+    if (r.status !== 0) {
+      console.error(r.stdout);
+      console.error(r.stderr);
+      fail(`compare-emit failed in ${dir} (exit ${r.status})`, 1);
+    }
+  };
+
+  try {
+    emit(ROPE_DIR, join(outDir, "new"));
+    git(["worktree", "add", "--quiet", "--detach", worktree, refCommit], repo);
+    const wtRope = join(worktree, ropeRel);
+    // Old physics, new tooling — the same trick the shell version used, and the
+    // same caveat: it holds only while the tooling touches stable physics
+    // interfaces. `compare-emit` is written to that rule (see sim/compare.ts,
+    // which derives its own body ids rather than reading a field the old engine
+    // has never heard of).
+    rmSync(join(wtRope, "src", "tools"), { recursive: true, force: true });
+    rmSync(join(wtRope, "src", "sim"), { recursive: true, force: true });
+    cpSync(join(ROPE_DIR, "src", "tools"), join(wtRope, "src", "tools"), { recursive: true });
+    cpSync(join(ROPE_DIR, "src", "sim"), join(wtRope, "src", "sim"), { recursive: true });
+    if (!existsSync(join(wtRope, "node_modules"))) {
+      symlinkSync(join(ROPE_DIR, "node_modules"), join(wtRope, "node_modules"));
+    }
+    emit(wtRope, join(outDir, "old"));
+
+    const oldSide = readCompareFrames(join(outDir, "old.jsonl"));
+    const newSide = readCompareFrames(join(outDir, "new.jsonl"));
+    const diff = diffCompareFrames(oldSide, newSide);
+    if (o.json !== undefined) {
+      console.log(JSON.stringify({ new: here, old: refCommit, forkFrame, window, diff }));
+    } else {
+      // The method rests on both sides reproducing the SAME pre-issue state, so
+      // a fork frame the two already disagree at makes the diff a comparison of
+      // two different histories rather than of the change. Say so: an unmarked
+      // table here reads as the change's effect and is not.
+      if (diff.firstDivergentFrame === forkFrame) {
+        console.log(
+          `  WARNING: the two runs already differ AT the fork frame — the divergence started ` +
+            `earlier, so this diff is not the change's effect. Walk --frame back until the ` +
+            `first compared frame matches.`,
+        );
+      }
+      console.log(
+        `  compared ${diff.frames} frames; ` +
+          (diff.firstDivergentFrame === null
+            ? `no divergence past ${(diff.maxDrift * 1000).toFixed(2)}mm`
+            : `first divergence @f${diff.firstDivergentFrame} on ${diff.firstDivergentBody} ` +
+              `(maxDrift=${(diff.maxDrift * 100).toFixed(2)}px)`),
+      );
+      console.log(`    body                   drift(mm)    Δ|v|(m/s)      Δw(rad/s)`);
+      for (const b of diff.bodies) {
+        console.log(
+          `    body#${String(b.id).padStart(2)} ${b.type.padEnd(14)} ` +
+            `${(b.drift * 1000).toFixed(2).padStart(10)} ${b.dv.toFixed(4).padStart(12)} ` +
+            `${b.dw.toFixed(4).padStart(14)}`,
+        );
+      }
+      if (diff.chainLengthDelta !== null) {
+        console.log(`    chain length: ${(diff.chainLengthDelta * 100).toFixed(2)}cm (new − old)`);
+      }
+      console.log(`  SVGs: ${outDir}/old.{before,after}.svg  ${outDir}/new.{before,after}.svg`);
+    }
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: repo });
+  }
+  process.exit(0);
+}
+
+function readCompareFrames(file: string): CompareFrame[] {
+  return readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as CompareFrame);
+}
+
+// The half of `cli compare` that runs inside each side's tree: replay to the
+// fork frame, continue on the recorded inputs, and write one JSON object per
+// frame plus the two SVGs. Never called by hand.
+function cmdCompareEmit(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const forkAt = Math.min(Number(o.frame), rec.frames.length);
+  const window = Number(o.frames ?? 24);
+  const prefix = o.out ?? "compare";
+  const lines: string[] = [];
+  const end = Math.min(rec.frames.length, forkAt + window);
+  for (let i = 0; i < end; i++) {
+    level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+    const n = i + 1;
+    if (n === forkAt) writeFileSync(`${prefix}.before.svg`, renderFrameSVG(level));
+    if (n >= forkAt) lines.push(JSON.stringify(compareFrame(level)));
+  }
+  writeFileSync(`${prefix}.after.svg`, renderFrameSVG(level));
+  writeFileSync(`${prefix}.jsonl`, lines.join("\n") + "\n");
+  process.exit(0);
+}
+
+// Continue a bundle from a frame with ZERO input and watch the scene come to
+// rest — the standing form of the `_bcont.ts`/`_rest.ts` throwaway.
+//
+// A scene left alone must settle and then stay settled, and the two failures
+// this catches are opposite: energy appearing (the 68 m/s runaway that started
+// this line of work) and a body that reports itself at rest while creeping
+// across the level (the friction motor, the ratchet). Both are invisible to a
+// plain replay, which stops the moment the recorded inputs run out.
+function cmdSettle(file: string, o: Record<string, string>): void {
+  const rec = loadRecording(file);
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  const total = rec.frames.length;
+  const from = Math.min(Number(o.from ?? total), total);
+  const frames = Number(o.frames ?? 600);
+  const every = Number(o.every ?? 60);
+  for (let i = 0; i < from; i++) level.physicsProcess(de(rec.frames[i]!), 1 / 60);
+
+  const world = level.world;
+  const start = new Map<number, Vec2>();
+  for (const b of world.bodies) if (!b.removed) start.set(b.buildIndex, b.globalPosition);
+
+  // Zero input, fed through the deserializer so pressed/released edges are
+  // correct relative to the recording: releasing a held deploy is a real event
+  // and must happen exactly once, on the first continued frame.
+  console.log(`[settle] ${file} — from f${from}, ${frames} frames of zero input`);
+  console.log(`    frame   KE(J)      max|v|    max|w|`);
+  let peakAfterSettled = 0;
+  const violations: Violation[] = [];
+  for (let i = 0; i < frames; i++) {
+    // Aim at the avatar itself, which is what "not aiming" is encoded as; aiming
+    // at the world origin would steer the ball for the whole window.
+    const at =
+      level instanceof BallLevel ? level.ball.globalPosition : (level as Level).player.globalPosition;
+    const input = de({ h: 0, mx: at.x, my: at.y });
+    level.physicsProcess(input, 1 / 60);
+    if (level instanceof BallLevel) violations.push(...checkBallInvariants(level));
+    else violations.push(...checkInvariants(level));
+    const ke = kineticEnergy(world);
+    let maxV = 0;
+    let maxW = 0;
+    for (const b of world.bodies) {
+      if (b.removed || !(b instanceof RigidBody2D)) continue;
+      maxV = Math.max(maxV, b.linearVelocity.length());
+      maxW = Math.max(maxW, Math.abs(b.angularVelocity));
+    }
+    // Once past the settling half of the window, nothing may pick up energy
+    // again: that is the "and stays there" half of the assertion. Judged on
+    // kinetic energy rather than on the fastest body, because the fastest body
+    // is often the chain tip - a third of a gram, whose 2 cm/s is 7e-8 J and is
+    // the documented at-rest floor rather than motion.
+    if (i > frames / 2) peakAfterSettled = Math.max(peakAfterSettled, ke);
+    if (i % every === 0 || i === frames - 1) {
+      console.log(
+        `  f${String(level.frame).padStart(6)}  ${ke.toExponential(2)}  ` +
+          `${maxV.toFixed(5)}  ${maxW.toFixed(5)}`,
+      );
+    }
+  }
+
+  let worstDrift = 0;
+  let worstName = "";
+  for (const b of world.bodies) {
+    if (b.removed) continue;
+    const was = start.get(b.buildIndex);
+    if (!was) continue;
+    const drift = b.globalPosition.distanceTo(was);
+    if (drift > worstDrift) {
+      worstDrift = drift;
+      worstName = `body#${b.buildIndex} ${b.name || b.constructor.name}`;
+    }
+  }
+  console.log(`  net drift: ${(worstDrift * 1000).toFixed(1)}mm (${worstName || "nothing moved"})`);
+  console.log(`  peak KE over the second half: ${peakAfterSettled.toExponential(2)} J`);
+  printViolations(violations);
+  const settled = peakAfterSettled < SETTLE_KE_TOLERANCE && violations.length === 0;
+  console.log(settled ? "RESULT: SETTLED" : "RESULT: NOT SETTLED");
+  process.exit(settled ? 0 : 1);
+}
+
+// What "at rest" means for `cli settle`. A settled ball scene reads about 1e-7 J
+// of kinetic energy, so 1e-5 is two orders above the floor and still far under
+// anything moving: the 2.4 mm/frame friction motor (session-611f) ran the ball
+// at 0.14 m/s, which is 6e-4 J.
+const SETTLE_KE_TOLERANCE = 1e-5;
+
+// Anomaly sweep — step 2.5 of the debugging loop: run this before choosing what
+// to inspect. `--all` sweeps the whole corpus and prints only what is notable,
+// which is how a regression in a bundle nobody is currently looking at gets
+// found (see sim/scan.ts for what it measures and why those five things).
+function cmdScan(fileOrAll: string, o: Record<string, string>): void {
+  const topK = Number(o.top ?? 5);
+  if (fileOrAll === "--all") {
+    let flagged = 0;
+    for (const dir of BUNDLE_DIRS) {
+      let files: string[];
+      try {
+        files = readdirSync(dir).filter(isBundleFile).sort();
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        const scan = scanRecording(loadRecording(join(dir, f)), topK);
+        const notes = notable(scan);
+        if (notes.length === 0) {
+          console.log(`  ok    ${f}`);
+          continue;
+        }
+        flagged++;
+        console.log(`  FLAG  ${f}`);
+        for (const n of notes) console.log(`          ${n}`);
+      }
+    }
+    console.log(`[scan] ${flagged} bundle(s) with something worth looking at`);
+    process.exit(0);
+  }
+
+  const rec = loadRecording(fileOrAll);
+  const scan = scanRecording(rec, topK);
+  if (o.json !== undefined) {
+    console.log(JSON.stringify(scan));
+    process.exit(0);
+  }
+  console.log(`[scan] ${fileOrAll} — level=${scan.level} frames=${scan.frames} (current physics)`);
+  for (const b of scan.bodies) {
+    console.log(`  body#${b.id} ${b.name} (${b.type})`);
+    console.log(
+      `    Δv spikes: ` +
+        (b.dvSpikes.map((s) => `${s.magnitude.toFixed(3)}@f${s.frame}`).join("  ") || "none"),
+    );
+    console.log(
+      `    Δw spikes: ` +
+        (b.dwSpikes.map((s) => `${s.magnitude.toFixed(3)}@f${s.frame}`).join("  ") || "none"),
+    );
+    console.log(
+      `    embed: ${(b.maxEmbed * 1000).toFixed(1)}mm` +
+        (b.maxEmbed > 0 ? ` in ${b.maxEmbedInto} @f${b.maxEmbedFrame}` : ""),
+    );
+    console.log(
+      `    settled drift: ${(b.settledDrift * 1000).toFixed(2)}mm` +
+        (b.settledFrames > 0 ? ` over ${b.settledFrames}f from f${b.settledDriftFrame}` : "") +
+        `   contact flicker: ${(b.contactFlicker * 100).toFixed(0)}% of ${b.restingFrames} resting frames`,
+    );
+  }
+  if (scan.chain) {
+    console.log(
+      `  chain: longest stall run ${scan.chain.longestStallRun}f @f${scan.chain.longestStallRunFrame}, ` +
+        `lease high-water ${(scan.chain.maxBlockedSlack * 100).toFixed(1)}cm @f${scan.chain.maxBlockedSlackFrame}, ` +
+        `max length ${(scan.chain.maxLength * 100).toFixed(1)}cm` +
+        (scan.chain.anchorLength !== null
+          ? ` (anchored at ${(scan.chain.anchorLength * 100).toFixed(1)}cm)`
+          : ""),
+    );
+    console.log(
+      `    solve gain spikes: ` +
+        (scan.chain.solveGainSpikes
+          .map((s) => `${s.magnitude.toFixed(2)}@f${s.frame}`)
+          .join("  ") || "none"),
+    );
+  }
+  const notes = notable(scan);
+  console.log(notes.length === 0 ? "  nothing notable" : "  notable:");
+  for (const n of notes) console.log(`    ${n}`);
+  process.exit(0);
+}
+
 // Print the chain/rope wrap path (node polyline) per frame — the geometry the
 // digest table omits. Node count > 2 means the chain has caught corners.
 function cmdChainpath(file: string, o: Record<string, string>): void {
@@ -312,29 +1041,52 @@ function cmdChainpath(file: string, o: Record<string, string>): void {
 // Replay every bundle in a directory with current physics; invariants (incl.
 // the stuck detector) must hold. Digest divergence is informational — bundles
 // recorded before a physics fix legitimately diverge.
-function cmdBundles(dir: string): void {
-  let files: string[];
-  try {
-    files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
-  } catch {
-    fail(`cannot read bundle dir: ${dir}`);
+function cmdBundles(dirs: string[]): void {
+  const found: { dir: string; file: string }[] = [];
+  for (const dir of dirs) {
+    let files: string[];
+    try {
+      files = readdirSync(dir).filter(isBundleFile).sort();
+    } catch {
+      // A missing directory is only fatal if it was the only one asked for: the
+      // committed corpus is always there, while `playtests/bundles/` is local
+      // scratch a fresh clone does not have.
+      if (dirs.length === 1) fail(`cannot read bundle dir: ${dir}`);
+      continue;
+    }
+    for (const f of files) found.push({ dir, file: f });
   }
-  if (files.length === 0) fail(`no bundles in ${dir}`);
+  if (found.length === 0) fail(`no bundles in ${dirs.join(", ")}`);
   let failed = 0;
-  for (const f of files) {
-    const rec = loadRecording(join(dir, f));
+  let diverged = 0;
+  let worstDrift = 0;
+  let worstDriftFile = "";
+  for (const { dir, file } of found) {
+    const rec = loadRecording(join(dir, file));
     const r = replayRecording(rec);
     const div = r.divergedAtFrame !== null ? ` (diverges @f${r.divergedAtFrame}, maxDrift=${(r.maxDrift * 100).toFixed(1)}px)` : "";
     const g = rec.git ? ` @${rec.git}` : "";
+    if (r.divergedAtFrame !== null) diverged++;
+    if (r.maxDrift > worstDrift) {
+      worstDrift = r.maxDrift;
+      worstDriftFile = file;
+    }
     if (r.violations.length > 0) {
       failed++;
-      console.log(`FAIL ${f}${g} — ${r.violations.length} violation(s)${div}`);
+      console.log(`FAIL ${file}${g} — ${r.violations.length} violation(s)${div}`);
       printViolations(r.violations, 5);
     } else {
-      console.log(`PASS ${f}${g} — ${r.framesRun} frames${div}`);
+      console.log(`PASS ${file}${g} — ${r.framesRun} frames${div}`);
     }
   }
-  console.log(failed === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failed}/${files.length})`);
+  // Divergence stays informational — a bundle recorded before a physics fix
+  // legitimately diverges — but it is stated rather than left silent, so a run
+  // where everything drifted cannot read the same as one where nothing did.
+  console.log(
+    `[bundles] ${found.length} bundles, ${diverged} diverged` +
+      (worstDrift > 0 ? `, worst drift ${(worstDrift * 100).toFixed(1)}px (${worstDriftFile})` : ""),
+  );
+  console.log(failed === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failed}/${found.length})`);
   process.exit(failed === 0 ? 0 : 1);
 }
 
@@ -342,11 +1094,18 @@ function cmdBundles(dir: string): void {
 // captured inputs+digests, and confirm bit-for-bit reproduction.
 function cmdSelftest(): void {
   const script: PlaytestScript = {
-    // Pinned to the grapple arena, not DEFAULT_LEVEL: this script holds
-    // fire/retract/move/jump, and playtest scripts can't drive ball levels.
+    // The grapple arena, pinned rather than DEFAULT_LEVEL: this script holds
+    // fire/retract/move/jump, which is the grapple controller's vocabulary. The
+    // ball controller gets its own round trip below.
     level: "LEVEL_2",
     frames: 300,
     holds: [
+      // Two loose circles, so the determinism check has rigid bodies in it at
+      // all: without them the whole scene is the avatar and its hook, which is
+      // precisely the blind spot full-world digests exist to close. They are
+      // spawned at the mouse aim point, land on the arena and settle.
+      { action: "spawn_large", from: 4, to: 5 },
+      { action: "spawn_small", from: 12, to: 13 },
       { action: "fire", from: 40, to: 300 },
       { action: "retract", from: 80, to: 200 },
       { action: "move_right", from: 120, to: 220 },
@@ -356,17 +1115,85 @@ function cmdSelftest(): void {
   };
 
   const a = runScript(script);
-  const rec: Recording = { level: script.level, frames: a.serializedFrames, digests: a.digests };
+  const rec: Recording = {
+    level: script.level,
+    frames: a.serializedFrames,
+    digests: a.digests,
+    // The whole scene, not the avatar alone: determinism is a claim about the
+    // simulation, and it was only ever checked on one body.
+    worldDigests: a.worldDigests,
+  };
   const b = replayRecording(rec);
 
-  // Same-engine round-trip: demand bit-exact reproduction, not just low drift.
-  const ok = b.bitDivergedAtFrame === null && b.violations.length === 0;
+  // Same-engine round-trip: demand bit-exact reproduction, not just low drift,
+  // and demand it of every body and of the rope path, not only of the avatar.
+  const ok =
+    b.bitDivergedAtFrame === null && b.worldBitDivergedAtFrame === null && b.violations.length === 0;
   console.log(`[selftest] ran ${a.framesRun} frames, replayed ${b.framesRun}`);
-  console.log(`  diverged: ${b.bitDivergedAtFrame ?? "no"}  violations: ${b.violations.length}`);
+  console.log(`  avatar diverged: ${b.bitDivergedAtFrame ?? "no"}  violations: ${b.violations.length}`);
+  console.log(
+    `  world  diverged: ${b.worldBitDivergedAtFrame ?? "no"}` +
+      (b.worldBitDivergedAtFrame !== null && b.worldMaxDriftName
+        ? ` (worst: ${b.worldMaxDriftName})`
+        : "") +
+      `  bodies: ${a.worldDigests[a.worldDigests.length - 1]?.bodies.length ?? 0}`,
+  );
   if (b.violations[0]) console.log(`  first: f${b.violations[0].frame} ${b.violations[0].kind}`);
-  console.log(ok ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
-  process.exit(ok ? 0 : 1);
+
+  // The ball controller, through the RECORDING path rather than through
+  // `runScript` directly: a bundle written headlessly has to replay bit-for-bit,
+  // or every scenario recorded that way is evidence about a run nobody can
+  // reproduce. It also puts the chain, the coil and the ball's spin inside the
+  // determinism check, none of which the grapple script above touches.
+  const ballRun = recordScript(BALL_SELFTEST_SCRIPT);
+  const c = replayRecording(ballRun.recording);
+  const ballOk =
+    c.bitDivergedAtFrame === null &&
+    c.worldBitDivergedAtFrame === null &&
+    c.violations.length === 0 &&
+    ballRun.result.passed;
+  console.log(`[selftest] ball: recorded ${ballRun.result.framesRun} frames, replayed ${c.framesRun}`);
+  console.log(
+    `  avatar diverged: ${c.bitDivergedAtFrame ?? "no"}  world diverged: ${c.worldBitDivergedAtFrame ?? "no"}` +
+      `  violations: ${c.violations.length}`,
+  );
+  if (c.violations[0]) console.log(`  first: f${c.violations[0].frame} ${c.violations[0].kind}`);
+
+  console.log(ok && ballOk ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
+  process.exit(ok && ballOk ? 0 : 1);
 }
+
+// A ball & chain session with everything the controller does in it: a deploy, an
+// anchor, a wind-up on the aim steering, and the coil that comes with it. Held
+// here rather than in `playtests/` because the selftest must not depend on a
+// file that can be edited out from under it.
+const BALL_SELFTEST_SCRIPT: PlaytestScript = {
+  level: "SELFTEST_BALL",
+  controller: "ball",
+  frames: 240,
+  spawn: { x: 0, y: 0 },
+  data: {
+    player: { x: 0, y: 0, radius: 8 },
+    // A block 1.8 m above the ball (bottom face at -1.8 m, just inside the
+    // chain's reach) and a floor to settle on.
+    bodies: [
+      { kind: "static", x: 0, y: -200, rot: 0, shape: { kind: "rect", w: 200, h: 40 } },
+      { kind: "static", x: 0, y: 150, rot: 0, shape: { kind: "rect", w: 4000, h: 100 } },
+    ],
+  },
+  holds: [{ action: "deploy", from: 5, to: 240 }],
+  aim: [
+    { from: 1, to: 10, x: 0, y: -1, relative: true },
+    // A quarter turn every six frames, which is what winds the chain on.
+    ...Array.from({ length: 20 }, (_, i) => ({
+      from: 120 + i * 6,
+      to: 125 + i * 6,
+      x: Math.cos((i * Math.PI) / 4),
+      y: Math.sin((i * Math.PI) / 4),
+      relative: true,
+    })),
+  ],
+};
 
 switch (cmd) {
   case "play":
@@ -382,12 +1209,44 @@ switch (cmd) {
     cmdDump(arg, opts(rest));
     break;
   case "continue":
-    if (!arg) fail("usage: cli continue <bundle.json> [--from N] [--hold a,b] [--frames M] [--every K] [--trace out.jsonl]");
+    if (!arg) fail("usage: cli continue <bundle.json> [--from N] [--hold a,b] [--aim X,Y] [--frames M] [--every K] [--trace out.jsonl]");
     cmdContinue(arg, opts(rest));
     break;
   case "render":
     if (!arg) fail("usage: cli render <bundle.json> [--frame N] [--out file.svg]");
     cmdRender(arg, opts(rest));
+    break;
+  case "query":
+    if (!arg) fail("usage: cli query <bundle.json> [--frame N | --from A --to B] [--every K] [--body ID] [--json]");
+    cmdQuery(arg, opts(rest));
+    break;
+  case "shot":
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N] [--zoom Z] [--out f.png]  |  cli shot --diff a.png b.png [--out d.png]");
+    cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
+    break;
+  case "record":
+    if (!arg) fail("usage: cli record [<level>] <script.json> [--out session.json]");
+    cmdRecord(arg, opts(rest), rest);
+    break;
+  case "compare":
+    if (!arg) fail("usage: cli compare <bundle.json> --frame N --ref <rev> [--frames M] [--json]");
+    cmdCompare(arg, opts(rest));
+    break;
+  case "compare-emit":
+    if (!arg) fail("usage: cli compare-emit <bundle.json> --frame N [--frames M] --out PREFIX");
+    cmdCompareEmit(arg, opts(rest));
+    break;
+  case "settle":
+    if (!arg) fail("usage: cli settle <bundle.json> [--from N] [--frames M] [--every K]");
+    cmdSettle(arg, opts(rest));
+    break;
+  case "scan":
+    if (!arg) fail("usage: cli scan <bundle.json|--all> [--top K] [--json]");
+    cmdScan(arg, opts(rest));
+    break;
+  case "trace":
+    if (!arg) fail("usage: cli trace <bundle.json> [--from A] [--to B] [--body ID[,ID]] [--out t.jsonl]");
+    void cmdTrace(arg, opts(rest));
     break;
   case "chainpath":
     if (!arg) fail("usage: cli chainpath <bundle.json> [--from A] [--to B] [--every N]");
@@ -398,23 +1257,25 @@ switch (cmd) {
     cmdFork(arg, opts(rest));
     break;
   case "bundles":
-    cmdBundles(arg ?? "playtests/bundles");
+    // Both corpora by default: the committed regressions (which a fresh clone
+    // has) and the local scratch dir (which it does not).
+    cmdBundles(arg ? [arg, ...rest.filter((r) => !r.startsWith("--"))] : BUNDLE_DIRS);
     break;
   case "selftest":
     cmdSelftest();
     break;
   case "ledges":
-    cmdLedges();
+    void cmdLedges();
     break;
   case "corners":
-    cmdCorners();
+    void cmdCorners();
     break;
   case "contacts":
-    cmdContacts();
+    void cmdContacts();
     break;
   default:
     fail(
-      "usage: cli <play|replay|dump|continue|render|chainpath|fork|bundles|selftest|ledges|corners|contacts> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|contacts> [file] [options]",
     );
 }
 
@@ -422,22 +1283,39 @@ switch (cmd) {
 // some geometry and a fixed number of steps — so they need no level, no input
 // trace and no bundle, and a regression reads as a number rather than as a rope
 // in a wall four hundred frames into a recording.
-function cmdContacts(): void {
+async function cmdContacts(): Promise<void> {
+  // Dynamic for the same reason as `cli trace`: the case suite reaches into
+  // engine internals (`ContactAudit`) that an old revision does not have, and
+  // `cli compare` runs this very file inside a worktree of one.
+  const { runContactCases } = await import("../sim/contactCases");
   const results = runContactCases();
   let failed = 0;
+  let xfail = 0;
   for (const r of results) {
-    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    // An expected failure is a pass for the exit code, and an expected PASS is a
+    // failure: a case that has started working while still marked is a stale
+    // marker, which is a lie about what the suite covers.
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
     for (const d of r.details) console.log(`        ${d}`);
-    if (!r.passed) failed++;
+    if (stale) {
+      console.log(`        this case is marked expectedFail but PASSED — delete the marker`);
+    }
+    if (bad) failed++;
+    if (r.expectedFail && !r.passed) xfail++;
   }
-  console.log(`[contacts] ${results.length - failed}/${results.length} cases passed`);
+  const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
+  console.log(`[contacts] ${results.length - failed}/${results.length} cases green${x}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
 // Corner-exposure geometry cases (src/sim/cornerCases.ts). Pure geometry, so it
 // needs no level and runs instantly - and it is what decides whether the rope may
 // bend around a compound body's vertex at all.
-function cmdCorners(): void {
+async function cmdCorners(): Promise<void> {
+  const { runCornerCases } = await import("../sim/cornerCases");
   const results = runCornerCases();
   let failed = 0;
   for (const r of results) {
@@ -449,7 +1327,8 @@ function cmdCorners(): void {
 }
 
 // Generated grab-scenario sweep (src/sim/ledgeMatrix.ts).
-function cmdLedges(): void {
+async function cmdLedges(): Promise<void> {
+  const { runLedgeMatrix } = await import("../sim/ledgeMatrix");
   const results = runLedgeMatrix();
   let failed = 0;
   for (const r of results) {

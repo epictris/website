@@ -9,7 +9,17 @@ import { render, renderBall } from "./render/renderer";
 import { ballZoom, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { CameraController } from "./render/cameraController";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
-import { digest, digestBall, serializeInput, type Digest, type Recording, type SerializedFrame } from "./sim/trace";
+import {
+  digest,
+  digestBall,
+  serializeInput,
+  worldDigest,
+  worldDigestBall,
+  type Digest,
+  type Recording,
+  type SerializedFrame,
+  type WorldDigest,
+} from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
 
@@ -69,6 +79,7 @@ function reset(): void {
   cameraCtl.snap();
   recFrames.length = 0;
   recDigests.length = 0;
+  recWorldDigests.length = 0;
 }
 level.onReset = reset;
 
@@ -88,6 +99,10 @@ const input: IInputSource = (ballInput ?? liveInput)!;
 // trimmed; it resets whenever the level resets.
 const recFrames: SerializedFrame[] = [];
 const recDigests: Digest[] = [];
+// The rest of the scene, at the same cadence — every rigid body and the chain,
+// so a replay of this bundle is compared on the whole world rather than on the
+// avatar alone (see WorldDigest).
+const recWorldDigests: WorldDigest[] = [];
 
 function downloadRecording(): void {
   const rec: Recording = {
@@ -95,6 +110,7 @@ function downloadRecording(): void {
     git: __GIT_COMMIT__,
     frames: recFrames.slice(),
     digests: recDigests.slice(),
+    worldDigests: recWorldDigests.slice(),
   };
   const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -132,6 +148,9 @@ function frame(now: number): void {
     level.physicsProcess(frameInput, STEP);
     recFrames.push(serializeInput(frameInput));
     recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
+    recWorldDigests.push(
+      level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level),
+    );
     accumulator -= STEP;
     steps++;
   }

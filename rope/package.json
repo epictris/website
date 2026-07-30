@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "bun run scripts/test.ts",
     "replay": "bun run src/tools/cli.ts"
   },
   "devDependencies": {

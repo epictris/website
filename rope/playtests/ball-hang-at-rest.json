@@ -1,0 +1,57 @@
+{
+  "level": "ball-hang-at-rest",
+  "controller": "ball",
+  "frames": 600,
+  "spawn": {
+    "x": 0,
+    "y": 0
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": -200.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 200.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      }
+    ]
+  },
+  "holds": [
+    {
+      "action": "deploy",
+      "from": 5,
+      "to": 600
+    }
+  ],
+  "aim": [
+    {
+      "from": 1,
+      "to": 10,
+      "x": 0,
+      "y": -1.0,
+      "relative": true
+    }
+  ],
+  "asserts": [
+    {
+      "window": {
+        "from": 400,
+        "to": 600
+      },
+      "maxSpeed": 0.05,
+      "maxDrift": 0.02,
+      "maxChainGrowth": 0.01
+    }
+  ]
+}

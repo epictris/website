@@ -25,6 +25,7 @@ import {
   sweepCircle,
 } from "./collision";
 import { shapeContacts } from "./manifold";
+import { PhaseTrace } from "./phaseTrace";
 import { PhysTrace } from "./physTrace";
 
 // Trace helper: one record per moveAndCollide hit.
@@ -225,6 +226,40 @@ interface CachedImpulses {
   t: number;
 }
 
+// ---- contact bookkeeping audit --------------------------------------------
+// Off in play, on under `cli contacts`: every velocity change the contact phase
+// writes must be accounted for by an impulse applied to a PAIR.
+//
+// The `momentum` case already pins the aggregate at machine precision, and this
+// is the same statement made per body, which is what catches the defect that
+// aggregate cannot see: a one-sided write. Rigid-rigid friction used to be
+// exactly that - a routine that wrote only to `body`, sized from the other
+// body's motion, with nothing making the two directions equal and opposite - and
+// it became a motor the moment level scenery stopped being frictionless
+// (session-611f, a hanging ball walking its anchor 3.6 m across the level). An
+// aggregate check misses it whenever the other side of the scene is a static
+// body, because the floor absorbs the discrepancy silently.
+export const ContactAudit = {
+  enabled: false,
+  violations: [] as string[],
+  // Impulse and angular impulse each body was handed this solve.
+  applied: new Map<number, { p: Vec2; l: number }>(),
+
+  reset(): void {
+    this.violations.length = 0;
+    this.applied.clear();
+  },
+
+  record(body: PhysicsBody2D, impulse: Vec2, angular: number): void {
+    const e = this.applied.get(body.id);
+    if (e) {
+      this.applied.set(body.id, { p: e.p.add(impulse), l: e.l + angular });
+    } else {
+      this.applied.set(body.id, { p: impulse, l: angular });
+    }
+  },
+};
+
 export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
@@ -233,14 +268,26 @@ export class World {
   // iterated - so it cannot put a map's ordering anywhere near the solve.
   private contactCache = new Map<string, CachedImpulses>();
 
+  // Names bodies for the full-world digest: assignment order in this world, not
+  // the process-global `id`, so two builds of the same level agree.
+  private nextBuildIndex = 0;
+
   add(body: CollisionObject2D): void {
     body.world = this;
     body.removed = false;
     if (body instanceof Area2D) {
       if (!this.areas.includes(body)) this.areas.push(body);
+      else return;
     } else if (body instanceof PhysicsBody2D) {
       if (!this.bodies.includes(body)) this.bodies.push(body);
+      else return;
+    } else {
+      return;
     }
+    // Only on the add that actually appends: re-adding a body it already holds
+    // must not renumber it, and a body removed and re-added takes a fresh index
+    // because it is, as far as the digest is concerned, a new body.
+    body.buildIndex = this.nextBuildIndex++;
   }
 
   // Snapshot every body's transform for render interpolation. Called at the top
@@ -471,6 +518,7 @@ export class World {
 
   integrate(dt: number): void {
     this.applyAreaForces(dt);
+    PhaseTrace.mark("areas", this);
     for (const body of this.bodies) {
       if (body instanceof RigidBody2D && !body.removed) {
         body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
@@ -478,6 +526,7 @@ export class World {
         body.globalRotation += body.angularVelocity * dt;
       }
     }
+    PhaseTrace.mark("gravity", this);
     this.resolveDynamicCollisions(dt);
     this.notifyAreas();
   }
@@ -761,6 +810,10 @@ export class World {
     const previous = this.contactCache;
     this.contactCache = new Map<string, CachedImpulses>();
     if (constraints.length === 0) return;
+    // Velocities as the solve found them, so the audit can ask whether every
+    // change it left is explained by an impulse the pair actually applied.
+    const before = ContactAudit.enabled ? this.snapshotVelocities() : null;
+    if (before) ContactAudit.applied.clear();
 
     const solved: SolverContact[] = [];
     for (const c of constraints) {
@@ -850,9 +903,68 @@ export class World {
 
     for (const s of solved) {
       this.contactCache.set(s.key, { n: s.c.normalImpulse, t: s.c.tangentImpulse });
+      // What this contact actually spent, normal and tangent. The phase delta
+      // says the contact solve gave the ball 1.2 m/s sideways; this says which
+      // contact paid for it, and whether it was at the Coulomb limit.
+      PhaseTrace.contact(
+        s.c.a,
+        s.c.b,
+        s.c.normalImpulse,
+        s.c.tangentImpulse,
+        s.c.normal,
+        s.c.point,
+        s.c.slipping,
+      );
     }
 
+    if (before) this.auditImpulses(before);
     this.separatePairs(constraints);
+  }
+
+  private snapshotVelocities(): Map<number, { v: Vec2; w: number }> {
+    const out = new Map<number, { v: Vec2; w: number }>();
+    for (const body of this.bodies) {
+      if (body instanceof RigidBody2D && !body.removed) {
+        out.set(body.id, { v: body.linearVelocity, w: body.angularVelocity });
+      }
+    }
+    return out;
+  }
+
+  // Every body's momentum change across the solve must equal the impulses the
+  // pair solve handed it, and nothing else. A discrepancy means something in the
+  // contact phase wrote a velocity outside the pair bookkeeping - which is the
+  // exact shape of the friction motor this solver replaced.
+  private auditImpulses(before: Map<number, { v: Vec2; w: number }>): void {
+    for (const body of this.bodies) {
+      if (!(body instanceof RigidBody2D) || body.removed) continue;
+      const was = before.get(body.id);
+      if (!was) continue;
+      const applied = ContactAudit.applied.get(body.id) ?? { p: Vec2.ZERO, l: 0 };
+      const dp = body.linearVelocity.sub(was.v).mul(body.mass);
+      const dl = (body.angularVelocity - was.w) * body.inertia;
+      // Scaled by what was actually applied: these are float sums over up to
+      // `VELOCITY_ITERATIONS` increments, so the honest bar is relative.
+      const tolP = 1e-9 + 1e-9 * applied.p.length();
+      const tolL = 1e-9 + 1e-9 * Math.abs(applied.l);
+      const residual = dp.sub(applied.p);
+      if (residual.length() > tolP) {
+        // The residual, not the two totals: they agree to several digits by
+        // construction and printing both hides the very thing being reported.
+        ContactAudit.violations.push(
+          `body#${body.buildIndex} ${body.name || body.constructor.name}: ` +
+            `${residual.length().toExponential(3)} N·s of momentum change with no impulse behind ` +
+            `it (applied |P|=${applied.p.length().toExponential(3)})`,
+        );
+      }
+      if (Math.abs(dl - applied.l) > tolL) {
+        ContactAudit.violations.push(
+          `body#${body.buildIndex} ${body.name || body.constructor.name}: ` +
+            `${Math.abs(dl - applied.l).toExponential(3)} N·m·s of angular momentum change with ` +
+            `no impulse behind it (applied |L|=${Math.abs(applied.l).toExponential(3)})`,
+        );
+      }
+    }
   }
 
   // Coulomb friction, accumulated and clamped to the cone of this contact's OWN
@@ -969,7 +1081,9 @@ export class World {
     // manifolds are where Box2D's resting-stack quality actually comes from.
     const pairs = this.collectContacts();
     this.solveContacts(pairs, dt);
+    PhaseTrace.mark("contacts", this);
     const gripStuck = this.applyStaticGrip(pairs, dt);
+    PhaseTrace.mark("grip", this);
 
     // Which surfaces each body met this frame, and the grippiest of them.
     // `contactDamp` is once per body per frame now (see below), so it is the
@@ -1042,6 +1156,9 @@ export class World {
         body.stickAnchor = null;
       }
     }
+    // The circle-against-static path, which solves its contact whole (normal,
+    // friction, grip and pin) and is therefore its own phase.
+    PhaseTrace.mark("circle-contacts", this);
 
     // Light contact drag, ONCE PER BODY PER FRAME.
     //
@@ -1065,6 +1182,7 @@ export class World {
       const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
       body.linearVelocity = body.linearVelocity.mul(damp);
     }
+    PhaseTrace.mark("contact-damp", this);
 
     // Position is recovered for the whole scene AFTER every body's contacts have
     // been solved, and iterated over all of them together.
@@ -1465,9 +1583,15 @@ function applyPairImpulse(s: SolverContact, impulse: Vec2): void {
   const { c } = s;
   c.a.linearVelocity = c.a.linearVelocity.add(impulse.mul(c.a.inverseMass));
   c.a.angularVelocity += s.rA.cross(impulse) * s.invIA;
+  if (ContactAudit.enabled) {
+    ContactAudit.record(c.a, impulse, s.rA.cross(impulse) * (s.invIA > 0 ? 1 : 0));
+  }
   if (!s.bRigid) return; // a static `b` has infinite mass: nothing to write
   s.bRigid.linearVelocity = s.bRigid.linearVelocity.sub(impulse.mul(s.bRigid.inverseMass));
   s.bRigid.angularVelocity -= s.rB.cross(impulse) * s.invIB;
+  if (ContactAudit.enabled) {
+    ContactAudit.record(s.bRigid, impulse.neg(), -s.rB.cross(impulse) * (s.invIB > 0 ? 1 : 0));
+  }
 }
 
 // The Coulomb coefficient one body brings to a contact with another: its own

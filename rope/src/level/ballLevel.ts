@@ -6,6 +6,7 @@
 import { Vec2 } from "../engine/vec2";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { Debug } from "../engine/debug";
+import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
@@ -104,6 +105,7 @@ export class BallLevel {
     this.frame++;
     Debug.clear();
     PhysTrace.frame = this.frame;
+    PhaseTrace.begin(this.frame, this.world);
     // Snapshot the pre-step transforms the renderer interpolates from.
     this.world.captureRenderTransforms();
 
@@ -120,6 +122,10 @@ export class BallLevel {
     const ballRotationAtFrameStart = this.ball.globalRotation;
 
     this.ball.resolveInput(input);
+    // The aim steering overwrites the ball's angular velocity outright, so it is
+    // a phase in its own right - a spin that appears here is the player's, and
+    // one that appears in `unwind` is the chain refusing it.
+    PhaseTrace.mark("aim", this.world);
     this.bodies = this.bodies.filter((b) => !b.removed);
     // The hook's attach callback (fired inside the step below) needs the scene
     // to regenerate the chain's wrap path; hand it this frame's bodies.
@@ -138,6 +144,7 @@ export class BallLevel {
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
     for (const chain of this.sceneChains) chain.physicsStep(delta);
+    PhaseTrace.mark("scene-chains", this.world);
 
     // Push the ball clear of the scenery before anything measures against it,
     // and before the chain solve rather than after.
@@ -171,6 +178,10 @@ export class BallLevel {
     // two of them keeps a residual that only this simultaneous two-normal solve
     // clears — 3.3 cm of it in session-726f, with no chain out at all.
     this.world.depenetrateRigid(this.ball);
+    // Position-only, so this phase never shows a velocity of its own; it is
+    // marked so that what follows is measured from a ball already clear of the
+    // scenery, which is the whole point of the ordering.
+    PhaseTrace.mark("push-out", this.world);
 
     // Chain logic runs AFTER integration — the ball is a RigidBody2D, so
     // integration moves it; solving afterwards leaves the frame's final state
@@ -238,6 +249,7 @@ export class BallLevel {
         }
       }
       this.ball.chain.physicsStep(this.bodies, delta);
+      PhaseTrace.mark("rope-solve", this.world);
       for (const [body, before] of haulAtSolve) {
         body.globalPosition = body.globalPosition.sub(
           body.globalPosition.sub(before.position).mul(spinShare),
@@ -248,6 +260,9 @@ export class BallLevel {
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
       }
+      // What the spin's share of the solve took back off everything but the ball
+      // (session-265f). Zero on a frame with no aim spin.
+      PhaseTrace.mark("spin-rollback", this.world);
       // A rope correction is still free to shove the ball into something on its
       // way; push out again so the frame does not *end* inside the scenery, and
       // then set the chain phase's velocity contribution to the displacement it
@@ -265,6 +280,7 @@ export class BallLevel {
       // turn, so a wound-up ball stalls rather than unwinding itself
       // (session-394f).
       this.ball.chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta);
+      PhaseTrace.mark("unwind", this.world);
       // The unwind just turned the ball, and the ball is not only a circle — it
       // carries its mounting loop out on the rim, so a rotation can swing that
       // into geometry the push-out had already cleared. Clear it again; the
@@ -279,6 +295,10 @@ export class BallLevel {
           .div(delta)
           .mul(this.ball.chain.topologyCreditScale),
       );
+      // The PBD velocity update taken over the whole chain phase — the single
+      // largest source of one-frame ball velocity there is, and the one every
+      // launch has come through.
+      PhaseTrace.mark("chain-velocity", this.world);
       // A surface the frame had to push the ball out of is one the ball is
       // resting against, so the frame must not *end* with the chain driving it
       // through that surface. The push-out already undid the motion in position;
@@ -303,10 +323,16 @@ export class BallLevel {
         const into = this.ball.linearVelocity.dot(normal);
         if (into < 0) this.ball.linearVelocity = this.ball.linearVelocity.sub(normal.mul(into));
       }
+      // Cancelling the component the geometry has already refused (session-537f:
+      // the ceiling drive). A delta here is traction the frame did NOT fund.
+      PhaseTrace.mark("refuse-into-surface", this.world);
       // Whatever the solve could not reach is the winch stall: a point-blank
       // anchor is held over its length by the geometry the ball is resting on,
       // and re-basing lets the constraint settle there instead of winding up.
       this.ball.chain.absorbBlockedLength(delta);
+      // Length only, never velocity — a delta showing up here would mean the
+      // stall lease had learnt to move something, which it must not.
+      PhaseTrace.mark("stall-lease", this.world);
       this.chainStallFrames =
         this.ball.chain.stalledLength > BallLevel.STALL_EPSILON ? this.chainStallFrames + 1 : 0;
       const gain = this.ball.linearVelocity.length() - speedBefore;

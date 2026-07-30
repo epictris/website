@@ -1,0 +1,77 @@
+{
+  "level": "ball-wedge",
+  "controller": "ball",
+  "frames": 600,
+  "spawn": {
+    "x": 0,
+    "y": 0.35
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": 100.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 4000.0,
+          "h": 100.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": -45.0,
+        "y": -25.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 30.0,
+          "h": 150.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": 45.0,
+        "y": -25.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 30.0,
+          "h": 150.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "rigid",
+        "x": 0.0,
+        "y": -60.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 55.00000000000001,
+          "h": 30.0
+        },
+        "friction": 1.0
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "window": {
+        "from": 400,
+        "to": 600
+      },
+      "maxSpeed": 0.05,
+      "maxEmbed": 0.01,
+      "maxDrift": 0.01
+    }
+  ]
+}

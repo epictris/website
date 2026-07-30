@@ -9,6 +9,7 @@ import {
 } from "../engine/body";
 import { circleShape } from "../engine/shapes";
 import { Debug } from "../engine/debug";
+import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
 import { World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
@@ -108,6 +109,7 @@ export class Level {
     this.frame++;
     Debug.clear();
     PhysTrace.frame = this.frame;
+    PhaseTrace.begin(this.frame, this.world);
     // Snapshot the pre-step transforms the renderer interpolates from.
     this.world.captureRenderTransforms();
 
@@ -126,11 +128,15 @@ export class Level {
 
     this.player.rope?.updateFrameStartDistanceLookup();
     this.player.resolveInput(input, delta);
+    // Locomotion and the character sweep (`moveAndCollide`), which is where the
+    // grapple avatar's velocity is decided.
+    PhaseTrace.mark("locomotion", this.world);
 
     // Drop bodies removed from the world this frame.
     this.bodies = this.bodies.filter((b) => !b.removed);
 
     if (this.player.rope) this.player.rope.physicsStep(this.bodies, delta);
+    PhaseTrace.mark("rope-solve", this.world);
 
     // Hooks fly independently (Godot Hook._PhysicsProcess), after level logic.
     for (const b of this.bodies) {
@@ -146,6 +152,7 @@ export class Level {
     // A level with no chains does nothing here, which is what keeps every
     // recorded replay bit-identical.
     for (const chain of this.sceneChains) chain.physicsStep(delta);
+    PhaseTrace.mark("scene-chains", this.world);
 
     this.cameraPosition = this.player.globalPosition;
   }

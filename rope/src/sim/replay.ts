@@ -10,14 +10,20 @@ import {
   checkInvariants,
   digest,
   digestBall,
+  EnergyMonitor,
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
   inputDeserializer,
   StuckDetector,
+  worldDigest,
+  worldDigestBall,
+  worldDigestDrift,
+  worldDigestsEqual,
   type Digest,
   type Recording,
   type Violation,
+  type WorldDigest,
 } from "./trace";
 
 export interface ReplayResult {
@@ -38,6 +44,16 @@ export interface ReplayResult {
   // Largest positional drift (metres) between re-sim and recording over the run.
   maxDrift: number;
   healthy: boolean;
+  // The same three questions asked of the WHOLE scene rather than of the avatar
+  // (see WorldDigest). All null/zero when the bundle carries no `worldDigests` —
+  // every bundle recorded before they existed, which replays exactly as before.
+  worldDigests: WorldDigest[];
+  worldDivergedAtFrame: number | null;
+  // What carried the first behavioural divergence: `body#3`, `chain length`, …
+  worldDivergedName: string | null;
+  worldBitDivergedAtFrame: number | null;
+  worldMaxDrift: number;
+  worldMaxDriftName: string | null;
 }
 
 // Reconstruct the level a recording plays on. Self-contained bundles
@@ -56,20 +72,35 @@ export function replayRecording(rec: Recording): ReplayResult {
   const level = levelFromRecording(rec);
   const deserialize = inputDeserializer();
   const digests: Digest[] = [];
+  const worldDigests: WorldDigest[] = [];
   const violations: Violation[] = [];
   const stuck = new StuckDetector();
+  // Ball levels only: the grapple avatar's locomotion is a forced body by
+  // construction, and the mover levels contain scripted geometry that does real
+  // work on whatever it touches, so an energy budget there is not an invariant
+  // but a description of the level.
+  const energy = new EnergyMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
   let bitDivergedAtFrame: number | null = null;
   let maxDrift = 0;
+  let worldDivergedAtFrame: number | null = null;
+  let worldDivergedName: string | null = null;
+  let worldBitDivergedAtFrame: number | null = null;
+  let worldMaxDrift = 0;
+  let worldMaxDriftName: string | null = null;
 
   for (let i = 0; i < rec.frames.length; i++) {
     const input = deserialize(rec.frames[i]!);
     level.physicsProcess(input, 1 / 60);
     const d = level instanceof BallLevel ? digestBall(level) : digest(level);
     digests.push(d);
+    const wd = level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level);
+    worldDigests.push(wd);
     if (level instanceof BallLevel) {
       violations.push(...checkBallInvariants(level));
+      const ev = energy.push(level, input);
+      if (ev) violations.push(ev);
     } else {
       violations.push(...checkInvariants(level));
       const sv = stuck.push(level, input);
@@ -85,6 +116,21 @@ export function replayRecording(rec: Recording): ReplayResult {
         divergedByStateFork = !Number.isFinite(drift);
       }
     }
+    const expectedWorld = rec.worldDigests?.[i];
+    if (expectedWorld) {
+      if (worldBitDivergedAtFrame === null && !worldDigestsEqual(wd, expectedWorld)) {
+        worldBitDivergedAtFrame = i + 1;
+      }
+      const w = worldDigestDrift(wd, expectedWorld);
+      if (Number.isFinite(w.drift) && w.drift > worldMaxDrift) {
+        worldMaxDrift = w.drift;
+        worldMaxDriftName = w.name;
+      }
+      if (worldDivergedAtFrame === null && w.drift > DRIFT_EPSILON) {
+        worldDivergedAtFrame = i + 1;
+        worldDivergedName = w.name;
+      }
+    }
   }
 
   return {
@@ -97,5 +143,11 @@ export function replayRecording(rec: Recording): ReplayResult {
     bitDivergedAtFrame,
     maxDrift,
     healthy: violations.length === 0,
+    worldDigests,
+    worldDivergedAtFrame,
+    worldDivergedName,
+    worldBitDivergedAtFrame,
+    worldMaxDrift,
+    worldMaxDriftName,
   };
 }

@@ -92,6 +92,12 @@ export const LAYER_ANCHOR = 2;
 
 export abstract class CollisionObject2D {
   readonly id: number = nextId++;
+  // Position in the order its world was built, stamped by `World.add`. `id` is a
+  // process-global counter, so a second level built in the same process (the
+  // selftest runs a script and then replays it) numbers its bodies differently;
+  // the build index is per world and therefore the same in both, which is what
+  // makes it the name a full-world digest can be compared by. -1 until added.
+  buildIndex = -1;
   name = "";
   globalPosition: Vec2 = Vec2.ZERO;
   globalRotation = 0;

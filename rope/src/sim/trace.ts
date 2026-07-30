@@ -4,7 +4,12 @@
 // assert bit-for-bit reproduction; invariants catch physical nonsense.
 
 import { Vec2 } from "../engine/vec2";
-import { StaticBody2D, type PhysicsBody2D } from "../engine/body";
+import {
+  CharacterBody2D,
+  RigidBody2D,
+  StaticBody2D,
+  type PhysicsBody2D,
+} from "../engine/body";
 import { bodyOverlapCircle, shapeRadius } from "../engine/collision";
 import { Hook } from "../classes/hook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
@@ -12,6 +17,8 @@ import { LedgeHangState } from "../classes/states/ledgeHangState";
 import { OnWallState } from "../classes/states/onWallState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
+import type { Rope } from "../classes/rope";
+import type { World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { LevelData } from "../level/levelFormat";
@@ -40,6 +47,10 @@ export interface Recording {
   level: string;
   frames: SerializedFrame[];
   digests?: Digest[];
+  // The whole scene, not just the avatar (see WorldDigest). Optional and at the
+  // same cadence as `digests`: bundles recorded before it existed replay exactly
+  // as they always did, and new ones are compared on every body.
+  worldDigests?: WorldDigest[];
   git?: string;
   // Self-contained bundles (e.g. exported from the level editor, whose level
   // isn't in the registry) embed their geometry + controller here. When
@@ -58,6 +69,161 @@ export interface Digest {
   ropeLen: number | null;
   maxRope: number | null;
   state: string;
+}
+
+// ---- full-world digest -----------------------------------------------------
+// `Digest` is the avatar's, and that is all it has ever been: every other rigid
+// body in the scene could jitter, drift, NaN or embed itself in the floor
+// without moving a digest by one bit, so "bit-identical" and `maxDrift` spoke
+// for the avatar alone. A rigid-pile jitter regression shipped under exactly
+// that claim (session-298f).
+//
+// This is the whole movable scene instead, one entry per body that can move,
+// named by build order (see CollisionObject2D.buildIndex) so the same body is
+// the same entry across two builds of a level. It carries `w` as well, which no
+// avatar digest ever did - the ball's angular velocity is what the no-rolling
+// regression (session-314f) changed, and no digest could see it.
+//
+// Statics and movers are deliberately out. A static cannot move, and a mover's
+// pose is a pure function of the frame number, so neither can carry a
+// regression that the bodies here do not also show.
+
+export interface BodyDigest {
+  id: number; // build-order index within the level's world
+  px: number;
+  py: number;
+  rot: number;
+  vx: number;
+  vy: number;
+  w: number; // angular velocity, rad/s (0 for the grapple avatar, which has none)
+}
+
+export interface ChainDigest {
+  nodes: number;
+  pathLen: number;
+  maxRope: number;
+  blockedSlack: number;
+}
+
+export interface WorldDigest {
+  frame: number;
+  bodies: BodyDigest[];
+  chain: ChainDigest | null;
+}
+
+function worldDigestOf(frame: number, world: World, rope: Rope | null): WorldDigest {
+  const bodies: BodyDigest[] = [];
+  for (const body of world.bodies) {
+    if (body.removed) continue;
+    if (body instanceof RigidBody2D) {
+      bodies.push({
+        id: body.buildIndex,
+        px: body.globalPosition.x,
+        py: body.globalPosition.y,
+        rot: body.globalRotation,
+        vx: body.linearVelocity.x,
+        vy: body.linearVelocity.y,
+        w: body.angularVelocity,
+      });
+    } else if (body instanceof CharacterBody2D) {
+      bodies.push({
+        id: body.buildIndex,
+        px: body.globalPosition.x,
+        py: body.globalPosition.y,
+        rot: body.globalRotation,
+        vx: body.velocity.x,
+        vy: body.velocity.y,
+        w: 0,
+      });
+    }
+  }
+  return {
+    frame,
+    bodies,
+    chain: rope
+      ? {
+          nodes: rope.path().length,
+          pathLen: rope.getCurrentLength(),
+          maxRope: rope.maxRopeLength,
+          blockedSlack: rope.blockedSlack,
+        }
+      : null,
+  };
+}
+
+export function worldDigest(level: Level): WorldDigest {
+  return worldDigestOf(level.frame, level.world, level.player.rope);
+}
+
+export function worldDigestBall(level: BallLevel): WorldDigest {
+  return worldDigestOf(level.frame, level.world, level.ball.chain);
+}
+
+// Worst behavioural difference between two full-world digests, and the name of
+// whatever carries it — so a regression in scenery reads as loudly as one in
+// the avatar instead of being aggregated into a single number.
+//
+// A body present in one and not the other, or a chain that exists in one alone,
+// is an infinite difference: that is a different scene, not a drifted one.
+export interface WorldDrift {
+  drift: number;
+  name: string;
+}
+
+export function worldDigestDrift(a: WorldDigest, b: WorldDigest): WorldDrift {
+  let worst: WorldDrift = { drift: 0, name: "" };
+  const consider = (drift: number, name: string): void => {
+    if (drift > worst.drift) worst = { drift, name };
+  };
+  const byId = new Map(b.bodies.map((e) => [e.id, e]));
+  for (const e of a.bodies) {
+    const o = byId.get(e.id);
+    if (!o) {
+      consider(Infinity, `body#${e.id} (absent in the other run)`);
+      continue;
+    }
+    byId.delete(e.id);
+    consider(Math.hypot(e.px - o.px, e.py - o.py), `body#${e.id}`);
+  }
+  for (const e of byId.values()) consider(Infinity, `body#${e.id} (absent in the other run)`);
+  if ((a.chain === null) !== (b.chain === null)) {
+    consider(Infinity, "chain (deployed in one run only)");
+  } else if (a.chain && b.chain) {
+    if (a.chain.nodes !== b.chain.nodes) consider(Infinity, "chain (different wrap topology)");
+    consider(Math.abs(a.chain.pathLen - b.chain.pathLen), "chain length");
+  }
+  return worst;
+}
+
+export function worldDigestsEqual(a: WorldDigest, b: WorldDigest): boolean {
+  if (a.bodies.length !== b.bodies.length) return false;
+  for (let i = 0; i < a.bodies.length; i++) {
+    const x = a.bodies[i]!;
+    const y = b.bodies[i]!;
+    if (
+      x.id !== y.id ||
+      x.px !== y.px ||
+      x.py !== y.py ||
+      x.rot !== y.rot ||
+      x.vx !== y.vx ||
+      x.vy !== y.vy ||
+      x.w !== y.w
+    ) {
+      return false;
+    }
+  }
+  if ((a.chain === null) !== (b.chain === null)) return false;
+  if (a.chain && b.chain) {
+    if (
+      a.chain.nodes !== b.chain.nodes ||
+      a.chain.pathLen !== b.chain.pathLen ||
+      a.chain.maxRope !== b.chain.maxRope ||
+      a.chain.blockedSlack !== b.chain.blockedSlack
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function serializeInput(input: FrameInput): SerializedFrame {
@@ -336,6 +502,143 @@ export class StuckDetector {
     }
     return null;
   }
+}
+
+// ---- energy invariant ------------------------------------------------------
+// The solver may not invent energy.
+//
+// This is the class of bug that was found late four times in a row and once more
+// as a friction motor: the rope's PBD velocity update paying itself for a
+// correction that was later undone (`394f`, `458f`, `431f`, `726f`), and
+// rigid-rigid friction reading a slip it could not answer (`611f`). Every one of
+// them showed up as a body gaining speed with nothing pushing it, and every one
+// of them was found by hand, frames at a time, because nothing was watching the
+// only quantity that says "this is impossible" rather than "this looks wrong".
+//
+// The gate on input is what makes it safe to assert. The aim steering is a
+// legitimate energy source - it overwrites `angularVelocity` outright, so the
+// player can pour in as much spin as they like - and so is retracting the chain.
+// The invariant therefore arms only while the sim is UNFORCED: no held button
+// and no aim. In those spans nothing may go up but noise.
+
+// Sized against the two numbers that matter, both measured rather than guessed.
+//
+// The floor: across the whole corpus an unforced span gains at most 2.1e-5 J of
+// solver noise (three spans in session-1195f; every other span is exactly zero).
+// The signal: the ball's mass is 3.3e-4 kg, so it carries 1.6e-4 J at 1 m/s -
+// this simulation's energies are small in absolute terms, and a tolerance
+// written in "sensible" round joules would sit above every quantity in the
+// scene and detect nothing at all.
+//
+// 1e-4 J is five times the noise floor and about the kinetic energy of a ball at
+// 0.8 m/s, so a refund-class bug - which banks speed every frame until the
+// assembly is crossing the level - trips it long before it is visible. The
+// relative term covers a fast swing, where the same fractional noise is a larger
+// number.
+const ENERGY_ABS_TOLERANCE = 1e-4; // J
+const ENERGY_REL_TOLERANCE = 0.05; // plus 5% of the largest kinetic energy in the span
+// An unforced span shorter than this is not worth judging: a body still landing
+// when the player lets go is exchanging energy with contacts at full rate.
+const ENERGY_MIN_SPAN = 30;
+// Kinematic spin below which the steering is not meaningfully driving anything
+// (rad/s). The aim gain is 15/s, so this is a loop within a milliradian of where
+// the player is pointing.
+const STEERING_SPIN = 0.02;
+
+// Total mechanical energy of everything that can move: kinetic (linear and
+// angular) plus gravitational potential, with y measured downward so height is
+// -y. Statics and movers are excluded because their motion is scripted, which is
+// exactly the thing that would make this quantity meaningless.
+export function mechanicalEnergy(world: World): number {
+  let total = 0;
+  for (const body of world.bodies) {
+    if (body.removed || !(body instanceof RigidBody2D)) continue;
+    total += 0.5 * body.mass * body.linearVelocity.lengthSquared();
+    total += 0.5 * body.inertia * body.angularVelocity * body.angularVelocity;
+    total += body.mass * 9.8 * body.gravityScale * -body.globalPosition.y;
+  }
+  return total;
+}
+
+// The inputs that put energy into a ball level, as opposed to merely being held.
+//
+// Deploy (`fire`) is hold-to-keep, so it is held for most of a session and
+// gating on "any button" disarms the invariant almost everywhere - which is what
+// it did. Holding a chain out is not a source: the chain is a constraint, and
+// the one moment the deploy injects anything is the frame the hook is spawned,
+// which changes the body set and restarts the span anyway. Winding the chain in
+// or out genuinely does work on the ball, so those three are sources.
+const FORCED_ACTIONS: Action[] = ["retract", "extend", "retractClick"];
+
+function anyForcedInput(input: FrameInput): boolean {
+  return FORCED_ACTIONS.some((a) => input[a].held);
+}
+
+export class EnergyMonitor {
+  private baseline: number | null = null;
+  private span = 0;
+  private peakKinetic = 0;
+  private bodyCount = 0;
+
+  // Call once per frame after physicsProcess, with the frame's input. Returns a
+  // violation the first frame an unforced span gains energy, then re-arms.
+  push(level: BallLevel, input: FrameInput): Violation | null {
+    // The steering is only a source while it is actually turning the ball.
+    // Asking "is the player aiming" instead disarms the invariant permanently on
+    // any mouse-recorded bundle, where the cursor is somewhere at every instant
+    // and the ball is therefore always nominally aiming; what matters is the
+    // spin it writes, and a ball whose loop already faces the cursor is handed
+    // essentially none. `kinematicRotation` is the sim's own record of having
+    // overwritten the spin this frame.
+    const steering =
+      level.ball.kinematicRotation && Math.abs(level.ball.angularVelocity) > STEERING_SPIN;
+    const bodies = level.world.bodies.filter((b) => !b.removed).length;
+    if (anyForcedInput(input) || steering || bodies !== this.bodyCount) {
+      // A body appearing or disappearing (a hook spawned, a hook removed)
+      // changes the total by construction, so the span restarts rather than
+      // reading the difference as the solver's doing.
+      this.bodyCount = bodies;
+      this.baseline = null;
+      this.span = 0;
+      this.peakKinetic = 0;
+      return null;
+    }
+
+    const energy = mechanicalEnergy(level.world);
+    const kinetic = kineticEnergy(level.world);
+    this.peakKinetic = Math.max(this.peakKinetic, kinetic);
+    if (this.baseline === null) {
+      this.baseline = energy;
+      this.span = 1;
+      return null;
+    }
+    this.span++;
+    if (this.span < ENERGY_MIN_SPAN) return null;
+    const tolerance = ENERGY_ABS_TOLERANCE + ENERGY_REL_TOLERANCE * this.peakKinetic;
+    if (energy <= this.baseline + tolerance) return null;
+    const gain = energy - this.baseline;
+    const span = this.span;
+    this.baseline = null;
+    this.span = 0;
+    this.peakKinetic = 0;
+    return {
+      frame: level.frame,
+      kind: "energy-gained",
+      detail:
+        `unforced ${span}f span gained ${gain.toExponential(2)} J ` +
+        `(tolerance ${tolerance.toExponential(2)})`,
+    };
+  }
+}
+
+export function kineticEnergy(world: World): number {
+  let total = 0;
+  for (const body of world.bodies) {
+    if (body.removed || !(body instanceof RigidBody2D)) continue;
+    total += 0.5 * body.mass * body.linearVelocity.lengthSquared();
+    total += 0.5 * body.inertia * body.angularVelocity * body.angularVelocity;
+  }
+  return total;
 }
 
 // Ball & chain invariants: NaN, runaway speed, chain-over-length once
