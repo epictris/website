@@ -19,7 +19,7 @@ import { wrapAngle } from "../engine/mathf";
 import { RigidBody2D, StaticBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
-import { polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
+import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
@@ -472,6 +472,53 @@ function caseMomentum(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// spin-drive: a spinning ball resting on a crate must not drive it away.
+//
+// The sibling `impact-transfer` needs, and the one case the pair solver makes
+// newly dangerous. Measuring slip between the two contact points - the standard
+// formulation - is only legitimate because a pair impulse is equal and opposite,
+// so the reaction is real. For the ball it is not: its spin is KINEMATIC, the aim
+// steering overwrites `angularVelocity` every frame, so the angular half of the
+// reaction is discarded the moment it is applied. A friction constraint reading a
+// velocity it can never affect is not a brake but a motor, and an unbounded one -
+// which is how a ball merely hanging on a chain walked its anchor 3.6 m across a
+// level (session-611f).
+//
+// The floor here is ICE, and that is what makes the case sharp rather than
+// decorative. On a normal floor the crate's own stiction holds it whatever the
+// ball does - the drive is capped at mu times the ball's weight while the grip is
+// capped at mu_s times the weight of the crate AND the ball riding it, which is
+// strictly more - so the scene passes for a reason that has nothing to do with
+// the contact being honest. Take the crate's anchor away and the cone is the only
+// thing left bounding the drive, which is exactly the question.
+//
+// The signature to watch for is a DEAD-STEADY terminal speed: a motor pays the
+// same cone every frame for ever, so it does not decay the way a nudge does.
+// ---------------------------------------------------------------------------
+function caseSpinDrive(sims: Sim[]): ContactResult {
+  const sim = new Sim("spin-drive", 60);
+  sims.push(sim);
+  sim.addStatic(rectShape(40, 1), Vec2.ZERO, 0, 0);
+  const crate = sim.addRigid(rectShape(1, 0.6), new Vec2(0, -0.8));
+  const ball = sim.addRigid(circleShape(0.3), new Vec2(0, -1.4));
+  ball.kinematicRotation = true;
+
+  sim.step(1200, () => {
+    // What aim steering does: rewrite the spin every frame, so no contact
+    // impulse can ever slow it.
+    ball.angularVelocity = 20;
+  });
+
+  const drift = Math.abs(crate.globalPosition.x);
+  const speed = Math.abs(crate.linearVelocity.x);
+  const good = drift < 0.5 && speed < 0.05;
+  return ok("spin-drive — a spinning ball does not drive the crate under it", good, [
+    `${good ? "ok  " : "BAD "} crate driven ${(drift * 100).toFixed(1)}cm in 20s at a final ` +
+      `${speed.toFixed(4)} m/s (want <50cm, <0.05 m/s)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // penetration: nothing above may hold its answer while standing inside geometry.
 //
 // Aggregated across every scene rather than asserted per case, because it is a
@@ -508,6 +555,7 @@ export function runContactCases(): ContactResult[] {
     casePivot(sims),
     caseImpactTransfer(sims),
     caseMomentum(sims),
+    caseSpinDrive(sims),
   ];
   results.push(casePenetration(sims));
   return results;

@@ -18,7 +18,9 @@ export interface Contact {
   // `circleOverlap(aCentre, r, b)` reports, so a caller can treat a circle
   // contact and a polygon contact identically.
   readonly normal: Vec2;
-  // Penetration depth along the normal, always positive.
+  // Penetration depth along the normal. Positive when the shapes overlap;
+  // negative (down to the caller's `slop`) when they are merely close, which is
+  // still a contact as far as a constraint solver is concerned.
   readonly depth: number;
   // World-space contact point on the boundary.
   readonly point: Vec2;
@@ -117,14 +119,14 @@ function clipToPlane(a: Vec2, b: Vec2, n: Vec2, o: Vec2): [Vec2, Vec2] | null {
 }
 
 // Manifold between two vertex shapes.
-function loopVsLoop(a: ShapeTransform, b: ShapeTransform): Contact[] {
+function loopVsLoop(a: ShapeTransform, b: ShapeTransform, slop: number): Contact[] {
   const va = worldVerts(a);
   const vb = worldVerts(b);
   if (va.length < 3 || vb.length < 3) return [];
 
   const sa = maxSeparation(va, vb);
   const sb = maxSeparation(vb, va);
-  if (sa.separation > 0 || sb.separation > 0) return [];
+  if (sa.separation > slop || sb.separation > slop) return [];
 
   // Reference face: the shallower penetration. The small bias toward `b` keeps
   // a resting box on a floor picking the *floor's* face frame for frame rather
@@ -157,8 +159,10 @@ function loopVsLoop(a: ShapeTransform, b: ShapeTransform): Contact[] {
   const normal = useB ? refNormal : refNormal.neg();
   const out: Contact[] = [];
   [p0, p1].forEach((p, slot) => {
+    // Negative depth is separation, and within the slop band it is still a
+    // contact - see `shapeContacts`.
     const depth = -refNormal.dot(p.sub(refA));
-    if (depth > 0) {
+    if (depth > -slop) {
       out.push({ normal, depth, point: p, featureId: featureId(useB, refIndex, incIndex, slot) });
     }
   });
@@ -167,7 +171,7 @@ function loopVsLoop(a: ShapeTransform, b: ShapeTransform): Contact[] {
 
 // Manifold between a vertex shape `a` and a circle `b`: one point, on the
 // polygon boundary nearest the circle's centre.
-function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number): Contact[] {
+function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number, slop: number): Contact[] {
   const va = worldVerts(a);
   if (va.length < 3) return [];
   let closest = va[0]!;
@@ -192,7 +196,7 @@ function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number): Contact[
       break;
     }
   }
-  if (!inside && dist > radius) return [];
+  if (!inside && dist > radius + slop) return [];
   // Points from the circle toward the polygon — out of `b` toward `a`.
   const normal =
     dist > EPS
@@ -205,10 +209,26 @@ function loopVsCircle(a: ShapeTransform, centre: Vec2, radius: number): Contact[
 
 // Contacts between `a` (a rect or convex polygon) and `b` (any shape), with
 // normals pointing out of `b` toward `a`.
-export function shapeContacts(a: ShapeTransform, b: ShapeTransform): Contact[] {
+//
+// `slop` widens the band a point is emitted in: at 0 (the default, and what
+// every positional-recovery caller wants) only genuinely penetrating points come
+// back, and a positive value also emits points that are merely CLOSE, reporting
+// their separation as a negative `depth`.
+//
+// The constraint solver needs that band and nothing else does. A pile at rest is
+// pushed to exactly zero overlap, and then every body in it falls by the same
+// gravity step, so the interfaces between them never re-penetrate at all: at a
+// strict `depth > 0` a resting stack's contacts simply vanish from the set. Warm
+// starting has nothing to hold across a frame, the pile is re-derived from
+// nothing every time its contacts flicker back, and the noise from that is what
+// walked a four-box stack apart across the floor.
+//
+// A caller that pushes bodies out along `depth` must NOT pass a slop, or it will
+// push a separated pair together.
+export function shapeContacts(a: ShapeTransform, b: ShapeTransform, slop = 0): Contact[] {
   if (a.shape.kind === "circle") return []; // circles go through circleOverlap
   if (b.shape.kind === "circle") {
-    return loopVsCircle(a, b.globalPosition, b.shape.radius);
+    return loopVsCircle(a, b.globalPosition, b.shape.radius, slop);
   }
-  return loopVsLoop(a, b);
+  return loopVsLoop(a, b, slop);
 }

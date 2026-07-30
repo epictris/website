@@ -62,11 +62,32 @@ export const GRAVITY = new Vec2(0, 9.8);
 const SKIN = 0.0008;
 // Scale on the impulse a pushing character imparts to a rigid circle.
 const CHARACTER_PUSH_FACTOR = 0.5;
-// Share of a rigid-vs-rigid contact each of the two bodies resolves. There is no
-// pair solver here: each body meets the other again on its own pass, with no
-// knowledge of what that pass will do, so each takes half and the contact
-// converges over a couple of frames instead of both resolving it in full.
-const RIGID_PAIR_SHARE = 0.5;
+// Gauss-Seidel iterations over the whole contact constraint list. Box2D's
+// default; the 4 that `NORMAL_SOLVER_ITERATIONS` still uses on the static path
+// was tuned for a single manifold solved on its own, and a scene-wide list needs
+// more passes for a load to travel through a pile.
+const VELOCITY_ITERATIONS = 8;
+// How close two shapes must be for the constraint gather to call it a contact,
+// in metres. Larger than one frame of gravity (2.7 mm) on purpose.
+//
+// A pile at rest is pushed to exactly zero overlap, and then every body in it
+// falls by the same gravity step, so the interfaces between them never
+// re-penetrate: at a strict "overlap > 0" a resting stack's own contacts vanish
+// from the set on the frames it needs them most. Contacts inside the band are
+// kept as SPECULATIVE ones - they carry a negative depth, ask for no impulse
+// unless something is approaching fast enough to close the gap within the step,
+// and above all they persist, which is what gives warm starting something to
+// hold on to.
+const CONTACT_SLOP = 0.01;
+// Approach speed (m/s) below which a contact earns no bounce at all.
+//
+// Without it, any restitution above zero makes resting contacts micro-bounce for
+// ever on the velocity gravity re-adds each frame - the contact reflects it, the
+// next frame's gravity puts it back, and a body that should be asleep hums.
+// Every engine gates restitution this way. Default restitution is 0 and
+// rigid-rigid contacts have never had any, so with the shipped defaults this
+// costs nothing; it is here so that turning restitution on is not a trap.
+const RESTITUTION_THRESHOLD = 1;
 // Sweeps of the scene-wide positional recovery per physics step. Each sweep gives
 // every rigid body one depenetration pass, so a pile settles together instead of
 // whichever body the loop reached last winning its overlap outright.
@@ -152,9 +173,58 @@ export interface ContactConstraint {
 // can never be produced for the same shape pair.
 const CIRCLE_PAIR_FEATURE = -2;
 
+// What one (shape, shape) contact routine did on the static path.
+//
+// `stuck` drives the stick-anchor release counter, as it always has. `grip` is
+// the surface friction of whatever was touched, or null for no contact at all:
+// `contactDamp` is once per body per frame now, so a body's own pass has to know
+// which surfaces it met instead of each pair damping as it goes.
+interface ContactOutcome {
+  stuck: boolean;
+  grip: number | null;
+}
+
+const NO_CONTACT: ContactOutcome = { stuck: false, grip: null };
+
+// A constraint with everything the iteration loop needs precomputed. Positions
+// do not change during a velocity solve, so the lever arms, the effective masses
+// and the restitution target are all constant across the iterations.
+interface SolverContact {
+  readonly c: ContactConstraint;
+  readonly bRigid: RigidBody2D | null;
+  readonly rA: Vec2;
+  readonly rB: Vec2;
+  readonly invIA: number;
+  readonly invIB: number;
+  readonly tangent: Vec2;
+  readonly invEffN: number;
+  readonly invEffT: number;
+  // Separation speed this contact is owed, captured pre-solve.
+  readonly bounce: number;
+  // Approach speed a still-separated contact may take without closing its gap
+  // within the step. Zero for a touching or penetrating one.
+  readonly approach: number;
+  readonly friction: number;
+  // Coulomb cone scales for the two halves of the tangent direction. 1 unless a
+  // body on this contact is an aiming ball (see `contactBrakeScale`).
+  readonly brakePos: number;
+  readonly brakeNeg: number;
+  readonly key: string;
+}
+
+// Accumulated impulses carried from one frame to the next.
+interface CachedImpulses {
+  n: number;
+  t: number;
+}
+
 export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
+
+  // Last frame's accumulated impulses, by contact. Looked up only - never
+  // iterated - so it cannot put a map's ordering anywhere near the solve.
+  private contactCache = new Map<string, CachedImpulses>();
 
   add(body: CollisionObject2D): void {
     body.world = this;
@@ -580,7 +650,7 @@ export class World {
   // which is what removes the static/dynamic branch split rather than doubling
   // it. The O(n²) loop stays too — at this scene scale a broadphase is complexity
   // with no payoff.
-  collectContacts(): ContactConstraint[] {
+  collectContacts(dynamicPairsOnly = false): ContactConstraint[] {
     const out: ContactConstraint[] = [];
     const n = this.bodies.length;
     for (let i = 0; i < n; i++) {
@@ -596,6 +666,7 @@ export class World {
         const b = iLeads ? bj : bi;
         // Neither side can move: two statics touching is not a contact.
         if (!(a instanceof RigidBody2D)) continue;
+        if (dynamicPairsOnly && !(b instanceof RigidBody2D)) continue;
         const as = a.getShapes();
         const bs = b.getShapes();
         for (let si = 0; si < as.length; si++) {
@@ -636,26 +707,266 @@ export class World {
     if (sa.shape.kind !== "circle") {
       // `shapeContacts(x, y)` reports normals out of `y` toward `x`, which is
       // already the convention.
-      for (const c of shapeContacts(sa, sb)) push(c.normal, c.depth, c.point, c.featureId);
+      for (const c of shapeContacts(sa, sb, CONTACT_SLOP)) {
+        push(c.normal, c.depth, c.point, c.featureId);
+      }
       return;
     }
     if (sb.shape.kind !== "circle") {
       // The vertex shape has to lead, so the normals come out the other way.
-      for (const c of shapeContacts(sb, sa)) push(c.normal.neg(), c.depth, c.point, c.featureId);
+      for (const c of shapeContacts(sb, sa, CONTACT_SLOP)) {
+        push(c.normal.neg(), c.depth, c.point, c.featureId);
+      }
       return;
     }
-    const ov = circleOverlap(sa.globalPosition, sa.shape.radius, sb);
-    if (!ov) return;
+    // Two circles. Written out rather than routed through `circleOverlap`,
+    // which reports nothing at all once the two are apart; inside the slop band
+    // this still has to answer with a negative depth.
+    const ra = sa.shape.radius;
+    const delta = sa.globalPosition.sub(sb.globalPosition);
+    const dist = delta.length();
+    const depth = ra + sb.shape.radius - dist;
+    if (depth <= -CONTACT_SLOP) return;
+    const normal = dist > 1e-9 ? delta.div(dist) : Vec2.UP;
     // A circle's contact point is on its own rim, back along the normal.
-    push(
-      ov.normal,
-      ov.depth,
-      sa.globalPosition.sub(ov.normal.mul(sa.shape.radius)),
-      CIRCLE_PAIR_FEATURE,
+    push(normal, depth, sa.globalPosition.sub(normal.mul(ra)), CIRCLE_PAIR_FEATURE);
+  }
+
+  // Solve a list of constraints as a sequential-impulse system: one impulse per
+  // contact, computed once for the pair, applied equal and opposite.
+  //
+  // This is Catto's formulation (GDC 2006), the one Box2D uses and effectively
+  // every 2D engine has converged on. Nothing about these rigid bodies is novel,
+  // so the answer to every design question here is "what does Box2D do"; the
+  // novel mechanic is the rope, and the rope is exactly what this does not touch.
+  // It runs before `Rope`/`BallLevel` as the contact solve always has, and hands
+  // them a scene whose velocities are physically sane.
+  //
+  // Velocity only. Position is recovered by the scene-wide `depenetrateRigid`
+  // sweep that closes the step, plus the per-pair push below.
+  private solveContacts(constraints: ContactConstraint[], dt: number): void {
+    const previous = this.contactCache;
+    this.contactCache = new Map<string, CachedImpulses>();
+    if (constraints.length === 0) return;
+
+    const solved: SolverContact[] = [];
+    for (const c of constraints) {
+      const bRigid = c.b instanceof RigidBody2D ? c.b : null;
+      const rA = c.point.sub(c.a.globalPosition);
+      const rB = c.point.sub(c.b.globalPosition);
+      const invMassA = c.a.inverseMass;
+      const invMassB = bRigid ? bRigid.inverseMass : 0;
+      // A body whose rotation is driven externally (the ball's aim steering
+      // overwrites `angularVelocity` every frame) is rotationally locked as far
+      // as a contact is concerned: an impulse poured into its spin would be
+      // discarded, and the waste is what let a steered ball slide instead of
+      // braking. A static `b` is the same statement with both terms zero, which
+      // is what lets one solver handle both without a branch.
+      const invIA = c.a.kinematicRotation ? 0 : c.a.inverseInertia;
+      const invIB = bRigid ? (bRigid.kinematicRotation ? 0 : bRigid.inverseInertia) : 0;
+
+      const rAxN = rA.cross(c.normal);
+      const rBxN = rB.cross(c.normal);
+      const invEffN = invMassA + invMassB + rAxN * rAxN * invIA + rBxN * rBxN * invIB;
+      if (invEffN <= 1e-9) continue;
+      const tangent = new Vec2(-c.normal.y, c.normal.x);
+      const rAxT = rA.cross(tangent);
+      const rBxT = rB.cross(tangent);
+      const invEffT = invMassA + invMassB + rAxT * rAxT * invIA + rBxT * rBxT * invIB;
+
+      // Restitution, captured once from the PAIR-relative approach at the point -
+      // both bodies' `velocityAtPoint`, not `a`'s alone - and never re-derived
+      // per iteration. Re-applying a bounce to a velocity that already contains
+      // it is how an iterated solver invents energy.
+      const vn = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
+      const restitution = Math.max(c.a.restitution, bRigid ? bRigid.restitution : 0);
+      const bounce = vn < -RESTITUTION_THRESHOLD ? -restitution * vn : 0;
+
+      solved.push({
+        c,
+        bRigid,
+        rA,
+        rB,
+        invIA,
+        invIB,
+        tangent,
+        invEffN,
+        invEffT,
+        bounce,
+        approach: Math.max(0, -c.depth) / dt,
+        friction: combinedFriction(c.a, c.b, bRigid),
+        brakePos: brakeScale(c.a, bRigid, tangent),
+        brakeNeg: brakeScale(c.a, bRigid, tangent.neg()),
+        key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
+      });
+    }
+
+    // Warm start: begin from last frame's accumulated impulses instead of from
+    // zero, applied equal and opposite before the first iteration.
+    //
+    // This is not an optimisation. Cold-started, the iterations have to re-derive
+    // the entire support load of a pile from scratch every single frame and with
+    // any finite budget never quite get there - which is exactly the class of
+    // residual-jitter bug the resting-contact work has been chasing one symptom
+    // at a time, and why a four-box stack blew itself apart across the floor.
+    // Warm started, the iterations only correct the CHANGE since last frame.
+    //
+    // A cached impulse is a starting guess and not a claim about state, so a
+    // stale entry (the contact has gone) is simply dropped and a wrong guess
+    // costs iterations and never correctness. That is also why the rope
+    // rewriting the ball's velocity after this solve does not invalidate it.
+    for (const s of solved) {
+      const cached = previous.get(s.key);
+      if (!cached) continue;
+      s.c.normalImpulse = cached.n;
+      s.c.tangentImpulse = cached.t;
+      applyPairImpulse(
+        s,
+        s.c.normal.mul(cached.n).add(s.tangent.mul(cached.t)),
+      );
+    }
+
+    for (let it = 0; it < VELOCITY_ITERATIONS; it++) {
+      for (const s of solved) {
+        // Tangent first, then normal - Box2D's ordering, so the non-penetration
+        // solve gets the last word over anything friction has just done.
+        this.solveTangent(s);
+        this.solveNormal(s);
+      }
+    }
+
+    for (const s of solved) {
+      this.contactCache.set(s.key, { n: s.c.normalImpulse, t: s.c.tangentImpulse });
+    }
+
+    this.separatePairs(constraints);
+  }
+
+  // Coulomb friction, accumulated and clamped to the cone of this contact's OWN
+  // accumulated normal impulse.
+  //
+  // `mu * Pn` is the whole cap. The one-sided routines had to size their friction
+  // budget from the normal velocity they had just killed plus a gravity bite,
+  // because at rest that is all a single pass can see of the load; the
+  // accumulated normal impulse *is* the support load, warm starting keeps it
+  // honest across frames, and adding the estimate on top would double-count it.
+  private solveTangent(s: SolverContact): void {
+    if (s.friction <= 0 || s.invEffT <= 1e-9) return;
+    const { c } = s;
+    const vt = frictionVelocity(c.a, c.point).sub(frictionVelocity(c.b, c.point)).dot(s.tangent);
+    // The cone is asymmetric only for an aiming ball: `contactBrakeScale` fades
+    // impulses that oppose its travel so reorienting the spin mid-roll cannot
+    // shed momentum, while impulses that drive it still land in full. Written on
+    // the cone rather than on the applied increment so the running total stays a
+    // true record of what was applied, which is what warm starting reads.
+    const cone = s.friction * c.normalImpulse;
+    const total = clamp(
+      c.tangentImpulse - vt / s.invEffT,
+      -cone * s.brakeNeg,
+      cone * s.brakePos,
     );
+    const delta = total - c.tangentImpulse;
+    c.tangentImpulse = total;
+    if (delta !== 0) applyPairImpulse(s, s.tangent.mul(delta));
+  }
+
+  // Non-penetration, accumulated with the running total clamped at zero rather
+  // than each increment clamped on its own. A later iteration may hand back part
+  // of an earlier one, which is what lets the points of a face settle on the load
+  // split that actually holds the body still instead of each over-correcting for
+  // the other.
+  private solveNormal(s: SolverContact): void {
+    const { c } = s;
+    const vn = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
+    // A contact still separated by `s.gap` may legitimately close at up to
+    // `gap/dt` without ending the step overlapping, so that is what it is
+    // allowed to approach at. For a touching or penetrating contact the gap is
+    // zero and this is the plain non-penetration constraint; for a separated one
+    // it is a speculative contact, which is what lets a point stay in the set
+    // across the frames it is not quite touching without braking anything.
+    const total = Math.max(0, c.normalImpulse + (s.bounce - s.approach - vn) / s.invEffN);
+    const delta = total - c.normalImpulse;
+    c.normalImpulse = total;
+    if (delta !== 0) applyPairImpulse(s, c.normal.mul(delta));
+  }
+
+  // Per-pair positional push, kept from the routines this replaces.
+  //
+  // Leaning on the scene-wide sweep alone is not equivalent: it resolves only the
+  // two deepest overlaps per body per pass, and removing the per-pair pushes left
+  // the ball 240 mm inside the ground. Split by inverse mass rather than in half,
+  // so a light body against a heavy one is the one that moves - each body used to
+  // push itself half the depth on its own visit, which came to the same total
+  // separation only because it never asked which body should give way.
+  //
+  // One push per (shape, shape) pair, at that pair's deepest point: the points of
+  // a manifold share a normal, so pushing out at each in turn would push out
+  // several times over. The gather emits a pair's points contiguously, so the run
+  // is found by walking the list - never by grouping it into a map, which would
+  // put a map's ordering into a sequence of position writes.
+  private separatePairs(constraints: ContactConstraint[]): void {
+    for (let i = 0; i < constraints.length; ) {
+      const head = constraints[i]!;
+      let deepest = head;
+      let j = i + 1;
+      while (j < constraints.length) {
+        const c = constraints[j]!;
+        if (c.a !== head.a || c.b !== head.b || c.shapeA !== head.shapeA || c.shapeB !== head.shapeB) {
+          break;
+        }
+        if (c.depth > deepest.depth) deepest = c;
+        j++;
+      }
+      i = j;
+      const bRigid = deepest.b instanceof RigidBody2D ? deepest.b : null;
+      const invMassA = deepest.a.inverseMass;
+      const invMassB = bRigid ? bRigid.inverseMass : 0;
+      const total = invMassA + invMassB;
+      // A speculative contact is not overlapping, so there is nothing to push
+      // out of - pushing along a negative depth would drag the pair together.
+      if (total <= 0 || deepest.depth <= 0) continue;
+      const push = deepest.normal.mul(deepest.depth / total);
+      deepest.a.globalPosition = deepest.a.globalPosition.add(push.mul(invMassA));
+      if (bRigid) bRigid.globalPosition = bRigid.globalPosition.sub(push.mul(invMassB));
+    }
   }
 
   private resolveDynamicCollisions(dt: number): void {
+    // Rigid versus rigid, as one impulse per contact solved for the pair.
+    //
+    // Only rigid-vs-rigid, deliberately. That is where the defect was, it keeps
+    // the ball's static behaviour - `resolveRigidCircle`'s steering branch and
+    // its centred-circle path, which is bit-identical to every recorded replay -
+    // untouched, and it makes the change reviewable. Folding static contacts into
+    // the same solver is a worthwhile follow-up once `cli contacts` has been
+    // green across a few changes, and a valuable one: warm-started static
+    // manifolds are where Box2D's resting-stack quality actually comes from.
+    const pairs = this.collectContacts(true);
+    this.solveContacts(pairs, dt);
+
+    // Which surfaces each body met this frame, and the grippiest of them.
+    // `contactDamp` is once per body per frame now (see below), so it is the
+    // body's own pass that has to know, rather than each contact damping as it
+    // goes.
+    const grips = new Map<number, number>();
+    const met = (body: PhysicsBody2D, grip: number): void => {
+      grips.set(body.id, Math.max(grips.get(body.id) ?? 0, grip));
+    };
+    for (const c of pairs) {
+      // Only contacts that actually PUSHED BACK count. The gather keeps
+      // speculative contacts - bodies within `CONTACT_SLOP` but not yet touching
+      // - so that a resting pile's constraints persist for warm starting, and
+      // those carry no impulse by construction. Damping a body for merely being
+      // near another is a permanent brake on something that is not touching
+      // anything: a ball hanging on a chain a centimetre clear of a crate was
+      // slowed 2% every frame, the chain read that refusal as a block, and the
+      // winch stall paid out slack against it for ever - 1.7 m of chain grown to
+      // 3.7 and never released (session-611f).
+      if (c.normalImpulse <= 0) continue;
+      met(c.a, c.b.surfaceFriction);
+      met(c.b, c.a.surfaceFriction);
+    }
+
     for (const body of this.bodies) {
       if (!(body instanceof RigidBody2D) || body.removed || !body.hasShape()) continue;
       // Resolve every shape the body carries — a compound body (the ball &
@@ -670,9 +981,11 @@ export class World {
           for (const other of this.bodies) {
             if (other === body || other.removed || !other.hasShape()) continue;
             if (body.exceptions.has(other.id)) continue;
-            if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
+            if (!(other instanceof StaticBody2D)) continue;
             for (const oshape of other.getShapes()) {
-              stuck = this.resolveRigidLoop(body, bshape, other, oshape, dt) || stuck;
+              const out = this.resolveRigidLoop(body, bshape, other, oshape, dt);
+              stuck = out.stuck || stuck;
+              if (out.grip !== null) met(body, out.grip);
             }
           }
           continue;
@@ -685,11 +998,13 @@ export class World {
         for (const other of this.bodies) {
           if (other === body || other.removed || !other.hasShape()) continue;
           if (body.exceptions.has(other.id)) continue;
-          if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
+          if (!(other instanceof StaticBody2D)) continue;
           // A compound target exposes each of its shapes (e.g. the ball's loop
           // blocks other dynamic bodies too).
           for (const oshape of other.getShapes()) {
-            stuck = this.resolveRigidCircle(body, offset, r, other, oshape, dt) || stuck;
+            const out = this.resolveRigidCircle(body, offset, r, other, oshape, dt);
+            stuck = out.stuck || stuck;
+            if (out.grip !== null) met(body, out.grip);
           }
         }
       }
@@ -708,6 +1023,29 @@ export class World {
       } else if (++body.ungrippedFrames > STICK_RELEASE_FRAMES) {
         body.stickAnchor = null;
       }
+    }
+
+    // Light contact drag, ONCE PER BODY PER FRAME.
+    //
+    // It used to be applied once per (shape, shape) pair, at the end of each
+    // contact routine, which a scene-wide constraint list would apply several
+    // times over: a body touching three things would be damped three times for
+    // no reason but how its neighbours happen to be cut up. `contactDamp` is a
+    // nonphysical drag a standard engine would express as global linear damping,
+    // and it stays only because its default is replay-locked - so the one thing
+    // it must not do is depend on geometry it has nothing to do with.
+    //
+    // The grippiest surface the body met decides, which reduces to exactly the
+    // old value for the single-contact case every body used to be. The
+    // `grip === 1` branch is not an optimisation: it keeps the default path on
+    // the literal `contactDamp`, since 1 - (1 - 0.98) * 1 does not round back to
+    // exactly 0.98 and would drift recorded replays.
+    for (const body of this.bodies) {
+      if (!(body instanceof RigidBody2D) || body.removed) continue;
+      const grip = grips.get(body.id);
+      if (grip === undefined) continue;
+      const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
+      body.linearVelocity = body.linearVelocity.mul(damp);
     }
 
     // Position is recovered for the whole scene AFTER every body's contacts have
@@ -763,9 +1101,15 @@ export class World {
   }
 
   // Resolve one of a rigidbody's vertex shapes (a rect or convex polygon)
-  // against a single target shape, through a contact manifold rather than the
-  // single point a circle can produce. Returns whether static friction has the
-  // body gripped.
+  // against a single STATIC target shape, through a contact manifold rather than
+  // the single point a circle can produce.
+  //
+  // Rigid-vs-rigid no longer reaches here: it goes through `solveContacts`, where
+  // one impulse is computed for the pair and applied equal and opposite. What is
+  // left is the static path - stiction, the position pin, and the Coulomb split -
+  // which is a body-versus-static idea and stays one (a pin fights the other
+  // body's own resolution pass, and there is no other pass to fight against an
+  // immovable surface).
   //
   // Deliberately a sibling of `resolveRigidCircle` rather than a generalisation
   // of it: that routine carries the ball & chain avatar's steering path and a
@@ -775,78 +1119,12 @@ export class World {
   private resolveRigidLoop(
     body: RigidBody2D,
     bshape: ShapeTransform,
-    other: PhysicsBody2D,
+    other: StaticBody2D,
     oshape: ShapeTransform,
     dt: number,
-  ): boolean {
+  ): ContactOutcome {
     const contacts = shapeContacts(bshape, oshape);
-    if (contacts.length === 0) return false;
-
-    if (!(other instanceof StaticBody2D)) {
-      // Rigid-rigid: split the push and damp the approach, as this path has
-      // always approximated it - but through the *coupled* linear/angular
-      // effective mass, and per manifold point, so an off-centre contact torques
-      // the body.
-      //
-      // It used to read `body.linearVelocity.dot(normal)` and write the impulse
-      // back into `linearVelocity` alone, which is a contact with **no torque at
-      // all**. A circle can get away with that (its contact normal passes through
-      // its centre, so there is genuinely no lever), and this branch was written
-      // as the circle path's twin; a vertex shape cannot. Resting on another
-      // rigid body, it could only ever be pushed, never turned, so a body balanced
-      // on a corner of one had no way to fall off it: a long sliver cantilevered
-      // out into thin air over the corner of another polygon rotated at 0.2 rad/s
-      // - a crumb of friction torque, the only kind reaching it - where it should
-      // have whipped round in a fraction of a second (session-166f).
-      //
-      // `RIGID_PAIR_SHARE` is the same halving as before: neither body's solve
-      // knows about the other's, so each takes half and the pair converges over a
-      // couple of frames rather than both resolving the contact in full.
-      let deepest = contacts[0]!;
-      for (const c of contacts) if (c.depth > deepest.depth) deepest = c;
-      body.globalPosition = body.globalPosition.add(deepest.normal.mul(deepest.depth * 0.5));
-      const invI = body.kinematicRotation ? 0 : body.inverseInertia;
-      // Accumulated and iterated exactly as the static branch is, and for the
-      // same reason: a pile of polygons resting on each other is the resting case
-      // too, and one pass per point leaves the pair of a face overshooting against
-      // each other into a residual spin. `RIGID_PAIR_SHARE` still scales what this
-      // body takes, since the other one meets this contact again on its own pass.
-      const totals = contacts.map(() => 0);
-      let vnKilled = 0;
-      for (let it = 0; it < NORMAL_SOLVER_ITERATIONS; it++) {
-        for (let i = 0; i < contacts.length; i++) {
-          const c = contacts[i]!;
-          const r = c.point.sub(body.globalPosition);
-          const rCrossN = r.cross(c.normal);
-          const invEffN = body.inverseMass + rCrossN * rCrossN * invI;
-          if (invEffN <= 1e-9) continue;
-          const vn = body.linearVelocity
-            .add(new Vec2(-r.y, r.x).mul(body.angularVelocity))
-            .sub(other.velocityAtPoint(c.point))
-            .dot(c.normal);
-          const wanted = (-vn * RIGID_PAIR_SHARE) / invEffN;
-          const before = totals[i]!;
-          totals[i] = Math.max(0, before + wanted);
-          const applied = totals[i]! - before;
-          if (applied === 0) continue;
-          body.linearVelocity = body.linearVelocity.add(c.normal.mul(applied * body.inverseMass));
-          body.angularVelocity += rCrossN * applied * invI;
-        }
-      }
-      for (const t of totals) vnKilled += t * body.inverseMass;
-      // Friction and the contact damp stay a once-per-contact-pair affair, at the
-      // deepest point: `applyRigidContactFriction` ends with `contactDamp`, and
-      // calling it per manifold point would apply that damp once per point.
-      this.applyRigidContactFriction(
-        body,
-        other,
-        deepest.point.sub(body.globalPosition),
-        deepest.normal,
-        vnKilled,
-        dt,
-      );
-      return false;
-    }
+    if (contacts.length === 0) return NO_CONTACT;
 
     const grip = other.surfaceFriction;
     const staticMu = body.staticFriction * grip;
@@ -1096,31 +1374,34 @@ export class World {
       }
     }
 
-    const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
-    body.linearVelocity = body.linearVelocity.mul(damp);
-    return stuck;
+    return { stuck, grip };
   }
 
   // Resolve one of a rigidbody's circles (centred at `body.globalPosition +
-  // offset`, radius `r`) against a single target shape. A centred circle
+  // offset`, radius `r`) against a single STATIC target shape. A centred circle
   // (offset zero) reproduces the legacy resolution exactly; an offset circle
   // adds a torque term so an off-centre contact spins the body.
+  //
+  // Rigid-vs-rigid no longer reaches here either - it goes through
+  // `solveContacts`. What stays is the ball & chain avatar's steering branch and
+  // the centred-circle path, which is bit-identical to every recorded replay and
+  // is exactly what this landing is scoped to leave alone.
   private resolveRigidCircle(
     body: RigidBody2D,
     offset: Vec2,
     r: number,
-    other: PhysicsBody2D,
+    other: StaticBody2D,
     oshape: ShapeTransform,
     dt: number,
-  ): boolean {
+  ): ContactOutcome {
     const center = body.globalPosition.add(offset);
     const ov = circleOverlap(center, r, oshape);
-    if (!ov) return false;
+    if (!ov) return NO_CONTACT;
     // The primary shape's offset is exactly (0,0), so this gate (not a
     // floating-point cross-product test) keeps the centred circle on the
     // legacy torque-free path, bit-for-bit with recorded replays.
     const centered = offset.x === 0 && offset.y === 0;
-    if (other instanceof StaticBody2D) {
+    {
       // The surface's own friction scales both Coulomb coefficients the body
       // brings to the contact: 1 (the default) multiplies by exactly 1 and is
       // bit-identical to the pre-surface-friction path, 0 makes the surface
@@ -1229,7 +1510,7 @@ export class World {
           const d = body.globalPosition.sub(body.stickAnchor);
           const dTan = d.sub(ov.normal.mul(d.dot(ov.normal)));
           body.globalPosition = body.globalPosition.sub(dTan);
-          return true;
+          return { stuck: true, grip };
         }
         // Slipping: release the grip and fall through to kinetic friction.
         body.stickAnchor = null;
@@ -1307,105 +1588,8 @@ export class World {
           body.angularVelocity += rCrossT * j * invI;
         }
       }
-      // Light contact drag. `contactDamp` is the fraction of speed *retained*,
-      // so the surface fades it toward 1 (no drag) as friction drops to ice.
-      // The grip === 1 branch is not an optimisation: it keeps the default path
-      // on the literal `contactDamp`, since 1 - (1 - 0.98) * 1 does not round
-      // back to exactly 0.98 and would drift recorded replays.
-      const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
-      body.linearVelocity = body.linearVelocity.mul(damp);
-      return stuck;
-    } else {
-      // Rigid-rigid: split the push, damp approach velocity (approximate).
-      body.globalPosition = body.globalPosition.add(ov.normal.mul(ov.depth * 0.5));
-      const rContact = offset.add(ov.normal.mul(-r));
-      const rel = body.linearVelocity.dot(ov.normal);
-      let vnKilled = 0;
-      if (rel < 0) {
-        body.linearVelocity = body.linearVelocity.sub(ov.normal.mul(rel * 0.5));
-        vnKilled = -rel * 0.5;
-      }
-      this.applyRigidContactFriction(body, other, rContact, ov.normal, vnKilled, dt);
-      return false;
+      return { stuck, grip };
     }
-  }
-
-  // Tangential friction and damping for a contact with another *rigid* body,
-  // where the static path's Coulomb solve does not reach.
-  //
-  // Resting on a rigid body used to be resting on ice: the branch split the
-  // push-out and killed the approach velocity and stopped there, so a circle's
-  // `contactFriction` and `contactDamp` — which decide everything about how it
-  // behaves on a static floor — did nothing at all against a polygon. Gravity
-  // then does work down a rigid slope for ever, and with a chain to carry it
-  // away that is a motor: a ball hanging on a rigid polygon's face slid the pair
-  // across the level at a steady 0.7 m/s and never slowed (session-431f).
-  //
-  // Deliberately the simple half of the static solve — Coulomb-capped kinetic
-  // friction and the contact damp, no stiction and no stick anchor. Those pin a
-  // body to a surface that is not going anywhere, which is not true of a rigid
-  // body, and the pinning would fight the other body's own resolution pass.
-  private applyRigidContactFriction(
-    body: RigidBody2D,
-    other: PhysicsBody2D,
-    rContact: Vec2,
-    normal: Vec2,
-    vnKilled: number,
-    dt: number,
-  ): void {
-    const grip = other.surfaceFriction;
-    const kineticMu = body.contactFriction * grip;
-    if (kineticMu > 0) {
-      const invI = body.kinematicRotation ? 0 : body.inverseInertia;
-      const contactPoint = body.globalPosition.add(rContact);
-      const tangent = new Vec2(-normal.y, normal.x);
-      const pointVel = body.linearVelocity.add(
-        new Vec2(-rContact.y, rContact.x).mul(body.angularVelocity),
-      );
-      // Slip measured against the WORLD, not against the other body's surface.
-      //
-      // The static path measures relative slip, and must: a scripted mover is an
-      // infinite-mass surface whose motion is a given, so a body resting on one
-      // is dragged along with it and that is the whole point. Two *dynamic*
-      // bodies are a different situation, and the difference is that this routine
-      // is not one half of a reciprocal impulse pair. It only ever writes to
-      // `body`; the other direction is a separate call, on a separate pass, whose
-      // impulse is sized independently from its own mass and its own normal
-      // budget. Nothing makes the two equal and opposite, so any impulse taken
-      // from `other`'s motion is energy the contact invented.
-      //
-      // Read as relative slip, the ball resting against a crate therefore drove
-      // it: the ball's spin is kinematic (the aim rewrites it every frame, so
-      // nothing the contact does can slow it) and its linear velocity is whatever
-      // the chain solve last credited it, which for a wedged ball is metres per
-      // second of motion the geometry is refusing. Either one appears here as a
-      // surface sliding under the crate, and Coulomb friction dutifully drags the
-      // crate along with it - at a dead-steady 2.4 mm a frame, for ever, because
-      // the crate's own grip on the floor is resolved earlier in the same pass
-      // and cannot answer a drive that lands after it. A ball merely hanging on a
-      // chain walked its anchor 3.6 m across the level that way (session-611f).
-      //
-      // Against the world the impulse can only ever oppose the body's own motion,
-      // so the contact is a brake and never a motor - which is what this routine
-      // was added to be, and all `session-431f` (gravity doing work down a rigid
-      // slope for ever) ever needed. The bodies still shove each other through
-      // the normal channel, which *is* solved as a pair.
-      const surfSpeed = pointVel.dot(tangent);
-      const rCrossT = rContact.cross(tangent);
-      const invEff = body.inverseMass + rCrossT * rCrossT * invI;
-      if (invEff > 1e-9) {
-        const g = GRAVITY.mul(body.gravityScale);
-        const gravityBite = Math.max(0, g.mul(dt).dot(normal.mul(-1)));
-        const maxImpulse = kineticMu * body.mass * (vnKilled + gravityBite);
-        let j = -surfSpeed / invEff;
-        j = Math.max(-maxImpulse, Math.min(maxImpulse, j));
-        if (tangent.mul(j).dot(body.linearVelocity) < 0) j *= body.contactBrakeScale;
-        body.linearVelocity = body.linearVelocity.add(tangent.mul(j * body.inverseMass));
-        body.angularVelocity += rCrossT * j * invI;
-      }
-    }
-    const damp = grip === 1 ? body.contactDamp : 1 - (1 - body.contactDamp) * grip;
-    body.linearVelocity = body.linearVelocity.mul(damp);
   }
 
   private notifyAreas(): void {
@@ -1419,6 +1603,89 @@ export class World {
       area.notifyOverlaps(inside);
     }
   }
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+// Apply `impulse` to `a` and its exact negative to `b`. Equal and opposite by
+// construction, which is the whole point of the pair solver: it is what conserves
+// momentum, and what makes a body landing on another knock it round rather than
+// stop it.
+function applyPairImpulse(s: SolverContact, impulse: Vec2): void {
+  const { c } = s;
+  c.a.linearVelocity = c.a.linearVelocity.add(impulse.mul(c.a.inverseMass));
+  c.a.angularVelocity += s.rA.cross(impulse) * s.invIA;
+  if (!s.bRigid) return; // a static `b` has infinite mass: nothing to write
+  s.bRigid.linearVelocity = s.bRigid.linearVelocity.sub(impulse.mul(s.bRigid.inverseMass));
+  s.bRigid.angularVelocity -= s.rB.cross(impulse) * s.invIB;
+}
+
+// The velocity of `body` at `point` as far as FRICTION is concerned.
+//
+// A body whose rotation is driven externally - the ball's aim steering, which
+// overwrites `angularVelocity` every frame - has infinite rotational inertia in
+// this solver, because no impulse the contact applies to its spin would survive
+// the next frame's steering. A contact that then still reads that spin as
+// surface motion is reading a velocity it can never affect, and a friction
+// constraint that does so is not a brake but a MOTOR: it drives the other body
+// at the cone limit every single frame, and the reaction that should decelerate
+// the drive is discarded along with the rest of the angular impulse.
+//
+// The pair solve makes the linear half of the reaction real, which is what makes
+// relative slip legitimate again for everything else - two crates now grip each
+// other properly. The kinematic spin is the one term that has to come out, and
+// leaving it in is what let a ball merely HANGING on a chain drive its anchor
+// across the level (session-611f); the chain grew a metre over its anchored
+// length and stayed there.
+//
+// Only friction. The normal constraint reads the true velocity: it cannot do
+// sustained work, since penetration is bounded, so it is not a motor.
+function frictionVelocity(body: PhysicsBody2D, point: Vec2): Vec2 {
+  if (body instanceof RigidBody2D && body.kinematicRotation) return body.linearVelocity;
+  return body.velocityAtPoint(point);
+}
+
+// The Coulomb coefficient one body brings to a contact with another: its own
+// kinetic friction, scaled by how grippy the other body's surface is.
+function contributedFriction(body: PhysicsBody2D, against: PhysicsBody2D): number {
+  return (body instanceof RigidBody2D ? body.contactFriction : 0) * against.surfaceFriction;
+}
+
+// One friction coefficient for the pair.
+//
+// The three routines this replaces each computed `body.contactFriction *
+// other.surfaceFriction`, which is asymmetric the moment both sides are rigid -
+// the two passes over one contact disagreed about how much friction it had.
+// Combining the two products geometrically is Box2D's rule (sqrt(muA * muB)), and
+// against a static body - which brings no kinetic coefficient of its own - it
+// reduces to exactly the arithmetic the replay corpus was recorded under.
+function combinedFriction(
+  a: RigidBody2D,
+  b: PhysicsBody2D,
+  bRigid: RigidBody2D | null,
+): number {
+  const muA = contributedFriction(a, b);
+  return bRigid ? Math.sqrt(muA * contributedFriction(bRigid, a)) : muA;
+}
+
+// How much of the friction cone is available in direction `dir`.
+//
+// `contactBrakeScale` is a ball-controller device: while the player aims,
+// impulses opposing the ball's travel are faded so reorienting the spin mid-roll
+// cannot shed momentum, and impulses driving it still apply in full. It is 1 for
+// everything else, so this is the identity for all scenery.
+function brakeScale(a: RigidBody2D, bRigid: RigidBody2D | null, dir: Vec2): number {
+  let scale = 1;
+  if (a.contactBrakeScale !== 1 && dir.dot(a.linearVelocity) < 0) {
+    scale = Math.min(scale, a.contactBrakeScale);
+  }
+  // The impulse on `b` is the negative, so it brakes `b` under the opposite test.
+  if (bRigid && bRigid.contactBrakeScale !== 1 && dir.dot(bRigid.linearVelocity) > 0) {
+    scale = Math.min(scale, bRigid.contactBrakeScale);
+  }
+  return scale;
 }
 
 // Cheap symmetric overlap test between two shape transforms.
