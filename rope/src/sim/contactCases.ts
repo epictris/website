@@ -715,12 +715,14 @@ function casePenetration(sims: Sim[]): ContactResult {
 // every launch identically zero would pass a spread check on its own.
 // ---------------------------------------------------------------------------
 function caseLoopHop(sims: Sim[]): ContactResult {
-  // Above the threshold by half again, so the case follows the tuning constant
-  // rather than pinning a number the feel is allowed to move.
-  const FAST = BallPlayer.LOOP_HOP_MIN_SPIN * 1.5;
-  // Below it, and this half is the one the report was about: a ball rolling
-  // slowly must not hop at all, however its loop lands.
-  const SLOW = BallPlayer.LOOP_HOP_MIN_SPIN * 0.5;
+  const MIN = BallPlayer.LOOP_HOP_MIN_SPIN;
+  const FULL = BallPlayer.LOOP_HOP_FULL_SPIN;
+  const MAX = BallPlayer.LOOP_HOP_MAX_SPEED;
+  // Under the threshold, halfway up the ramp, and at the top of it. The case
+  // follows the tuning constants rather than pinning numbers the feel is allowed
+  // to move.
+  const SLOW = MIN * 0.5;
+  const MID = (MIN + FULL) / 2;
   const PHASES = 8;
 
   const launches = (spin: number, tag: string): number[] => {
@@ -750,23 +752,33 @@ function caseLoopHop(sims: Sim[]): ContactResult {
     return out;
   };
 
-  const fast = launches(FAST, "fast");
+  const fast = launches(FULL, "fast");
+  const mid = launches(MID, "mid");
   const slow = launches(SLOW, "slow");
+  const spread = (xs: number[]): number => Math.max(...xs) - Math.min(...xs);
   const fastLo = Math.min(...fast);
-  const fastHi = Math.max(...fast);
+  const midLo = Math.min(...mid);
   const slowHi = Math.max(...slow);
   // The drop itself bounces a little - the ball is 0.15 elastic - so the bar for
   // "did not hop" is the restitution bounce, not zero.
   const NO_HOP = 1.0;
-  const good =
-    fastHi - fastLo < 0.05 && fastLo > BallPlayer.LOOP_HOP_MIN_SPEED && slowHi < NO_HOP;
-  return ok("loop-hop — the same spin hops the same, and a slow one does not hop", good, [
-    `${fastHi - fastLo < 0.05 && fastLo > BallPlayer.LOOP_HOP_MIN_SPEED ? "ok  " : "BAD "} ` +
-      `${PHASES} phases at ${FAST.toFixed(0)} rad/s launched ${fastLo.toFixed(3)}..` +
-      `${fastHi.toFixed(3)} m/s (spread ${((fastHi - fastLo) * 100).toFixed(1)}cm/s, want <5, ` +
-      `all >${BallPlayer.LOOP_HOP_MIN_SPEED})`,
-    `${slowHi < NO_HOP ? "ok  " : "BAD "} the same drop at ${SLOW.toFixed(0)} rad/s, under the ` +
-      `hop threshold, peaked at ${slowHi.toFixed(3)} m/s (want <${NO_HOP})`,
+  // Halfway up the ramp is half the speed, within a tolerance that is a bound on
+  // the mechanic rather than a claim about the exact number.
+  const midWanted = MAX / 2;
+  const consistent = spread(fast) < 0.05 && spread(mid) < 0.05;
+  const linear = Math.abs(midLo - midWanted) < 0.15 * MAX;
+  const tops = Math.abs(fastLo - MAX) < 0.05 * MAX;
+  const quiet = slowHi < NO_HOP;
+  const good = consistent && linear && tops && quiet;
+  return ok("loop-hop — the hop follows the spin, on a ramp, and a slow one does not hop", good, [
+    `${consistent ? "ok  " : "BAD "} ${PHASES} phases spread ${(spread(fast) * 100).toFixed(1)}` +
+      `cm/s at ${FULL} rad/s and ${(spread(mid) * 100).toFixed(1)}cm/s at ${MID} (want <5)`,
+    `${tops ? "ok  " : "BAD "} the top of the ramp launched ${fastLo.toFixed(3)} m/s ` +
+      `(want ${MAX.toFixed(2)})`,
+    `${linear ? "ok  " : "BAD "} halfway up it launched ${midLo.toFixed(3)} m/s ` +
+      `(want ${midWanted.toFixed(2)})`,
+    `${quiet ? "ok  " : "BAD "} the same drop at ${SLOW} rad/s, under the threshold, peaked at ` +
+      `${slowHi.toFixed(3)} m/s (want <${NO_HOP})`,
   ]);
 }
 

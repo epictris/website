@@ -356,14 +356,22 @@ lands in the ball's linear velocity.
 The same roll into the same floor launched at 1.7 m/s once and 4.4 m/s a few
 hundred frames later (`session-1594f`), which reads as the ball randomly deciding
 to fire itself off the level.
-`BallPlayer.applyLoopHop` states the move instead, in the honest physical
-quantity with the phase taken out: the loop's own **tip speed**, `|ω| × loopArm`,
-clamped at both ends, applied by *setting* the outgoing normal speed rather than
+`BallPlayer.applyLoopHop` states the move instead, as a function of the spin with
+the phase taken out, applied by *setting* the outgoing normal speed rather than
 adding to it - what the solve made of the phase is exactly what is being
 replaced.
+It is a **ramp**: nothing at all up to `LOOP_HOP_MIN_SPIN` (20 rad/s), then a
+straight line from zero there to `LOOP_HOP_MAX_SPEED` (3 m/s) at
+`LOOP_HOP_FULL_SPIN` (45), and that speed for anything faster.
+Starting the line at zero rather than at a floor is what makes the threshold
+invisible - a hop that began at some minimum speed would fire at full size the
+instant the spin crossed the bar, so a ball wound to the edge of it would flick
+between a dead landing and a real hop on nothing the player did.
+The two spins are the range real play uses: across the recorded sessions the ball
+spends 90-95% of its time under 20-29 rad/s and peaks in the mid 40s.
 Winding up harder hops higher, the same wind-up always hops the same, and below
-`LOOP_HOP_MIN_SPIN` a loop touch is just a touch, so a slow roll and a ball
-resting on its loop stay quiet.
+the threshold a loop touch is just a touch, so a slow roll and a ball resting on
+its loop stay quiet.
 It is edge-triggered on the loop meeting something, because a ball sitting on its
 loop with the aim spinning is in contact every frame and hopping it every frame
 is a motor rather than a move.
@@ -389,12 +397,14 @@ lift it, so the loop ends up pinned in the ground, its velocity answer removed
 every frame while the positional sweep pushes the ball back out - a body
 corrected in position and paid nothing for it, which the chain reads as a blocked
 correction.
-`cli contacts` `loop-hop` is the detector, and it has two halves for the two
-failures: the same drop at eight starting rotations, which spread 1.25 m/s before
-and are identical now, and the same drop *under* the threshold, which must not
-hop at all (2.18 m/s before, 0.87 now).
-It also asserts the hop still *happens*, since a fix that made every launch zero
-would pass a spread check on its own.
+`cli contacts` `loop-hop` is the detector, and it drops the same ball at eight
+starting rotations at three spins: under the threshold, halfway up the ramp and
+at the top of it.
+The phases must agree (they spread 1.25 m/s before and are identical now), the
+slow drop must not hop at all (2.18 m/s before, 0.85 now), and the two live spins
+must land on the ramp - half the speed halfway up it.
+That last one is what stops the mechanic being quietly deleted: a fix that made
+every launch zero would pass a spread check on its own.
 
 ### The coil
 

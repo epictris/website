@@ -62,14 +62,24 @@ export class BallPlayer extends RigidBody2D {
   // frame and 4.4 at another (session-1594f), which reads as the ball randomly
   // deciding to launch.
   //
-  // So the hop is stated outright, in the honest physical quantity: the loop's
-  // own tip speed, |omega| x the loop arm, with the phase taken out. Winding up
-  // harder hops higher, the same wind-up always hops the same, and both ends are
-  // clamped - the floor so a hop is worth doing at all, the ceiling so a ball
-  // spun up to 40 rad/s does not fire itself off the level.
-  static readonly LOOP_HOP_MIN_SPIN = 40;
-  static readonly LOOP_HOP_MIN_SPEED = 1.2;
-  static readonly LOOP_HOP_MAX_SPEED = 3.5;
+  // So the hop is stated outright, as a function of the spin with the phase taken
+  // out: nothing at all below `LOOP_HOP_MIN_SPIN`, then a straight line from zero
+  // there to `LOOP_HOP_MAX_SPEED` at `LOOP_HOP_FULL_SPIN`, and that speed for
+  // anything faster. The same wind-up always hops the same, and winding up harder
+  // hops higher all the way rather than in one step.
+  //
+  // Starting the line at ZERO rather than at a floor is what makes the threshold
+  // invisible: a hop that began at some minimum speed would fire at full size the
+  // instant the spin crossed the bar, so a ball wound up to the edge of it would
+  // flick between a dead landing and a real hop on nothing the player did.
+  //
+  // The two spins are the range real play uses. Across the recorded sessions the
+  // ball spends 90-95% of its time under 20-29 rad/s and peaks in the mid 40s, so
+  // 20 leaves ordinary rolling alone and 45 puts the top of the ramp at the top
+  // of what a hard wind-up reaches.
+  static readonly LOOP_HOP_MIN_SPIN = 20;
+  static readonly LOOP_HOP_FULL_SPIN = 45;
+  static readonly LOOP_HOP_MAX_SPEED = 3;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
   // level's 0.12 m radius, ρ·(4/3)πr³ ≈ 52 kg. That number is the feel - a
   // wrecking ball, sluggish under aim-kicks and chain tugs and hard for
@@ -207,13 +217,11 @@ export class BallPlayer extends RigidBody2D {
     let allowed = Math.max(this.restitution * approach, solved - spinNormal);
 
     const spin = Math.abs(this.angularVelocity);
-    const hopping = !wasTouching && spin >= BallPlayer.LOOP_HOP_MIN_SPIN;
+    const hopping = !wasTouching && spin > BallPlayer.LOOP_HOP_MIN_SPIN;
     if (hopping) {
-      allowed = Mathf.clamp(
-        spin * this.loopArm,
-        BallPlayer.LOOP_HOP_MIN_SPEED,
-        BallPlayer.LOOP_HOP_MAX_SPEED,
-      );
+      const over = spin - BallPlayer.LOOP_HOP_MIN_SPIN;
+      const span = BallPlayer.LOOP_HOP_FULL_SPIN - BallPlayer.LOOP_HOP_MIN_SPIN;
+      allowed = Mathf.clamp(over / span, 0, 1) * BallPlayer.LOOP_HOP_MAX_SPEED;
     }
     const along = this.linearVelocity.dot(normal);
     // The hop SETS the outgoing speed — the whole point is that it does not
