@@ -78,7 +78,7 @@ export class BallPlayer extends RigidBody2D {
   // 20 leaves ordinary rolling alone and 45 puts the top of the ramp at the top
   // of what a hard wind-up reaches.
   static readonly LOOP_HOP_MIN_SPIN = 20;
-  static readonly LOOP_HOP_FULL_SPIN = 45;
+  static readonly LOOP_HOP_FULL_SPIN = 30;
   static readonly LOOP_HOP_MAX_SPEED = 3;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
   // level's 0.12 m radius, ρ·(4/3)πr³ ≈ 52 kg. That number is the feel - a
