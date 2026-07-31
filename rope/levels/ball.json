@@ -1646,12 +1646,13 @@
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 19.99999999999993,
-        "h": 40.000000000000014
+        "w": 20,
+        "h": 40
       },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "material": "cast iron"
     },
     {
       "kind": "rigid",

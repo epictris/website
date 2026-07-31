@@ -361,6 +361,35 @@ export function isExposedCorner(
   return coveredAngle(arcs) < Math.PI - FLAT_EPSILON;
 }
 
+// Half-extents of a shape's world-axis-aligned bounding box, about its own
+// `globalPosition`. Rejecting a pair whose boxes are apart is what keeps a
+// narrowphase off pairs that cannot touch, and it is only sound if the box
+// really does contain the shape at its current rotation - so the rotation is
+// applied here rather than a local extent being reused, which would be a box
+// that shrinks as a rect turns and starts missing contacts at 45°.
+export function shapeExtents(t: ShapeTransform): Vec2 {
+  const s = t.shape;
+  if (s.kind === "circle") return new Vec2(s.radius, s.radius);
+  const c = Math.abs(Math.cos(t.globalRotation));
+  const sn = Math.abs(Math.sin(t.globalRotation));
+  if (s.kind === "rect") {
+    const hw = s.size.x / 2;
+    const hh = s.size.y / 2;
+    return new Vec2(hw * c + hh * sn, hw * sn + hh * c);
+  }
+  // A convex loop's box is its widest vertex on each axis, taken rotated. The
+  // support-point form (max |v·x̂|, max |v·ŷ|) is the same answer and no cheaper
+  // at four to eight vertices.
+  let ex = 0;
+  let ey = 0;
+  for (const v of s.verts) {
+    const r = v.rotated(t.globalRotation);
+    ex = Math.max(ex, Math.abs(r.x));
+    ey = Math.max(ey, Math.abs(r.y));
+  }
+  return new Vec2(ex, ey);
+}
+
 // A CollisionShape2D attached to a body. Its global transform is the body's
 // transform, offset by the shape's own mount point (zero for the single-shape
 // bodies that make up most of the project).

@@ -5,7 +5,7 @@
 // (deterministic replay), not bit-compatible with Godot.
 
 import { Vec2 } from "./vec2";
-import { circleShape } from "./shapes";
+import { circleShape, shapeExtents } from "./shapes";
 import type { ShapeTransform } from "./shapes";
 import {
   Area2D,
@@ -661,11 +661,25 @@ export class World {
       }
     };
     for (const bshape of body.getShapes()) {
+      const be = shapeExtents(bshape);
       for (const other of this.bodies) {
         if (other === body || other.removed || !other.hasShape()) continue;
         if (body.exceptions.has(other.id)) continue;
         if (!isSolidTarget(other)) continue;
         for (const oshape of other.getShapes()) {
+          // The same conservative box reject the contact gather uses, and here
+          // it is the one that pays: this runs per rigid body per depenetration
+          // pass and twice more in the ball's chain phase, so the scene's whole
+          // narrowphase was being walked five or six times a frame to find the
+          // one surface a body is actually resting on. It was 0.88 ms of a
+          // 2.3 ms frame.
+          //
+          // Nothing here is speculative - an overlap has positive depth by
+          // definition - so shapes whose boxes are strictly apart cannot
+          // contribute, and no margin is needed to keep the answer identical.
+          const oe = shapeExtents(oshape);
+          if (Math.abs(bshape.globalPosition.x - oshape.globalPosition.x) > be.x + oe.x) continue;
+          if (Math.abs(bshape.globalPosition.y - oshape.globalPosition.y) > be.y + oe.y) continue;
           if (bshape.shape.kind === "circle") {
             const ov = circleOverlap(bshape.globalPosition, bshape.shape.radius, oshape);
             if (ov) consider(ov);
@@ -730,8 +744,34 @@ export class World {
         const as = a.getShapes();
         const bs = b.getShapes();
         for (let si = 0; si < as.length; si++) {
+          const sa = as[si]!;
+          const ea = shapeExtents(sa);
           for (let sj = 0; sj < bs.length; sj++) {
-            this.gatherShapePair(out, a, si, as[si]!, b, sj, bs[sj]!);
+            const sb = bs[sj]!;
+            // The pair loop is O(n²) with no broadphase, and at this scene scale
+            // that is the right trade (see "Known simplifications") - but only
+            // the LOOP is cheap. What it costs is `gatherShapePair`, a full SAT
+            // and incident-face clip per shape pair, run on the ball arena 743
+            // times a frame for the 1 pair that is actually within reach.
+            //
+            // So the box test, which is exactly conservative rather than
+            // approximately so: `gatherShapePair` drops anything at
+            // `depth <= -CONTACT_SLOP`, and boxes separated on an axis by more
+            // than the slop put the shapes further than the slop apart on that
+            // axis alone. Every pair skipped here is a pair the narrowphase
+            // would have gathered nothing from, so the contact set is identical
+            // and every recorded replay stays bit-for-bit - which is the whole
+            // reason to reject on the shapes' own boxes rather than to build a
+            // grid whose bucket size would be a new number to be wrong about.
+            //
+            // On session-1618f it takes 99.9% of the narrowphase calls out and
+            // `World.integrate` from 1.475 ms a frame to 0.087.
+            const eb = shapeExtents(sb);
+            const dx = sa.globalPosition.x - sb.globalPosition.x;
+            if (Math.abs(dx) > ea.x + eb.x + CONTACT_SLOP) continue;
+            const dy = sa.globalPosition.y - sb.globalPosition.y;
+            if (Math.abs(dy) > ea.y + eb.y + CONTACT_SLOP) continue;
+            this.gatherShapePair(out, a, si, sa, b, sj, sb);
           }
         }
       }

@@ -137,6 +137,17 @@ static geometry included. What is left outside it is the ball avatar's aim **ste
   O(n²), which at this scene scale is complexity with no payoff. Sleeping is the standard
   answer to "momentum transfer destabilises settled piles", and is the wheel to import if that
   ever bites harder than `settle`/`stack` tolerate — rather than more damping.
+  What the *loop* costs is indeed nothing; what it used to cost was the **narrowphase** it ran
+  at the end of every arm of it. `collectContacts` and `gatherDepenetration` both reject on the
+  two shapes' world AABBs first now (`shapeExtents`), which on the ball arena takes 99.9% of the
+  SAT calls out - 743 shape pairs a frame examined to find the one within reach - and
+  `World.integrate` from 1.475 ms a frame to 0.374. It is exactly conservative rather than
+  approximately so: the contact gather drops anything at `depth <= -CONTACT_SLOP` and the
+  depenetration gather anything not actually overlapping, so a pair whose boxes are that far
+  apart is a pair those routines would have gathered nothing from. Every bundle in the corpus
+  replays bit-for-bit across the change, which is the test that it is a rejection and not an
+  approximation. A grid or a BVH is the next step if body counts ever justify it, and this is
+  the thing to measure it against rather than against the version with no rejection at all.
 - No CCD, no speculative *sweeps*, no sub-stepping. Body speeds are bounded by the invariants
   and tunnelling has never been the failure mode; the rope's failure modes are geometric and
   have their own tooling. (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
