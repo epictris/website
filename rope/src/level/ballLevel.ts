@@ -19,7 +19,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
-import { buildSceneChains, type SceneChain } from "./chains";
+import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -165,7 +165,7 @@ export class BallLevel {
     // phase opens: whatever they move is then part of the state that phase
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
-    for (const chain of this.sceneChains) chain.physicsStep(delta);
+    stepSceneChains(this.sceneChains, delta);
     PhaseTrace.mark("scene-chains", this.world);
 
     // Push the ball clear of the scenery before anything measures against it,

@@ -23,7 +23,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
-import { buildSceneChains, type SceneChain } from "./chains";
+import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 
 // Scripted-mover update: sets the body's transform for the given sim time.
@@ -154,7 +154,7 @@ export class Level {
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
     // recorded replay bit-identical.
-    for (const chain of this.sceneChains) chain.physicsStep(delta);
+    stepSceneChains(this.sceneChains, delta);
     PhaseTrace.mark("scene-chains", this.world);
 
     this.cameraPosition = this.player.globalPosition;

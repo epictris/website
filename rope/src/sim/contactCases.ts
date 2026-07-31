@@ -16,7 +16,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
-import { ForceArea, RigidBody2D, StaticBody2D } from "../engine/body";
+import { ForceArea, PhysicsBody2D, RigidBody2D, StaticBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
@@ -25,6 +25,8 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
+import { SceneChain, stepSceneChains } from "../level/chains";
+import { RopeContact } from "../lib/ropeContact";
 
 const DT = 1 / 60;
 const DEG = Math.PI / 180;
@@ -992,6 +994,86 @@ function caseAreaReach(): ContactResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// chain-order — a symmetrical rig hangs symmetrically, whichever order its
+// chains are written in.
+//
+// Every scene chain is an independent PBD solve that writes positions and
+// credits itself velocity, so sweeping the list once is Gauss-Seidel with one
+// iteration: the chain that solves first moves the bodies, and the one after it
+// gets the last word. Where two chains hold the SAME pair of bodies - which is
+// what a bridle, a swing seat or any two-point hanger is - the residual is a
+// lean, and it is the array's lean rather than the geometry's. On the ball
+// arena's hanging weight it was 18 cm and 18 degrees of link tilt, in a rig
+// symmetrical to the millimetre, and swapping the two chains in the level file
+// mirrored the answer digit for digit.
+//
+// So the case builds one rig twice, identical but for the order of its two lower
+// chains, and asserts what the level author sees: over the settled tail it hangs
+// near centre and its link hangs near level, in BOTH orders. Running both orders
+// is what makes the bound honest rather than a fit to one arrangement - the two
+// runs are each other's reflection, so a solver that leans fails whichever way
+// the level happens to list its chains.
+// ---------------------------------------------------------------------------
+function caseChainOrder(): ContactResult {
+  const FRAMES = 900;
+  // Bounds, not numbers: four sweeps leave this rig at 42 mm and 2.9 degrees,
+  // one sweep leaves it at 236 mm and 25.3 degrees, so a bar between the two
+  // separates them with room on both sides.
+  const MAX_LEAN = 0.08;
+  const MAX_TILT = 6 * DEG;
+
+  // Returns the worst [weight lean, link tilt] over the settled tail, not the
+  // pose at one instant: the rig is a pendulum, so a single sample can catch a
+  // leaning one crossing centre and read as healthy.
+  const hang = (swapped: boolean): [number, number] => {
+    const sim = new Sim("chain-order");
+    const ceiling = new StaticBody2D();
+    ceiling.globalPosition = new Vec2(0, -4);
+    ceiling.setShape(rectShape(4, 0.2));
+    sim.world.add(ceiling);
+    const link = sim.addRigid(rectShape(0.2, 0.4), new Vec2(0, -2.3));
+    const weight = sim.addRigid(rectShape(2, 1.7), new Vec2(0, -1));
+
+    // Anchors sit ON the surfaces they are bolted to, as `buildSceneChains`
+    // snaps an authored one: an anchor inside a body leaves the span starting
+    // in its interior and the chain winds around its own anchor.
+    const chain = (a: [PhysicsBody2D, number, number], b: [PhysicsBody2D, number, number]) => {
+      const pa = new Vec2(a[1], a[2]);
+      const pb = new Vec2(b[1], b[2]);
+      return new SceneChain(RopeContact.at(a[0], pa), RopeContact.at(b[0], pb), pa.distanceTo(pb), null);
+    };
+    const hanger = chain([ceiling, 0, -3.9], [link, 0, -2.5]);
+    const left = chain([link, -0.1, -2.1], [weight, -1, -1.85]);
+    const right = chain([link, 0.1, -2.1], [weight, 1, -1.85]);
+    const chains = swapped ? [hanger, right, left] : [hanger, left, right];
+
+    let lean = 0;
+    let tilt = 0;
+    sim.step(FRAMES, (n) => {
+      stepSceneChains(chains, DT);
+      if (n <= FRAMES - 300) return;
+      lean = Math.max(lean, Math.abs(weight.globalPosition.x));
+      tilt = Math.max(tilt, Math.abs(wrapAngle(link.globalRotation)));
+    });
+    return [lean, tilt];
+  };
+
+  const [leanA, tiltA] = hang(false);
+  const [leanB, tiltB] = hang(true);
+  const lean = Math.max(leanA, leanB);
+  const tilt = Math.max(tiltA, tiltB);
+  const hangs = lean <= MAX_LEAN;
+  const level = tilt <= MAX_TILT;
+
+  return ok("chain-order — a symmetrical hanging rig does not lean on its chain order", hangs && level, [
+    `${hangs ? "ok  " : "BAD "} worst lean ${(leanA * 1000).toFixed(1)}mm, ${(leanB * 1000).toFixed(1)}mm swapped ` +
+      `(want <${MAX_LEAN * 1000}mm)`,
+    `${level ? "ok  " : "BAD "} worst link tilt ${(tiltA / DEG).toFixed(2)}deg, ${(tiltB / DEG).toFixed(2)}deg swapped ` +
+      `(want <${(MAX_TILT / DEG).toFixed(0)}deg)`,
+  ]);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -1014,6 +1096,7 @@ export function runContactCases(): ContactResult[] {
   ];
   ContactAudit.enabled = false;
   results.push(caseAreaReach());
+  results.push(caseChainOrder());
   results.push(caseHookBlockedAttaches());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));

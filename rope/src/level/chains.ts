@@ -44,13 +44,73 @@ export class SceneChain {
     this.color = color;
   }
 
-  // One frame of the chain. Called after `World.integrate`, so the constraint
-  // has the last word on where the bodies it holds end up - the same order the
-  // ball controller runs its chain in, and for the same reason (solve before
-  // integration ends every fast frame over-length by |v|·dt).
-  physicsStep(delta: number): void {
+  // Open this chain's frame. Once per frame, however many solve passes follow.
+  beginFrame(delta: number): void {
     this.rope.beginFrame(delta);
-    this.rope.physicsStep(NOTHING, delta);
+  }
+
+  // One solve pass. Called after `World.integrate`, so the constraint has the
+  // last word on where the bodies it holds end up - the same order the ball
+  // controller runs its chain in, and for the same reason (solve before
+  // integration ends every fast frame over-length by |v|·dt).
+  solve(delta: number): void {
+    this.rope.solvePass(NOTHING, delta);
+  }
+}
+
+// How many times the chain set is swept per frame. 1 is what this was, and 1 is
+// a solver that does not converge; see `stepSceneChains` for what that cost.
+// Measured on the ball arena's two-chain bridle, worst values over a settled
+// 250-frame window:
+//
+//   sweeps    lean     link tilt    mean speed
+//        1    184 mm     18.45 deg     0.085 m/s
+//        2     32 mm      2.28 deg     0.025
+//        4     16 mm      0.94 deg     0.0050
+//        8     16 mm      0.97 deg     0.0059
+//
+// 8 buys nothing over 4, so this is the knee and not a budget.
+const CHAIN_SWEEPS = 4;
+
+// One frame of every scene chain, as ONE system rather than as a list of
+// independent ropes.
+//
+// Each chain is a full PBD solve that writes positions and credits itself
+// velocity, so a single pass in list order is Gauss-Seidel with one iteration:
+// the first chain solves against the state gravity left, moves both of its
+// bodies, and the next solves against a scene the first has already displaced.
+// Its correction is then the last word, and the residual is whatever the earlier
+// chains wanted and did not get.
+//
+// That residual is not small and it does not wash out. A weight hung from a link
+// by two chains - one pair of bodies, two constraints, which is what any bridle
+// or swing seat is - leaned 18 cm off centre with its link tilted 18 degrees, in
+// a rig symmetrical to the millimetre. Swapping the two chains' order in the
+// level file mirrored the result exactly, digit for digit, which is the whole
+// diagnosis: nothing about the geometry chose that side, the array order did.
+// Worse, the residual is re-injected every frame, so the rig also rang at
+// 0.085 m/s for ever instead of settling.
+//
+// Sweeping the set repeatedly is the standard answer (this is what iteration
+// count is FOR in every impulse or PBD solver), and the direction alternates so
+// the order bias of one sweep is the mirror of the next's rather than the same
+// one compounded. The bias stays order-driven at any sweep count - swapping the
+// file's chains still mirrors the answer - but four sweeps leave it the size of a
+// solver residual (16 mm, 0.9 deg) instead of the size of the level, and the rig
+// settles instead of ringing.
+//
+// `beginFrame` stays outside the loop: it releases the blocked-length lease, and
+// a lease released once per PASS would be handed back K times faster than the
+// geometry that bought it can re-earn it.
+export function stepSceneChains(chains: readonly SceneChain[], delta: number): void {
+  if (chains.length === 0) return;
+  for (const chain of chains) chain.beginFrame(delta);
+  for (let sweep = 0; sweep < CHAIN_SWEEPS; sweep++) {
+    if (sweep % 2 === 0) {
+      for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
+    } else {
+      for (let i = chains.length - 1; i >= 0; i--) chains[i]!.solve(delta);
+    }
   }
 }
 

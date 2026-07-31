@@ -467,9 +467,22 @@ export class Rope {
     }
   }
 
+  // One frame of the rope: open the frame if the caller has not, then solve it
+  // once. This is what every single-pass caller wants and what they all did
+  // before the split below.
   physicsStep(bodies: PhysicsBody2D[], delta: number): void {
     if (!this.frameBegun) this.beginFrame(delta);
     this.frameBegun = false;
+    this.solvePass(bodies, delta);
+  }
+
+  // One solve pass: regenerate the path, enforce the length, credit the bodies
+  // for what it moved. Split out of `physicsStep` so a caller solving a SET of
+  // ropes can iterate the set without re-opening each rope's frame - the
+  // per-frame bookkeeping in `beginFrame` (the lease release above all) is a
+  // statement about the frame, and running it once per pass would release the
+  // lease K times over. See `stepSceneChains`.
+  solvePass(bodies: PhysicsBody2D[], delta: number): void {
     this.regenerateAndMeasure(bodies);
     const lengthError = this.calculateRopePathLength() - this.constraintLength;
     this.topologyCreditScale =
