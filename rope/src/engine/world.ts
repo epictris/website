@@ -695,6 +695,11 @@ export class World {
   // which is what removes the static/dynamic branch split rather than doubling
   // it. The O(n²) loop stays too — at this scene scale a broadphase is complexity
   // with no payoff.
+  // The constraints the last `integrate` solved. Read-only to everything but the
+  // solver; a caller that wants to know what a body touched this frame asks here
+  // rather than re-deriving contacts it would then have to keep in step.
+  frameContacts: ContactConstraint[] = [];
+
   collectContacts(): ContactConstraint[] {
     const out: ContactConstraint[] = [];
     const n = this.bodies.length;
@@ -1101,6 +1106,11 @@ export class World {
       met(c.a, c.b.surfaceFriction);
       met(c.b, c.a.surfaceFriction);
     }
+
+    // This frame's contact set, kept for callers that own a mechanic the solver
+    // deliberately does not: `BallPlayer.applyLoopHop` needs to know that the
+    // ball's mounting loop met a surface, and which way that surface faces.
+    this.frameContacts = constraints;
 
     const gripped = this.applyStaticGrip(constraints, dt);
     // The steered ball's grip, which is the only thing a circle contact still

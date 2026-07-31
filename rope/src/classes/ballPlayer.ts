@@ -9,9 +9,10 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
-import { wrapAngle } from "../engine/mathf";
+import { Mathf, wrapAngle } from "../engine/mathf";
 import { ImpermeableBody, RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
+import type { ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import type { FrameInput } from "../input/frameInput";
@@ -48,6 +49,27 @@ export class BallPlayer extends RigidBody2D {
   // circle) and the renderer so the solid loop matches the drawn one.
   static readonly LOOP_RADIUS = 2 * PX;
   static readonly LOOP_GAP = 1.5 * PX;
+  // The loop-hop: driving the mounting loop into the ground bounces the ball,
+  // and how hard is a function of the SPIN alone.
+  //
+  // Left to the contact solver it is a function of the loop's rotation phase at
+  // the instant it lands, which is the one thing the player can neither see nor
+  // aim. The solver is not wrong - the loop really is coming down at omega x r,
+  // and a spin the aim steering drives kinematically is one the solver may not
+  // take that energy out of, so all of it goes into the ball - but the *normal*
+  // component of omega x r depends on where in its arc the loop happens to be
+  // when it touches. The same roll into the same floor gave 1.7 m/s at one
+  // frame and 4.4 at another (session-1594f), which reads as the ball randomly
+  // deciding to launch.
+  //
+  // So the hop is stated outright, in the honest physical quantity: the loop's
+  // own tip speed, |omega| x the loop arm, with the phase taken out. Winding up
+  // harder hops higher, the same wind-up always hops the same, and both ends are
+  // clamped - the floor so a hop is worth doing at all, the ceiling so a ball
+  // spun up to 40 rad/s does not fire itself off the level.
+  static readonly LOOP_HOP_MIN_SPIN = 8;
+  static readonly LOOP_HOP_MIN_SPEED = 1.2;
+  static readonly LOOP_HOP_MAX_SPEED = 3.5;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
   // level's 0.12 m radius, ρ·(4/3)πr³ ≈ 52 kg. That number is the feel - a
   // wrecking ball, sluggish under aim-kicks and chain tugs and hard for
@@ -75,6 +97,12 @@ export class BallPlayer extends RigidBody2D {
   // the hook's attach callback can regenerate the chain's wrap path (the hook
   // fires mid-integration, with no bodies list in hand).
   sceneBodies: PhysicsBody2D[] = [];
+  // Was the mounting loop in contact with something last frame? The loop-hop is
+  // edge-triggered on this (see `applyLoopHop`).
+  private loopTouching = false;
+  // The loop is mounted second, so it is shape 1. Named because a contact's
+  // `shapeA` is how the hop tells a loop strike from the ball's own rim.
+  static readonly LOOP_SHAPE_INDEX = 1;
 
   constructor(radius = 0.08) {
     super();
@@ -114,6 +142,49 @@ export class BallPlayer extends RigidBody2D {
   get radius(): number {
     const shape = this.primaryShape().shape;
     return shape.kind === "circle" ? shape.radius : 0;
+  }
+
+  // Distance from the ball's centre to the loop ring's centre — the arm the
+  // loop swings on, and so the radius its tip speed is measured at.
+  get loopArm(): number {
+    return this.radius + BallPlayer.LOOP_GAP;
+  }
+
+  // The loop striking a surface, resolved as a mechanic rather than left to the
+  // contact solve (see LOOP_HOP_MIN_SPIN). Called once per frame, after the
+  // contacts and the depenetration sweep, so what it writes is the last word on
+  // the frame's velocity — as `applySteeringGrip` is for the roll.
+  //
+  // Edge-triggered on the loop meeting something: a ball sitting on its loop
+  // with the aim spinning is in contact every frame, and hopping it every frame
+  // is a motor rather than a move.
+  applyLoopHop(contacts: readonly ContactConstraint[]): void {
+    let best: ContactConstraint | null = null;
+    for (const c of contacts) {
+      // The loop is this body's second shape, and only as `a`: `a` is always the
+      // dynamic body of the pair, which for the ball against scenery is the ball.
+      if (c.a !== this || c.shapeA !== BallPlayer.LOOP_SHAPE_INDEX) continue;
+      // A speculative contact carries no impulse and is not something met.
+      if (c.normalImpulse <= 0) continue;
+      if (best === null || c.normalImpulse > best.normalImpulse) best = c;
+    }
+    const touching = best !== null;
+    const wasTouching = this.loopTouching;
+    this.loopTouching = touching;
+    if (!touching || wasTouching) return;
+    const spin = Math.abs(this.angularVelocity);
+    if (spin < BallPlayer.LOOP_HOP_MIN_SPIN) return;
+    const hop = Mathf.clamp(
+      spin * this.loopArm,
+      BallPlayer.LOOP_HOP_MIN_SPEED,
+      BallPlayer.LOOP_HOP_MAX_SPEED,
+    );
+    // The normal points out of the surface toward the ball, so this SETS the
+    // outgoing normal speed rather than adding to it: what the solver made of
+    // the loop's phase-dependent approach is exactly what is being replaced.
+    const normal = best!.normal;
+    const along = this.linearVelocity.dot(normal);
+    this.linearVelocity = this.linearVelocity.add(normal.mul(hop - along));
   }
 
   get chainAnchored(): boolean {

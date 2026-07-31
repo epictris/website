@@ -22,6 +22,7 @@ import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { ContactAudit, World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
+import { BallPlayer } from "../classes/ballPlayer";
 import { RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
 
 const DT = 1 / 60;
@@ -693,6 +694,59 @@ function casePenetration(sims: Sim[]): ContactResult {
   return ok("penetration — no scene stands more than 5 mm inside geometry", passed, details);
 }
 
+// ---------------------------------------------------------------------------
+// loop-hop: driving the mounting loop into the ground must hop the ball by the
+// same amount every time, for the same spin.
+//
+// The loop is a second collision circle offset on the ball's rim, so unlike the
+// ball's own surface its contact point carries a NORMAL component of omega x r -
+// and the spin is kinematic, so the solver may not take that energy back out of
+// it. Every bit of it therefore lands in the ball's linear velocity, sized by
+// where in its arc the loop happened to be at the instant it touched. That is
+// the mechanic the player likes (hit the loop into the ground and bounce) with
+// its magnitude set by the one variable they cannot see: the same roll into the
+// same floor launched at 1.7 m/s once and 4.4 m/s a few hundred frames later
+// (session-1594f).
+//
+// `BallPlayer.applyLoopHop` states it instead, as the loop's own tip speed, and
+// this case is the statement that the phase no longer reaches it: the same drop
+// at eight different starting rotations must hop within a couple of centimetres
+// per second of each other. The hop must also still HAPPEN - a fix that made
+// every launch identically zero would pass a spread check on its own.
+// ---------------------------------------------------------------------------
+function caseLoopHop(sims: Sim[]): ContactResult {
+  const SPIN = 18;
+  const PHASES = 8;
+  const launches: number[] = [];
+  for (let i = 0; i < PHASES; i++) {
+    const sim = new Sim(`loop-hop-${i}`);
+    sims.push(sim);
+    floor(sim);
+    const ball = new BallPlayer(0.12);
+    ball.globalPosition = new Vec2(0, -2.3);
+    ball.globalRotation = (i * 2 * Math.PI) / PHASES;
+    sim.world.add(ball);
+    let launch = 0;
+    sim.step(90, () => {
+      // What aim steering does every frame: drive the spin kinematically.
+      ball.kinematicRotation = true;
+      ball.angularVelocity = SPIN;
+      ball.applyLoopHop(sim.world.frameContacts);
+      launch = Math.max(launch, -ball.linearVelocity.y);
+    });
+    launches.push(launch);
+  }
+  const lo = Math.min(...launches);
+  const hi = Math.max(...launches);
+  const spread = hi - lo;
+  const good = spread < 0.05 && lo > BallPlayer.LOOP_HOP_MIN_SPEED;
+  return ok("loop-hop — the same spin hops the same, whatever the loop's phase", good, [
+    `${good ? "ok  " : "BAD "} ${PHASES} phases at ${SPIN} rad/s launched ${lo.toFixed(3)}` +
+      `..${hi.toFixed(3)} m/s (spread ${(spread * 100).toFixed(1)}cm/s, want <5, all >` +
+      `${BallPlayer.LOOP_HOP_MIN_SPEED})`,
+  ]);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -710,6 +764,7 @@ export function runContactCases(): ContactResult[] {
     caseMomentum(sims),
     caseSpinDrive(sims),
     caseRollDrive(sims),
+    caseLoopHop(sims),
   ];
   ContactAudit.enabled = false;
   results.push(caseImpulsePairing());

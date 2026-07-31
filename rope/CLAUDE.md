@@ -320,6 +320,40 @@ Cancelling it restores the rule the wall case already obeyed: once resting, a
 surface gravity does not press the ball into gives no traction, so a spinning
 ball cannot climb a wall — or drive along a ceiling.
 A constraint is not a force here and may not act like one.
+
+### The loop-hop
+
+Driving the mounting loop into the ground bounces the ball, and that is a move
+the player makes on purpose: roll, wind up, and hit the loop into the floor.
+Left to the contact solver its size is set by the loop's rotation **phase** at
+the instant it lands, which is the one variable the player can neither see nor
+aim.
+The loop is a second collision circle offset on the rim, so unlike the ball's own
+surface its contact point carries a *normal* component of ω × r; the spin is
+kinematic, so the solver may not take that energy back out of it, and all of it
+lands in the ball's linear velocity.
+The same roll into the same floor launched at 1.7 m/s once and 4.4 m/s a few
+hundred frames later (`session-1594f`), which reads as the ball randomly deciding
+to fire itself off the level.
+`BallPlayer.applyLoopHop` states the move instead, in the honest physical
+quantity with the phase taken out: the loop's own **tip speed**, `|ω| × loopArm`,
+clamped at both ends, applied by *setting* the outgoing normal speed rather than
+adding to it - what the solve made of the phase is exactly what is being
+replaced.
+Winding up harder hops higher, the same wind-up always hops the same, and below
+`LOOP_HOP_MIN_SPIN` a loop touch is just a touch, so a slow roll and a ball
+resting on its loop stay quiet.
+It is edge-triggered on the loop meeting something, because a ball sitting on its
+loop with the aim spinning is in contact every frame and hopping it every frame
+is a motor rather than a move.
+It is written after the contacts and the depenetration sweep, for the same reason
+`applySteeringGrip` is: a control input with no force behind it cannot be
+expressed as an impulse the solver would cap.
+`cli contacts` `loop-hop` is the detector - the same drop at eight starting
+rotations, which spread 1.25 m/s before and are identical now - and it asserts
+the hop still *happens*, since a fix that made every launch zero would pass a
+spread check on its own.
+
 ### The coil
 
 Rope wound onto the circular body the rope *starts* on — the ball winding its own
@@ -488,7 +522,7 @@ bun run test                                  # THE suite: typecheck + every che
 bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
-bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum)
+bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-hop)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
