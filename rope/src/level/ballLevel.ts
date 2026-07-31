@@ -148,13 +148,14 @@ export class BallLevel {
     }
     this.bodies = this.bodies.filter((b) => !b.removed);
 
+    const ballVelocityBeforeContacts = this.ball.linearVelocity;
     this.world.integrate(delta);
 
     // Driving the mounting loop into a surface hops the ball, at a speed set by
     // the spin and nothing else. It is written here, after the contacts and the
     // depenetration sweep, because it REPLACES what the solve made of the loop's
     // landing — a phase-dependent launch the player cannot aim (session-1594f).
-    this.ball.applyLoopHop(this.world.frameContacts);
+    this.ball.applyLoopHop(this.world.frameContacts, ballVelocityBeforeContacts);
     PhaseTrace.mark("loop-hop", this.world);
 
     // Scene chains solve straight after integration, before the ball's own chain

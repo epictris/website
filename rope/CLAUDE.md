@@ -349,10 +349,29 @@ is a motor rather than a move.
 It is written after the contacts and the depenetration sweep, for the same reason
 `applySteeringGrip` is: a control input with no force behind it cannot be
 expressed as an impulse the solver would cap.
-`cli contacts` `loop-hop` is the detector - the same drop at eight starting
-rotations, which spread 1.25 m/s before and are identical now - and it asserts
-the hop still *happens*, since a fix that made every launch zero would pass a
-spread check on its own.
+Stating the move is only half of it, and the half that does nothing on its own:
+the solve's launch fires at **any** spin, so writing the designed hop over it
+above a threshold leaves every slower landing exactly as random as before - which
+is what raising `LOOP_HOP_MIN_SPIN` to 40 turned out to do, hopping a slowly
+rolling ball as hard as ever.
+So a frame the loop is down on also has its outgoing normal speed **capped**, at
+the plain restitution bounce the ball's own linear approach was worth.
+The cap keeps `LOOP_LIFT_KEEP` (0.4) of the solve's answer rather than all of it,
+because the loop rotating under the ball really does lift it: cap it to nothing
+and the loop is pinned in the ground, its velocity answer removed every frame
+while the positional sweep pushes the ball back out - a body corrected in
+position and paid nothing for it, which the chain reads as a blocked correction.
+A wound-up ball resting on the geometry its chain is anchored to then stored that
+error until the winch spent it in one frame (`rope-solve-kick` at 4.7 m/s in
+`session-265f`, against a corpus that otherwise peaks at 2.1).
+The corpus is green across 0.35-0.5 and red at 0.25 and below, so the number is
+the middle of a region rather than a lucky value.
+`cli contacts` `loop-hop` is the detector, and it has two halves for the two
+failures: the same drop at eight starting rotations, which spread 1.25 m/s before
+and are identical now, and the same drop *under* the threshold, which must not
+hop at all (2.18 m/s before, 0.87 now).
+It also asserts the hop still *happens*, since a fix that made every launch zero
+would pass a spread check on its own.
 
 ### The coil
 

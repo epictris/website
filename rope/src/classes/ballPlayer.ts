@@ -67,7 +67,25 @@ export class BallPlayer extends RigidBody2D {
   // harder hops higher, the same wind-up always hops the same, and both ends are
   // clamped - the floor so a hop is worth doing at all, the ceiling so a ball
   // spun up to 40 rad/s does not fire itself off the level.
-  static readonly LOOP_HOP_MIN_SPIN = 8;
+  static readonly LOOP_HOP_MIN_SPIN = 40;
+  // How much of the solve's own answer to a loop landing survives the cap on a
+  // frame that is not a hop.
+  //
+  // Not zero, and that is not a tuning preference. The loop rotating under the
+  // ball really does lift it, and a cap that removes all of that pins the loop
+  // in the ground: the solve's velocity answer is taken away every frame while
+  // the positional sweep quietly pushes the ball back out, which is a body being
+  // corrected in position and paid nothing for it. The chain reads exactly that
+  // as a blocked correction, and a wound-up ball resting on the geometry its
+  // chain is anchored to then stores the error until the winch spends it in one
+  // frame - `rope-solve-kick` at 4.7 m/s in session-265f, against a corpus that
+  // otherwise peaks at 2.1.
+  //
+  // Keeping 0.4 of it leaves the ball riding over its own loop and removes the
+  // surplus the phase-dependent impulse pays on top. The corpus is green across
+  // 0.35-0.5 and red at 0.25 and below, so this is the middle of a region rather
+  // than a lucky value.
+  static readonly LOOP_LIFT_KEEP = 0.4;
   static readonly LOOP_HOP_MIN_SPEED = 1.2;
   static readonly LOOP_HOP_MAX_SPEED = 3.5;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
@@ -155,10 +173,25 @@ export class BallPlayer extends RigidBody2D {
   // contacts and the depenetration sweep, so what it writes is the last word on
   // the frame's velocity — as `applySteeringGrip` is for the roll.
   //
-  // Edge-triggered on the loop meeting something: a ball sitting on its loop
-  // with the aim spinning is in contact every frame, and hopping it every frame
-  // is a motor rather than a move.
-  applyLoopHop(contacts: readonly ContactConstraint[]): void {
+  // It does two things, and the second is the one without which raising the
+  // threshold does nothing. The solve's own answer to a loop landing is a launch
+  // sized by the loop's rotation phase, and it fires at ANY spin: the loop comes
+  // down at omega x r, the ball's spin is kinematic so the impulse cannot be
+  // taken out of it, and all of it lands in the ball's linear velocity. So a
+  // frame the loop is in contact on has its outgoing normal speed CAPPED at what
+  // the ball's own linear approach could bounce to — the plain restitution the
+  // ball would have got had it landed on its rim. Only then, and only on the
+  // frame the loop first meets something and only above the spin threshold, is
+  // the designed hop written over it.
+  //
+  // `velocityBefore` is the ball's velocity before the contacts ran, which is
+  // what makes the cap a statement about the ball's own motion rather than about
+  // what the solve made of the spin.
+  //
+  // Edge-triggered, because a ball sitting on its loop with the aim spinning is
+  // in contact every frame, and hopping it every frame is a motor rather than a
+  // move. The cap is not: it applies for as long as the loop is down.
+  applyLoopHop(contacts: readonly ContactConstraint[], velocityBefore: Vec2): void {
     let best: ContactConstraint | null = null;
     for (const c of contacts) {
       // The loop is this body's second shape, and only as `a`: `a` is always the
@@ -168,23 +201,35 @@ export class BallPlayer extends RigidBody2D {
       if (c.normalImpulse <= 0) continue;
       if (best === null || c.normalImpulse > best.normalImpulse) best = c;
     }
-    const touching = best !== null;
     const wasTouching = this.loopTouching;
-    this.loopTouching = touching;
-    if (!touching || wasTouching) return;
+    this.loopTouching = best !== null;
+    if (best === null) return;
+
+    // The normal points out of the surface toward the ball, so a positive
+    // component along it is the ball leaving.
+    const normal = best.normal;
+    const approach = Math.max(0, -velocityBefore.dot(normal));
+    const solved = Math.max(0, this.linearVelocity.dot(normal));
+    let allowed = Math.max(this.restitution * approach, BallPlayer.LOOP_LIFT_KEEP * solved);
+
     const spin = Math.abs(this.angularVelocity);
-    if (spin < BallPlayer.LOOP_HOP_MIN_SPIN) return;
-    const hop = Mathf.clamp(
-      spin * this.loopArm,
-      BallPlayer.LOOP_HOP_MIN_SPEED,
-      BallPlayer.LOOP_HOP_MAX_SPEED,
-    );
-    // The normal points out of the surface toward the ball, so this SETS the
-    // outgoing normal speed rather than adding to it: what the solver made of
-    // the loop's phase-dependent approach is exactly what is being replaced.
-    const normal = best!.normal;
+    const hopping = !wasTouching && spin >= BallPlayer.LOOP_HOP_MIN_SPIN;
+    if (hopping) {
+      allowed = Mathf.clamp(
+        spin * this.loopArm,
+        BallPlayer.LOOP_HOP_MIN_SPEED,
+        BallPlayer.LOOP_HOP_MAX_SPEED,
+      );
+    }
     const along = this.linearVelocity.dot(normal);
-    this.linearVelocity = this.linearVelocity.add(normal.mul(hop - along));
+    // The hop SETS the outgoing speed — the whole point is that it does not
+    // depend on what the solve made of the phase, which means neither the size
+    // it landed on nor the direction. Every other frame the loop is down, this
+    // only ever takes speed away: what the solve did to keep the loop out of the
+    // ground stays, what it paid the ball for the loop's phase does not.
+    if (hopping || along > allowed) {
+      this.linearVelocity = this.linearVelocity.add(normal.mul(allowed - along));
+    }
   }
 
   get chainAnchored(): boolean {

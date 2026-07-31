@@ -715,35 +715,58 @@ function casePenetration(sims: Sim[]): ContactResult {
 // every launch identically zero would pass a spread check on its own.
 // ---------------------------------------------------------------------------
 function caseLoopHop(sims: Sim[]): ContactResult {
-  const SPIN = 18;
+  // Above the threshold by half again, so the case follows the tuning constant
+  // rather than pinning a number the feel is allowed to move.
+  const FAST = BallPlayer.LOOP_HOP_MIN_SPIN * 1.5;
+  // Below it, and this half is the one the report was about: a ball rolling
+  // slowly must not hop at all, however its loop lands.
+  const SLOW = BallPlayer.LOOP_HOP_MIN_SPIN * 0.5;
   const PHASES = 8;
-  const launches: number[] = [];
-  for (let i = 0; i < PHASES; i++) {
-    const sim = new Sim(`loop-hop-${i}`);
-    sims.push(sim);
-    floor(sim);
-    const ball = new BallPlayer(0.12);
-    ball.globalPosition = new Vec2(0, -2.3);
-    ball.globalRotation = (i * 2 * Math.PI) / PHASES;
-    sim.world.add(ball);
-    let launch = 0;
-    sim.step(90, () => {
-      // What aim steering does every frame: drive the spin kinematically.
-      ball.kinematicRotation = true;
-      ball.angularVelocity = SPIN;
-      ball.applyLoopHop(sim.world.frameContacts);
-      launch = Math.max(launch, -ball.linearVelocity.y);
-    });
-    launches.push(launch);
-  }
-  const lo = Math.min(...launches);
-  const hi = Math.max(...launches);
-  const spread = hi - lo;
-  const good = spread < 0.05 && lo > BallPlayer.LOOP_HOP_MIN_SPEED;
-  return ok("loop-hop — the same spin hops the same, whatever the loop's phase", good, [
-    `${good ? "ok  " : "BAD "} ${PHASES} phases at ${SPIN} rad/s launched ${lo.toFixed(3)}` +
-      `..${hi.toFixed(3)} m/s (spread ${(spread * 100).toFixed(1)}cm/s, want <5, all >` +
-      `${BallPlayer.LOOP_HOP_MIN_SPEED})`,
+
+  const launches = (spin: number, tag: string): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < PHASES; i++) {
+      const sim = new Sim(`loop-hop-${tag}-${i}`);
+      sims.push(sim);
+      floor(sim);
+      const ball = new BallPlayer(0.12);
+      ball.globalPosition = new Vec2(0, -2.3);
+      ball.globalRotation = (i * 2 * Math.PI) / PHASES;
+      sim.world.add(ball);
+      // The ball's velocity as the previous frame left it — what the hop measures
+      // its cap against, standing in for BallLevel's pre-contact snapshot.
+      let before = ball.linearVelocity;
+      let launch = 0;
+      sim.step(90, () => {
+        // What aim steering does every frame: drive the spin kinematically.
+        ball.kinematicRotation = true;
+        ball.angularVelocity = spin;
+        ball.applyLoopHop(sim.world.frameContacts, before);
+        before = ball.linearVelocity;
+        launch = Math.max(launch, -ball.linearVelocity.y);
+      });
+      out.push(launch);
+    }
+    return out;
+  };
+
+  const fast = launches(FAST, "fast");
+  const slow = launches(SLOW, "slow");
+  const fastLo = Math.min(...fast);
+  const fastHi = Math.max(...fast);
+  const slowHi = Math.max(...slow);
+  // The drop itself bounces a little - the ball is 0.15 elastic - so the bar for
+  // "did not hop" is the restitution bounce, not zero.
+  const NO_HOP = 1.0;
+  const good =
+    fastHi - fastLo < 0.05 && fastLo > BallPlayer.LOOP_HOP_MIN_SPEED && slowHi < NO_HOP;
+  return ok("loop-hop — the same spin hops the same, and a slow one does not hop", good, [
+    `${fastHi - fastLo < 0.05 && fastLo > BallPlayer.LOOP_HOP_MIN_SPEED ? "ok  " : "BAD "} ` +
+      `${PHASES} phases at ${FAST.toFixed(0)} rad/s launched ${fastLo.toFixed(3)}..` +
+      `${fastHi.toFixed(3)} m/s (spread ${((fastHi - fastLo) * 100).toFixed(1)}cm/s, want <5, ` +
+      `all >${BallPlayer.LOOP_HOP_MIN_SPEED})`,
+    `${slowHi < NO_HOP ? "ok  " : "BAD "} the same drop at ${SLOW.toFixed(0)} rad/s, under the ` +
+      `hop threshold, peaked at ${slowHi.toFixed(3)} m/s (want <${NO_HOP})`,
   ]);
 }
 
