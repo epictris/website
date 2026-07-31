@@ -70,6 +70,9 @@ export class BallLevel {
   // payment, which is the one failure `rope-grew` cannot see (it measures growth,
   // and a lease held at a constant value grows by nothing — session-1080f).
   chainLeaseHeldFrames = 0;
+  // Speed the frame's own winding entitles the solve to (see the assignment in
+  // `physicsProcess`); zero on a frame with no chain.
+  chainWinchSpeedBudget = 0;
   private endWasFixed = false;
 
   // Length below which a stall is float noise rather than a blocked correction.
@@ -237,6 +240,11 @@ export class BallLevel {
         overLengthBeforeSolve > 0
           ? Mathf.clamp(spinLength / overLengthBeforeSolve, 0, 1)
           : 0;
+      // What winding this frame's chain onto the ball is *worth* as a speed: the
+      // winch has to haul the ball that far towards its anchor to pay for it, so
+      // it is the floor under how big the solve's correction can honestly be.
+      // The kick invariant measures against it (see `rope-solve-kick`).
+      this.chainWinchSpeedBudget = spinLength / delta;
       // The solve moves *every* body on the chain's path, so it settles the
       // ball's spin partly by hauling the far end. Hauling the ball is fine —
       // that is the winch, and it is how winding chain onto yourself pulls you
@@ -374,6 +382,7 @@ export class BallLevel {
       this.chainAnchorLength = null;
       this.chainStallFrames = 0;
       this.chainLeaseHeldFrames = 0;
+      this.chainWinchSpeedBudget = 0;
     }
     this.endWasFixed = endFixed;
 

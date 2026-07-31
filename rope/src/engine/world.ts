@@ -1507,7 +1507,24 @@ export class World {
       // The steered ball anchors its own CENTRE rather than a contact point: the
       // grip drives the centre so the contact is stationary, so the centre is
       // what the roll advances and what the creep has to be measured against.
-      const held = body.stickBody === other ? body.stickAnchorWorld() : null;
+      // Continue the anchor only if the grip actually held LAST frame. The
+      // anchor survives a few ungripped frames so a flickering grip does not
+      // re-seed itself downhill every eighth frame (`STICK_RELEASE_FRAMES`), and
+      // for a crate holding a slope that is right: it drifts sub-millimetre
+      // while the grip is off. A steered ball does not drift, it ROLLS - metres
+      // per second - and the anchor stands still while it does, so resuming onto
+      // the held anchor yanks the whole lapse out in one frame. Five ungripped
+      // frames at 2.4 m/s put the anchor 21.7 cm behind the ball, and the grip
+      // dragged it back there with no velocity change to show for it: a visible
+      // teleport, backwards, against its own motion (`session-497f` f376).
+      //
+      // Re-seeding costs nothing here, because this anchor is not holding a
+      // position - it advances by the intended roll every frame and exists only
+      // to remove the ONE frame of gravity creep integration slid in underneath
+      // it. Losing that for the frame a grip resumes on is a fraction of a
+      // millimetre.
+      const continuous = body.stickBody === other && body.ungrippedFrames === 0;
+      const held = continuous ? body.stickAnchorWorld() : null;
       body.setStickAnchor(other, held === null ? body.globalPosition : held.add(rollTan.mul(dt)));
       const d = body.globalPosition.sub(body.stickAnchorWorld()!);
       body.globalPosition = body.globalPosition.sub(d.sub(normal.mul(d.dot(normal))));

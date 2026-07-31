@@ -770,6 +770,67 @@ function caseLoopHop(sims: Sim[]): ContactResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// grip-reseed: a steered ball that loses its footing and gets it back must not
+// be dragged back to where it lost it.
+//
+// The steered ball's grip pins its centre to an anchor that advances by the roll
+// it intended, which is what removes the frame of gravity creep integration
+// slides in underneath it. That anchor survives a few ungripped frames on
+// purpose (`STICK_RELEASE_FRAMES`), because the grip flickers and re-seeding on
+// every miss walks a body downhill. For a crate holding a slope that is right -
+// it drifts sub-millimetre while the grip is off. A rolling ball does not drift,
+// it TRAVELS, and the anchor stands still while it does.
+//
+// So resuming onto a held anchor yanks the whole lapse out in one frame, with no
+// velocity change to show for it: five ungripped frames at 2.4 m/s put the
+// anchor 21.7 cm behind and the ball was dragged back there, backwards, through
+// its own direction of travel (`session-497f` f376 - which reads on screen as
+// the player teleporting).
+//
+// The scene is the cheapest way to make the grip lapse and return: a floor with
+// a gap in it, and a ball rolled across.
+// ---------------------------------------------------------------------------
+function caseGripReseed(sims: Sim[]): ContactResult {
+  const sim = new Sim("grip-reseed");
+  sims.push(sim);
+  // Two slabs with a 15 cm gap, tops level at y = 0. The gap is small on
+  // purpose: the lapse has to be SHORTER than `STICK_RELEASE_FRAMES`, or the
+  // anchor is dropped on its own and there is nothing stale to snap back to.
+  sim.addStatic(rectShape(6, 1), new Vec2(-3.075, 0.5));
+  sim.addStatic(rectShape(6, 1), new Vec2(3.075, 0.5));
+  const ball = new BallPlayer(0.12);
+  ball.globalPosition = new Vec2(-2, -0.12);
+  sim.world.add(ball);
+  ball.linearVelocity = new Vec2(3, 0);
+
+  let worstBack = 0;
+  let worstFrame = 0;
+  let prev = ball.globalPosition;
+  sim.step(240, (n) => {
+    // Steered: the spin is driven every frame and the ball rolls on it.
+    ball.kinematicRotation = true;
+    ball.angularVelocity = 25;
+    const moved = ball.globalPosition.x - prev.x;
+    // Backwards travel while the ball is going forwards is the yank. Nothing
+    // else in this scene can produce it: the floor is flat and the ball is only
+    // ever rolling right.
+    if (ball.linearVelocity.x > 0 && -moved > worstBack) {
+      worstBack = -moved;
+      worstFrame = n;
+    }
+    prev = ball.globalPosition;
+  });
+
+  const good = worstBack < 0.005 && ball.globalPosition.x > 0;
+  return ok("grip-reseed — a ball that re-grips is not dragged back to where it slipped", good, [
+    `${worstBack < 0.005 ? "ok  " : "BAD "} worst backwards step ${(worstBack * 1000).toFixed(1)}mm` +
+      ` @f${worstFrame} (want <5mm)`,
+    `${ball.globalPosition.x > 0 ? "ok  " : "BAD "} the ball crossed the gap, ending at x=` +
+      `${ball.globalPosition.x.toFixed(2)} (want >0)`,
+  ]);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -788,6 +849,7 @@ export function runContactCases(): ContactResult[] {
     caseSpinDrive(sims),
     caseRollDrive(sims),
     caseLoopHop(sims),
+    caseGripReseed(sims),
   ];
   ContactAudit.enabled = false;
   results.push(caseImpulsePairing());

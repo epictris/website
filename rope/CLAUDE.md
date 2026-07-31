@@ -321,6 +321,27 @@ surface gravity does not press the ball into gives no traction, so a spinning
 ball cannot climb a wall — or drive along a ceiling.
 A constraint is not a force here and may not act like one.
 
+### The steered ball's grip
+
+`applySteeringGrip` pins the rolling ball's centre to an anchor that **advances
+by the roll it intended**, which is how the one frame of gravity creep the
+integrator slides in underneath it is removed without touching the roll itself.
+That anchor survives a few ungripped frames (`STICK_RELEASE_FRAMES`) because the
+grip flickers, and for a crate holding a slope that is right - it drifts
+sub-millimetre while the grip is off.
+A rolling ball does not drift, it **travels**, and the anchor stands still while
+it does, so resuming onto a held anchor yanks the whole lapse out in one frame.
+Five ungripped frames at 2.4 m/s put the anchor 21.7 cm behind the ball and the
+grip dragged it back there, with no velocity change to show for it: a teleport,
+backwards, through its own direction of travel (`session-497f` f376, reported as
+the player rubber-banding).
+So the anchor is continued only if the grip actually held **last** frame, and
+re-seeded otherwise, which costs nothing because this anchor holds no position -
+it advances every frame and exists only to remove that one frame of creep.
+`cli contacts` `grip-reseed` is the case: a ball rolled across a gap narrower
+than `STICK_RELEASE_FRAMES` of flight, which is the only way to make the grip
+lapse and return with the anchor still held.
+
 ### The loop-hop
 
 Driving the mounting loop into the ground bounces the ball, and that is a move
@@ -356,16 +377,18 @@ is what raising `LOOP_HOP_MIN_SPIN` to 40 turned out to do, hopping a slowly
 rolling ball as hard as ever.
 So a frame the loop is down on also has its outgoing normal speed **capped**, at
 the plain restitution bounce the ball's own linear approach was worth.
-The cap keeps `LOOP_LIFT_KEEP` (0.4) of the solve's answer rather than all of it,
-because the loop rotating under the ball really does lift it: cap it to nothing
-and the loop is pinned in the ground, its velocity answer removed every frame
-while the positional sweep pushes the ball back out - a body corrected in
-position and paid nothing for it, which the chain reads as a blocked correction.
-A wound-up ball resting on the geometry its chain is anchored to then stored that
-error until the winch spent it in one frame (`rope-solve-kick` at 4.7 m/s in
-`session-265f`, against a corpus that otherwise peaks at 2.1).
-The corpus is green across 0.35-0.5 and red at 0.25 and below, so the number is
-the middle of a region rather than a lucky value.
+What the cap removes is exactly the **spin's** own contribution at that contact -
+`(ω × r)·n`, scaled by `1 + restitution` because that is what the solve does with
+an approach - and not a fraction of the answer.
+The difference is the violent cases: a ball slammed into the floor at 4 m/s is
+owed its full response, and a blanket cap takes 60% of it away, which leaves the
+ball on the ground where the chain then hauls it (`rope-solve-kick` at 5.1 m/s in
+`session-477f`).
+Capping to *nothing* is worse again: the loop rotating under the ball really does
+lift it, so the loop ends up pinned in the ground, its velocity answer removed
+every frame while the positional sweep pushes the ball back out - a body
+corrected in position and paid nothing for it, which the chain reads as a blocked
+correction.
 `cli contacts` `loop-hop` is the detector, and it has two halves for the two
 failures: the same drop at eight starting rotations, which spread 1.25 m/s before
 and are identical now, and the same drop *under* the threshold, which must not
@@ -585,8 +608,15 @@ anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame) and `chain-clip` (a span's interior deep
 inside static geometry).
 `rope-solve-kick` exists because `runaway-speed` is a 1000 m/s ceiling and so
-never saw a 96 m/s one-frame launch; the whole ball corpus peaks at 2.1 m/s of
-gain in a frame, so 4 is well clear of real play. It is the general form of
+never saw a 96 m/s one-frame launch.
+It is measured against what the frame's own **winding** entitles the solve to:
+winding chain onto the ball shortens the free span by `|ω|` × the spool rate and
+the winch pays for that by hauling the ball in, so at 41 rad/s on the ball's own
+rim the chain legitimately reels in 9 cm in a frame - 5.5 m/s, and nothing to do
+with a launch (`session-265f` f139).
+A launch has no winding behind it, so subtracting the budget leaves that case
+exactly as visible while taking the mechanic out of the measurement: past the
+subtraction the whole corpus sits under 1 m/s, against a bar of 4. It is the general form of
 `rope-anchor-kick`, which only ever watched the anchoring frame.
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy

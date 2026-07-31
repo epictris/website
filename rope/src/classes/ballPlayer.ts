@@ -68,24 +68,6 @@ export class BallPlayer extends RigidBody2D {
   // clamped - the floor so a hop is worth doing at all, the ceiling so a ball
   // spun up to 40 rad/s does not fire itself off the level.
   static readonly LOOP_HOP_MIN_SPIN = 40;
-  // How much of the solve's own answer to a loop landing survives the cap on a
-  // frame that is not a hop.
-  //
-  // Not zero, and that is not a tuning preference. The loop rotating under the
-  // ball really does lift it, and a cap that removes all of that pins the loop
-  // in the ground: the solve's velocity answer is taken away every frame while
-  // the positional sweep quietly pushes the ball back out, which is a body being
-  // corrected in position and paid nothing for it. The chain reads exactly that
-  // as a blocked correction, and a wound-up ball resting on the geometry its
-  // chain is anchored to then stores the error until the winch spends it in one
-  // frame - `rope-solve-kick` at 4.7 m/s in session-265f, against a corpus that
-  // otherwise peaks at 2.1.
-  //
-  // Keeping 0.4 of it leaves the ball riding over its own loop and removes the
-  // surplus the phase-dependent impulse pays on top. The corpus is green across
-  // 0.35-0.5 and red at 0.25 and below, so this is the middle of a region rather
-  // than a lucky value.
-  static readonly LOOP_LIFT_KEEP = 0.4;
   static readonly LOOP_HOP_MIN_SPEED = 1.2;
   static readonly LOOP_HOP_MAX_SPEED = 3.5;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
@@ -210,7 +192,19 @@ export class BallPlayer extends RigidBody2D {
     const normal = best.normal;
     const approach = Math.max(0, -velocityBefore.dot(normal));
     const solved = Math.max(0, this.linearVelocity.dot(normal));
-    let allowed = Math.max(this.restitution * approach, BallPlayer.LOOP_LIFT_KEEP * solved);
+    // What the SPIN was worth at this contact, along the normal: the loop's own
+    // velocity about the ball's centre, which is the whole of what the phase
+    // contributes and the only part of the solve's answer that has no business
+    // in the ball's linear velocity. Subtracting it leaves a violent landing its
+    // full response — the ball's own approach is untouched — and takes the
+    // phase-driven surplus off a gentle one, which is the entire difference
+    // between a bounce and a launch.
+    const r = best.point.sub(this.globalPosition);
+    const spinAtPoint = new Vec2(-this.angularVelocity * r.y, this.angularVelocity * r.x);
+    // Scaled by (1 + restitution) because that is what the solve does with an
+    // approach: it cancels it and adds the bounce on top.
+    const spinNormal = Math.abs(spinAtPoint.dot(normal)) * (1 + this.restitution);
+    let allowed = Math.max(this.restitution * approach, solved - spinNormal);
 
     const spin = Math.abs(this.angularVelocity);
     const hopping = !wasTouching && spin >= BallPlayer.LOOP_HOP_MIN_SPIN;

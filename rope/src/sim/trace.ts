@@ -694,14 +694,25 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       detail: `solve added ${level.anchorKickSpeedGain.toFixed(1)} px/s as the chain anchored`,
     });
   }
-  if (
-    level.chainSolveSpeedGain !== null &&
-    level.chainSolveSpeedGain > CHAIN_SOLVE_KICK_TOLERANCE
-  ) {
+  // Measured against what the frame's own winding entitles the solve to. Winding
+  // chain onto the ball shortens the free span by |omega| x the spool rate, and
+  // the winch pays for that by hauling the ball in - so at 41 rad/s on the ball's
+  // own rim the chain legitimately reels in 9 cm in a frame, which is 5.5 m/s and
+  // nothing to do with a launch. Charging that to the same 4 m/s bar as a
+  // phantom one reports the mechanic working (`session-265f` f139, where the
+  // whole 4.5 m/s gain is covered by the winding that frame).
+  //
+  // A launch has no winding behind it - `session-1474f`'s 96 m/s came from a wrap
+  // path jumping half a metre with the ball barely turning - so subtracting the
+  // budget leaves that case exactly as visible as it was.
+  const kick = (level.chainSolveSpeedGain ?? 0) - level.chainWinchSpeedBudget;
+  if (level.chainSolveSpeedGain !== null && kick > CHAIN_SOLVE_KICK_TOLERANCE) {
     out.push({
       frame,
       kind: "rope-solve-kick",
-      detail: `chain solve added ${level.chainSolveSpeedGain.toFixed(1)} m/s in one frame`,
+      detail:
+        `chain solve added ${level.chainSolveSpeedGain.toFixed(1)} m/s in one frame, ` +
+        `${kick.toFixed(1)} of it beyond what winding paid for`,
     });
   }
   if (b.chain) {
