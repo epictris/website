@@ -98,8 +98,18 @@ export interface WindowAssert {
   maxSpeed?: number;
   // Ceiling on how far it strays from where it started the window (m).
   maxDrift?: number;
-  // Signed travel along x over the window (m) — a floor for "it rolled", a
-  // ceiling for "it did not drive itself sideways".
+  // Travel along x over the window (m). `minTravelX` is net signed
+  // displacement — a floor for "it rolled". `maxTravelX` is the WIDTH OF THE
+  // BAND the avatar stayed inside, max(x) - min(x) — a ceiling for "it did not
+  // drive itself sideways".
+  //
+  // The band, not the excursion from the window's first sample, because the
+  // scenarios this guards are periodic: a ball held under a ceiling with the aim
+  // circling settles into a limit cycle, and measuring from one arbitrary sample
+  // of it reports the phase that sample landed on as much as it reports the
+  // orbit. Two runs with the SAME amplitude scored 0.08 and 0.24 on it, so the
+  // assertion moved when the phase did and said nothing about the wandering it
+  // exists to catch (found re-deriving the ball's wind-up, session-322f).
   minTravelX?: number;
   maxTravelX?: number;
   // Ceiling on kinetic energy anywhere in the window (J) — "it is at rest".
@@ -353,8 +363,9 @@ function evaluateWindow(a: WindowAssert, stats: FrameStat[]): AssertResult {
     check(travel >= a.minTravelX, `travelX=${travel.toFixed(4)}>=${a.minTravelX}`);
   }
   if (a.maxTravelX !== undefined) {
-    const travel = Math.max(...slice.map((s) => Math.abs(s.pos.x - first.pos.x)));
-    check(travel <= a.maxTravelX, `|travelX|=${travel.toFixed(4)}<=${a.maxTravelX}`);
+    const xs = slice.map((s) => s.pos.x);
+    const travel = Math.max(...xs) - Math.min(...xs);
+    check(travel <= a.maxTravelX, `bandX=${travel.toFixed(4)}<=${a.maxTravelX}`);
   }
   if (a.maxKinetic !== undefined) {
     const worst = Math.max(...slice.map((s) => s.kinetic));

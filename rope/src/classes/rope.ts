@@ -1222,6 +1222,35 @@ export class Rope {
     const correctionDir = segment.resolveCorrectionDir();
     const centre = segment.body.globalPosition;
 
+    // A body whose rotation is driven KINEMATICALLY has no torque arm, because
+    // it does not answer to torque: its angular velocity is overwritten outright
+    // every frame by the controller that owns it (the ball's aim steering), so a
+    // rotational share of the length correction is not the rope acting on the
+    // body - it is the rope silently rewriting the pose the player asked for.
+    //
+    // Left in, it is the larger share, and it takes the wind-up with it. The
+    // torque arm at a self-wrapped attachment is the ball's own radius, so
+    // `inertia / (inertia + mass * arm^2)` leaves under a third of the
+    // correction to HAUL and spends the rest unwinding: a ball winding chain
+    // onto itself on the ground turned 0.47 rad by the aim and was turned
+    // 0.46 rad back by the solve, every frame, for ever. Two things came out of
+    // that, and they are the two this fixes:
+    //
+    //  - The wind-up stalls dead. The chain cannot shorten, the ball is never
+    //    hauled towards its anchor, and the spin the player is holding buys
+    //    nothing (session-322f: 130 frames at full aim, 0.3 mm of progress).
+    //  - The ball visibly shakes. The rotation is walked back in POSITION, so
+    //    every frame the ball is spun a quarter-radian one way and dragged back
+    //    the other - and with the spin pinned, the mounting loop parks against
+    //    the ground and grinds there, driving 3 m/s of contact impulse per frame
+    //    into a ball that is not going anywhere.
+    //
+    // Hauling is the mechanic - winding chain onto yourself is what pulls you in
+    // - and `unwindOverLength` is already the place a wind-up with nowhere left
+    // to be hauled gives the radian back, bounded to the frame's own turn so the
+    // ball stalls rather than unwinding itself. This leaves rotation to it.
+    if (segment.body instanceof RigidBody2D && segment.body.kinematicRotation) return 0;
+
     if (segment instanceof PathStart) {
       if (segment.body instanceof Player) return 0;
       const leverArm = segment.selfWrap
