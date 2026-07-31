@@ -8,7 +8,7 @@ import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
-import { World } from "../engine/world";
+import { GRAVITY, World } from "../engine/world";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
@@ -361,9 +361,40 @@ export class BallLevel {
       // resting, a surface gravity does not press the ball into gives no
       // traction, so a spinning ball cannot climb a wall — or drive along a
       // ceiling. A constraint is not a force here, and it may not act like one.
+      //
+      // It is the CHAIN's share that may not act like one, though, and only
+      // that: the ball arrives at this phase already pressing into whatever it
+      // rests on, because integrate applied gravity and the contact solve does
+      // not run again before the frame ends. Cancelling that share too is the
+      // same statement about gravity, and gravity IS a force — it is what a
+      // resting contact carries and what the Coulomb cone is sized from
+      // (`maxImpulse = mu * Pn`). Taken outright, the frame ended with no
+      // approach velocity left at all, so next frame's contact spent a normal
+      // impulse of 0.4 where a chainless one on the same slope spends 8, the
+      // friction cone collapsed with it, and a ball resting on a rigid platform
+      // accelerated down a 15 degree slope at very nearly the full tangential
+      // gravity for as long as the chain stayed anchored — 35 cm in 30 frames,
+      // against a free ball that stops in 15 (`session-291f`).
+      //
+      // So the bound is gravity's own per-frame step, not zero — and no more
+      // than the ball brought in with it, so a frame the contact solve has
+      // already answered for hands back nothing. Gravity's step is the one part
+      // of the entering approach that is provably not the chain's: the rest of
+      // it may be momentum an earlier chain solve wrote, and refusing that stays
+      // exactly as it was. A chain hauling the ball at a ceiling still gets
+      // nothing either way, because gravity there points out of the surface and
+      // both bounds are zero — which is what keeps the wall and ceiling cases
+      // (`session-537f`) as they were.
+      const gravityStep = GRAVITY.mul(this.ball.gravityScale * delta);
       for (const normal of pushedOutOf) {
         const into = this.ball.linearVelocity.dot(normal);
-        if (into < 0) this.ball.linearVelocity = this.ball.linearVelocity.sub(normal.mul(into));
+        const funded = Math.max(
+          Math.min(velocityBeforeChain.dot(normal), 0),
+          Math.min(gravityStep.dot(normal), 0),
+        );
+        if (into < funded) {
+          this.ball.linearVelocity = this.ball.linearVelocity.sub(normal.mul(into - funded));
+        }
       }
       // Cancelling the component the geometry has already refused (session-537f:
       // the ceiling drive). A delta here is traction the frame did NOT fund.
