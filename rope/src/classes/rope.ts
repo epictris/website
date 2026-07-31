@@ -220,6 +220,14 @@ export class Rope {
     return this.calculateRopePathLength() > this.constraintLength - 3 * PX;
   }
 
+  // How far over its length the rope is right now - the solve's own residual,
+  // and what a caller iterating a set of ropes measures convergence by (see
+  // `stepSceneChains`). Zero for a slack rope: the constraint is an inequality,
+  // so a rope shorter than its length is not in error, it is hanging loose.
+  get overLength(): number {
+    return Mathf.max(this.calculateRopePathLength() - this.constraintLength, 0);
+  }
+
   retract(amount = PX): void {
     // The rope may never be retracted to a negative length.
     this.maxRopeLength = Mathf.max(this.maxRopeLength - amount, 0);

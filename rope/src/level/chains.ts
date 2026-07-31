@@ -58,19 +58,41 @@ export class SceneChain {
   }
 }
 
-// How many times the chain set is swept per frame. 1 is what this was, and 1 is
-// a solver that does not converge; see `stepSceneChains` for what that cost.
-// Measured on the ball arena's two-chain bridle, worst values over a settled
-// 250-frame window:
+// How far over its length any chain may end a frame. This is the statement the
+// sweep loop below is written against, and it is what "the chain does not
+// stretch" means: 5 mm is half a pixel at PIXELS_PER_METER, i.e. under what the
+// renderer can show.
+const CHAIN_TOLERANCE = 0.005;
+
+// Sweeps the tolerance may spend getting there. A ceiling, not a target - a rig
+// that converges leaves the loop on the sweep it converges on, which for the
+// single-chain rigs that are most of every level is the first one.
 //
-//   sweeps    lean     link tilt    mean speed
-//        1    184 mm     18.45 deg     0.085 m/s
-//        2     32 mm      2.28 deg     0.025
-//        4     16 mm      0.94 deg     0.0050
-//        8     16 mm      0.97 deg     0.0059
+// Measured on the ball arena's hanging weight (a link on one chain, a 476 kg
+// slab on two more), worst over-length over a settled 300-frame window, and the
+// wall clock for 900 frames of all three chains:
 //
-// 8 buys nothing over 4, so this is the knee and not a budget.
-const CHAIN_SWEEPS = 4;
+//   sweeps   over-length   cost
+//        1       125 mm      -
+//        4        73 mm     84 ms
+//       16        22 mm    125 ms
+//       32        11 mm    208 ms
+//       64       5.2 mm    394 ms
+//      128       2.2 mm    786 ms
+//
+// It halves per doubling and does not stall, so the cap is a straight choice of
+// how much to spend: 64 reaches the tolerance on that rig (4.99 mm) for 0.55 ms
+// a frame, against a 16.7 ms budget.
+//
+// The cap and not the tolerance is therefore what a hard rig gets, and it is
+// meant to be: convergence rate falls with the chains' angle, because a shallow
+// V carries a far bigger tension for the same weight. `cli contacts`
+// `chain-order` is one at 14 degrees off horizontal, and it wants ~200 sweeps
+// for 5 mm - 1.7 ms a frame for a piece of scenery. It gets 64 and ends 15 mm
+// over, against 191 mm at one sweep. Authoring the chains steeper is worth more
+// there than any cap this side of sane, and a rig that will not converge is
+// bounded rather than silently expensive.
+const MAX_CHAIN_SWEEPS = 64;
 
 // One frame of every scene chain, as ONE system rather than as a list of
 // independent ropes.
@@ -95,22 +117,45 @@ const CHAIN_SWEEPS = 4;
 // count is FOR in every impulse or PBD solver), and the direction alternates so
 // the order bias of one sweep is the mirror of the next's rather than the same
 // one compounded. The bias stays order-driven at any sweep count - swapping the
-// file's chains still mirrors the answer - but four sweeps leave it the size of a
-// solver residual (16 mm, 0.9 deg) instead of the size of the level, and the rig
+// file's chains still mirrors the answer - but a converged set leaves it the
+// size of a solver residual rather than the size of the level, and the rig
 // settles instead of ringing.
 //
+// The same residual is what the chains look like they are made of. Each solve
+// pins its own chain to exactly its length (`relaxationFactor` is 1, and a lone
+// chain measures 0.00 mm of stretch under any load at all), but the chain solved
+// after it moves the bodies they share and stretches the first one back out. On
+// the ball arena's hanging weight that was 73 mm on a 1.03 m chain - 7%, read
+// from the game as the chain being made of elastic. It is not: it is the set
+// being left unconverged, and it does not care how heavy the weight is (the same
+// rig at 4x the mass stretches by the same 72.72 mm, since a PBD position
+// correction is written in mass ratios).
+//
+// So the loop runs to the RESIDUAL rather than to a count: sweep until no chain
+// is more than `CHAIN_TOLERANCE` over its length, up to `MAX_CHAIN_SWEEPS`. What
+// that buys over a fixed count is both ends at once - the single-chain rigs that
+// are most of every level converge on the first sweep and pay for one, and a
+// coupled rig spends what it actually needs instead of what looked reasonable
+// when the constant was written.
+//
 // `beginFrame` stays outside the loop: it releases the blocked-length lease, and
-// a lease released once per PASS would be handed back K times faster than the
-// geometry that bought it can re-earn it.
+// a lease released once per PASS would be handed back a sweep's worth faster
+// than the geometry that bought it can re-earn it.
 export function stepSceneChains(chains: readonly SceneChain[], delta: number): void {
   if (chains.length === 0) return;
   for (const chain of chains) chain.beginFrame(delta);
-  for (let sweep = 0; sweep < CHAIN_SWEEPS; sweep++) {
+  for (let sweep = 0; sweep < MAX_CHAIN_SWEEPS; sweep++) {
     if (sweep % 2 === 0) {
       for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
     } else {
       for (let i = chains.length - 1; i >= 0; i--) chains[i]!.solve(delta);
     }
+    // Measured after the sweep, so a set that is already satisfied still pays
+    // one solve - the sweep is what discovers that, and gravity has moved the
+    // bodies since the last one.
+    let worst = 0;
+    for (const chain of chains) worst = Math.max(worst, chain.rope.overLength);
+    if (worst <= CHAIN_TOLERANCE) break;
   }
 }
 

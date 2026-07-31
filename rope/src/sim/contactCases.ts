@@ -1017,16 +1017,29 @@ function caseAreaReach(): ContactResult {
 // ---------------------------------------------------------------------------
 function caseChainOrder(): ContactResult {
   const FRAMES = 900;
-  // Bounds, not numbers: four sweeps leave this rig at 42 mm and 2.9 degrees,
-  // one sweep leaves it at 236 mm and 25.3 degrees, so a bar between the two
-  // separates them with room on both sides.
-  const MAX_LEAN = 0.08;
-  const MAX_TILT = 6 * DEG;
+  // Bounds, not numbers. The shipped sweep leaves this rig at 9 mm, 0.9 deg and
+  // 15 mm of stretch; a single sweep leaves it at 236 mm, 25.3 deg and 191 mm.
+  // The bars sit a couple of times clear of the first and well under the second.
+  const MAX_LEAN = 0.04;
+  const MAX_TILT = 3 * DEG;
+  // Stretch is the springiness a level author actually sees, and the reason the
+  // sweep runs to a residual rather than to a count: every chain here is pinned
+  // to exactly its length by its own solve and stretched back out by the one
+  // solved after it.
+  //
+  // This rig does NOT meet `CHAIN_TOLERANCE` - its chains run 14 degrees off
+  // horizontal, which is a big tension for the load and the slowest thing there
+  // is for Gauss-Seidel, so `MAX_CHAIN_SWEEPS` binds before the tolerance does
+  // (it wants ~200 sweeps for 5 mm, against the ball arena's rig converging
+  // inside the cap). That is deliberate: the case is the one that measures what
+  // the CAP is worth, and a bar written at the tolerance would be asserting
+  // something this scene never reaches.
+  const MAX_STRETCH = 0.02;
 
-  // Returns the worst [weight lean, link tilt] over the settled tail, not the
-  // pose at one instant: the rig is a pendulum, so a single sample can catch a
-  // leaning one crossing centre and read as healthy.
-  const hang = (swapped: boolean): [number, number] => {
+  // Returns the worst [weight lean, link tilt, chain stretch] over the settled
+  // tail, not the pose at one instant: the rig is a pendulum, so a single sample
+  // can catch a leaning one crossing centre and read as healthy.
+  const hang = (swapped: boolean): [number, number, number] => {
     const sim = new Sim("chain-order");
     const ceiling = new StaticBody2D();
     ceiling.globalPosition = new Vec2(0, -4);
@@ -1050,27 +1063,33 @@ function caseChainOrder(): ContactResult {
 
     let lean = 0;
     let tilt = 0;
+    let stretch = 0;
     sim.step(FRAMES, (n) => {
       stepSceneChains(chains, DT);
       if (n <= FRAMES - 300) return;
       lean = Math.max(lean, Math.abs(weight.globalPosition.x));
       tilt = Math.max(tilt, Math.abs(wrapAngle(link.globalRotation)));
+      for (const c of chains) stretch = Math.max(stretch, c.rope.overLength);
     });
-    return [lean, tilt];
+    return [lean, tilt, stretch];
   };
 
-  const [leanA, tiltA] = hang(false);
-  const [leanB, tiltB] = hang(true);
+  const [leanA, tiltA, stretchA] = hang(false);
+  const [leanB, tiltB, stretchB] = hang(true);
   const lean = Math.max(leanA, leanB);
   const tilt = Math.max(tiltA, tiltB);
+  const stretch = Math.max(stretchA, stretchB);
   const hangs = lean <= MAX_LEAN;
   const level = tilt <= MAX_TILT;
+  const rigid = stretch <= MAX_STRETCH;
 
-  return ok("chain-order — a symmetrical hanging rig does not lean on its chain order", hangs && level, [
+  return ok("chain-order — a symmetrical hanging rig hangs straight and its chains do not stretch", hangs && level && rigid, [
     `${hangs ? "ok  " : "BAD "} worst lean ${(leanA * 1000).toFixed(1)}mm, ${(leanB * 1000).toFixed(1)}mm swapped ` +
       `(want <${MAX_LEAN * 1000}mm)`,
     `${level ? "ok  " : "BAD "} worst link tilt ${(tiltA / DEG).toFixed(2)}deg, ${(tiltB / DEG).toFixed(2)}deg swapped ` +
       `(want <${(MAX_TILT / DEG).toFixed(0)}deg)`,
+    `${rigid ? "ok  " : "BAD "} worst chain stretch ${(stretchA * 1000).toFixed(2)}mm, ${(stretchB * 1000).toFixed(2)}mm swapped ` +
+      `(want <${MAX_STRETCH * 1000}mm)`,
   ]);
 }
 
