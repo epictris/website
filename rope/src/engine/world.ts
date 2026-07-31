@@ -11,6 +11,7 @@ import {
   Area2D,
   CharacterBody2D,
   CollisionObject2D,
+  CollisionShape2D,
   ForceArea,
   KinematicCollision2D,
   PhysicsBody2D,
@@ -132,6 +133,10 @@ export interface RayResult {
   collider: PhysicsBody2D;
   position: Vec2;
   normal: Vec2;
+  // The piece of the collider the ray reached. A compound body is several
+  // surfaces and they need not answer the same way - the grapple hook asks the
+  // one it actually hit whether it is hook-proof.
+  shape: CollisionShape2D;
 }
 
 export interface RayOptions {
@@ -482,7 +487,7 @@ export class World {
         const hit = rayVsShape(from, to, s, opts.hitFromInside ?? false);
         if (hit && hit.t < bestT) {
           bestT = hit.t;
-          best = { collider: body, position: hit.position, normal: hit.normal };
+          best = { collider: body, position: hit.position, normal: hit.normal, shape: s };
         }
       }
     }

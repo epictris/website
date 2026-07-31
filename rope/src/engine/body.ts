@@ -23,6 +23,21 @@ export class CollisionShape2D implements ShapeTransform {
   // can legitimately be both at once — which is exactly the ball's case.
   wrappable = true;
 
+  // Is this surface hook-proof? A hook that reaches it is destroyed (the grapple
+  // hook) or deflected (the ball's), instead of anchoring. It blocks motion
+  // exactly as any other solid shape does - hook-proof is about the *rope*, and
+  // nothing else.
+  //
+  // A property of the SHAPE, and it has to be: which surface the hook reached is
+  // a collision question, and every collision question here is about a shape
+  // rather than a body ("`obj` identity answers 'does this move as one rigid
+  // piece with that', `shape` identity answers 'is this the same surface'").
+  // Held on the body it could not express either of the two things levels
+  // actually want - a hook-proof crate that still falls and is hauled about
+  // (a body kind cannot be `rigid` and `impermeable` at once), or a compound
+  // wall with one attachable ledge and hook-proof faces everywhere else.
+  impermeable = false;
+
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,
@@ -277,10 +292,7 @@ export abstract class PhysicsBody2D extends CollisionObject2D {
 
 export class StaticBody2D extends PhysicsBody2D {}
 
-// Rope-attachment blocker: hooks are destroyed on contact instead of attaching.
-export class ImpermeableBody extends StaticBody2D {}
-
-// Hook-only scene geometry — the mirror image of ImpermeableBody. The hook
+// Hook-only scene geometry — the mirror image of an impermeable *shape*. The hook
 // anchors to it, but the avatar, the rope/chain and loose debris all pass
 // straight through: a background grate, girder or chandelier the player can
 // swing from without it blocking the level.

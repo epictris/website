@@ -14,9 +14,9 @@
 
 import {
   AnchorBody,
-  ImpermeableBody,
   RigidBody2D,
   StaticBody2D,
+  type CollisionShape2D,
   type PhysicsBody2D,
 } from "../engine/body";
 import { PX } from "../engine/units";
@@ -25,7 +25,7 @@ import {
   nearestShapeIndex,
   nearestSurfacePoint,
 } from "../engine/shapes";
-import { bodyOverlapCircle, bodySweepCircle } from "../engine/collision";
+import { bodySweepCircle, circleOverlap } from "../engine/collision";
 import { CONTACT_SLOP } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
@@ -120,7 +120,8 @@ export class BallHook extends RigidBody2D {
     const speed = step.length();
     const motion = speed > 0 ? step.mul(1 + CONTACT_SLOP / speed) : step;
 
-    let best: { t: number; normal: Vec2; collider: PhysicsBody2D } | null = null;
+    let best: { t: number; normal: Vec2; collider: PhysicsBody2D; shape: CollisionShape2D } | null =
+      null;
     for (const body of this.world.bodies) {
       if (body.removed || body === this || body.name === "Player") continue;
       if (this.exceptions.has(body.id)) continue;
@@ -134,12 +135,15 @@ export class BallHook extends RigidBody2D {
       if (!body.hasShape()) continue;
       const sweep = bodySweepCircle(body, from, motion, r);
       if (sweep && sweep.t <= 1 && (!best || sweep.t < best.t)) {
-        best = { t: sweep.t, normal: sweep.normal, collider: body };
+        best = { t: sweep.t, normal: sweep.normal, collider: body, shape: sweep.shape };
       }
     }
     if (best) {
       const contactCenter = from.add(motion.mul(best.t));
-      if (best.collider instanceof ImpermeableBody) {
+      // The piece the sweep struck answers, not the body: a compound wall may
+      // be hook-proof on the face the throw came in at and attachable one piece
+      // along, which is the whole point of the flag being per shape.
+      if (best.shape.impermeable) {
         this.bounce(best.normal, contactCenter);
         return;
       }
@@ -184,7 +188,7 @@ export class BallHook extends RigidBody2D {
   // late but on the right surface: the anchor is placed on the contact's own
   // shape, not on wherever the deflection has since carried the hook.
   //
-  // Impermeable bodies are left to `bounce`: the solver's deflection is not the
+  // Impermeable pieces are left to `bounce`: the solver's deflection is not the
   // glancing-speed rule that surface is defined by, and re-deriving one from the
   // other would be two bounces.
   //
@@ -204,7 +208,6 @@ export class BallHook extends RigidBody2D {
       if (c.normalImpulse <= 0) continue;
       const other = c.a === this ? c.b : c.b === this ? c.a : null;
       if (!other || other.removed || this.exceptions.has(other.id)) continue;
-      if (other instanceof ImpermeableBody) continue;
       if (
         !(
           other instanceof StaticBody2D ||
@@ -225,6 +228,10 @@ export class BallHook extends RigidBody2D {
       // slack by 19 mm in one frame, and the ball it had been braking took off
       // (`session-576f` fails `rope-anchor-kick` on it).
       const s = other.getShapes()[c.a === this ? c.shapeB : c.shapeA];
+      // Hook-proof pieces are left to `bounce` (see above), and the constraint
+      // names the piece, so a wall that is hook-proof on one face and
+      // attachable on another is answered per face here too.
+      if (s?.impermeable) continue;
       this.attach(other, s ? nearestSurfacePoint(s, this.globalPosition) : c.point);
       return true;
     }
@@ -232,8 +239,8 @@ export class BallHook extends RigidBody2D {
   }
 
   // Radius-aware overlap probe for slow / resting contact the sweep (which needs
-  // motion) doesn't cover: attach to a static/rigid surface, bounce off
-  // impermeable. Runs at the end of physicsStep.
+  // motion) doesn't cover: attach to a static/rigid surface, bounce off a
+  // hook-proof one. Runs at the end of physicsStep.
   //
   // Its margin stays a touch tolerance and is deliberately NOT widened to the
   // solver's `CONTACT_SLOP` the way the sweep's reach is. The sweep extrapolates
@@ -252,11 +259,6 @@ export class BallHook extends RigidBody2D {
     const probeR = r + 0.5 * PX;
     for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
-      if (body instanceof ImpermeableBody) {
-        const ov = bodyOverlapCircle(body, from, probeR);
-        if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
-        return;
-      }
       if (
         !(body instanceof StaticBody2D || body instanceof RigidBody2D || body instanceof AnchorBody)
       ) {
@@ -269,6 +271,15 @@ export class BallHook extends RigidBody2D {
       // the contact's `shapeIndex` resolved from a point that is on nothing.
       const shapes = body.getShapes();
       const s = shapes[nearestShapeIndex(shapes, from)];
+      // Whichever piece is nearest is the one the tip is resting on, and it is
+      // that piece that decides: hook-proof deflects, anything else anchors.
+      // Asked of the body instead, one hook-proof face would make a whole
+      // compound wall unattachable.
+      if (s?.impermeable) {
+        const ov = circleOverlap(from, probeR, s);
+        if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
+        return;
+      }
       this.attach(body, s ? nearestSurfacePoint(s, from) : from);
       return;
     }

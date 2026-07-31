@@ -16,15 +16,29 @@
 
 import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
-import { ForceArea, PhysicsBody2D, RigidBody2D, StaticBody2D } from "../engine/body";
+import {
+  ForceArea,
+  PhysicsBody2D,
+  RigidBody2D,
+  StaticBody2D,
+  type CollisionObject2D,
+} from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { ContactAudit, World } from "../engine/world";
-import { ShapeGeometry } from "../lib/shapeGeometry";
+import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
-import { RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
+import { Hook } from "../classes/hook";
+import { buildLevelBodies, RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
+import { backgroundTransform, buildSceneBackgrounds } from "../level/backgrounds";
+import {
+  scaleLevelData,
+  type BackgroundData,
+  type LevelBodyData,
+  type LevelData,
+} from "../level/levelFormat";
 import { SceneChain, stepSceneChains } from "../level/chains";
 import { RopeContact } from "../lib/ropeContact";
 
@@ -1093,6 +1107,338 @@ function caseChainOrder(): ContactResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// materials — an authored shape weighs what its material and its thickness say
+// it weighs, per SHAPE and not per body.
+//
+// Mass is authored state, and authored state that nothing checks is authored
+// state that quietly stops being read: the fields reach the sim through
+// `makePiece`, and a build that ignored one would produce a level that looks
+// identical, plays differently and violates nothing. So this is arithmetic
+// asserted directly - area × thickness × density - rather than a scenario whose
+// outcome depends on it.
+//
+// The compound case is the one that motivates per-shape material at all: a
+// group's mass, centre of mass and inertia are sums over its pieces, so a stone
+// head on a wooden shaft has to land its origin near the head. Checking the
+// centre of mass is also what catches the subtler failure - a build that reads
+// the materials for the mass but weighs the pieces as oak when it places the
+// origin, which is every rigid-body lever arm measured from the wrong point.
+// ---------------------------------------------------------------------------
+function caseMaterials(): ContactResult {
+  const SLAB = 0.2; // the default thickness, in metres
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(b) * 1e-9 + 1e-12;
+
+  const build = (bodies: LevelBodyData[]): (CollisionObject2D | null)[] => {
+    const world = new World();
+    const data: LevelData = { player: { x: 0, y: 0, radius: 0.08 }, bodies };
+    return buildLevelBodies(world, data, () => {}).byIndex;
+  };
+
+  const rect = (extra: Partial<LevelBodyData>): LevelBodyData => ({
+    kind: "rigid",
+    x: 0,
+    y: 0,
+    rot: 0,
+    shape: { kind: "rect", w: 2, h: 0.4 },
+    ...extra,
+  });
+
+  const [plain, stone, thick, wheel] = build([
+    // Names nothing: 20 cm of oak, which is what it weighed before materials.
+    rect({}),
+    rect({ material: "stone" }),
+    rect({ material: "stone", thickness: 2 * SLAB }),
+    // A circle is a DISC of its thickness (a wheel seen face on), not a sphere:
+    // an authored thickness that some shape kinds ignored would be a field that
+    // lies about what it does. The sphere rule stays the code-built round
+    // bodies' - see `ShapeGeometry.computeMass`.
+    { kind: "rigid", x: 0, y: 0, rot: 0, shape: { kind: "circle", r: 0.5 }, material: "steel", thickness: 0.1 },
+  ]) as RigidBody2D[];
+
+  const wantPlain = 2 * 0.4 * SLAB * MATERIALS.wood;
+  const wantStone = 2 * 0.4 * SLAB * MATERIALS.stone;
+  const wantWheel = Math.PI * 0.25 * 0.1 * MATERIALS.steel;
+  const plainOk = near(plain!.mass, wantPlain);
+  const stoneOk = near(stone!.mass, wantStone);
+  const thickOk = near(thick!.mass, 2 * wantStone);
+  const wheelOk = near(wheel!.mass, wantWheel);
+
+  // A compound body of two 1 m squares side by side, one oak and one lead. The
+  // pieces are 1 m apart, so a build that weighed them equally would put the
+  // origin at x = 0 - the midpoint of the two, which is what the assertion is
+  // written against.
+  const square = (x: number, material: string): LevelBodyData => ({
+    kind: "rigid",
+    x,
+    y: 0,
+    rot: 0,
+    shape: { kind: "rect", w: 1, h: 1 },
+    material,
+    group: "g1",
+  });
+  const [piece] = build([square(-0.5, "wood"), square(0.5, "lead")]) as RigidBody2D[];
+  const mWood = SLAB * MATERIALS.wood;
+  const mLead = SLAB * MATERIALS.lead;
+  const wantCentre = (-0.5 * mWood + 0.5 * mLead) / (mWood + mLead);
+  const sumOk = near(piece!.mass, mWood + mLead);
+  const centreOk = near(piece!.globalPosition.x, wantCentre);
+
+  const passed = plainOk && stoneOk && thickOk && wheelOk && sumOk && centreOk;
+  return ok("materials — an authored shape weighs its area × thickness × density, per shape", passed, [
+    `${plainOk ? "ok  " : "BAD "} no material named: ${plain!.mass.toFixed(4)} kg (want ${wantPlain.toFixed(4)}, 20cm of oak)`,
+    `${stoneOk ? "ok  " : "BAD "} same slab in stone: ${stone!.mass.toFixed(4)} kg (want ${wantStone.toFixed(4)})`,
+    `${thickOk ? "ok  " : "BAD "} twice as thick: ${thick!.mass.toFixed(4)} kg (want ${(2 * wantStone).toFixed(4)})`,
+    `${wheelOk ? "ok  " : "BAD "} steel disc r=0.5 t=0.1: ${wheel!.mass.toFixed(4)} kg (want ${wantWheel.toFixed(4)}, NOT the sphere's ${((4 / 3) * Math.PI * 0.125 * MATERIALS.steel).toFixed(1)})`,
+    `${sumOk ? "ok  " : "BAD "} oak+lead group mass: ${piece!.mass.toFixed(4)} kg (want ${(mWood + mLead).toFixed(4)})`,
+    `${centreOk ? "ok  " : "BAD "} its centre of mass: x ${piece!.globalPosition.x.toFixed(4)} m (want ${wantCentre.toFixed(4)}, midpoint would be 0)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// impermeable-shape — hook-proof is a property of the SURFACE, and both hooks
+// ask the piece they reached.
+//
+// It used to be a body KIND, which could say neither of the two things a level
+// wants. A kind is one per body, so nothing could be `rigid` and hook-proof at
+// once - a crate that falls, is hauled about and still refuses the hook was not
+// expressible - and a compound wall was hook-proof in whole or not at all, so a
+// single attachable ledge among hook-proof faces could not be authored either.
+//
+// Both hooks are checked because they reach a surface by different means: the
+// grapple hook raycasts and is destroyed, the ball's sweeps/probes and is
+// deflected. Each has its own answer to "which piece did I hit", and a fix
+// applied to one of them alone is exactly the class of bug the shape/body rule
+// exists to stop.
+//
+// The legacy kind is checked in the same breath: every level on disk still
+// carries `kind: "impermeable"`, and the fold-in happens in one place
+// (`normalizeLevelData`, inside `scaleLevelData`). If it ever stops happening,
+// walls that have repelled the hook since a level was designed silently start
+// catching it, which no invariant can see.
+// ---------------------------------------------------------------------------
+function caseImpermeableShape(): ContactResult {
+  // A compound wall: hook-proof on the left piece, attachable on the right.
+  const wall = (x: number, hookProof: boolean): LevelBodyData => ({
+    kind: "static",
+    x,
+    y: 2,
+    rot: 0,
+    shape: { kind: "rect", w: 1, h: 1 },
+    group: "wall",
+    ...(hookProof ? { impermeable: true } : {}),
+  });
+  const bodies: LevelBodyData[] = [
+    wall(-0.5, true),
+    wall(0.5, false),
+    // The case a kind could not express at all: a dynamic body that is also
+    // hook-proof. Pinned with `gravityScale` 0 so the throw meets it where it
+    // was authored rather than wherever it has fallen to.
+    {
+      kind: "rigid",
+      x: 3,
+      y: 2,
+      rot: 0,
+      shape: { kind: "rect", w: 1, h: 1 },
+      impermeable: true,
+    },
+    // Authored the retired way, which is how every level on disk still says it.
+    { kind: "impermeable", x: 5, y: 2, rot: 0, shape: { kind: "rect", w: 1, h: 1 } },
+  ];
+
+  const build = () => {
+    const world = new World();
+    const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies }, 1);
+    const built = buildLevelBodies(world, data, () => {});
+    for (const b of world.bodies) if (b instanceof RigidBody2D) b.gravityScale = 0;
+    return { world, built, data };
+  };
+
+  // Does a ball hook thrown straight down at `x` anchor, or is it turned away?
+  const ballAttaches = (x: number): boolean => {
+    const { world } = build();
+    const hook = new BallHook();
+    hook.globalPosition = new Vec2(x, 0);
+    hook.linearVelocity = new Vec2(0, BallPlayer.HOOK_SPEED);
+    let attached = false;
+    hook.registerAttachmentCallback(() => {
+      attached = true;
+    });
+    world.add(hook);
+    for (let f = 0; f < 30 && !attached; f++) {
+      hook.physicsStep(DT);
+      if (attached) break;
+      world.integrate(DT);
+      hook.physicsStep(DT);
+    }
+    return attached;
+  };
+
+  // The grapple hook is a raycast and is DESTROYED rather than deflected, so
+  // its two outcomes are "attached" and "destroyed" rather than "attached" and
+  // "still flying".
+  const grappleAttaches = (x: number): boolean => {
+    const { world } = build();
+    const hook = new Hook();
+    hook.globalPosition = new Vec2(x, 0);
+    hook.velocity = new Vec2(0, 0.2);
+    let attached = false;
+    let destroyed = false;
+    hook.registerAttachmentCallback(() => {
+      attached = true;
+    });
+    hook.onDestroyed(() => {
+      destroyed = true;
+    });
+    world.add(hook);
+    for (let f = 0; f < 30 && !attached && !destroyed; f++) hook.physicsStep();
+    return attached;
+  };
+
+  const { built, data } = build();
+  const legacy = data.bodies[3]!;
+  const legacyFolded =
+    legacy.kind === "static" &&
+    legacy.impermeable === true &&
+    built.byIndex[3]!.getShapes().every((s) => s.impermeable);
+  // The group is ONE body of two pieces, and the pieces must disagree - that is
+  // the whole statement.
+  const pieces = built.byIndex[0]!.getShapes();
+  const perShape = pieces.length === 2 && pieces[0]!.impermeable && !pieces[1]!.impermeable;
+
+  const ballProof = !ballAttaches(-0.5);
+  const ballLedge = ballAttaches(0.5);
+  const ballRigid = !ballAttaches(3);
+  const grappleProof = !grappleAttaches(-0.5);
+  const grappleLedge = grappleAttaches(0.5);
+
+  const passed =
+    perShape && legacyFolded && ballProof && ballLedge && ballRigid && grappleProof && grappleLedge;
+  return ok("impermeable-shape — hook-proof is per surface, and both hooks ask the piece they hit", passed, [
+    `${perShape ? "ok  " : "BAD "} one compound body, two pieces, only the first hook-proof`,
+    `${legacyFolded ? "ok  " : "BAD "} the retired \`kind: "impermeable"\` loads as a static with a hook-proof shape`,
+    `${ballProof ? "ok  " : "BAD "} ball hook into the hook-proof piece: ${ballProof ? "deflected" : "ANCHORED"}`,
+    `${ballLedge ? "ok  " : "BAD "} ball hook into its attachable sibling: ${ballLedge ? "anchored" : "TURNED AWAY"}`,
+    `${ballRigid ? "ok  " : "BAD "} ball hook into a hook-proof RIGID body: ${ballRigid ? "deflected" : "ANCHORED"}`,
+    `${grappleProof ? "ok  " : "BAD "} grapple hook into the hook-proof piece: ${grappleProof ? "destroyed" : "ANCHORED"}`,
+    `${grappleLedge ? "ok  " : "BAD "} grapple hook into its attachable sibling: ${grappleLedge ? "anchored" : "TURNED AWAY"}`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// background-group — a background panel welded into a compound body rides it,
+// and everything else about it stays decoration.
+//
+// Authored state that nothing checks is authored state that quietly stops being
+// read, and this one is invisible to every other detector here: a panel is never
+// simulated, so a build that dropped the attachment entirely would violate no
+// invariant, diverge no digest and pass every bundle. What it would do is leave
+// the paint behind while the body it decorates swings away from it - a thing only
+// a person looking at the game would notice, which is exactly the failure this
+// suite exists to turn into a number.
+//
+// Three statements, and the third is what stops the first two passing for the
+// wrong reason:
+//
+// - the tagged panel resolves to the group's engine body, and after that body has
+//   fallen and turned by a real amount its drawn placement has followed - moved
+//   by what the body moved by, turned by what the body turned by;
+// - the panel is not a PIECE of that body: it brings no shape, so the built body
+//   still carries exactly the shapes its geometry authored;
+// - an untagged panel, and one tagged into a group no body carries, are drawn
+//   exactly where they were authored after all of it. Without those two, "every
+//   panel rides something" would pass this case just as well as the rule does.
+// ---------------------------------------------------------------------------
+function caseBackgroundGroup(): ContactResult {
+  const panel = (
+    x: number,
+    y: number,
+    rot: number,
+    group?: string,
+  ): BackgroundData => ({
+    x,
+    y,
+    rot,
+    shape: { kind: "rect", w: 3.4, h: 1.4 },
+    ...(group !== undefined ? { group } : {}),
+  });
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 0.08 },
+      bodies: [
+        { kind: "static", x: 0, y: 3, rot: 0, shape: { kind: "rect", w: 20, h: 1 } },
+        // One shape, so the count below says whether the panel joined it.
+        { kind: "rigid", x: 0, y: -1, rot: 0.35, shape: { kind: "rect", w: 2.2, h: 0.4 }, group: "slab" },
+      ],
+      // Offset from the body's origin on purpose: a panel drawn at the origin
+      // would follow the body under a rotation that was being ignored.
+      backgrounds: [panel(0.6, -1.3, 0.35, "slab"), panel(6, -1, 0), panel(-6, -1, 0, "nothing")],
+    },
+    1,
+  );
+
+  const world = new World();
+  const built = buildLevelBodies(world, data, () => {});
+  const [rider, loose, orphan] = buildSceneBackgrounds(data.backgrounds!, built.byGroup);
+  const body = built.byGroup.get("slab") as RigidBody2D | undefined;
+
+  const before = {
+    body: body ? { pos: body.globalPosition, rot: body.globalRotation } : null,
+    rider: backgroundTransform(rider!, 1),
+    loose: backgroundTransform(loose!, 1),
+    orphan: backgroundTransform(orphan!, 1),
+  };
+  for (let f = 0; f < 240; f++) world.integrate(DT);
+  const after = {
+    rider: backgroundTransform(rider!, 1),
+    loose: backgroundTransform(loose!, 1),
+    orphan: backgroundTransform(orphan!, 1),
+  };
+
+  const attached = rider!.body !== null && rider!.body === body;
+  const onePiece = (body?.getShapes().length ?? 0) === 1;
+  // The slab has to have actually gone somewhere, or "it followed" is a
+  // statement about a body that never moved.
+  const bodyMoved = body ? body.globalPosition.distanceTo(before.body!.pos) : 0;
+  const bodyTurned = body ? Math.abs(wrapAngle(body.globalRotation - before.body!.rot)) : 0;
+  const worthChecking = bodyMoved > 1 && bodyTurned > 0.02;
+  // Followed means its placement IN THE BODY'S FRAME is what it was - not that
+  // it moved by what the body's origin moved by, which a panel held off that
+  // origin cannot do while the body turns: it swings, and the swing is the part
+  // being checked. Paired with the travel below, since a panel that stopped
+  // being attached altogether would hold its frame-relative placement in the
+  // only way that matters here by not moving at all.
+  const localOf = (t: { pos: Vec2; rot: number }, pose: { pos: Vec2; rot: number }) => ({
+    off: t.pos.sub(pose.pos).rotated(-pose.rot),
+    rot: wrapAngle(t.rot - pose.rot),
+  });
+  const nowPose = body
+    ? { pos: body.globalPosition, rot: body.globalRotation }
+    : { pos: Vec2.ZERO, rot: 0 };
+  const wasLocal = localOf(before.rider, before.body ?? nowPose);
+  const nowLocal = localOf(after.rider, nowPose);
+  const followedPos = nowLocal.off.distanceTo(wasLocal.off);
+  const followedRot = Math.abs(wrapAngle(nowLocal.rot - wasLocal.rot));
+  const riderTravelled = after.rider.pos.distanceTo(before.rider.pos);
+  const followed = body !== undefined && followedPos < 1e-9 && followedRot < 1e-9 && riderTravelled > 1;
+  const looseStill =
+    after.loose.pos.distanceTo(before.loose.pos) === 0 && after.loose.rot === before.loose.rot;
+  const orphanStill =
+    orphan!.body === null &&
+    after.orphan.pos.distanceTo(before.orphan.pos) === 0 &&
+    after.orphan.rot === before.orphan.rot;
+
+  const passed = attached && onePiece && worthChecking && followed && looseStill && orphanStill;
+  return ok("background-group — a welded panel rides its body and adds nothing to it", passed, [
+    `${attached ? "ok  " : "BAD "} the tagged panel resolves to the group's engine body`,
+    `${onePiece ? "ok  " : "BAD "} the body carries ${body?.getShapes().length ?? 0} shape(s) — a panel is not a piece`,
+    `${worthChecking ? "ok  " : "BAD "} the body moved ${bodyMoved.toFixed(2)} m and turned ${(bodyTurned / DEG).toFixed(1)}°`,
+    `${followed ? "ok  " : "BAD "} the panel followed it ${riderTravelled.toFixed(2)} m, holding its place in the body's frame to ${(followedPos * 1000).toFixed(6)} mm / ${(followedRot / DEG).toFixed(6)}°`,
+    `${looseStill ? "ok  " : "BAD "} an untagged panel is drawn where it was authored`,
+    `${orphanStill ? "ok  " : "BAD "} a panel tagged into a group with no body is drawn where it was authored`,
+  ]);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -1114,6 +1460,9 @@ export function runContactCases(): ContactResult[] {
     caseGripReseed(sims),
   ];
   ContactAudit.enabled = false;
+  results.push(caseMaterials());
+  results.push(caseImpermeableShape());
+  results.push(caseBackgroundGroup());
   results.push(caseAreaReach());
   results.push(caseChainOrder());
   results.push(caseHookBlockedAttaches());

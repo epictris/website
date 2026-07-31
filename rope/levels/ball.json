@@ -35,6 +35,19 @@
       },
       "color": "#000000",
       "opacity": 0.8
+    },
+    {
+      "x": 1750,
+      "y": 430.00000000000006,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 260.0000000000001,
+        "h": 39.99999999999994
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "group": "g89"
     }
   ],
   "cameraRegions": [
@@ -271,7 +284,7 @@
     },
     {
       "kind": "arrow",
-      "x": 1360.3112887414927,
+      "x": 1358.505235489999,
       "y": 450,
       "rot": -0.7776761935987528,
       "w": 57.01047097999764,
@@ -354,37 +367,37 @@
     {
       "a": {
         "body": 85,
-        "x": 1680.1926625839983,
-        "y": -200
+        "x": 1750.0432196484421,
+        "y": 60
       },
       "b": {
         "body": 87,
-        "x": 1680.0454567955544,
-        "y": 170.00000000000003
+        "x": 1750.0454567955553,
+        "y": 300.0000000000001
       }
     },
     {
       "a": {
         "body": 87,
-        "x": 1669.9999999999995,
-        "y": 210.00000000000006
+        "x": 1750.1163938497125,
+        "y": 340.00000000000006
       },
       "b": {
         "body": 86,
-        "x": 1580,
-        "y": 259.99999999999994
+        "x": 1684.189405769943,
+        "y": 416.57561016505343
       }
     },
     {
       "a": {
         "body": 87,
-        "x": 1689.9999999999998,
-        "y": 210.00000000000006
+        "x": 1749.8070021538094,
+        "y": 340.00000000000006
       },
       "b": {
         "body": 86,
-        "x": 1780,
-        "y": 259.99999999999994
+        "x": 1800.4377736205215,
+        "y": 385.426953878055
       }
     }
   ],
@@ -409,7 +422,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 84.99999999999997,
       "y": -90,
       "rot": 0,
@@ -420,7 +433,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -521,7 +535,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 85.00000000000003,
       "y": -320.00000000000017,
       "rot": 0,
@@ -532,10 +546,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 765,
       "y": 270,
       "rot": 0,
@@ -546,7 +561,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
       "kind": "force",
@@ -564,7 +580,7 @@
       "force": 300
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 725,
       "y": -245.00000000000006,
       "rot": 0,
@@ -575,12 +591,13 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
       "kind": "static",
       "x": 1170,
-      "y": 105.00000000000003,
+      "y": 104.99999999999999,
       "rot": 0,
       "shape": {
         "kind": "rect",
@@ -634,7 +651,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 725,
       "y": 275,
       "rot": 0,
@@ -645,7 +662,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -662,7 +680,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 85.00000000000003,
       "y": -550,
       "rot": 0,
@@ -673,7 +691,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -690,7 +709,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 700.4118095489746,
       "y": 110.5259149626993,
       "rot": 2.0943951023931953,
@@ -701,10 +720,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 745.9999999999999,
       "y": 105,
       "rot": 2.0943951023931953,
@@ -715,10 +735,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 703.0000000000002,
       "y": 188.00000000000003,
       "rot": 1.0471975511965976,
@@ -729,10 +750,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 746.7585613195797,
       "y": 186.63384118766822,
       "rot": 1.0471975511965976,
@@ -743,10 +765,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 765.0000000000001,
       "y": -195.00000000000003,
       "rot": 0,
@@ -757,10 +780,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 725,
       "y": 35.00000000000005,
       "rot": 0,
@@ -771,7 +795,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 0.2
+      "friction": 0.2,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1066,7 +1091,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2000.0000000000052,
       "y": 265.0000000000002,
       "rot": 0,
@@ -1076,7 +1101,8 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1093,7 +1119,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2000.0000000000036,
       "y": 290.0000000000002,
       "rot": 0,
@@ -1104,10 +1130,11 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2200.0000000000055,
       "y": 265.0000000000002,
       "rot": 0,
@@ -1117,7 +1144,8 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1134,7 +1162,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2200.000000000004,
       "y": 290.0000000000002,
       "rot": 0,
@@ -1145,10 +1173,11 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2400.000000000008,
       "y": 265.0000000000002,
       "rot": 0,
@@ -1158,7 +1187,8 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1175,7 +1205,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2400.000000000006,
       "y": 290.0000000000002,
       "rot": 0,
@@ -1186,10 +1216,11 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2604.9999999999995,
       "y": 30.000000000000004,
       "rot": 0,
@@ -1200,10 +1231,11 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 2589.9999999999995,
       "y": -384.99999999999994,
       "rot": 0,
@@ -1214,7 +1246,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1273,7 +1306,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1804.9999999999993,
       "y": -675.0000000000001,
       "rot": 0,
@@ -1284,10 +1317,11 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1784.999999999999,
       "y": -735,
       "rot": 0,
@@ -1298,7 +1332,8 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1315,7 +1350,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1794.9999999999989,
       "y": -510.00000000000006,
       "rot": 0,
@@ -1326,7 +1361,8 @@
       },
       "color": "#000000",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
@@ -1514,7 +1550,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1385.0000000000002,
       "y": 390.00000000000006,
       "rot": 0,
@@ -1525,16 +1561,17 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "anchor",
-      "x": 1480,
-      "y": 495.0000000000001,
+      "x": 1500.0000000000005,
+      "y": 485.00000000000006,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 140,
+        "w": 80,
         "h": 30.000000000000004
       },
       "color": "#555555",
@@ -1542,7 +1579,7 @@
       "friction": 1
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1405,
       "y": 385,
       "rot": 0,
@@ -1552,10 +1589,11 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
-      "kind": "impermeable",
+      "kind": "static",
       "x": 1410.0000000000002,
       "y": 305,
       "rot": 0,
@@ -1566,16 +1604,17 @@
       },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "impermeable": true
     },
     {
       "kind": "static",
-      "x": 1520,
-      "y": -210,
+      "x": 1564.9999999999998,
+      "y": 50,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 339.9999999999999,
+        "w": 430,
         "h": 20
       },
       "color": "#555555",
@@ -1584,13 +1623,31 @@
     },
     {
       "kind": "rigid",
-      "x": 1680,
-      "y": 345,
+      "x": 1743.5295238724368,
+      "y": 405.85185434277327,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 240.00000000000003,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "impermeable": true,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "rigid",
+      "x": 1750.0000000000007,
+      "y": 320.00000000000006,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 200,
-        "h": 170.00000000000003
+        "w": 19.99999999999993,
+        "h": 40.000000000000014
       },
       "color": "#555555",
       "opacity": 0.5,
@@ -1598,13 +1655,99 @@
     },
     {
       "kind": "rigid",
-      "x": 1679.9999999999998,
-      "y": 190.00000000000003,
+      "x": 1756.4704761275632,
+      "y": 454.14814565722673,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 240.00000000000003,
+        "h": 10
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "impermeable": true,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "rigid",
+      "x": 1621.4947003607904,
+      "y": 433.374605849143,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "rigid",
+      "x": 1637.0238430669413,
+      "y": 491.3301554264871,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "rigid",
+      "x": 1862.9761569330578,
+      "y": 368.66984457351305,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "rigid",
+      "x": 1878.5052996392092,
+      "y": 426.62539415085695,
+      "rot": -0.2617993877991494,
+      "shape": {
+        "kind": "rect",
+        "w": 10,
+        "h": 20
+      },
+      "color": "#000000",
+      "opacity": 1,
+      "friction": 1,
+      "material": "steel",
+      "thickness": 40,
+      "group": "g89"
+    },
+    {
+      "kind": "static",
+      "x": 870.0000000000001,
+      "y": 330,
       "rot": 0,
       "shape": {
         "kind": "rect",
-        "w": 19.99999999999993,
-        "h": 40.000000000000014
+        "w": 10,
+        "h": 10
       },
       "color": "#555555",
       "opacity": 0.5,

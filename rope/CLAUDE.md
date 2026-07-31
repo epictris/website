@@ -28,8 +28,11 @@ When adding a constant, classify its dimension: lengths/velocities/accelerations
 ## Mass and materials
 
 The third SI unit is the **kilogram**, and a body weighs what its size and its material say it weighs (`lib/shapeGeometry.ts`).
-`Density` is a table of real densities in kg/m³ - cast iron 7200 for the ball, steel 7850 for its hook, stone 2400 for the sandbox's loose boulders, oak 700 for anything a level authors as `rigid` - and `computeMass` turns one into a mass by the shape's real **volume**: a circle is a sphere, a rect or polygon a slab `SCENE_DEPTH` (0.2 m) thick.
-The two kinds are deliberately not one extrusion, because the round things here are balls and the flat ones are cut from scenery; extruding a ball to the slab depth makes small ones absurd (a 4 cm hook outweighing a 5 cm rock six times over).
+`Density` is a table of real densities in kg/m³ - cast iron 7200 for the ball, steel 7850 for its hook, stone 2400 for the sandbox's loose boulders, oak 700 for anything a level authors and does not say otherwise about - and a mass is that density times the shape's real **volume**.
+
+There are two volume rules and they belong to different halves of the project.
+The **code-built** round bodies (the ball, its hook, a cannonball, the sandbox's rocks) go through `computeMass`, where a circle is a **sphere**: extruding a ball to a slab's thickness makes small ones absurd, a 4 cm hook outweighing a 5 cm rock six times over.
+**Authored level geometry** goes through `prismMass` instead and is always a **prism** - `area × thickness × density` - a circle included, because an authored circle is a disc seen face on (a wheel, a barrel end) and a `thickness` some shape kinds quietly ignored would be a field that lies about what it does.
 The avatar is the one body that states its mass outright (`Player.MASS`, 70 kg): its collision circle stands in for a person and its radius says nothing about what that person weighs.
 
 The point of the absolute scale is that ratios become **checkable**. The ball is a 24 cm cast-iron sphere at 52 kg, its hook is 0.26 kg, the slab it hauls is 63 kg - and each of those is a number a person can hold against the real object rather than only against the other bodies in the scene.
@@ -38,7 +41,13 @@ The scale itself is behaviour-neutral: gravity is an acceleration and every cons
 What is **not** neutral is anything written in units that carry a mass: an impulse (`CannonBall`'s explosion), an energy tolerance (the `energy-gained` invariant, `cli settle`'s at-rest bar), a momentum floor.
 Each of those was restated in terms it can keep - a target speed, a fraction of the ball's kinetic energy - rather than rescaled to a new constant, so the next mass change does not silently turn a check into an assertion about nothing.
 A circle's **moment of inertia** stays the disc's `1/2·m·r²` rather than the sphere's `2/5`: rotation in this engine is planar, and the sphere's figure is a fifth easier to spin, which measurably loosens the wind-up (see the note on `computeMomentOfInertia`).
-Level geometry carries no material of its own yet - a `rigid` body is oak until `LevelBodyData` can name one.
+Level geometry names **its own material and thickness**, per *shape* rather than per body (`LevelBodyData.material` / `thickness`, authored in the editor's inspector alongside a live mass readout).
+`MATERIALS` is the authorable table - wood, ice, flesh, rubber, brick, stone, glass, aluminium, cast iron, steel, lead, each at its real density - and a shape names one rather than carrying a raw number, because naming the stuff is the decision an author is making and the density is a fact about the material the level should not restate.
+Absent, a shape is 20 cm of oak, which is what every body authored before the fields was, so an old level loads with exactly the masses it always had; an unknown material name loads as that default rather than as a body of no mass.
+
+Per shape and not per body is the whole point, and it is the one property of a compound group that does **not** collapse onto its first member's (`syncGroupProps` leaves it alone): a body's mass, centre of mass and moment of inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for, and its origin lands near the head.
+That also means the build cannot re-derive a compound body's piece masses from its mounted shapes - a `CollisionShape2D` carries no material - so `setCompoundInertia` takes the masses `makePiece` computed, which is what stops the inertia disagreeing with the centre of mass the origin was just placed at.
+`cli contacts` `materials` is the detector: the arithmetic asserted directly (a slab in oak and in stone, twice as thick, a steel disc that is *not* the sphere's 4110 kg, and an oak+lead group whose centre of mass is at 0.44 m rather than the midpoint), because authored state nothing checks is authored state that quietly stops being read - a build ignoring one of these fields produces a level that looks identical, plays differently and violates no invariant.
 
 ## Determinism & correspondence to the C# source
 
@@ -494,7 +503,7 @@ contacts, flying or dangling.
 The throw is a **straight line**: the hook carries `gravityScale = 0` for the
 deploy and `BallHook.endFlight()` switches gravity back on the moment the throw
 ends, so the shot goes exactly where it was aimed and only then falls. Every
-ending calls it — the hook attaching, a bounce off an impermeable (the deflected
+ending calls it — the hook attaching, a bounce off a hook-proof surface (the deflected
 remainder does arc), the chain snagging geometry, and the chain running out of
 length (so the dangling tip swings instead of hanging in the air).
 
@@ -778,7 +787,7 @@ launches, mover misbehavior):
    anchoring in mid-air, a hook on the wrong side of a wall) the digest table is
    blind — it only carries the avatar's pos/vel/rope-length, not the chain wrap
    path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
-   whole scene at frame N (bodies, impermeable = dashed steel border, hook-only
+   whole scene at frame N (bodies, hook-proof surfaces = dashed steel border, hook-only
    anchors = a grate mesh, areas with
    their glyphs — skulls for a killzone, flow arrows for a force area — chain
    wrap path + wrap-node markers, avatar); convert with `magick f.svg f.png` and
@@ -1034,7 +1043,7 @@ when none of them is an area or an anchor).
 A property the bodies disagree on shows blank with a `mixed` placeholder and only writes once
 something is typed into it; the kind picker gains a `mixed` entry for the same reason.
 Selected bodies draw an orange halo *under* their own border,
-so an impermeable's dashed steel edge stays legible while selected.
+so a hook-proof piece's dashed steel edge stays legible while selected.
 **Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor: the clipboard holds copies
 detached from the model, and paste re-centres the group's bounding box on the pointer (with
 snap on, its top-left corner lands on the grid), leaving the new bodies selected so it can be
@@ -1043,8 +1052,13 @@ repeated. `Ctrl+D` duplicates in place at a 2-cell offset.
 nudge is a pure translation (never snapped), so a body keeps any sub-cell offset it has and the
 fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
 key is released. The kind picker
-covers `static`, `rigid`, `killzone`, `impermeable`, `anchor`, `force`.
-Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below), and a
+covers `static`, `rigid`, `killzone`, `anchor`, `force`, and a **hook-proof** checkbox sits
+below `friction` for the two solid kinds (see **Hook-proof surfaces**) - per shape, so one
+piece of a compound body can be the only place a hook will catch.
+Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
+Everything that is a piece of stuff rather than a region of space - every kind but the two areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
+The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See **Mass and materials**; both are per shape, so a selection spanning a compound body edits its pieces individually.
+A
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
 knob steers the current, and force-kind circles get that knob too (a plain circle's rotation
 is invisible, so it has none). A toggleable snap (fixed 10 cm, the
@@ -1104,7 +1118,17 @@ It is the one editor layer besides `geometry` whose output the **player sees**, 
 
 The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a panel that is dark, huge or nearly transparent. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the panel's own fill, whichever it was picked to contrast with.
 
-The inspector panel is exactly the transform plus the fill (`color` + `opacity`); a background has no kind, no friction and no behaviour to configure.
+A panel may be welded into a **compound body** with **Ctrl+G**, exactly as two shapes are - it carries the same `group` tag (`BackgroundData.group`), and `buildSceneBackgrounds` resolves that tag to the engine body the group built and stores the panel's placement in that body's frame.
+The panel is then drawn in the body's *interpolated* transform, so decoration on a rigid assembly swings, falls and turns with it instead of staying welded to the spot it was authored at, and a backdrop tracking the 60 Hz pose while its body draws interpolated cannot visibly detach from it between steps.
+It stays decoration throughout: it adds no shape, no mass and no seam to the body, so `groupCentroid` weighs the group's *shapes* alone and welding a backdrop on cannot move the point the body turns about.
+`syncGroupProps` leaves a panel's fill alone for the same reason material and thickness are left alone per shape - a backdrop is authored to sit *behind* the geometry, so painting it the lead shape's colour is exactly wrong.
+The tag is authored in world coordinates like a chain's anchors and for the same reason: a group's origin is a centre of mass that moves as pieces are added.
+A tag no body carries - several panels grouped together with no geometry, or a group whose bodies were deleted - is not an error and simply leaves the panel where it was authored, which is also what every level authored before the field does.
+Group membership beats layer visibility and lock in the editor's picking: a group is one object, and picking up half of it would silently re-place the other half against it.
+`cli contacts` `background-group` is the detector, and it exists because nothing else here can see this: a panel is never simulated, so a build that stopped attaching them violates no invariant, diverges no digest and passes every bundle while leaving the paint behind as the body swings away from it.
+It asserts the three halves together - the tagged panel holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled, the body still carries only the shapes its geometry authored (a panel is not a piece), and an untagged panel and one tagged into a group with no body are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case.
+
+The inspector panel is exactly the transform plus the fill (`color` + `opacity`) plus the group controls; a background has no kind, no friction and no behaviour to configure.
 **Images** (a source, plus `scale` / `crop` / `tile`) are designed for but not implemented: they land as three optional fields on `BackgroundData` read by `fillBackground`, and one more inspector section. Nothing else moves, because the placement, the shape, the layer and the entire editor pipeline are already shared with every other item.
 
 ### Notes
@@ -1148,8 +1172,11 @@ Neither caller asks it per query any more. Exposure is a property of how a body'
 So it is settled once and cached on the shape (`CollisionShape2D.isVertexExposed`, invalidated when the shape set changes), and `isSeamVertex` is a lookup by vertex index.
 `isSeamOccluded` takes that as its first answer and only then asks the *dynamic* half - neighbouring bodies, which do move relative to the corner. That decomposition is exact rather than an optimisation: coverage only grows as geometry is added, so a corner its own body has already closed off cannot be reopened by a neighbour.
 
-On disk it is a `group` tag on each member (`LevelBodyData.group`), and members are matched by tag alone, so the format stays a flat body list.
+A **background panel** may be a member too (see **Background**): it rides the body as decoration rather than becoming a piece of it - no shape, no mass, no seam - which is how a moving object gets a look that is not built out of collision geometry.
+
+On disk it is a `group` tag on each member (`LevelBodyData.group`, and `BackgroundData.group` for a panel), and members are matched by tag alone, so the format stays a flat body list.
 A body has one kind, one fill, one friction and one force, so the group takes its **first member's** and the editor keeps the rest in step (`syncGroupProps`) - a file can never disagree with what it draws.
+**Material and thickness are the exception** and stay per piece: a body's mass, centre of mass and inertia are sums over its shapes, so a stone head on a wooden shaft is a compound body of two materials and collapsing them onto the lead's would be the editor overwriting what was authored.
 Areas are deliberately not groupable: `World.integrate` tests area overlap against `primaryShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
 
 Because a group is one body, it is **selected and moved as one**: clicking any piece selects all of them, a rubber band that touches one piece takes the whole body (`withWholeGroups`), and **Alt+click** reaches past that to a single piece when its own shape needs editing.
@@ -1200,6 +1227,22 @@ Authoring those chains steeper is worth more than any cap this side of sane.
 `Rope.beginFrame` stays **outside** the sweep loop - it releases the blocked-length lease, and a lease released once per pass is handed back a sweep's worth faster than the geometry that bought it can re-earn it - which is why `Rope.solvePass` exists as its own method, and `Rope.overLength` is what the loop measures convergence by (zero for a slack chain: the constraint is an inequality).
 `cli contacts` `chain-order` is the case: one rig, built twice with its two lower chains in opposite orders, must hang near centre, near level, and with its chains near their authored length in both.
 
+The **ball's chain is in that sweep too** whenever the level has chains at all (`sweepChains`, called from `BallLevel`'s chain phase), and for exactly the reason the scene chains are in it with each other: anchor a chain to a body a scene chain also holds and the two share a body, so each one's solve is the last word on where that body ends up and the other's correction is the residual.
+Solved once each, they spent every frame undoing one another - the arena's link block moved 10 mm and 0.15 rad one way by its three chains and 11 mm and 0.17 rad back by the ball's, frame after frame, for ever.
+The cost of that is **not** the shaking, which nets out in position and is not even visible; it is the **mass ratio**.
+A PBD correction is split between the bodies on the path by their inverse effective mass, and the ball's chain, solving alone, split it against the link's own 11.2 kg rather than against the 1758 kg ladder and the ceiling that the link is tied to: four fifths of every winch correction went into hauling an anchor that three other chains put straight back next frame, and the ball - which is the thing winding chain onto yourself is supposed to haul - kept a fifth, which is almost exactly what gravity took off it again.
+So a wind-up against that anchor bought 0.55 mm a frame of travel, the length the solve could not reach was charged to the ball's rotation by `unwindOverLength`, and the player's aim was refused **96%** across 200 frames while they held it: a ball that will not turn to face the reticle, reported as the chain being jerky and the ball refusing to roll up it (`session-521f`).
+Swept together, the scene chains refuse the anchor *within* the frame and the next pass puts the correction where it can still go, which is the ball.
+The aim demand over those same 200 frames falls from 13 rad/s to 1.9, which is the ball tracking the reticle rather than being stuck a long way off it.
+`playtests/ball-winch-hung-anchor.json` is the mechanic in isolation - a chain-hung anchor light enough that the mass split is most of the answer - and it winches **1.37 m** against 0.07 m before, next to 1.36 m for the same rig anchored to a static, which is the statement: how far a winch hauls must not depend on what is holding the far end.
+The sweep is skipped outright on a level with no chains, so every playtest and recording that predates scene chains replays bit-for-bit.
+
+What that loop measures convergence by is **the disturbance to the coupled rope**, not the set's own residual, and the distinction is the whole cost of the feature.
+The scene set's residual is a property of the *level* - this arena's rig wants ~200 sweeps for 5 mm and gets 64, so it is over tolerance on 1616 frames out of 1618 - and a loop waiting for it therefore always spends the whole cap, on the one solve in the set that regenerates a wrap path and is an order dearer than the rest.
+That doubled the arena's physics frame, p50 2.3 ms to 3.7 and p99 5.2 to 8.9 with peaks at 15.3 against the 16.7 ms the renderer also draws inside, and it bought nothing: the coupling has stopped changing the answer after the first sweep, and the winch travel is identical to four decimal places either way (`session-1618f`, reported as the frame rate collapsing).
+Gated on the disturbance it takes **one** sweep on that arena and the cost is back in the noise.
+Worth knowing separately: `stepSceneChains` on its own is 31% of an arena frame (0.74 ms mean, 8.9 ms peak) and spends the cap every frame for pure scenery, which is the authored angle rather than the solver - see the note above about authoring a shallow V steeper.
+
 Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
 That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.
@@ -1237,7 +1280,7 @@ The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (sup
 the generated one — adds the `rigid`, `anchor` and `force` kinds, the `cameraRegions` and
 `chains` lists, and the per-body `group` tag); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
-through the shared `src/level/buildBodies.ts` (statics, killzones, impermeables, anchors,
+through the shared `src/level/buildBodies.ts` (statics, killzones, anchors,
 force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
 
@@ -1306,10 +1349,36 @@ That asymmetry is also what keeps a buffer from fighting its neighbour: two adjo
 `priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
 The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - the buffer belongs to the region currently in force, and the island became that region on entry, so the enclosing region's buffer is no longer what is holding.
 
+## Hook-proof surfaces
+
+**Impermeable** is a flag on the **shape** (`CollisionShape2D.impermeable`, authored as `LevelBodyData.impermeable` per level entry): the grapple hook is destroyed on that surface and the ball's is deflected, instead of either anchoring.
+It is solid in every other respect - being hook-proof is about the rope and nothing else - so the avatar stands on it, bodies collide with it and the rope still wraps its corners.
+
+It was a body **kind** for as long as it could only ever be static scene geometry, and that cost the two things levels actually want.
+A kind is one per body, so nothing could be `rigid` *and* hook-proof: a crate that falls, is hauled about by a chain and still refuses the hook was not expressible at all.
+And a compound body was hook-proof in whole or not at all, so a wall with a single attachable ledge among hook-proof faces - the shape of most deliberate level geometry - could not be authored either.
+Per shape it is both, and the flag is where the rest of the project already says it should be: **`obj` identity answers "does this move as one rigid piece with that", `shape` identity answers "is this the same surface"**, and which surface the hook reached is the second question (see **Shapes**).
+
+Every path that decides therefore names a **piece**, and each of the three had to be given one:
+`World.intersectRay`'s `RayResult` carries the `shape` it hit (the grapple `Hook` reads it), `bodySweepCircle` and `bodyOverlapCircle` return the piece of the earliest / deepest hit (`BallHook`'s sweep and probe), and `attachToBlockingContact` already had one, since a `ContactConstraint` names the shapes it formed on.
+The remaining body-level reading was `BallPlayer`'s attach callback, which is a backstop behind `BallHook`'s own decision and now resolves the piece nearest the anchor point.
+
+Rendering is per piece for the same reason - a body that is hook-proof on one face and attachable on the next has to draw as the two things it is.
+`geometryStyle` takes the piece (the compound path already strokes each piece where it lies outside its siblings, so it is one style call per stroke), the editor's `strokeCompoundOutline` hands its style callback the item being stroked, and the SVG snapshot's `bodyColor` takes the shape.
+Nothing else moved: the ball arena renders **0 pixels** different from before the change.
+
+Levels on disk still carry the retired `kind: "impermeable"`, and `normalizeLevelData` folds it into `static` + `impermeable: true`.
+It runs inside `scaleLevelData` rather than at each loader, because that is the one gate a level cannot reach the sim or the editor without passing through - the conversion between the pixels on disk and the metres everything downstream is written in.
+A migration a caller can forget is one that is missing wherever the next caller is added, and the failure is silent: the body builds as an ordinary static and the hook simply starts catching on a wall that has repelled it since the level was designed.
+
+`cli contacts` `impermeable-shape` is the detector, and it asserts both hooks against one compound body: the hook-proof piece turns each away, its sibling anchors each, a hook-proof **rigid** body deflects the ball's hook, and the retired kind still loads hook-proof.
+Both hooks, because they reach a surface by different means - a raycast that destroys, a sweep/probe that deflects - and a fix applied to one of them alone is exactly the class of bug the shape-versus-body rule exists to stop.
+
 ## Hook-only anchor geometry
 
-An **`anchor`** body is an `AnchorBody` (`engine/body.ts`) — the exact mirror image of
-`impermeable`. The hook attaches to it, but **nothing collides with it**: the avatar, the
+An **`anchor`** body is an `AnchorBody` (`engine/body.ts`) — the mirror image of a
+hook-proof surface (see **Hook-proof surfaces**), and, unlike one, a body kind rather than a
+per-shape flag: what it changes is what the body *is*, not what the hook does with it. The hook attaches to it, but **nothing collides with it**: the avatar, the
 ball, loose debris and the rope/chain all pass straight through. It is what background
 scenery you can swing from is made of — a metal grate, a girder, a chandelier — geometry
 that must not block the level it decorates.

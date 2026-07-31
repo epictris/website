@@ -92,11 +92,20 @@ mesh (holes you can see the backdrop through, which is what the body is). A new
 pass-through type must bring its own before it ships.
 
 The mirror-image pair is worth stating outright, because the two are one bit
-apart and confusing them would be lethal to a level: an **`impermeable`** body is
-solid but hook-proof (the hook bounces off it), an **`anchor`** body is
+apart and confusing them would be lethal to a level: an **impermeable** surface
+is solid but hook-proof (the hook bounces off it), an **`anchor`** body is
 hook-only but not solid (everything else passes through it). They are drawn to
 be unmistakable — the first keeps a full solid fill with a dashed steel edge,
 the second is punched through with holes.
+
+They are not, however, the same *kind* of thing, and that asymmetry is
+deliberate. Hook-proof is a flag on the **shape** (`CollisionShape2D.impermeable`,
+authored per level entry), because it changes only what the hook does with a
+surface: a hook-proof crate still falls and is still hauled about, and a
+compound wall can be attachable on one ledge and hook-proof on every other face.
+An `anchor` is a body kind, because what it changes is what the body *is* — it
+occupies its own collision layer and is outside every collision path in the
+world, which is a statement about a body and cannot be made a piece at a time.
 
 ### Backgrounds
 
@@ -123,6 +132,15 @@ The still-frame test is met the same way as before: in a screenshot, everything
 outlined is a body, everything flat and behind them is paint. The editor draws
 its own dashed teal outline on a panel, which is editor chrome (it also draws
 handles, marquees and camera guides) and never reaches the game.
+
+A panel may be **welded into a compound body** (the same `group` tag its shapes
+carry), which makes it decoration *of that body*: it is drawn in the body's
+frame, so a backdrop on a swinging rigid assembly swings with it. Nothing else
+changes — it is still paint, still under every body, still unstroked, and it adds
+no shape, no mass and no seam to the body it rides. That is the point of allowing
+it: without it, decoration can only be authored on scenery that never moves, and
+a level that wants a moving object to look like anything has to build the look
+out of collision geometry.
 
 ## Convex-only polygons; compound bodies
 

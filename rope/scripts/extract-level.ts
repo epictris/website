@@ -107,7 +107,7 @@ function childShape(bodyPath: string): NodeInfo | null {
 }
 
 interface OutBody {
-  kind: "static" | "impermeable" | "killzone";
+  kind: "static" | "killzone";
   x: number;
   y: number;
   rot: number;
@@ -157,7 +157,7 @@ for (const [path, n] of nodes) {
 
 const body = `// AUTO-GENERATED from scenes/levels/Level2.tscn — do not edit by hand.
 export interface LevelBodyData {
-  kind: "static" | "impermeable" | "killzone";
+  kind: "static" | "killzone";
   x: number;
   y: number;
   rot: number;

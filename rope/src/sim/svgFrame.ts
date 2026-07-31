@@ -10,11 +10,10 @@ import {
   ForceArea,
   StaticBody2D,
   RigidBody2D,
-  ImpermeableBody,
 } from "../engine/body";
 import { PIXELS_PER_METER } from "../engine/units";
 import type { Rope } from "../classes/rope";
-import type { PhysicsBody2D } from "../engine/body";
+import type { CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import {
   anchorGlyphs,
@@ -100,11 +99,14 @@ function rotatedHalfExtents(hw: number, hh: number, rot: number): { x: number; y
   return { x: hw * c + hh * s, y: hw * s + hh * c };
 }
 
-function bodyColor(b: PhysicsBody2D): { fill: string; stroke: string } {
+// Per SHAPE, not per body: hook-proof is a property of the surface, so a
+// compound wall repelling the hook on one face and attachable on the next has
+// to draw as the two things it is.
+function bodyColor(b: PhysicsBody2D, piece: CollisionShape2D): { fill: string; stroke: string } {
   const fill = (b as { fillColor?: string }).fillColor ?? "#555555";
-  // Impermeable (hook-proof) bodies get a red stroke so it's clear why a hook
+  // Impermeable (hook-proof) surfaces get a red stroke so it's clear why a hook
   // bounces off them rather than anchoring.
-  const stroke = b instanceof ImpermeableBody ? "#d0506a" : "#8a8a8a";
+  const stroke = piece.impermeable ? "#d0506a" : "#8a8a8a";
   return { fill, stroke };
 }
 
@@ -164,9 +166,9 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   // Collect geometry as SVG elements while accumulating the bounding box.
   const shapeEls: string[] = [];
   for (const b of bodies) {
-    const { fill, stroke } = bodyColor(b);
     const op = (b as { fillOpacity?: number }).fillOpacity ?? 0.5;
     for (const s of b.getShapes()) {
+      const { fill, stroke } = bodyColor(b, s);
       const cx = s.globalPosition.x * M;
       const cy = s.globalPosition.y * M;
       if (s.shape.kind === "rect") {

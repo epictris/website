@@ -1,0 +1,234 @@
+{
+  "level": "ball-winch-hung-anchor",
+  "controller": "ball",
+  "frames": 300,
+  "spawn": {
+    "x": 0,
+    "y": 0
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": 48.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 800.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": -400.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 400.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "rigid",
+        "x": 0.0,
+        "y": -200.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 60.0,
+          "h": 30.0
+        },
+        "friction": 1.0,
+        "thickness": 1.2
+      }
+    ],
+    "chains": [
+      {
+        "a": {
+          "body": 1,
+          "x": 0.0,
+          "y": -380.0
+        },
+        "b": {
+          "body": 2,
+          "x": 0.0,
+          "y": -215.0
+        }
+      }
+    ]
+  },
+  "holds": [
+    {
+      "action": "deploy",
+      "from": 30,
+      "to": 300
+    }
+  ],
+  "aim": [
+    {
+      "from": 1,
+      "to": 29,
+      "x": 0,
+      "y": -1.0,
+      "relative": true
+    },
+    {
+      "from": 120,
+      "to": 125,
+      "x": 1,
+      "y": 0,
+      "relative": true
+    },
+    {
+      "from": 126,
+      "to": 131,
+      "x": 0.7071,
+      "y": 0.7071,
+      "relative": true
+    },
+    {
+      "from": 132,
+      "to": 137,
+      "x": 0,
+      "y": 1,
+      "relative": true
+    },
+    {
+      "from": 138,
+      "to": 143,
+      "x": -0.7071,
+      "y": 0.7071,
+      "relative": true
+    },
+    {
+      "from": 144,
+      "to": 149,
+      "x": -1,
+      "y": 0,
+      "relative": true
+    },
+    {
+      "from": 150,
+      "to": 155,
+      "x": -0.7071,
+      "y": -0.7071,
+      "relative": true
+    },
+    {
+      "from": 156,
+      "to": 161,
+      "x": 0,
+      "y": -1,
+      "relative": true
+    },
+    {
+      "from": 162,
+      "to": 167,
+      "x": 0.7071,
+      "y": -0.7071,
+      "relative": true
+    },
+    {
+      "from": 168,
+      "to": 173,
+      "x": 1,
+      "y": 0,
+      "relative": true
+    },
+    {
+      "from": 174,
+      "to": 179,
+      "x": 0.7071,
+      "y": 0.7071,
+      "relative": true
+    },
+    {
+      "from": 180,
+      "to": 185,
+      "x": 0,
+      "y": 1,
+      "relative": true
+    },
+    {
+      "from": 186,
+      "to": 191,
+      "x": -0.7071,
+      "y": 0.7071,
+      "relative": true
+    },
+    {
+      "from": 192,
+      "to": 197,
+      "x": -1,
+      "y": 0,
+      "relative": true
+    },
+    {
+      "from": 198,
+      "to": 203,
+      "x": -0.7071,
+      "y": -0.7071,
+      "relative": true
+    },
+    {
+      "from": 204,
+      "to": 209,
+      "x": 0,
+      "y": -1,
+      "relative": true
+    },
+    {
+      "from": 210,
+      "to": 215,
+      "x": 0.7071,
+      "y": -0.7071,
+      "relative": true
+    },
+    {
+      "from": 216,
+      "to": 221,
+      "x": 1,
+      "y": 0,
+      "relative": true
+    },
+    {
+      "from": 222,
+      "to": 227,
+      "x": 0.7071,
+      "y": 0.7071,
+      "relative": true
+    },
+    {
+      "from": 228,
+      "to": 233,
+      "x": 0,
+      "y": 1,
+      "relative": true
+    },
+    {
+      "from": 234,
+      "to": 239,
+      "x": -0.7071,
+      "y": 0.7071,
+      "relative": true
+    }
+  ],
+  "asserts": [
+    {
+      "window": {
+        "from": 150,
+        "to": 300
+      },
+      "minAnchorApproach": 0.6
+    }
+  ]
+}

@@ -144,11 +144,67 @@ const MAX_CHAIN_SWEEPS = 64;
 export function stepSceneChains(chains: readonly SceneChain[], delta: number): void {
   if (chains.length === 0) return;
   for (const chain of chains) chain.beginFrame(delta);
+  sweepChains(chains, null, delta);
+}
+
+// The sweep itself, over a set whose frames are already open, plus optionally
+// one more rope that is NOT scenery: the ball's chain, when it is anchored to a
+// body a scene chain also holds.
+//
+// That rope belongs in this loop for exactly the reason the scene chains belong
+// in it with each other - they share a body, so each one's solve is the last
+// word on where that body ends up and the other's correction is the residual.
+// Left out of it, the ball's chain solved once, after the set had converged, and
+// the two spent every frame undoing each other: the ball arena's link block was
+// moved 10 mm and 0.15 rad one way by its three chains and 11 mm and 0.17 rad
+// back by the ball's, frame after frame, for ever (session-521f).
+//
+// The cost of that is not the shaking, which nets out in position. It is that a
+// PBD correction is split between the bodies on the path by their INVERSE MASS,
+// and the ball's chain, solving alone, split it against the link's own 11 kg
+// rather than against what the link is actually tied to. Four fifths of every
+// winch correction was therefore spent moving an anchor that three other chains
+// put straight back, and the ball - which is what winding chain onto yourself is
+// supposed to haul - kept a fifth. Swept together, the scene chains refuse the
+// anchor within the frame and the next pass puts the correction where it can
+// still go, which is the ball: a light anchor on a chain went from 7 cm of winch
+// travel to 137 cm (`playtests/ball-winch-hung-anchor.json`), against 136 cm for
+// the same rig anchored to a static, which is the statement - how far a winch
+// hauls must not depend on what is holding the far end.
+export function sweepChains(
+  chains: readonly SceneChain[],
+  extra: { rope: Rope; bodies: PhysicsBody2D[] } | null,
+  delta: number,
+): void {
   for (let sweep = 0; sweep < MAX_CHAIN_SWEEPS; sweep++) {
     if (sweep % 2 === 0) {
       for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
     } else {
       for (let i = chains.length - 1; i >= 0; i--) chains[i]!.solve(delta);
+    }
+    if (extra) {
+      // What the scene's pass has just done to the rope being coupled in, and
+      // the ONLY thing this loop measures convergence by: the two are done
+      // arguing once the scenery stops disturbing the rope, whatever the
+      // scenery's own residual is.
+      //
+      // Gating on that residual instead is gating on a property of the LEVEL,
+      // not of the coupling. The ball arena's rig wants ~200 sweeps for 5 mm and
+      // gets 64 (see above), so the set is over its tolerance on essentially
+      // every frame - 1616 of 1618 - and a loop waiting for it always spends the
+      // whole cap. What it spends it on is a ball chain solve, which regenerates
+      // a wrap path and is an order dearer than a scene chain's: it doubled the
+      // arena's physics frame (p50 2.3 ms to 3.7, p99 5.2 to 8.9, peaks at
+      // 15.3 against a 16.7 ms budget the renderer also draws inside) for sweeps
+      // that had stopped changing the answer after the first (session-1618f).
+      const disturbed = extra.rope.overLength;
+      // Solved last, so the frame ends on the rope whose books the caller takes:
+      // `BallLevel` credits the ball for the position the chain phase leaves it
+      // at, and a scene chain solving after it would move the anchor out from
+      // under that measurement.
+      extra.rope.solvePass(extra.bodies, delta);
+      if (disturbed <= CHAIN_TOLERANCE) break;
+      continue;
     }
     // Measured after the sweep, so a set that is already satisfied still pays
     // one solve - the sweep is what discovers that, and gravity has moved the

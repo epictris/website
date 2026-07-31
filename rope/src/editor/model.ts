@@ -19,7 +19,13 @@ import {
   polySignedArea2,
 } from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { slabMass, sphereMass } from "../lib/shapeGeometry";
+import {
+  DEFAULT_MATERIAL,
+  DEFAULT_THICKNESS,
+  MATERIALS,
+  prismMass,
+  type MaterialName,
+} from "../lib/shapeGeometry";
 import {
   DEFAULT_BACKGROUND_COLOR,
   DEFAULT_BACKGROUND_OPACITY,
@@ -82,10 +88,21 @@ export interface EdNote {
 export interface EdItem {
   id: number;
   layer: EdLayer;
-  // Compound-body membership (geometry layer only): items sharing a group id
-  // build into ONE engine body carrying all their shapes, so the rope and ledge
-  // detection treat the join between two pieces as an interior seam rather than
-  // as a corner (see `LevelBodyData.group`). Null = a body of its own.
+  // Compound-body membership: geometry items sharing a group id build into ONE
+  // engine body carrying all their shapes, so the rope and ledge detection treat
+  // the join between two pieces as an interior seam rather than as a corner (see
+  // `LevelBodyData.group`). Null = a body of its own.
+  //
+  // A BACKGROUND item may carry one too, and it means the same thing one layer
+  // down: the panel is part of that body, drawn in its frame, so decoration on a
+  // rigid assembly swings and falls with it (`BackgroundData.group`). It brings
+  // no shape to the body - a background is decoration and stays decoration - so
+  // it contributes nothing to the group's mass, centre of mass or seams. A group
+  // of backgrounds alone is a legitimate thing to author: several panels moved
+  // and turned as one piece of scenery, with no body behind them.
+  //
+  // The camera and notes layers stay ungrouped: neither is drawn in play, and
+  // neither has anything a body could carry it in.
   //
   // The id is editor-local and never leaves it: `toLevelData` writes a `g<id>`
   // tag, and loading mints fresh ids from whatever tags a file carries.
@@ -100,6 +117,18 @@ export interface EdItem {
   // Geometry layer:
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
+  // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
+  // hook is destroyed on it and the ball's is deflected. Per SHAPE, so it is
+  // among the properties `syncGroupProps` leaves alone - a compound wall with
+  // one attachable ledge among hook-proof faces is what it is for.
+  impermeable: boolean;
+  // What the shape is made of, and how thick it is through z - the dimension
+  // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
+  // SHAPE, so they are the one geometry property `syncGroupProps` leaves alone:
+  // a compound body's mass, centre of mass and inertia are sums over its
+  // pieces, and a piece brings its own material to them.
+  material: MaterialName;
+  thickness: number; // metres
   force: number; // force areas only: m/s² along the item's rotation
   // Camera layer:
   cam: EdCamera;
@@ -235,6 +264,14 @@ function edShape(s: ShapeData): EdShape {
   return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
 }
 
+// An on-disk material name resolved to one the editor can put in its picker.
+// A name this build does not have loads as the default, exactly as the runtime
+// loader resolves it (`materialDensity`), rather than as an entry the picker
+// cannot show.
+function materialName(name: string | undefined): MaterialName {
+  return name !== undefined && name in MATERIALS ? (name as MaterialName) : DEFAULT_MATERIAL;
+}
+
 // Metre-space LevelData → editor model.
 function fromLevelData(data: LevelData): EdModel {
   // On-disk group tags are arbitrary strings; the editor works in numeric ids,
@@ -252,13 +289,18 @@ function fromLevelData(data: LevelData): EdModel {
     id: newBodyId(),
     layer: "geometry",
     group: groupIdFor(b.group),
-    kind: b.kind,
+    // `scaleLevelData` normalised the retired `impermeable` kind away on the
+    // way in, so what is left here is a real `BodyKind`.
+    kind: b.kind as BodyKind,
     pos: new Vec2(b.x, b.y),
     rot: b.rot,
     shape: edShape(b.shape),
     color: b.color ?? DEFAULT_BODY_COLOR,
     opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
     friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
+    impermeable: b.impermeable === true,
+    material: materialName(b.material),
+    thickness: b.thickness ?? DEFAULT_THICKNESS,
     force: b.force ?? 0,
     cam: defaultCamera(),
     note: defaultNote(),
@@ -266,7 +308,9 @@ function fromLevelData(data: LevelData): EdModel {
   const backgrounds: EdItem[] = (data.backgrounds ?? []).map((g) => ({
     id: newBodyId(),
     layer: "background",
-    group: null, // grouping is a geometry-layer notion; keeps the field total
+    // The same tag namespace the bodies use: a panel welded into a compound body
+    // rides it (see `EdItem.group` and `BackgroundData.group`).
+    group: groupIdFor(g.group),
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(g.x, g.y),
     rot: g.rot,
@@ -274,6 +318,10 @@ function fromLevelData(data: LevelData): EdModel {
     color: g.color ?? DEFAULT_BACKGROUND_COLOR,
     opacity: g.opacity ?? DEFAULT_BACKGROUND_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    impermeable: false,
+    // Unused off the geometry layer; keeps the field total.
+    material: DEFAULT_MATERIAL,
+    thickness: DEFAULT_THICKNESS,
     force: 0,
     cam: defaultCamera(),
     note: defaultNote(),
@@ -289,6 +337,10 @@ function fromLevelData(data: LevelData): EdModel {
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    impermeable: false,
+    // Unused off the geometry layer; keeps the field total.
+    material: DEFAULT_MATERIAL,
+    thickness: DEFAULT_THICKNESS,
     force: 0,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
@@ -312,6 +364,10 @@ function fromLevelData(data: LevelData): EdModel {
     color: NOTE_COLOR,
     opacity: NOTE_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    impermeable: false,
+    // Unused off the geometry layer; keeps the field total.
+    material: DEFAULT_MATERIAL,
+    thickness: DEFAULT_THICKNESS,
     force: 0,
     cam: defaultCamera(),
     note: {
@@ -364,6 +420,9 @@ export function toLevelData(model: EdModel): LevelData {
       // rather than omitted at its default.
       color: i.color,
       opacity: i.opacity,
+      // Written as the same `g<id>` tag the bodies carry, so a panel and the
+      // shapes it is welded to name one group (see the bodies below).
+      ...(i.group !== null ? { group: `g${i.group}` } : {}),
     }));
 
   const cameraRegions: CameraRegionData[] = model.items
@@ -440,6 +499,12 @@ export function toLevelData(model: EdModel): LevelData {
       color: b.color,
       opacity: b.opacity,
       friction: b.friction,
+      // Absent means "an ordinary surface", so only a hook-proof one says so.
+      ...(b.impermeable ? { impermeable: true } : {}),
+      // Written only when the shape is something other than the default 20 cm
+      // of oak, so every level authored before materials stays byte-identical.
+      ...(b.material !== DEFAULT_MATERIAL ? { material: b.material } : {}),
+      ...(b.thickness !== DEFAULT_THICKNESS ? { thickness: b.thickness } : {}),
       // Only force areas carry a magnitude; omitting it elsewhere keeps saved
       // levels free of a field that would read as meaningful.
       ...(b.kind === "force" ? { force: b.force } : {}),
@@ -689,18 +754,26 @@ export function shapeArea(item: EdItem): number {
 // polygon a slab of `SCENE_DEPTH`, so the two stopped being proportional the
 // moment masses became physical.
 export function shapeMass(item: EdItem): number {
-  if (item.shape.kind === "circle") return sphereMass(item.shape.r);
-  return slabMass(shapeArea(item));
+  return prismMass(shapeArea(item), item.thickness, MATERIALS[item.material]);
 }
 
 // A group's centre of mass - the point `buildLevelBodies` puts the compound
 // body's origin at, and therefore the point it rotates about. Weighted by mass,
 // not the bounding-box centre: every rigid-body lever arm in the engine is
 // measured from the body origin, so the two have to agree.
+//
+// Measured over the group's SHAPES alone. A background panel is decoration and
+// brings no shape to the built body, so it brings no mass to this sum either -
+// welding a backdrop onto a body may not shift the point that body turns about,
+// or the editor would be rotating a group about a point the sim does not have.
+// A group with no geometry at all has no body to agree with, so its panels are
+// weighed among themselves and the group turns about their own centre.
 export function groupCentroid(items: readonly EdItem[]): Vec2 {
+  const shapes = items.filter((i) => i.layer === "geometry");
+  const weighed = shapes.length ? shapes : items;
   let total = 0;
   let acc = Vec2.ZERO;
-  for (const i of items) {
+  for (const i of weighed) {
     const a = shapeMass(i);
     total += a;
     acc = acc.add(i.pos.mul(a));
@@ -708,7 +781,7 @@ export function groupCentroid(items: readonly EdItem[]): Vec2 {
   if (total > 0) return acc.div(total);
   // Degenerate (zero-area) shapes: fall back to the plain mean so the answer is
   // still inside the group rather than NaN.
-  return items.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, items.length));
+  return weighed.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, weighed.length));
 }
 
 // Turn a whole group about `centre` by `delta` radians: each piece's placement
@@ -722,13 +795,36 @@ export function rotateGroupAbout(items: readonly EdItem[], centre: Vec2, delta: 
   }
 }
 
+// The member whose body-level properties the group is built from: the first
+// GEOMETRY item in model order, which is the first of the group's entries in the
+// body list `toLevelData` writes, which is the entry `buildLevelBodies` takes a
+// group's kind, style, friction and force from. Null for a group of backgrounds
+// alone, which builds no body at all.
+export function groupLead(members: readonly EdItem[]): EdItem | null {
+  return members.find((m) => m.layer === "geometry") ?? null;
+}
+
 // Body-level properties a compound body has exactly one of. When several items
 // build into one body only the first member's are used, so the editor copies
 // the lead's onto the rest rather than letting a file disagree with what it
 // draws.
-export function syncGroupProps(lead: EdItem, members: readonly EdItem[]): void {
+//
+// `material` and `thickness` are deliberately NOT among them: they are per
+// shape, and a body whose pieces are made of different things is the case that
+// motivates them (a stone head on a wooden shaft). The build reads every
+// piece's own (`makePiece`), so copying the lead's would be the editor
+// overwriting authored material.
+//
+// Background members are left alone entirely: a panel is not a piece of the
+// body, it is decoration carried by it, and it has none of these properties -
+// its fill is its own (a backdrop is authored to sit behind the geometry, so
+// painting it the geometry's colour is exactly wrong), and kind, friction and
+// force mean nothing on a layer nothing collides with.
+export function syncGroupProps(members: readonly EdItem[]): void {
+  const lead = groupLead(members);
+  if (!lead) return;
   for (const m of members) {
-    if (m === lead) continue;
+    if (m === lead || m.layer !== "geometry") continue;
     m.kind = lead.kind;
     m.color = lead.color;
     m.opacity = lead.opacity;
@@ -802,6 +898,9 @@ export function emptyModel(): EdModel {
         color: DEFAULT_BODY_COLOR,
         opacity: DEFAULT_BODY_OPACITY,
         friction: DEFAULT_SURFACE_FRICTION,
+        impermeable: false,
+        material: DEFAULT_MATERIAL,
+        thickness: DEFAULT_THICKNESS,
         force: 0,
         cam: defaultCamera(),
         note: defaultNote(),

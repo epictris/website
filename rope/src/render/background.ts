@@ -19,6 +19,7 @@ import {
   DEFAULT_BACKGROUND_OPACITY,
   type BackgroundData,
 } from "../level/levelFormat";
+import { backgroundTransform, type SceneBackground } from "../level/backgrounds";
 import { hexToRgba } from "./color";
 import { outlineHalfExtents, outlineOfData, pathOutline, type Outline } from "./shapePath";
 
@@ -46,17 +47,28 @@ export function backgroundHalfExtents(g: BackgroundData): Vec2 {
 
 // Every panel of a (metre-scaled) level, in authored order, in the caller's
 // world transform. Called first by both game renderers.
+//
+// A panel welded into a compound body is drawn in that body's frame
+// (`backgroundTransform`), so it moves with the thing it decorates; every other
+// panel draws exactly where it was authored. `alpha` is the render
+// interpolation the rest of the frame uses, and an attached panel has to be
+// drawn against the same interpolated pose as the body itself.
 export function drawBackgrounds(
   ctx: CanvasRenderingContext2D,
-  backgrounds: readonly BackgroundData[],
+  backgrounds: readonly SceneBackground[],
+  alpha: number,
 ): void {
   for (const g of backgrounds) {
+    const { pos, rot } = backgroundTransform(g, alpha);
     fillBackground(
       ctx,
-      new Vec2(g.x, g.y),
-      g.rot,
-      outlineOfData(g.shape),
-      hexToRgba(g.color ?? DEFAULT_BACKGROUND_COLOR, g.opacity ?? DEFAULT_BACKGROUND_OPACITY),
+      pos,
+      rot,
+      outlineOfData(g.data.shape),
+      hexToRgba(
+        g.data.color ?? DEFAULT_BACKGROUND_COLOR,
+        g.data.opacity ?? DEFAULT_BACKGROUND_OPACITY,
+      ),
     );
   }
 }

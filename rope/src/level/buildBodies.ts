@@ -8,14 +8,18 @@ import { Vec2 } from "../engine/vec2";
 import {
   AnchorBody,
   ForceArea,
-  ImpermeableBody,
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
 } from "../engine/body";
 import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
 import { World } from "../engine/world";
-import { ShapeGeometry } from "../lib/shapeGeometry";
+import {
+  DEFAULT_THICKNESS,
+  materialDensity,
+  prismMass,
+  ShapeGeometry,
+} from "../lib/shapeGeometry";
 import { KillZone } from "../classes/killZone";
 import {
   DEFAULT_BODY_COLOR,
@@ -88,6 +92,13 @@ export interface BuiltBodies {
   // of one compound group map to the SAME object, which is the whole point of a
   // group; chains resolve their authored body index through this.
   byIndex: (CollisionObject2D | null)[];
+  // The engine object each compound-group TAG became. Background panels resolve
+  // the body they ride through this, which is why it is keyed by the tag rather
+  // than by an index: a panel is a member of the group, not a thing attached to
+  // one particular entry of it, and the group is what has an engine body. A tag
+  // no body carries (a background-only group, or one whose bodies were all
+  // deleted) is simply absent, and the panel stays where it was authored.
+  byGroup: Map<string, CollisionObject2D>;
 }
 
 // Areas are single-shape everywhere they are used - `World.integrate` tests
@@ -101,13 +112,13 @@ function groupable(kind: LevelBodyData["kind"]): boolean {
 // The authored entries in build order, each as the run of entries that make up
 // one engine body. A group's run is emitted where its FIRST member sits, so
 // z-order and the `byIndex` mapping stay in authored order.
-function groupRuns(bodies: readonly LevelBodyData[]): Array<{ indices: number[] }> {
-  const runs: Array<{ indices: number[] }> = [];
-  const byTag = new Map<string, { indices: number[] }>();
+function groupRuns(bodies: readonly LevelBodyData[]): Array<{ tag: string | null; indices: number[] }> {
+  const runs: Array<{ tag: string | null; indices: number[] }> = [];
+  const byTag = new Map<string, { tag: string | null; indices: number[] }>();
   bodies.forEach((b, i) => {
     const tag = b.group && groupable(b.kind) ? b.group : null;
     if (tag === null) {
-      runs.push({ indices: [i] });
+      runs.push({ tag: null, indices: [i] });
       return;
     }
     const existing = byTag.get(tag);
@@ -115,7 +126,7 @@ function groupRuns(bodies: readonly LevelBodyData[]): Array<{ indices: number[] 
       existing.indices.push(i);
       return;
     }
-    const run = { indices: [i] };
+    const run = { tag, indices: [i] };
     byTag.set(tag, run);
     runs.push(run);
   });
@@ -128,6 +139,10 @@ interface Piece {
   pos: Vec2;
   rot: number;
   mass: number;
+  // Hook-proof (`LevelBodyData.impermeable`), carried per piece: one body may
+  // be attachable on one face and repel the hook on the next, which is why the
+  // flag lives on the mounted `CollisionShape2D` rather than on a body kind.
+  impermeable: boolean;
 }
 
 function makePiece(b: LevelBodyData): Piece {
@@ -139,7 +154,22 @@ function makePiece(b: LevelBodyData): Piece {
     shape: made.shape,
     pos,
     rot: b.rot,
-    mass: ShapeGeometry.computeMass({ shape: made.shape, globalPosition: pos, globalRotation: b.rot }),
+    impermeable: b.impermeable === true,
+    // The piece's own material and thickness, not the group's: they are the one
+    // authored property a compound body does not have just one of, and every
+    // sum below - centre of mass, mass, inertia - is written over the pieces
+    // precisely so each can bring its own.
+    //
+    // A prism whatever the shape kind, a circle included: an authored circle is
+    // a disc seen face on (a wheel, a barrel end), so it is `thickness` thick
+    // like everything else on the level. The sphere rule is the code-built
+    // round bodies' (the ball, its hook, the sandbox's rocks) and stays theirs -
+    // see `ShapeGeometry.computeMass`.
+    mass: prismMass(
+      ShapeGeometry.area(made.shape),
+      b.thickness ?? DEFAULT_THICKNESS,
+      materialDensity(b.material),
+    ),
   };
 }
 
@@ -159,23 +189,34 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const only = pieces[0]!;
     body.globalPosition = only.pos;
     body.globalRotation = only.rot;
-    body.setShape(only.shape);
+    body.setShape(only.shape).impermeable = only.impermeable;
     return;
   }
   body.globalPosition = centre;
   body.globalRotation = 0;
   body.collisionShapes = [];
-  for (const p of pieces) body.addShape(p.shape, p.pos.sub(centre), p.rot);
+  for (const p of pieces) {
+    body.addShape(p.shape, p.pos.sub(centre), p.rot).impermeable = p.impermeable;
+  }
 }
 
 // Mass and moment of inertia of a mounted compound body. Each piece contributes
 // its own second moment about its own centroid plus the parallel-axis term for
 // how far that centroid sits from the body origin.
-function setCompoundInertia(rb: RigidBody2D): void {
+//
+// The masses come from the `pieces` rather than being re-derived from the
+// mounted shapes, because a shape carries neither material nor thickness:
+// re-deriving here would weigh every piece as 20 cm of oak and silently
+// disagree with the centre of mass `mountPieces` just placed the origin at.
+// `mountPieces` mounts the pieces in order, so the two lists correspond index
+// for index.
+function setCompoundInertia(rb: RigidBody2D, pieces: Piece[]): void {
   let mass = 0;
   let inertia = 0;
-  for (const s of rb.getShapes()) {
-    const m = ShapeGeometry.computeMass(s);
+  const shapes = rb.getShapes();
+  for (let i = 0; i < shapes.length; i++) {
+    const s = shapes[i]!;
+    const m = pieces[i]!.mass;
     const d = s.localOffset.lengthSquared();
     mass += m;
     inertia += ShapeGeometry.computeMomentOfInertia(s, m) + m * d;
@@ -193,6 +234,7 @@ export function buildLevelBodies(
 ): BuiltBodies {
   const wrapBodies: PhysicsBody2D[] = [];
   const byIndex: (CollisionObject2D | null)[] = data.bodies.map(() => null);
+  const byGroup = new Map<string, CollisionObject2D>();
 
   for (const run of groupRuns(data.bodies)) {
     // A group's kind, style and friction come from its first member: a body has
@@ -202,12 +244,13 @@ export function buildLevelBodies(
     const pieces = run.indices.map((i) => makePiece(data.bodies[i]!));
     const built = buildOne(world, lead, pieces, onReset);
     for (const i of run.indices) byIndex[i] = built;
+    if (run.tag !== null) byGroup.set(run.tag, built);
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and an AnchorBody reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, byIndex };
+  return { wrapBodies, byIndex, byGroup };
 }
 
 function buildOne(
@@ -249,7 +292,7 @@ function buildOne(
   if (b.kind === "rigid") {
     const rb = new RigidBody2D();
     mountPieces(rb, pieces);
-    setCompoundInertia(rb);
+    setCompoundInertia(rb, pieces);
     applyStyle(rb, b);
     // The authored `friction` is the body's material grip, so it scales what the
     // body brings to a contact as well as what it offers one: an ice block is
@@ -262,7 +305,9 @@ function buildOne(
     return rb;
   }
 
-  const sb = b.kind === "impermeable" ? new ImpermeableBody() : new StaticBody2D();
+  // Hook-proof is not a kind any more - it is a flag `mountPieces` puts on the
+  // shapes themselves, so an ordinary static carries it (see `Piece`).
+  const sb = new StaticBody2D();
   mountPieces(sb, pieces);
   applyStyle(sb, b);
   world.add(sb);

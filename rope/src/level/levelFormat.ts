@@ -10,16 +10,26 @@
 
 // Body kinds a level can contain:
 // - static:      immovable geometry the rope wraps and bodies collide with.
-// - impermeable: static, but hooks are destroyed on contact instead of attaching.
-// - anchor:      the mirror image of impermeable — the hook attaches to it, but
-//                nothing collides with it and the rope never wraps it. Scenery
-//                the player swings from and passes through (a background grate,
-//                a girder, a chandelier).
+// - anchor:      hook-only scenery — the hook attaches to it, but nothing
+//                collides with it and the rope never wraps it (a background
+//                grate, a girder, a chandelier).
 // - killzone:    an Area2D that resets the level when the avatar enters it.
 // - rigid:       a dynamic RigidBody2D (gravity + collisions), authored in place.
 // - force:       an Area2D that accelerates every body inside it along the
 //                area's own rotation (a river current, wind, an updraft).
-export type BodyKind = "static" | "impermeable" | "anchor" | "killzone" | "rigid" | "force";
+//
+// Hook-proof (`impermeable`) is deliberately NOT among them - it is a per-shape
+// flag below. It was a kind while it could only ever be static scene geometry,
+// and that cost the two things a level actually wants: a hook-proof crate that
+// still falls and is hauled about (nothing can be `rigid` and `impermeable` at
+// once when both are kinds), and a compound wall with one attachable ledge and
+// hook-proof faces everywhere else.
+export type BodyKind = "static" | "anchor" | "killzone" | "rigid" | "force";
+
+// The retired kind, as levels on disk (and the generated `levelData.ts`) still
+// carry it. `normalizeLevelData` folds it into `static` + `impermeable: true`
+// at load, so nothing past that line ever sees it.
+export const LEGACY_IMPERMEABLE = "impermeable";
 
 // A shape as authored on disk. `poly` is a **convex** vertex loop in the item's
 // own local frame, centred on its area centroid (the loader re-centres one that
@@ -48,7 +58,21 @@ export const DEFAULT_SURFACE_FRICTION = 1;
 export const DEFAULT_FORCE_MAGNITUDE = 300;
 
 export interface LevelBodyData {
-  kind: BodyKind;
+  // `normalizeLevelData` is what every level passes through on the way in, so
+  // downstream this is a `BodyKind`; the wider type is only how the retired
+  // `"impermeable"` kind is still readable off disk.
+  kind: BodyKind | typeof LEGACY_IMPERMEABLE;
+  // Hook-proof: the grapple hook is destroyed on this surface and the ball's is
+  // deflected, instead of either anchoring. It is solid either way - being
+  // hook-proof is about the rope and nothing else - so the avatar stands on it,
+  // bodies collide with it and the rope still wraps its corners.
+  //
+  // Per SHAPE, which is per entry here, and unlike every other body-level
+  // property it does NOT collapse onto a group's first member: a compound wall
+  // whose one attachable ledge is a piece among hook-proof faces is precisely
+  // what it is for, and which surface the hook reached is a question about a
+  // shape rather than about a body.
+  impermeable?: boolean;
   x: number;
   y: number;
   rot: number;
@@ -58,6 +82,35 @@ export interface LevelBodyData {
   opacity?: number;
   // Surface friction, 0 (ice) .. 1 (rubber). Absent = DEFAULT_SURFACE_FRICTION.
   friction?: number;
+  // What this shape is made of and how thick it is through z - the dimension
+  // the 2D view cannot show. Together they are the shape's mass: its area times
+  // `thickness` times the material's density (`MATERIALS` in
+  // `lib/shapeGeometry.ts`), so a 2 m × 0.4 m stone slab 20 cm thick weighs
+  // 384 kg and a level author can check that against the real thing.
+  //
+  // A material NAME rather than a raw density, because naming the stuff is the
+  // decision an author is making; the density is a fact about the material that
+  // the level should not restate. An unknown name (a hand-edited file, or one
+  // written by a build that had a material this one does not) loads as the
+  // default rather than as a body of no mass.
+  //
+  // Absent = wood, 0.2 m: what every body authored before these fields is made
+  // of, so an old level loads with exactly the masses it always had.
+  //
+  // Both are per SHAPE and not per body, which is the one property of a
+  // compound group that deliberately does NOT collapse onto the first member's:
+  // a body made of a stone head on a wooden shaft is exactly the case, and its
+  // mass, centre of mass and moment of inertia are all sums over the pieces
+  // (`buildBodies.ts`), so each piece bringing its own material is what those
+  // sums are for.
+  //
+  // Only a `rigid` body has a mass at all - a static is infinite - but they are
+  // authored on any solid geometry, as `friction` is: they state what the thing
+  // is made of, and they also fix where a compound body's origin sits, which
+  // the editor rotates a group about whatever its kind.
+  material?: string;
+  // Metres in the sim, scene pixels on disk like every other length.
+  thickness?: number;
   // Force areas only: acceleration magnitude in pixels/s² (metres/s² once
   // scaled), applied along the body's own rotation — rot 0 flows right, so
   // rotating the area steers the current. Negative reverses it.
@@ -79,6 +132,8 @@ export interface LevelBodyData {
   // The group's kind, colour, opacity, friction and force are taken from its
   // FIRST entry: a body has one of each, so the rest are ignored (the editor
   // keeps them in sync so a file never disagrees with what it draws).
+  // `material`, `thickness` and `impermeable` are the exceptions and stay per
+  // entry - see the fields.
   group?: string;
 }
 
@@ -197,6 +252,23 @@ export interface BackgroundData {
   // Optional appearance (hex colour + 0..1 fill opacity). Absent = the defaults.
   color?: string;
   opacity?: number;
+  // Compound-body membership, the SAME tag `LevelBodyData.group` carries: a
+  // panel tagged into a group is drawn in that group's engine body's frame, so
+  // decoration on a rigid body swings, falls and turns with it instead of
+  // staying welded to the spot it was authored at.
+  //
+  // A tag rather than a body index (which is how `ChainAnchorData` names a body)
+  // because this IS the grouping mechanism and not a second one: an author welds
+  // a backdrop into a compound body exactly as they weld two shapes together,
+  // and a tag no body carries - several panels grouped with nothing else, or a
+  // group whose bodies were deleted - is simply decoration that does not move.
+  //
+  // The placement stays in WORLD coordinates like everything else on disk, and
+  // `buildSceneBackgrounds` converts it into the body's frame once, at load: a
+  // group's origin is its combined centre of mass, which shifts as pieces are
+  // added, so a local offset in the file would be authored against a moving
+  // point. That is the same reason chains author their anchors in world space.
+  group?: string;
 }
 
 // Default glyph height of a text note, in scene pixels.
@@ -261,7 +333,29 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
 }
 
-export function scaleLevelData(data: LevelData, factor: number): LevelData {
+// Fold the retired `impermeable` KIND into what it now is: a static body whose
+// shape is hook-proof. Idempotent, and a no-op for every level authored since,
+// so it costs nothing to run on the way out as well as on the way in.
+//
+// It runs inside `scaleLevelData` rather than at each loader, because that is
+// the one gate a level cannot reach the sim (or the editor) without passing
+// through - the conversion between the pixels on disk and the metres everything
+// downstream is written in. A migration a caller can forget is a migration that
+// is missing wherever a new caller is added, and the failure is silent: the
+// body builds as an ordinary static and the hook simply starts anchoring to a
+// wall that has repelled it since the level was designed.
+export function normalizeLevelData(data: LevelData): LevelData {
+  if (!data.bodies.some((b) => b.kind === LEGACY_IMPERMEABLE)) return data;
+  return {
+    ...data,
+    bodies: data.bodies.map((b) =>
+      b.kind === LEGACY_IMPERMEABLE ? { ...b, kind: "static" as const, impermeable: true } : b,
+    ),
+  };
+}
+
+export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
+  const data = normalizeLevelData(rawData);
   // A camera region's positions, extents, offsets, locks and buffer are
   // lengths; viewportScale, blend (seconds) and priority are not.
   const regions = data.cameraRegions?.map((r) => ({
@@ -298,6 +392,7 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
     shape: scaleShape(g.shape, factor),
     ...(g.color !== undefined ? { color: g.color } : {}),
     ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
+    ...(g.group !== undefined ? { group: g.group } : {}),
   }));
   // A chain's anchor points and its length are lengths; the body indices and
   // the colour are not.
@@ -326,6 +421,11 @@ export function scaleLevelData(data: LevelData, factor: number): LevelData {
       ...(b.color !== undefined ? { color: b.color } : {}),
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),
+      ...(b.impermeable !== undefined ? { impermeable: b.impermeable } : {}),
+      // A material is a name and scales by nothing; a thickness is a length in
+      // z and scales exactly as the two lengths in the plane do.
+      ...(b.material !== undefined ? { material: b.material } : {}),
+      ...(b.thickness !== undefined ? { thickness: b.thickness * factor } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
       ...(b.group !== undefined ? { group: b.group } : {}),
     })),

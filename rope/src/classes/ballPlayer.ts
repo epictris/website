@@ -10,8 +10,8 @@
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf, wrapAngle } from "../engine/mathf";
-import { ImpermeableBody, RigidBody2D, type PhysicsBody2D } from "../engine/body";
-import { circleShape } from "../engine/shapes";
+import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
+import { circleShape, nearestShapeIndex } from "../engine/shapes";
 import type { ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
@@ -384,8 +384,13 @@ export class BallPlayer extends RigidBody2D {
       this.hookInFlight = null;
       this.chainTip = null;
       if (!this.chain) return;
-      if (body instanceof ImpermeableBody) {
-        // Hook-proof surface: the chain is lost.
+      // Hook-proof surface: the chain is lost. `BallHook` deflects off one
+      // rather than attaching, so this is a backstop - but it is asked of the
+      // PIECE the anchor point landed on, because a wall may be hook-proof on
+      // one face and attachable on the next and a body-level answer would be
+      // wrong for whichever face it is not about.
+      const shapes = body.getShapes();
+      if (shapes[nearestShapeIndex(shapes, point)]?.impermeable) {
         this.releaseChain();
         return;
       }

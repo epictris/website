@@ -14,12 +14,12 @@ import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
-  type BackgroundData,
   type CameraRegionData,
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
-import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
+import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
+import { buildSceneChains, stepSceneChains, sweepChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -33,7 +33,7 @@ export class BallLevel {
   // Camera-behaviour volumes, in metres (see Level.cameraRegions).
   readonly cameraRegions: CameraRegionData[];
   // Decoration drawn behind the level, in metres (see Level.backgrounds).
-  readonly backgrounds: BackgroundData[];
+  readonly backgrounds: SceneBackground[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
   onReset: (() => void) | null = null;
@@ -89,7 +89,6 @@ export class BallLevel {
   constructor(rawData: LevelData) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
-    this.backgrounds = data.backgrounds ?? [];
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);
@@ -99,6 +98,9 @@ export class BallLevel {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built.byIndex);
+    // After the bodies, since a panel welded into a compound group is placed in
+    // that group's engine body's frame.
+    this.backgrounds = buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup);
 
     this.cameraPosition = this.ball.globalPosition;
   }
@@ -276,6 +278,19 @@ export class BallLevel {
         }
       }
       this.ball.chain.physicsStep(this.bodies, delta);
+      // The chain and the scenery's chains are ONE system whenever they share a
+      // body, so the solve is swept over the set rather than run once each (see
+      // `sweepChains`). The scene chains have already converged among themselves
+      // above, so what this sweep resolves is only their answer to what the ball
+      // has just pulled on - which is exactly the motion the rollback below is
+      // written about, and the reason the anchor's share of the winch stops
+      // being spent on an anchor that cannot move.
+      //
+      // Skipped when the level has no chains, so every level and playtest that
+      // predates scene chains replays bit-for-bit.
+      if (this.sceneChains.length > 0) {
+        sweepChains(this.sceneChains, { rope: this.ball.chain, bodies: this.bodies }, delta);
+      }
       PhaseTrace.mark("rope-solve", this.world);
       for (const [body, before] of haulAtSolve) {
         body.globalPosition = body.globalPosition.sub(

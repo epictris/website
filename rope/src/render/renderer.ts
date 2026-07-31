@@ -8,10 +8,10 @@ import {
   AnimatableBody2D,
   Area2D,
   ForceArea,
-  ImpermeableBody,
   RigidBody2D,
   StaticBody2D,
   type CollisionObject2D,
+  type CollisionShape2D,
 } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PIXELS_PER_METER, PX } from "../engine/units";
@@ -131,15 +131,20 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
     drawCompoundGeometry(ctx, body, shapes);
     return;
   }
-  for (const s of shapes) drawGeometryShape(ctx, body, s);
+  const pieces = body.getShapes();
+  shapes.forEach((s, i) => drawGeometryShape(ctx, body, s, pieces[i]));
 }
 
 // How a body's geometry is painted: the same choices `drawGeometryShape` makes,
 // pulled out so the compound path cannot drift from the single-shape one.
 function geometryStyle(
   body: CollisionObject2D,
+  // The PIECE being drawn, when there is one: hook-proof is a property of the
+  // surface, so one body may draw a dashed steel edge on the face that repels
+  // the hook and its ordinary border on the ledge that does not.
+  piece?: CollisionShape2D,
 ): { fill: string | null; stroke: string; width: number; dash: number[] } {
-  if (body instanceof ImpermeableBody) {
+  if (piece?.impermeable) {
     return {
       fill: body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : null,
       stroke: IMPERMEABLE_EDGE,
@@ -205,10 +210,14 @@ function drawCompoundGeometry(
     ctx.fill(unionPath(shapes));
   }
   const box = shapesBounds(shapes);
-  ctx.strokeStyle = style.stroke;
-  ctx.lineWidth = style.width;
-  ctx.setLineDash(style.dash);
+  const pieces = body.getShapes();
   for (let i = 0; i < shapes.length; i++) {
+    // Per piece, because hook-proof is: `renderShapes` returns the mounted
+    // shapes in order, so piece `i` is the transform's own.
+    const edge = geometryStyle(body, pieces[i]);
+    ctx.strokeStyle = edge.stroke;
+    ctx.lineWidth = edge.width;
+    ctx.setLineDash(edge.dash);
     ctx.save();
     // Clip away each sibling in turn. Clips intersect, so after the loop what is
     // left is "outside every other piece" - which is where this piece's edge is
@@ -237,11 +246,12 @@ function drawGeometryShape(
   ctx: CanvasRenderingContext2D,
   body: CollisionObject2D,
   t: ShapeTransform,
+  piece?: CollisionShape2D,
 ): void {
   // Impermeable (hook-proof) surfaces: authored fill, but a dashed steel border
   // instead of the plain one so they read as chain-repelling — it's clear why
   // the hook bounces off them rather than anchoring.
-  if (body instanceof ImpermeableBody) {
+  if (piece?.impermeable) {
     pathShape(ctx, t);
     if (body.fillColor) {
       ctx.fillStyle = hexToRgba(body.fillColor, body.fillOpacity);
@@ -412,7 +422,7 @@ export function render(
 
   // Authored decoration, under everything: nothing the player can touch may be
   // hidden behind a backdrop.
-  drawBackgrounds(ctx, level.backgrounds);
+  drawBackgrounds(ctx, level.backgrounds, alpha);
 
   // Chains hang among the decoration, behind every solid thing - which is the
   // same statement as their passing through it (see `SceneChain`).
@@ -677,7 +687,7 @@ export function renderBall(
   ctx.translate(-camera.position.x, -camera.position.y);
 
   // Authored decoration under everything (see `render`).
-  drawBackgrounds(ctx, level.backgrounds);
+  drawBackgrounds(ctx, level.backgrounds, alpha);
 
   // Chains behind the solid geometry they pass through (see `render`).
   drawSceneChains(ctx, level.sceneChains, alpha);

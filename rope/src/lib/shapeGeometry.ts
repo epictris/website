@@ -14,10 +14,15 @@ export const LEDGE_MAX_INTERIOR_ANGLE = Mathf.degToRad(100);
 // Interior angles are rotation-invariant — computed once per Shape and cached.
 const interiorAngleCache = new WeakMap<Shape, number[]>();
 
-// How thick a slab of scenery is, in metres. A rect or polygon is a flat piece
-// cut from the world - a platform, a crate, a plank - so its mass is its area
-// times this depth times its density. Circles do NOT use it (see `computeMass`).
-export const SCENE_DEPTH = 0.2;
+// How thick a piece of scenery is through the z axis - the dimension the 2D
+// view cannot show - in metres. A level shape authors its own `thickness`; this
+// is what one that does not is, and it is what every body authored before the
+// field was 0.2 m thick as.
+//
+// It is NOT used by the code-built round bodies (the ball, its hook, a
+// cannonball, the sandbox's rocks), which are spheres rather than extrusions -
+// see `computeMass`.
+export const DEFAULT_THICKNESS = 0.2;
 
 // Real material densities, kg/m³. A body's mass is a physical quantity here, not
 // a tuning number: the ball is cast iron and weighs what a cast-iron ball of its
@@ -30,8 +35,8 @@ export const Density = {
   CAST_IRON: 7200,
   STEEL: 7850,
   // Oak: generic scene props - crates, planks, the movable slabs levels author
-  // as `rigid`. Level geometry carries no material of its own yet, so this is
-  // what an authored rigid body is made of.
+  // as `rigid`. A level shape names its own material (`LevelBodyData.material`,
+  // per shape rather than per body); this is what one that names none is.
   WOOD: 700,
   // Rock/rubble: the loose circles the grapple sandbox spawns.
   STONE: 2400,
@@ -41,19 +46,75 @@ export const Density = {
   FLESH: 1000,
 } as const;
 
-// What a body is made of when nothing says otherwise: an authored `rigid` level
-// body is a wooden crate or plank until the level format can name its material.
-export const DEFAULT_DENSITY = Density.WOOD;
+// The materials a level shape may be made of, in ascending density - the order
+// the editor's picker lists them in, which is the order an author thinks about
+// them in ("heavier than that").
+//
+// Names rather than raw numbers, because a material is what an author is
+// actually choosing: "this crate is stone" is a decision about the level, and
+// 2400 is a fact about stone that the level should not have to restate (or get
+// slightly wrong in three different places). It is also what keeps the numbers
+// honest - every one of these is the real density of the real thing, so a
+// stone slab of a given size weighs what such a slab weighs.
+//
+// The keys are what reaches disk, so they are stable: renaming one is a level
+// format change and an unknown name loads as the default rather than as zero
+// mass.
+export const MATERIALS = {
+  wood: Density.WOOD,
+  ice: 917,
+  flesh: Density.FLESH,
+  rubber: 1100,
+  brick: 1900,
+  stone: Density.STONE,
+  glass: 2500,
+  aluminium: 2700,
+  "cast iron": Density.CAST_IRON,
+  steel: Density.STEEL,
+  lead: 11340,
+} as const;
+
+export type MaterialName = keyof typeof MATERIALS;
+
+export const MATERIAL_NAMES = Object.keys(MATERIALS) as MaterialName[];
+
+// What a shape is made of when it names nothing: an authored level shape is a
+// wooden crate or plank.
+export const DEFAULT_MATERIAL: MaterialName = "wood";
+export const DEFAULT_DENSITY = MATERIALS[DEFAULT_MATERIAL];
+
+// The density of a named material, defaulting whatever the name is not one of
+// them - a hand-edited level naming a material this build does not have gets
+// oak rather than a body of zero mass.
+export function materialDensity(name: string | undefined): number {
+  if (name === undefined) return DEFAULT_DENSITY;
+  return (MATERIALS as Record<string, number | undefined>)[name] ?? DEFAULT_DENSITY;
+}
 
 // The two volume rules, exposed for callers that hold a radius or an area rather
 // than a shape (the editor's group centre of mass), so there is one statement of
 // each in the project.
+//
+// A SPHERE is what the code-built round bodies are - the ball, its hook, a
+// cannonball, the sandbox's rocks - and it is deliberately not an extrusion:
+// extruding a ball to a slab's thickness makes small ones absurd (a 4 cm hook
+// would outweigh a 5 cm rock six times over).
 export function sphereMass(radius: number, density: number = DEFAULT_DENSITY): number {
   return (4 / 3) * Mathf.Pi * radius * radius * radius * density;
 }
 
-export function slabMass(area: number, density: number = DEFAULT_DENSITY): number {
-  return area * SCENE_DEPTH * density;
+// A PRISM is what authored level geometry is: a flat piece cut from the world -
+// a platform, a crate, a plank, a wheel - of the thickness the author gave it
+// through the z axis the 2D view cannot show. Every shape kind takes this rule,
+// a circle included: an authored circle is a disc seen face on (a wheel, a
+// barrel end), and a `thickness` that some shapes quietly ignored would be a
+// field that lies about what it does.
+export function prismMass(
+  area: number,
+  thickness: number = DEFAULT_THICKNESS,
+  density: number = DEFAULT_DENSITY,
+): number {
+  return area * thickness * density;
 }
 
 export const ShapeGeometry = {
@@ -174,23 +235,30 @@ export const ShapeGeometry = {
     return [inNormal, outNormal];
   },
 
+  // A shape's area in m², whichever kind it is. One statement of it, so the two
+  // mass rules and the editor's centre of mass cannot disagree about how big a
+  // shape is.
+  area(shape: Shape): number {
+    if (shape.kind === "circle") return Mathf.Pi * shape.radius * shape.radius;
+    if (shape.kind === "poly") return polyArea(shape.verts);
+    return shape.size.x * shape.size.y;
+  },
+
   // Mass in KILOGRAMS: the shape's real volume times its material's density
-  // (see `Density` / `SCENE_DEPTH` above). The sim runs in metres and seconds,
-  // so mass is the third SI unit and every derived quantity - momentum,
-  // impulses, kinetic energy - is a real one too.
+  // (see `Density` above). The sim runs in metres and seconds, so mass is the
+  // third SI unit and every derived quantity - momentum, impulses, kinetic
+  // energy - is a real one too.
   //
-  // A circle is a SPHERE and a rect/poly is a prism of `SCENE_DEPTH`, which is
-  // the one place this file is deliberately not a single extrusion: the round
-  // things here are balls (the cast-iron ball, its hook, a cannonball, a rock)
-  // and the flat ones are slabs cut from the scenery. Extruding a ball to the
-  // slab depth makes small balls absurdly heavy - a 4 cm hook would outweigh a
-  // 5 cm rock by six times - so each kind gets the volume its shape actually
-  // has.
+  // This is the CODE-BUILT bodies' rule, where a circle is a SPHERE: the round
+  // things built here are balls (the cast-iron ball, its hook, a cannonball, a
+  // rock) and the flat ones are slabs of the default thickness. Authored level
+  // geometry does not come through here - it is a prism of the thickness its
+  // author gave it, `prismMass` over `area`, a circle included (see
+  // `buildBodies.ts`), because there the field has to mean what it says.
   computeMass(shape: ShapeTransform, density: number = DEFAULT_DENSITY): number {
     const s = shape.shape;
     if (s.kind === "circle") return sphereMass(s.radius, density);
-    if (s.kind === "poly") return slabMass(polyArea(s.verts), density);
-    return slabMass(s.size.x * s.size.y, density);
+    return prismMass(ShapeGeometry.area(s), DEFAULT_THICKNESS, density);
   },
 
   // Second moment about the shape's own origin. For a polygon that origin must

@@ -220,7 +220,9 @@ function unionPath(items: readonly EdItem[]): Path2D {
 function strokeCompoundOutline(
   ctx: CanvasRenderingContext2D,
   items: readonly EdItem[],
-  style: () => void,
+  // Called with the piece about to be stroked, so a style that differs per
+  // piece (a hook-proof face among ordinary ones) can say so.
+  style: (item: EdItem) => void,
 ): void {
   const box = groupBounds(items);
   const pad = 1;
@@ -240,7 +242,7 @@ function strokeCompoundOutline(
     }
     const own = new Path2D();
     pathOutlineInto(own, items[i]!.pos, items[i]!.rot, outlineOf(items[i]!));
-    style();
+    style(items[i]!);
     ctx.stroke(own);
     ctx.restore();
   }
@@ -448,18 +450,23 @@ function drawNoteText(ctx: CanvasRenderingContext2D, cam: Camera, item: EdItem):
 // origin its built body will have, and the point it rotates about - and a
 // selected one adds spokes to each piece plus a dashed hull, which is what says
 // "these are one body" rather than "these shapes happen to overlap".
+// `visible` is what may be marked (the members on layers that are drawn);
+// `all` is every item in the model, which is what the centre of mass is measured
+// over - the diamond is the built body's origin, and hiding a layer may not move
+// it.
 function drawGroupMarks(
   ctx: CanvasRenderingContext2D,
-  geometry: readonly EdItem[],
+  visible: readonly EdItem[],
+  all: readonly EdItem[],
   selectedIds: ReadonlySet<number>,
   worldLine: number,
 ): void {
   const groups = new Set<number>();
-  for (const b of geometry) if (b.group !== null) groups.add(b.group);
+  for (const b of visible) if (b.group !== null) groups.add(b.group);
   for (const id of groups) {
-    const members = groupMembers(geometry, id);
-    if (members.length < 2) continue;
-    const centre = groupCentroid(members);
+    if (groupMembers(all, id).length < 2) continue;
+    const members = groupMembers(visible, id);
+    const centre = groupCentroid(groupMembers(all, id));
     const selected = members.some((m) => selectedIds.has(m.id));
     ctx.strokeStyle = GROUP_MARK;
     if (selected) {
@@ -575,8 +582,11 @@ export function drawEditor(
         ctx.setLineDash([]);
       });
     }
-    strokeCompoundOutline(ctx, members, () => {
-      if (body.kind === "impermeable") {
+    // The border is per PIECE, because hook-proof is: a compound wall may be
+    // attachable on the ledge the player aims at and repel the hook everywhere
+    // else, and one border for the body would draw only one of those.
+    strokeCompoundOutline(ctx, members, (m) => {
+      if (m.impermeable) {
         ctx.strokeStyle = IMPERMEABLE_EDGE;
         ctx.lineWidth = worldLine * 2;
         ctx.setLineDash([5 * PX, 3 * PX]);
@@ -631,7 +641,7 @@ export function drawEditor(
       ctx.lineWidth = worldLine * 5;
       ctx.stroke();
     }
-    if (body.kind === "impermeable") {
+    if (body.impermeable) {
       // Hook-proof: dashed steel border so it's distinct from a plain static
       // (matches the in-game render).
       ctx.strokeStyle = IMPERMEABLE_EDGE;
@@ -657,9 +667,14 @@ export function drawEditor(
   // and nothing about the drawn shapes says so on their own - they are simply
   // several shapes touching - so the marks are what make the seam rule visible
   // while a level is being laid out.
-  if (visibleLayers.has("geometry")) {
-    drawGroupMarks(ctx, geometry, selectedIds, worldLine);
-  }
+  //
+  // Backgrounds are in the same pass, spokes and hull included: a panel welded
+  // into a body rides it in play, and the spoke reaching down to a backdrop is
+  // the only thing on screen that says so. Only the VISIBLE members are marked,
+  // so hiding a layer really does take it out of the picture; the diamond stays
+  // put whatever is hidden, since it is the shapes' centre of mass alone.
+  const markable = [...(visibleLayers.has("geometry") ? geometry : []), ...backgrounds];
+  drawGroupMarks(ctx, markable, model.items, selectedIds, worldLine);
 
   // Chains over the bodies they hold. Drawn STRAIGHT, because that is what the
   // solver renders: a chain's span is a straight line between wrap nodes, and

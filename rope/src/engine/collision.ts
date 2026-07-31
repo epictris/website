@@ -16,7 +16,7 @@
 import { Vec2 } from "./vec2";
 import { polyEdgeNormal, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
-import type { CollisionObject2D } from "./body";
+import type { CollisionObject2D, CollisionShape2D } from "./body";
 
 const EPS = 1e-6;
 
@@ -646,15 +646,20 @@ export function shapeSupport(t: ShapeTransform, worldDir: Vec2): Vec2 {
 // Deepest overlap of a probe circle against any shape `body` carries, or null.
 // Deepest rather than first, because the piece the probe is furthest inside is
 // the one whose normal actually pushes it out.
+//
+// The hit names the PIECE it happened on, not only the body: which surface was
+// reached is what decides whether a hook anchors to it or is turned away by it
+// (`CollisionShape2D.impermeable`), and a caller handed a body alone has to
+// guess that again from the geometry it has just been told about.
 export function bodyOverlapCircle(
   body: CollisionObject2D,
   center: Vec2,
   radius: number,
-): { normal: Vec2; depth: number } | null {
-  let best: { normal: Vec2; depth: number } | null = null;
+): { normal: Vec2; depth: number; shape: CollisionShape2D } | null {
+  let best: { normal: Vec2; depth: number; shape: CollisionShape2D } | null = null;
   for (const s of body.getShapes()) {
     const ov = circleOverlap(center, radius, s);
-    if (ov && (!best || ov.depth > best.depth)) best = ov;
+    if (ov && (!best || ov.depth > best.depth)) best = { ...ov, shape: s };
   }
   return best;
 }
@@ -667,11 +672,11 @@ export function bodySweepCircle(
   from: Vec2,
   motion: Vec2,
   radius: number,
-): SweepHit | null {
-  let best: SweepHit | null = null;
+): (SweepHit & { shape: CollisionShape2D }) | null {
+  let best: (SweepHit & { shape: CollisionShape2D }) | null = null;
   for (const s of body.getShapes()) {
     const hit = sweepCircle(from, motion, radius, s);
-    if (hit && (!best || hit.t < best.t)) best = hit;
+    if (hit && (!best || hit.t < best.t)) best = { ...hit, shape: s };
   }
   return best;
 }

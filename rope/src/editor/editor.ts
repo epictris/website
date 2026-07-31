@@ -37,6 +37,7 @@ import {
   emptyModel,
   groupBounds,
   groupCentroid,
+  groupLead,
   groupMembers,
   halfExtents,
   isArrowNote,
@@ -53,6 +54,7 @@ import {
   pointInBody,
   rotateGroupAbout,
   setArrowEnds,
+  shapeMass,
   setPolyVerts,
   syncGroupProps,
   toWorld,
@@ -70,6 +72,13 @@ import {
   CHAIN_HIT_PX,
   HANDLE_HIT_PX,
 } from "./render";
+import {
+  DEFAULT_MATERIAL,
+  DEFAULT_THICKNESS,
+  MATERIALS,
+  MATERIAL_NAMES,
+  type MaterialName,
+} from "../lib/shapeGeometry";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
   digest,
@@ -97,7 +106,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
 // off a killzone or a current - so the chain tool passes straight through one.
-const CHAINABLE_KINDS: BodyKind[] = ["static", "impermeable", "anchor", "rigid"];
+const CHAINABLE_KINDS: BodyKind[] = ["static", "anchor", "rigid"];
 const chainable = (b: EdItem): boolean =>
   b.layer === "geometry" && CHAINABLE_KINDS.includes(b.kind);
 
@@ -116,7 +125,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
-const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "impermeable", "anchor", "force"];
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "anchor", "force"];
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
@@ -331,6 +340,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // The items a click on `hit` selects: its whole compound body, since a group
   // IS one body. Alt reaches past that to the single piece, which is what the
   // per-vertex and per-shape edits need.
+  //
+  // Group membership beats layer state here, and deliberately: a group that
+  // spans layers (a backdrop welded to the body it decorates) is still one
+  // object, and picking up half of it would silently re-place the other half
+  // against it. Hiding or locking a layer stops its items being TARGETED - it
+  // cannot dismantle a body that is already welded.
   const clickTargets = (hit: EdItem, alt: boolean): EdItem[] =>
     alt ? [hit] : pickGroupOf(model.items, hit);
   // Expand a set of item ids so no group is ever half-selected - a rubber band
@@ -777,6 +792,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       if (Number.isFinite(v)) {
         set(v);
         markDirty();
+        // Anything the panel DERIVES from what was just typed - a body's mass
+        // from its size, thickness or material, a chain's slack from its length
+        // - is stale the instant the value lands, and the panel is deliberately
+        // not rebuilt while a field is being typed into. `refreshFields` leaves
+        // the focused input alone, so this costs the typing nothing.
+        refreshFields();
       }
     });
     wrap.appendChild(input);
@@ -796,6 +817,22 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // a circle (whose rotation is otherwise invisible).
   const frictionless = (b: EdItem) =>
     b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
+
+  // May this item be welded into a compound body? Geometry that is not an area,
+  // and background panels, which ride the body as decoration (see `EdItem.group`
+  // and `groupable` in buildBodies.ts). Areas are single-shape everywhere they
+  // are used, so a grouped one would silently act through its first piece alone;
+  // camera regions and notes are never drawn in play and have nothing to ride.
+  const groupableItem = (b: EdItem) =>
+    b.layer === "background" ||
+    (b.layer === "geometry" && b.kind !== "killzone" && b.kind !== "force");
+
+  // An area is a region of space rather than a piece of stuff, so it is made of
+  // nothing and carries no density. Every other kind does, `anchor` included:
+  // a grate is a real object, and its material fixes the centre of mass a
+  // compound one is built and rotated about even though nothing collides with
+  // it.
+  const massless = (b: EdItem) => b.kind === "killzone" || b.kind === "force";
 
   // A number field bound to one panel and one selection: it shows the value the
   // group agrees on (blank if they differ) and writes to every member. `after`
@@ -847,14 +884,18 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         (b) => b.shape.kind !== "circle" || (b.layer === "geometry" && b.kind === "force"),
       )
     ) {
-      const whole = wholeGroup(items);
+      // Measured against the whole SELECTION, not this panel's slice of it: a
+      // group that spans layers (a backdrop welded to the body it decorates) is
+      // still one body, and turning the geometry panel's items alone would leave
+      // the panel behind.
+      const whole = wholeGroup(selectedBodies());
       if (whole) {
         // A compound body has ONE rotation, about the centre of mass its built
         // body's origin sits at. Turning each piece about its own centre would
         // pull the body apart, so the field is a delta applied to the group -
-        // shown against the first member's angle, which is the built body's own
+        // shown against the lead shape's angle, which is the built body's own
         // frame of reference.
-        const lead = whole[0]!;
+        const lead = groupLead(whole) ?? whole[0]!;
         numField(
           g,
           "rot°",
@@ -928,6 +969,140 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     cw.appendChild(ci);
     g.appendChild(cw);
     num("opacity", (b) => b.opacity, (b, v) => (b.opacity = Math.min(1, Math.max(0, v))), 0.1);
+  }
+
+  // Hook-proof: the grapple hook is destroyed on this surface and the ball's is
+  // deflected, instead of either anchoring. Still solid - it is about the rope
+  // and nothing else - so the avatar stands on it and the rope still wraps its
+  // corners.
+  //
+  // A checkbox on the shape rather than an entry in the kind picker, which is
+  // where it used to live, and the two things that could not be said there are
+  // exactly the two a level wants: a hook-proof crate that still falls (a body
+  // cannot be `rigid` and `impermeable` at once when both are kinds), and a
+  // compound wall with one attachable ledge among hook-proof faces. So it is
+  // per shape and, like material and thickness, a group does not collapse it
+  // onto its first member's.
+  function addImpermeableField(g: HTMLElement, items: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = items.every((b) => b.impermeable);
+    // A mixed selection says so rather than reporting one piece's answer as the
+    // group's - which on a wall that is half hook-proof would be a lie either
+    // way round.
+    box.indeterminate = !box.checked && items.some((b) => b.impermeable);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) b.impermeable = box.checked;
+      markDirty();
+      // The border style is what says a surface is hook-proof, and it is drawn
+      // from the item, so the canvas is already right; the panel is rebuilt so
+      // the box loses its indeterminate state.
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "hook-proof";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "The hook is destroyed (grapple) or deflected (ball) on this surface instead of anchoring — drawn with a dashed steel edge. It stays solid: you can stand on it and the rope still wraps its corners. Per shape, so one piece of a compound body can be the only place a hook will catch.";
+    g.appendChild(hint);
+  }
+
+  // What the shapes are made of: a material, a thickness through the z axis the
+  // 2D view cannot show, and the mass those two work out to. Per SHAPE, not per
+  // body - the one geometry property a compound body does not collapse onto its
+  // first member's, since a body's mass, centre of mass and inertia are sums
+  // over its pieces and a piece brings its own material to them (see
+  // `LevelBodyData.material`).
+  //
+  // The mass readout is what makes either number authorable at all: an author
+  // is choosing a weight, and a density and a depth only become one once the
+  // shape's own size is in it. It is the same `prismMass` the built body uses,
+  // through `shapeMass`, and it is a live readout for the same reason the
+  // vertex count is - a canvas resize changes it while the panel is
+  // deliberately not rebuilt.
+  function addMaterialFields(g: HTMLElement, items: EdItem[]): void {
+    const mw = el("label", "ed-field");
+    mw.textContent = "material";
+    const ms = document.createElement("select");
+    ms.className = "ed-select";
+    const sharedMaterial = items.every((b) => b.material === items[0]!.material)
+      ? items[0]!.material
+      : null;
+    if (!sharedMaterial) {
+      // Mixed: a blank entry holds the selection until one is picked, exactly as
+      // the kind picker does, so it never reports one material as the group's.
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "mixed";
+      ms.appendChild(o);
+    }
+    for (const name of MATERIAL_NAMES) {
+      const o = document.createElement("option");
+      o.value = name;
+      // The name alone: the picker is as wide as the panel and no wider, and
+      // "aluminium · 2700 kg/m³" clips in it. The density it stands for gets a
+      // readout row of its own below, which cannot overflow.
+      o.textContent = name;
+      ms.appendChild(o);
+    }
+    ms.value = sharedMaterial ?? "";
+    ms.addEventListener("change", () => {
+      if (!ms.value) return;
+      beginAction();
+      for (const b of items) b.material = ms.value as MaterialName;
+      markDirty();
+      refreshFields();
+    });
+    mw.appendChild(ms);
+    g.appendChild(mw);
+
+    // What the picked material is worth, since the picker itself has room for
+    // the name alone. Re-derived from the items rather than from the value the
+    // panel was built with, so picking a material updates it without a rebuild.
+    const density = () => {
+      const first = items[0]!.material;
+      return items.every((b) => b.material === first) ? `${MATERIALS[first]} kg/m³` : "mixed";
+    };
+    const drow = el("label", "ed-field");
+    drow.textContent = "density";
+    const dval = document.createElement("span");
+    dval.textContent = density();
+    drow.appendChild(dval);
+    g.appendChild(drow);
+    readouts.push({ el: dval, get: density });
+
+    // Authored in pixels like every other length, since it is one: the z
+    // dimension of the same prism the width and height are the other two of.
+    numField(
+      g,
+      "thickness",
+      () => shared(items, (b) => b.thickness * M2PX),
+      (v) => {
+        for (const b of items) b.thickness = Math.max(1, v) * PX;
+      },
+      10,
+      items.length > 1,
+    );
+
+    const mass = () => {
+      const kg = items.reduce((m, b) => m + shapeMass(b), 0);
+      // Under a kilogram (a pebble, a shard) the interesting digits are grams.
+      return kg < 1 ? `${(kg * 1000).toFixed(0)} g` : `${kg.toFixed(kg < 10 ? 2 : 1)} kg`;
+    };
+    const row = el("label", "ed-field");
+    row.textContent = items.length > 1 ? "total mass" : "mass";
+    const val = document.createElement("span");
+    val.textContent = mass();
+    row.appendChild(val);
+    g.appendChild(row);
+    readouts.push({ el: val, get: mass });
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Thickness is the shape's depth through z, the dimension the 2D view cannot show: mass is area × thickness × density. Both are per shape, so a compound body's pieces each carry their own. Only a rigid body has a mass, but the material also fixes where a group's centre of mass — the point it rotates about — sits.";
+    g.appendChild(hint);
   }
 
   // Every layer's panel ends the same way: the two actions that apply to any
@@ -1007,9 +1182,16 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (!bodies.some(frictionless)) {
       num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
+    // Hook-proof, offered for the solid kinds it means something on: an area is
+    // a region the rope passes through, and a hook-only anchor exists to be
+    // caught on, so neither has a hook to repel.
+    if (bodies.every((b) => b.kind === "static" || b.kind === "rigid")) {
+      addImpermeableField(g, bodies);
+    }
+    if (!bodies.some(massless)) addMaterialFields(g, bodies);
 
     addFillFields(g, num, bodies, sync);
-    addGroupSection(g, bodies);
+    addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
   }
@@ -1019,15 +1201,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // corners - the rope will not wrap a vertex buried inside a sibling shape, and
   // ledge detection will not grab one. That is the whole reason to group, so the
   // panel says it rather than offering a bare button.
-  function addGroupSection(g: HTMLElement, bodies: EdItem[]): void {
-    const groups = new Set(bodies.map((b) => b.group).filter((x): x is number => x !== null));
+  //
+  // It reads the WHOLE selection rather than the panel's own layer, because a
+  // group may span layers - a backdrop welded to the body it decorates is the
+  // case - and a Group button that silently left the panels out of it would be
+  // making a different body than the one on screen. Gated like the actions row:
+  // a cross-layer selection carries one shared section above the per-layer
+  // panels instead of the same buttons repeated in each of them.
+  function addGroupSection(g: HTMLElement): void {
+    if (selectionSpansLayers) return;
+    appendGroupSection(g);
+  }
+  function appendGroupSection(g: HTMLElement): void {
+    const sel = selectedBodies();
+    const groups = new Set(sel.map((b) => b.group).filter((x): x is number => x !== null));
     const row = el("div", "ed-row");
-    // Areas are single-shape everywhere they are used, so they are not groupable
-    // (see `groupable` in buildBodies.ts) and the button would be a lie.
-    const eligible = bodies.filter((b) => b.kind !== "killzone" && b.kind !== "force");
+    const eligible = sel.filter(groupableItem);
     if (eligible.length > 1) {
       const b = button("Group", () => groupSelected());
-      b.title = "Weld these shapes into one compound body (Ctrl+G)";
+      b.title = "Weld these into one compound body (Ctrl+G)";
       row.appendChild(b);
     }
     if (groups.size) {
@@ -1038,12 +1230,18 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     if (!row.childElementCount) return;
     g.appendChild(row);
     const hint = el("div", "ed-hint");
-    if (groups.size === 1 && bodies.every((b) => b.group !== null)) {
-      const members = groupMembers(model.items, bodies[0]!.group!).length;
-      hint.textContent = `One compound body of ${members} shapes: they share a transform, and the rope and ledge grabs treat the seams between them as interior. Alt+click a piece to edit it alone.`;
+    if (groups.size === 1 && sel.every((b) => b.group !== null)) {
+      const members = groupMembers(model.items, sel[0]!.group!);
+      const shapes = members.filter((m) => m.layer === "geometry").length;
+      const panels = members.length - shapes;
+      const parts = [`${shapes} ${shapes === 1 ? "shape" : "shapes"}`];
+      if (panels) parts.push(`${panels} background ${panels === 1 ? "panel" : "panels"}`);
+      hint.textContent = shapes
+        ? `One compound body of ${parts.join(" and ")}: they share a transform, and the rope and ledge grabs treat the seams between the shapes as interior. Alt+click a piece to edit it alone.`
+        : `${panels} background ${panels === 1 ? "panel" : "panels"} moved and turned as one. There is no body here, so they stay where they are authored in play; group them with a shape to have them ride it.`;
     } else {
       hint.textContent =
-        "Grouping builds these as ONE body, so the rope runs straight over the seams between them instead of snagging. Kind, fill and friction collapse onto the first one's.";
+        "Grouping builds these as ONE body, so the rope runs straight over the seams between them instead of snagging. Kind, fill and friction collapse onto the first shape's; material, thickness and hook-proof stay per shape. A background panel in the group is decoration carried by that body - it keeps its own fill, adds no mass, and is drawn in the body's frame, so it moves with it.";
     }
     g.appendChild(hint);
   }
@@ -1147,12 +1345,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Decoration only: drawn behind every body, with nothing to collide with, wrap or stand on. Images are not implemented yet.";
+      "Decoration only: drawn behind every body, with nothing to collide with, wrap or stand on. Group one with a body (Ctrl+G) to have it ride that body. Images are not implemented yet.";
     g.appendChild(hint);
 
     const num = groupNum(g, items);
     addTransformFields(g, num, items);
     addFillFields(g, num, items);
+    addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
   }
@@ -1366,8 +1565,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       const g = el("div", "ed-group");
       g.appendChild(heading(`${sel.length} items across ${layers.length} layers`));
       const hint = el("div", "ed-hint");
-      hint.textContent = `${layers.join(", ")} — each layer's properties are edited in its own panel below. Duplicate and Delete apply to all of them.`;
+      hint.textContent = `${layers.join(", ")} - each layer's properties are edited in its own panel below. Grouping, Duplicate and Delete apply to all of them.`;
       g.appendChild(hint);
+      appendGroupSection(g);
       appendActions(g);
       inspector.appendChild(g);
     }
@@ -1467,7 +1667,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   // refuses to grab one. Body-level properties (kind, fill, friction, force)
   // collapse onto the first member's, since a body has only one of each.
   function groupSelected(): void {
-    const sel = selectedBodies().filter((b) => b.layer === "geometry" && b.kind !== "killzone" && b.kind !== "force");
+    const sel = selectedBodies().filter(groupableItem);
     if (sel.length < 2) return;
     beginAction();
     const id = newBodyId();
@@ -1479,7 +1679,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     }
     for (const b of sel) b.group = id;
     const members = groupMembers(model.items, id);
-    syncGroupProps(sel[0]!, members);
+    syncGroupProps(members);
     setSelection(members.map((b) => b.id));
     markDirty();
     rebuildInspector();
@@ -1506,8 +1706,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     for (const b of edited) {
       if (b.group === null || seen.has(b.group)) continue;
       seen.add(b.group);
-      const members = groupMembers(model.items, b.group);
-      syncGroupProps(members[0]!, members);
+      syncGroupProps(groupMembers(model.items, b.group));
     }
   }
 
@@ -1567,6 +1766,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       color: style.color,
       opacity: style.opacity,
       friction: DEFAULT_SURFACE_FRICTION,
+      // Hook-proof is opt-in: a fresh shape is one the hook can catch.
+      impermeable: false,
+      // A fresh shape is 20 cm of oak, which is what every body authored before
+      // materials existed is made of.
+      material: DEFAULT_MATERIAL,
+      thickness: DEFAULT_THICKNESS,
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,

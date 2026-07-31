@@ -1,13 +1,12 @@
 // Hook — the grappling projectile, ported from classes/Hook.cs.
 // A CharacterBody2D that flies in a straight line and either attaches to the
-// first body it hits (firing the rope's attachment callback) or is destroyed by
-// an ImpermeableBody.
+// first surface it hits (firing the rope's attachment callback) or is destroyed
+// by an impermeable one.
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import {
   CharacterBody2D,
-  ImpermeableBody,
   LAYER_ANCHOR,
   LAYER_SOLID,
   type PhysicsBody2D,
@@ -49,7 +48,10 @@ export class Hook extends CharacterBody2D {
 
     if (result) {
       const closest = result.collider;
-      if (closest instanceof ImpermeableBody) {
+      // The PIECE the ray reached, not the body: one wall may be a compound of
+      // an attachable ledge and hook-proof faces, and the hook is answered by
+      // whichever it actually flew into.
+      if (result.shape.impermeable) {
         for (const cb of this.destroyedCbs) cb();
         this.world.remove(this);
         return;

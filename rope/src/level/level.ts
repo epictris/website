@@ -18,11 +18,11 @@ import { Hook } from "../classes/hook";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
-  type BackgroundData,
   type CameraRegionData,
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
+import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 
@@ -52,9 +52,10 @@ export class Level {
   // Camera-behaviour volumes, in metres. Read by the render-side
   // CameraController; the sim never touches them.
   readonly cameraRegions: CameraRegionData[];
-  // Decoration drawn behind the level, in metres. Read only by the renderer;
+  // Decoration drawn behind the level, in metres, resolved against the bodies
+  // any of it is welded to (see SceneBackground). Read only by the renderer;
   // like the camera regions, the sim never touches them.
-  readonly backgrounds: BackgroundData[];
+  readonly backgrounds: SceneBackground[];
   // Chains strung between authored bodies, solved every frame after the world
   // integrates (see SceneChain).
   readonly sceneChains: SceneChain[];
@@ -63,7 +64,6 @@ export class Level {
   constructor(rawData: LevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
-    this.backgrounds = data.backgrounds ?? [];
     this.player = new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);
@@ -73,6 +73,9 @@ export class Level {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built.byIndex);
+    // After the bodies, since a panel welded into a compound group is placed in
+    // that group's engine body's frame.
+    this.backgrounds = buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup);
 
     init?.(this);
 
