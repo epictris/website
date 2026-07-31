@@ -208,6 +208,32 @@ surface the ball was resting on: 16 cm of chain per second, out of a ball hangin
 perfectly still (`session-537f`).
 Held as a lease the same persistent block costs the same fixed slack every frame,
 and across the whole ball corpus permanent growth is now exactly zero.
+A lease is only a lease if it is **released before the solve**, and for a long
+time it was not: the release ran in `absorbBlockedLength`, after a solve that had
+already enforced `maxRopeLength + blockedSlack`, so a taut rope ended the frame at
+exactly that length, the block was measured as the lease it was already holding,
+and `max(blocked, released)` handed it straight back.
+Every instalment a momentary block ever bought was therefore permanent, and it
+compounded: a ball swinging on a 108 cm chain carried 53 cm of surplus it had
+earned in two brief blocks a thousand frames earlier, a chain half again as long
+as it said it was, felt as the chain slowly stretching while hanging
+(`session-1080f`).
+The release now happens in `Rope.beginFrame`, so the constraint the solve enforces
+is genuinely shorter and the surplus is given back as the rope reeling in.
+It is gated on whether geometry refused the correction on the frame just gone
+(`Rope.noteBlockedByGeometry`, reported by `BallLevel` from its push-out normals),
+because releasing into a *live* block is not a trial but grinding - the solve
+hauls the ball into a surface it is already resting on, the push-out undoes it,
+and the lease is re-earned every frame for as long as the block lasts, which
+swung a ball wound up under a ceiling twice as wide as it should.
+`rope-grew` cannot see any of this, and that is the point of the invariant that
+now covers it: growth is measured against the anchoring length, so a lease held at
+a constant value grows by nothing and reads as healthy for ever.
+`rope-lease-held` is the sharp statement instead - a lease may not outlive the
+block that bought it - and it fires on a lease above 2 cm carried for more than
+120 consecutive frames on which *nothing was blocking*, which leaves the
+legitimately-held case (a chain anchored point-blank behind a surface the ball
+rests on, blocked for hundreds of frames, `session-726f`) alone.
 The aim steering did: it is *kinematic* (it overwrites `angularVelocity`, so
 nothing the solver does can stop the ball winding on more chain than it has).
 Winding it on is the point, and while the solve can pay for it by hauling the

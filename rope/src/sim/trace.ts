@@ -375,6 +375,26 @@ const CHAIN_GROWTH_TOLERANCE = 1.0;
 // its stall run would have said anything, because a runaway is measured in
 // metres of chain and only incidentally in frames.
 const CHAIN_STALL_FRAMES_TOLERANCE = 60;
+// Consecutive frames the chain may hold a blocked-length lease while nothing is
+// blocking it. The lease is the constraint sitting where geometry is actually
+// holding the far end, and it is a *loan*: released at 0.5 m/s the moment the
+// geometry stops refusing, so a surplus worth having survives a few dozen frames
+// of release at most.
+//
+// It exists because `rope-grew` is blind to exactly this failure. That check
+// measures the constraint against the length the chain anchored at, so a lease
+// held at a constant value grows by nothing and reads as healthy for ever -
+// which is what a ball swinging on a 108 cm chain did while carrying 53 cm of
+// surplus it had earned in two brief blocks a thousand frames earlier
+// (session-1080f). The chain is half again as long as it says it is, the player
+// feels it stretch, and every invariant passes.
+//
+// Frames where the geometry IS refusing the correction do not count: a chain
+// anchored point-blank behind a surface the ball rests on is legitimately held
+// over its length for as long as the ball sits there, which across the corpus is
+// hundreds of frames (session-726f). What may not happen is the surplus
+// outliving the block that bought it.
+const CHAIN_LEASE_HELD_FRAMES_TOLERANCE = 120;
 // A chain span may graze a corner (endpoints on a surface), but its interior
 // must never run deep inside static geometry — that's the chain clipping
 // through the scene. Same 3 cm slack as the embed check.
@@ -702,6 +722,13 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         frame,
         kind: "rope-grew",
         detail: `max=${b.chain.constraintLength.toFixed(2)} vs ${level.chainAnchorLength.toFixed(2)} at anchor`,
+      });
+    }
+    if (level.chainLeaseHeldFrames > CHAIN_LEASE_HELD_FRAMES_TOLERANCE) {
+      out.push({
+        frame,
+        kind: "rope-lease-held",
+        detail: `${(b.chain.blockedSlack * 100).toFixed(1)}cm of blocked-length lease unrepaid for ${level.chainLeaseHeldFrames} frames with nothing blocking it`,
       });
     }
     if (level.chainStallFrames > CHAIN_STALL_FRAMES_TOLERANCE) {

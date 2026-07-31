@@ -168,7 +168,20 @@ export class Rope {
   // length the rope really has and a persistent block costs a fixed amount of
   // slack instead of a fresh instalment every frame. See `absorbBlockedLength`.
   blockedSlack = 0;
-  private slackReleasedThisFrame = false;
+  // What the lease was before this frame's release, so the stall accounting can
+  // tell a block being *re-earned* from a block getting worse. Re-earning the
+  // 8 mm the release just handed back is the mechanism working, not a stall.
+  private leaseAtFrameStart = 0;
+  // Did geometry refuse the chain's correction on the frame just gone? Set by
+  // the caller that can see it (`BallLevel`, from the push-out that follows its
+  // solve); false for callers with nothing to report, which is every rope whose
+  // correction has no separate push-out behind it.
+  //
+  // It gates the release, and it has to be *last* frame's answer, because the
+  // release happens before this frame's solve — there is no evidence about a
+  // frame that has not run yet. A block does not appear and vanish between two
+  // frames, so last frame's is the right one to act on.
+  private blockedLastFrame = false;
   frictionCoefficient = 0.4;
 
   start: RopeAttachment;
@@ -273,14 +286,50 @@ export class Rope {
     this.topologyJump += Math.abs(this.calculateRopePathLength() - before);
   }
 
-  // Zero the per-frame accounting. Callers that touch the rope more than once a
-  // frame (the ball controller syncs, solves, unwinds and re-bases) call this at
-  // the top of their frame; `physicsStep` does it for callers that do not.
-  beginFrame(): void {
+  // Zero the per-frame accounting and hand back this frame's instalment of the
+  // blocked-length lease. Callers that touch the rope more than once a frame
+  // (the ball controller syncs, solves, unwinds and re-bases) call this at the
+  // top of their frame; `physicsStep` does it for callers that do not.
+  //
+  // The release happens *here*, before the solve, and that placement is the
+  // whole mechanism. Released afterwards it could never bite: the solve enforces
+  // `constraintLength`, so a taut rope ends the frame at exactly that length,
+  // `absorbBlockedLength` measures the block as the lease it was already holding,
+  // and `max(blocked, released)` keeps the lease for ever. Every instalment a
+  // momentary block ever bought was therefore permanent, and a ball swinging on
+  // a 108 cm chain grew 53 cm of surplus over a thousand frames without
+  // `maxRopeLength` moving a millimetre (session-1080f). Released first, the
+  // constraint the solve enforces is genuinely shorter, so the surplus is given
+  // back as the rope reeling in rather than held for ever.
+  //
+  // It is gated on `blockedLastFrame` because releasing into a live block is not
+  // a trial, it is grinding: the solve hauls the rope's far end into the surface
+  // it is already resting on, the push-out undoes it, and the lease is re-earned
+  // — every frame, for as long as the block lasts. A ball wound up under a
+  // ceiling swung twice as wide that way, driven by a constraint that spent the
+  // whole time pulling it into geometry that had already refused it. So the
+  // lease is released only once the geometry has stopped saying no.
+  beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
-    this.slackReleasedThisFrame = false;
+    this.leaseAtFrameStart = this.blockedSlack;
+    if (!this.blockedLastFrame) {
+      this.blockedSlack = Mathf.max(this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta, 0);
+    }
     this.frameBegun = true;
+  }
+
+  // Whether geometry refused this frame's correction, reported by the caller
+  // that can see it: the ball controller's push-out normals. Only what the
+  // *next* `beginFrame` reads — see `blockedLastFrame`.
+  noteBlockedByGeometry(blocked: boolean): void {
+    this.blockedLastFrame = blocked;
+  }
+
+  // What that caller last reported. Read by the `rope-lease-held` invariant,
+  // which is the statement that a lease nothing is blocking has to be repaid.
+  get blockedByGeometry(): boolean {
+    return this.blockedLastFrame;
   }
 
   // Wrap detection for a still-deploying ball chain. While the hook is in
@@ -419,7 +468,7 @@ export class Rope {
   }
 
   physicsStep(bodies: PhysicsBody2D[], delta: number): void {
-    if (!this.frameBegun) this.beginFrame();
+    if (!this.frameBegun) this.beginFrame(delta);
     this.frameBegun = false;
     this.regenerateAndMeasure(bodies);
     const lengthError = this.calculateRopePathLength() - this.constraintLength;
@@ -498,7 +547,7 @@ export class Rope {
       }
     }
 
-    this.absorbBlockedLength(delta);
+    this.absorbBlockedLength();
   }
 
   // Winch stall: if scene geometry blocked the correction (a pinned player
@@ -530,17 +579,27 @@ export class Rope {
   // the rope reels back in rather than snapping to length. `maxRopeLength` is
   // left meaning what it says: the length the rope actually has.
   //
-  // Released once per frame however many times the frame stalls; `beginFrame`
-  // opens the next one.
-  absorbBlockedLength(delta: number): void {
+  // This half only ever *raises* the lease, to whatever the geometry has refused
+  // once the frame's bodies have settled; the release is `beginFrame`'s, run
+  // before the solve so what is measured here is a block the solver actually
+  // ran into rather than the lease it was handed. Safe to call several times a
+  // frame — the ball controller does, since the push-out moves the ball after
+  // the solve — because raising is idempotent.
+  //
+  // The stall is measured against the lease at *frame start*, not against the
+  // released one: re-earning this frame's instalment is the release working, and
+  // counting it would report every legitimately-held chain as stalling for as
+  // long as it is held. Only a lease that has to grow past where the frame began
+  // is the constraint being pushed out further than it already was, which is
+  // what `rope-stalling` watches for.
+  absorbBlockedLength(): void {
     const settledLength = this.calculateRopePathLength();
     const blocked = Mathf.max(settledLength - this.maxRopeLength, 0);
-    this.stalledLength += Mathf.max(blocked - this.blockedSlack, 0);
-    const released = this.slackReleasedThisFrame
-      ? this.blockedSlack
-      : this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta;
-    this.blockedSlack = Mathf.max(Mathf.max(blocked, released), 0);
-    this.slackReleasedThisFrame = true;
+    this.stalledLength += Mathf.max(
+      blocked - Mathf.max(this.blockedSlack, this.leaseAtFrameStart),
+      0,
+    );
+    this.blockedSlack = Mathf.max(this.blockedSlack, blocked);
   }
 
   private regenerateSpans(): RopePath[] {

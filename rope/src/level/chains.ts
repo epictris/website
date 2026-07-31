@@ -49,7 +49,7 @@ export class SceneChain {
   // ball controller runs its chain in, and for the same reason (solve before
   // integration ends every fast frame over-length by |v|·dt).
   physicsStep(delta: number): void {
-    this.rope.beginFrame();
+    this.rope.beginFrame(delta);
     this.rope.physicsStep(NOTHING, delta);
   }
 }

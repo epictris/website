@@ -63,10 +63,21 @@ export class BallLevel {
   // there has been — far more diagnostic than the total, which a single
   // discontinuous jump in the wrap path can dominate on its own.
   chainStallFrames = 0;
+  // Consecutive frames the chain has held a real blocked-length lease while
+  // NOTHING was blocking it. A lease is a loan against present geometry, so the
+  // frames where the geometry has stopped saying no are the frames it must be
+  // being paid back on; a run of them is the lease having become a permanent
+  // payment, which is the one failure `rope-grew` cannot see (it measures growth,
+  // and a lease held at a constant value grows by nothing — session-1080f).
+  chainLeaseHeldFrames = 0;
   private endWasFixed = false;
 
   // Length below which a stall is float noise rather than a blocked correction.
   static readonly STALL_EPSILON = 0.001;
+  // Lease below which there is nothing worth calling a surplus: the release
+  // hands back 8 mm a frame, so anything under a couple of centimetres is on its
+  // way out already.
+  static readonly LEASE_EPSILON = 0.02;
 
   // The ball plays 1.5× the arena's authored avatar radius — a heftier ball
   // & chain than the grapple avatar, without hand-editing generated levelData.
@@ -207,7 +218,7 @@ export class BallLevel {
       // kinematic aim spin, which `unwindOverLength` will refuse below. The rest
       // is real motion — gravity, momentum, a swing going taut — and is the
       // solve's proper business.
-      this.ball.chain.beginFrame();
+      this.ball.chain.beginFrame(delta);
       this.ball.chain.syncWraps(this.bodies);
       const overLengthBeforeSolve =
         this.ball.chain.getCurrentLength() - this.ball.chain.constraintLength;
@@ -329,12 +340,23 @@ export class BallLevel {
       // Whatever the solve could not reach is the winch stall: a point-blank
       // anchor is held over its length by the geometry the ball is resting on,
       // and re-basing lets the constraint settle there instead of winding up.
-      this.ball.chain.absorbBlockedLength(delta);
+      this.ball.chain.absorbBlockedLength();
+      // Whether the geometry actually refused the chain this frame — the same
+      // push-out normals the velocity above was cancelled against. Next frame's
+      // `beginFrame` reads it to decide whether the lease may be handed back:
+      // released into a live block, the constraint spends every frame hauling
+      // the ball into a surface that is already saying no.
+      this.ball.chain.noteBlockedByGeometry(pushedOutOf.length > 0);
       // Length only, never velocity — a delta showing up here would mean the
       // stall lease had learnt to move something, which it must not.
       PhaseTrace.mark("stall-lease", this.world);
       this.chainStallFrames =
         this.ball.chain.stalledLength > BallLevel.STALL_EPSILON ? this.chainStallFrames + 1 : 0;
+      this.chainLeaseHeldFrames =
+        this.ball.chain.blockedSlack > BallLevel.LEASE_EPSILON &&
+        !this.ball.chain.blockedByGeometry
+          ? this.chainLeaseHeldFrames + 1
+          : 0;
       const gain = this.ball.linearVelocity.length() - speedBefore;
       this.anchorKickSpeedGain = anchoredThisFrame ? gain : null;
       this.chainSolveSpeedGain = gain;
@@ -343,6 +365,7 @@ export class BallLevel {
       this.chainSolveSpeedGain = null;
       this.chainAnchorLength = null;
       this.chainStallFrames = 0;
+      this.chainLeaseHeldFrames = 0;
     }
     this.endWasFixed = endFixed;
 
