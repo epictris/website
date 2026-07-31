@@ -1504,27 +1504,55 @@ export class World {
     // One statement per (body, surface), at the deepest of that pair's points:
     // the grip writes the body's whole velocity, so applying it once per contact
     // point would apply it several times over.
-    for (let i = 0; i < constraints.length; ) {
-      const head = constraints[i]!;
-      let deepest = head;
-      let j = i;
-      while (j < constraints.length) {
-        const c = constraints[j]!;
-        if (c.a !== head.a || c.b !== head.b) break;
-        if (c.depth > deepest.depth) deepest = c;
-        j++;
+    //
+    // A pair is offered from BOTH sides, as `applyStaticGrip` offers its pin.
+    // Which body leads a constraint is an id ordering and nothing more, and it
+    // used to be enough to read `a` alone only because `b` was always a static -
+    // one a static can never be. Against a rigid ramp built before the ball, the
+    // ball IS `b`, so the whole routine looked straight past the only body it
+    // exists for and the grip never ran at all.
+    const grip = (
+      body: RigidBody2D,
+      other: PhysicsBody2D,
+      normal: Vec2,
+      point: Vec2,
+    ): void => {
+      if (!body.kinematicRotation) return;
+      // A scripted mover carries the surface out from under the body by design,
+      // so there is nothing to hold still against - the same exclusion
+      // `applyStaticGrip` makes, and for the same reason. A rigid body is not
+      // that: it is mobile in the classification sense while being exactly the
+      // scenery a ball rests on, and the anchor is kept in the surface's own
+      // frame (`setStickAnchor`), so it means the same thing against one as
+      // against the world.
+      //
+      // This used to refuse every rigid surface outright, on the argument that
+      // gripping is against the immovable, and it left the one body in the game
+      // that is always steered with no pin at all against scenery: not
+      // `applyStaticGrip`'s, which declines a `kinematicRotation` body because a
+      // steered anchor has to advance by the roll, and not this one. So a
+      // resting ball kept the whole of gravity's integration step every frame
+      // and the recovery resolved it along the inclined normal - 0.68 mm of
+      // sideways travel a frame, 84 cm down a 20 degree ramp in fifteen seconds,
+      // at a reported velocity of zero, while the identical static ramp held it
+      // to 0.1 cm (`steered-ramp-hold`).
+      if (!(other instanceof RigidBody2D) && other.isMobile) {
+        body.releaseStick();
+        return;
       }
-      i = j;
 
-      const body = head.a;
-      const other = head.b;
-      if (!body.kinematicRotation) continue;
-      if (other instanceof RigidBody2D) continue; // gripping is against the immovable
-      if (deepest.depth <= 0) continue; // speculative: not resting on anything yet
-
-      const normal = deepest.normal;
-      const point = deepest.point;
-      const staticMu = body.staticFriction * other.surfaceFriction;
+      const otherRigid = other instanceof RigidBody2D ? other : null;
+      // The same combination the kinetic path and `applyStaticGrip` use: the
+      // geometric mean of what each body brings, so two rigid bodies agree on one
+      // coefficient however the pair is ordered.
+      const staticMu = otherRigid
+        ? Math.sqrt(
+            body.staticFriction *
+              other.surfaceFriction *
+              otherRigid.staticFriction *
+              body.surfaceFriction,
+          )
+        : body.staticFriction * other.surfaceFriction;
       const rContact = point.sub(body.globalPosition);
       const surfV = other.velocityAtPoint(point);
       const wCrossR = new Vec2(-body.angularVelocity * rContact.y, body.angularVelocity * rContact.x);
@@ -1534,13 +1562,12 @@ export class World {
       const gN = -g.dot(normal);
       const withinBudget =
         staticMu > 0 &&
-        !other.isMobile &&
         gN > 1e-6 &&
         g.sub(normal.mul(g.dot(normal))).length() <= staticMu * gN;
       if (slipTan.length() >= SLIP_STICK || !withinBudget) {
         // Slipping: release the grip and leave the solver's friction to it.
         body.releaseStick();
-        continue;
+        return;
       }
       // Grip: drive the centre so the contact is stationary,
       // v_centre = surfaceVel - omega x r_contact.
@@ -1548,6 +1575,24 @@ export class World {
       const vnKeep = body.linearVelocity.dot(normal);
       const rollTan = desired.sub(normal.mul(desired.dot(normal)));
       body.linearVelocity = normal.mul(vnKeep).add(rollTan);
+      // The same roll taken RELATIVE to the surface, which is what the anchor
+      // below advances by. The velocity above wants the surface's own motion in
+      // it - a ball riding a moving body moves with it - but the anchor is held
+      // in that body's frame (`setStickAnchor`), so it is carried along already,
+      // and adding `surfV` a second time counts it twice.
+      //
+      // Against a static this is the same vector (`surfV` is zero) and nothing
+      // changes. Against a rigid one it is the whole bug: the surface's velocity
+      // AT THIS POINT IN THE FRAME is gravity's own step, un-cancelled - the
+      // engine integrates before it solves, and a body whose support is a chain
+      // rather than a contact carries all 0.163 m/s of it for ever, since a PBD
+      // length constraint corrects position and never that step. Read as surface
+      // motion, a hanging platform that goes nowhere presented 54 mm/s of
+      // downhill slip, the anchor chased it 0.9 mm a frame, and the ball rode it
+      // 29 cm down a 14 degree slope in ten seconds while gripping every frame
+      // and reporting a velocity of zero (`session-599f`).
+      const rollRel = wCrossR.neg();
+      const rollRelTan = rollRel.sub(normal.mul(rollRel.dot(normal)));
       // Kill gravity creep at any spin: integration slides the ball one step of
       // gravity downhill each frame before this solve (worse the steeper the
       // slope); undo it by pinning the along-surface position to an anchor that
@@ -1576,10 +1621,46 @@ export class World {
       // millimetre.
       const continuous = body.stickBody === other && body.ungrippedFrames === 0;
       const held = continuous ? body.stickAnchorWorld() : null;
-      body.setStickAnchor(other, held === null ? body.globalPosition : held.add(rollTan.mul(dt)));
+      body.setStickAnchor(
+        other,
+        held === null ? body.globalPosition : held.add(rollRelTan.mul(dt)),
+      );
       const d = body.globalPosition.sub(body.stickAnchorWorld()!);
       body.globalPosition = body.globalPosition.sub(d.sub(normal.mul(d.dot(normal))));
       stuck.add(body.id);
+    };
+
+    for (let i = 0; i < constraints.length; ) {
+      const head = constraints[i]!;
+      let deepest = head;
+      let normalImpulse = 0;
+      let j = i;
+      while (j < constraints.length) {
+        const c = constraints[j]!;
+        if (c.a !== head.a || c.b !== head.b) break;
+        if (c.depth > deepest.depth) deepest = c;
+        normalImpulse += c.normalImpulse;
+        j++;
+      }
+      i = j;
+      // Resting is what the contact CARRIED, not how deep it is. Depth is the
+      // test everywhere else here, and against another dynamic body it cannot be
+      // used: the solve pushes a resting interface to exactly zero overlap and
+      // the pair then falls by the same gravity step, so the depth sits on 0 and
+      // its sign is float noise - the very thing `CONTACT_SLOP` and speculative
+      // contacts exist for (see "Resting contacts"). Read as depth, the grip
+      // dropped on every other frame, and since the anchor re-seeds wherever the
+      // ball is when a lapsed grip resumes, each lapse kept the creep it was
+      // there to remove: still 78 cm down a 20 degree ramp with the grip
+      // nominally holding. A contact that pushed back is carrying load, which is
+      // the same statement `mu * Pn` makes about how much grip there is to have.
+      if (normalImpulse <= 0) continue;
+      grip(head.a, head.b, deepest.normal, deepest.point);
+      // The same contact seen from the other body: its surface normal is the one
+      // pointing back at it.
+      if (head.b instanceof RigidBody2D) {
+        grip(head.b, head.a, deepest.normal.neg(), deepest.point);
+      }
     }
     return stuck;
   }

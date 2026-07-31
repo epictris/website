@@ -341,6 +341,23 @@ surface gravity does not press the ball into gives no traction, so a spinning
 ball cannot climb a wall — or drive along a ceiling.
 A constraint is not a force here and may not act like one.
 
+Gravity is, though, and the cancel is bounded because of it.
+The ball arrives at that phase already pressing into whatever it rests on —
+`integrate` applied gravity and the contact solve does not run again before the
+frame ends — so cancelling the component *outright* took gravity's own step with
+it, and that step is what a resting contact carries and what the next frame's
+Coulomb cone is sized from.
+Taken, the contact spent a normal impulse of **0.4** where a chainless one on the
+same slope spends **8**, the cone collapsed with it, and a ball resting on a rigid
+platform accelerated down a 15° slope at very nearly the full tangential gravity
+for as long as the chain stayed anchored: 35 cm in 30 frames, against a free ball
+that stops in 15 (`session-291f`).
+So the bound is gravity's own per-frame step, and no more than the ball brought
+in with it — the rest of the entering approach may be momentum an earlier chain
+solve wrote, and refusing that is unchanged.
+The ceiling and wall cases are untouched either way, because gravity there points
+out of the surface and both bounds are zero.
+
 ### The steered ball's grip
 
 `applySteeringGrip` pins the rolling ball's centre to an anchor that **advances
@@ -361,6 +378,55 @@ it advances every frame and exists only to remove that one frame of creep.
 `cli contacts` `grip-reseed` is the case: a ball rolled across a gap narrower
 than `STICK_RELEASE_FRAMES` of flight, which is the only way to make the grip
 lapse and return with the anchor still held.
+
+It grips **scenery** as it grips the world, and for a long time it did not.
+`applyStaticGrip` declines a `kinematicRotation` body on purpose - a steered
+anchor has to advance by the roll rather than hold a point still - and this
+routine declined every rigid surface, on the argument that gripping is against
+the immovable.
+Between them the one body in the game that is always steered had no position pin
+at all against a rigid body, so it kept the whole of gravity's integration step
+every frame: exactly the leak **The position pin** below is written about, at
+0.68 mm of sideways travel a frame, 84 cm down a 20° ramp in fifteen seconds,
+reporting a velocity of zero the whole way.
+Two things had to change together, and the second is the one worth remembering.
+A pair is offered from **both sides**, because which body leads a constraint is
+an id ordering and nothing more - against a ramp built before the ball, the ball
+is `b`, and reading `a` alone (which was enough while `b` was always a static)
+looked straight past the only body this routine exists for.
+And resting is what the contact **carried**, not how deep it is: the solve pushes
+a resting interface to exactly zero overlap and the pair then falls by the same
+gravity step, so a `depth > 0` test reads float noise (see **Resting contacts**)
+and dropped the grip every other frame.
+Since a lapsed grip re-seeds its anchor wherever the ball has got to, each lapse
+kept the creep it was there to remove - still 78 cm, with the grip nominally
+holding.
+`normalImpulse > 0` is the test instead, which is the same statement `mu * Pn`
+already makes about how much grip there is to have.
+`cli contacts` `steered-ramp-hold` is the case, and it measures the static ramp
+beside the rigid one so the number stands against the same ball on the same
+slope.
+
+The third piece is that the anchor advances by the roll **relative to the
+surface**, and not by `surfV - ω×r`.
+The velocity the grip writes wants the surface's own motion in it - a ball riding
+a moving body moves with it - but the anchor is held in that body's frame, so it
+is carried along already and counting `surfV` again double-counts it.
+Against a static the two are the same vector, which is why every static case was
+blind to this.
+Against a rigid one it is the whole of what was left: this engine integrates
+before it solves, so a body carries a frame of gravity's velocity until something
+cancels it, a contact does that every frame and a **chain never does** - a PBD
+length constraint corrects position, not velocity.
+A chain-hung platform therefore sits still while permanently carrying 0.163 m/s
+downward, the grip read that as the surface sliding underneath, and the anchor
+chased 54 mm/s of phantom downhill slip at 0.9 mm a frame: 29 cm down a 14°
+slope in ten seconds, gripping on every frame, reporting a velocity of zero
+(`session-599f`).
+`cli contacts` `steered-hung-hold` is that scene - the same slab, held up by two
+chains instead of by the ground - and it measures the ball against the SLAB,
+because the rig is a pendulum and a ball riding a swinging slab is the ball doing
+its job.
 
 ### The loop-hop
 
@@ -1710,6 +1776,7 @@ Against a static that is the same statement as a world-space anchor, since a sta
 A body resting on a rigid body had no pin at all, so it kept the whole of gravity's integration step every frame: the velocity solve cancels the velocity gravity added and never the *step* already taken with it, and the recovery then resolves that step along the contact face - which on an inclined one turns a 2.7 mm fall into 0.6 mm of **sideways** travel.
 Nothing accelerated the body into that motion and nothing ever takes it back, so it is a ratchet: slabs slid 53 cm and 66 cm across `255f` and `326f` while reporting velocities of 1e-8 m/s, which is to say invisibly to every check the suite had.
 `cli contacts` `rigid-ramp-hold` was the same thing written down as a case, and carried an `expectedFail` marker until this closed it.
+The steered ball reached the same gap from the other side and was fixed later, in `applySteeringGrip` rather than here (see **The steered ball's grip**): it is the one body `applyStaticGrip` declines, so closing the pin for every other body left it as the last one creeping.
 
 Four things make a relative pin friction rather than a weld, and each of them was a red case first:
 

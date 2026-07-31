@@ -560,6 +560,160 @@ function caseRigidRampHold(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// steered-ramp-hold: a steered ball holds a rigid ramp as it holds a static one.
+//
+// `rigid-ramp-hold` for the ball, and the gap between the two grip routines. A
+// ball under aim steering carries `kinematicRotation`, which `applyStaticGrip`
+// declines on purpose - a steered ball owns its own anchor, because that anchor
+// has to ADVANCE by the roll rather than hold a point still - and what owns it,
+// `applySteeringGrip`, only ever gripped against the immovable. So the one body
+// in the game that is always steered had no pin at all against scenery, and kept
+// the whole of gravity's integration step every frame: the same
+// g*sin(theta)*dt^2 leak `rigid-ramp-hold` was written for, resolved along the
+// inclined normal into 0.68 mm of sideways travel a frame - 20 cm in five
+// seconds, at a reported velocity of zero.
+//
+// Both halves are measured, because the static one is what says the rigid number
+// is a defect and not the scene: it is the same ball, the same slope and the same
+// coefficients, with only the ramp's kind changed.
+// ---------------------------------------------------------------------------
+function caseSteeredRampHold(sims: Sim[]): ContactResult {
+  const drift = (rigidRamp: boolean, deg: number): number => {
+    const sim = new Sim(`steered ramp ${deg}deg ${rigidRamp ? "rigid" : "static"}`, 120);
+    sims.push(sim);
+    const th = deg * DEG;
+    const rise = 6 * Math.tan(th);
+    // A wedge: flat bottom on the floor, top face inclined by `deg`, descending
+    // to the right. Rigid or static by the flag, and identical either way - the
+    // ramp's KIND is the only difference between the two halves of this case.
+    const wedge = [
+      new Vec2(-3, 1),
+      new Vec2(3, 1),
+      new Vec2(3, 0.5),
+      new Vec2(-3, 0.5 - rise),
+    ];
+    sim.addStatic(rectShape(40, 1), new Vec2(0, 1.5));
+    if (rigidRamp) {
+      const ramp = sim.addRigidPoly(wedge, Vec2.ZERO);
+      ramp.mass *= 200;
+      ramp.inertia *= 200;
+    } else {
+      const made = polyShapeCentred(wedge);
+      sim.addStatic(made.shape, made.offset);
+    }
+    // Resting on the middle of the incline, with the ball's own coefficients as
+    // `roll-drive` uses them.
+    const up = new Vec2(Math.sin(th), -Math.cos(th));
+    const ball = sim.addRigid(circleShape(0.25), new Vec2(0, 0.5 - rise / 2).add(up.mul(0.25)));
+    ball.contactFriction = 1.8;
+    ball.staticFriction = 0.58;
+    ball.contactDamp = 0.99;
+    // A settled aim: the steering still owns the spin (which is what makes this
+    // the ball's grip rather than a box's), and it is asking for none.
+    ball.kinematicRotation = true;
+    const start = ball.globalPosition;
+    sim.step(900, () => {
+      ball.kinematicRotation = true;
+      ball.angularVelocity = 0;
+    });
+    return ball.globalPosition.distanceTo(start);
+  };
+
+  const details: string[] = [];
+  let passed = true;
+  for (const deg of [5, 20]) {
+    const onStatic = drift(false, deg);
+    const onRigid = drift(true, deg);
+    // The same bar `rigid-ramp-hold` holds its box to, and the static twin says
+    // what the scene is capable of.
+    const good = onRigid < 0.1 && onStatic < 0.1;
+    passed &&= good;
+    details.push(
+      `${good ? "ok  " : "BAD "} ${deg}deg: drift=${(onRigid * 100).toFixed(1)}cm on a rigid ramp ` +
+        `against ${(onStatic * 100).toFixed(1)}cm on a static one, in 15s`,
+    );
+  }
+  return ok("steered-ramp-hold — a steered ball holds a ramp made of scenery", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// steered-hung-hold: the surface a steered ball grips may be held up by a chain.
+//
+// `steered-ramp-hold` with the ramp's support changed from a contact to a scene
+// chain, which is what level scenery often is - and the distinction is not
+// cosmetic. This engine integrates before it solves, so every body carries a
+// frame of gravity's velocity until something cancels it; a contact does that
+// every frame, and a PBD length constraint never does, because it corrects
+// POSITION. A hung platform therefore sits still while permanently carrying
+// 0.163 m/s of downward velocity.
+//
+// The grip reads that velocity as the surface sliding under the ball, and the
+// tangential part of it - 54 mm/s down a 14 degree slope - is real enough to
+// chase: the anchor advanced 0.9 mm a frame after a platform that goes nowhere,
+// and the ball rode it 29 cm downhill in ten seconds while gripping on every
+// single frame and reporting a velocity of zero (`session-599f`).
+//
+// The anchor is held in the surface's own frame, so genuine surface motion is
+// already in it; only the ball's roll RELATIVE to the surface belongs in the
+// advance. Against a static the two are the same vector, which is why every
+// static case in this file was blind to it.
+// ---------------------------------------------------------------------------
+function caseSteeredHungHold(sims: Sim[]): ContactResult {
+  const deg = 14;
+  const sim = new Sim(`steered hung ramp ${deg}deg`, 120);
+  sims.push(sim);
+  const th = deg * DEG;
+  // A slab hung level from two chains, tilted by `deg`: nothing it rests on, so
+  // nothing ever takes gravity's step off it.
+  const ceiling = new StaticBody2D();
+  ceiling.globalPosition = new Vec2(0, -4);
+  ceiling.setShape(rectShape(8, 0.2));
+  sim.world.add(ceiling);
+  const slab = sim.addRigid(rectShape(4, 0.4), Vec2.ZERO, th);
+  const chain = (ax: number, bx: number) => {
+    const pa = new Vec2(ax, -3.9);
+    const pb = new Vec2(bx, 0).rotated(th).add(new Vec2(0, -0.2).rotated(th));
+    return new SceneChain(
+      RopeContact.at(ceiling, pa),
+      RopeContact.at(slab, pb),
+      pa.distanceTo(pb),
+      null,
+    );
+  };
+  const chains = [chain(-1.5, -1.5), chain(1.5, 1.5)];
+
+  // Resting on the middle of the slab's top face, with the ball's own
+  // coefficients as `roll-drive` uses them.
+  const up = new Vec2(Math.sin(th), -Math.cos(th));
+  const ball = sim.addRigid(circleShape(0.25), up.mul(0.45));
+  ball.contactFriction = 1.8;
+  ball.staticFriction = 0.58;
+  ball.contactDamp = 0.99;
+  ball.kinematicRotation = true;
+
+  // Measured against the SLAB, not against the world: the rig is a pendulum and
+  // the ball riding a slab that swings is the ball doing its job.
+  const offset = (): Vec2 =>
+    ball.globalPosition.sub(slab.globalPosition).rotated(-slab.globalRotation);
+  let start = offset();
+  let worst = 0;
+  sim.step(900, (n) => {
+    stepSceneChains(chains, DT);
+    ball.kinematicRotation = true;
+    ball.angularVelocity = 0;
+    // Let the rig settle onto its chains before the measurement opens.
+    if (n === 120) start = offset();
+    if (n > 120) worst = Math.max(worst, offset().distanceTo(start));
+  });
+
+  const good = worst < 0.05;
+  return ok("steered-hung-hold — a steered ball holds a surface a chain holds up", good, [
+    `${good ? "ok  " : "BAD "} slid ${(worst * 100).toFixed(1)}cm along a chain-hung ${deg}deg slab in 13s ` +
+      `(want <5cm)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // spin-drive: a spinning ball resting on a crate must not drive it away.
 //
 // The sibling `impact-transfer` needs, and the one case the pair solver makes
@@ -1450,6 +1604,8 @@ export function runContactCases(): ContactResult[] {
     caseRampHold(sims),
     caseRampBreak(sims),
     caseRigidRampHold(sims),
+    caseSteeredRampHold(sims),
+    caseSteeredHungHold(sims),
     caseTopple(sims),
     casePivot(sims),
     caseImpactTransfer(sims),
