@@ -497,6 +497,30 @@ ends, so the shot goes exactly where it was aimed and only then falls. Every
 ending calls it — the hook attaching, a bounce off an impermeable (the deflected
 remainder does arc), the chain snagging geometry, and the chain running out of
 length (so the dangling tip swings instead of hanging in the air).
+
+The attach test **must out-reach the solver**, and that is why its sweep runs `CONTACT_SLOP` past the end of the step rather than stopping at it.
+`World.integrate`'s constraint gather keeps *speculative* contacts out to that band and cancels the approach velocity of anything that would close the gap within the step, whether or not the two ever overlap.
+So a hook that stops short of a surface by under a centimetre never gets a second frame in which to touch it: the solver has already spent the approach, and what is left is tangential.
+In `session-593f` the hook fell 200 mm in one step at a hanging plank 193.7 mm away, the sweep wanted `t = 1.033` and returned null, and the solver converted 12 m/s of approach into a 4 m/s skate along the plank's face that carried the hook off its corner over the next twelve frames - a clean shot at a big target that simply did not stick, and which replayed **HEALTHY**, because nothing about it violates an invariant.
+The reach costs no accuracy: the anchor is still placed at the swept contact point, which is on the surface.
+The overlap probe's margin is deliberately **not** widened to match.
+The sweep extrapolates along a known direction of travel; the probe has none, so a `CONTACT_SLOP` probe would anchor to whatever is within a centimetre, float the anchor off the geometry (`session-601f`) and lengthen the chain's path enough to kick the ball as it anchors (it fails `rope-anchor-kick` on `session-576f`).
+A near-stationary hook needs no help from it in any case, since the sweep's reach never falls below `CONTACT_SLOP` however slow the hook is.
+`playtests/ball-hook-short-step.json` is the scenario in isolation: a throw whose step ends 8 mm short of a ceiling must anchor on that same frame.
+
+Reaching further is still only an **approximation** of the solver, though, and the exact half of the attach test is `BallHook.attachToBlockingContact`, which reads `World.frameContacts` and anchors wherever the solver actually pushed back.
+The two measure different things and cannot be made to agree by tuning a distance.
+A sweep measures **along the path**; the solver's band is **perpendicular**, so on an oblique approach the path to contact is longer than the gap across it by `1/cos` of the angle between them and a reach of one `CONTACT_SLOP` under-covers a band of one.
+The solver is also blind to the contact point sliding off the feature within the step, so it blocks against a corner's face *plane* on paths that clear the corner.
+`session-1154f` is 4 mm of exactly that, at the swinging end of the same hanging plank: a 2.9 N·s impulse off the end face's plane turned a 12 m/s throw into 4.9 m/s at 45° off aim, with every predictive test correctly reporting no contact.
+Reading the solver's own contacts needs no second copy of its predicate and cannot drift from it, and `normalImpulse > 0` is what separates a contact that pushed from a speculative one that asked for nothing - so a hook coasting parallel to a wall a few millimetres clear still does not anchor to it.
+It is one frame late by construction (physicsStep runs before integrate), which is why the sweep exists and runs first: the sweep catches the head-on case on the right frame with the shot's velocity intact, and this catches everything else on the right surface.
+
+It rescues a **throw** only. A dangling tip hangs at exactly `CHAIN_MAX_LENGTH`, so anchoring it on a contact reported while the hook is still millimetres clear buys the chain that much extra path, and a chain going taut-to-slack in one frame drops the ball it had been braking - 0.7 m/s of `rope-anchor-kick` on `session-576f` f60.
+A tip drifts into its surface slowly and the probe catches it on real contact, which is what keeps the anchored length honest.
+The `hook-blocked-attaches` contact case is the general statement, asserted over a fan of 240 throws past a tilted slab's end rather than at one placed near-miss: **every throw the solver pushes on must anchor**.
+A single fixed offset would stop straddling the sub-millimetre margin the moment the manifold changed, and then pass by missing the geometry instead of by handling it.
+
 At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it
@@ -1309,6 +1333,24 @@ signed magnitude in px/s² on disk, m/s² in the sim — negative reverses the f
 deliberately an *acceleration*, not a true force: a current carries light and heavy bodies
 alike, so one authored number behaves the same for the avatar, a pebble and a boulder. Areas
 are not wrap bodies; the rope passes straight through.
+
+What an area *contains* is decided by one predicate, `shapesOverlap`, shared by the force
+areas, the killzone notifications and the world's overlap query.
+Its vertex-vs-vertex branch is the separating-axis test (`shapeContacts` at slop 0) behind a
+bounding-circle reject, and the exact half of that is not optional: it used to be the
+bounding circle alone, which for a rect is its half-**diagonal**, so a long thin area reached
+as a disc many times its own size.
+The ball arena's 31.5 × 0.7 m river current reached 15.75 m in every direction, and a plank
+hung on scene chains 5.6 m *above* the water was accelerated sideways at a steady 3 m/s²,
+swinging a metre off its anchors and failing `energy-gained` twice in the first 100 frames of
+a level nobody was even playing.
+The avatar is a circle and circles take the exact branch, which is what kept it looking like
+a chain bug: only a rect or polygon body could be in the wrong, and until scene chains there
+were none in reach of an area.
+`area-reach` (`cli contacts`) is the statement - a body clear of the volume is untouched
+however close the bounding circle passes, a body inside is carried, and a body dipping one
+corner in is carried too, that last one being what stops the fix collapsing to a
+centre-inside test.
 
 **`friction`** (0 = ice, 1 = rubber, default 1) is a property of every non-area body,
 carried on the engine body as `CollisionObject2D.surfaceFriction`. It scales the contact

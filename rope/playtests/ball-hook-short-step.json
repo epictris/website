@@ -1,0 +1,68 @@
+{
+  "level": "ball-hook-short-step",
+  "controller": "ball",
+  "frames": 180,
+  "spawn": {
+    "x": 0,
+    "y": 0
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": 50.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 1000.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": -36.8,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 400.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      }
+    ]
+  },
+  "aim": [
+    {
+      "from": 1,
+      "to": 120,
+      "x": 0.0,
+      "y": -1.0,
+      "relative": true
+    }
+  ],
+  "holds": [
+    {
+      "action": "deploy",
+      "from": 100,
+      "to": 180
+    }
+  ],
+  "asserts": [
+    {
+      "reachState": "BallAnchored",
+      "byFrame": 101
+    },
+    {
+      "frame": 140,
+      "state": "BallAnchored"
+    }
+  ]
+}

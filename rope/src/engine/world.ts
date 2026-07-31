@@ -88,7 +88,13 @@ const VELOCITY_ITERATIONS = 20;
 // unless something is approaching fast enough to close the gap within the step,
 // and above all they persist, which is what gives warm starting something to
 // hold on to.
-const CONTACT_SLOP = 0.01;
+//
+// Exported because it is not only the solver's business: it is the width of the
+// band inside which `integrate` will act on a pair. Anything that wants to claim
+// a contact BEFORE the solver turns it into a bounce — `BallHook`'s attach test
+// is the one — has to look at least this far, or the solver silently wins the
+// races it loses by less than a centimetre (`session-593f`).
+export const CONTACT_SLOP = 0.01;
 // Approach speed (m/s) below which a contact earns no bounce at all.
 //
 // Without it, any restitution above zero makes resting contacts micro-bounce for
@@ -1610,7 +1616,27 @@ function brakeScale(a: RigidBody2D, bRigid: RigidBody2D | null, dir: Vec2): numb
   return scale;
 }
 
-// Cheap symmetric overlap test between two shape transforms.
+// Symmetric overlap test between two shape transforms.
+//
+// The vertex-vs-vertex case is the separating-axis test, not a bounding-circle
+// approximation of it. It used to be the latter - `a`'s bounding circle against
+// `b`, with a comment promising a refinement that was never written and a
+// justification ("the area queries always involve a circle in practice") that
+// held only while every body an area could reach was the round avatar.
+//
+// A bounding circle is a broadphase, and using one as the answer makes a long
+// thin area enormously bigger than it is drawn: `shapeRadius` of a rect is its
+// half-DIAGONAL, so the 31.5 x 0.7 m river current across the bottom of the ball
+// arena reached as a disc of radius 15.75 m centred on it. Everything rectangular
+// in most of the level was inside that disc, and force areas apply their
+// acceleration to whatever they overlap - so a plank hung on scene chains 5.6 m
+// ABOVE the water was blown sideways at a steady 3 m/s², every frame, and swung a
+// metre off its anchors while the level read as a perfectly symmetrical pendulum.
+// The circle avatar took the exact branch above and behaved, which is what kept
+// it looking like a chain bug rather than an area one.
+//
+// `killzone` runs through the same test (`notifyAreas`), where the same slop
+// would reset the level from outside the volume.
 function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {
   if (a.shape.kind === "circle") {
     return circleOverlap(a.globalPosition, a.shape.radius, b) !== null;
@@ -1618,8 +1644,9 @@ function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {
   if (b.shape.kind === "circle") {
     return circleOverlap(b.globalPosition, b.shape.radius, a) !== null;
   }
-  // Two vertex shapes: sample via one's bounding circle then refine with the
-  // min-translation test against the other (sufficient for the area/explosion
-  // queries the game issues, which always involve a circle in practice).
-  return circleOverlap(a.globalPosition, shapeRadius(a.shape), b) !== null;
+  // Cheap conservative reject first - a shape outside the other's bounding
+  // circle cannot touch it - then the exact test. `shapeContacts` at slop 0
+  // emits a point only where the loops genuinely meet.
+  if (circleOverlap(a.globalPosition, shapeRadius(a.shape), b) === null) return false;
+  return shapeContacts(a, b).length > 0;
 }

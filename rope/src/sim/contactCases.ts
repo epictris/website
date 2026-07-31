@@ -16,13 +16,14 @@
 
 import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
-import { RigidBody2D, StaticBody2D } from "../engine/body";
+import { ForceArea, RigidBody2D, StaticBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { ContactAudit, World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
+import { BallHook } from "../classes/ballHook";
 import { RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
 
 const DT = 1 / 60;
@@ -843,6 +844,154 @@ function caseGripReseed(sims: Sim[]): ContactResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// hook-blocked-attaches — the hook anchors to anything the solver stops it on.
+//
+// A `BallHook` decides for itself, before it moves, whether the step ahead ends
+// on a surface. The solver decides afterwards, from a different measurement:
+// separation along a contact normal, closed at the normal component of the
+// approach, out to `CONTACT_SLOP`. Those two disagree at the margin, and the
+// solver always wins, because it runs second. Where it wins, the throw is spent:
+// its approach velocity is cancelled and what is left is tangential, so a shot
+// aimed dead at a surface skates off along it instead of anchoring, and does so
+// while every invariant reports HEALTHY (`session-593f`, `session-1154f`).
+//
+// The property, and it is the whole point of the case: a hook that the solver
+// pushes on must be a hook that anchors. Asserted over a FAN of throws past the
+// end of a tilted slab rather than at one hand-placed near-miss, because the
+// margin is a sub-millimetre band whose position moves with any change to the
+// manifold - a fixed offset would stop straddling it silently, and pass by
+// missing the geometry rather than by handling it.
+// ---------------------------------------------------------------------------
+function caseHookBlockedAttaches(): ContactResult {
+  const OFFSETS = 240;
+  // Across the slab's end and well past its corner, so the fan covers head-on
+  // hits, the corner, and clean misses in one sweep.
+  const FROM = -0.35;
+  const TO = 0.15;
+
+  let blocked = 0;
+  let unattached = 0;
+  let firstBad = "";
+  for (let i = 0; i < OFFSETS; i++) {
+    const x = FROM + ((TO - FROM) * i) / (OFFSETS - 1);
+    const world = new World();
+    // The hanging plank of `session-1154f`, pinned: a 2.4 x 0.8 slab at 60°,
+    // thrown at from below so the shot meets its lower end face near head-on.
+    const slab = new StaticBody2D();
+    slab.globalPosition = new Vec2(0, -2);
+    slab.globalRotation = 1.05;
+    slab.setShape(rectShape(2.4, 0.8));
+    world.add(slab);
+
+    const hook = new BallHook();
+    hook.globalPosition = new Vec2(x, 0);
+    hook.linearVelocity = new Vec2(0, -BallPlayer.HOOK_SPEED);
+    let attached = false;
+    hook.registerAttachmentCallback(() => {
+      attached = true;
+    });
+    world.add(hook);
+
+    // The level's own order: every body's physicsStep, then one integrate.
+    for (let f = 0; f < 20 && !attached; f++) {
+      hook.physicsStep(DT);
+      if (attached) break;
+      world.integrate(DT);
+      const pushed = world.frameContacts.some(
+        (c) => (c.a === hook || c.b === hook) && c.normalImpulse > 0,
+      );
+      if (!pushed) continue;
+      blocked++;
+      // One more physicsStep is all it may take: the sweep anchors on the frame
+      // of contact, the backstop on the frame after.
+      hook.physicsStep(DT);
+      if (!attached) {
+        unattached++;
+        if (!firstBad) firstBad = `x=${x.toFixed(4)} f${f + 1}`;
+      }
+      break;
+    }
+  }
+
+  // A fan that never gets blocked would pass the check above by testing nothing.
+  const enough = blocked >= 10;
+  const good = unattached === 0;
+  return ok("hook-blocked-attaches — a hook the solver pushes on is a hook that anchors", good && enough, [
+    `${good ? "ok  " : "BAD "} ${unattached} of ${blocked} blocked throws failed to anchor` +
+      `${firstBad ? ` (first at ${firstBad})` : ""} (want 0)`,
+    `${enough ? "ok  " : "BAD "} ${blocked} of ${OFFSETS} throws were blocked at all (want >=10)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// area-reach — an area acts on what it actually contains, and on nothing else.
+//
+// Every area query in the world goes through one predicate (`shapesOverlap`),
+// and its vertex-vs-vertex branch used to answer with a BOUNDING CIRCLE: a rect
+// against the half-diagonal disc of the other, with a comment promising a
+// refinement that was never written. For the round avatar that branch is never
+// taken, which is why it survived - and for a long thin area it is enormous. The
+// ball arena's 31.5 x 0.7 m river current reached as a 15.75 m disc, so a plank
+// hung on scene chains 5.6 m above the water was accelerated sideways at a
+// steady 3 m/s² and swung a metre off its anchors, in a rig whose geometry is
+// symmetrical to the millimetre.
+//
+// The case is three rect bodies against one long thin current, and it is written
+// as the general statement rather than as that level: a body clear of the volume
+// is untouched however close the bounding circle passes, a body inside is
+// carried, and a body dipping a corner in is carried too. That last one is what
+// stops the fix being "test the centre", which would pass the first two.
+//
+// Gravity is off throughout: what is asserted is the area's own acceleration, and
+// a falling body would leave the volume mid-case and confuse the two.
+// ---------------------------------------------------------------------------
+function caseAreaReach(): ContactResult {
+  const FRAMES = 30;
+  const ACCEL = 3;
+  const world = new World();
+
+  // The current: long, thin, and pointing -x (rot pi, as the level authors it).
+  const current = new ForceArea();
+  current.globalPosition = new Vec2(0, 0);
+  current.globalRotation = Math.PI;
+  current.setShape(rectShape(31.5, 0.7));
+  current.magnitude = ACCEL;
+  world.add(current);
+
+  const plank = (x: number, y: number): RigidBody2D => {
+    const b = new RigidBody2D();
+    b.globalPosition = new Vec2(x, y);
+    b.setShape(rectShape(3.4, 0.6));
+    b.gravityScale = 0;
+    world.add(b);
+    return b;
+  };
+
+  // Clear of the volume by 5.3 m of empty air, and 7.6 m from its centre - well
+  // inside the old bounding circle, which is the whole point of where it sits.
+  const above = plank(-5, -5.6);
+  // Squarely inside.
+  const inside = plank(-5, 0);
+  // Overlapping the top face by 5 cm, centre outside.
+  const dipping = plank(5, -0.6);
+
+  for (let f = 0; f < FRAMES; f++) world.integrate(DT);
+
+  // What the area is worth over the run, and the bar for "carried": most of it,
+  // since a body inside for every frame gets all of it.
+  const full = ACCEL * DT * FRAMES;
+  const clear = above.linearVelocity.length() === 0;
+  const carried = inside.linearVelocity.x <= -full * 0.99;
+  const dipped = dipping.linearVelocity.x <= -full * 0.99;
+
+  return ok("area-reach — an area acts on what it contains, not on its bounding circle", clear && carried && dipped, [
+    `${clear ? "ok  " : "BAD "} body 5.3m clear of the volume: |v| ${above.linearVelocity.length().toFixed(4)} m/s (want 0)`,
+    `${carried ? "ok  " : "BAD "} body inside: vx ${inside.linearVelocity.x.toFixed(3)} m/s (want <= ${(-full * 0.99).toFixed(3)})`,
+    `${dipped ? "ok  " : "BAD "} body dipping a corner in: vx ${dipping.linearVelocity.x.toFixed(3)} m/s (want <= ${(-full * 0.99).toFixed(3)})`,
+  ]);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -864,6 +1013,8 @@ export function runContactCases(): ContactResult[] {
     caseGripReseed(sims),
   ];
   ContactAudit.enabled = false;
+  results.push(caseAreaReach());
+  results.push(caseHookBlockedAttaches());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));
   return results;
