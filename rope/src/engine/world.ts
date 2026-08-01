@@ -586,11 +586,23 @@ export class World {
   // pushed out of is a surface that body is resting against, and a caller that
   // derives velocity from the frame's displacement (see BallLevel) needs that
   // set to refuse itself credit for driving into one.
-  depenetrateRigid(body: RigidBody2D, iterations = 2): Vec2[] {
+  //
+  // `accept` narrows what counts as solid for this caller. The default - every
+  // solid body in the scene - is what a caller pushing out the one body its
+  // constraint moves wants. A caller whose constrained body is itself something
+  // other bodies rest ON does not: pushing it out of a neighbour is one side of
+  // a pair being resolved by whoever asked, which is the race `integrate`'s
+  // scene-wide sweep exists to avoid, and the constraint's own body is not the
+  // side that must yield (see `settleChainBodies`).
+  depenetrateRigid(
+    body: RigidBody2D,
+    iterations = 2,
+    accept: ((other: PhysicsBody2D) => boolean) | null = null,
+  ): Vec2[] {
     const pushedOutOf: Vec2[] = [];
     if (body.removed || !body.hasShape()) return pushedOutOf;
     for (let pass = 0; pass < iterations; pass++) {
-      const [a, b] = this.gatherDepenetration(body);
+      const [a, b] = this.gatherDepenetration(body, accept);
       if (!a) return pushedOutOf;
       // Resolve the two deepest overlaps *together* rather than one after the
       // other. Pushing fully out of one surface can push straight into another,
@@ -649,6 +661,7 @@ export class World {
   // be re-gathered after every push.
   private gatherDepenetration(
     body: RigidBody2D,
+    accept: ((other: PhysicsBody2D) => boolean) | null = null,
   ): [{ normal: Vec2; depth: number } | null, { normal: Vec2; depth: number } | null] {
     let a: { normal: Vec2; depth: number } | null = null;
     let b: { normal: Vec2; depth: number } | null = null;
@@ -666,6 +679,7 @@ export class World {
         if (other === body || other.removed || !other.hasShape()) continue;
         if (body.exceptions.has(other.id)) continue;
         if (!isSolidTarget(other)) continue;
+        if (accept && !accept(other)) continue;
         for (const oshape of other.getShapes()) {
           // The same conservative box reject the contact gather uses, and here
           // it is the one that pays: this runs per rigid body per depenetration

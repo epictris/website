@@ -698,7 +698,7 @@ function caseSteeredHungHold(sims: Sim[]): ContactResult {
   let start = offset();
   let worst = 0;
   sim.step(900, (n) => {
-    stepSceneChains(chains, DT);
+    stepSceneChains(chains, sim.world, DT);
     ball.kinematicRotation = true;
     ball.angularVelocity = 0;
     // Let the rig settle onto its chains before the measurement opens.
@@ -1217,7 +1217,7 @@ function caseChainOrder(): ContactResult {
     let tilt = 0;
     let stretch = 0;
     sim.step(FRAMES, (n) => {
-      stepSceneChains(chains, DT);
+      stepSceneChains(chains, sim.world, DT);
       if (n <= FRAMES - 300) return;
       lean = Math.max(lean, Math.abs(weight.globalPosition.x));
       tilt = Math.max(tilt, Math.abs(wrapAngle(link.globalRotation)));
@@ -1242,6 +1242,93 @@ function caseChainOrder(): ContactResult {
       `(want <${(MAX_TILT / DEG).toFixed(0)}deg)`,
     `${rigid ? "ok  " : "BAD "} worst chain stretch ${(stretchA * 1000).toFixed(2)}mm, ${(stretchB * 1000).toFixed(2)}mm swapped ` +
       `(want <${MAX_STRETCH * 1000}mm)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// chain-hung-jam: a chain may not haul the body it holds through the geometry
+// that body is jammed against.
+//
+// The failure the ordering in `settleChainBodies` exists to prevent, and the one
+// it is impossible to see from a velocity trace: every frame is healthy on every
+// invariant while the numbers double. A chain writes a positional correction and
+// pays itself Δposition/Δt for it; a body it hauls into a surface ends the frame
+// embedded; next frame's contact solve pushes it back out and takes the approach
+// velocity off it, and the chain then re-corrects a gap that is the push-out's
+// depth PLUS however far the credit it kept has carried the body. Gain above
+// one, so it doubles: in `session-147f` a 628 kg plank hung from a static ledge
+// by two chains went from 12 mm of correction to 172 mm over five frames, sat
+// 204 mm inside a 100 mm slab - past half its thickness, so the push-out
+// resolved out of the FAR face - and tunnelled clean through the ledge it hangs
+// from, swinging away with 2.6 kJ it never earned.
+//
+// The rig is that session's own, moved to the origin and started at the frame
+// the plank began jamming (its f44 state, from `cli trace`): the plank swings up
+// on its bridle until its right half is under the ledge it hangs from, and then
+// the constraint and the surface disagree for as long as it takes to settle.
+//
+// The bar that discriminates is the PEAK SPEED, not the tunnel. A runaway is
+// what a tunnel is made of - the plank only gets through the slab because the
+// compounding carries it more than half a slab deep in one step - so the honest
+// detector is the compounding itself, which this rig shows at 14.5 m/s against
+// 6.6 for a 628 kg plank that was handed 2.6. The tunnel is asserted anyway
+// because it is the failure as reported and it costs nothing to watch.
+//
+// What this case does NOT yet reach: the rig still ends 15 s of jamming at
+// ~1 m/s instead of at rest. The chain's correction is part rotation, the
+// push-out that answers it is a translation, and the difference is credit
+// nothing takes back - the same fight as above, one derivative up. An angular
+// push-out is what that wants and it belongs with the ball's own phase, which
+// has the identical hole; until then `energy-gained` still fires on a hard jam.
+// ---------------------------------------------------------------------------
+function caseChainHungJam(sims: Sim[]): ContactResult {
+  const sim = new Sim("chain-hung-jam", 30);
+  sims.push(sim);
+  const ledge = sim.addStatic(rectShape(1.3, 0.1), Vec2.ZERO);
+  // 4 m of steel plank on an asymmetric bridle - as authored, and heavy enough
+  // that the mass ratio in the correction is all the plank's.
+  const plank = sim.addRigid(rectShape(4, 0.1), new Vec2(-2.05, 0.6), 0.2618);
+  plank.mass = 628;
+  plank.inertia = ShapeGeometry.computeMomentOfInertia(plank.primaryShape(), plank.mass);
+  plank.linearVelocity = new Vec2(1.94, 1.69);
+  plank.angularVelocity = -2.85;
+  // Anchors sit ON the surfaces they are bolted to, and an authored chain with
+  // no length is taut between them - both of which `buildSceneChains` does.
+  const chain = (a: Vec2, b: Vec2) =>
+    new SceneChain(RopeContact.at(ledge, a), RopeContact.at(plank, b), a.distanceTo(b), null);
+  const chains = [
+    chain(new Vec2(-0.65, -0.05), new Vec2(-1.3398, 0.7385)),
+    chain(new Vec2(-0.3931, 0.05), new Vec2(-0.396, 0.9914)),
+  ];
+
+  // The ledge's top face, in a world where +y is down.
+  const ledgeTop = -0.05;
+  const lowestCorner = (): number => {
+    let lowest = -Infinity;
+    for (const sx of [-2, 2]) {
+      for (const sy of [-0.05, 0.05]) {
+        const y = new Vec2(sx, sy).rotated(plank.globalRotation).add(plank.globalPosition).y;
+        lowest = Math.max(lowest, y);
+      }
+    }
+    return lowest;
+  };
+  let worstAbove = 0;
+  let peakSpeed = 0;
+  sim.step(900, () => {
+    stepSceneChains(chains, sim.world, DT);
+    // How far the plank's lowest corner has got ABOVE the ledge's top face -
+    // zero for a plank hanging under it, and metres for one that has gone
+    // through and swung away.
+    worstAbove = Math.max(worstAbove, ledgeTop - lowestCorner());
+    peakSpeed = Math.max(peakSpeed, plank.linearVelocity.length());
+  });
+
+  const held = worstAbove < 0.05;
+  const bounded = peakSpeed < 9;
+  return ok("chain-hung-jam — a chain does not haul what it holds through a surface", held && bounded, [
+    `${held ? "ok  " : "BAD "} plank rose ${(worstAbove * 1000).toFixed(1)}mm above the ledge it hangs under (want <50mm)`,
+    `${bounded ? "ok  " : "BAD "} peak speed ${peakSpeed.toFixed(2)} m/s over 15s of jamming (want <9, was 14.5)`,
   ]);
 }
 
@@ -1732,6 +1819,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseBackgroundGroup());
   results.push(caseAreaReach());
   results.push(caseChainOrder());
+  results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));

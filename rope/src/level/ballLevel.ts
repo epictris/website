@@ -19,7 +19,14 @@ import {
 } from "./levelFormat";
 import { buildLevelBodies } from "./buildBodies";
 import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
-import { buildSceneChains, stepSceneChains, sweepChains, type SceneChain } from "./chains";
+import {
+  buildSceneChains,
+  settleChainBodies,
+  snapshotChainBodies,
+  stepSceneChains,
+  sweepChains,
+  type SceneChain,
+} from "./chains";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -167,7 +174,7 @@ export class BallLevel {
     // phase opens: whatever they move is then part of the state that phase
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
-    stepSceneChains(this.sceneChains, delta);
+    stepSceneChains(this.sceneChains, this.world, delta);
     PhaseTrace.mark("scene-chains", this.world);
 
     // Push the ball clear of the scenery before anything measures against it,
@@ -231,6 +238,15 @@ export class BallLevel {
       // kinematic aim spin, which `unwindOverLength` will refuse below. The rest
       // is real motion — gravity, momentum, a swing going taut — and is the
       // solve's proper business.
+      // The scene bodies this whole phase may move, snapshotted before any of it
+      // does. The ball's own chain solve moves whatever lies on its path and the
+      // coupled sweep below moves whatever the scene chains hold, and both pay
+      // those bodies velocity for it - the same credit `stepSceneChains` has to
+      // close against the geometry, and for the same reason (see
+      // `settleChainBodies`). The ball is excluded because the books below are
+      // its own, taken over this phase with both of its push-outs in them.
+      const sceneBefore =
+        this.sceneChains.length > 0 ? snapshotChainBodies(this.sceneChains, this.ball) : [];
       this.ball.chain.beginFrame(delta);
       this.ball.chain.syncWraps(this.bodies);
       const overLengthBeforeSolve =
@@ -305,6 +321,16 @@ export class BallLevel {
       // What the spin's share of the solve took back off everything but the ball
       // (session-265f). Zero on a frame with no aim spin.
       PhaseTrace.mark("spin-rollback", this.world);
+      // Settled after the rollback and not before it, so the displacement the
+      // credit is taken over is the one the phase actually ends on - a rollback
+      // run afterwards would undo part of the move while the credit for it
+      // stayed, which is the whole failure this exists to prevent.
+      if (sceneBefore.length > 0) {
+        settleChainBodies(this.sceneChains, sceneBefore, this.world, delta);
+      }
+      // Position for the scene's chain-held bodies, and the velocity they are
+      // owed for it - the ball's own share of this phase is `chain-velocity`.
+      PhaseTrace.mark("chain-settle", this.world);
       // A rope correction is still free to shove the ball into something on its
       // way; push out again so the frame does not *end* inside the scenery, and
       // then set the chain phase's velocity contribution to the displacement it

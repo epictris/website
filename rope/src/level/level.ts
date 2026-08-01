@@ -157,7 +157,7 @@ export class Level {
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
     // recorded replay bit-identical.
-    stepSceneChains(this.sceneChains, delta);
+    stepSceneChains(this.sceneChains, this.world, delta);
     PhaseTrace.mark("scene-chains", this.world);
 
     this.cameraPosition = this.player.globalPosition;

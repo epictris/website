@@ -1318,6 +1318,25 @@ That doubled the arena's physics frame, p50 2.3 ms to 3.7 and p99 5.2 to 8.9 wit
 Gated on the disturbance it takes **one** sweep on that arena and the cost is back in the noise.
 Worth knowing separately: `stepSceneChains` on its own is 31% of an arena frame (0.74 ms mean, 8.9 ms peak) and spends the cap every frame for pure scenery, which is the authored angle rather than the solver - see the note above about authoring a shallow V steeper.
 
+The chain phase **closes against the geometry**, the same way `BallLevel` closes the ball's own (`settleChainBodies`).
+A chain writes its positional correction straight onto the bodies it holds and pays itself Δposition/Δt for it, which is a standard PBD velocity update and honest only if that correction is the last word on where the body ends up.
+For a body a chain hauls into a surface it is not: the frame ends with the body embedded, next frame's `World.integrate` pushes it back out positionally and takes the approach velocity off it at the contact, and the chain then re-corrects a gap that is the push-out's depth **plus** however far the credit it kept has carried the body since.
+That is a loop with a gain above one and it doubles every frame.
+`session-147f` is the whole of it: a 628 kg plank hung from a static ledge by two chains, swung up so its end jammed under that same ledge, and the chain's credit ran -0.76, -2.44, -4.68, -7.42, -10.36 m/s over five frames while the contact's push-out grew 10, 32, 108, 200, 304 mm to match, until the plank stood **204 mm inside a 100 mm slab** - past half its thickness, so the push-out resolved out of the far face and the plank tunnelled clean through the ledge it hangs from, swung away carrying 2.6 kJ it never earned, fell back on the ledge and did it again.
+Every frame of that replays HEALTHY: nothing about it violates an invariant until the energy monitor notices the kJ, 75 frames later.
+
+Refunding the credit is what this cannot be fixed by, in the same words the ball's phase uses: the credit is taken along the correction and would have to be handed back along the contact normal, so a refund big enough to stop the compounding also injects velocity sideways.
+Ordering the frame so the question never arises is the fix - push out after the sweep, take the phase's velocity over the displacement that **survives** the push-out, and there is nothing left to refund.
+The `funded` bound on the into-surface refusal is `BallLevel`'s and is there for its reason: a body arrives at this phase already pressing into whatever it rests on, so cancelling that share too would leave the frame with no approach velocity and next frame's contact would size its Coulomb cone from nothing.
+Two details are load-bearing.
+The push-out counts **statics only**: a chain-hung body is as often a platform as a weight, and an overlap with something resting on it is a pair the next `integrate` solves for both sides - resolving it here moves the wrong body and then pays it for having moved, which shoved the slab out from under the ball in `steered-hung-hold` and rode the credit 15 m across the level.
+And the credit carries `topologyCreditScale`, because this **replaces** the per-pass credits rather than adding to them: a scene chain wraps nothing, but its span is still re-resolved around the corner of the body it is bolted to, and dropping the scale let this rig's span grow 46 cm in one frame as the plank turned under its own anchor and threw it off at 13.9 m/s.
+`cli contacts` `chain-hung-jam` is the case, and what it asserts is the **compounding** (peak 6.6 m/s against 14.5) rather than the tunnel, since a runaway is what a tunnel is made of.
+
+Still open there: a hard jam ends 15 s at ~1 m/s rather than at rest, and `energy-gained` still fires on one.
+The chain's correction is part rotation and the push-out that answers it is a translation, so the difference is credit nothing takes back - the same fight one derivative up.
+An angular push-out is what that wants, and it belongs with the ball's phase, which has the identical hole.
+
 Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
 That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.

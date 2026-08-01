@@ -22,8 +22,14 @@
 // paid for that by making every chain a thing the player might silently snag on.
 
 import { Vec2 } from "../engine/vec2";
-import type { CollisionObject2D, PhysicsBody2D } from "../engine/body";
+import {
+  RigidBody2D,
+  StaticBody2D,
+  type CollisionObject2D,
+  type PhysicsBody2D,
+} from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
+import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
 import { type ChainData, type LevelData } from "./levelFormat";
@@ -141,10 +147,167 @@ const MAX_CHAIN_SWEEPS = 64;
 // `beginFrame` stays outside the loop: it releases the blocked-length lease, and
 // a lease released once per PASS would be handed back a sweep's worth faster
 // than the geometry that bought it can re-earn it.
-export function stepSceneChains(chains: readonly SceneChain[], delta: number): void {
+export function stepSceneChains(
+  chains: readonly SceneChain[],
+  world: World,
+  delta: number,
+): void {
   if (chains.length === 0) return;
+  const before = snapshotChainBodies(chains, null);
   for (const chain of chains) chain.beginFrame(delta);
   sweepChains(chains, null, delta);
+  settleChainBodies(chains, before, world, delta);
+}
+
+const isStatic = (body: PhysicsBody2D): boolean => body instanceof StaticBody2D;
+
+// The share of this frame's chain-phase displacement that `body` may be paid
+// velocity for: the lowest `topologyCreditScale` among the chains that hold it,
+// and 1 for a body no chain in the set touches.
+function creditScale(chains: readonly SceneChain[], body: RigidBody2D): number {
+  let scale = 1;
+  for (const chain of chains) {
+    if (chain.rope.path().some((n) => n.contact.obj === body)) {
+      scale = Math.min(scale, chain.rope.topologyCreditScale);
+    }
+  }
+  return scale;
+}
+
+// A body a chain solve is about to move, as it stood before that solve. The
+// chain phase's velocity credit is `Δposition / Δt` taken over the WHOLE phase
+// (see `settleChainBodies`), so what it needs is one snapshot per body, not the
+// per-pass deltas the sweep's individual solves take.
+export interface ChainBodyState {
+  readonly body: RigidBody2D;
+  readonly position: Vec2;
+  readonly rotation: number;
+  readonly velocity: Vec2;
+  readonly spin: number;
+}
+
+// Every dynamic body on the given chains' paths, snapshotted. `exclude` is for a
+// caller that keeps its own books for one body — `BallLevel` does, for the ball.
+export function snapshotChainBodies(
+  chains: readonly SceneChain[],
+  exclude: RigidBody2D | null,
+): ChainBodyState[] {
+  const states: ChainBodyState[] = [];
+  for (const chain of chains) {
+    for (const node of chain.rope.path()) {
+      const body = node.contact.obj;
+      if (!(body instanceof RigidBody2D) || body === exclude) continue;
+      if (states.some((s) => s.body === body)) continue;
+      states.push({
+        body,
+        position: body.globalPosition,
+        rotation: body.globalRotation,
+        velocity: body.linearVelocity,
+        spin: body.angularVelocity,
+      });
+    }
+  }
+  return states;
+}
+
+// Close the chain phase against the geometry, which is what makes a chain-hung
+// body's velocity honest.
+//
+// A chain writes its positional correction straight onto the bodies it holds and
+// pays itself velocity for it, Δposition over Δt. That is a standard PBD
+// velocity update and it is honest, but ONLY if the correction is the last word
+// on where the body ends up. For a body a chain hauls into a surface it is not:
+// the frame ends with the body embedded, next frame's `World.integrate` pushes
+// it back out positionally and kills the approach velocity at the contact, and
+// the chain then re-corrects a gap that is now the push-out's depth PLUS the
+// distance the credited velocity carried the body in the meantime. That is a
+// feedback loop with a gain above one, and it doubles every frame.
+//
+// `session-147f` is the whole of it: a 628 kg plank hung from a static ledge by
+// two chains, swung up so its end jammed under that same ledge. The chain's
+// credit went -0.76, -2.44, -4.68, -7.42, -10.36 m/s over five frames while the
+// contact's push-out grew 10, 32, 108, 200, 304 mm to match, until the plank sat
+// 204 mm inside a 100 mm slab - deeper than half its thickness, so the contact
+// push-out resolved out of the FAR face and the plank tunnelled clean through
+// the ledge it hangs from. It then swung free with 2.6 kJ it never earned, fell
+// back onto the ledge, and did it again.
+//
+// This is the same defect `BallLevel` was written around for the ball's own
+// chain, and it is fixed the same way, in that phase's words: refunding the
+// credit cannot be made to work (the credit is taken along the correction and
+// would have to be handed back along the contact normal), so the frame is
+// ORDERED so the question never arises. Push out here, derive the phase's
+// velocity over the displacement that survives the push-out, and there is
+// nothing to refund - a body can never bank speed for a move that was undone.
+//
+// The `funded` bound is `BallLevel`'s, for its reason: a body arrives at this
+// phase already pressing into whatever it rests on, because `integrate` applied
+// gravity and the contact solve does not run again before the frame ends.
+// Cancelling that share too would leave the frame with no approach velocity at
+// all, and next frame's contact would size its Coulomb cone from nothing. So the
+// bound is gravity's own per-frame step, and no more than the body brought in
+// with it.
+export function settleChainBodies(
+  chains: readonly SceneChain[],
+  before: readonly ChainBodyState[],
+  world: World,
+  delta: number,
+): void {
+  const blockedBodies = new Set<RigidBody2D>();
+  for (const s of before) {
+    // Out of the SCENERY, and not out of other dynamic bodies. A chain-hung body
+    // is as often a platform as a weight, and an overlap with something resting
+    // on it is a pair the next `integrate` solves for both sides with an impulse
+    // - resolving it here instead moves the wrong body, since the constraint's
+    // own body is not the one that has to give way, and then pays it velocity
+    // for having moved. `steered-hung-hold` is the case: the ball rests on a
+    // chain-hung slab, and a push-out that counted the ball shoved the slab out
+    // from under it every frame and rode the credit 15 m across the level.
+    const pushedOutOf = world.depenetrateRigid(s.body, 2, isStatic);
+    if (pushedOutOf.length > 0) blockedBodies.add(s.body);
+    // Discounted the same way each solve discounts its own credit, and it has to
+    // be carried here because this REPLACES those credits rather than adding to
+    // them: a length error the path's own topology put there is corrected in
+    // position and earns no velocity (see `Rope.topologyCreditScale`). A scene
+    // chain wraps nothing, but its span can still be re-resolved around the
+    // corner of the very body it is bolted to, and that jump is not motion - it
+    // is the description changing. Dropped, this rig's span grew 46 cm in one
+    // frame as the plank turned under its own anchor and the plank left at
+    // 13.9 m/s carrying 66 kJ.
+    //
+    // The lowest scale of the chains holding this body, because the credit being
+    // scaled is the sum of what they all did to it and a jump on any one of them
+    // is a jump in that sum.
+    const credit = creditScale(chains, s.body);
+    s.body.angularVelocity =
+      s.spin + ((s.body.globalRotation - s.rotation) / delta) * credit;
+    s.body.linearVelocity = s.velocity.add(
+      s.body.globalPosition.sub(s.position).div(delta).mul(credit),
+    );
+    const gravityStep = GRAVITY.mul(s.body.gravityScale * delta);
+    for (const normal of pushedOutOf) {
+      const into = s.body.linearVelocity.dot(normal);
+      const funded = Math.max(
+        Math.min(s.velocity.dot(normal), 0),
+        Math.min(gravityStep.dot(normal), 0),
+      );
+      if (into < funded) {
+        s.body.linearVelocity = s.body.linearVelocity.sub(normal.mul(into - funded));
+      }
+    }
+  }
+  // Whatever the sweep could not reach is the chain being held over its length
+  // by the geometry one of its bodies is resting against - the winch stall, and
+  // re-basing lets the constraint settle there instead of winding up against the
+  // block. Per chain and not per scene: a lease released into a live block
+  // spends every frame hauling a body into a surface that is already saying no,
+  // and one blocked chain is no reason to hold another one's.
+  for (const chain of chains) {
+    chain.rope.absorbBlockedLength();
+    chain.rope.noteBlockedByGeometry(
+      chain.rope.path().some((n) => n.contact.obj instanceof RigidBody2D && blockedBodies.has(n.contact.obj)),
+    );
+  }
 }
 
 // The sweep itself, over a set whose frames are already open, plus optionally
