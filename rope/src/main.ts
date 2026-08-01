@@ -6,7 +6,8 @@ import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { render, renderBall } from "./render/renderer";
-import { ballZoom, GRAPPLE_ZOOM, type Camera } from "./render/camera";
+import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
+import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import {
@@ -29,31 +30,25 @@ const MAX_STEPS_PER_FRAME = 5; // avoid spiral-of-death after a long stall
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
+// The view is a fixed 16:9 frame (see render/viewport.ts), so the camera's
+// viewport is a constant: the window changes how big that frame is drawn, never
+// how much world is inside it.
 const camera: Camera = {
   position: Vec2.ZERO,
   zoom: GRAPPLE_ZOOM,
-  viewportWidth: window.innerWidth,
-  viewportHeight: window.innerHeight,
+  viewportWidth: VIEW_WIDTH,
+  viewportHeight: VIEW_HEIGHT,
 };
 // The camera is driven by the controller (eased follow + camera regions);
 // `camera.zoom` is its output, so the framing scale lives here instead.
 const cameraCtl = new CameraController();
-let baseZoom = GRAPPLE_ZOOM;
 
-let cssWidth = window.innerWidth;
-let cssHeight = window.innerHeight;
+// Where the frame lands on the canvas — refreshed on resize, since it carries
+// the display's DPR as well as the fit.
+let view = viewTransform(VIEW_WIDTH, VIEW_HEIGHT);
 
 function resize(): void {
-  const dpr = window.devicePixelRatio || 1;
-  cssWidth = window.innerWidth;
-  cssHeight = window.innerHeight;
-  canvas.width = Math.floor(cssWidth * dpr);
-  canvas.height = Math.floor(cssHeight * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  camera.viewportWidth = cssWidth;
-  camera.viewportHeight = cssHeight;
-  // The ball's base zoom is height-driven, so a resize re-derives it.
-  if (isBall) baseZoom = ballZoom(cssHeight);
+  view = fitCanvas(canvas);
 }
 
 // Level selection via ?level=NAME (defaults to DEFAULT_LEVEL).
@@ -63,6 +58,7 @@ const levelId = ((): string => {
 })();
 const levelSpec = LEVELS[levelId]!;
 const isBall = levelSpec.controller === "ball";
+const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
 
 resize();
 window.addEventListener("resize", resize);
@@ -173,15 +169,12 @@ function frame(now: number): void {
   // faster than the 60 Hz sim.
   input.pollAim?.();
 
-  const dpr = window.devicePixelRatio || 1;
   if (level instanceof BallLevel) {
-    renderBall(ctx, dpr, cssWidth, cssHeight, level, camera, fps, ballInput!.aimPoint(), alpha);
+    renderBall(ctx, view, level, camera, fps, ballInput!.aimPoint(), alpha);
   } else {
     render(
       ctx,
-      dpr,
-      cssWidth,
-      cssHeight,
+      view,
       level,
       camera,
       fps,

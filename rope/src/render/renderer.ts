@@ -24,6 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
+import type { ViewTransform } from "./viewport";
 import type { CameraRegionData } from "../level/levelFormat";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
@@ -394,9 +395,9 @@ function drawCrosshair(ctx: CanvasRenderingContext2D, p: Vec2): void {
 
 export function render(
   ctx: CanvasRenderingContext2D,
-  dpr: number,
-  cssWidth: number,
-  cssHeight: number,
+  // Where the fixed 16:9 frame lands on this canvas and how big — the scale
+  // carries the display's DPR with it (see render/viewport.ts).
+  view: ViewTransform,
   level: Level,
   camera: Camera,
   fps: number,
@@ -409,11 +410,12 @@ export function render(
   // The camera region in force, for the debug overlay (see drawDebugOverlay).
   heldCameraRegion: CameraRegionData | null = null,
 ): void {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
+  const { width: viewWidth, height: viewHeight } = view;
+  ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
+  drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
 
   ctx.save();
-  ctx.translate(cssWidth / 2, cssHeight / 2);
+  ctx.translate(viewWidth / 2, viewHeight / 2);
   // World is in metres; scale metres → screen pixels. camera.zoom is the view
   // knob, PIXELS_PER_METER the unit conversion. Fixed-pixel decoration drawn in
   // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
@@ -494,7 +496,7 @@ export function render(
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#5a6472";
-  ctx.fillText(`${Math.round(fps)} fps`, cssWidth - 8, 6);
+  ctx.fillText(`${Math.round(fps)} fps`, viewWidth - 8, 6);
   ctx.textAlign = "left";
 }
 
@@ -665,9 +667,8 @@ function drawAimReticle(ctx: CanvasRenderingContext2D, at: Vec2): void {
 // drawAimReticle.
 export function renderBall(
   ctx: CanvasRenderingContext2D,
-  dpr: number,
-  cssWidth: number,
-  cssHeight: number,
+  // See `render`: where the fixed 16:9 frame lands on this canvas.
+  view: ViewTransform,
   level: BallLevel,
   camera: Camera,
   fps: number,
@@ -675,11 +676,12 @@ export function renderBall(
   // See `render`: fraction of a physics step elapsed since the last one.
   alpha = 1,
 ): void {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawTrainingGrid(ctx, camera, cssWidth, cssHeight);
+  const { width: viewWidth, height: viewHeight } = view;
+  ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
+  drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
 
   ctx.save();
-  ctx.translate(cssWidth / 2, cssHeight / 2);
+  ctx.translate(viewWidth / 2, viewHeight / 2);
   // World is in metres; scale metres → screen pixels. camera.zoom is the view
   // knob, PIXELS_PER_METER the unit conversion. Fixed-pixel decoration drawn in
   // this space is expressed as a world length via PX (= 1 / PIXELS_PER_METER).
@@ -757,6 +759,6 @@ export function renderBall(
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#5a6472";
-  ctx.fillText(`${Math.round(fps)} fps`, cssWidth - 8, 6);
+  ctx.fillText(`${Math.round(fps)} fps`, viewWidth - 8, 6);
   ctx.textAlign = "left";
 }

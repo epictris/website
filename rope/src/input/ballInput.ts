@@ -53,6 +53,7 @@ import {
 } from "./frameInput";
 import { PAD_RB, PAD_Y, readGamepad } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
+import { clientToView, viewPerClientPx } from "../render/viewport";
 import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
 
@@ -118,8 +119,10 @@ export class BallInputSource implements IInputSource {
     private aimOrigin: () => Vec2,
   ) {
     canvas.addEventListener("mousemove", (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const screen = new Vec2(e.clientX - rect.left, e.clientY - rect.top);
+      // View pixels, not client pixels: the frame is a fixed 16:9 scaled to fit
+      // the window, so the cursor has to be un-projected through that fit before
+      // the camera can un-project it into the world.
+      const screen = clientToView(canvas, e.clientX, e.clientY);
       const prev = this.mouseScreen;
       this.mouseScreen = screen;
       this.aimLocal = MOTION_AIM
@@ -153,7 +156,11 @@ export class BallInputSource implements IInputSource {
   private motionAim(e: MouseEvent, screen: Vec2, prev: Vec2 | null): Vec2 {
     const locked = document.pointerLockElement === this.canvas;
     const travel = prev ? screen.sub(prev) : null;
-    const device = new Vec2(e.movementX, e.movementY);
+    // `movementX/Y` is client pixels, where `screen` is already view pixels, so
+    // the device delta is scaled by the frame's fit before the two are used
+    // interchangeably — otherwise motion aim moved at the window's scale rather
+    // than the view's, and by a different amount on every display.
+    const device = new Vec2(e.movementX, e.movementY).mul(viewPerClientPx(this.canvas));
     // Locked, the device delta is the only motion there is (the cursor holds
     // still); it falls back to cursor travel for events that carry no
     // movementX/Y, which is what synthetic events (headless tooling) dispatch.
@@ -170,6 +177,14 @@ export class BallInputSource implements IInputSource {
     return clampReach(this.aimLocal.add(motion.mul(metresPerPx)));
   }
 
+  // The on-screen controls hang inside the play frame rather than off the
+  // window, so they follow the letterboxed 16:9 view instead of floating in a
+  // bar beside it (hence `position: absolute` on both, against the frame's
+  // `position: relative`).
+  private controlsHost(): HTMLElement {
+    return this.canvas.parentElement ?? document.body;
+  }
+
   // Bottom-left virtual joystick: a fixed base ring with a draggable knob. The
   // knob follows the finger clamped to JOYSTICK_RADIUS_PX; deflection past the
   // deadzone sets joyAim to its normalized direction. touch-action:none + a
@@ -177,7 +192,7 @@ export class BallInputSource implements IInputSource {
   private buildJoystick(): void {
     const base = document.createElement("div");
     Object.assign(base.style, {
-      position: "fixed",
+      position: "absolute",
       bottom: "max(24px, env(safe-area-inset-bottom))",
       left: "24px",
       zIndex: "10",
@@ -256,7 +271,7 @@ export class BallInputSource implements IInputSource {
     base.addEventListener("touchend", end, { passive: false });
     base.addEventListener("touchcancel", end, { passive: false });
 
-    document.body.append(base);
+    this.controlsHost().append(base);
   }
 
   private buildDeploy(): void {
@@ -275,7 +290,7 @@ export class BallInputSource implements IInputSource {
       '<polyline points="37 30 37 26 33 27"/>' +
       "</svg>";
     Object.assign(deploy.style, {
-      position: "fixed",
+      position: "absolute",
       bottom: "max(24px, env(safe-area-inset-bottom))",
       right: "24px",
       zIndex: "10",
@@ -304,7 +319,7 @@ export class BallInputSource implements IInputSource {
     deploy.addEventListener("touchend", press(false), { passive: false });
     deploy.addEventListener("touchcancel", press(false), { passive: false });
 
-    document.body.append(deploy);
+    this.controlsHost().append(deploy);
   }
 
   // The world point currently aimed at, or null when nothing aims (no input

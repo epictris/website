@@ -4,7 +4,8 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
-import { ballZoom, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
+import { BALL_ZOOM, GRAPPLE_ZOOM, screenToWorld, worldToScreen, type Camera } from "../render/camera";
+import { LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "../render/viewport";
 import {
   CAMERA_BLEND_TIME,
   CameraController,
@@ -185,14 +186,22 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let cssW = window.innerWidth;
   let cssH = window.innerHeight;
   let dpr = window.devicePixelRatio || 1;
+  // Editing, or playing a level inline (▶ Test). Declared here because `resize`
+  // below has to know which of the two the camera is framing for; the rest of
+  // the test state lives further down, under "mode: edit | test".
+  let mode: "edit" | "test" = "edit";
   function resize(): void {
     dpr = window.devicePixelRatio || 1;
     cssW = window.innerWidth;
     cssH = window.innerHeight;
     canvas.width = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
-    camera.viewportWidth = cssW;
-    camera.viewportHeight = cssH;
+    // Editing spans the whole canvas; a test plays in the game's fixed frame, so
+    // a resize mid-test must not hand the camera the window's shape back.
+    if (mode !== "test") {
+      camera.viewportWidth = cssW;
+      camera.viewportHeight = cssH;
+    }
   }
   resize();
   window.addEventListener("resize", resize);
@@ -382,7 +391,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   }
 
   // --- mode: edit | test ----------------------------------------------------
-  let mode: "edit" | "test" = "edit";
+  // (`mode` itself is declared above `resize`, which reads it.)
   let testLevel: Level | BallLevel | null = null;
   let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
@@ -410,6 +419,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
     savedCam = { pos: camera.position, zoom: camera.zoom };
+    // The test is played in the game's fixed 16:9 frame, so the camera is given
+    // the frame's dimensions rather than the editor window's: `viewportScale`,
+    // the follow point and every pointer un-projection are in view pixels while
+    // a test runs, exactly as they are in the game.
+    camera.viewportWidth = VIEW_WIDTH;
+    camera.viewportHeight = VIEW_HEIGHT;
     testController = controller;
     testData = pixelData;
     recFrames.length = 0;
@@ -462,6 +477,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function stopTest(): void {
     mode = "edit";
     testLevel = null;
+    // Back to editing the whole canvas (see startTest).
+    camera.viewportWidth = cssW;
+    camera.viewportHeight = cssH;
     if (savedCam) {
       camera.position = savedCam.pos;
       camera.zoom = savedCam.zoom;
@@ -2715,25 +2733,25 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         dt,
         testLevel.cameraRenderPosition(alpha),
         testLevel.cameraRegions,
-        testController === "ball" ? ballZoom(camera.viewportHeight) : GRAPPLE_ZOOM,
+        testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();
       liveInput?.pollAim();
+      // A test is played in the game's own fixed 16:9 frame, fitted into the
+      // editor canvas — the point of ▶ Test is that framing is felt exactly as
+      // it will play, and a window-shaped view would show a different slice of
+      // the level from the one the player gets. What is left over is the same
+      // letterbox the game has, painted here because the frame no longer covers
+      // the whole canvas.
+      const view = viewTransform(canvas.width, canvas.height);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = LETTERBOX_COLOR;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       if (testLevel instanceof BallLevel) {
-        renderBall(
-          ctx,
-          dpr,
-          cssW,
-          cssH,
-          testLevel,
-          camera,
-          fps,
-          ballInput?.aimPoint() ?? null,
-          alpha,
-        );
+        renderBall(ctx, view, testLevel, camera, fps, ballInput?.aimPoint() ?? null, alpha);
       } else {
-        render(ctx, dpr, cssW, cssH, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha);
+        render(ctx, view, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha);
       }
     } else {
       drawEditor(

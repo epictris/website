@@ -23,16 +23,13 @@ export function screenToWorld(cam: Camera, screenX: number, screenY: number): Ve
 // by the CameraController.
 export const GRAPPLE_ZOOM = 2;
 
-// Ball & chain plays at a tighter scale than the grapple level (BALL_ZOOM on a
-// desktop-height viewport), but scales down on short viewports so a landscape
-// phone still frames the ball and its chain arc. Height-driven: the vertical
-// span is what has to fit. Shared by the game (main.ts) and the editor's inline
-// ▶ Test Ball, so both frame the ball identically.
+// Ball & chain plays at a tighter scale than the grapple level. It is a plain
+// constant because the view is a fixed 16:9 frame scaled to fit the window (see
+// render/viewport.ts): a short window makes the whole frame smaller rather than
+// showing less of the level, so there is no longer a viewport height for a zoom
+// to be derived from. It used to scale down on short viewports, which is what
+// let a landscape phone frame the ball and its chain arc.
 export const BALL_ZOOM = 2.2;
-const BALL_ZOOM_REF_HEIGHT = 900; // viewport height the base zoom is tuned for
-export function ballZoom(viewportHeight: number): number {
-  return Math.min(BALL_ZOOM, BALL_ZOOM * (viewportHeight / BALL_ZOOM_REF_HEIGHT));
-}
 
 // Inverse of screenToWorld: a world-metre point → CSS-pixel screen coordinate.
 export function worldToScreen(cam: Camera, world: Vec2): Vec2 {

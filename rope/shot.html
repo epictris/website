@@ -4,12 +4,17 @@
     <meta charset="utf-8" />
     <title>rope frame grab</title>
     <style>
+      /* Same fixed 16:9 frame as the game (see src/render/viewport.ts), so a
+         grab is the frame the player is shown rather than one shaped by
+         whatever window size the harness happened to ask for. */
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; }
-      #game { display: block; width: 100vw; height: 100vh; }
+      body { display: flex; align-items: center; justify-content: center; }
+      #frame { position: relative; }
+      #game { display: block; width: 100%; height: 100%; }
     </style>
   </head>
   <body>
-    <canvas id="game"></canvas>
+    <div id="frame"><canvas id="game"></canvas></div>
     <script type="module" src="/src/shotMain.ts"></script>
   </body>
 </html>

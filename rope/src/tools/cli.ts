@@ -618,7 +618,12 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
   const frame = Number(o.frame ?? 1);
   const out = resolve(o.out ?? `${first.replace(/\.json(\.gz)?$/, "")}.f${frame}.png`);
   const zoom = o.zoom;
-  const size = o.size ?? "1200,900";
+  // The game's fixed frame is 1920×1080 (render/viewport.ts) and the page fits it
+  // into whatever viewport it gets, so anything else grabs the same picture with
+  // letterbox bars around it. `--window-size` is the *window*, and headless
+  // chromium keeps 87px of it for itself, so the height asks for that on top to
+  // leave a 1920×1080 viewport (measured; both headless modes agree).
+  const size = o.size ?? "1920,1167";
   const port = Number(o.port ?? SHOT_PORT);
   const chromium = ["chromium-browser", "chromium", "google-chrome"].find(
     (b) => spawnSync("which", [b]).status === 0,

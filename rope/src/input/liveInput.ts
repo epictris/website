@@ -34,6 +34,7 @@ import {
   readGamepad,
 } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
+import { clientToView } from "../render/viewport";
 
 const MOVE_DEADZONE = 0.35; // left-stick X → digital move threshold
 const AIM_DEADZONE = 0.3; // right-stick deflection before it takes over aim
@@ -105,8 +106,10 @@ export class LiveInputSource implements IInputSource {
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
     canvas.addEventListener("mousemove", (e) => {
-      const rect = canvas.getBoundingClientRect();
-      this.mouseScreen = new Vec2(e.clientX - rect.left, e.clientY - rect.top);
+      // View pixels, not client pixels: the frame is a fixed 16:9 scaled to fit
+      // the window, so the cursor has to be un-projected through that fit before
+      // the camera can un-project it into the world.
+      this.mouseScreen = clientToView(canvas, e.clientX, e.clientY);
       this.aimSource = "mouse";
     });
     canvas.addEventListener("mousedown", (e) => {

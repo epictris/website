@@ -663,8 +663,11 @@ the two can be compared by feel without a rebuild):
   lets the reticle be bounded without that cost.
   The first move (and the first after another device owned aim) seeds `aimLocal`
   from the real cursor position.
-The camera zoom scales down on short viewports (height-driven, capped at the
-desktop zoom) so a landscape phone still frames the ball and its chain arc.
+`BALL_ZOOM` is a plain constant: the view is a fixed 16:9 frame scaled to fit the
+window (see **The view**), so a landscape phone gets the same framing as a
+desktop at a smaller size rather than a smaller slice of the level.
+It used to be height-driven, capped at the desktop zoom, which is what let a
+short viewport still frame the ball and its chain arc.
 The page is an installable full-screen web app (`public/manifest.webmanifest`
 with `display: fullscreen`, plus `apple-mobile-web-app-*` metas for iOS and
 `viewport-fit=cover`): added to a phone's home screen it launches without
@@ -1151,6 +1154,7 @@ way in editor and game via `src/render/color.ts`). Both the editor and the game 
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
+A test also plays in the game's own fixed 1920 × 1080 frame, fitted into the editor canvas and letterboxed (see **The view**): the point of ▶ Test is that the framing is what the player gets, and an editor-window-shaped view showed a different slice of the level from the one it will be played on.
 **B** is the same ball test but spawned **at the cursor**, so a corner of the level can be spot-checked without walking the spawn marker over to it and back.
 The override is baked into the `LevelData` the test level is built from rather than into the model, so it never edits the level, and a reset (and the exported P bundle) respawns at the same point.
 
@@ -1363,10 +1367,27 @@ force areas, and rigid bodies), so the grapple and ball controllers load identic
 
 ## Camera
 
+### The view
+
+The game is drawn into a **fixed 1920 × 1080 frame** scaled to fit the window (`render/viewport.ts`), not into the window itself.
+Every layer above the canvas - the camera, the renderer, pointer un-projection - works in those **view pixels** and never sees the window's real size; the window decides one thing, how large the frame is drawn.
+It is centred, scaled by the tighter axis, and what is left over on the other axis is background: letterbox bars on a 4:3 display, pillarbox bars on a phone.
+
+Framing is the reason, and it is not cosmetic.
+A camera region's `viewportScale` says *how much world is on screen*, and that can only mean something if "the screen" is a fixed shape - sized off the window, a tall monitor saw further up and down than a laptop and a phone in landscape saw a different level again, so a room framed by eye in the editor was framed differently for everyone who played it.
+1920 × 1080 because that is what the zoom constants are read on: at that size the frame is 1:1, and it is why `BALL_ZOOM` could stop being height-driven.
+
+`ViewTransform` (a scale plus the frame's origin, in the target's pixels) is the whole interface, and it carries the display's DPR folded into its scale, so the renderer takes one argument for where the frame is and how big.
+The same value describes the frame in **client** pixels, which is what `clientToView` un-projects a pointer through: one arithmetic for drawing the frame and for reading a click on it, rather than two that can disagree by a letterbox bar.
+It also means the frame does not have to *be* the canvas - the editor's ▶ Test fits it into the whole editor canvas and paints the bars itself (`LETTERBOX_COLOR`), so a level is tested in the frame it will be played in.
+The touch controls are positioned inside the frame rather than the window for the same reason.
+
+`cli shot` asks headless chromium for a window 87px taller than the frame, since that is what the browser keeps for itself, so a grab is exactly the frame with no bars.
+
 `render/cameraController.ts` owns the view: an **eased follow** of the avatar, reshaped by the level's **camera regions**.
 It is deliberately render-side, driven by the wall-clock frame `dt` rather than the fixed timestep, so easing it can never change a recorded run.
 (The grapple controller un-projects the cursor through the camera, so the camera does reach the sim as *input* — but the trace records the resulting world point, so replays stay bit-identical.)
-`camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `ballZoom(viewportHeight)` for the ball, re-derived on resize).
+`camera.zoom` is the controller's **output**; the base framing scale lives in the caller (`GRAPPLE_ZOOM`, or `BALL_ZOOM` for the ball).
 The default framing puts the avatar **dead centre** for both controllers — the ball's old 3/5-down shift is gone — so shifting the view is a camera region's `offsetX`/`offsetY` and nothing else, one authored mechanism rather than a per-controller rule.
 
 Two smoothings run at deliberately different timescales:
