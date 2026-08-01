@@ -213,6 +213,23 @@ export interface CameraRegionData {
   // Authored wider, it is what lets a swing that leaves the region and comes
   // straight back keep one camera the whole time.
   buffer?: number;
+  // Per-side overrides of `buffer`, for a **rect** region only: a room is
+  // rarely symmetrical, and the arc a swing takes out of one usually reaches far
+  // past one wall and barely past the other, which a single number can only
+  // cover by being that wide on all four sides.
+  //
+  // Sides are the region's own, in its local frame - left/right are ∓x and
+  // top/bottom are ∓y, so a rotated region's "top" turns with it. Each falls
+  // back to `buffer`, which falls back to REGION_EXIT_MARGIN, so authoring one
+  // side leaves the other three exactly as they were.
+  //
+  // A circle has no sides and a polygon's growth is a signed-distance offset
+  // with no axis to hang them on (see `pathOutlineGrown`), so both ignore these
+  // and take `buffer` alone; the editor offers the fields to rects only.
+  bufferLeft?: number;
+  bufferRight?: number;
+  bufferTop?: number;
+  bufferBottom?: number;
   // Overlap tie-break: the containing region with the highest priority wins
   // (later in the list wins a tie). Absent = 0.
   priority?: number;
@@ -370,6 +387,10 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
     ...(r.lockY !== undefined ? { lockY: r.lockY * factor } : {}),
     ...(r.blend !== undefined ? { blend: r.blend } : {}),
     ...(r.buffer !== undefined ? { buffer: r.buffer * factor } : {}),
+    ...(r.bufferLeft !== undefined ? { bufferLeft: r.bufferLeft * factor } : {}),
+    ...(r.bufferRight !== undefined ? { bufferRight: r.bufferRight * factor } : {}),
+    ...(r.bufferTop !== undefined ? { bufferTop: r.bufferTop * factor } : {}),
+    ...(r.bufferBottom !== undefined ? { bufferBottom: r.bufferBottom * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
   }));
   // A note's placement, box and glyph height are lengths; its text is not.

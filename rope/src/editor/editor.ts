@@ -1461,6 +1461,34 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         },
       },
     );
+    // Per-side overrides of that, for rects only: a circle has no sides and a
+    // polygon grows as a signed-distance offset, so neither can express them
+    // (see `pathOutlineGrown`) and offering the fields there would be four
+    // controls that do nothing. Sides are the region's own - a rotated region's
+    // "top" turns with it - and blank means the buffer above.
+    if (regions.every((b) => b.shape.kind === "rect")) {
+      const sideField = (
+        label: string,
+        key: "bufferLeft" | "bufferRight" | "bufferTop" | "bufferBottom",
+      ): void => {
+        num(
+          label,
+          (b) => (b.cam[key] ?? NaN) * M2PX,
+          (b, v) => (b.cam[key] = Math.max(0, v * PX)),
+          10,
+          {
+            placeholder: "buffer",
+            onEmpty: () => {
+              for (const b of regions) b.cam[key] = null;
+            },
+          },
+        );
+      };
+      sideField("buf left", "bufferLeft");
+      sideField("buf right", "bufferRight");
+      sideField("buf top", "bufferTop");
+      sideField("buf bottom", "bufferBottom");
+    }
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     addActionsRow(g);

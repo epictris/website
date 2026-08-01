@@ -31,8 +31,11 @@ import {
   pathOutline,
   pathOutlineGrown,
   pathOutlineInto,
+  uniformMargin,
+  type Margin,
   type Outline,
 } from "../render/shapePath";
+import { REGION_EXIT_MARGIN } from "../render/cameraController";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -197,10 +200,32 @@ function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
 export function pathRegionBuffer(
   ctx: CanvasRenderingContext2D,
   body: EdItem,
-  buffer: number,
+  buffer: Margin,
 ): void {
   ctx.beginPath();
   pathOutlineGrown(ctx, body.pos, body.rot, outlineOf(body), buffer);
+}
+
+// The buffer a camera region holds by, as `regionBuffer` computes it from the
+// saved file - a plain distance, or a rect's per-side set once any side is
+// authored, each side falling back to the region's own buffer and then to the
+// controller's jitter margin. Null = nothing authored at all, which is drawn as
+// nothing: the default margin is 15 cm of hysteresis rather than a reach an
+// author placed, and outlining it on every region would say otherwise.
+export function cameraBufferMargin(r: EdItem): Margin | null {
+  const { buffer, bufferLeft, bufferRight, bufferTop, bufferBottom } = r.cam;
+  const perSide =
+    r.shape.kind === "rect" &&
+    [bufferLeft, bufferRight, bufferTop, bufferBottom].some((s) => s !== null);
+  if (buffer === null && !perSide) return null;
+  const base = buffer ?? REGION_EXIT_MARGIN;
+  if (!perSide) return base;
+  return {
+    left: bufferLeft ?? base,
+    right: bufferRight ?? base,
+    top: bufferTop ?? base,
+    bottom: bufferBottom ?? base,
+  };
 }
 
 // Every piece of a compound body accumulated into one path, so it can be filled
@@ -298,7 +323,16 @@ export function cameraRegionLabel(r: EdItem): string {
   const lock = `${r.cam.lockX !== null ? "x" : ""}${r.cam.lockY !== null ? "y" : ""}`;
   if (lock) parts.push(`lock ${lock}`);
   if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
-  if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
+  const buf = cameraBufferMargin(r);
+  if (buf !== null) {
+    // Per side, the sides are named rather than left to a reading order nobody
+    // can guess from four numbers.
+    parts.push(
+      typeof buf === "number"
+        ? `buf ${px(buf)}`
+        : `buf l${px(buf.left)} r${px(buf.right)} t${px(buf.top)} b${px(buf.bottom)}`,
+    );
+  }
   if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
   return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
 }
@@ -755,8 +789,9 @@ export function drawEditor(
     // anywhere inside it, so a region drawn without it looks like it lets go at
     // its own edge. Finer dots and a thinner line than the region's own border,
     // since it is the region's reach rather than a second volume.
-    if (r.cam.buffer !== null && r.cam.buffer > 0) {
-      pathRegionBuffer(ctx, r, r.cam.buffer);
+    const buffer = cameraBufferMargin(r);
+    if (buffer !== null && uniformMargin(buffer) > 0) {
+      pathRegionBuffer(ctx, r, buffer);
       ctx.strokeStyle = CAMERA_REGION_COLOR;
       ctx.lineWidth = worldLine;
       ctx.setLineDash([2 * PX, 5 * PX]);

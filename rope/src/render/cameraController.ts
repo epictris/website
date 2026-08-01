@@ -36,6 +36,8 @@ import { Vec2 } from "../engine/vec2";
 import type { CameraRegionData } from "../level/levelFormat";
 import { DEFAULT_VIEWPORT_SCALE } from "../level/levelFormat";
 import type { Camera } from "./camera";
+import type { Margin } from "./shapePath";
+import { marginSides, uniformMargin } from "./shapePath";
 
 // Exponential follow time constant, seconds — the time to close ~63% of the
 // distance to the target. Small enough to stay responsive, large enough to take
@@ -52,8 +54,29 @@ export const CAMERA_BLEND_TIME = 0.7;
 export const REGION_EXIT_MARGIN = 0.15; // metres
 
 // The buffer a region actually holds by: its own, or the jitter default.
-export function regionBuffer(r: CameraRegionData): number {
-  return r.buffer ?? REGION_EXIT_MARGIN;
+//
+// A rect may state one per side (`bufferLeft` and friends), each falling back to
+// the region's own `buffer` and then to the jitter default. A region authoring
+// none answers the plain number, so every path that had one is untouched; the
+// other two shape kinds have no sides to state and always do (see `Margin`).
+export function regionBuffer(r: CameraRegionData): Margin {
+  const base = r.buffer ?? REGION_EXIT_MARGIN;
+  if (r.shape.kind !== "rect") return base;
+  const { bufferLeft, bufferRight, bufferTop, bufferBottom } = r;
+  if (
+    bufferLeft === undefined &&
+    bufferRight === undefined &&
+    bufferTop === undefined &&
+    bufferBottom === undefined
+  ) {
+    return base;
+  }
+  return {
+    left: bufferLeft ?? base,
+    right: bufferRight ?? base,
+    top: bufferTop ?? base,
+    bottom: bufferBottom ?? base,
+  };
 }
 
 export interface CameraTarget {
@@ -62,14 +85,20 @@ export interface CameraTarget {
 }
 
 // Is a world point inside a region's (rotated) volume, optionally grown by
-// `margin` on every side?
-export function pointInRegion(r: CameraRegionData, p: Vec2, margin = 0): boolean {
+// `margin` — one distance on every side, or a rect's per-side set?
+export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0): boolean {
   if (r.shape.kind === "circle") {
-    return p.distanceTo(new Vec2(r.x, r.y)) <= r.shape.r + margin;
+    return p.distanceTo(new Vec2(r.x, r.y)) <= r.shape.r + uniformMargin(margin);
   }
   const l = p.sub(new Vec2(r.x, r.y)).rotated(-r.rot);
   if (r.shape.kind === "rect") {
-    return Math.abs(l.x) <= r.shape.w / 2 + margin && Math.abs(l.y) <= r.shape.h / 2 + margin;
+    // Per side, in the region's own frame: the sides the buffer names, and the
+    // one place a rect's grown volume is decided alongside `pathOutlineGrown`,
+    // which draws exactly this.
+    const m = marginSides(margin);
+    const hx = r.shape.w / 2;
+    const hy = r.shape.h / 2;
+    return l.x >= -hx - m.left && l.x <= hx + m.right && l.y >= -hy - m.top && l.y <= hy + m.bottom;
   }
   // Convex polygon: inside every face plane, each pushed out by the margin. A
   // true offset (rounded corners) rather than the rect's square-cornered growth,
@@ -77,6 +106,7 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin = 0): boolean
   // filleted corners — the drawn zone is exactly the zone tested here.
   const verts = r.shape.verts;
   const n = verts.length;
+  const grow = uniformMargin(margin);
   for (let i = 0; i < n; i++) {
     const a = verts[i]!;
     const b = verts[(i + 1) % n]!;
@@ -84,7 +114,7 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin = 0): boolean
     const ey = b.y - a.y;
     const len = Math.hypot(ex, ey);
     if (len < 1e-9) continue;
-    if ((ey * (l.x - a.x) - ex * (l.y - a.y)) / len > margin) return false;
+    if ((ey * (l.x - a.x) - ex * (l.y - a.y)) / len > grow) return false;
   }
   return true;
 }

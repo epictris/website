@@ -73,6 +73,13 @@ export interface EdCamera {
   lockY: number | null; // metres
   blend: number | null; // seconds
   buffer: number | null; // metres; null = the controller's REGION_EXIT_MARGIN
+  // Per-side overrides of `buffer`, in the region's own frame (left/right = ∓x,
+  // top/bottom = ∓y). Rect regions only - a circle has no sides and a polygon
+  // grows as an offset - and null = fall back to `buffer`.
+  bufferLeft: number | null;
+  bufferRight: number | null;
+  bufferTop: number | null;
+  bufferBottom: number | null;
   priority: number;
 }
 
@@ -220,6 +227,10 @@ export const defaultCamera = (): EdCamera => ({
   lockY: null,
   blend: null,
   buffer: null,
+  bufferLeft: null,
+  bufferRight: null,
+  bufferTop: null,
+  bufferBottom: null,
   priority: 0,
 });
 
@@ -349,6 +360,10 @@ function fromLevelData(data: LevelData): EdModel {
       lockY: r.lockY ?? null,
       blend: r.blend ?? null,
       buffer: r.buffer ?? null,
+      bufferLeft: r.bufferLeft ?? null,
+      bufferRight: r.bufferRight ?? null,
+      bufferTop: r.bufferTop ?? null,
+      bufferBottom: r.bufferBottom ?? null,
       priority: r.priority ?? 0,
     },
     note: defaultNote(),
@@ -443,6 +458,17 @@ export function toLevelData(model: EdModel): LevelData {
       ...(i.cam.lockY !== null ? { lockY: i.cam.lockY } : {}),
       ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
       ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+      // Per-side buffers mean nothing off a rect, so they are not written for
+      // one: a field on disk the loader ignores is a field that lies about what
+      // it does.
+      ...(i.shape.kind === "rect"
+        ? {
+            ...(i.cam.bufferLeft !== null ? { bufferLeft: i.cam.bufferLeft } : {}),
+            ...(i.cam.bufferRight !== null ? { bufferRight: i.cam.bufferRight } : {}),
+            ...(i.cam.bufferTop !== null ? { bufferTop: i.cam.bufferTop } : {}),
+            ...(i.cam.bufferBottom !== null ? { bufferBottom: i.cam.bufferBottom } : {}),
+          }
+        : {}),
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
     }));
 

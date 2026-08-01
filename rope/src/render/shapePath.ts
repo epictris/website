@@ -118,8 +118,30 @@ export function pathOutlineInto(
   p.closePath();
 }
 
-// The outline grown by `margin` on every side — the shape of a camera region's
-// buffer zone, and the one place its geometry is decided.
+// How far an outline is grown: one distance on every side, or a distance per
+// side. Sides are the outline's OWN — left/right are ∓x and top/bottom are ∓y in
+// the shape's local frame, so a rotated region's "top" turns with it.
+//
+// Only a rect can express sides at all: a circle has none, and a polygon's
+// growth is a signed-distance offset with no axis to hang them on. Both take
+// `uniformMargin` instead, so what is drawn stays exactly what `pointInRegion`
+// tests for those kinds.
+export interface SideMargin {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+export type Margin = number | SideMargin;
+
+export const marginSides = (m: Margin): SideMargin =>
+  typeof m === "number" ? { left: m, right: m, top: m, bottom: m } : m;
+
+export const uniformMargin = (m: Margin): number =>
+  typeof m === "number" ? m : Math.max(m.left, m.right, m.top, m.bottom);
+
+// The outline grown by `margin` — the shape of a camera region's buffer zone,
+// and the one place its geometry is decided.
 //
 // A rect grows per axis, with square corners, because that is literally what
 // `pointInRegion` tests for it. A polygon grows as a true offset (faces pushed
@@ -130,22 +152,27 @@ export function pathOutlineGrown(
   center: Vec2,
   rot: number,
   o: Outline,
-  margin: number,
+  margin: Margin,
 ): void {
   if (o.kind === "circle") {
-    ctx.arc(center.x, center.y, o.radius + margin, 0, Math.PI * 2);
+    ctx.arc(center.x, center.y, o.radius + uniformMargin(margin), 0, Math.PI * 2);
     return;
   }
   if (o.kind === "rect") {
+    const m = marginSides(margin);
     ctx.save();
     ctx.translate(center.x, center.y);
     ctx.rotate(rot);
-    const hx = o.half.x + margin;
-    const hy = o.half.y + margin;
-    ctx.rect(-hx, -hy, hx * 2, hy * 2);
+    ctx.rect(
+      -(o.half.x + m.left),
+      -(o.half.y + m.top),
+      o.half.x * 2 + m.left + m.right,
+      o.half.y * 2 + m.top + m.bottom,
+    );
     ctx.restore();
     return;
   }
+  const grow = uniformMargin(margin);
   ctx.save();
   ctx.translate(center.x, center.y);
   ctx.rotate(rot);
@@ -162,16 +189,16 @@ export function pathOutlineGrown(
     const b = o.verts[(i + 1) % n]!;
     const nrm = normals[i]!;
     if (nrm.x === 0 && nrm.y === 0) continue;
-    const oa = a.add(nrm.mul(margin));
+    const oa = a.add(nrm.mul(grow));
     if (i === 0) ctx.moveTo(oa.x, oa.y);
     else ctx.lineTo(oa.x, oa.y);
-    ctx.lineTo(b.x + nrm.x * margin, b.y + nrm.y * margin);
+    ctx.lineTo(b.x + nrm.x * grow, b.y + nrm.y * grow);
     // Corner fillet at `b`, from this face's normal round to the next face's.
     // The loop turns clockwise on screen, which in y-down space is the
     // direction of increasing angle — canvas's default sweep.
     const next = normals[(i + 1) % n]!;
     if (next.x !== 0 || next.y !== 0) {
-      ctx.arc(b.x, b.y, margin, Math.atan2(nrm.y, nrm.x), Math.atan2(next.y, next.x));
+      ctx.arc(b.x, b.y, grow, Math.atan2(nrm.y, nrm.x), Math.atan2(next.y, next.x));
     }
   }
   ctx.closePath();
