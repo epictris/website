@@ -29,7 +29,7 @@ export const GRAPPLE_ZOOM = 2;
 // showing less of the level, so there is no longer a viewport height for a zoom
 // to be derived from. It used to scale down on short viewports, which is what
 // let a landscape phone frame the ball and its chain arc.
-export const BALL_ZOOM = 2.2;
+export const BALL_ZOOM = 2;
 
 // Inverse of screenToWorld: a world-metre point → CSS-pixel screen coordinate.
 export function worldToScreen(cam: Camera, world: Vec2): Vec2 {

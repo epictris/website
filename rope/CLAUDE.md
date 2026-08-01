@@ -607,6 +607,19 @@ A tip drifts into its surface slowly and the probe catches it on real contact, w
 The `hook-blocked-attaches` contact case is the general statement, asserted over a fan of 240 throws past a tilted slab's end rather than at one placed near-miss: **every throw the solver pushes on must anchor**.
 A single fixed offset would stop straddling the sub-millimetre margin the moment the manifold changed, and then pass by missing the geometry instead of by handling it.
 
+Whichever surface the hook reaches first decides, and where two are reached at once **an attach beats a bounce**.
+Attachable and hook-proof geometry are therefore swept as two separate questions (`bodySweepCircle`'s `only` filter) rather than as one earliest hit.
+The two are not comparable outcomes - a bounce is "nothing happened, keep going" and an attach is the throw being over - so ranking them against each other lets whichever surface sorts first decide for both, and at a seam there is nothing to sort by at all, since `t` is equal.
+What actually decided was body **build order**, which is to say the order the level file happens to list its bodies in.
+`session-596f` is that: the hook came to rest in the seam where a hook-proof disc meets an attachable pillar, touching both, and bounced off the disc at `t = 0` on every frame for 250 frames while sitting on a surface it should have anchored to on the first.
+Nothing about it is a velocity - the hook sat still - so the only thing it showed up as was the chain it left dangling: frozen at its deployed length with its tip held by geometry, it fed the winch stall a blocked correction every one of those frames and grew from 64 cm to 3.58 m, read from the game as the chain stretching without limit.
+`probeContact` had the same blindness one step further on, and there it needs no tie-break to justify the rule: a probe has no direction of travel, so every surface in the band was reached at once, and a hook-proof surface the tip is also touching does not un-touch the one it caught.
+The anchor **point** is the other half.
+The swept path places it a radius back along the inward normal from the contact-frame centre, which is the surface only while that centre is genuinely a radius clear of it.
+A sweep that *begins* inside the piece returns `t = 0` (see "rest resolution when a sweep starts embedded"), so the centre is the hook where it stands and stepping a radius further buries the anchor - 2 cm inside the pillar, which the chain then runs through.
+There the surface answers for itself (`nearestSurfacePoint`), exactly as `probeContact` has it answer for the same reason.
+`cli contacts` `hook-seam` is the detector, and it asserts the seam from **both build orders** - an answer that depends on which body was listed first is not an answer - that the anchor lands on the face rather than a radius inside it, and that a hook-proof surface genuinely reached *first* still deflects, which is what stops the fix collapsing to "attach always wins".
+
 At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it

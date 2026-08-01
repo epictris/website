@@ -651,13 +651,21 @@ export function shapeSupport(t: ShapeTransform, worldDir: Vec2): Vec2 {
 // reached is what decides whether a hook anchors to it or is turned away by it
 // (`CollisionShape2D.impermeable`), and a caller handed a body alone has to
 // guess that again from the geometry it has just been told about.
+//
+// `only` narrows the scan to the pieces it accepts. A caller that treats two
+// kinds of surface differently has to be able to ask about each kind on its own
+// terms: answered "the deepest piece" it learns what the winning piece was and
+// nothing about the piece it lost to, which is only enough while every piece of
+// every body decides the same way (see `BallHook`).
 export function bodyOverlapCircle(
   body: CollisionObject2D,
   center: Vec2,
   radius: number,
+  only?: (s: CollisionShape2D) => boolean,
 ): { normal: Vec2; depth: number; shape: CollisionShape2D } | null {
   let best: { normal: Vec2; depth: number; shape: CollisionShape2D } | null = null;
   for (const s of body.getShapes()) {
+    if (only && !only(s)) continue;
     const ov = circleOverlap(center, radius, s);
     if (ov && (!best || ov.depth > best.depth)) best = { ...ov, shape: s };
   }
@@ -667,14 +675,18 @@ export function bodyOverlapCircle(
 // Earliest swept-circle hit against any shape `body` carries, or null. Earliest
 // because a sweep stops at first contact, and which piece that is depends on the
 // direction of travel, not on the order the pieces were mounted.
+//
+// `only` narrows the scan as it does above, and for the same reason.
 export function bodySweepCircle(
   body: CollisionObject2D,
   from: Vec2,
   motion: Vec2,
   radius: number,
+  only?: (s: CollisionShape2D) => boolean,
 ): (SweepHit & { shape: CollisionShape2D }) | null {
   let best: (SweepHit & { shape: CollisionShape2D }) | null = null;
   for (const s of body.getShapes()) {
+    if (only && !only(s)) continue;
     const hit = sweepCircle(from, motion, radius, s);
     if (hit && (!best || hit.t < best.t)) best = { ...hit, shape: s };
   }

@@ -1480,6 +1480,132 @@ function caseImpermeableShape(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// hook-seam — where hook-proof geometry meets attachable geometry, an attach
+// beats a bounce, and the anchor lands on the surface.
+//
+// `impermeable-shape` above asks each surface on its own, one at a time, which
+// is every arrangement in which one surface is the only one the hook can reach.
+// A seam is not that: the hook touches both at once, so both answer, and the two
+// answers are not comparable outcomes - a bounce is "nothing happened, keep
+// going" and an attach is the throw being over. Scanned as a single earliest hit
+// the two are ranked against each other anyway, and at a seam there is nothing
+// to rank by, since the reach is equal. What actually decided was body BUILD
+// ORDER, which is to say the order the level file happens to list its bodies in.
+//
+// `session-596f` is the failure: the hook came to rest in the seam where a
+// hook-proof disc meets an attachable pillar, and bounced off the disc at t = 0
+// on every frame for 250 frames while sitting on a surface it should have
+// anchored to on the first. Nothing about that is a velocity - the hook sat
+// still - so the only thing it showed up as was the chain it left dangling,
+// frozen at its deployed length with its tip held by geometry, feeding the winch
+// stall a blocked correction every one of those frames: 64 cm of chain grown to
+// 3.58 m, read from the game as the chain stretching without limit.
+//
+// So the seam is asserted from both build orders, because an answer that depends
+// on which body was listed first is not an answer. The hook-proof surface must
+// still win when it is genuinely reached FIRST - otherwise the fix is "attach
+// always wins", which deletes hook-proof geometry rather than fixing it - and
+// the anchor must land ON the surface, because a sweep that starts embedded
+// returns t = 0 and the swept path's "one radius back along the normal" reads
+// the hook's own centre as a contact frame and buries the anchor a radius inside
+// the body it just caught.
+// ---------------------------------------------------------------------------
+function caseHookSeam(): ContactResult {
+  // Two separate bodies, coplanar top faces meeting at x = 0: hook-proof to the
+  // left, attachable to the right. A hook on the seam reaches both at the same
+  // instant, by identical arithmetic, so the tie is exact.
+  const proof: LevelBodyData = {
+    kind: "static",
+    x: -0.5,
+    y: 1,
+    rot: 0,
+    shape: { kind: "rect", w: 1, h: 1 },
+    impermeable: true,
+  };
+  const attachable: LevelBodyData = {
+    kind: "static",
+    x: 0.5,
+    y: 1,
+    rot: 0,
+    shape: { kind: "rect", w: 1, h: 1 },
+  };
+  // Directly behind the hook-proof slab, so a throw down the left side reaches
+  // the hook-proof face first and the attachable one only past it.
+  const behind: LevelBodyData = {
+    kind: "static",
+    x: -0.5,
+    y: 3,
+    rot: 0,
+    shape: { kind: "rect", w: 1, h: 1 },
+  };
+  const FACE_Y = 0.5; // top face of both slabs
+  const HOOK_R = 0.02;
+
+  // Throw a hook straight down at `x` from `y`, or drop it in place at rest when
+  // `speed` is 0 (the embedded-start path the session actually hit). `order`
+  // decides which body the level lists first.
+  const throwAt = (
+    x: number,
+    y: number,
+    speed: number,
+    order: LevelBodyData[],
+  ): { attached: boolean; point: Vec2 | null } => {
+    const world = new World();
+    const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies: order }, 1);
+    buildLevelBodies(world, data, () => {});
+    const hook = new BallHook();
+    hook.globalPosition = new Vec2(x, y);
+    hook.linearVelocity = new Vec2(0, speed);
+    hook.endFlight();
+    let point: Vec2 | null = null;
+    hook.registerAttachmentCallback((_b, p) => {
+      point = p;
+    });
+    world.add(hook);
+    for (let f = 0; f < 30 && point === null; f++) {
+      hook.physicsStep(DT);
+      if (point !== null) break;
+      world.integrate(DT);
+    }
+    return { attached: point !== null, point };
+  };
+
+  const seam = [proof, attachable];
+  const seamSwapped = [attachable, proof];
+  // On the seam, moving: the sweep ranks a hook-proof and an attachable surface
+  // reached at the very same t.
+  const moving = throwAt(0, 0.2, BallPlayer.HOOK_SPEED, seam);
+  const movingSwapped = throwAt(0, 0.2, BallPlayer.HOOK_SPEED, seamSwapped);
+  // On the seam, at rest and already touching both: the probe path, and the
+  // sweep's embedded t = 0.
+  const resting = throwAt(0, FACE_Y, 0, seam);
+  const restingSwapped = throwAt(0, FACE_Y, 0, seamSwapped);
+
+  const anchors = moving.attached && movingSwapped.attached;
+  const anchorsAtRest = resting.attached && restingSwapped.attached;
+  const orderBlind =
+    anchors &&
+    anchorsAtRest &&
+    moving.point!.sub(movingSwapped.point!).length() < 1e-12 &&
+    resting.point!.sub(restingSwapped.point!).length() < 1e-12;
+  // On the surface, not a radius inside it. The face is at FACE_Y; a buried
+  // anchor reads FACE_Y + HOOK_R.
+  const onSurface =
+    anchorsAtRest && Math.abs(resting.point!.y - FACE_Y) < 0.1 * HOOK_R && resting.point!.x >= 0;
+  // The hook-proof surface still wins when it is genuinely reached first.
+  const deflected = !throwAt(-0.5, 0.2, BallPlayer.HOOK_SPEED, [proof, behind]).attached;
+
+  const passed = anchors && anchorsAtRest && orderBlind && onSurface && deflected;
+  return ok("hook-seam — an attach beats a bounce where the two surfaces meet", passed, [
+    `${anchors ? "ok  " : "BAD "} thrown into the seam: ${anchors ? "anchored" : "BOUNCED OFF THE HOOK-PROOF SIDE"}`,
+    `${anchorsAtRest ? "ok  " : "BAD "} at rest touching both: ${anchorsAtRest ? "anchored" : "BOUNCED FOR EVER"}`,
+    `${orderBlind ? "ok  " : "BAD "} the same answer with the two bodies listed in either order`,
+    `${onSurface ? "ok  " : "BAD "} anchor on the face at y=${FACE_Y}: ${resting.point ? `y=${resting.point.y.toFixed(4)}` : "never anchored"}`,
+    `${deflected ? "ok  " : "BAD "} hook-proof reached first still deflects: ${deflected ? "deflected" : "ANCHORED THROUGH IT"}`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // background-group — a background panel welded into a compound body rides it,
 // and everything else about it stays decoration.
 //
@@ -1618,6 +1744,7 @@ export function runContactCases(): ContactResult[] {
   ContactAudit.enabled = false;
   results.push(caseMaterials());
   results.push(caseImpermeableShape());
+  results.push(caseHookSeam());
   results.push(caseBackgroundGroup());
   results.push(caseAreaReach());
   results.push(caseChainOrder());

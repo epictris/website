@@ -110,6 +110,20 @@ export class BallHook extends RigidBody2D {
   // below - which is a whole frame later, and stops at the hook's centre rather
   // than on the surface - ever caught it, so the chain ended up anchored 2 cm
   // off the corner it was aimed at (`session-306f`).
+  //
+  // Attachable and hook-proof geometry are swept as two separate questions, and
+  // an attach wins a tie. They cannot be one "earliest hit" because the two
+  // answers are not comparable outcomes: a bounce is "nothing happened, keep
+  // going" and an attach is the throw being over, so a single best-hit scan lets
+  // whichever surface happens to sort first decide for both. At a tie there is
+  // no geometry to sort by at all - `t` is equal - so the winner was body build
+  // order, which is to say the order the level file lists its bodies in.
+  // `session-596f` is that: the hook came to rest in the seam where a hook-proof
+  // disc meets an attachable pillar, touching both, and bounced off the disc at
+  // `t = 0` on every frame for 250 frames while sitting on a surface it should
+  // have anchored to on the first. The chain, frozen at its deployed length with
+  // its tip held by geometry, fed the winch stall a blocked correction every one
+  // of those frames and grew from 64 cm to 3.58 m.
   physicsStep(dt: number): void {
     if (!this.armed || !this.world) return;
     if (this.attachToBlockingContact()) return;
@@ -120,8 +134,9 @@ export class BallHook extends RigidBody2D {
     const speed = step.length();
     const motion = speed > 0 ? step.mul(1 + CONTACT_SLOP / speed) : step;
 
-    let best: { t: number; normal: Vec2; collider: PhysicsBody2D; shape: CollisionShape2D } | null =
-      null;
+    type Hit = { t: number; normal: Vec2; collider: PhysicsBody2D; shape: CollisionShape2D };
+    let anchor: Hit | null = null;
+    let proof: Hit | null = null;
     for (const body of this.world.bodies) {
       if (body.removed || body === this || body.name === "Player") continue;
       if (this.exceptions.has(body.id)) continue;
@@ -133,23 +148,40 @@ export class BallHook extends RigidBody2D {
         continue;
       }
       if (!body.hasShape()) continue;
-      const sweep = bodySweepCircle(body, from, motion, r);
-      if (sweep && sweep.t <= 1 && (!best || sweep.t < best.t)) {
-        best = { t: sweep.t, normal: sweep.normal, collider: body, shape: sweep.shape };
-      }
-    }
-    if (best) {
-      const contactCenter = from.add(motion.mul(best.t));
       // The piece the sweep struck answers, not the body: a compound wall may
       // be hook-proof on the face the throw came in at and attachable one piece
       // along, which is the whole point of the flag being per shape.
-      if (best.shape.impermeable) {
-        this.bounce(best.normal, contactCenter);
-        return;
+      const hit = bodySweepCircle(body, from, motion, r, (s) => !s.impermeable);
+      if (hit && hit.t <= 1 && (!anchor || hit.t < anchor.t)) {
+        anchor = { t: hit.t, normal: hit.normal, collider: body, shape: hit.shape };
       }
+      const off = bodySweepCircle(body, from, motion, r, (s) => s.impermeable === true);
+      if (off && off.t <= 1 && (!proof || off.t < proof.t)) {
+        proof = { t: off.t, normal: off.normal, collider: body, shape: off.shape };
+      }
+    }
+    // Reached first decides, and an attach takes the tie.
+    if (anchor && (!proof || anchor.t <= proof.t)) {
+      const contactCenter = from.add(motion.mul(anchor.t));
       // Anchor on the surface itself: one radius from the contact-frame centre
       // along the (inward) contact normal.
-      this.attach(best.collider, contactCenter.sub(best.normal.mul(r)));
+      //
+      // That projection is only the surface while the contact-frame centre is
+      // genuinely a radius clear of it, which is what a sweep that travels to
+      // its contact leaves. A sweep that BEGINS inside the piece returns t = 0
+      // (see "rest resolution when a sweep starts embedded"), so the centre is
+      // the hook where it stands and stepping a radius further along the inward
+      // normal buries the anchor - 2 cm inside the pillar in `session-596f`,
+      // which the chain then runs through. There the surface answers for itself,
+      // exactly as `probeContact` has it answer for the same reason.
+      const point = circleOverlap(from, r, anchor.shape)
+        ? nearestSurfacePoint(anchor.shape, from)
+        : contactCenter.sub(anchor.normal.mul(r));
+      this.attach(anchor.collider, point);
+      return;
+    }
+    if (proof) {
+      this.bounce(proof.normal, from.add(motion.mul(proof.t)));
       return;
     }
     this.probeContact();
@@ -251,12 +283,19 @@ export class BallHook extends RigidBody2D {
   // chain's path enough to kick the ball as it anchors. A near-stationary hook
   // needs no help from it anyway: the sweep's reach never falls below
   // `CONTACT_SLOP` however slow the hook is.
+  //
+  // As in the sweep, an attachable surface within reach wins outright over a
+  // hook-proof one, and here it does not even need a tie-break to justify it: a
+  // probe has no direction of travel, so "which was reached first" has no
+  // meaning and every surface in the band was reached at once. A hook-proof
+  // surface the tip is also touching does not un-touch the one it caught.
   probeContact(): void {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
     const shape = this.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const probeR = r + 0.5 * PX;
+    let proof: { normal: Vec2; depth: number } | null = null;
     for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
       if (
@@ -264,25 +303,28 @@ export class BallHook extends RigidBody2D {
       ) {
         continue;
       }
+      // Whichever piece is nearest is the one the tip is resting on, and it is
+      // that piece that decides: hook-proof deflects, anything else anchors.
+      // Asked of the body instead, one hook-proof face would make a whole
+      // compound wall unattachable.
+      const shapes = body.getShapes();
+      const s = shapes[nearestShapeIndex(shapes, from)];
+      if (s?.impermeable) {
+        // Remember the deepest hook-proof surface and keep looking: it only
+        // deflects if nothing here anchors.
+        const ov = circleOverlap(from, probeR, s);
+        if (ov && (!proof || ov.depth > proof.depth)) proof = ov;
+        continue;
+      }
       // Anchor ON the surface, exactly as the swept path does, rather than at
       // the hook's own centre: the probe fires while the hook is up to its own
       // radius plus the probe margin clear of the geometry, and anchoring at the
       // centre leaves the chain visibly ending short of the corner it caught and
       // the contact's `shapeIndex` resolved from a point that is on nothing.
-      const shapes = body.getShapes();
-      const s = shapes[nearestShapeIndex(shapes, from)];
-      // Whichever piece is nearest is the one the tip is resting on, and it is
-      // that piece that decides: hook-proof deflects, anything else anchors.
-      // Asked of the body instead, one hook-proof face would make a whole
-      // compound wall unattachable.
-      if (s?.impermeable) {
-        const ov = circleOverlap(from, probeR, s);
-        if (ov) this.bounce(ov.normal, from.add(ov.normal.mul(ov.depth)));
-        return;
-      }
       this.attach(body, s ? nearestSurfacePoint(s, from) : from);
       return;
     }
+    if (proof) this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth)));
   }
 
   // Deflect off a hook-proof surface and seat the hook at `seatPos` so the
