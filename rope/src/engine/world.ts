@@ -1159,7 +1159,7 @@ export class World {
     }
 
     // This frame's contact set, kept for callers that own a mechanic the solver
-    // deliberately does not: `BallPlayer.applyLoopHop` needs to know that the
+    // deliberately does not: `BallPlayer.applyLoopCap` needs to know that the
     // ball's mounting loop met a surface, and which way that surface faces.
     this.frameContacts = constraints;
 

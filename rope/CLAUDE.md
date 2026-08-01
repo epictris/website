@@ -428,13 +428,13 @@ chains instead of by the ground - and it measures the ball against the SLAB,
 because the rig is a pendulum and a ball riding a swinging slab is the ball doing
 its job.
 
-### The loop-hop
+### The loop cap
 
-Driving the mounting loop into the ground bounces the ball, and that is a move
-the player makes on purpose: roll, wind up, and hit the loop into the floor.
-Left to the contact solver its size is set by the loop's rotation **phase** at
-the instant it lands, which is the one variable the player can neither see nor
-aim.
+Driving the mounting loop into the ground must **never** hop the ball, however
+hard it is spinning.
+Left to the contact solver it does, and the size of it is set by the loop's
+rotation **phase** at the instant it lands, which is the one variable the player
+can neither see nor aim.
 The loop is a second collision circle offset on the rim, so unlike the ball's own
 surface its contact point carries a *normal* component of ω × r; the spin is
 kinematic, so the solver may not take that energy back out of it, and all of it
@@ -442,35 +442,13 @@ lands in the ball's linear velocity.
 The same roll into the same floor launched at 1.7 m/s once and 4.4 m/s a few
 hundred frames later (`session-1594f`), which reads as the ball randomly deciding
 to fire itself off the level.
-`BallPlayer.applyLoopHop` states the move instead, as a function of the spin with
-the phase taken out, applied by *setting* the outgoing normal speed rather than
-adding to it - what the solve made of the phase is exactly what is being
-replaced.
-It is a **ramp**: nothing at all up to `LOOP_HOP_MIN_SPIN` (20 rad/s), then a
-straight line from zero there to `LOOP_HOP_MAX_SPEED` (3 m/s) at
-`LOOP_HOP_FULL_SPIN` (45), and that speed for anything faster.
-Starting the line at zero rather than at a floor is what makes the threshold
-invisible - a hop that began at some minimum speed would fire at full size the
-instant the spin crossed the bar, so a ball wound to the edge of it would flick
-between a dead landing and a real hop on nothing the player did.
-The two spins are the range real play uses: across the recorded sessions the ball
-spends 90-95% of its time under 20-29 rad/s and peaks in the mid 40s.
-Winding up harder hops higher, the same wind-up always hops the same, and below
-the threshold a loop touch is just a touch, so a slow roll and a ball resting on
-its loop stay quiet.
-It is edge-triggered on the loop meeting something, because a ball sitting on its
-loop with the aim spinning is in contact every frame and hopping it every frame
-is a motor rather than a move.
-It is written after the contacts and the depenetration sweep, for the same reason
-`applySteeringGrip` is: a control input with no force behind it cannot be
-expressed as an impulse the solver would cap.
-Stating the move is only half of it, and the half that does nothing on its own:
-the solve's launch fires at **any** spin, so writing the designed hop over it
-above a threshold leaves every slower landing exactly as random as before - which
-is what raising `LOOP_HOP_MIN_SPIN` to 40 turned out to do, hopping a slowly
-rolling ball as hard as ever.
-So a frame the loop is down on also has its outgoing normal speed **capped**, at
-the plain restitution bounce the ball's own linear approach was worth.
+So a frame the loop is down on has its outgoing normal speed **capped**
+(`BallPlayer.applyLoopCap`), at the plain restitution bounce the ball's own
+linear approach was worth.
+There was for a while a designed hop written over the cap above a spin threshold
+- a ramp from `LOOP_HOP_MIN_SPIN` to `LOOP_HOP_MAX_SPEED` - and it is **gone**:
+a loop touch is a touch at any spin, so a wind-up buys speed through the roll and
+the chain rather than through the floor.
 What the cap removes is exactly the **spin's** own contribution at that contact -
 `(ω × r)·n`, scaled by `1 + restitution` because that is what the solve does with
 an approach - and not a fraction of the answer.
@@ -483,14 +461,17 @@ lift it, so the loop ends up pinned in the ground, its velocity answer removed
 every frame while the positional sweep pushes the ball back out - a body
 corrected in position and paid nothing for it, which the chain reads as a blocked
 correction.
-`cli contacts` `loop-hop` is the detector, and it drops the same ball at eight
-starting rotations at three spins: under the threshold, halfway up the ramp and
-at the top of it.
-The phases must agree (they spread 1.25 m/s before and are identical now), the
-slow drop must not hop at all (2.18 m/s before, 0.85 now), and the two live spins
-must land on the ramp - half the speed halfway up it.
-That last one is what stops the mechanic being quietly deleted: a fix that made
-every launch zero would pass a spread check on its own.
+It is written after the contacts and the depenetration sweep, for the same reason
+`applySteeringGrip` is: a control input with no force behind it cannot be
+expressed as an impulse the solver would cap.
+`cli contacts` `loop-cap` is the detector, and it drops the same ball at eight
+starting rotations at three spins - ordinary rolling, a hard wind-up, and 90
+rad/s, well past anything the aim steering produces.
+Every one of them must peak at the drop's own restitution bounce (0.85 m/s, from
+2.18 before the cap existed) and the phases must agree (they spread 1.25 m/s
+before and are identical now).
+The high spin is what stops the hop coming back as a threshold nobody notices:
+the phases agree just as well when a launch is being written over them.
 
 ### The coil
 
@@ -700,7 +681,7 @@ bun run test                                  # THE suite: typecheck + every che
 bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
-bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-hop)
+bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants

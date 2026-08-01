@@ -866,55 +866,49 @@ function casePenetration(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
-// loop-hop: driving the mounting loop into the ground must hop the ball by the
-// same amount every time, for the same spin.
+// loop-cap: driving the mounting loop into the ground must never hop the ball,
+// at any spin and at any rotation phase.
 //
 // The loop is a second collision circle offset on the ball's rim, so unlike the
 // ball's own surface its contact point carries a NORMAL component of omega x r -
 // and the spin is kinematic, so the solver may not take that energy back out of
 // it. Every bit of it therefore lands in the ball's linear velocity, sized by
-// where in its arc the loop happened to be at the instant it touched. That is
-// the mechanic the player likes (hit the loop into the ground and bounce) with
-// its magnitude set by the one variable they cannot see: the same roll into the
-// same floor launched at 1.7 m/s once and 4.4 m/s a few hundred frames later
-// (session-1594f).
+// where in its arc the loop happened to be at the instant it touched: the same
+// roll into the same floor launched at 1.7 m/s once and 4.4 m/s a few hundred
+// frames later (session-1594f).
 //
-// `BallPlayer.applyLoopHop` states it instead, as the loop's own tip speed, and
-// this case is the statement that the phase no longer reaches it: the same drop
-// at eight different starting rotations must hop within a couple of centimetres
-// per second of each other. The hop must also still HAPPEN - a fix that made
-// every launch identically zero would pass a spread check on its own.
+// `BallPlayer.applyLoopCap` removes exactly that contribution, so what is left
+// is the ball's own landing. This case is the statement that the phase no longer
+// reaches it - the same drop at eight starting rotations must land within a
+// couple of centimetres per second of each other - and that no spin buys a hop,
+// including one far above anything real play reaches.
 // ---------------------------------------------------------------------------
-function caseLoopHop(sims: Sim[]): ContactResult {
-  const MIN = BallPlayer.LOOP_HOP_MIN_SPIN;
-  const FULL = BallPlayer.LOOP_HOP_FULL_SPIN;
-  const MAX = BallPlayer.LOOP_HOP_MAX_SPEED;
-  // Under the threshold, halfway up the ramp, and at the top of it. The case
-  // follows the tuning constants rather than pinning numbers the feel is allowed
-  // to move.
-  const SLOW = MIN * 0.5;
-  const MID = (MIN + FULL) / 2;
+function caseLoopCap(sims: Sim[]): ContactResult {
+  // Ordinary rolling, a hard wind-up (real play peaks in the mid 40s), and well
+  // past anything the aim steering will produce: the mechanic is gone at all of
+  // them, not merely tuned out below a threshold.
+  const SPINS = [10, 45, 90];
   const PHASES = 8;
 
-  const launches = (spin: number, tag: string): number[] => {
+  const launches = (spin: number): number[] => {
     const out: number[] = [];
     for (let i = 0; i < PHASES; i++) {
-      const sim = new Sim(`loop-hop-${tag}-${i}`);
+      const sim = new Sim(`loop-cap-${spin}-${i}`);
       sims.push(sim);
       floor(sim);
       const ball = new BallPlayer(0.12);
       ball.globalPosition = new Vec2(0, -2.3);
       ball.globalRotation = (i * 2 * Math.PI) / PHASES;
       sim.world.add(ball);
-      // The ball's velocity as the previous frame left it — what the hop measures
-      // its cap against, standing in for BallLevel's pre-contact snapshot.
+      // The ball's velocity as the previous frame left it — what the cap measures
+      // against, standing in for BallLevel's pre-contact snapshot.
       let before = ball.linearVelocity;
       let launch = 0;
       sim.step(90, () => {
         // What aim steering does every frame: drive the spin kinematically.
         ball.kinematicRotation = true;
         ball.angularVelocity = spin;
-        ball.applyLoopHop(sim.world.frameContacts, before);
+        ball.applyLoopCap(sim.world.frameContacts, before);
         before = ball.linearVelocity;
         launch = Math.max(launch, -ball.linearVelocity.y);
       });
@@ -923,33 +917,23 @@ function caseLoopHop(sims: Sim[]): ContactResult {
     return out;
   };
 
-  const fast = launches(FULL, "fast");
-  const mid = launches(MID, "mid");
-  const slow = launches(SLOW, "slow");
-  const spread = (xs: number[]): number => Math.max(...xs) - Math.min(...xs);
-  const fastLo = Math.min(...fast);
-  const midLo = Math.min(...mid);
-  const slowHi = Math.max(...slow);
   // The drop itself bounces a little - the ball is 0.15 elastic - so the bar for
   // "did not hop" is the restitution bounce, not zero.
   const NO_HOP = 1.0;
-  // Halfway up the ramp is half the speed, within a tolerance that is a bound on
-  // the mechanic rather than a claim about the exact number.
-  const midWanted = MAX / 2;
-  const consistent = spread(fast) < 0.05 && spread(mid) < 0.05;
-  const linear = Math.abs(midLo - midWanted) < 0.15 * MAX;
-  const tops = Math.abs(fastLo - MAX) < 0.05 * MAX;
-  const quiet = slowHi < NO_HOP;
-  const good = consistent && linear && tops && quiet;
-  return ok("loop-hop — the hop follows the spin, on a ramp, and a slow one does not hop", good, [
-    `${consistent ? "ok  " : "BAD "} ${PHASES} phases spread ${(spread(fast) * 100).toFixed(1)}` +
-      `cm/s at ${FULL} rad/s and ${(spread(mid) * 100).toFixed(1)}cm/s at ${MID} (want <5)`,
-    `${tops ? "ok  " : "BAD "} the top of the ramp launched ${fastLo.toFixed(3)} m/s ` +
-      `(want ${MAX.toFixed(2)})`,
-    `${linear ? "ok  " : "BAD "} halfway up it launched ${midLo.toFixed(3)} m/s ` +
-      `(want ${midWanted.toFixed(2)})`,
-    `${quiet ? "ok  " : "BAD "} the same drop at ${SLOW} rad/s, under the threshold, peaked at ` +
-      `${slowHi.toFixed(3)} m/s (want <${NO_HOP})`,
+  const spread = (xs: number[]): number => Math.max(...xs) - Math.min(...xs);
+  const runs = SPINS.map((spin) => {
+    const out = launches(spin);
+    return { spin, hi: Math.max(...out), spread: spread(out) };
+  });
+  const quiet = runs.every((r) => r.hi < NO_HOP);
+  const consistent = runs.every((r) => r.spread < 0.05);
+  return ok("loop-cap — the loop never hops the ball, at any spin or phase", quiet && consistent, [
+    ...runs.map(
+      (r) =>
+        `${r.hi < NO_HOP && r.spread < 0.05 ? "ok  " : "BAD "} ${r.spin} rad/s: peaked at ` +
+        `${r.hi.toFixed(3)} m/s (want <${NO_HOP}), ${PHASES} phases spread ` +
+        `${(r.spread * 100).toFixed(1)}cm/s (want <5)`,
+    ),
   ]);
 }
 
@@ -1738,7 +1722,7 @@ export function runContactCases(): ContactResult[] {
     caseMomentum(sims),
     caseSpinDrive(sims),
     caseRollDrive(sims),
-    caseLoopHop(sims),
+    caseLoopCap(sims),
     caseGripReseed(sims),
   ];
   ContactAudit.enabled = false;
