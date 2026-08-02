@@ -22,7 +22,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
-import { surfaceMaterial } from "./assets";
+import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
 
@@ -37,7 +37,7 @@ const LINK_HALF_LEN = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links inte
 // it is what makes a chain read as interlocking rather than as a row of beads.
 const TWIST = Math.PI / 2;
 
-// White: the instance colour MULTIPLIES the shared steel material, so a chain
+// White: the instance colour MULTIPLIES the shared iron material, so a chain
 // with no authored colour must not tint it at all.
 const DEFAULT_CHAIN_COLOR = new THREE.Color(1, 1, 1);
 
@@ -79,7 +79,7 @@ export class ChainLayer {
   }
 
   private makeMesh(capacity: number): THREE.InstancedMesh {
-    const mesh = new THREE.InstancedMesh(this.geometry, surfaceMaterial("steel"), capacity);
+    const mesh = new THREE.InstancedMesh(this.geometry, forgedMetal(FORGED_SMALL), capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -198,13 +198,14 @@ const FORWARD = new THREE.Vector3(0, 0, 1);
 // 2D renderer's `drawManacle`.
 function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
   const g = new THREE.Group();
-  const steel = surfaceMaterial("steel");
-  const iron = surfaceMaterial("cast iron");
+  // The same forged iron the links are, at the same scale: the manacle is the
+  // end of the chain rather than a different object bolted to it.
+  const iron = forgedMetal(FORGED_SMALL);
   const R = 4.5 * PX; // the same cuff radius the 2D manacle is drawn at
 
   const band = new THREE.TorusGeometry(R, R * 0.18, 8, 20);
   owned.push(band);
-  const cuff = new THREE.Mesh(band, steel);
+  const cuff = new THREE.Mesh(band, iron);
   cuff.castShadow = true;
   g.add(cuff);
 
@@ -223,7 +224,7 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
 
   const clevisGeo = new THREE.TorusGeometry(R * 0.32, R * 0.12, 6, 12);
   owned.push(clevisGeo);
-  const clevis = new THREE.Mesh(clevisGeo, steel);
+  const clevis = new THREE.Mesh(clevisGeo, iron);
   clevis.position.set(R * 1.6, 0, 0);
   clevis.rotation.x = Math.PI / 2;
   g.add(clevis);

@@ -120,7 +120,21 @@ import {
   LIGHT_SHADOW_BUDGET,
 } from "../render3d/lights";
 
-type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow" | "chain" | "light";
+// `geometry` draws the OTHER kind of scene object: a rect like `rect`, but one
+// that is drawn and never simulated. It is a tool rather than a mode on the rect
+// tool because what a shape IS is the first thing an author decides about it, and
+// a draw that has to be corrected afterwards in the inspector is the coupling
+// this pair of objects exists to avoid.
+type Tool =
+  | "select"
+  | "rect"
+  | "circle"
+  | "poly"
+  | "geometry"
+  | "text"
+  | "arrow"
+  | "chain"
+  | "light";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
 // (a note is a text box or an arrow, never a circle) and vice versa, so the
@@ -132,7 +146,7 @@ type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow" | "chain" |
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "poly", "light", "chain"],
+  scene: ["select", "rect", "circle", "poly", "geometry", "light", "chain"],
   camera: ["select", "rect", "circle", "poly"],
   notes: ["select", "text", "arrow"],
 };
@@ -149,7 +163,7 @@ const chainable = (b: EdItem): boolean =>
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   notes:
@@ -786,11 +800,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     rect: button("+ Rect", () => setTool("rect")),
     circle: button("+ Circle", () => setTool("circle")),
     poly: button("+ Poly", () => setTool("poly")),
+    geometry: button("+ Geometry", () => setTool("geometry")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
     chain: button("+ Chain", () => setTool("chain")),
     light: button("+ Light", () => setTool("light")),
   };
+  toolBtns.geometry.title =
+    "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   const kindSel = document.createElement("select");
@@ -820,6 +837,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.rect,
     toolBtns.circle,
     toolBtns.poly,
+    toolBtns.geometry,
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.chain,
@@ -1478,6 +1496,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // An arrow is stored as a box, but its height is only a pick band and its
     // width is its length — the notes panel exposes that instead.
     if (items.some(isArrowNote)) return;
+    // A MESH has no size to type either. What is drawn is the model's own
+    // geometry at its own dimensions, sized by `scale` on the visual panel; the
+    // outline it still carries is the editor's handle on it and the placeholder
+    // drawn until the file arrives, neither of which is a number an author
+    // authors. Offering w/h here is a pair of fields that appear to resize the
+    // prop and do not - the shape they change is invisible the moment the mesh
+    // loads.
+    if (items.every((b) => b.object === "geometry" && b.visual.kind === "mesh")) return;
     // Size is per-shape, so it only appears when the group is all one shape.
     if (items.every((b) => b.shape.kind === "rect")) {
       num("w", (b) => (b.shape.kind === "rect" ? b.shape.w * M2PX : 0), (b, v) => {
@@ -1567,44 +1593,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // compound wall with one attachable ledge among hook-proof faces. So it is
   // per shape and, like material and thickness, a group does not collapse it
   // onto its first member's.
-  // Does this shape take part in the simulation? Unticked, it is decoration:
-  // drawn and nothing else, never built into the world, and every physics
-  // property below it disappears from the panel because none of them mean
-  // anything on it (see `(LevelBodyData.object === "collision")`).
-  //
-  // It is the FIRST control on the panel, above the kind, because it is the
-  // larger question - what kind of body this is only matters once there is a
-  // body - and because switching it is how a wall becomes a backdrop, or back,
-  // without being re-drawn as some other sort of item.
-  function addCollisionField(g: HTMLElement, items: EdItem[]): void {
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = items.every((b) => b.object === "collision");
-    box.indeterminate = !box.checked && items.some((b) => b.object === "collision");
-    box.addEventListener("change", () => {
-      beginAction();
-      // Ticking it CONVERTS the object between the two kinds a shape can be -
-      // something the level is built from, and something it is only drawn with.
-      // It is one object either way, which is why this is a conversion rather
-      // than a flag on a thing that is secretly both.
-      for (const b of items) {
-        b.object = box.checked ? "collision" : "geometry";
-        b.ownShape = true;
-      }
-      markDirty();
-      // Which fields apply depends on it, and so does how the shape is drawn.
-      rebuildInspector();
-    });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "collision";
-    wrap.appendChild(box);
-    g.appendChild(wrap);
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Converts between the two things a shape can be. ON it is a collision shape: what the body is made of, simulated and never drawn - a geometry object in the same body is what draws it. OFF it is a geometry object: drawn and nothing else, with a dashed teal edge here and no border in game, never simulated, so nothing collides with it, the rope does not wrap it and no force reaches it. Merge it into a colliding body (Ctrl+G) to have it ride that body.";
-    g.appendChild(hint);
-  }
-
   function addImpermeableField(g: HTMLElement, items: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
@@ -2083,6 +2071,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function appendActions(g: HTMLElement): void {
     const row = el("div", "ed-row");
+    // On a COLLISION shape, and only there: it is the object that has no look of
+    // its own, and giving it one is the step a draw no longer takes for you.
+    // A geometry object already is the look, and offering it a second one would
+    // stack two extrusions in the same place.
+    const solids = selectedBodies().filter(
+      (b) => b.object === "collision" && b.layer === "scene",
+    );
+    if (solids.length && solids.length === selectedBodies().length) {
+      const b = button("Add geometry", () => addGeometryFor(solids));
+      b.title =
+        "Give this shape a look: a geometry object with its own copy of the outline, in the same body. Nothing draws a collision shape by itself.";
+      row.appendChild(b);
+    }
     row.append(
       button("Duplicate", () => duplicateSelected()),
       button("Delete", () => deleteSelected()),
@@ -2125,8 +2126,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches.";
       g.appendChild(hint);
     }
-
-    addCollisionField(g, bodies);
 
     const sync = () => syncEditedBodies(bodies);
     const num = groupNum(g, bodies, sync);
@@ -2194,26 +2193,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     g.appendChild(row);
     const only = bodies.size === 1 ? [...bodies][0]! : null;
-    // The body's own depth, which is the third axis of its frame. Every other
-    // axis is already body-relative (an object's x/y/rot are offsets from the
-    // body), and this is what stops z being the odd one out: an object's own
-    // `z` is an offset from this, so pulling a whole assembly toward the camera
-    // is one number rather than one per object.
-    //
-    // Offered beside an OBJECT selection only. The body panel carries its own
-    // `z`, and two fields for one number in one inspector is one of them going
-    // stale under the other.
-    if (only !== null && !selectedBodyIds.size && sel[0]!.layer === "scene") {
-      const members = bodyMembers(model.items, only);
-      numField(
-        g,
-        "body z",
-        () => sel[0]!.bodyZ * M2PX,
-        (v) => {
-          for (const m of members) m.bodyZ = v * PX;
-        },
-      );
-    }
     if (!row.childElementCount && only === null) return;
     const hint = el("div", "ed-hint");
     if (only !== null) {
@@ -2314,7 +2293,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function buildBodyPanel(id: number): void {
     const members = bodyMembers(model.items, id);
     if (!members.length) return;
-    const lead = bodyLead(members) ?? members[0]!;
     const index = bodyIndexOf(id);
     const g = el("div", "ed-group");
     g.appendChild(heading(`Body #${index} — ${bodyLabel(members)}`));
@@ -2328,16 +2306,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
     numField(g, "x", () => origin.pos.x * M2PX, (v) => nudgeBy(v * PX - origin.pos.x, 0));
     numField(g, "y", () => origin.pos.y * M2PX, (v) => nudgeBy(0, v * PX - origin.pos.y));
-    // The third axis of the same frame, and the one the 2D view cannot show.
-    // Stored rather than derived, so it is a plain write.
-    numField(
-      g,
-      "z",
-      () => lead.bodyZ * M2PX,
-      (v) => {
-        for (const m of members) m.bodyZ = v * PX;
-      },
-    );
+    // No z beside them: a body's position is x and y, and depth belongs to the
+    // objects that draw (see `LevelBodyData`), where the geometry panel's
+    // `off z` authors it.
     // Turning a body turns everything in it about the point it is built to
     // rotate about - its centre of mass, which is where the engine puts the
     // origin (see `bodyCentroid`).
@@ -3242,9 +3213,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the same type, so this only picks the appearance and the starting size —
   // the drag that follows resizes it identically whatever it is.
   function newDrawnItem(t: Exclude<Tool, "select" | "chain">, start: Vec2): EdItem {
-    // A drawn shape is a piece of the level; making it decoration is the tick
-    // being taken off, which is a decision rather than a default.
-    const object: EdObject = t === "light" ? "light" : "collision";
+    // Which of the three scene objects the tool draws. `+ Geometry` is the only
+    // way to get a drawn-and-not-simulated object in one gesture; every other
+    // shape tool draws a collision object, and NOTHING is created beside it.
+    const object: EdObject =
+      t === "light" ? "light" : t === "geometry" ? "geometry" : "collision";
     const style = newItemStyle(activeLayer, object);
     // Drawn INTO the selected body, when one is selected. With a body selected
     // the thing being authored is a part of it - the collision box under a mesh,
@@ -3268,11 +3241,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // moves it later, which is a decision rather than something a draw has an
       // opinion about.
       bodyId,
-      // A freshly drawn shape is part of the level; decoration is the tick
-      // being taken off, which is a decision rather than a default.
-      collision: true,
-      // On the gameplay plane until something says otherwise.
-      bodyZ: 0,
       pos: start,
       rot: 0,
       kind: newKind,
@@ -3340,39 +3308,46 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       };
     }
+    // A geometry object is a rect like `+ Rect`, so a click drops one at the grid
+    // step and a drag sizes it - the drag itself reads `shape.kind` and needs to
+    // know nothing about which tool drew it.
     return {
       ...base,
       shape:
-        t === "rect"
+        t === "rect" || t === "geometry"
           ? { kind: "rect", w: gridStep, h: gridStep }
           : { kind: "circle", r: gridStep },
     };
   }
 
-  // The geometry object that DRAWS a freshly drawn collision shape, or null when
-  // its body already has one. Nothing renders a collision shape by itself any
-  // more, so a bare draw would put an invisible wall on the canvas and the author
-  // would find out in ▶ Test - which is the trap that made the old "a shape
-  // draws itself" default worth keeping in the first place. It carries no shape
-  // of its own, which is what `withGeometryTwin` writes for every level authored
-  // under that default: one outline, drawn by one object that says so.
-  function geometryTwinFor(item: EdItem): EdItem | null {
-    if (item.object !== "collision" || item.layer !== "scene") return null;
-    const dressed = bodyMembers(model.items, item.bodyId).some(
-      (m) => m.object === "geometry" && !m.ownShape,
-    );
-    if (dressed) return null;
-    return {
+  // A geometry object for an existing collision shape: what makes a drawn body
+  // visible, on request. Drawing a shape creates the collision object and NOTHING
+  // else, so being drawn and being simulated are two decisions an author makes
+  // separately - which is the whole of the collision/geometry split, and was
+  // undermined by a draw that quietly made one of each.
+  //
+  // It carries its OWN copy of the outline rather than dressing the body's
+  // collision shapes. The two objects are then independent in both directions:
+  // the collision shape can be resized, replaced or deleted and the look stays
+  // exactly as authored, which is what a body of two objects should mean. The
+  // cost is real and is the point - a wall widened after it is dressed is
+  // widened twice - and a dressing (`ownShape: false`) is still what a level
+  // loaded from the legacy default has.
+  function addGeometryFor(items: EdItem[]): void {
+    const made = items.map((item) => ({
       ...item,
       id: newBodyId(),
-      object: "geometry",
-      ownShape: false,
+      object: "geometry" as const,
+      ownShape: true,
       shape: cloneShape(item.shape),
       cam: { ...item.cam },
       light: { ...item.light },
       note: { ...item.note },
       visual: { ...item.visual },
-    };
+    }));
+    if (!made.length) return;
+    beginAction();
+    addAndSelect(made);
   }
 
   // How close (in screen px) a click must land to the draft's first vertex to
@@ -3412,11 +3387,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     beginAction();
     addAndSelect([item]);
     // Same rules the drag-drawn shapes take: a polygon drawn into a selected
-    // body wears that body's properties rather than the tool's defaults, and it
-    // comes with the geometry object that draws it.
+    // body wears that body's properties rather than the tool's defaults.
     syncBodyProps(bodyMembers(model.items, item.bodyId));
-    const twin = geometryTwinFor(item);
-    if (twin) model.items.push(twin);
   }
 
   function deleteSelected(): void {
@@ -4161,17 +4133,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
-    // A drawn collision shape gets the geometry object that draws it, once the
-    // drag has settled where and how big it is - the twin copies the placement,
-    // and making it at mousedown would leave it at the point the drag started.
-    if (drag.mode === "draw") {
-      const twin = geometryTwinFor(drag.body);
-      if (twin) {
-        model.items.push(twin);
-        markDirty();
-        rebuildInspector();
-      }
-    }
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       if (box) {

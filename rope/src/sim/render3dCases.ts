@@ -521,6 +521,32 @@ function editorRoundTrip(): CaseResult[] {
       { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
       { type: "geometry" },
     ]);
+  // A shape DRAWN in the editor is a collision object and nothing else, and this
+  // is the trip that has to leave it that way. It is the same assertion as
+  // "a body authored with a bare collision shape keeps it bare" one level down,
+  // made against the round trip an author actually performs: draw, save, reopen.
+  // Both halves could undo it independently - the save could invent a look, the
+  // load could migrate one in - so it is checked where they meet.
+  const drawn: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        color: "#555555",
+        opacity: 0.5,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }],
+      },
+    ],
+  };
+  const reopened = modelToDisk(modelFromDisk(drawn));
+  const stayedBare =
+    JSON.stringify(reopened.bodies[0]!.objects) ===
+    JSON.stringify([{ type: "collision", shape: { kind: "rect", w: 80, h: 80 } }]);
+
   return [
     {
       name: "editor: a level with visuals saves back byte-identical",
@@ -533,6 +559,13 @@ function editorRoundTrip(): CaseResult[] {
       detail: twinned
         ? "one collision object and one shapeless geometry object"
         : `wrote ${JSON.stringify(back.bodies[3]!.objects)}`,
+    },
+    {
+      name: "editor: a drawn collision shape survives a save and reopen still bare",
+      pass: stayedBare,
+      detail: stayedBare
+        ? "one collision object, nothing added"
+        : `wrote ${JSON.stringify(reopened.bodies[0]!.objects)}`,
     },
   ];
 }
@@ -1199,13 +1232,26 @@ function renderNeedsGeometry(): CaseResult[] {
     { type: "geometry", texture: "brick" },
   ]);
 
-  // ...and the migration that keeps every authored level looking as it did.
-  const raw: RawLevelData = level([{ type: "collision", shape }]);
-  const once = normalizeLevelData(raw);
+  // ...and the migration that keeps every level authored under the old default
+  // looking as it did. It is asked of a LEGACY body - a flat entry carrying its
+  // own shape - because that is the only form the old default was ever expressed
+  // in, and the only form the migration still runs on.
+  const legacy: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 * PX },
+    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape }],
+  };
+  const once = normalizeLevelData(legacy);
   const twice = normalizeLevelData(once);
   const twin = once.bodies[0]!.objects.filter(isGeometryObject);
   const migrated = twin.length === 1 && twin[0]!.shape === undefined;
   const stable = twice.bodies[0]!.objects.length === once.bodies[0]!.objects.length;
+  // ...and the other half of that rule, which is what makes a bare collision
+  // shape an authorable thing rather than a state the loader edits away. A body
+  // already in the nested form said what objects it has; a load that added a
+  // geometry object to it would mean an author could draw a collision shape,
+  // save, and get back a level saying something they did not write.
+  const nested = normalizeLevelData(level([{ type: "collision", shape }]));
+  const leftBare = nested.bodies[0]!.objects.filter(isGeometryObject).length === 0;
   // A body that already says how it looks is left alone. Twinning it too puts an
   // extrusion of the collision box inside the authored prop - a grey brick in the
   // middle of a lamp, drawn in play and absent from the editor.
@@ -1245,6 +1291,13 @@ function renderNeedsGeometry(): CaseResult[] {
       detail: stable
         ? `${once.bodies[0]!.objects.length} objects, unchanged on a second pass`
         : `${once.bodies[0]!.objects.length} then ${twice.bodies[0]!.objects.length}`,
+    },
+    {
+      name: "render: a body authored with a bare collision shape keeps it bare",
+      pass: leftBare,
+      detail: leftBare
+        ? "no geometry object invented at load"
+        : "the loader added a geometry object nobody authored",
     },
     {
       name: "render: a body that already says how it looks is left alone",

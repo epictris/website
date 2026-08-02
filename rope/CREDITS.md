@@ -7,12 +7,15 @@ manifest and regenerate, which is what `cli assets` checks.
 ## 3D models
 
 - **bulkhead-lamp** - "andersonmat", [source](https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb), CC BY 4.0
+- **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
+- **sewer-wall** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
 - **yellow_barrel** - "Anna Denisova (@Den1121)", [source](https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88), CC BY 4.0
 
 ## Surface textures
 
 - **brick** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/factory_brick), CC0
 - **rock wall** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/rock_wall_08), CC0
+- **rusted iron** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Metal053B), CC0
 
 ## Everything else
 

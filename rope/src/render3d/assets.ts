@@ -272,6 +272,75 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "Amal Kumar",
     license: "CC0",
   },
+  // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
+  // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
+  //
+  // Keyed as a SURFACE rather than under `cast iron` or `steel`, which it is
+  // near enough to be either of. Those two material names are worn by authored
+  // level geometry as well - girders, plate, machinery - and this is a
+  // particular weathered, rusted piece rather than what iron is, so a set under
+  // the material's name would re-skin every steel body in every level as a side
+  // effect of dressing the avatar. The avatar asks for it by name instead.
+  "rusted iron": {
+    maps: {
+      base: {
+        file: "/textures/rusted-iron-base.webp",
+        sha256: "3a2a9b67cea9f1111d1ac400f37857f60da0da6bb359e5eb519e5b202ca42606",
+      },
+      // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
+      // this renderer wants. It is nearly flat (channel means .50/.50/1.00,
+      // sigma .003) because the scan is a plate rather than a relief - the rust
+      // is a change of colour and roughness far more than of surface - which is
+      // also why it costs 23 KB.
+      normal: {
+        file: "/textures/rusted-iron-normal.webp",
+        sha256: "5a8dd07b7b5dbd56860a4288ef05ebe10269a6e3b3f045eb85ae2da6379b1622",
+      },
+      // The pair that carries the whole look: bare metal is smooth and fully
+      // metallic, rust is rough and not metal at all, and having both maps is
+      // what lets one surface be the two materials it physically is. Both
+      // arrive with the number in RED alone and are flattened to grey by
+      // `assets:optimize-texture`.
+      roughness: {
+        file: "/textures/rusted-iron-roughness.webp",
+        sha256: "ecd27be47a577056258dac3d8618e6741d9f2a82b6aa1324ed984da2560f0e05",
+      },
+      metallic: {
+        file: "/textures/rusted-iron-metallic.webp",
+        sha256: "c8ea41878743e6e285cffe02ffdba4ea16bd6f22209bf4a3ee14494bd213ede4",
+      },
+      // No AO map in the set, and nothing to derive one from: an almost flat
+      // surface occludes almost nothing.
+    },
+    // ambientCG states no captured size for this one, so this is the by-eye
+    // number the manifest comment above allows for exactly that case - and the
+    // bodies wearing it are `SphereGeometry` and `TorusGeometry`, whose UVs run
+    // 0..1 over the whole primitive rather than in metres like the extruder's.
+    // 1 m is therefore "one repeat over the ball", which is the framing
+    // ambientCG's own preview sphere is shot at; the chain's links take a
+    // fraction of it each through `tileScale` (see `chainVisual`).
+    tile: 1,
+    // A multiplier over the map, which reads a mean of 0.29 - a scan of metal
+    // polished far brighter than a ball & chain has any business being. At the
+    // map's own value the sphere is a mirror, and a mirror in a scene whose
+    // environment is a painted sky gradient (see `environment.ts`) reflects a
+    // blue sky and nothing else: the rust and the pitting the set was chosen for
+    // are wiped out by a reflection of the air. Roughened, the albedo and the
+    // metallic map are what is seen, which is the point of having them.
+    roughness: 3.2,
+    // Metalness has its own map (bare metal reads ~1, rust ~0), and this scales
+    // it down rather than replacing it: the map's own bare metal is a 0.91 mean,
+    // and metal is nearly ALL reflection, so at the map's value the ball is a
+    // 24 cm mirror of the sky in the middle of the frame - the brightest, most
+    // moving thing on screen, which is not what the thing you are steering
+    // should be. Scaled down it keeps the map's rust/metal contrast and reads as
+    // iron rather than as chrome.
+    metalness: 0.85,
+    fallback: "cast iron",
+    source: "https://ambientcg.com/view?id=Metal053B",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
 };
 
 // Every map of every set, which is what the fetch, the budget and the collision
@@ -706,12 +775,6 @@ async function dressWithImages(
   mat.needsUpdate = true;
 }
 
-// The generated surface for a material name, at life size and with no tint -
-// what the ball, its chain and the other code-built visuals wear.
-export function surfaceMaterial(name: string | undefined): THREE.MeshStandardMaterial {
-  return surfaceFor({ texture: name });
-}
-
 // Which named surface a key resolves to, and at what scale it is meant to be
 // seen. ONE namespace, looked up authored-first: a level names a surface, and
 // whether that surface is a downloaded set of maps or a few hundred bytes of
@@ -866,6 +929,27 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     // "Provenance, in the manifest" in CLAUDE.md).
     source: "https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb",
     author: "andersonmat",
+    license: "CC BY 4.0",
+  },
+  // Two pieces of the same sewer brick set, credited once each because the
+  // manifest is per ENTRY and these are two files rather than two maps of one
+  // surface. Both are authored in real-world metres - the arch is 3.0 x 1.9 x
+  // 1.9 m (`Sewer_Walls_Arch_02`), the wall a 3.0 x 3.0 m panel half a metre
+  // thick (`Sewer_Walls_01`) - so neither wears a `scale`.
+  "sewer-arch": {
+    file: "/meshes/sewer-arch.glb",
+    sha256: "fb662f0f000675b1642e1a8833a5023ac70b3b973375c9cd6f0454229da2d75e",
+    source:
+      "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
+    author: "MightyPinecone",
+    license: "CC BY 4.0",
+  },
+  "sewer-wall": {
+    file: "/meshes/sewer-wall.glb",
+    sha256: "3cb78d536663b1435aa6eccfe453e50c1ff7f2565b2351f629616f551d4d2a24",
+    source:
+      "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
+    author: "MightyPinecone",
     license: "CC BY 4.0",
   },
   yellow_barrel: {

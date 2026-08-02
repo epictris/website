@@ -76,12 +76,15 @@ export function worldPlacement(
   };
 }
 
-// ...and how far off the gameplay plane it ends up: the body's own depth plus
-// the object's offset from it. Kept beside the placement above because it is the
-// same statement about the same frame - z is simply the axis the 2D view cannot
-// show, and the one that used to be absolute while x, y and rot were not.
-export function worldDepth(body: LevelBodyData, z: number | undefined, fallback: number): number {
-  return (body.z ?? 0) + (z ?? fallback);
+// ...and how far off the gameplay plane it ends up, which is the object's own
+// business and only its own. Kept beside the placement above because the pair is
+// the whole of "where does this end up", and to say the asymmetry out loud: x, y
+// and rot compose through the body's frame because the body HAS them, and z does
+// not because it does not. A body is a thing in the gameplay plane (see
+// `LevelBodyData`), so depth is authored per drawn object, against the plane
+// itself, and a fallback is what an object that says nothing takes.
+export function objectDepth(z: number | undefined, fallback: number): number {
+  return z ?? fallback;
 }
 
 // Coulomb coefficients an authored `rigid` body brings to its own contacts.

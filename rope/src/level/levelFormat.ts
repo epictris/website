@@ -182,9 +182,12 @@ export interface CollisionObjectData extends ObjectPlacement {
 // perfectly well want. The two used to be one authored thing (a collision shape
 // drew itself whenever nobody said otherwise), which meant there was no way to
 // say "this collides differently from how it looks" without also saying how it
-// looks. Levels written under the old default are given the geometry object that
+// looks. Levels written in the LEGACY form are given the geometry object that
 // states it, once, at load (`withGeometryTwin` in this file), so nothing on disk
-// changed appearance when the default went away.
+// changed appearance when the default went away. A body in the current form is
+// left exactly as authored, however bare: an editor draw makes a collision object
+// and nothing else, and a loader that invented a look for it would make "drawn"
+// and "simulated" one decision again by the back door.
 //
 // A geometry object with no `shape` of its own draws the body's COLLISION
 // outlines: that is how a wall wears brick at twice life size without the file
@@ -481,18 +484,16 @@ export interface LevelBodyData {
   x: number;
   y: number;
   rot: number;
-  // ...and how far the whole body sits off the gameplay plane, positive toward
-  // the camera. Absent = on the plane.
+  // ...and NO z. A body is a thing in the gameplay plane: where it is, what it
+  // collides as and what the rope can wrap are all questions about x and y, and
+  // the sim has no third axis to answer in. Depth is a fact about how something
+  // is DRAWN, so it lives on the geometry objects and the lights that draw
+  // (`GeometryObjectData.z`, `LightObjectData.z`) and on nothing else. A body
+  // briefly carried one as "the third axis of its frame", which put a render-only
+  // number on the one object in the file the renderer is not what defines.
   //
-  // It completes the frame. `x`, `y` and `rot` were body-relative from the
-  // start and `z` was not, so a body was a frame in the plane and an absolute
-  // depth outside it - which meant pulling an assembly forward was editing every
-  // object in it, and the one field that could not be moved as a unit was the
-  // one the 2D view cannot show. An object's `z` is now an offset from this,
-  // exactly as its `x` is an offset from the body's.
-  //
-  // A LENGTH, so it converts between the file's pixels and the sim's metres.
-  z?: number;
+  // Collision objects are the same statement one level down: `CollisionObjectData`
+  // is a placement in the plane and a shape, and has never had a z to lose.
   // Everything a body has exactly one of. They were per-entry and collapsed onto
   // a group's first member, which is a rule an author had to know and a file
   // could disagree with; here there is one of each because there is one body.
@@ -1082,7 +1083,11 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
     }
     const legacy = members as LegacyBodyData[];
     const lead = legacy.find((e) => e.collision !== false) ?? first;
-    bodies.push({
+    // `withGeometryTwin` here and nowhere else: a legacy entry is exactly a body
+    // authored when a collision shape drew itself, so this is where that default
+    // has to be written down. A body already in the nested form (above) is left
+    // with the objects it has, however few.
+    bodies.push(withGeometryTwin({
       // A retired `impermeable` KIND is a static whose shapes are hook-proof;
       // `objectsOfLegacy` has already put the flag on the collision object.
       kind: lead.kind === LEGACY_IMPERMEABLE ? "static" : lead.kind,
@@ -1102,7 +1107,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
           }
         : {}),
       objects: legacy.flatMap(objectsOfLegacy),
-    });
+    }));
   }
 
   // The retired light list: each becomes a body containing nothing but a light,
@@ -1141,25 +1146,32 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
   return finish(raw, bodies, (i) => bodyOfEntry[i] ?? i);
 }
 
-// The two gates every level passes through however it got here, and the one
-// place the result is assembled. Both are migrations from a default that no
-// longer exists, and both have to run on a file already in the nested form - a
-// level saved yesterday is exactly as legacy as one saved last year, in the only
-// sense that matters.
+// The gate every level passes through however it got here, and the one place the
+// result is assembled. It is a migration from a default that no longer exists,
+// and it has to run on a file already in the nested form - a level saved
+// yesterday is exactly as legacy as one saved last year, in the only sense that
+// matters.
+//
+// What is NOT here any more is the geometry twin. It used to run over every body
+// on every load, which made "a body with collision and no geometry" a state a
+// file could not hold: drawing a bare collision shape, saving and loading it back
+// returned a dressing nobody asked for. It now runs where the default it migrates
+// actually applied - on a body converted from a LEGACY entry, in
+// `normalizeLevelData` - so a body authored under the current rule keeps the
+// objects it was authored with.
 function finish(
   raw: RawLevelData,
   bodies: LevelBodyData[],
   bodyOf: (entry: number) => number,
 ): LevelData {
-  const withTwins = bodies.map(withGeometryTwin);
   const added = new Map<number, AnchorObjectData[]>();
-  const chains = withChainAnchors(withTwins, added, raw.chains, bodyOf);
+  const chains = withChainAnchors(bodies, added, raw.chains, bodyOf);
   // The anchors are folded in by COPYING the bodies that gained one. Pushing
   // them into `body.objects` instead reaches back through `raw` and edits the
   // caller's level in place: for a file already in the nested form the bodies
   // here ARE the input's, so a second load found the anchors of the first and
   // added another set beside them.
-  const out = withTwins.map((b, i) => {
+  const out = bodies.map((b, i) => {
     const extra = added.get(i);
     return extra ? { ...b, objects: [...b.objects, ...extra] } : b;
   });
@@ -1242,9 +1254,10 @@ function withChainAnchors(
 // thing to resize, and the two would drift apart the first time only one of them
 // was.
 //
-// Idempotent, which it has to be: a body that gets a twin has a shapeless
-// geometry object the next time it passes through here, and every level passes
-// through here on every load.
+// Applied ONLY to a body converted from a legacy entry (see `finish`), which is
+// what stops it inventing a look for a body deliberately authored without one.
+// Idempotent all the same: the legacy path is reached by a file that still
+// carries retired panels or lights, and a run through it must not stack twins.
 function withGeometryTwin(body: LevelBodyData): LevelBodyData {
   if (!body.objects.some(isCollisionObject)) return body;
   // ANY geometry object at all is the body saying how it looks, and that answer
@@ -1548,7 +1561,6 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,
-      ...(b.z !== undefined ? { z: b.z * factor } : {}),
       ...(b.color !== undefined ? { color: b.color } : {}),
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),

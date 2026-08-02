@@ -75,12 +75,13 @@ import {
 // `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
 // `notes` the authoring annotations (invisible in play).
 //
-// There is deliberately NO decoration layer. Decoration is a shape with its
-// collision switched off (`EdItem.collision`, `LevelBodyData.collision`), which
-// is one flag on the thing an author already has rather than a second kind of
-// item with its own layer, its own inspector and its own resolve path - and it
-// means a wall can be turned into a backdrop, or back, without being re-drawn on
-// another layer.
+// There is deliberately NO decoration layer. A drawn-but-not-simulated shape is
+// a GEOMETRY OBJECT (`EdItem.object`), drawn with `+ Geometry` and living in the
+// same body, on the same layer, as the collision shapes beside it - rather than
+// a second kind of item with its own layer, its own inspector and its own
+// resolve path. What a level actually wants is the two of them TOGETHER: a wall
+// is a collision shape you cannot see and a geometry object you cannot touch,
+// and putting them on separate layers would split one body across two.
 //
 // `lights` is the level's own light sources (see `LightData`). It is a layer
 // rather than a property of a body because a light is not a piece of stuff: it
@@ -226,10 +227,12 @@ export interface EdItem {
   // editor-furniture colours below.
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
-  // Geometry layer:
-  // Does this shape take part in the simulation? False is decoration: it is
-  // drawn and nothing else, never built into the world, and every physics
-  // property below is ignored rather than refused, so a shape can be switched
+  // Whether this shape takes part in the simulation is not a field: it is which
+  // OBJECT this is (`object` above). A collision object collides because that is
+  // what it is, a geometry object does not for the same reason, and there is no
+  // conversion between them - authoring one or the other is the `+ Rect` /
+  // `+ Geometry` choice, made where the shape is drawn.
+  //
   // Does this GEOMETRY item carry an outline of its own? A form does - a
   // backdrop, a sign - and is drawn and picked by it. A DRESSING does not: what
   // it draws is the body's collision outlines wearing its surface, so it has no
@@ -241,14 +244,10 @@ export interface EdItem {
   ownShape: boolean;
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
-  // How far the whole BODY sits off the gameplay plane, in metres, positive
-  // toward the camera. Body-level like `kind` and `friction`, so
-  // `syncBodyProps` keeps a body's objects in agreement about it.
-  //
-  // It is what makes the body a frame in all three axes rather than two and a
-  // half: an object's own `offsetZ` is an offset from this, so pulling an
-  // assembly forward is one edit rather than one per object.
-  bodyZ: number;
+  // There is no body depth here, and none on a collision item either: a body is
+  // a thing in the gameplay plane and so is the shape it collides as (see
+  // `LevelBodyData`). Depth is `EdVisual.offsetZ`, on the geometry objects and
+  // lights that draw, measured from the plane itself.
   // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
   // hook is destroyed on it and the ball's is deflected. Per SHAPE, so it is
   // among the properties `syncBodyProps` leaves alone - a compound wall with
@@ -381,7 +380,7 @@ export interface EdVisual {
   // an object with a transform like every other, so the look does not carry a
   // second one that could disagree with it. What is left here is the two
   // rotations and the depth the item's in-plane transform cannot express.
-  offsetZ: number; // metres; an offset from the BODY's own z
+  offsetZ: number; // metres off the gameplay plane, positive toward the camera
   rotX: number;
   rotY: number;
   scale: number; // dimensionless
@@ -685,7 +684,6 @@ function fromLevelData(data: LevelData): EdModel {
       layer: "scene" as const,
       bodyId,
       kind: b.kind,
-      bodyZ: b.z ?? 0,
       color: b.color ?? DEFAULT_BODY_COLOR,
       opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
       friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
@@ -766,7 +764,6 @@ function fromLevelData(data: LevelData): EdModel {
     ownShape: true,
     bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
-    bodyZ: 0, // unused off the scene layer; keeps the field total
     pos: new Vec2(r.x, r.y),
     rot: r.rot,
     shape: edShape(r.shape),
@@ -813,7 +810,6 @@ function lightItem(
     ownShape: true,
     bodyId,
     kind: "static", // unused on this layer; keeps the field total
-    bodyZ: 0, // unused off the scene layer; keeps the field total
     pos,
     // A light's item rotation IS its object rotation, which is what turns a
     // spot's aim: the direction is authored in the object's own frame.
@@ -853,7 +849,6 @@ function lightItem(
     ownShape: true,
     bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
-    bodyZ: 0, // unused off the scene layer; keeps the field total
     pos: new Vec2(n.x, n.y),
     rot: n.rot,
     shape: { kind: "rect", w: n.w, h: n.h },
@@ -1085,9 +1080,6 @@ export function toLevelData(model: EdModel): LevelData {
       x: origin.pos.x,
       y: origin.pos.y,
       rot: origin.rot,
-      // Absent means "on the plane", so only a body that is off it says so and
-      // an ordinary level stays byte-identical through a save.
-      ...(lead.bodyZ !== 0 ? { z: lead.bodyZ } : {}),
       // Only a GEOMETRY lead has a body fill to give. A body that is nothing but
       // a light has no fill at all, and writing the light's own faint editor
       // colour as one would put a body colour on disk that nothing draws.
@@ -1525,7 +1517,6 @@ export function syncBodyProps(members: readonly EdItem[]): void {
   for (const m of members) {
     if (m === lead || m.object !== "collision") continue;
     m.kind = lead.kind;
-    m.bodyZ = lead.bodyZ;
     m.color = lead.color;
     m.opacity = lead.opacity;
     m.friction = lead.friction;
@@ -1605,7 +1596,6 @@ export function emptyModel(): EdModel {
     ownShape: true,
         bodyId: newBodyId(),
         kind: "static",
-        bodyZ: 0,
         pos: new Vec2(0, 0),
         rot: 0,
         shape: { kind: "rect", w: 8, h: 0.6 },

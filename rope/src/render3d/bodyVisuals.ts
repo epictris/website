@@ -46,7 +46,7 @@ import { AnchorBody } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
 import { DECOR_DEPTH, DECOR_Z } from "../level/decor";
-import { localPlacement, worldDepth, type BuiltBody } from "../level/buildBodies";
+import { localPlacement, objectDepth, type BuiltBody } from "../level/buildBodies";
 import {
   isCollisionObject,
   isGeometryObject,
@@ -371,7 +371,7 @@ export class BodyVisual {
       // which is what the offset on a prop is for, and the only reading that
       // stays right for a body of several pieces.
       const atPiece = (dressing.kind ?? "auto") === "auto";
-      const z = worldDepth(data, dressing.z, solidZ);
+      const z = objectDepth(dressing.z, solidZ);
       const shape = shapes[i];
       if (atPiece && shape) {
         const piece = this.piece(shape.localOffset.x, shape.localOffset.y, shape.localRotation);
@@ -399,7 +399,7 @@ export class BodyVisual {
       // A form on a body with collision is an object among objects and is drawn
       // on the plane; one on a body without is decoration and sits behind it,
       // which is what a flat fill drawn before every body already was.
-      const defaultZ = worldDepth(data, g.z, collisions.length > 0 ? solidZ : DECOR_Z);
+      const defaultZ = objectDepth(g.z, collisions.length > 0 ? solidZ : DECOR_Z);
       const outline = g.shape
         ? outlineOfData(g.shape)
         : outlineOfData({ kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER });
@@ -427,7 +427,7 @@ export class BodyVisual {
         x: local.pos.x,
         y: local.pos.y,
         rot: local.rot,
-        z: worldDepth(data, l.z, DEFAULT_LIGHT_Z),
+        z: objectDepth(l.z, DEFAULT_LIGHT_Z),
       });
       if (mounted) this.lights.push(mounted);
     }
