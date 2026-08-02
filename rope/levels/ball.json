@@ -1642,7 +1642,13 @@
       "color": "#ceb236",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "impermeable": true,
+      "visual": {
+        "kind": "mesh",
+        "mesh": "yellow_barrel",
+        "offsetY": -15,
+        "scale": 0.01
+      }
     },
     {
       "kind": "static",
@@ -1673,7 +1679,10 @@
       "friction": 1,
       "impermeable": true,
       "visual": {
-        "kind": "mesh"
+        "kind": "mesh",
+        "mesh": "yellow_barrel",
+        "offsetY": -15,
+        "scale": 0.01
       }
     },
     {

@@ -7,15 +7,19 @@
 // anybody reads off a build. So the bar is asserted rather than advised, in the
 // suite, next to every other claim this project makes about itself.
 //
-// Four separate failures, because they have four different fixes:
+// Five separate failures, because they have five different fixes:
 //
-//   POINTER    - a `.glb` that is really a 130-byte Git LFS pointer, which is
-//                what a clone without git-lfs installed gets. GLTFLoader fails
-//                on it as a parse error deep in a dynamic import, so it is
-//                named here instead. `git lfs install && git lfs pull`.
-//   MISSING    - a manifest key whose file is not on disk at all. Draws the grey
-//                placeholder box in game, which is deliberate (never a hole in
-//                the level) and therefore easy to ship without noticing.
+//   MISSING    - a manifest key whose file is not on disk. Usually just an
+//                unfetched clone (`bun run assets:fetch`), but it is also what a
+//                deleted release asset looks like. In game it draws the grey
+//                placeholder box, which is deliberate (never a hole in the
+//                level) and therefore easy to ship without noticing.
+//   STALE      - a file whose bytes are not the `sha256` its entry names. The
+//                release asset was replaced, or the download truncated; either
+//                way this tree is not the one that was tested.
+//   COLLISION  - two entries whose files share a basename. They are one flat
+//                namespace in the release, so the second would overwrite the
+//                first on publish and both would fetch the same bytes.
 //   ORPHAN     - a file on disk no manifest entry names. Bytes in the budget
 //                that nothing can draw; a `.glb` is self-contained, so there is
 //                no sidecar that would legitimately be unreferenced.
@@ -23,21 +27,30 @@
 //
 // Then the budget itself.
 
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MESH_ASSETS } from "../render3d/assets";
+import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PUBLIC_DIR = join(ROOT, "public");
 const MESH_DIR = join(PUBLIC_DIR, "meshes");
 
-// The total is set by Git LFS bandwidth rather than by disk: the free quota is
-// 10 GiB/month and every CI checkout that pulls LFS objects spends the whole
-// directory again, so the ceiling is roughly quota / builds-per-month. 100 MB at
-// ~50 builds a month is 5 GiB, half the quota, which leaves room for the month
-// where a lot is landing. It is not a disk limit and raising it is a real
-// decision about that quota, not a formality.
+// The store itself imposes nothing worth budgeting against - a GitHub Release
+// caps a single asset at 2 GiB and neither total size nor download bandwidth at
+// all - so this bar is an engineering one and has to be argued rather than
+// quoted. Two things pay for these bytes: the Docker image the VM pulls on every
+// deploy (props are baked in at build, see the Dockerfile), and the time a level
+// takes to dress itself once it is open. 100 MB is roughly where the image stops
+// being a thing you can rebuild and redeploy without thinking about it, and at
+// the ~1 MB a prop this game's art style implies it is a hundred-odd props,
+// which is a lot more level than currently exists.
+//
+// It is deliberately NOT a quota, so raising it is allowed - but do it by
+// deciding those two costs are worth paying, not because the number was in the
+// way.
 export const TOTAL_BUDGET_BYTES = 100 * 1024 * 1024;
 // A single prop this big has not been through `gltf-transform`. The style this
 // game is drawn in (see CLAUDE.md) puts a textured prop at well under 1 MB, so
@@ -47,9 +60,6 @@ export const FILE_BUDGET_BYTES = 8 * 1024 * 1024;
 // Report the total as a warning well before it fails, so the budget is something
 // that gets discussed while there is still room rather than the day it blocks.
 const WARN_FRACTION = 0.8;
-
-// Git LFS pointers are small text files with a fixed first line.
-const LFS_MAGIC = "version https://git-lfs.github.com/spec/v1";
 
 export interface AssetCheck {
   name: string;
@@ -75,17 +85,6 @@ function walk(dir: string): string[] {
   return out.sort();
 }
 
-// A pointer is text and tiny, so this reads at most the magic line and never
-// pulls a real model into memory.
-function isLfsPointer(path: string): boolean {
-  if (statSync(path).size > 1024) return false;
-  try {
-    return readFileSync(path, "utf8").startsWith(LFS_MAGIC);
-  } catch {
-    return false; // unreadable as UTF-8 means it is the binary, which is the point
-  }
-}
-
 function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
@@ -103,23 +102,48 @@ export function runAssetChecks(): AssetCheck[] {
     referenced.set(join(PUBLIC_DIR, asset.file.replace(/^\//, "")), key);
   }
 
-  const pointers = files.filter(isLfsPointer);
-  checks.push({
-    name: "assets: no unfetched Git LFS pointers",
-    pass: pointers.length === 0,
-    detail: pointers.length
-      ? `${pointers.length} pointer file(s), run \`git lfs install && git lfs pull\`: ` +
-        pointers.map((f) => relative(ROOT, f)).join(", ")
-      : `${files.length} file(s), all real`,
-  });
-
   const missing = [...referenced].filter(([path]) => !files.includes(path));
   checks.push({
     name: "assets: every manifest key has a file",
     pass: missing.length === 0,
     detail: missing.length
-      ? missing.map(([path, key]) => `${key} -> ${relative(ROOT, path)}`).join(", ")
+      ? `run \`bun run assets:fetch\` (or the asset was deleted from the release): ` +
+        missing.map(([path, key]) => `${key} -> ${relative(ROOT, path)}`).join(", ")
       : `${referenced.size} manifest entr(ies) resolved`,
+  });
+
+  // The bytes on disk are the bytes the manifest names. A release asset can be
+  // replaced in place, so without this a tree can quietly be running a different
+  // model from the one its revision was written against.
+  const stale: string[] = [];
+  for (const [path, key] of referenced) {
+    if (!files.includes(path)) continue;
+    const want = MESH_ASSETS[key]!.sha256;
+    const got = createHash("sha256").update(readFileSync(path)).digest("hex");
+    if (got !== want) stale.push(`${key}: manifest ${want.slice(0, 12)}…, disk ${got.slice(0, 12)}…`);
+  }
+  checks.push({
+    name: "assets: on-disk bytes match the manifest sha256",
+    pass: stale.length === 0,
+    detail: stale.length ? stale.join("; ") : `${referenced.size - missing.length} verified`,
+  });
+
+  // One flat namespace in the release, keyed by basename - so two entries whose
+  // files differ only by directory would overwrite each other on publish and
+  // then both fetch the same bytes, which is a level quietly wearing the wrong
+  // prop rather than any kind of error.
+  const byName = new Map<string, string[]>();
+  for (const [key, asset] of Object.entries(MESH_ASSETS)) {
+    const name = basename(asset.file);
+    byName.set(name, [...(byName.get(name) ?? []), key]);
+  }
+  const collisions = [...byName].filter(([, keys]) => keys.length > 1);
+  checks.push({
+    name: "assets: no two entries share a filename",
+    pass: collisions.length === 0,
+    detail: collisions.length
+      ? collisions.map(([name, keys]) => `${name} <- ${keys.join(", ")}`).join("; ")
+      : `${byName.size} distinct filename(s)`,
   });
 
   const orphans = files.filter((f) => !referenced.has(f));
@@ -132,19 +156,34 @@ export function runAssetChecks(): AssetCheck[] {
   });
 
   const unsourced = Object.entries(MESH_ASSETS)
-    .filter(([, a]) => !a.source?.trim() || !a.license?.trim())
+    .filter(
+      ([, a]) =>
+        !a.source?.trim() || !a.license?.trim() || !a.author?.trim() || !a.sha256?.trim(),
+    )
     .map(([key]) => key);
   checks.push({
-    name: "assets: every entry records its source and licence",
+    name: "assets: every entry records its source, author, licence and sha256",
     pass: unsourced.length === 0,
-    detail: unsourced.length ? `missing source/license: ${unsourced.join(", ")}` : "all recorded",
+    detail: unsourced.length
+      ? `incomplete: ${unsourced.join(", ")}`
+      : `${Object.keys(MESH_ASSETS).length} entr(ies) recorded`,
   });
 
-  // Pointers are excluded from the byte count: a pointer weighs 130 bytes and
-  // would report a directory of them as costing nothing, which is the opposite
-  // of the truth. The pointer check above is what fails in that case.
-  const real = files.filter((f) => !pointers.includes(f));
-  const sizes = real.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
+  // Attribution is a licence obligation for anything under CC-BY, and a credits
+  // file kept by hand is one that is forgotten on exactly the day an asset is
+  // added. Generated from the manifest, and checked here so it cannot drift.
+  const wantCredits = renderCredits();
+  const haveCredits = existsSync(CREDITS_PATH) ? readFileSync(CREDITS_PATH, "utf8") : "";
+  checks.push({
+    name: "assets: CREDITS.md matches the manifest",
+    pass: haveCredits === wantCredits,
+    detail:
+      haveCredits === wantCredits
+        ? "up to date"
+        : "out of date - run `bun run assets:credits`",
+  });
+
+  const sizes = files.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
   const total = sizes.reduce((a, s) => a + s.bytes, 0);
 
   const oversized = sizes.filter((s) => s.bytes > FILE_BUDGET_BYTES);

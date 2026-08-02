@@ -71,5 +71,5 @@ if (r.status !== 0) process.exit(r.status ?? 1);
 const after = statSync(output).size;
 const mb = (b: number) => `${(b / (1024 * 1024)).toFixed(2)} MB`;
 console.log(`[assets] ${mb(before)} -> ${mb(after)} (${(after / before * 100).toFixed(0)}%)  ${output}`);
-console.log(`[assets] add it to MESH_ASSETS in src/render3d/assets.ts with its source and licence,`);
-console.log(`[assets] then \`bun run replay assets\` to check it against the budget.`);
+console.log(`[assets] next: \`bun run assets:publish ${output}\` uploads it and prints its`);
+console.log(`[assets] MESH_ASSETS entry, sha256 included.`);

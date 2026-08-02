@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit",
     "test": "bun run scripts/test.ts",
     "replay": "bun run src/tools/cli.ts",
-    "assets:optimize": "bun run scripts/optimize-asset.ts"
+    "assets:optimize": "bun run scripts/optimize-asset.ts",
+    "assets:publish": "bun run scripts/publish-asset.ts",
+    "assets:fetch": "bun run scripts/fetch-assets.ts",
+    "assets:credits": "bun run scripts/credits.ts"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.1.1",

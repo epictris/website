@@ -262,9 +262,16 @@ export function tintedSurface(
 
 export interface MeshAsset {
   // Path under `public/`, so vite serves it in dev and copies it in a build.
-  // Under `public/meshes/`, which is what `.gitattributes` stores in Git LFS and
-  // what `cli assets` walks.
+  // Under `public/meshes/`, which is gitignored and populated by
+  // `bun run assets:fetch` - the bytes live in a GitHub Release, not in git (see
+  // scripts/assetStore.ts for why). The basename is also the asset's name in
+  // that release, so it must be unique across the manifest.
   file: string;
+  // The bytes this revision of the repo was written against. A release asset can
+  // be replaced in place, so this is the only thing that says WHICH boulder a
+  // given commit meant; the fetch verifies it and fails hard on a mismatch.
+  // `bun run assets:publish` prints it.
+  sha256: string;
   // Uniform scale from the model's own units to metres. A model authored at a
   // real-world size in metres is 1; anything else states its conversion here
   // rather than every level that uses it restating it in `visual.scale`.
@@ -274,13 +281,19 @@ export interface MeshAsset {
   rotX?: number;
   rotY?: number;
   rotZ?: number;
-  // WHERE THIS CAME FROM, and what it may be used under. Both required, and
-  // `cli assets` fails without them, because provenance is exactly the thing
-  // that goes missing: the file is opaque, the licence lives on a web page
-  // nobody revisits, and a year later "can this ship" has no answer but "delete
-  // it and remodel". A binary in the tree with no source is a liability rather
-  // than an asset.
+  // WHERE THIS CAME FROM, who made it, and what it may be used under. All three
+  // required, and `cli assets` fails without them, because provenance is exactly
+  // the thing that goes missing: the file is opaque, the licence lives on a web
+  // page nobody revisits, and a year later "can this ship" has no answer but
+  // "delete it and remodel". A binary with no source is a liability rather than
+  // an asset.
+  //
+  // `author` is separate from `source` because a licence like CC-BY obliges you
+  // to credit a PERSON, and a link to the page you found it on is not that.
+  // CREDITS.md is generated from these fields (`bun run assets:credits`) and
+  // checked against them, so an asset cannot ship uncredited.
   source: string;
+  author: string;
   license: string;
 }
 
@@ -294,10 +307,18 @@ export interface MeshAsset {
 // draws the placeholder, which is a grey box of the body's own size - visible,
 // obviously wrong, and never a hole in the level.
 //
-// Every entry must be run through `bun run assets:optimize` before it lands, and
-// `cli assets` holds the whole directory to a byte budget; see "Prop assets" in
-// CLAUDE.md for why the budget is where it is.
-export const MESH_ASSETS: Record<string, MeshAsset> = {};
+// Every entry is `assets:optimize`d, then `assets:publish`ed, and `cli assets`
+// holds the whole directory to a byte budget; see "Prop assets" in CLAUDE.md.
+export const MESH_ASSETS: Record<string, MeshAsset> = {
+  yellow_barrel: {
+    file: "/meshes/yellow_barrel.glb",
+    sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",
+    source:
+      "https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88",
+    author: "Anna Denisova (@Den1121)",
+    license: "CC BY 4.0",
+  },
+};
 
 const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
 

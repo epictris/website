@@ -1578,17 +1578,30 @@ The GLTF loader is imported dynamically, so it lands in its own chunk and is fet
 
 ### Prop assets
 
-Props are `.glb` files under `public/meshes/`, stored in **Git LFS** (`.gitattributes`) so the repo's history carries pointers rather than the bytes.
-They are the only binary in a tree that otherwise generates its textures in code, which is why they carry a process the rest of the project does not need.
+Props are `.glb` files under `public/meshes/`, which is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
+They are the only binary this tree has - it otherwise generates its textures in code - which is why they carry a process the rest of the project does not need.
+
+**Not git, and specifically not Git LFS**, because an asset has to be **deletable**.
+A binary in git history is permanent, and an LFS object pushed to GitHub goes on consuming the quota after the file is removed - the only supported purge is deleting the repository, which is not an option for a repo with a deploy wired to it.
+A release asset is one `gh release delete-asset` away.
+Being able to change your mind about a prop is worth more here than anything git gives you for the bytes.
+
+The trade, stated once: **deleting an asset breaks builds of old commits**, whose manifest entries name bytes that no longer exist.
+That is the direct cost of deletability, and the failure is loud (the fetch stops the build) rather than a quietly different-looking game.
+
+The tag carries no version meaning - it is a file store that happens to live on GitHub, flat, keyed by the basename of `MeshAsset.file`.
+Each entry pins a **`sha256`**, because a release asset can be replaced in place: the hash is the only thing that says *which* boulder a given revision of this repo meant, and both the fetch and `cli assets` verify it.
+Nothing in the chain is authenticated - the release is public, and a token would have to reach the Docker build as an `ARG`, where it is readable by anyone who pulls the image.
 
 They are also the one thing here that gets **worse silently**.
 A level renders identically whether its props are 40 KB or 6 MB, every test stays green, and what changes is how long the first frame takes and how much of the LFS bandwidth quota a month of CI spends - neither of which anybody reads off a build.
 So three things are asserted rather than advised.
 
 **A budget, in the suite.** `cli assets` holds the whole directory to **100 MB**, and any single file to **8 MB**.
-The total is set by Git LFS **bandwidth** rather than by disk: the free quota is 10 GiB/month and every CI checkout that pulls LFS objects spends the whole directory again, so the ceiling is roughly quota ÷ builds-per-month.
-100 MB at ~50 builds a month is half the quota, which leaves room for a busy month.
-Raising it is a real decision about that quota rather than a formality.
+The store imposes nothing worth budgeting against - a release caps one asset at 2 GiB and neither total size nor download bandwidth at all - so the bar is an engineering one and has to be argued rather than quoted.
+Two things pay for these bytes: the Docker image the VM pulls on every deploy, since props are baked in at build, and the time a level takes to dress itself once it is open.
+100 MB is roughly where the image stops being something you rebuild and redeploy without thinking about it, and at ~1 MB a prop that is a hundred-odd props - a lot more level than exists.
+It is deliberately **not** a quota, so raising it is allowed; do it by deciding those two costs are worth paying, not because the number was in the way.
 The per-file bar is not a target to author up to - a textured prop in this game's style is well under 1 MB, and 8 MB is what catches a raw Blender export with 2k PNGs in it before that becomes the habit.
 
 **A pipeline, pinned.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
@@ -1599,15 +1612,31 @@ So meshopt comes with `setMeshoptDecoder` wired into `gltfLoader()` (~25 KB, shi
 Textures are **WebP rather than KTX2** for the same reason twice over: KTX2 needs the external `ktx` binary at build time *and* `KTX2Loader` plus its transcoder at runtime, where WebP needs neither - three.js reads it through `EXT_texture_webp` - and is within a few percent on disk.
 What KTX2 buys is staying compressed in **VRAM**, which is a decision for when there are enough props for VRAM to be the constraint rather than download size. It is not now.
 
-**Provenance, in the manifest.** `MeshAsset` requires `source` and `license`, and `cli assets` fails without them.
+**Provenance, in the manifest.** `MeshAsset` requires `source`, `author` and `license`, and `cli assets` fails without them.
 The file is opaque and the licence lives on a web page nobody revisits, so a binary with no source is a liability rather than an asset - a year later "can this ship" has no answer but "delete it and remodel".
+`author` is separate from `source` because a licence like **CC-BY obliges you to credit a person**, and a link to the page you found it on is not that.
 
-`cli assets` separates four failures because they have four different fixes: an unfetched **LFS pointer** (a clone with no `git lfs` - `GLTFLoader` fails on it as a parse error deep in a dynamic import, so it is named here instead), a manifest key with no **file** (draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
+`CREDITS.md` is **generated** from those fields (`bun run assets:credits`) and checked against them by `cli assets`, so it cannot drift.
+Attribution is a licence obligation, and a hand-kept credits list is one that gets forgotten on exactly the day the asset is added - a violation that looks like nothing at all. The manifest is the file you cannot avoid editing to add a prop, so the credits derive from it.
+Note that the generated file discharges the *record*; a CC-BY asset shipping in the game also wants that credit reachable by a player, which is a UI decision rather than a tooling one.
+
+`cli assets` separates five failures because they have five different fixes: a manifest key with no **file** (usually an unfetched clone, but also what a deleted release asset looks like - in game it draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), a **stale** file whose bytes are not the sha256 its entry names, two entries **colliding** on a basename (one flat namespace in the release, so the second would overwrite the first), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
 It is not part of `cli render3d`, which is deliberately pure - no GPU, no canvas, no level, and no filesystem.
 
 The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare inherits the generated surface for its `material` (`tintedSurface(spec?.visual?.texture ?? spec?.material, …)`), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import.
 
-New machine: `git lfs install` once, then `git lfs pull`. CI checks the build job out with `lfs: true`, because that checkout **is** the Docker build context.
+Two directories, and the split matters: `public/meshes/` is **build output** - only ever the optimised copy, only ever written by `assets:fetch` or `assets:optimize` - while `assets-src/` holds the **raw download** as it arrived.
+Both are gitignored. A raw is kept because re-optimising is what you do when the pipeline's settings change, and it is re-downloadable from the `source` its manifest entry records if it is ever lost.
+
+The whole loop:
+
+```sh
+just asset assets-src/rock.glb public/meshes/rock.glb        # optimise + upload
+# paste the printed MESH_ASSETS entry into src/render3d/assets.ts
+bun run replay assets                                        # check it
+just assets                                                  # on another machine
+gh release delete-asset assets rock.glb                      # change your mind
+```
 
 ### Traps
 
