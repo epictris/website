@@ -52,6 +52,7 @@ import {
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
+import { outlineDressings } from "../render3d/bodyVisuals";
 import { DECOR_Z, depthOf } from "../level/decor";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
@@ -479,7 +480,8 @@ function editorRoundTrip(): CaseResult[] {
         friction: 1,
         visual: { kind: "none" },
       },
-      // ...and a body with no visual at all, which must come back with none.
+      // ...and a body with no visual at all, which must come back with the
+      // geometry object that draws it and nothing more.
       {
         kind: "static",
         x: 500,
@@ -510,7 +512,14 @@ function editorRoundTrip(): CaseResult[] {
   // two builders chose the same origin to measure from.
   const a = flattened(scaleLevelData(authored, 1));
   const b = flattened(scaleLevelData(back, 1));
-  const untouched = back.bodies[3]!.objects.length === 1;
+  // Nothing draws a collision shape but a geometry object, so a body authored
+  // under the old default must come back carrying the one that states it - with
+  // NO shape of its own, since copying the outline is the drift this avoided.
+  const twinned = JSON.stringify(back.bodies[3]!.objects) ===
+    JSON.stringify([
+      { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
+      { type: "geometry" },
+    ]);
   return [
     {
       name: "editor: a level with visuals saves back byte-identical",
@@ -518,10 +527,10 @@ function editorRoundTrip(): CaseResult[] {
       detail: a === b ? "byte-identical" : `\n  authored ${a}\n  saved    ${b}`,
     },
     {
-      name: "editor: a body with no visual gains no geometry object",
-      pass: untouched,
-      detail: untouched
-        ? "one collision object and nothing else"
+      name: "editor: a body with no visual gains the geometry object that draws it",
+      pass: twinned,
+      detail: twinned
+        ? "one collision object and one shapeless geometry object"
         : `wrote ${JSON.stringify(back.bodies[3]!.objects)}`,
     },
   ];
@@ -1158,8 +1167,97 @@ function realLevelRoundTrip(): CaseResult[] {
   ];
 }
 
+// NOTHING BUT A GEOMETRY OBJECT DRAWS. A collision shape used to draw itself
+// whenever no one said otherwise, and this is the case that keeps that from
+// creeping back: the old default was invisible by construction (a level that
+// relied on it looked right, so nothing reported it), and the same is true of a
+// regression - a stray extrusion beside an authored mesh reads as a level that
+// needs its geometry nudged rather than as a renderer drawing twice.
+//
+// The migration half matters just as much. Every level on disk was authored
+// under the old default, so `withGeometryTwin` is the only thing standing
+// between the split and a hundred and twenty-eight invisible bodies.
+function renderNeedsGeometry(): CaseResult[] {
+  // Built as `LevelData` rather than through `normalizeLevelData`, deliberately:
+  // the gate would hand this body the geometry object it is asserting the
+  // absence of.
+  const level = (objects: SceneObjectData[]): LevelData => ({
+    player: { x: 0, y: 0, radius: 8 * PX },
+    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects }],
+  });
+  const shape = { kind: "rect" as const, w: 1, h: 1 };
+  const drawnBy = (objects: SceneObjectData[]) => outlineDressings(level(objects).bodies[0]!);
+
+  const bare = drawnBy([{ type: "collision", shape }]);
+  const dressed = drawnBy([{ type: "collision", shape }, { type: "geometry" }]);
+  // One dressing over a compound body covers every piece of it, which is a whole
+  // wall wearing one surface rather than the first brick of it being drawn.
+  const compound = drawnBy([
+    { type: "collision", shape },
+    { type: "collision", x: 2, shape },
+    { type: "geometry", texture: "brick" },
+  ]);
+
+  // ...and the migration that keeps every authored level looking as it did.
+  const raw: RawLevelData = level([{ type: "collision", shape }]);
+  const once = normalizeLevelData(raw);
+  const twice = normalizeLevelData(once);
+  const twin = once.bodies[0]!.objects.filter(isGeometryObject);
+  const migrated = twin.length === 1 && twin[0]!.shape === undefined;
+  const stable = twice.bodies[0]!.objects.length === once.bodies[0]!.objects.length;
+  // A body that already says how it looks is left alone. Twinning it too puts an
+  // extrusion of the collision box inside the authored prop - a grey brick in the
+  // middle of a lamp, drawn in play and absent from the editor.
+  const authored = level([
+    { type: "collision", shape },
+    { type: "geometry", kind: "mesh", mesh: "bulkhead-lamp", shape },
+  ]);
+  const untouched =
+    normalizeLevelData(authored).bodies[0]!.objects.length === authored.bodies[0]!.objects.length;
+
+  return [
+    {
+      name: "render: a collision shape with no geometry object draws nothing",
+      pass: bare.length === 1 && bare[0] === undefined,
+      detail: bare[0] === undefined ? "not drawn" : "drawn by something",
+    },
+    {
+      name: "render: a shapeless geometry object draws the body's collision outlines",
+      pass: dressed.length === 1 && dressed[0] !== undefined,
+      detail: dressed[0] !== undefined ? "drawn by the geometry object" : "not drawn",
+    },
+    {
+      name: "render: one dressing covers every piece of a compound body",
+      pass: compound.length === 2 && compound.every((d) => d?.texture === "brick"),
+      detail: `${compound.filter(Boolean).length} of ${compound.length} pieces drawn`,
+    },
+    {
+      name: "render: a level authored under the old default gains the object that draws it",
+      pass: migrated,
+      detail: migrated
+        ? "one geometry object, no shape of its own"
+        : `wrote ${JSON.stringify(twin)}`,
+    },
+    {
+      name: "render: and gains it exactly once, however many times it is loaded",
+      pass: stable,
+      detail: stable
+        ? `${once.bodies[0]!.objects.length} objects, unchanged on a second pass`
+        : `${once.bodies[0]!.objects.length} then ${twice.bodies[0]!.objects.length}`,
+    },
+    {
+      name: "render: a body that already says how it looks is left alone",
+      pass: untouched,
+      detail: untouched
+        ? "authored geometry stands; no extrusion added beside it"
+        : "an extrusion was added inside the authored prop",
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
+    ...renderNeedsGeometry(),
     ...cameraCorrespondence(),
     ...blendStability(),
     ...extrusionGeometry(),

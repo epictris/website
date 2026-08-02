@@ -268,6 +268,28 @@ export function mountVisual(
 // to read as "something is missing here" rather than as a wall.
 const ORPHAN_PLACEHOLDER = 0.3;
 
+// Which geometry object draws each of a body's collision outlines, in the body's
+// authored collision order - `undefined` where NOTHING does, which is a body
+// whose shapes are solid and invisible.
+//
+// A geometry object with no shape of its own DRESSES the body's collision
+// outlines rather than being a form in its own right. They pair with the
+// collision objects in authored order, and one dressing covers all of them -
+// which is the two cases that actually occur: a whole wall wearing brick at
+// twice life size (one dressing, several pieces), and a compound body whose
+// pieces are each their own prop (one dressing each).
+//
+// Split out of the constructor so the claim can be checked without a GPU, a
+// canvas or a DOM: building a `BodyVisual` needs all three, and "does a bare
+// collision shape draw?" is a question about this list alone.
+export function outlineDressings(data: LevelBodyData): (GeometryObjectData | undefined)[] {
+  const collisions = data.objects.filter(isCollisionObject);
+  const dressings = data.objects.filter(
+    (o): o is GeometryObjectData => isGeometryObject(o) && o.shape === undefined,
+  );
+  return collisions.map((_, i) => dressings[i] ?? dressings[0]);
+}
+
 export class BodyVisual {
   readonly root = new THREE.Group();
   // Which frame the world was last seen holding this body. `Scene3D` stamps it
@@ -326,24 +348,20 @@ export class BodyVisual {
     const collisions = data.objects.filter(isCollisionObject);
     const shapes = this.body?.getShapes() ?? [];
     const geometries = data.objects.filter(isGeometryObject);
-    // A geometry object with no shape of its own DRESSES the body's collision
-    // outlines rather than being a form in its own right. They pair with the
-    // collision objects in authored order, and one dressing covers all of them -
-    // which is the two cases that actually occur: a whole wall wearing brick at
-    // twice life size (one dressing, several pieces), and a compound body whose
-    // pieces are each their own prop (one dressing each).
-    const dressings = geometries.filter((g) => g.shape === undefined);
-    const dressingFor = (i: number) => dressings[i] ?? dressings[0];
+    const dressings = outlineDressings(data);
 
-    // The body's own outlines: one child per collision shape, dressed by its own
-    // dressing object if it has one and by the collision object's material
-    // otherwise. This is the implicit default, and it runs whether or not
-    // anything authored a dressing - which is what makes "no geometry object"
-    // and "a geometry object that says how" the same path.
+    // The body's own outlines, drawn ONLY where a geometry object asks for them.
+    // A collision shape is what the body is made of and nothing else: it used to
+    // draw itself whenever no one said otherwise, which made "what this collides
+    // as" and "what this looks like" the same authored thing and left no way to
+    // say they differ without also saying how. Every level that relied on the old
+    // default is given the geometry object that states it, once, at load
+    // (`withGeometryTwin`), so nothing on disk changes appearance.
     collisions.forEach((c, i) => {
-      const dressing = dressingFor(i);
+      const dressing = dressings[i];
+      if (!dressing) return;
       const spec: DrawSpec = {
-        ...(dressing ? { geometry: dressing } : {}),
+        geometry: dressing,
         collision: c,
         ...(data.color !== undefined ? { color: data.color } : {}),
       };
@@ -352,8 +370,8 @@ export class BodyVisual {
       // REPLACES the outline, so it is drawn at its own authored placement -
       // which is what the offset on a prop is for, and the only reading that
       // stays right for a body of several pieces.
-      const atPiece = (dressing?.kind ?? "auto") === "auto";
-      const z = worldDepth(data, dressing?.z, solidZ);
+      const atPiece = (dressing.kind ?? "auto") === "auto";
+      const z = worldDepth(data, dressing.z, solidZ);
       const shape = shapes[i];
       if (atPiece && shape) {
         const piece = this.piece(shape.localOffset.x, shape.localOffset.y, shape.localRotation);
@@ -363,7 +381,7 @@ export class BodyVisual {
       // Either a prop standing where it was placed, or a body that built no
       // engine shapes at all (a `killzone` or `force` area, which the 3D scene
       // still draws) - both fall back to the authored outline in its own frame.
-      const local = localPlacement(built, atPiece ? c : dressing!);
+      const local = localPlacement(built, atPiece ? c : dressing);
       const piece = this.piece(local.pos.x, local.pos.y, local.rot);
       const outline = outlineOfData(c.shape);
       this.mount(piece, () => primitiveGeometry(outline, spec), spec, z, true);

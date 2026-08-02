@@ -176,17 +176,21 @@ export interface CollisionObjectData extends ObjectPlacement {
 // `buildBodies.ts` and `contactCases.ts` all ignore it, and a level with none of
 // it plays identically.
 //
-// THE DEFAULT IS THE POINT, and it is what keeps the split between colliding and
-// looking from costing anything. A body with NO geometry object at all is drawn
-// as its own collision shapes given depth, so a level is fully 3D the moment it
-// loads and an authored geometry object is a decoration on top of a scene that
-// already works — rather than the scene being invisible until every body has one.
+// NOTHING ELSE DRAWS. A collision object is what a body is made of and a
+// geometry object is what it looks like, and a body with no geometry object is
+// drawn by nothing at all - an invisible wall, which is a thing a level may
+// perfectly well want. The two used to be one authored thing (a collision shape
+// drew itself whenever nobody said otherwise), which meant there was no way to
+// say "this collides differently from how it looks" without also saying how it
+// looks. Levels written under the old default are given the geometry object that
+// states it, once, at load (`withGeometryTwin` in this file), so nothing on disk
+// changed appearance when the default went away.
 //
-// A geometry object with no `shape` of its own means the same outlines, dressed
-// differently: that is how a wall wears brick at twice life size without the
-// file carrying its collision outline a second time where the two could drift
-// apart. An authored `shape` is a form of its own, which is what decoration and
-// a prop's placeholder are.
+// A geometry object with no `shape` of its own draws the body's COLLISION
+// outlines: that is how a wall wears brick at twice life size without the file
+// carrying its outline a second time where the two could drift apart, and it is
+// what the migrated twin is. An authored `shape` is a form of its own, which is
+// what decoration and a prop's placeholder are.
 export interface GeometryObjectData extends ObjectPlacement {
   type: "geometry";
   // How this is turned into something the GPU draws. The three answers are the
@@ -957,7 +961,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
   const panels = raw.backgrounds ?? [];
   const lights = raw.lights ?? [];
   if (!legacyBodies && panels.length === 0 && lights.length === 0) {
-    return { ...raw, bodies: raw.bodies as LevelBodyData[] };
+    return { ...raw, bodies: (raw.bodies as LevelBodyData[]).map(withGeometryTwin) };
   }
 
   const bodies: LevelBodyData[] = [];
@@ -1085,7 +1089,52 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
   }));
 
   const { backgrounds: _panels, lights: _lights, ...rest } = raw;
-  return { ...rest, bodies, ...(chains ? { chains } : {}) };
+  return { ...rest, bodies: bodies.map(withGeometryTwin), ...(chains ? { chains } : {}) };
+}
+
+// Drawing is a GEOMETRY object's job, and collision is a collision object's. A
+// file written before that split has bodies whose outlines were drawn BECAUSE
+// they collided, so they get the geometry object that says so: one with no shape
+// of its own, which already means "draw this body's collision outlines". The
+// level looks exactly as it did, and the file now says why instead of leaning on
+// a default that no longer exists.
+//
+// The outline is deliberately NOT copied onto it. A second copy is a second
+// thing to resize, and the two would drift apart the first time only one of them
+// was.
+//
+// Idempotent, which it has to be: a body that gets a twin has a shapeless
+// geometry object the next time it passes through here, and every level passes
+// through here on every load.
+function withGeometryTwin(body: LevelBodyData): LevelBodyData {
+  if (!body.objects.some(isCollisionObject)) return body;
+  // ANY geometry object at all is the body saying how it looks, and that answer
+  // stands. A lamp whose collision box carries an authored mesh looks like the
+  // lamp; adding an extrusion of the box beside it draws a grey brick inside the
+  // fitting - visible in play, invisible in the editor, and exactly the kind of
+  // thing a migration should never invent. Only a body that says NOTHING about
+  // its appearance is given the object stating what it used to look like.
+  if (body.objects.some(isGeometryObject)) return body;
+  // Placed where the first collision object is. A shapeless auto dressing is
+  // drawn at each piece it dresses, so this changes nothing about the picture -
+  // but it is what the editor shows and what a later save writes, and a geometry
+  // object sitting half a screen from the wall it draws is a lie about the
+  // level even while it renders correctly. It matters for the legacy form in
+  // particular, where a migrated body sits at the origin and its objects carry
+  // the world placement.
+  const lead = body.objects.find(isCollisionObject)!;
+  return {
+    ...body,
+    objects: [
+      ...body.objects,
+      {
+        type: "geometry",
+        ...(lead.x !== undefined ? { x: lead.x } : {}),
+        ...(lead.y !== undefined ? { y: lead.y } : {}),
+        ...(lead.rot !== undefined ? { rot: lead.rot } : {}),
+      },
+    ],
+  };
 }
 
 // Areas are single-shape everywhere they are used - `World.integrate` tests

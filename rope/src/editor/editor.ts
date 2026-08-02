@@ -294,7 +294,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // Exclusive with the item selection, like the chain selection is, and for the
   // same reason: there is no panel that could say anything sensible about both.
-  let selectedBodyId: number | null = null;
+  // A SET, because merging is an operation on two bodies and the tree is where
+  // two bodies are picked. Shift or Ctrl on an outliner row extends it, exactly
+  // as they extend the item selection.
+  const selectedBodyIds = new Set<number>();
+  // The one body being edited, or null when none or several are. A body panel
+  // shows one body's transform, and there is no sane transform for a set.
+  const soleBodyId = (): number | null =>
+    selectedBodyIds.size === 1 ? [...selectedBodyIds][0]! : null;
   // Chains carry their own selection, and the two are mutually exclusive: a
   // chain has no shape, no placement and no properties in common with an item,
   // so a mixed selection would have nothing an inspector panel could say about
@@ -388,6 +395,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     const liveChains = new Set(model.chains.map((c) => c.id));
     for (const id of selectedChainIds) if (!liveChains.has(id)) selectedChainIds.delete(id);
+    // Undoing a merge retires the body it made, so a selection still naming it
+    // would leave the panel showing a body with nothing in it.
+    const liveBodies = new Set(model.items.map((b) => b.bodyId));
+    for (const id of selectedBodyIds) if (!liveBodies.has(id)) selectedBodyIds.delete(id);
     rebuildInspector();
     markDirty(); // an undo/redo is a change like any other - it autosaves too
   }
@@ -430,7 +441,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (unchanged) return;
     selectedIds.clear();
     selectedChainIds.clear();
-    selectedBodyId = null;
+    selectedBodyIds.clear();
     for (const id of ids) selectedIds.add(id);
     nudging = false;
     // A canvas pick has to be findable in the tree, so the body it landed in
@@ -446,15 +457,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Select a BODY. Its objects are deliberately left unselected: what the
   // inspector then shows is the body's own properties and nothing else.
   function setBodySelection(id: number | null): void {
-    if (selectedBodyId === id && !selectedIds.size && !selectedChainIds.size) return;
+    if (soleBodyId() === id && !selectedIds.size && !selectedChainIds.size) return;
     selectedIds.clear();
     selectedChainIds.clear();
-    selectedBodyId = id;
+    selectedBodyIds.clear();
+    if (id !== null) selectedBodyIds.add(id);
     nudging = false;
     // Unfold it in the tree and force the rebuild that shows it, so a click on
     // the canvas lands somewhere you can see: the panel jumps to the body and
     // opens it, and `refreshOutliner` scrolls the row into view.
     if (id !== null) revealBody(id);
+    rebuildInspector();
+  }
+
+  // Add or remove one body from the selection, which is how two are picked to be
+  // merged. It drops the item and chain selections for the same reason
+  // `setBodySelection` does: there is no panel that could speak for a body and an
+  // object at once.
+  function toggleBodySelection(id: number): void {
+    selectedIds.clear();
+    selectedChainIds.clear();
+    if (!selectedBodyIds.delete(id)) selectedBodyIds.add(id);
+    nudging = false;
+    revealBody(id);
     rebuildInspector();
   }
 
@@ -472,17 +497,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // deleting a body deletes the objects in it, and moving one moves them - which
   // is a different question from what the inspector is editing.
   const operandItems = (): EdItem[] =>
-    selectedBodyId !== null ? bodyMembers(model.items, selectedBodyId) : selectedBodies();
+    selectedBodyIds.size
+      ? [...selectedBodyIds].flatMap((id) => bodyMembers(model.items, id))
+      : selectedBodies();
 
   function setChainSelection(ids: readonly number[]): void {
     selectedIds.clear();
     selectedChainIds.clear();
+    selectedBodyIds.clear();
     for (const id of ids) selectedChainIds.add(id);
     nudging = false;
     rebuildInspector();
   }
   function toggleSelection(id: number): void {
     selectedChainIds.clear();
+    selectedBodyIds.clear();
     if (!selectedIds.delete(id)) selectedIds.add(id);
     nudging = false;
     rebuildInspector();
@@ -491,7 +520,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // selected as a body, or with one of its objects picked out? That is what
   // decides whether a click selects the BODY or drills into it.
   const insideCurrentBody = (hit: EdItem): boolean =>
-    selectedBodyId === hit.bodyId ||
+    selectedBodyIds.has(hit.bodyId) ||
     model.items.some((i) => i.bodyId === hit.bodyId && selectedIds.has(i.id));
 
   // The items a click on `hit` selects once it has drilled in: its whole body,
@@ -714,6 +743,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     replaceModel(emptyModel());
     resetHistory();
     selectedIds.clear();
+    selectedBodyIds.clear();
     currentName = null;
     dirty = false;
     camera.position = Vec2.ZERO;
@@ -993,11 +1023,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (on && !first) first = row;
     }
     for (const [row, id] of bodyRows) {
-      const on = id === selectedBodyId;
+      const on = selectedBodyIds.has(id);
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
-    const key = `${selectedBodyId ?? ""}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
+    const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
+    const key = `${bodyKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
     if (key === outlinerSelKey) return;
     outlinerSelKey = key;
     first?.scrollIntoView({ block: "nearest" });
@@ -1045,10 +1076,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Selecting a body selects THE BODY - not the objects in it. That is the
       // whole point of the row existing: a body has properties of its own, and
       // they are what the inspector should offer when you click one.
+      //
+      // Shift or Ctrl extends, which is how two bodies are picked to be merged.
       row.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        setBodySelection(id);
+        if (e.shiftKey || e.ctrlKey || e.metaKey) toggleBodySelection(id);
+        else setBodySelection(id);
       });
       outlinerBody.appendChild(row);
       outlinerRows.push([row, []]);
@@ -1503,7 +1537,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(wrap);
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Off makes this decoration: drawn behind every solid shape, with a dashed teal edge here and no border in game, and never simulated — nothing collides with it, the rope does not wrap it and no force reaches it. It keeps its 3D visual, so it is also how a prop with no collision is placed. Group it with a colliding shape (Ctrl+G) to have it ride that body.";
+      "Converts between the two things a shape can be. ON it is a collision shape: what the body is made of, simulated and never drawn - a geometry object in the same body is what draws it. OFF it is a geometry object: drawn and nothing else, with a dashed teal edge here and no border in game, never simulated, so nothing collides with it, the rope does not wrap it and no force reaches it. Merge it into a colliding body (Ctrl+G) to have it ride that body.";
     g.appendChild(hint);
   }
 
@@ -1993,19 +2027,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // One panel for the whole selection: every property the group has in common
-  // is editable and writes to all of them. A lone body is just the N=1 case, so
+  // is editable and writes to all of them. A lone object is just the N=1 case, so
   // single and multi editing can't drift apart.
+  //
+  // It edits an OBJECT, so it shows only what an object has: its form, where it
+  // sits in its body, and what it is made of. A kind, a friction, a force and a
+  // fill are the BODY's - one each, for the whole assembly - and they are edited
+  // on the body panel, reached by selecting the body. They used to be repeated
+  // here, which read as a collision shape having its own `kind: static` and its
+  // own friction; it did not, and the file it saves to has never had a place to
+  // put them.
+  //
+  // A LOOK is the same story one level down. Nothing draws a collision shape but
+  // a geometry object, so the visual fields belong to the geometry panel: on a
+  // collision shape they were controls that wrote to a field `toLevelData` has
+  // never written for a collision object, which is a dial connected to nothing.
   function buildBodyGroup(bodies: EdItem[]): void {
     const g = el("div", "ed-group");
-    // Decoration is named as what it is. A panel called "Body #12" with no kind,
-    // no friction and no mass reads as a body whose fields have gone missing.
+    // Named for what it IS. A panel headed "Body #12" on something that is one
+    // object inside a body is the same confusion in the title bar.
     const solid = bodies.some((b) => (b.object === "collision"));
-    const noun = solid ? "Body" : "Decoration";
+    const noun = solid ? "Collision" : "Geometry";
     g.appendChild(
       heading(
         bodies.length === 1
           ? `${noun} #${bodies[0]!.id}`
-          : `${bodies.length} ${solid ? "shapes" : "pieces of decoration"} selected`,
+          : `${bodies.length} ${solid ? "collision shapes" : "geometry objects"} selected`,
       ),
     );
     if (bodies.length > 1) {
@@ -2017,51 +2064,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     addCollisionField(g, bodies);
 
-    const kw = el("label", "ed-field");
-    kw.textContent = "kind";
-    const ks = document.createElement("select");
-    ks.className = "ed-select";
-    const sharedKind = bodies.every((b) => b.kind === bodies[0]!.kind) ? bodies[0]!.kind : null;
-    if (!sharedKind) {
-      // Mixed kinds: a blank entry holds the selection until one is picked, so
-      // the picker never misreports one kind as the group's.
-      const o = document.createElement("option");
-      o.value = "";
-      o.textContent = "mixed";
-      ks.appendChild(o);
-    }
-    for (const k of BODY_KINDS) {
-      const o = document.createElement("option");
-      o.value = k;
-      o.textContent = k;
-      ks.appendChild(o);
-    }
-    ks.value = sharedKind ?? "";
-    ks.addEventListener("change", () => {
-      if (!ks.value) return;
-      beginAction();
-      for (const b of bodies) b.kind = ks.value as BodyKind;
-      markDirty();
-      // Which fields apply depends on the kind (force magnitude, friction), so
-      // the panel has to be rebuilt rather than just revalued.
-      rebuildInspector();
-    });
-    kw.appendChild(ks);
-    // A kind is a statement about physics, so it is offered only where there is
-    // any: on decoration it would be a control that changes nothing.
-    if (solid) g.appendChild(kw);
-
     const sync = () => syncEditedBodies(bodies);
     const num = groupNum(g, bodies, sync);
     addTransformFields(g, num, bodies);
-    if (solid && bodies.every((b) => b.kind === "force")) {
-      // Acceleration along rot°, authored in px/s² like every other length.
-      // Negative reverses the flow, so it is deliberately not clamped at 0.
-      num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
-    }
-    if (solid && !bodies.some(frictionless)) {
-      num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
-    }
     // Hook-proof, offered for the solid kinds it means something on: an area is
     // a region the rope passes through, and a hook-only anchor exists to be
     // caught on, so neither has a hook to repel.
@@ -2071,12 +2076,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Material and thickness are what a shape WEIGHS, and decoration weighs
     // nothing - its extrusion depth is `visual.depth` instead.
     if (solid && !bodies.some(massless)) addMaterialFields(g, bodies);
-    // An area is a region of space with no solid to extrude, so it has no
-    // visual: its glyph lattice is a flat mark drawn on the 2D overlay in both
-    // render modes.
-    if (!solid || !bodies.some(massless)) addVisualFields(g, bodies);
+    // What a thing LOOKS like is a geometry object's business and only its own.
+    // A collision shape is drawn by whichever geometry object dresses it, and
+    // `toLevelData` writes no look for a collision object at all - so these
+    // fields on one edited a value that never reached disk.
+    if (!solid) addVisualFields(g, bodies);
 
-    addFillFields(g, num, bodies, sync);
+    // Decoration carries its OWN fill - `toLevelData` writes an own-shape
+    // geometry object's colour and opacity onto the object. A collision shape
+    // does not: the colour a wall is painted is its BODY's, and it is edited
+    // there. A dressing has no shape of its own to fill, so it takes the body's
+    // too and gets no swatch here.
+    if (!solid && bodies.every((b) => b.ownShape)) addFillFields(g, num, bodies, sync);
+
     addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -2100,10 +2112,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function appendGroupSection(g: HTMLElement): void {
     const sel = selectedBodies();
-    const bodies = new Set(sel.map((b) => b.bodyId));
+    // Bodies picked in the TREE count here too - selecting two rows and pressing
+    // Merge is the plainest way to say "these are one body from now on", and it
+    // is the reason the body selection is a set.
+    const bodies = new Set(selectedBodyIds.size ? selectedBodyIds : sel.map((b) => b.bodyId));
     const row = el("div", "ed-row");
-    const eligible = sel.filter(canShareBody);
-    if (eligible.length > 1 && bodies.size > 1) {
+    if (mergeableBodies().length > 1) {
       const b = button("Merge", () => mergeIntoBody());
       b.title = "Move these objects into one body (Ctrl+G)";
       row.appendChild(b);
@@ -2115,13 +2129,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.appendChild(b);
     }
     g.appendChild(row);
+    const only = bodies.size === 1 ? [...bodies][0]! : null;
     // The body's own depth, which is the third axis of its frame. Every other
     // axis is already body-relative (an object's x/y/rot are offsets from the
     // body), and this is what stops z being the odd one out: an object's own
     // `z` is an offset from this, so pulling a whole assembly toward the camera
     // is one number rather than one per object.
-    if (bodies.size === 1 && sel[0]!.layer === "scene") {
-      const members = bodyMembers(model.items, sel[0]!.bodyId);
+    //
+    // Offered beside an OBJECT selection only. The body panel carries its own
+    // `z`, and two fields for one number in one inspector is one of them going
+    // stale under the other.
+    if (only !== null && !selectedBodyIds.size && sel[0]!.layer === "scene") {
+      const members = bodyMembers(model.items, only);
       numField(
         g,
         "body z",
@@ -2131,10 +2150,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       );
     }
-    if (!row.childElementCount && bodies.size !== 1) return;
+    if (!row.childElementCount && only === null) return;
     const hint = el("div", "ed-hint");
-    if (bodies.size === 1) {
-      const members = bodyMembers(model.items, sel[0]!.bodyId);
+    if (only !== null) {
+      const members = bodyMembers(model.items, only);
       const shapes = members.filter((m) => m.object === "collision").length;
       const lights = members.filter((m) => m.object === "light").length;
       const panels = members.length - shapes - lights;
@@ -2152,6 +2171,78 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
+  // A body's position in the outliner, which is what names it everywhere in the
+  // UI. Derived from the same `bodyRuns` the tree and `toLevelData` walk, so the
+  // number on a panel is the number in the tree is the index on disk.
+  const bodyIndexOf = (id: number): number =>
+    bodyRuns(model.items.filter((i) => i.layer === "scene")).findIndex(
+      (r) => r[0]!.bodyId === id,
+    );
+
+  // The properties a BODY has exactly one of: what it is, what it rubs like,
+  // what drives it, what it is painted. Shared by the body panel and by the
+  // body section above an object selection, so those two can't drift apart
+  // about which fields a kind makes applicable.
+  //
+  // Read and written on the LEADS - the collision object each body's record is
+  // written from - and pushed to the rest of each body by `syncBodyProps`. Going
+  // through the members instead is what put a `mixed` in the opacity field of a
+  // body whose decoration is deliberately a different opacity from its walls:
+  // that decoration's own opacity is not the body's, and reading it as a second
+  // opinion on the body's fill is reading the wrong field.
+  function addBodyProps(g: HTMLElement, members: EdItem[]): void {
+    const leads = members.filter((b) => b.object === "collision");
+    const num = groupNum(g, leads, () => syncEditedBodies(leads));
+    // The physics half exists only for a body that HAS some. A body of pure
+    // decoration or a lone light has no kind, no friction and no force, and
+    // offering them would be three controls that change nothing.
+    if (leads.length) {
+      const kw = el("label", "ed-field");
+      kw.textContent = "kind";
+      const ks = document.createElement("select");
+      ks.className = "ed-select";
+      const sharedKind = leads.every((b) => b.kind === leads[0]!.kind) ? leads[0]!.kind : null;
+      if (!sharedKind) {
+        // Mixed kinds: a blank entry holds the selection until one is picked, so
+        // the picker never misreports one body's kind as the group's.
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = "mixed";
+        ks.appendChild(o);
+      }
+      for (const k of BODY_KINDS) {
+        const o = document.createElement("option");
+        o.value = k;
+        o.textContent = k;
+        ks.appendChild(o);
+      }
+      ks.value = sharedKind ?? "";
+      ks.addEventListener("change", () => {
+        if (!ks.value) return;
+        beginAction();
+        for (const m of leads) m.kind = ks.value as BodyKind;
+        markDirty();
+        // Which fields apply depends on the kind (force magnitude, friction), so
+        // the panel has to be rebuilt rather than just revalued.
+        rebuildInspector();
+      });
+      kw.appendChild(ks);
+      g.appendChild(kw);
+      if (!leads.some(frictionless)) {
+        num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
+      }
+      if (leads.every((b) => b.kind === "force")) {
+        // Acceleration along rot°, authored in px/s² like every other length.
+        // Negative reverses the flow, so it is deliberately not clamped at 0.
+        num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
+      }
+    }
+    // ...and the fill, which only a body written from a collision lead has: a
+    // body of pure decoration is painted by its objects' own colours, and a
+    // body that is nothing but a light is not painted at all.
+    if (leads.length) addFillFields(g, num, leads, () => syncEditedBodies(leads));
+  }
+
   // THE BODY panel: a container with a transform and the properties a body has
   // exactly one of. Deliberately narrow - everything it does NOT offer is a
   // thing that belongs to a scene object, and offering it here is what made a
@@ -2160,9 +2251,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const members = bodyMembers(model.items, id);
     if (!members.length) return;
     const lead = bodyLead(members) ?? members[0]!;
-    const index = bodyRuns(model.items.filter((i) => i.layer === "scene")).findIndex(
-      (r) => r[0]!.bodyId === id,
-    );
+    const index = bodyIndexOf(id);
     const g = el("div", "ed-group");
     g.appendChild(heading(`Body #${index} — ${bodyLabel(members)}`));
 
@@ -2197,39 +2286,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (v) => rotateGroupAbout(members, bodyCentroid(members), rad(v) - origin.rot),
     );
 
-    const num = groupNum(g, members, () => syncEditedBodies(members));
-    // The physics half exists only for a body that HAS some. A body of pure
-    // decoration or a lone light has no kind, no friction and no force, and
-    // offering them would be three controls that change nothing.
-    if (bodyLead(members)) {
-      const kw = el("label", "ed-field");
-      kw.textContent = "kind";
-      const ks = document.createElement("select");
-      ks.className = "ed-select";
-      for (const k of BODY_KINDS) {
-        const o = document.createElement("option");
-        o.value = k;
-        o.textContent = k;
-        ks.appendChild(o);
-      }
-      ks.value = lead.kind;
-      ks.addEventListener("change", () => {
-        beginAction();
-        for (const m of members) m.kind = ks.value as BodyKind;
-        markDirty();
-        // Which fields apply depends on the kind (force magnitude, friction).
-        rebuildInspector();
-      });
-      kw.appendChild(ks);
-      g.appendChild(kw);
-      if (lead.kind !== "killzone" && lead.kind !== "force" && lead.kind !== "anchor") {
-        num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
-      }
-      if (lead.kind === "force") {
-        num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
-      }
-    }
-    addFillFields(g, num, members, () => syncEditedBodies(members));
+    addBodyProps(g, members);
     inspector.appendChild(g);
 
     const actions = el("div", "ed-group");
@@ -2246,6 +2303,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       `${kinds.filter((k) => k === "light").length} light. ` +
       "A body is the frame they are placed in and the properties they share - what each one IS lives on the object. Expand this body in the panel bottom-left and click an object to edit its shape, material or look.";
     inspector.appendChild(hint);
+  }
+
+  // SEVERAL bodies. No transform, because there is no one frame to edit - what
+  // this panel is for is the operations that take a set: Merge above all, and
+  // the body properties they can be given in one go.
+  function buildBodiesPanel(ids: number[]): void {
+    const members = ids.flatMap((id) => bodyMembers(model.items, id));
+    const g = el("div", "ed-group");
+    g.appendChild(heading(`${ids.length} bodies selected`));
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Shift or Ctrl+click a body row to add or remove one. Merge puts every object in these bodies into a single body; edits below apply to all of them.";
+    g.appendChild(hint);
+    addBodyProps(g, members);
+    inspector.appendChild(g);
+
+    const actions = el("div", "ed-group");
+    appendGroupSection(actions);
+    appendActions(actions);
+    inspector.appendChild(actions);
   }
 
   // Chain panel. A chain has no placement of its own - both ends are points on
@@ -2745,8 +2822,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // shape here, no material and no look, because a body has none of those -
     // they belong to the objects in it, which are edited by picking one out of
     // the tree.
-    if (selectedBodyId !== null) {
-      buildBodyPanel(selectedBodyId);
+    if (selectedBodyIds.size) {
+      const sole = soleBodyId();
+      if (sole !== null) buildBodyPanel(sole);
+      else buildBodiesPanel([...selectedBodyIds]);
       return;
     }
 
@@ -2786,6 +2865,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       appendActions(g);
       inspector.appendChild(g);
     }
+    // No body section here. A body's properties belong to the body, and the body
+    // is selected by clicking it - in the outliner or on the canvas. Showing them
+    // alongside an object's is what made a collision shape look like it had a
+    // kind and a friction of its own.
     for (const k of panels) {
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
@@ -2831,7 +2914,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return {
         ...b,
         id,
-        group,
+        // The COPY's body, not the original's. `...b` carries `bodyId` over, so
+        // writing the remapped id to any other field left a duplicated wall
+        // silently joining the body it was copied from.
+        bodyId: group,
         pos: b.pos.add(offset),
         shape: cloneShape(b.shape),
         cam: { ...b.cam },
@@ -2872,6 +2958,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     model.chains.push(...chains);
     selectedIds.clear();
     selectedChainIds.clear();
+    selectedBodyIds.clear();
     for (const b of bodies) selectedIds.add(b.id);
     markDirty();
     rebuildInspector();
@@ -2887,22 +2974,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // Body-level properties (kind, fill, friction, force) collapse onto the lead's,
   // since a body has only one of each.
+  //
+  // The bodies it acts on come from whichever selection is live: two rows picked
+  // in the outliner, or objects picked on the canvas (whose WHOLE bodies move,
+  // not the selected objects alone - dragging one piece of a body into another
+  // and leaving its siblings behind would silently take that body apart, which
+  // is a thing to do on purpose with Ctrl+Shift+G rather than a side effect of
+  // merging).
+  const mergeableBodies = (): number[] => {
+    const ids = selectedBodyIds.size
+      ? [...selectedBodyIds]
+      : [...new Set(selectedBodies().map((b) => b.bodyId))];
+    // A body only merges if EVERY object in it may share one. An area is
+    // single-shape wherever it is used, so a merged one would silently act
+    // through its first piece alone.
+    return ids.filter((id) => bodyMembers(model.items, id).every(canShareBody));
+  };
+
   function mergeIntoBody(): void {
-    const sel = selectedBodies().filter(canShareBody);
-    if (sel.length < 2) return;
+    const ids = mergeableBodies();
+    if (ids.length < 2) return;
     const id = newBodyId();
-    // Whole bodies move, not the selected objects alone: dragging one piece of a
-    // body into another body and leaving its siblings behind would silently take
-    // that body apart, which is a thing to do on purpose (Ctrl+Shift+G) rather
-    // than a side effect of merging.
-    const absorbed = new Set(sel.map((b) => b.bodyId));
-    const moving = model.items.filter((i) => absorbed.has(i.bodyId));
-    if (absorbed.size < 2) return;
+    const absorbed = new Set(ids);
     beginAction();
-    for (const b of moving) b.bodyId = id;
+    for (const b of model.items) if (absorbed.has(b.bodyId)) b.bodyId = id;
     const members = bodyMembers(model.items, id);
     syncBodyProps(members);
-    setSelection(members.map((b) => b.id));
+    // The result is selected the way its ingredients were: merging two rows in
+    // the tree leaves the new body selected as a BODY, so the panel is still
+    // showing a body and not suddenly a heap of objects.
+    if (selectedBodyIds.size) setBodySelection(id);
+    else setSelection(members.map((b) => b.id));
     markDirty();
     rebuildInspector();
   }
@@ -2911,15 +3013,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // own. Nothing else changes - the objects stay exactly where they are, and
   // only stop sharing a transform, a seam rule and a set of body properties.
   function splitIntoBodies(): void {
-    const sel = selectedBodies();
     // Every body the selection touches, taken WHOLE: splitting half a body would
     // leave the other half claiming to be a body of two that has one object in
     // it, which is exactly the state having no null stopped being possible.
-    const ids = new Set(sel.map((b) => b.bodyId));
+    const ids = new Set(
+      selectedBodyIds.size ? selectedBodyIds : selectedBodies().map((b) => b.bodyId),
+    );
     const affected = model.items.filter((i) => ids.has(i.bodyId));
-    if (affected.length === sel.length && sel.every((b) => bodyMembers(model.items, b.bodyId).length === 1)) return;
+    // Nothing to do when every one of them already holds a single object.
+    if (affected.length === ids.size) return;
     beginAction();
     for (const b of affected) b.bodyId = newBodyId();
+    // The bodies that were selected no longer exist, so the selection follows
+    // the objects out - leaving it pointing at retired ids would empty the panel
+    // and leave the tree highlighting nothing.
+    if (selectedBodyIds.size) setSelection(affected.map((b) => b.id));
     markDirty();
     rebuildInspector();
   }
@@ -2972,13 +3080,28 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // being taken off, which is a decision rather than a default.
     const object: EdObject = t === "light" ? "light" : "collision";
     const style = newItemStyle(activeLayer, object);
+    // Drawn INTO the selected body, when one is selected. With a body selected
+    // the thing being authored is a part of it - the collision box under a mesh,
+    // a second shape for a compound wall, the light a lamp throws - and making it
+    // a body of its own would mean drawing it, selecting both and merging, every
+    // single time. An area is refused for the reason `canShareBody` gives: it is
+    // single-shape wherever it is used.
+    //
+    // Camera regions and notes are never in a body in any meaningful sense, so
+    // they keep getting one of their own.
+    const host = activeLayer === "scene" ? soleBodyId() : null;
+    const bodyId =
+      host !== null && bodyMembers(model.items, host).every(canShareBody)
+        ? host
+        : newBodyId();
     const base = {
       id: newBodyId(),
       layer: activeLayer,
       object,
-      // A fresh object is a body of one. Ctrl+G moves it into another later,
-      // which is a decision rather than something a draw has an opinion about.
-      bodyId: newBodyId(),
+      // The selected body, or one of its own when nothing is selected. Ctrl+G
+      // moves it later, which is a decision rather than something a draw has an
+      // opinion about.
+      bodyId,
       // A freshly drawn shape is part of the level; decoration is the tick
       // being taken off, which is a decision rather than a default.
       collision: true,
@@ -3059,6 +3182,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     };
   }
 
+  // The geometry object that DRAWS a freshly drawn collision shape, or null when
+  // its body already has one. Nothing renders a collision shape by itself any
+  // more, so a bare draw would put an invisible wall on the canvas and the author
+  // would find out in ▶ Test - which is the trap that made the old "a shape
+  // draws itself" default worth keeping in the first place. It carries no shape
+  // of its own, which is what `withGeometryTwin` writes for every level authored
+  // under that default: one outline, drawn by one object that says so.
+  function geometryTwinFor(item: EdItem): EdItem | null {
+    if (item.object !== "collision" || item.layer !== "scene") return null;
+    const dressed = bodyMembers(model.items, item.bodyId).some(
+      (m) => m.object === "geometry" && !m.ownShape,
+    );
+    if (dressed) return null;
+    return {
+      ...item,
+      id: newBodyId(),
+      object: "geometry",
+      ownShape: false,
+      shape: cloneShape(item.shape),
+      cam: { ...item.cam },
+      light: { ...item.light },
+      note: { ...item.note },
+      visual: { ...item.visual },
+    };
+  }
+
   // How close (in screen px) a click must land to the draft's first vertex to
   // close the loop rather than adding another vertex.
   const POLY_CLOSE_PX = 10;
@@ -3095,12 +3244,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     beginAction();
     addAndSelect([item]);
+    // Same rules the drag-drawn shapes take: a polygon drawn into a selected
+    // body wears that body's properties rather than the tool's defaults, and it
+    // comes with the geometry object that draws it.
+    syncBodyProps(bodyMembers(model.items, item.bodyId));
+    const twin = geometryTwinFor(item);
+    if (twin) model.items.push(twin);
   }
 
   function deleteSelected(): void {
-    if (!selectedIds.size && !selectedChainIds.size) return;
+    // A selected BODY means all of it: deleting a body deletes the objects in
+    // it. Reading `selectedIds` alone left the body panel's own Delete button
+    // doing nothing at all.
+    const doomed = new Set(operandItems().map((b) => b.id));
+    if (!doomed.size && !selectedChainIds.size) return;
     beginAction();
-    model.items = model.items.filter((b) => !selectedIds.has(b.id));
+    model.items = model.items.filter((b) => !doomed.has(b.id));
     model.chains = model.chains.filter((c) => !selectedChainIds.has(c.id));
     // A chain whose body has just gone has nothing left to hold. There is
     // nothing to prune about the bodies themselves: a body down to its last
@@ -3109,6 +3268,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     pruneChains();
     selectedIds.clear();
     selectedChainIds.clear();
+    selectedBodyIds.clear();
     markDirty();
     rebuildInspector();
   }
@@ -3117,7 +3277,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // offset it has and a fine nudge survives with snap on.
   const NUDGE_FINE = 0.01; // 1 cm
   function nudgeSelection(dir: Vec2, fine: boolean): void {
-    const sel = selectedBodies();
+    const sel = operandItems();
     if (!sel.length) return;
     // One undo step per run of nudges (a held arrow is a single gesture, like
     // a drag); releasing the key or any other action ends it.
@@ -3132,7 +3292,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   function duplicateSelected(): void {
-    const sel = selectedBodies();
+    const sel = operandItems();
     if (!sel.length) return;
     beginAction();
     const copy = cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2));
@@ -3148,7 +3308,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let clipboardChains: EdChain[] = [];
 
   function copySelection(): void {
-    const sel = selectedBodies();
+    const sel = operandItems();
     if (!sel.length) return;
     clipboard = sel.map((b) => ({
       ...b,
@@ -3210,6 +3370,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       replaceModel(modelFromDisk(data));
       resetHistory();
       selectedIds.clear();
+      // Body ids are per-model, so one carried across a load would highlight a
+      // body in the incoming level that has nothing to do with the one picked.
+      selectedBodyIds.clear();
       currentName = name;
       dirty = false;
       camera.position = model.player.pos;
@@ -3468,6 +3631,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const start = snapVec(world);
       const body = newDrawnItem(tool, start);
       model.items.push(body);
+      // A body has one kind, one fill, one friction: an object drawn into an
+      // existing body takes them rather than bringing the draw tool's defaults
+      // and disagreeing with its siblings about what the body is.
+      syncBodyProps(bodyMembers(model.items, body.bodyId));
       setSelection([body.id]);
       drag = { mode: "draw", body, start };
       markDirty();
@@ -3506,6 +3673,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // It is the drill-in every scene editor has, and it exists here for the
       // reason the whole refactor does: a body and the objects in it are
       // different things, and a single click cannot mean both.
+      // Shift extends whatever is already selected, and while that is BODIES it
+      // extends the body selection - so two bodies can be picked on the canvas
+      // and merged, exactly as they can in the tree. Falling through to the item
+      // selection here would quietly swap what the panel is editing mid-gesture.
+      if (e.shiftKey && !e.altKey && selectedBodyIds.size) {
+        toggleBodySelection(hit.bodyId);
+        drag = null;
+        return;
+      }
       if (!e.shiftKey && !e.altKey && !insideCurrentBody(hit)) {
         setBodySelection(hit.bodyId);
         // The whole body drags, since the body is what was selected.
@@ -3809,6 +3985,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
+    // A drawn collision shape gets the geometry object that draws it, once the
+    // drag has settled where and how big it is - the twin copies the placement,
+    // and making it at mousedown would leave it at the point the drag started.
+    if (drag.mode === "draw") {
+      const twin = geometryTwinFor(drag.body);
+      if (twin) {
+        model.items.push(twin);
+        markDirty();
+        rebuildInspector();
+      }
+    }
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       if (box) {

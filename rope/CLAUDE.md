@@ -1138,10 +1138,26 @@ repeated. `Ctrl+D` duplicates in place at a 2-cell offset.
 **Arrow keys** nudge the whole selection one grid cell (10 cm), or 1 cm with **Ctrl** held; the
 nudge is a pure translation (never snapped), so a body keeps any sub-cell offset it has and the
 fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
-key is released. The kind picker
-covers `static`, `rigid`, `killzone`, `anchor`, `force`, and a **hook-proof** checkbox sits
-below `friction` for the two solid kinds (see **Hook-proof surfaces**) - per shape, so one
-piece of a compound body can be the only place a hook will catch.
+key is released.
+
+Panels are split the way the format is, and **each is reached by selecting the thing it edits**.
+An object panel carries what an object has - its form, its placement in its body, its material,
+thickness, hook-proof flag and look - and nothing else; kind, friction, force and fill are the
+body's, and they appear only when the **body** is selected (outliner row, or a canvas click on an
+unselected body).
+There is deliberately no body section above a selected object: that is exactly what made a
+collision shape look like it had a `kind: static` and a friction of its own, when the file has
+never had a place to put them.
+The kind picker covers `static`, `rigid`, `killzone`, `anchor`, `force`; the **hook-proof**
+checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
+and it stays on the object panel for that reason (see **Hook-proof surfaces**).
+Body fields read and write the body's **collision lead** - the object its record is written from -
+and `syncBodyProps` pushes the values to the rest. Going through all the members instead put a
+`mixed` in the opacity field of a body whose decoration is deliberately a different opacity from
+its walls: that decoration's own opacity is not the body's, and reading it as a second opinion on
+the body's fill is reading the wrong field.
+The one fill that is *not* the body's is an own-shape geometry object's, which `toLevelData`
+writes onto the object; a dressing has no shape of its own to fill and takes the body's.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
 Everything that is a piece of stuff rather than a region of space - every kind but the two areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See **Mass and materials**; both are per shape, so a selection spanning a compound body edits its pieces individually.
@@ -1220,11 +1236,18 @@ It exists because a body is the unit the format is written in and the canvas can
 
 **Every body expands, including one holding a single object.** A body and a scene object are different things - one is a container with a transform, a kind and a fill, the other is a shape or a light inside it - and a row that collapsed the two whenever a body happened to hold one object would teach exactly the confusion the format was reshaped to remove.
 
-Selection follows the same distinction, and it is why a body has its **own selection** (`selectedBodyId`), exclusive with the item and chain selections. Clicking a body row selects THE BODY, and the inspector then shows the body's own properties - transform, kind, fill, friction, force - and no shape, material or look, because a body has none of those. Clicking an object row selects that object alone, which is the only way to reach one with no outline.
+Selection follows the same distinction, and it is why a body has its **own selection** (`selectedBodyIds`), exclusive with the item and chain selections. Clicking a body row selects THE BODY, and the inspector then shows the body's own properties - transform, kind, fill, friction, force - and no shape, material or look, because a body has none of those. Clicking an object row selects that object alone, which is the only way to reach one with no outline.
+
+It is a **set**, because merging is an operation on two bodies and the tree is where two bodies are picked: Shift or Ctrl on a body row (or on a canvas body, while bodies are what is selected) adds and removes, and the panel then drops the transform - there is no one frame to edit for a set - and offers **Merge**, which puts every object in them into a single body and leaves *that* body selected, so the panel is still showing a body rather than suddenly a heap of objects.
+`mergeableBodies` is the one rule both the button and Ctrl+G read: a body merges only if **every** object in it may share one, since an area is single-shape wherever it is used and a merged one would silently act through its first piece alone.
+Split is the inverse and hands the selection back to the objects, since the bodies it took apart no longer exist; `afterHistoryChange` drops retired body ids for the same reason, which is what undoing a merge would otherwise leave the panel pointing at.
+`operandItems` is what Delete, Duplicate, Copy and a nudge act on - a selected body means **all of it** - and they read it rather than `selectedIds`, which is what left the body panel's own Delete button doing nothing at all.
 
 On the canvas it is **click the body, then click into it**: a click on a body that is not the one being edited selects the body (and drags all of it), and clicking again once that body is current selects the object under the pointer. Alt still reaches an object directly. A canvas pick also **unfolds that body in the tree and scrolls to it**, so the two views cannot disagree about what is selected.
 
 An object's `x`/`y`/`rot°` in the inspector are **relative to its body**, because that is what the file records - a panel showing world coordinates would be showing a number the level does not contain. Moving the object that IS the body's origin moves the whole body, since its own offset is zero by definition.
+
+**A new object drawn while a body is selected joins that body.** With a body selected the thing being authored is a part of it - the collision box under a mesh, a second shape for a compound wall, the light a lamp throws - and making it a body of its own would mean drawing it, selecting both and merging, every time. It takes the body's kind, fill and friction on the way in (`syncBodyProps`), since a body has one of each. An area is refused for the reason `canShareBody` gives; camera regions and notes are never in a body in any meaningful sense and keep getting one of their own.
 
 ### Decoration
 
@@ -1257,7 +1280,7 @@ Group membership beats layer visibility and lock in the editor's picking: a grou
 `cli contacts` `decor-group` is the detector, and it exists because nothing else here can see any of this: decoration is never simulated, so a build that stopped attaching it violates no invariant, diverges no digest and passes every bundle while leaving the paint behind as the body swings away from it.
 It asserts the five halves together - the shape sharing the body holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled; the body still carries only the shapes its collision objects authored and the world holds only those bodies (decoration is not a piece and never reaches the sim); a piece in a body of its own and one in a body with no collision object at all are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case; and the retired `backgrounds` list migrates to exactly the same placement, body and fill, which is the half no level in the corpus can fail loudly, since every level on disk still carried panels in the old form.
 
-The inspector drops the whole physics half for a non-colliding shape - no kind, no friction, no material, no thickness, no hook-proof - because none of them mean anything on it, and a panel headed "Body #12" with its fields missing reads as a body that has lost them.
+The inspector drops the whole physics half for a body of pure decoration - no kind, no friction, no force, no fill, and on its objects no material, no thickness, no hook-proof - because none of them mean anything on it, and a panel headed "Body #12" with its fields missing reads as a body that has lost them.
 On disk the same rule holds: `toLevelData` writes no `friction`, `material`, `thickness`, `impermeable` or `force` for decoration, so a migrated panel is byte-stable through a save.
 **Images** (a source, plus `scale` / `crop` / `tile`) remain designed for but not implemented; a decorative shape wearing an authored PBR texture set (see **Surfaces**) is most of what they were for.
 
@@ -1567,10 +1590,20 @@ three.rotation.z = -body.rot
 The y-negation also mirrors a polygon loop, which is why `extrude.ts` measures the loop's signed area and re-winds it: physics polygons are wound clockwise-on-screen with y down (see **Shapes**), and `ExtrudeGeometry` wants counter-clockwise in its own frame for the front cap to face the camera.
 That happens to be what the negation produces, which is a coincidence worth stating rather than relying on - `cli render3d` asserts the cap's normals.
 
-### Every body is drawn, from day one
+### Nothing draws a collision shape but a geometry object
 
-A body with **no authored visual** is drawn as its own collision outline extruded through z and textured from its `material`, centred on the gameplay plane.
-That is the default rather than a fallback, and it is the whole reason the game looked fully 3D before any asset existed: the player sees exactly what they collide with, and a level author can ship a level without ever touching a visual field.
+A collision object is what a body is **made of**; a geometry object is what it **looks like**; and a body with no geometry object is drawn by nothing at all - a solid, invisible wall, which is a thing a level may want.
+They used to be one authored thing: a collision shape drew itself whenever nobody said otherwise, which meant there was no way to say "this collides differently from how it looks" without also saying how it looks, and every question about appearance had to be asked of a shape that had opinions about mass.
+
+The old default is not lost, it is **written down**. `withGeometryTwin` (`levelFormat.ts`) gives every body that has collision objects and **no geometry object at all** exactly one - carrying **no shape of its own**, which already means "draw this body's collision outlines" - at the one gate every level passes through on load.
+So a level authored under the old default looks pixel-identical and now says why, and `ball.json` goes from 187 objects to 317 the moment it loads.
+
+"No geometry object **at all**" is the load-bearing half. Any geometry object is the body saying how it looks, and that answer stands: a lamp whose collision box carries an authored mesh looks like the lamp, and twinning it too extrudes a grey brick inside the fitting - visible in play, invisible in the editor, and exactly the kind of thing a migration must never invent. The first cut of the rule skipped only bodies with a *shapeless* geometry object and did precisely that to two bodies.
+The outline is deliberately **not copied** onto the twin: a second copy is a second thing to resize, and the two would drift the first time only one of them was.
+It is idempotent because it has to be - a body that gains a twin has a shapeless geometry object the next time it passes through, and it passes through on every load.
+
+The editor holds the same line at the other end: drawing a collision shape creates its geometry twin on mouse-up (`geometryTwinFor`), because a draw that produced an invisible wall would be a trap the author found out about in `▶ Test`.
+The look fields sit on the geometry panel alone; on a collision shape they edited a value `toLevelData` has never written for a collision object, which is a dial connected to nothing.
 
 A body is a `THREE.Group` carrying the interpolated pose, with one child per collision shape at that piece's `localOffset`/`localRotation` - rigid within the body, so written **once** at build.
 The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
@@ -1600,9 +1633,12 @@ A **geometry object** is the choice between the ways a thing gets a look:
 
 - `kind: "auto"` (or absent) extrudes a **primitive** - its own `shape`, or the body's collision outlines when it has none - and wears a tileable PBR surface; `depth`, `bevel`, `texture` and `tileScale` override the defaults.
 - `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by the object's own `x`/`y`/`rot` plus `z`, `rotX`, `rotY` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the object names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
-- `kind: "none"` draws nothing at all - an invisible wall. It exists because absence already means "the default look".
+- `kind: "none"` draws nothing at all - an invisible wall on a body that has geometry. (A body with no geometry object at all is invisible too; `none` is how one object among several opts out.)
 
-**The default is the point.** A body with NO geometry object is drawn as its own collision shapes given depth, wearing the surface each one's `material` names - so a level is fully 3D the moment it loads, and a geometry object is a decoration on top of a scene that already works. A geometry object with **no shape** is the same outlines dressed differently, which is how a wall wears brick at twice life size without the file carrying its collision outline a second time where the two could drift apart. Dressings pair with collision objects in authored order, and one dressing covers all of them - which is the two cases that occur: a whole wall wearing one surface, and a compound body whose pieces are each their own prop. An `auto` dressing is drawn at its piece (what it draws IS that piece's outline); a `mesh` one is drawn at its own placement, since it replaces the outline rather than clothing it.
+A geometry object with **no shape** draws the body's **collision outlines**, which is how a wall wears brick at twice life size without the file carrying its outline a second time where the two could drift apart - and it is what the migrated twin is.
+`outlineDressings` (`render3d/bodyVisuals.ts`) is the whole rule, and it is split out of `BodyVisual` so it can be checked without a GPU, a canvas or a DOM: it returns which geometry object draws each collision outline, `undefined` where nothing does.
+Dressings pair with collision objects in authored order and one dressing covers all of them - the two cases that occur are a whole wall wearing one surface and a compound body whose pieces are each their own prop.
+An `auto` dressing is drawn at its piece (what it draws IS that piece's outline); a `mesh` one is drawn at its own placement, since it replaces the outline rather than clothing it.
 
 `mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, and `BodyVisual` is now the ONE class for every body - a wall, a swinging crate, a backdrop 20 m behind the plane and a lamp with no fitting are all a body with objects in it. What used to be a second class for decoration is the case where the body built no engine body: its root stands at the authored transform instead of tracking one, and `sync` has nothing to do.
 
