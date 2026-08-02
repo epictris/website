@@ -497,7 +497,11 @@
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone"
+      "material": "stone",
+      "thickness": 100,
+      "visual": {
+        "texture": "rock wall"
+      }
     },
     {
       "kind": "static",
@@ -515,7 +519,7 @@
       "material": "brick",
       "thickness": 100,
       "visual": {
-        "texture": "brick"
+        "texture": "rock wall"
       }
     },
     {
@@ -533,7 +537,7 @@
       "friction": 1,
       "thickness": 100,
       "visual": {
-        "texture": "stone"
+        "texture": "rock wall"
       }
     },
     {
@@ -549,7 +553,11 @@
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone"
+      "material": "stone",
+      "thickness": 100,
+      "visual": {
+        "texture": "rock wall"
+      }
     },
     {
       "kind": "static",
@@ -712,8 +720,9 @@
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
+      "thickness": 100,
       "visual": {
-        "texture": "stone"
+        "texture": "rock wall"
       }
     },
     {
@@ -1264,7 +1273,11 @@
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone"
+      "material": "stone",
+      "thickness": 100,
+      "visual": {
+        "texture": "rock wall"
+      }
     },
     {
       "kind": "static",
@@ -1396,7 +1409,7 @@
       "friction": 1,
       "thickness": 100,
       "visual": {
-        "texture": "stone"
+        "texture": "rock wall"
       }
     },
     {
@@ -1467,7 +1480,10 @@
       },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "visual": {
+        "texture": "steel"
+      }
     },
     {
       "kind": "anchor",
@@ -1481,7 +1497,10 @@
       },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "visual": {
+        "texture": "steel"
+      }
     },
     {
       "kind": "rigid",
@@ -2901,6 +2920,23 @@
       },
       "color": "#000000",
       "opacity": 1
+    },
+    {
+      "kind": "static",
+      "collision": false,
+      "x": 1900,
+      "y": 545.0000000000002,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 2420.0000000000005,
+        "h": 690
+      },
+      "color": "#555555",
+      "opacity": 0.5,
+      "visual": {
+        "texture": "brick"
+      }
     }
   ]
 }

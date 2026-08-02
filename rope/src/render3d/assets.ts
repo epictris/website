@@ -221,6 +221,45 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "Rob Tuytel",
     license: "CC0",
   },
+  // Keyed as a SURFACE rather than as a material name, which is the other half
+  // of the one namespace: `stone` already has a generated surface every stone
+  // body wears, and this is a particular weathered wall rather than what stone
+  // is. A shape asks for it by name (`visual.texture`, the editor's texture
+  // picker), and anything that does not goes on wearing the generated stone.
+  "rock wall": {
+    maps: {
+      base: {
+        file: "/textures/rock-wall-base.webp",
+        sha256: "dc7e2bb63a22f71aa629b7c46cff57818e902c6a88e7abc6f28ba7bab31c4875",
+      },
+      normal: {
+        file: "/textures/rock-wall-normal.webp",
+        sha256: "7641c194d6b94261bd36e1fab4b782fbbf896bd5d7428e41e51543c65f09aa7f",
+      },
+      // Poly Haven ships roughness, metallic and AO packed into one ARM image -
+      // R ambient occlusion, G roughness, B metallic - so the two maps this set
+      // wants are the same download read on two channels, each flattened to grey
+      // by `assets:optimize-texture --channel`. The B channel is a dielectric's
+      // zero and is stated below rather than shipped as a black image.
+      roughness: {
+        file: "/textures/rock-wall-roughness.webp",
+        sha256: "0874e41efdaa9ba52803358fa7370bd0732a687339a4202297a50872dda022ae",
+      },
+      ao: {
+        file: "/textures/rock-wall-ao.webp",
+        sha256: "d24e98a7701f3aa60e269f22528f568c3f6f1ed02f635ad73a8cd7da067cc148",
+      },
+    },
+    // Poly Haven's own captured size, 1800 mm square
+    // (https://api.polyhaven.com/info/rock_wall_08), so the blocks land life
+    // size with nothing eyeballed.
+    tile: 1.8,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/rock_wall_08",
+    author: "Amal Kumar",
+    license: "CC0",
+  },
 };
 
 // Every map of every set, which is what the fetch, the budget and the collision

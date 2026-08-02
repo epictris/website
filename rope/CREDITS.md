@@ -11,6 +11,7 @@ manifest and regenerate, which is what `cli assets` checks.
 ## Surface textures
 
 - **brick** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/factory_brick), CC0
+- **rock wall** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/rock_wall_08), CC0
 
 ## Everything else
 
