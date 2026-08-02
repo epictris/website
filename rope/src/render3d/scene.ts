@@ -73,6 +73,12 @@ export class Scene3D {
   readonly camera = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, 400);
   private readonly renderer: THREE.WebGLRenderer;
   private env: Environment;
+  // What the current `Environment` was built from. The editor rebuilds the whole
+  // scene on every model revision - every drag - and an environment is the one
+  // part of it whose construction is not free: PMREM convolves the generated sky
+  // into a mip chain on the GPU. The lights and the fog are cheap; the
+  // convolution is not, and nothing about dragging a wall changes it.
+  private envKey: string | null = null;
   private readonly bodies = new Map<CollisionObject2D, BodyVisual>();
   private readonly decor: DecorVisual[] = [];
   private lookup: VisualLookup = () => undefined;
@@ -96,7 +102,8 @@ export class Scene3D {
     });
     this.renderer.setPixelRatio(1); // the canvas is already sized in device pixels
     configureRenderer(this.renderer);
-    this.env = new Environment(this.scene);
+    this.env = new Environment(this.scene, undefined, this.renderer);
+    this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
   }
 
@@ -105,8 +112,7 @@ export class Scene3D {
   // here and nothing but transforms is touched per frame.
   setLevel(level: Scene3DLevel): void {
     this.clearLevel();
-    this.env.dispose();
-    this.env = new Environment(this.scene, level.visualSource.data.environment);
+    this.setEnvironment(level.visualSource.data.environment);
     this.lookup = makeLookup(level.visualSource);
     for (const body of level.world.bodies) this.ensureBody(body);
     this.buildDecor(level.decor);
@@ -119,8 +125,11 @@ export class Scene3D {
   // The environment a level authored, so a host that rebuilds the scene without
   // a level (the editor, between loads) can still light it.
   setEnvironment(env: EnvironmentData | undefined): void {
+    const key = JSON.stringify(env ?? null);
+    if (key === this.envKey) return;
+    this.envKey = key;
     this.env.dispose();
-    this.env = new Environment(this.scene, env);
+    this.env = new Environment(this.scene, env, this.renderer);
   }
 
   private ensureBody(body: CollisionObject2D): BodyVisual | null {

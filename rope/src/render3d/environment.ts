@@ -1,8 +1,26 @@
 // The light and the air. What separates a scene that reads as lit space from one
 // that reads as flat-shaded geometry is almost entirely here rather than in the
 // meshes: one warm directional sun with a shadow map, a cool hemisphere fill so
-// nothing is ever pure black, exponential fog so distance means something, and
-// filmic tone mapping so the sun has range to work in.
+// nothing is ever pure black, an environment for surfaces to REFLECT, and filmic
+// tone mapping so the sun has range to work in.
+//
+// There is deliberately NO FOG. It was here to say which layer is further away -
+// aerial perspective over the ten metres of depth a level authors into - and
+// what it also did was mute every distant surface at exactly the moment the
+// authored textures and the environment started giving those surfaces something
+// worth seeing. Depth is said by parallax, by the shadow the sun throws and by
+// the environment's own gradient instead. `THREE.FogExp2` is two lines if a
+// level ever wants it back, and it would want to be per level rather than a
+// default.
+//
+// The environment is what makes the PBR maps mean anything. A
+// `MeshStandardMaterial` gets its specular response from reflections, so with
+// lights alone there is nothing for a surface to reflect but one directional
+// sun: a roughness map has almost no visible effect, and a metal - which is
+// ALMOST ENTIRELY reflection - renders as a dark, dead shape. It is generated
+// rather than loaded, from the level's own sky, ground and sun colours, so it
+// costs no asset, matches whatever a level authored, and cannot disagree with
+// the fill about what colour the air is.
 //
 // Every number is a default a level may override (`LevelData.environment`), and
 // every default is chosen to sit against the palette the 2D renderer already
@@ -26,15 +44,6 @@ const DEFAULT_SKY_FILL = "#9fb6d8";
 const DEFAULT_GROUND_FILL = "#3a3226";
 const DEFAULT_SUN_INTENSITY = 3.1;
 const DEFAULT_FILL_INTENSITY = 1.3;
-const DEFAULT_HAZE = 0.35;
-
-// Haze 1 halves a surface's contrast against the sky at ~4 m of depth and buries
-// it by ~10 m. Sized against the depth range levels actually author into - the
-// gameplay plane at 0, props a metre or two either side, background layers out
-// to -20 m - rather than against a real atmosphere, where a scene this small
-// would show no aerial perspective at all. The point of the haze is to say which
-// layer is further away, and it has ten metres in which to say it.
-const FOG_DENSITY_AT_FULL_HAZE = 0.25;
 
 // The sun travels down-and-right-and-back in sim terms: from the upper left and
 // slightly in front of the plane, so a body's front face is lit, its left edge
@@ -49,15 +58,44 @@ const DEFAULT_SUN_DIR = { x: 0.55, y: 0.8, z: -0.5 };
 const SHADOW_DISTANCE = 30;
 const SHADOW_MAP_SIZE = 2048;
 
+// The generated environment, and how much of it is let in.
+//
+// `ENV_INTENSITY` is deliberately below 1 and the hemisphere fill comes DOWN to
+// meet it: image-based lighting contributes diffuse as well as specular, so an
+// environment dropped in at full strength on top of the existing fill lights the
+// scene twice and flattens exactly the contrast the fill was tuned for. What is
+// wanted from it here is mostly the specular - a surface that has something to
+// reflect - so it is mixed in at a level where the scene's overall brightness is
+// where it was and the highlights are new.
+const ENV_INTENSITY = 0.6;
+const FILL_WITH_ENV = 0.7; // multiplies the hemisphere fill, which now shares the job
+// Equirectangular, and small: PMREM blurs it into roughness levels immediately,
+// so the source only has to carry a gradient and a sun lobe. 128x64 is under
+// 32 KB of canvas and indistinguishable from 512 once convolved.
+const ENV_MAP_WIDTH = 128;
+const ENV_MAP_HEIGHT = 64;
+// How wide the sun's lobe is in the environment, as a fraction of the sphere,
+// and how much brighter than the sky it is. A tight, bright lobe is what puts a
+// travelling highlight on a rough surface as it turns; a wide one just raises
+// the ambient.
+const SUN_LOBE_SIZE = 0.09;
+const SUN_LOBE_GAIN = 6;
+
 export class Environment {
   readonly sun: THREE.DirectionalLight;
   readonly fill: THREE.HemisphereLight;
   private readonly dir = new THREE.Vector3();
   private readonly target = new THREE.Object3D();
 
+  private envTarget: THREE.WebGLRenderTarget | null = null;
+
   constructor(
     private readonly scene: THREE.Scene,
     env?: EnvironmentData,
+    // Optional so a host that has no renderer to hand (a test, a scene built
+    // before the canvas exists) still gets the lights; it simply gets no
+    // reflections, which is what this looked like before there were any.
+    renderer?: THREE.WebGLRenderer,
   ) {
     const sunDir = {
       x: env?.sunX ?? DEFAULT_SUN_DIR.x,
@@ -92,23 +130,34 @@ export class Environment {
     scene.add(this.target);
     this.sun.target = this.target;
 
+    const skyFill = new THREE.Color(env?.skyColor ?? DEFAULT_SKY_FILL);
+    const groundFill = new THREE.Color(env?.groundColor ?? DEFAULT_GROUND_FILL);
     this.fill = new THREE.HemisphereLight(
-      new THREE.Color(env?.skyColor ?? DEFAULT_SKY_FILL),
-      new THREE.Color(env?.groundColor ?? DEFAULT_GROUND_FILL),
-      env?.fillIntensity ?? DEFAULT_FILL_INTENSITY,
+      skyFill,
+      groundFill,
+      (env?.fillIntensity ?? DEFAULT_FILL_INTENSITY) * (renderer ? FILL_WITH_ENV : 1),
     );
     scene.add(this.fill);
 
-    const background = new THREE.Color(env?.backgroundColor ?? DEFAULT_SKY);
-    scene.background = background;
-    const haze = env?.haze ?? DEFAULT_HAZE;
-    scene.fog =
-      haze > 0
-        ? new THREE.FogExp2(
-            new THREE.Color(env?.fogColor ?? env?.backgroundColor ?? DEFAULT_SKY),
-            haze * FOG_DENSITY_AT_FULL_HAZE,
-          )
-        : null;
+    if (renderer) {
+      const source = equirectEnvironment(
+        skyFill,
+        groundFill,
+        new THREE.Color(env?.sunColor ?? DEFAULT_SUN_COLOR),
+        this.dir,
+      );
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      this.envTarget = pmrem.fromEquirectangular(source);
+      scene.environment = this.envTarget.texture;
+      scene.environmentIntensity = ENV_INTENSITY;
+      // The convolution is done and both the source canvas and the generator's
+      // own scratch targets are finished with; only the cube target survives.
+      source.dispose();
+      pmrem.dispose();
+    }
+
+    scene.background = new THREE.Color(env?.backgroundColor ?? DEFAULT_SKY);
+    scene.fog = null;
   }
 
   // Keep the shadow frustum around what the camera is looking at. A single
@@ -133,7 +182,66 @@ export class Environment {
     this.scene.remove(this.sun, this.fill, this.target);
     this.sun.dispose();
     this.fill.dispose();
+    if (this.envTarget) {
+      this.scene.environment = null;
+      this.envTarget.dispose();
+      this.envTarget = null;
+    }
   }
+}
+
+// The sky as one small equirectangular image: a vertical gradient from the
+// ground colour through the horizon to the sky colour, with a warm lobe where
+// the sun is. PMREM turns it into the mip chain a rough surface samples, so
+// nothing here has to be sharp - what it has to be is DIRECTIONAL, since a
+// uniform environment is indistinguishable from ambient light and puts no
+// highlight anywhere.
+function equirectEnvironment(
+  sky: THREE.Color,
+  ground: THREE.Color,
+  sunColor: THREE.Color,
+  sunDir: THREE.Vector3,
+): THREE.DataTexture {
+  const data = new Float32Array(ENV_MAP_WIDTH * ENV_MAP_HEIGHT * 4);
+  const dir = new THREE.Vector3();
+  for (let y = 0; y < ENV_MAP_HEIGHT; y++) {
+    // Equirectangular: v maps to polar angle, u to azimuth.
+    const theta = (y + 0.5) * (Math.PI / ENV_MAP_HEIGHT);
+    const up = Math.cos(theta); // +1 straight up, -1 straight down
+    for (let x = 0; x < ENV_MAP_WIDTH; x++) {
+      const phi = (x + 0.5) * ((Math.PI * 2) / ENV_MAP_WIDTH) - Math.PI;
+      dir.set(Math.sin(theta) * Math.sin(phi), up, Math.sin(theta) * Math.cos(phi));
+      // Sky above, ground below, mixed smoothly across the horizon rather than
+      // meeting at a line - a hard horizon shows up as a seam in the reflection
+      // of anything polished.
+      const t = up * 0.5 + 0.5;
+      const r = ground.r + (sky.r - ground.r) * t;
+      const g = ground.g + (sky.g - ground.g) * t;
+      const b = ground.b + (sky.b - ground.b) * t;
+      // The sun lobe, falling off with the angle to it.
+      const cos = dir.dot(sunDir);
+      const lobe = cos > 1 - SUN_LOBE_SIZE ? ((cos - (1 - SUN_LOBE_SIZE)) / SUN_LOBE_SIZE) ** 2 : 0;
+      const i = (y * ENV_MAP_WIDTH + x) * 4;
+      data[i] = r + sunColor.r * lobe * SUN_LOBE_GAIN;
+      data[i + 1] = g + sunColor.g * lobe * SUN_LOBE_GAIN;
+      data[i + 2] = b + sunColor.b * lobe * SUN_LOBE_GAIN;
+      data[i + 3] = 1;
+    }
+  }
+  // Float rather than 8-bit: the sun lobe is several times brighter than the
+  // sky, which is exactly the range an LDR texture cannot hold - clipped, the
+  // highlight it puts on a metal is the same white as the sky around it.
+  const tex = new THREE.DataTexture(
+    data,
+    ENV_MAP_WIDTH,
+    ENV_MAP_HEIGHT,
+    THREE.RGBAFormat,
+    THREE.FloatType,
+  );
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 // Renderer-side half of the look: filmic tone mapping and correct colour space,

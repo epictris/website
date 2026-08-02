@@ -33,6 +33,25 @@
 //   --lossless / --lossy       force either, for a source whose extension lies
 //                              about what has been done to it.
 //
+//   --channel r|g|b (default r) which channel of a SCALAR map carries the data.
+//                              Roughness, metallic and AO are one number per
+//                              texel, and every library stores that number
+//                              somewhere different: Poly Haven ships it in RED
+//                              alone (G and B are zero), while three.js reads
+//                              roughness from GREEN, metalness from BLUE and AO
+//                              from RED. Handing three.js the file as it arrives
+//                              therefore samples an empty channel and gets 0 -
+//                              and a wall at roughness 0 is a mirror, which
+//                              looks exactly like "the map is not applied"
+//                              rather than like a channel mistake.
+//                              So a scalar map is flattened to GREY here: the
+//                              named channel is written to all three, which is
+//                              correct for every slot at once and cannot be got
+//                              wrong downstream.
+//                              A NORMAL map is never flattened - its three
+//                              channels are a vector, not three copies of one
+//                              number.
+//
 //   --size 1024 (default)      the art style's own ceiling, the same one the
 //                              prop pipeline puts on a glTF's textures. 2k maps
 //                              on a wall seen at this camera distance are bytes
@@ -98,6 +117,13 @@ mkdirSync(dirname(resolve(output)), { recursive: true });
 // or duller than it was authored, which reads as a lighting bug rather than as a
 // conversion one.
 const colour = slot === "base";
+// One number per texel, as against the albedo's colour and the normal's vector.
+const scalar = slot === "roughness" || slot === "metallic" || slot === "ao";
+const channel = (flag("channel") ?? "r").toUpperCase();
+if (scalar && !["R", "G", "B"].includes(channel)) {
+  console.error("--channel must be r, g or b");
+  process.exit(2);
+}
 // Lossless is worth paying for only where there is something to preserve: see
 // the note above. An albedo is never encoded lossless - it is a picture.
 // EXR, PNG and TIFF are lossless sources; JPEG is not (see above).
@@ -109,6 +135,9 @@ const r = spawnSync(
   [
     resolve(input),
     ...(colour ? [] : ["-set", "colorspace", "sRGB", "-alpha", "off"]),
+    // Extract the data channel into all three, so the file answers whichever
+    // channel the renderer asks for.
+    ...(scalar ? ["-channel", channel, "-separate", "+channel"] : []),
     "-resize",
     // `>` shrinks only: a 512 map authored small is not upscaled into bytes
     // that carry no more detail than it had.
@@ -126,7 +155,7 @@ const after = statSync(output).size;
 const kb = (b: number) => `${(b / 1024).toFixed(0)} KB`;
 console.log(
   `[assets] ${slot}: ${kb(before)} -> ${kb(after)} (${((after / before) * 100).toFixed(0)}%)` +
-    `  ${lossless ? "lossless" : `q${colour ? 90 : 95}`}  ${output}`,
+    `  ${lossless ? "lossless" : `q${colour ? 90 : 95}`}${scalar ? `  ${channel}->grey` : ""}  ${output}`,
 );
 console.log(`[assets] next: \`bun run assets:publish ${output}\` uploads it and prints its`);
 console.log(`[assets] TEXTURE_ASSETS map entry, sha256 included.`);

@@ -197,7 +197,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       },
       roughness: {
         file: "/textures/factory-brick-roughness.webp",
-        sha256: "a66d5b69eaa985691c7edae9425dc64e5ebad5a0f992286f5b943ca7ec0b6e22",
+        sha256: "14b4965f7d1c70dd5c879e66eeabf258c400f428fcdd7b31bafb7bc83f36303f",
       },
       // No AO and no metallic map in this set, which is ordinary: brick is a
       // dielectric, so `metalness` below says so once rather than as 4 MB of
@@ -573,6 +573,12 @@ export function surfaceName(name: string | undefined): string {
 // here rather than each doing the arithmetic.
 export function tileMetres(name: string, tileScale?: number | null): number {
   return surfaceTile(name) * (tileScale ?? 1);
+}
+
+// Is this surface a set of authored photographs rather than generated noise?
+// The tint rule below turns on it (see `surfaceOf`).
+export function isAuthoredSurface(name: string): boolean {
+  return name in TEXTURE_ASSETS;
 }
 
 export function surfaceTile(name: string): number {

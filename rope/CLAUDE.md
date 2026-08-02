@@ -1580,9 +1580,19 @@ A body whose visual section was never touched writes no `visual` key at all, so 
 
 ### Light and air
 
-`LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, background, fog colour, and a **dimensionless** `haze` 0..1.
-Dimensionless on purpose - a fog density in 1/metres would have to be scaled the *other* way by `scaleLevelData`, and designing that trap out beats commenting on it - so the whole block passes through the scaler untouched.
+`LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, and background.
+Nothing in it is a length, so the whole block passes through `scaleLevelData` untouched - and anything added should keep that property, since a fog density in 1/metres is an inverse length and would have to be scaled the *other* way, which is a trap worth designing out rather than commenting on.
 Defaults reproduce the mood the game already had: `#1f2430` is both the sky and the page's letterbox colour, so the frame is not a window cut into a different game.
+
+**There is no fog.** It was here as aerial perspective - saying which layer is further away over the ten metres of depth a level authors into - and what it also did was mute every distant surface at exactly the point where authored textures and the environment started giving those surfaces something worth seeing. Depth is said by parallax, by the sun's shadow and by the environment's own gradient instead. `THREE.FogExp2` is two lines if a level ever wants it back, and it would want to be authored per level rather than defaulted on.
+
+**There is an environment, and it is generated.** A `MeshStandardMaterial` gets its specular response from what it can reflect, so with lights alone there is nothing in the world to reflect but one directional sun: a roughness map has almost no visible effect and a metal - which is nearly all reflection - renders as a dark, dead shape. The chains hanging in the ball arena were exactly that.
+
+`equirectEnvironment` paints a small equirectangular sky from the level's OWN colours - the hemisphere's sky and ground either side of a soft horizon, plus a warm lobe where the sun is - and `PMREMGenerator` convolves it into the mip chain a rough surface samples. No asset, nothing to download, and it cannot disagree with the fog and the fill about what colour the air is. It is a **float** texture because the sun lobe is several times brighter than the sky, which is the range an LDR image cannot hold: clipped, the highlight it puts on a metal is the same white as the sky around it. Directional for the same reason - a uniform environment is indistinguishable from ambient light and puts a highlight nowhere.
+
+Image-based lighting contributes **diffuse as well as specular**, so the hemisphere fill comes down to meet it (`FILL_WITH_ENV`) rather than the two stacking: measured over the ball arena, the frame's mean brightness moves 0.1304 to 0.1353 - under 4% - while the chains go from nearly invisible to reading as forged metal. `ENV_INTENSITY` is 0.6 rather than higher because past that the dielectrics start losing the sun's directional shading, which is the contrast the fill was tuned for in the first place.
+
+`Scene3D` rebuilds it only when the authored environment actually changes (`envKey`). The lights and the fog are cheap to rebuild and the convolution is not, and the editor reconstructs its scene on every model revision - every drag - none of which changes the sky.
 
 Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
 
@@ -1596,6 +1606,10 @@ A surface comes from one of two places and a level cannot tell which, because bo
 - **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic and ambient occlusion**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo in sRGB and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
 
 That the two share a namespace is the point of the arrangement: replacing a generated surface with an authored one is **adding a manifest entry under the material's own name**, and every level already naming that material picks it up with no edit at all. An unknown name still lands on a generated surface, so a hand-edited level naming a texture this build does not have looks ordinary rather than invisible.
+
+A **scalar map's channel is not a detail**: roughness, metallic and AO are one number per texel, three.js reads them from green, blue and red respectively, and texture libraries commonly ship the number in red alone. Handing three.js the file as it arrives therefore samples an empty channel and reads 0 - and roughness 0 is a mirror, which looks exactly like the texture not being applied rather than like a channel mistake (`factory_brick`'s roughness shipped this way and was invisible until its channel means were measured). `assets:optimize-texture` flattens every scalar map to grey, and `cli assets` measures the shipped files' channel means to say it happened; a normal map is never flattened, its channels being a vector.
+
+Authored surfaces are also **not tinted by the body's fill colour**, and that exception is why the tint exists at all: it carries the flat renderer's "colour IS appearance" onto generated noise, which has no colour of its own to defend. A photographed brick does, and multiplying it by the grey somebody typed to mean "this is a wall" makes it darker, flatter and less saturated - the opposite of what the photograph was added for.
 
 An authored set is **drawn in its generated fallback until its images arrive** and then swapped into the same material object, so a level dressed in real textures is never a scene of white boxes on a slow connection, and a map that fails to load leaves that one slot generated rather than the surface missing. `roughness`, `metalness`, `normalScale` and `aoIntensity` on the set are multipliers over whatever the maps say - and with no map, they *are* the value, which is why a set with no metallic map defaults to metalness 0 rather than three's 1.
 

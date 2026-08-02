@@ -29,6 +29,7 @@
 // Then the budget itself.
 
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +201,61 @@ export function runAssetChecks(): AssetCheck[] {
         ? "up to date"
         : "out of date - run `bun run assets:credits`",
   });
+
+  // A SCALAR map (roughness, metallic, ao) is one number per texel, and which
+  // channel it is written to decides whether the renderer sees it at all:
+  // three.js reads roughness from green, metalness from blue and AO from red,
+  // while texture libraries commonly ship the number in red alone. A map that is
+  // not grey is therefore a map that answers 0 on some slot - and roughness 0 is
+  // a mirror, which reads as "the texture is not applied" rather than as a
+  // channel mistake. `assets:optimize-texture` flattens them; this is what says
+  // it actually happened.
+  //
+  // It shells out to ImageMagick, which is the same tool the pipeline needs, so
+  // the machine that ADDS an asset always runs this check for real. Where the
+  // binary is absent (a bare CI container) the check reports as much rather than
+  // claiming a pass it did not make.
+  const scalarSlots = new Set(["roughness", "metallic", "ao"]);
+  const scalarMaps: Array<[string, string]> = [];
+  for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
+    for (const [slot, map] of Object.entries(asset.maps)) {
+      if (map && scalarSlots.has(slot)) {
+        scalarMaps.push([`${key}.${slot}`, join(PUBLIC_DIR, map.file.replace(/^\//, ""))]);
+      }
+    }
+  }
+  const haveMagick = spawnSync("which", ["magick"]).status === 0;
+  if (scalarMaps.length > 0) {
+    const notGrey: string[] = [];
+    let checked = 0;
+    for (const [name, path] of scalarMaps) {
+      if (!haveMagick || !files.includes(path)) continue;
+      const out = spawnSync("magick", [
+        path,
+        "-format",
+        "%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]",
+        "info:",
+      ]);
+      if (out.status !== 0) continue;
+      const [r, g, b] = String(out.stdout).trim().split(/\s+/).map(Number);
+      checked++;
+      // Channel means rather than a per-pixel comparison: a map whose data sits
+      // in one channel differs from grey by a mile on this measure, and a lossy
+      // encode's few-LSB wobble does not.
+      if (Math.abs(r! - g!) > 0.01 || Math.abs(r! - b!) > 0.01) {
+        notGrey.push(`${name} (R ${r!.toFixed(3)} G ${g!.toFixed(3)} B ${b!.toFixed(3)})`);
+      }
+    }
+    checks.push({
+      name: "assets: scalar texture maps are grey in all three channels",
+      pass: notGrey.length === 0,
+      detail: notGrey.length
+        ? `re-run \`assets:optimize-texture --map <slot> --channel <r|g|b>\`: ${notGrey.join(", ")}`
+        : haveMagick
+          ? `${checked} of ${scalarMaps.length} scalar map(s) verified`
+          : "skipped - ImageMagick not installed, so nothing was verified",
+    });
+  }
 
   const sizes = files.map((f) => ({ file: relative(ROOT, f), bytes: statSync(f).size }));
   const total = sizes.reduce((a, s) => a + s.bytes, 0);

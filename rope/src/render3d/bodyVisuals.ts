@@ -38,7 +38,7 @@ import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath
 import { DECOR_DEPTH, DECOR_Z, decorTransform, type SceneDecor } from "../level/decor";
 import type { VisualData } from "../level/levelFormat";
 import { DEFAULT_BEVEL, extrudeOutline } from "./extrude";
-import { loadMesh, surfaceFor } from "./assets";
+import { isAuthoredSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
 import { orientTo, placeAt, threeY } from "./space";
 
 // What the level authored for one piece of one body. Assembled by `scene.ts`
@@ -118,15 +118,27 @@ function primitiveGeometry(
 }
 
 // The surface an authored entry wears: its texture set (an authored PBR set or a
-// generated one), at its tiling scale, tinted by its authored fill colour.
+// generated one), at its tiling scale and offset, tinted by its authored fill
+// colour - UNLESS the surface is an authored one.
+//
+// That exception is the whole reason the tint exists. Levels were authored for a
+// flat 2D renderer where a body's colour IS its appearance, so the 3D scene
+// keeps that colour as a tint over the generated noise, which has no colour of
+// its own worth defending (see TINT_FLOOR). A photographed brick does: its
+// albedo is the measured colour of a real wall, and multiplying it by the grey
+// somebody typed to tell a flat renderer "this is a wall" makes it darker, less
+// saturated and flatter - the exact opposite of what the photograph was added
+// for. Naming an authored texture is the author saying what this thing looks
+// like, and it outranks the stand-in.
 export function surfaceOf(spec: AuthoredVisual | undefined): THREE.MeshStandardMaterial {
+  const name = surfaceName(spec?.visual?.texture ?? spec?.material);
   return surfaceFor({
     texture: spec?.visual?.texture,
     material: spec?.material,
     tileScale: spec?.visual?.tileScale,
     offsetX: spec?.visual?.tileOffsetX,
     offsetY: spec?.visual?.tileOffsetY,
-    color: tintFor(spec?.color),
+    color: isAuthoredSurface(name) ? undefined : tintFor(spec?.color),
   });
 }
 

@@ -9,6 +9,8 @@ barrels:
 - https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88
 bulkhead lamp:
 - https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb
+pallet:
+- https://sketchfab.com/3d-models/barrels-and-pallet-da8bc019be634479a121aede1a47faab
 
 # Tileable Meshes
 red brick wall:

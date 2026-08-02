@@ -457,11 +457,11 @@ export interface NoteData {
 // level authored before this block looks exactly as it did.
 //
 // Nothing in it is a length, which is deliberate rather than lucky. A sun
-// direction is a direction, the colours are colours, and the haze is a
-// dimensionless 0..1 rather than a fog density in 1/metres - an inverse length
-// would have to be scaled the OTHER way by `scaleLevelData`, which is a trap
-// worth designing out rather than commenting on. So the whole block passes
-// through the scaler untouched.
+// direction is a direction and the colours are colours, so the whole block passes
+// through `scaleLevelData` untouched. Anything added here should keep that
+// property: a fog density in 1/metres, say, is an inverse length and would have
+// to be scaled the OTHER way, which is a trap worth designing out rather than
+// commenting on.
 export interface EnvironmentData {
   // Direction the sunlight TRAVELS, in the sim's own frame (x right, y down),
   // plus a z toward the camera. Not normalised; absent = a warm sun from the
@@ -477,13 +477,14 @@ export interface EnvironmentData {
   skyColor?: string;
   groundColor?: string;
   fillIntensity?: number;
-  // What is behind everything, and what distance fades into. Absent = the page's
-  // own background, so the 3D scene's horizon and the letterbox bars agree.
+  // What is behind everything. Absent = the page's own background, so the 3D
+  // scene's horizon and the letterbox bars agree and the frame does not read as
+  // a window cut into a different game.
+  //
+  // There is no fog here any more (see `render3d/environment.ts`): distance is
+  // said by parallax, by the sun's shadow and by the environment's own gradient
+  // rather than by muting everything behind the gameplay plane.
   backgroundColor?: string;
-  fogColor?: string;
-  // Atmospheric perspective, 0 (vacuum) .. 1 (thick). This is what makes a
-  // background layer at -20 m read as far away rather than as a small object.
-  haze?: number;
 }
 
 export interface LevelData {
