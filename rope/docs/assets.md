@@ -11,5 +11,11 @@ bulkhead lamp:
 - https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb
 
 # Tileable Meshes
-brick wall:
-- https://www.poliigon.com/texture/reclaimed-dutch-bond-brick-wall-texture/8320
+red brick wall:
+- https://polyhaven.com/a/factory_brick
+stone brick wall:
+- https://polyhaven.com/a/stone_wall_05
+rock wall:
+- https://polyhaven.com/a/rock_wall_08
+concrete with rebar:
+- https://ambientcg.com/view?id=Concrete042C
