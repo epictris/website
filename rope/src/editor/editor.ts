@@ -25,6 +25,7 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
+  chainAnchor,
   chainEnds,
   chainEndWorld,
   cloneChain,
@@ -61,6 +62,7 @@ import {
   NOTE_DEFAULT_ARROW_LENGTH,
   NOTE_DEFAULT_SIZE,
   nearestSurfaceLocal,
+  DRESSING_GIZMO,
   pickBodyOf,
   pointInBody,
   rotateGroupAbout,
@@ -1089,7 +1091,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       bodyRows.push([row, id]);
       if (!open) return;
       for (const m of members) {
-        const objRow = el("div", `ed-out-row obj ${m.object === "light" ? "light" : (m.object === "collision") ? "solid" : "decor"}`);
+        const objRow = el(
+          "div",
+          `ed-out-row obj ${
+            m.object === "light"
+              ? "light"
+              : m.object === "anchor"
+                ? "anchor"
+                : m.object === "collision"
+                  ? "solid"
+                  : "decor"
+          }`,
+        );
         const objLabel = el("span", "ed-out-label");
         objLabel.textContent = objectLabel(m, M2PX);
         objRow.append(el("span", "ed-out-twist"), objLabel);
@@ -2647,6 +2660,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Notes-layer panel. A note's whole point is its prose, so the text box leads;
   // everything below it is placement.
+  // An ANCHOR: a chain's tie point on a body. It has a placement and an id and
+  // nothing else, which is the whole of what the format gives it - so the panel
+  // is a transform, the chains it holds, and a sentence saying what it is for.
+  //
+  // (Not `BodyKind.anchor`, which is hook-only scenery. The two share the word
+  // and nothing else; they are always told apart by `object` versus `kind`.)
+  function buildAnchorsGroup(anchors: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(
+        anchors.length === 1
+          ? `Anchor #${anchors[0]!.anchorId}`
+          : `${anchors.length} anchors selected`,
+      ),
+    );
+    const held = model.chains.filter((c) =>
+      anchors.some((a) => c.a === a.id || c.b === a.id),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      anchors.length === 1
+        ? `A chain's tie point on this body. It is an object IN the body, so it rides it: moving or turning the body moves the anchor, and the chain follows without anything being re-derived. ${held.length === 1 ? "One chain" : `${held.length} chains`} tied here.`
+        : "Chain tie points. Each is an object in its body and rides it; the chains follow.";
+    g.appendChild(hint);
+
+    const num = groupNum(g, anchors);
+    addTransformFields(g, num, anchors);
+    // No fill, no material, no look: an anchor is a point. Its canvas mark is the
+    // ring its chain already draws at it, which is also the handle that drags it.
+    addGroupSection(g);
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
   function buildNotesGroup(notes: EdItem[]): void {
     const g = el("div", "ed-group");
     g.appendChild(
@@ -2850,7 +2897,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the scene layer means one layer now holds two kinds of object: a lamp and
     // its light are ONE body and a perfectly ordinary thing to select together,
     // and they still want two panels.
-    const PANELS = ["collision", "geometry", "light", "camera", "notes"] as const;
+    const PANELS = ["collision", "geometry", "light", "anchor", "camera", "notes"] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
       b.layer === "camera" ? "camera" : b.layer === "notes" ? "notes" : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
@@ -2873,6 +2920,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
       else if (k === "light") buildLightsGroup(items);
+      else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "notes") buildNotesGroup(items);
       else buildBodyGroup(items);
     }
@@ -2938,15 +2986,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   ): EdChain[] {
     const out: EdChain[] = [];
     for (const c of chains) {
-      const a = idOf.get(c.a.itemId);
-      const b = idOf.get(c.b.itemId);
+      const a = idOf.get(c.a);
+      const b = idOf.get(c.b);
       if (a === undefined || b === undefined) continue;
-      out.push({
-        ...cloneChain(c),
-        id: newBodyId(),
-        a: { ...c.a, itemId: a },
-        b: { ...c.b, itemId: b },
-      });
+      out.push({ ...cloneChain(c), id: newBodyId(), a, b });
     }
     return out;
   }
@@ -3023,7 +3066,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Nothing to do when every one of them already holds a single object.
     if (affected.length === ids.size) return;
     beginAction();
-    for (const b of affected) b.bodyId = newBodyId();
+    // An ANCHOR does not become a body of its own. A chain is bolted to a shape,
+    // and an anchor alone in a body is tied to something that builds nothing at
+    // all - the chain would simply be dropped at load. It follows the first
+    // collision object out of the body it was in, which is the shape it was
+    // bolted to in the first place.
+    const wasIn = new Map<EdItem, number>(affected.map((b) => [b, b.bodyId]));
+    const leadOf = new Map<number, number>();
+    for (const b of affected) {
+      if (b.object === "anchor") continue;
+      const id = newBodyId();
+      const old = wasIn.get(b)!;
+      if (b.object === "collision" && !leadOf.has(old)) leadOf.set(old, id);
+      b.bodyId = id;
+    }
+    for (const b of affected) {
+      if (b.object !== "anchor") continue;
+      b.bodyId = leadOf.get(wasIn.get(b)!) ?? b.bodyId;
+    }
     // The bodies that were selected no longer exist, so the selection follows
     // the objects out - leaving it pointing at retired ids would empty the panel
     // and leave the tree highlighting nothing.
@@ -3045,18 +3105,55 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // --- chains ---------------------------------------------------------------
+
+  // The next free anchor id. Unique across the LEVEL, since that is the scope a
+  // chain names its two ends in.
+  function newAnchorId(): number {
+    let next = 1;
+    for (const i of model.items) if (i.object === "anchor" && i.anchorId >= next) next = i.anchorId + 1;
+    return next;
+  }
+
+  // A fresh ANCHOR object on `host`, at a world point pushed onto that item's
+  // surface. It joins the host's BODY, which is the whole point of the anchor
+  // being an object: it rides the body from then on, with nothing to keep in
+  // step and no re-derivation at load.
+  function newAnchorOn(host: EdItem, world: Vec2): EdItem {
+    return {
+      ...host,
+      id: newBodyId(),
+      object: "anchor",
+      ownShape: true,
+      // Snapped to the surface, because that is what bolting a chain to a body
+      // means - and because an anchor in a body's interior leaves the chain's
+      // span starting inside it, which the wrap generator resolves as a
+      // self-intersection (see `nearestSurfaceLocal`).
+      pos: toWorld(host, nearestSurfaceLocal(host, world)),
+      rot: host.rot,
+      shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
+      visual: defaultVisual(),
+      cam: { ...host.cam },
+      light: { ...host.light },
+      note: { ...host.note },
+      anchorId: newAnchorId(),
+    };
+  }
+
   // String a chain between two bodies, anchored where each end was placed. A
   // chain to the body you started on (or to another piece of the same compound
   // body) is a chain tied to itself and is refused.
-  function addChain(from: EdItem, fromLocal: Vec2, to: EdItem, world: Vec2): void {
+  function addChain(from: EdItem, fromWorld: Vec2, to: EdItem, world: Vec2): void {
     if (!chainable(to)) return;
     if (to.id === from.id) return;
-    if (from.bodyId !== null && to.bodyId === from.bodyId) return;
+    if (to.bodyId === from.bodyId) return;
     beginAction();
+    const a = newAnchorOn(from, fromWorld);
+    const b = newAnchorOn(to, world);
+    model.items.push(a, b);
     const chain: EdChain = {
       id: newBodyId(),
-      a: { itemId: from.id, local: fromLocal },
-      b: { itemId: to.id, local: nearestSurfaceLocal(to, world) },
+      a: a.id,
+      b: b.id,
       length: null, // taut as drawn
       color: null,
     };
@@ -3065,11 +3162,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     markDirty();
   }
 
-  // Drop chains that no longer have two bodies to hold. Called after any item
+  // Drop chains that no longer have two anchors to hold. Called after any item
   // deletion, so a chain can never outlive what it was tied to.
   function pruneChains(): void {
-    const live = new Set(model.items.filter((i) => i.object === "collision").map((i) => i.id));
-    model.chains = model.chains.filter((c) => live.has(c.a.itemId) && live.has(c.b.itemId));
+    const live = new Set(model.items.filter((i) => i.object === "anchor").map((i) => i.id));
+    model.chains = model.chains.filter((c) => live.has(c.a) && live.has(c.b));
+  }
+
+  // The shape an anchor slides along: the first collision object in its body,
+  // which is what a chain is bolted to. A body with none cannot hold a chain at
+  // all (`chainable`), so this is null only for a body taken apart under it.
+  const anchorHost = (a: EdItem): EdItem | null =>
+    bodyMembers(model.items, a.bodyId).find((m) => m.object === "collision") ?? null;
+
+  // ...and the mirror of it: an anchor no chain names has nothing to be. They
+  // are created only by stringing a chain, so one left behind is the wreckage of
+  // a deleted chain rather than something an author placed and may want.
+  function pruneAnchors(): void {
+    const used = new Set<number>();
+    for (const c of model.chains) {
+      used.add(c.a);
+      used.add(c.b);
+    }
+    model.items = model.items.filter((i) => i.object !== "anchor" || used.has(i.id));
   }
 
   // A fresh item for the draw tool, on the active layer. Every layer's item is
@@ -3130,6 +3245,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
+      anchorId: 0,
     };
     if (t === "light") {
       // Placed with a click at a reach worth having, and a drag overrides it -
@@ -3261,11 +3377,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     beginAction();
     model.items = model.items.filter((b) => !doomed.has(b.id));
     model.chains = model.chains.filter((c) => !selectedChainIds.has(c.id));
-    // A chain whose body has just gone has nothing left to hold. There is
-    // nothing to prune about the bodies themselves: a body down to its last
-    // object is still a body, which is the state "a group of one" used to have
-    // to be cleaned up into.
+    // A chain whose anchor has just gone has nothing left to hold, and an anchor
+    // whose chain has just gone has nothing left to be - the two prunes are each
+    // other's mirror and both are needed, since either end may be what was
+    // deleted. There is nothing to prune about the bodies themselves: a body down
+    // to its last object is still a body, which is the state "a group of one"
+    // used to have to be cleaned up into.
     pruneChains();
+    pruneAnchors();
     selectedIds.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
@@ -3323,7 +3442,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }));
     const copied = new Set(sel.map((b) => b.id));
     clipboardChains = model.chains
-      .filter((c) => copied.has(c.a.itemId) && copied.has(c.b.itemId))
+      .filter((c) => copied.has(c.a) && copied.has(c.b))
       .map(cloneChain);
   }
   function pasteClipboard(): void {
@@ -3733,6 +3852,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // except a LIGHT, which is its icon rather than its reach - see
   // `lightPickRadius`.
   function hitsItem(b: EdItem, world: Vec2): boolean {
+    // An anchor is never picked as an ITEM. Its canvas presence is the ring its
+    // chain draws at it, and that ring is already a drag handle - two things
+    // answering one click, one of them an invisible 30 cm box sitting on the wall
+    // the anchor is bolted to, is how a click on a wall starts selecting
+    // something else. It is reached by its chain's handle, or by its row in the
+    // outliner.
+    if (b.object === "anchor") return false;
     if (b.object === "light") return world.distanceTo(b.pos) <= lightPickRadius(worldLine());
     return pointInBody(b, world);
   }
@@ -3938,25 +4064,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         break;
       case "chainEnd": {
         drag.cursor = world;
-        // Land on whatever body is under the pointer, so moving an end along its
-        // own body and moving it onto a different one are the same gesture.
-        const over = topmostAt(world, (b) => chainable(b));
         const c = drag.chain;
-        const other = drag.end === "a" ? c.b : c.a;
-        const otherItem = itemOf(other.itemId);
-        const sameBody =
-          over !== null &&
-          (over.id === other.itemId ||
-            (over.bodyId !== null && over.bodyId === otherItem?.bodyId));
-        if (over && !sameBody) {
-          c[drag.end] = { itemId: over.id, local: nearestSurfaceLocal(over, world) };
-        } else {
-          // Off any body (or over the one the other end already holds): slide the
-          // anchor around the body it has, so the drag never leaves the chain
-          // tied to nothing.
-          const own = itemOf(c[drag.end].itemId);
-          if (own) c[drag.end] = { itemId: own.id, local: nearestSurfaceLocal(own, world) };
-        }
+        // The end IS an anchor object, so the drag MOVES that object rather than
+        // re-pointing the chain at something else. Re-anchoring onto another body
+        // is the same act: the anchor changes which body it is in.
+        const anchor = chainAnchor(model, c[drag.end]);
+        if (!anchor) break;
+        const other = chainAnchor(model, drag.end === "a" ? c.b : c.a);
+        // Land on whatever body is under the pointer, so sliding an end along its
+        // own body and moving it onto a different one are one gesture. Over the
+        // body the OTHER end already holds, or over nothing at all, it stays on
+        // the body it has - a drag can never leave a chain tied to itself or to
+        // nothing.
+        const over = topmostAt(world, (b) => chainable(b));
+        const host = over && over.bodyId !== other?.bodyId ? over : anchorHost(anchor);
+        if (!host) break;
+        anchor.bodyId = host.bodyId;
+        anchor.rot = host.rot;
+        anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
         markDirty();
         refreshFields();
         break;
@@ -4005,12 +4130,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // click lands on the icon: a band drawn anywhere inside a lamp's pool
           // would otherwise drag in every light in the room.
           .filter((b) =>
-            b.object === "light"
-              ? b.pos.x >= box.min.x &&
-                b.pos.x <= box.max.x &&
-                b.pos.y >= box.min.y &&
-                b.pos.y <= box.max.y
-              : caught(b, box.min, box.max),
+            // An anchor is not caught on its own account, for the reason a click
+            // does not land on one: it has no canvas presence but its chain's
+            // ring. It still comes along when its BODY is caught, through
+            // `withWholeBodies` below - which is the whole point of it being an
+            // object in that body.
+            b.object === "anchor"
+              ? false
+              : b.object === "light"
+                ? b.pos.x >= box.min.x &&
+                  b.pos.x <= box.max.x &&
+                  b.pos.y >= box.min.y &&
+                  b.pos.y <= box.max.y
+                : caught(b, box.min, box.max),
           )
           .map((b) => b.id);
         // No group is ever half-caught: a band that touches one piece of a
@@ -4026,7 +4158,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A chain lands only on a body: released over empty space the gesture is
       // simply abandoned, rather than leaving one end in mid-air.
       const to = topmostAt(drag.cursor, (b) => chainable(b));
-      if (to) addChain(drag.from, drag.local, to, drag.cursor);
+      if (to) addChain(drag.from, toWorld(drag.from, drag.local), to, drag.cursor);
     }
     drag = null;
     applyToolCursor();
@@ -4435,11 +4567,13 @@ function injectStyles(): void {
      looking for a piece. */
   .ed-out-row.body { color: #cbccc6; }
   .ed-out-row.obj { color: #9aa0ac; padding-left: 14px; }
-  /* The three things an object can be, coloured as the canvas already colours
-     them: solid geometry plain, decoration teal (its dashed editor outline),
-     a light amber (it is the one furniture layer whose colour is authored). */
+  /* What an object can be, coloured as the canvas already colours it: solid
+     geometry plain, decoration teal (its dashed editor outline), a light amber
+     (it is the one furniture layer whose colour is authored), an anchor the
+     forged iron of the chain it ties. */
   .ed-out-row.obj.decor .ed-out-label { color: #6fb3a8; }
   .ed-out-row.obj.light .ed-out-label { color: #e5c07b; }
+  .ed-out-row.obj.anchor .ed-out-label { color: #9a8c7a; }
   .ed-out-twist { width: 10px; color: #6b7280; text-align: center; flex: none; }
   .ed-out-twist.live:hover { color: #cbccc6; }
   .ed-out-label { overflow: hidden; text-overflow: ellipsis; }

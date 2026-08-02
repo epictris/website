@@ -47,6 +47,7 @@ import {
   type LightObjectData,
   type SceneObjectData,
   isCollisionObject,
+  isAnchorObject,
   isGeometryObject,
   type NoteData,
   type ShapeData,
@@ -101,7 +102,7 @@ import {
 export type EdLayer = "scene" | "camera" | "notes";
 export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
 
-// What KIND of scene object an item is - the SAME three the format has, and one
+// What KIND of scene object an item is - the SAME set the format has, and one
 // editor item per authored object.
 //
 // It used to be two, with a geometry object that had no shape of its own folded
@@ -109,9 +110,15 @@ export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
 // conflation this whole refactor exists to remove, seen from the other end: a
 // barrel is a body holding a collision box and a mesh, and an editor that shows
 // it as one thing called "mesh yellow_barrel" is teaching that a body, a
-// collision shape and a model are all the same object. They are three things,
-// and the outliner has to be able to say so.
-export type EdObject = "collision" | "geometry" | "light";
+// collision shape and a model are all the same object. They are different
+// things, and the outliner has to be able to say so.
+//
+// `anchor` joined last and is the smallest of them: a point on a body that a
+// chain end ties to (`AnchorObjectData`). It is an item rather than a pair of
+// numbers on the chain for the same reason - a chain end is a thing on a body,
+// so it rides that body, shows up in the outliner, and is dragged like anything
+// else instead of only being reachable by grabbing the rope.
+export type EdObject = "collision" | "geometry" | "light" | "anchor";
 
 // `poly` vertices are metres in the item's own local frame, kept **convex** and
 // centred on their area centroid — `setPolyVerts` is the one writer, so no edit
@@ -265,6 +272,11 @@ export interface EdItem {
   light: EdLight;
   // Notes layer:
   note: EdNote;
+  // Anchor objects only: the id `ChainData` names this end by. It is PRESERVED
+  // through a load and a save rather than minted fresh each time, so a level
+  // that goes through the editor untouched comes back with the same ids it went
+  // in with - the id is content, not a handle. 0 on everything else.
+  anchorId: number;
 }
 
 // How far toward the camera this item is drawn, in metres - the editor's side of
@@ -332,20 +344,19 @@ export function setArrowEnds(item: EdItem, tail: Vec2, head: Vec2): void {
 // item's own local (unrotated) frame. Local rather than world so the anchor
 // rides its body through every move, rotate and resize - the same reason a
 // `RopeContact` is stored in its body's frame at runtime.
-export interface EdChainEnd {
-  itemId: number;
-  local: Vec2; // metres, item-local
-}
-
-// A chain strung between two geometry items (see `ChainData`). It is not an
+// A chain strung between two ANCHOR items (see `ChainData`). It is not an
 // `EdItem`: it has no shape, no placement of its own and nothing to resize -
-// everything about it is derived from the two bodies it holds - so it lives in
-// its own list and carries its own selection rather than being forced through
-// the item machinery.
+// both of its points belong to bodies - so it lives in its own list and carries
+// its own selection rather than being forced through the item machinery.
+//
+// Each end is the item id of an anchor. The anchor holds the placement, so
+// moving a chain end IS moving an object: there is no second copy of the point
+// on the chain to keep in step, and a body carrying its anchors with it needs no
+// code at all.
 export interface EdChain {
   id: number;
-  a: EdChainEnd;
-  b: EdChainEnd;
+  a: number;
+  b: number;
   // Metres. Null = exactly taut between the two anchors, re-derived at load, so
   // a chain dragged out between two bodies stays taut as they are moved.
   length: number | null;
@@ -519,7 +530,7 @@ export const LIGHT_FILL_OPACITY = 0.06;
 // Half-size of the placeholder a DRESSING carries, in metres. It has no authored
 // outline, so this is only what the editor draws and picks it by - the save
 // writes no `shape` at all.
-const DRESSING_GIZMO = 0.3;
+export const DRESSING_GIZMO = 0.3;
 
 // Keyed by what is being DRAWN rather than by the layer alone, since the scene
 // layer draws two different things: a shape starts at the body defaults and a
@@ -682,6 +693,7 @@ function fromLevelData(data: LevelData): EdModel {
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
+      anchorId: 0,
     };
     for (const o of b.objects) {
       const w = worldPlacement(b, o);
@@ -720,6 +732,25 @@ function fromLevelData(data: LevelData): EdModel {
           color: o.color ?? base.color,
           opacity: o.opacity ?? base.opacity,
           visual: edVisual(o),
+        });
+        continue;
+      }
+      if (isAnchorObject(o)) {
+        bodies.push({
+          ...base,
+          id: newBodyId(),
+          object: "anchor",
+          ownShape: true,
+          pos: w.pos,
+          rot: w.rot,
+          // A point has no size. The gizmo is what the canvas draws and what a
+          // click has to land on, and it is the same one a dressing gets.
+          shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
+          impermeable: false,
+          material: DEFAULT_MATERIAL,
+          thickness: DEFAULT_THICKNESS,
+          visual: defaultVisual(),
+          anchorId: o.id,
         });
         continue;
       }
@@ -763,6 +794,7 @@ function fromLevelData(data: LevelData): EdModel {
     },
     light: defaultLight(),
     note: defaultNote(),
+    anchorId: 0,
   }));
 // One light OBJECT as the editor item that edits it. The lights layer is a view
 // over light objects wherever they live rather than a list of its own: a light
@@ -810,6 +842,7 @@ function lightItem(
       flicker: l.flicker ?? 0,
     },
     note: defaultNote(),
+    anchorId: 0,
   };
 }
 
@@ -835,26 +868,28 @@ function lightItem(
     force: 0,
     cam: defaultCamera(),
     light: defaultLight(),
+    anchorId: 0,
     note: {
       kind: n.kind,
       text: n.text ?? "",
       size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX,
     },
   }));
-  // Chains name bodies by their index in `data.bodies`, and a body is now
-  // several items - so the anchor is tied to the body's first collision item,
-  // which is what it is actually bolted to. A chain whose index is out of range
-  // (a hand-edited file), or which names a body with nothing to hold, is dropped
-  // rather than left dangling.
+  // Chains name their two ends by ANCHOR id, and each anchor is an item above -
+  // so the whole of the conversion is looking the two up. A chain naming an
+  // anchor the level does not contain (a hand-edited file) is dropped rather
+  // than left dangling.
+  const itemOfAnchor = new Map<number, EdItem>();
+  for (const i of bodies) if (i.object === "anchor") itemOfAnchor.set(i.anchorId, i);
   const chains: EdChain[] = [];
   for (const c of data.chains ?? []) {
-    const a = itemOfBody[c.a.body];
-    const b = itemOfBody[c.b.body];
+    const a = itemOfAnchor.get(c.a);
+    const b = itemOfAnchor.get(c.b);
     if (!a || !b) continue;
     chains.push({
       id: newBodyId(),
-      a: { itemId: a.id, local: toLocal(a, new Vec2(c.a.x, c.a.y)) },
-      b: { itemId: b.id, local: toLocal(b, new Vec2(c.b.x, c.b.y)) },
+      a: a.id,
+      b: b.id,
       length: c.length ?? null,
       color: c.color ?? null,
     });
@@ -972,6 +1007,12 @@ export function toLevelData(model: EdModel): LevelData {
 
     const objects: SceneObjectData[] = [];
     for (const i of run) {
+      if (i.object === "anchor") {
+        // A placement and the id chains name it by, and nothing else - which is
+        // all an anchor is.
+        objects.push({ type: "anchor", id: i.anchorId, ...localOf(i) });
+        continue;
+      }
       if (i.object === "light") {
         const d = defaultLight();
         const spot = i.light.kind === "spot";
@@ -1066,8 +1107,9 @@ export function toLevelData(model: EdModel): LevelData {
     };
   });
 
-  // Chains name their bodies by index into the list above, so the two are
-  // derived from the same runs in the same order.
+  // Which body each item ended up in, so a chain can be refused when both of its
+  // anchors landed in one. Derived from the same runs the bodies were, in the
+  // same order.
   const bodyOfItem = new Map<number, number>();
   runs.forEach((run, i) => {
     for (const item of run) bodyOfItem.set(item.id, i);
@@ -1075,20 +1117,17 @@ export function toLevelData(model: EdModel): LevelData {
 
   const chains: ChainData[] = [];
   for (const c of model.chains) {
-    const a = model.items.find((i) => i.id === c.a.itemId);
-    const b = model.items.find((i) => i.id === c.b.itemId);
-    const ia = bodyOfItem.get(c.a.itemId);
-    const ib = bodyOfItem.get(c.b.itemId);
-    // A chain whose body has been deleted (or is no longer geometry) has nothing
-    // to hold and is simply not written. Nor has one whose two ends have ended
-    // up in the SAME body - grouping the two things a chain held together is a
-    // chain tied to itself, which the loader would drop anyway.
-    if (!a || !b || ia === undefined || ib === undefined || ia === ib) continue;
-    const wa = toWorld(a, c.a.local);
-    const wb = toWorld(b, c.b.local);
+    const a = model.items.find((i) => i.id === c.a);
+    const b = model.items.find((i) => i.id === c.b);
+    // A chain whose anchor has been deleted has nothing to hold and is simply
+    // not written. Nor has one whose two anchors have ended up in the SAME body
+    // - merging the two things a chain held together is a chain tied to itself,
+    // which the loader would drop anyway.
+    if (a?.object !== "anchor" || b?.object !== "anchor") continue;
+    if (bodyOfItem.get(a.id) === bodyOfItem.get(b.id)) continue;
     chains.push({
-      a: { body: ia, x: wa.x, y: wa.y },
-      b: { body: ib, x: wb.x, y: wb.y },
+      a: a.anchorId,
+      b: b.anchorId,
       // Omitted = taut between the anchors, which the loader re-derives.
       ...(c.length !== null ? { length: c.length } : {}),
       ...(c.color !== null ? { color: c.color } : {}),
@@ -1382,6 +1421,10 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
     const reach = item.shape.kind === "circle" ? ` ${n(item.shape.r)}` : "";
     return `${item.light.kind}${reach}`;
   }
+  // NOT `BodyKind.anchor`, which is hook-only scenery and an entirely different
+  // thing that happens to share the word. This is a chain's tie point; the two
+  // are always distinguished by `object` versus `kind`.
+  if (item.object === "anchor") return `anchor ${item.anchorId}`;
   if (item.layer === "notes") return item.note.kind === "arrow" ? "arrow" : "text";
   if (item.layer === "camera") return "region";
   const form =
@@ -1493,7 +1536,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
 // --- chains -----------------------------------------------------------------
 
 export function cloneChain(c: EdChain): EdChain {
-  return { ...c, a: { ...c.a }, b: { ...c.b } };
+  return { ...c };
 }
 
 // A world point pushed onto the item's own surface, returned in the item's local
@@ -1509,10 +1552,18 @@ export function nearestSurfaceLocal(item: EdItem, world: Vec2): Vec2 {
   return nearestOnOutline(localVertices(item), local);
 }
 
-// Where a chain end currently sits in the world, or null if its item is gone.
-export function chainEndWorld(model: EdModel, end: EdChainEnd): Vec2 | null {
-  const item = model.items.find((i) => i.id === end.itemId);
-  return item ? toWorld(item, end.local) : null;
+// Where a chain end currently sits in the world, or null if its anchor is gone.
+// It is simply the anchor's own position: the anchor IS the end, so there is no
+// second copy of the point to keep in step with it.
+export function chainEndWorld(model: EdModel, end: number): Vec2 | null {
+  const item = model.items.find((i) => i.id === end);
+  return item?.object === "anchor" ? item.pos : null;
+}
+
+// The anchor item a chain end names, or null.
+export function chainAnchor(model: EdModel, end: number): EdItem | null {
+  const item = model.items.find((i) => i.id === end);
+  return item?.object === "anchor" ? item : null;
 }
 
 // Both ends in the world, or null if either item is gone (a chain in that state
@@ -1569,6 +1620,7 @@ export function emptyModel(): EdModel {
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),
+        anchorId: 0,
       },
     ],
   };

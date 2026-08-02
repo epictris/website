@@ -32,8 +32,13 @@ import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
-import type { BuiltBodies } from "./buildBodies";
-import { type ChainData, type LevelData } from "./levelFormat";
+import { worldPlacement, type BuiltBodies } from "./buildBodies";
+import {
+  isAnchorObject,
+  type AnchorObjectData,
+  type ChainData,
+  type LevelData,
+} from "./levelFormat";
 
 // The wrap-candidate list a chain solves against: nothing. Its two anchor bodies
 // are already the ends of every span, and `Rope.regeneratePath` never wraps a
@@ -393,25 +398,53 @@ function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
 }
 
 // Build every chain in `data` (metres) against the bodies `buildLevelBodies`
-// made. A chain naming a body index that built nothing - decoration, a lone
-// light, an index past the end - or naming the same body at both ends (which has
-// nothing to constrain) is dropped rather than fed to a solver that has no
+// made. A chain naming an anchor that is not in the level, or one on a body that
+// built nothing (decoration, a lone light), or the same body at both ends (which
+// has nothing to constrain) is dropped rather than fed to a solver that has no
 // meaning for it.
 export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChain[] {
+  // Every anchor in the level, by id. A chain names its two ends and nothing
+  // else - which body an end is on is a question about where its anchor lives,
+  // and this is where that is answered once for the whole list rather than by
+  // scanning the bodies per chain.
+  const anchors = new Map<number, AnchorSite>();
+  for (const b of built.bodies) {
+    for (const o of b.data.objects) {
+      if (!isAnchorObject(o)) continue;
+      // First id wins. Ids are unique by construction, and a file that has been
+      // hand-edited into a collision gets the earlier anchor rather than a
+      // silently-last-one-wins that depends on body order.
+      if (!anchors.has(o.id)) anchors.set(o.id, { built: b, anchor: o });
+    }
+  }
   const chains: SceneChain[] = [];
   for (const c of data.chains ?? []) {
-    const chain = buildOne(c, built);
+    const chain = buildOne(c, anchors);
     if (chain) chains.push(chain);
   }
   return chains;
 }
 
-function buildOne(c: ChainData, built: BuiltBodies): SceneChain | null {
-  const objA = built.bodies[c.a.body]?.body ?? null;
-  const objB = built.bodies[c.b.body]?.body ?? null;
+// An anchor and the body it is on, which is the pair every chain end resolves to.
+interface AnchorSite {
+  readonly built: BuiltBodies["bodies"][number];
+  readonly anchor: AnchorObjectData;
+}
+
+function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | null {
+  const siteA = anchors.get(c.a);
+  const siteB = anchors.get(c.b);
+  if (!siteA || !siteB) return null;
+  const objA = siteA.built.body;
+  const objB = siteB.built.body;
   if (!objA || !objB || objA === objB) return null;
-  const worldA = snapToSurface(objA, new Vec2(c.a.x, c.a.y));
-  const worldB = snapToSurface(objB, new Vec2(c.b.x, c.b.y));
+  // The anchor is placed in its BODY's frame, so its world point is the body's
+  // transform applied to it - the same `worldPlacement` every other object goes
+  // through. The surface snap that follows is unchanged: an anchor left in a
+  // body's interior leaves the chain's span starting INSIDE that body, and the
+  // wrap generator resolves that as a self-intersection.
+  const worldA = snapToSurface(objA, worldPlacement(siteA.built.data, siteA.anchor).pos);
+  const worldB = snapToSurface(objB, worldPlacement(siteB.built.data, siteB.anchor).pos);
   // Absent length = exactly taut as authored, which is what dragging a chain out
   // between two bodies in the editor means - measured between the anchors as
   // they actually land, so "taut" is taut.

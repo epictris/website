@@ -438,10 +438,38 @@ export interface LightObjectData extends ObjectPlacement {
   flicker?: number;
 }
 
+// A named point ON a body, and the only thing a chain end ties to.
+//
+// It exists because a chain is the one thing in a level that is a RELATION
+// rather than a part: it belongs to no single body, so it cannot nest, and it
+// used to say which bodies it held by INDEX into `LevelData.bodies` plus a pair
+// of world coordinates. Both halves were the odd ones out - every other
+// reference in this file is body-relative, and an index means reordering the
+// body list silently re-ties every chain in the level.
+//
+// Splitting it puts each half where it belongs. The PLACEMENT nests: an anchor
+// is a scene object in its body's own frame, so it rides that body the way a
+// light or a mesh does, and moving or turning the body moves its anchors with it
+// rather than needing them re-derived. The RELATION stays top-level, where a
+// relation belongs, and names anchors by an id that nothing about list order can
+// disturb.
+//
+// It also makes a chain end VISIBLE: an anchor is a row in the outliner and an
+// object that can be selected and dragged like any other, where before it was a
+// pair of numbers reachable only by grabbing the rope that ran to it.
+export interface AnchorObjectData extends ObjectPlacement {
+  type: "anchor";
+  // Unique across the LEVEL rather than the body - a chain names its two ends
+  // with nothing else to disambiguate them. `rot` comes with the placement and
+  // is carried for uniformity; an anchor is a point and nothing reads it.
+  id: number;
+}
+
 export type SceneObjectData =
   | CollisionObjectData
   | GeometryObjectData
-  | LightObjectData;
+  | LightObjectData
+  | AnchorObjectData;
 
 export interface LevelBodyData {
   // What this body IS, physically. Consulted only when the body has at least one
@@ -498,6 +526,10 @@ export function isLightObject(o: SceneObjectData): o is LightObjectData {
   return o.type === "light";
 }
 
+export function isAnchorObject(o: SceneObjectData): o is AnchorObjectData {
+  return o.type === "anchor";
+}
+
 // Does this body take part in the simulation at all? One predicate, so "is this
 // drawn only" is asked the same way by the builder, both renderers and the
 // editor rather than being spelled out per call site.
@@ -513,29 +545,49 @@ export function collides(b: LevelBodyData): boolean {
 // holds. A foreground chain's span additionally wraps scene geometry through the
 // ordinary solver, so a chain laid over a corner catches on it.
 //
-// The anchor points are authored in WORLD coordinates (scene pixels on disk),
-// not in the body's local frame: a body's ENGINE origin is its combined centre
-// of mass, which moves as collision objects are added, and a world point is what
-// the editor actually has under the pointer. `buildSceneChains` converts each
-// into the engine body's local frame once, at load.
-export interface ChainAnchorData {
-  // Index into `LevelData.bodies` of the body this end is tied to. A chain tied
-  // to the same body at both ends has nothing to constrain, so the editor
-  // refuses it and the loader drops it.
-  body: number;
-  x: number;
-  y: number;
-}
-
+// Each end names an ANCHOR OBJECT (`AnchorObjectData`) by id, and that is the
+// whole of the reference: which body an end is tied to is a question about where
+// that anchor lives, which the body containing it already answers. A chain is
+// therefore the only thing in a level that is a relation and nothing else - no
+// placement of its own, because both of its points belong to bodies.
+//
+// It used to name a body by INDEX and carry a pair of WORLD coordinates, which
+// went wrong in both halves: reordering the body list re-tied every chain, and a
+// world anchor had to be re-derived against the body's surface at load rather
+// than simply riding it. See `AnchorObjectData` for the split.
 export interface ChainData {
-  a: ChainAnchorData;
-  b: ChainAnchorData;
+  // Anchor ids. A chain whose two anchors are in the same body has nothing to
+  // constrain, so the editor refuses it and the loader drops it - as it does one
+  // naming an anchor that is not there, or one in a body that builds nothing.
+  a: number;
+  b: number;
   // Chain length. Absent = the distance between the two anchor points as
   // authored, i.e. a chain that starts exactly taut.
   length?: number;
   // Optional appearance. Absent = the renderer's own chain colours (the same
   // forged-iron links the ball & chain hangs on).
   color?: string;
+}
+
+// The retired form, as every level on disk still carries it: a body INDEX and a
+// WORLD point per end. `normalizeLevelData` turns each end into an anchor object
+// on the body it named, placed in that body's frame, and rewrites the chain to
+// name the two anchors.
+export interface LegacyChainAnchorData {
+  body: number;
+  x: number;
+  y: number;
+}
+
+export interface LegacyChainData {
+  a: LegacyChainAnchorData;
+  b: LegacyChainAnchorData;
+  length?: number;
+  color?: string;
+}
+
+export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainData {
+  return typeof c.a === "object";
 }
 
 // Default framing of a camera region: no offset, unchanged viewport, no lock.
@@ -829,7 +881,7 @@ export interface RawLevelData {
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
   notes?: NoteData[];
-  chains?: ChainData[];
+  chains?: (ChainData | LegacyChainData)[];
   environment?: EnvironmentData;
 }
 
@@ -961,7 +1013,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
   const panels = raw.backgrounds ?? [];
   const lights = raw.lights ?? [];
   if (!legacyBodies && panels.length === 0 && lights.length === 0) {
-    return { ...raw, bodies: (raw.bodies as LevelBodyData[]).map(withGeometryTwin) };
+    return finish(raw, raw.bodies as LevelBodyData[], (i) => i);
   }
 
   const bodies: LevelBodyData[] = [];
@@ -1082,14 +1134,101 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
     });
   }
 
-  const chains = raw.chains?.map((c) => ({
-    ...c,
-    a: { ...c.a, body: bodyOfEntry[c.a.body] ?? c.a.body },
-    b: { ...c.b, body: bodyOfEntry[c.b.body] ?? c.b.body },
-  }));
+  // A retired chain names its bodies by ENTRY index, and several entries of one
+  // group became one body - which is what a group always meant and what the chain
+  // list could not say - so the ends are renumbered onto the emitted bodies
+  // before they are turned into anchors.
+  return finish(raw, bodies, (i) => bodyOfEntry[i] ?? i);
+}
 
-  const { backgrounds: _panels, lights: _lights, ...rest } = raw;
-  return { ...rest, bodies: bodies.map(withGeometryTwin), ...(chains ? { chains } : {}) };
+// The two gates every level passes through however it got here, and the one
+// place the result is assembled. Both are migrations from a default that no
+// longer exists, and both have to run on a file already in the nested form - a
+// level saved yesterday is exactly as legacy as one saved last year, in the only
+// sense that matters.
+function finish(
+  raw: RawLevelData,
+  bodies: LevelBodyData[],
+  bodyOf: (entry: number) => number,
+): LevelData {
+  const withTwins = bodies.map(withGeometryTwin);
+  const added = new Map<number, AnchorObjectData[]>();
+  const chains = withChainAnchors(withTwins, added, raw.chains, bodyOf);
+  // The anchors are folded in by COPYING the bodies that gained one. Pushing
+  // them into `body.objects` instead reaches back through `raw` and edits the
+  // caller's level in place: for a file already in the nested form the bodies
+  // here ARE the input's, so a second load found the anchors of the first and
+  // added another set beside them.
+  const out = withTwins.map((b, i) => {
+    const extra = added.get(i);
+    return extra ? { ...b, objects: [...b.objects, ...extra] } : b;
+  });
+  const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
+  return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
+}
+
+// Retired chain ends into anchor objects. Each end named a body by index and a
+// point in WORLD space; it becomes an anchor object on that body, placed in the
+// body's own frame, and the chain is rewritten to name the two anchors by id.
+//
+// The anchors it creates are collected into `added`, keyed by body index, for
+// the caller to fold in - see `finish`, and the bug that rule is written
+// against. They belong at the END of their body's object list: a body's
+// collision objects build its shapes in authored order, an anchor is not one of
+// them, and appending is what keeps the world the sim sees bit-identical.
+//
+// A chain whose body index is out of range keeps a dangling id, which
+// `buildSceneChains` drops exactly as it dropped an out-of-range index.
+function withChainAnchors(
+  bodies: readonly LevelBodyData[],
+  added: Map<number, AnchorObjectData[]>,
+  chains: (ChainData | LegacyChainData)[] | undefined,
+  bodyOf: (entry: number) => number,
+): ChainData[] | undefined {
+  if (!chains) return undefined;
+  if (!chains.some(isLegacyChain)) return chains as ChainData[];
+  // Ids continue past whatever the file already uses, so a level part-way
+  // through the migration (hand-edited, or half-converted) cannot collide.
+  let next = 1;
+  for (const b of bodies) {
+    for (const o of b.objects) if (isAnchorObject(o) && o.id >= next) next = o.id + 1;
+  }
+  const anchorFor = (end: LegacyChainAnchorData): number => {
+    const index = bodyOf(end.body);
+    const body = bodies[index];
+    const id = next++;
+    if (!body) return id;
+    // Into the body's OWN frame, which is what every other object's placement is
+    // measured in. The inverse of `worldPlacement`, and deliberately written as
+    // its mirror image so the two cannot drift.
+    const cos = Math.cos(-body.rot);
+    const sin = Math.sin(-body.rot);
+    const dx = end.x - body.x;
+    const dy = end.y - body.y;
+    const x = dx * cos - dy * sin;
+    const y = dx * sin + dy * cos;
+    const list = added.get(index) ?? [];
+    list.push({
+      type: "anchor",
+      id,
+      // Absent means zero, which is the rule every placement here is written
+      // under: an anchor on the body's own origin says nothing at all.
+      ...(x !== 0 ? { x } : {}),
+      ...(y !== 0 ? { y } : {}),
+    });
+    added.set(index, list);
+    return id;
+  };
+  return chains.map((c) =>
+    isLegacyChain(c)
+      ? {
+          a: anchorFor(c.a),
+          b: anchorFor(c.b),
+          ...(c.length !== undefined ? { length: c.length } : {}),
+          ...(c.color !== undefined ? { color: c.color } : {}),
+        }
+      : c,
+  );
 }
 
 // Drawing is a GEOMETRY object's job, and collision is a collision object's. A
@@ -1290,6 +1429,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.thickness !== undefined ? { thickness: o.thickness * factor } : {}),
     };
   }
+  // An anchor is a placement and an id, and an id is not a length.
+  if (o.type === "anchor") return { type: "anchor", id: o.id, ...placed };
   if (o.type === "light") {
     return {
       type: "light",
@@ -1380,11 +1521,12 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(n.text !== undefined ? { text: n.text } : {}),
     ...(n.size !== undefined ? { size: n.size * factor } : {}),
   }));
-  // A chain's anchor points and its length are lengths; the body indices and
-  // the colour are not.
+  // A chain's LENGTH is a length; its two anchor ids and its colour are not. The
+  // anchor POINTS are no longer here at all - they are objects on their bodies
+  // and scale with every other placement, through `scaleObject`.
   const chains = data.chains?.map((c) => ({
-    a: { body: c.a.body, x: c.a.x * factor, y: c.a.y * factor },
-    b: { body: c.b.body, x: c.b.x * factor, y: c.b.y * factor },
+    a: c.a,
+    b: c.b,
     ...(c.length !== undefined ? { length: c.length * factor } : {}),
     ...(c.color !== undefined ? { color: c.color } : {}),
   }));

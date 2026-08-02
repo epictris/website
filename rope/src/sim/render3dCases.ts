@@ -45,6 +45,7 @@ import {
   isLightObject,
   type LevelData,
   isCollisionObject,
+  isAnchorObject,
   isGeometryObject,
   normalizeLevelData,
   type GeometryObjectData,
@@ -1255,9 +1256,91 @@ function renderNeedsGeometry(): CaseResult[] {
   ];
 }
 
+// A chain end is an ANCHOR OBJECT on a body, and the two halves of that are
+// checked here because neither fails loudly. A migration that put the anchor in
+// the wrong place gives a chain that is a few centimetres off and still swings;
+// an anchor that did not ride its body would only show once something moved.
+function chainAnchors(): CaseResult[] {
+  // A body a long way out AND turned, which is what a body-local placement gets
+  // wrong in two different ways at once.
+  const rot = Math.PI / 6;
+  const raw: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      { kind: "static", x: 0, y: 0, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 40, h: 40 } }] },
+      { kind: "rigid", x: 300, y: -120, rot, objects: [{ type: "collision", shape: { kind: "rect", w: 40, h: 40 } }] },
+    ],
+    // Authored the retired way: a body INDEX and a WORLD point per end.
+    chains: [{ a: { body: 0, x: 0, y: 0 }, b: { body: 1, x: 320, y: -100 } }],
+  };
+  const d = normalizeLevelData(raw);
+  const anchors = d.bodies.flatMap((b) =>
+    b.objects.filter(isAnchorObject).map((o) => ({ body: b, anchor: o })),
+  );
+  const chain = d.chains![0]!;
+  // Two anchors, one per body, and the chain names them rather than the bodies.
+  const shaped =
+    anchors.length === 2 &&
+    typeof chain.a === "number" &&
+    chain.a === anchors[0]!.anchor.id &&
+    chain.b === anchors[1]!.anchor.id;
+  // ...and the placement survives the trip into the body's frame. The end
+  // authored at world (320, -100) has to resolve back to exactly that, which is
+  // the half a rotated body is what tests at all.
+  const back = worldPlacement(anchors[1]!.body, anchors[1]!.anchor).pos;
+  const placed = Math.abs(back.x - 320) < 1e-9 && Math.abs(back.y - -100) < 1e-9;
+  // ...and it RIDES. Turn the body another quarter turn and the anchor's world
+  // point turns with it, with nothing re-derived and nothing else touched.
+  const turned = { ...anchors[1]!.body, rot: rot + Math.PI / 2 };
+  const after = worldPlacement(turned, anchors[1]!.anchor).pos;
+  const before = back.sub(new Vec2(anchors[1]!.body.x, anchors[1]!.body.y));
+  const want = before.rotated(Math.PI / 2).add(new Vec2(turned.x, turned.y));
+  const rode = after.distanceTo(want) < 1e-9;
+  // Loading twice must not mint a second pair. The gate rewrites the chain to
+  // the new form, so the second pass has nothing legacy left to convert -
+  // getting this wrong doubled the anchors of the real level on every save.
+  const twice = normalizeLevelData(d);
+  const stable = twice.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).length === 2;
+  // The same, through the EDITOR, which is where the anchors have to survive as
+  // objects and the chain as a pair of ids.
+  const round = modelToDisk(modelFromDisk(raw));
+  const kept =
+    round.chains?.length === 1 &&
+    round.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).length === 2;
+
+  return [
+    {
+      name: "chains: a retired chain end becomes an anchor object the chain names by id",
+      pass: shaped,
+      detail: shaped ? `2 anchors, chain ${chain.a} → ${chain.b}` : JSON.stringify(chain),
+    },
+    {
+      name: "chains: the anchor lands exactly where it was authored in world space",
+      pass: placed,
+      detail: placed ? "(320, -100) through a body turned 30°" : `(${back.x.toFixed(6)}, ${back.y.toFixed(6)})`,
+    },
+    {
+      name: "chains: and rides its body from then on, with nothing re-derived",
+      pass: rode,
+      detail: rode ? "turned with the body" : `off by ${after.distanceTo(want).toFixed(6)} m`,
+    },
+    {
+      name: "chains: loading a migrated level again mints no second pair of anchors",
+      pass: stable,
+      detail: stable ? "2 anchors, unchanged on a second pass" : `${twice.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).length} anchors`,
+    },
+    {
+      name: "chains: anchors and the chain that names them survive the editor round trip",
+      pass: kept,
+      detail: kept ? "2 anchors, 1 chain" : JSON.stringify(round.chains),
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...renderNeedsGeometry(),
+    ...chainAnchors(),
     ...cameraCorrespondence(),
     ...blendStability(),
     ...extrusionGeometry(),

@@ -1258,7 +1258,7 @@ It used to be its own thing entirely - a `backgrounds` list beside the bodies, o
 The argument was right about the danger and wrong about the remedy.
 A shape that is never **built** is excluded from everything by construction: `buildLevelBodies` drops non-colliding entries before they become `Piece`s, so there is no collision shape, no `World` membership, no mass and no vertex the rope can wrap - the exclusion IS the absence, and there is no call site left to remember.
 What that buys is that decoration stops being a second kind of thing with a second set of tools: it is drawn, picked, dragged, rotated, rubber-banded, put in a body, copied, undone and textured by exactly the code every wall goes through, and a wall becomes a backdrop (or back) by unticking a box rather than by being re-drawn on another layer.
-Levels on disk still carry the retired list; `normalizeLevelData` folds it into non-colliding bodies at the one gate every level passes through, writing out the panel list's own default fill explicitly so decoration cannot quietly turn grey on load, and **appending** rather than prepending because `ChainData` names bodies by index.
+Levels on disk still carry the retired list; `normalizeLevelData` folds it into non-colliding bodies at the one gate every level passes through, writing out the panel list's own default fill explicitly so decoration cannot quietly turn grey on load, and **appending** rather than prepending because a retired `ChainData` still named bodies by index at the point that migration ran.
 
 Two rules make it read as decoration, and they are load-bearing rather than cosmetic (`render/decor.ts` is the single implementation of both, shared by the editor and both game renderers, so what is authored is what plays):
 
@@ -1415,15 +1415,35 @@ Still open there: a hard jam ends 15 s at ~1 m/s rather than at rest, and `energ
 The chain's correction is part rotation and the push-out that answers it is a translation, so the difference is credit nothing takes back - the same fight one derivative up.
 An angular push-out is what that wants, and it belongs with the ball's phase, which has the identical hole.
 
-Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a body's ENGINE origin is a centre of mass that moves as collision objects are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
+#### Anchors
+
+A chain end is an **anchor object** on a body (`AnchorObjectData`), and a chain names its two ends by anchor **id** (`ChainData`) and carries nothing else.
+That split is the point: a chain is the one thing in a level that is a **relation** rather than a part, so it belongs to no body and cannot nest - but each of its two *points* does belong to one, and nests like any other object.
+
+It replaced a body **index** plus a pair of **world** coordinates per end, which was wrong in both halves.
+An index made body order load-bearing: the legacy migration had to renumber every chain when several grouped entries collapsed into one body (`bodyOfEntry`), and any future reordering would silently re-tie the level.
+A world point had to be re-derived against its body at load rather than simply riding it - the same defect body-relative object placement had already fixed everywhere else.
+Now the anchor **is** the end: moving a body moves its anchors, turning it turns them, and there is no second copy of the point anywhere to keep in step.
+
+`normalizeLevelData` converts the retired form at the one gate every level passes through - each end becomes an anchor object on the body it named, placed in that body's frame (the exact mirror of `worldPlacement`), and the chain is rewritten to name the two ids.
+Anchors are **appended** to their body's object list, which is what keeps it bit-identical: collision objects build a body's shapes in authored order and an anchor is not one of them.
+The anchors are folded in by **copying** the bodies that gained one, never by pushing into `body.objects` - for a file already in the nested form those arrays *are* the caller's, and mutating them made a second load find the first load's anchors and add another set beside them.
+
+In the editor an anchor is an ordinary `EdItem` with `object: "anchor"`: a row in the outliner, a panel of its own, and a member of its body, so a body drag, nudge, rotate, duplicate or paste carries it with no special case.
+It is deliberately **not** pickable on the canvas (`hitsItem`) and not caught by a rubber band on its own account - its canvas presence is the ring its chain already draws at it, and that ring is already the drag handle; an invisible 30 cm box sitting on the wall it is bolted to would just steal clicks meant for the wall.
+`pruneChains` and `pruneAnchors` are mirrors and both run on delete, since either end may be what was deleted; `splitIntoBodies` sends an anchor out with its body's **first collision object** rather than into a body of its own, which would leave the chain tied to something that builds nothing.
+`EdItem.anchorId` is preserved through a load and a save rather than minted fresh, because the id is content: a level that goes through the editor untouched comes back naming the same anchors.
+
+(Not to be confused with `BodyKind.anchor`, which is hook-only scenery. The two share the word and nothing else, and are always told apart by `object` versus `kind`.)
+
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
 That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.
 The loader applies the same rule rather than trusting the file, so a hand-edited level cannot author the degenerate case either.
 
 `length` absent means **taut** between the two anchors as they land, re-derived at load, which is what dragging one out gives; the inspector's `length` field authors slack, with a live readout of how much.
-A chain naming the same engine body at both ends (two members of one compound group, say) is refused in the editor and dropped at load - it has nothing to constrain.
+A chain whose two anchors are in the same body (merged together, say) is refused in the editor and dropped at load - it has nothing to constrain - as is one naming an anchor the level does not contain.
 Chains carry their own selection, exclusive with the item selection: a chain has no shape, no placement and no properties in common with an item, so a mixed selection would have nothing an inspector panel could say about it.
-They are picked by a screen-space band around their span and edited by two round endpoint handles; dragging one lands it on whatever body is under the pointer, so moving an anchor along its own body and moving it to a different one are the same gesture.
+They are picked by a screen-space band around their span and edited by two round endpoint handles; dragging one **moves the anchor object**, and re-anchoring onto another body is the same act said differently - the anchor changes which body it is in - so sliding an end along its own body and moving it to a different one are one gesture.
 In game they draw with the same forged links the ball & chain hangs on, laid along the wrap path and resolved against the render transforms; the editor draws them **straight**, because a span between wrap nodes *is* straight and a guessed sag would be a drawing of something the level does not contain.
 
 Links are laid by **one continuous arc length** measured from the anchor end (`drawChainPolyline`), never per span.
@@ -1619,7 +1639,7 @@ Areas stay on the 2D overlay in both modes, and so does the hook-only grate: a k
 
 ### Bodies and scene objects
 
-A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a piece of 3D geometry, or a light. Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
+A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a piece of 3D geometry, a light, or a chain **anchor**. Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
 
 That shape replaced three separate mechanisms at once, and each of them was working around the same missing thing:
 
