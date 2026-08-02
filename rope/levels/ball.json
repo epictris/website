@@ -878,6 +878,7 @@
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
+      "thickness": 50,
       "visual": {
         "texture": "stone"
       }

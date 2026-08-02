@@ -2,5 +2,10 @@ node_modules
 dist
 .git
 *.md
-scripts
 playtests
+# `scripts/` is NOT excluded, though it is all dev tooling: the build runs
+# `assets:fetch` from it (see the Dockerfile) to pull the 3D props, which are not
+# in git. It costs nothing in the shipped image - the runner stage copies only
+# `dist/`, so everything here is discarded with the builder.
+assets-src
+public/meshes
