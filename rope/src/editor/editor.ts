@@ -1029,8 +1029,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
+    for (const [row, id] of chainRows) {
+      const on = selectedChainIds.has(id);
+      row.classList.toggle("sel", on);
+      if (on && !first) first = row;
+    }
     const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
-    const key = `${bodyKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
+    const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
+    const key = `${bodyKey}|${chainKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
     if (key === outlinerSelKey) return;
     outlinerSelKey = key;
     first?.scrollIntoView({ block: "nearest" });
@@ -1040,12 +1046,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the body's for a body row.
   const outlinerRows: Array<[HTMLElement, number[]]> = [];
   // Body rows are highlighted by the BODY selection rather than by the item one,
-  // since the two are different selections.
+  // since the two are different selections. Chain rows are a third, for the same
+  // reason: a chain has its own selection because it has nothing an item panel
+  // could say about it.
   const bodyRows: Array<[HTMLElement, number]> = [];
+  const chainRows: Array<[HTMLElement, number]> = [];
 
   function buildOutliner(): void {
     outlinerRows.length = 0;
     bodyRows.length = 0;
+    chainRows.length = 0;
     outlinerBody.innerHTML = "";
     const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
     outlinerTitle.textContent = `Bodies (${runs.length})`;
@@ -1114,6 +1124,47 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         outlinerRows.push([objRow, [m.id]]);
       }
     });
+
+    // CHAINS, after the bodies and not inside any of them - which is exactly what
+    // a chain is. Its two anchors are objects and appear under their own bodies
+    // above; the chain itself belonged to neither, so before this it was the one
+    // thing in a level with no row at all and could only be found by clicking the
+    // rope on the canvas.
+    if (!model.chains.length) return;
+    const head = el("div", "ed-out-row head");
+    head.append(el("span", "ed-out-twist"), el("span", "ed-out-label"));
+    head.lastElementChild!.textContent = `Chains (${model.chains.length})`;
+    outlinerBody.appendChild(head);
+    // Named by the two BODIES they hold, which is what a chain is read as - "the
+    // one between the winch and the gate" - rather than by ids nothing else
+    // shows. The index is the body's outliner number, so the name says where to
+    // look.
+    const indexOfBody = new Map<number, number>();
+    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
+    const endLabel = (end: number): string => {
+      const anchor = chainAnchor(model, end);
+      if (!anchor) return "?";
+      const i = indexOfBody.get(anchor.bodyId);
+      return i === undefined ? "?" : `${i}`;
+    };
+    for (const c of model.chains) {
+      const row = el("div", "ed-out-row obj chain");
+      const label = el("span", "ed-out-label");
+      label.textContent = `${endLabel(c.a)} ↔ ${endLabel(c.b)}`;
+      row.append(el("span", "ed-out-twist"), label);
+      if (c.length !== null) {
+        const len = el("span", "ed-out-count");
+        len.textContent = `${Math.round(c.length * M2PX)}`;
+        row.appendChild(len);
+      }
+      row.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setChainSelection([c.id]);
+      });
+      outlinerBody.appendChild(row);
+      chainRows.push([row, c.id]);
+    }
   }
 
   // A row click, with the same Shift-to-extend rule the canvas has. It
@@ -4574,6 +4625,11 @@ function injectStyles(): void {
   .ed-out-row.obj.decor .ed-out-label { color: #6fb3a8; }
   .ed-out-row.obj.light .ed-out-label { color: #e5c07b; }
   .ed-out-row.obj.anchor .ed-out-label { color: #9a8c7a; }
+  .ed-out-row.obj.chain .ed-out-label { color: #9a8c7a; }
+  /* A section head inside the list: a chain is not in any body, so it cannot be
+     a child row, and the count belongs where the body count is. */
+  .ed-out-row.head { color: #6b7280; cursor: default; margin-top: 4px; }
+  .ed-out-row.head:hover { background: none; }
   .ed-out-twist { width: 10px; color: #6b7280; text-align: center; flex: none; }
   .ed-out-twist.live:hover { color: #cbccc6; }
   .ed-out-label { overflow: hidden; text-overflow: ellipsis; }
