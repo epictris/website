@@ -43,6 +43,7 @@ import {
   type LevelData,
   type NoteData,
   type ShapeData,
+  type VisualData,
 } from "../level/levelFormat";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
@@ -136,6 +137,11 @@ export interface EdItem {
   // pieces, and a piece brings its own material to them.
   material: MaterialName;
   thickness: number; // metres
+  // What the 3D renderer draws for this shape (see `EdVisual`). Carried on the
+  // BACKGROUND layer too, where its `offsetZ` is what turns a flat backdrop into
+  // a parallax layer; the camera and notes layers keep the default and never
+  // write it.
+  visual: EdVisual;
   force: number; // force areas only: m/s² along the item's rotation
   // Camera layer:
   cam: EdCamera;
@@ -207,6 +213,30 @@ export interface EdChain {
   color: string | null;
 }
 
+// How the 3D renderer draws this shape (see `VisualData`). Every field has a
+// value here rather than being optional, because the inspector edits a live
+// object and a `undefined` field is a control with nothing to bind to; the
+// nulls are the two fields whose default is "take it from somewhere else"
+// (`depth` from the shape's thickness, `bevel` from the extruder's own), which
+// is a real third state and not a missing value.
+//
+// Per SHAPE like `material` and `thickness`, so `syncGroupProps` leaves it
+// alone: a compound body of a stone head on a wooden shaft is two visuals on
+// one body, each riding its own piece.
+export interface EdVisual {
+  kind: "auto" | "mesh" | "none";
+  mesh: string; // manifest key; "" = none named yet
+  offset: Vec2; // metres, in the shape's own frame
+  offsetZ: number; // metres; 0 is the gameplay plane, positive toward the camera
+  rotX: number;
+  rotY: number;
+  rotZ: number;
+  scale: number; // dimensionless
+  depth: number | null; // metres; null = the shape's own thickness
+  texture: string; // texture-set key; "" = the one the material picks
+  bevel: number | null; // metres; null = the extruder's default
+}
+
 export interface EdModel {
   player: { pos: Vec2; radius: number };
   items: EdItem[];
@@ -238,6 +268,24 @@ export const defaultNote = (): EdNote => ({
   kind: "text",
   text: "",
   size: DEFAULT_NOTE_TEXT_SIZE * PX,
+});
+
+// A fresh visual is `auto` with everything defaulted, which is what every body
+// authored before the field is: the collision outline extruded and textured from
+// the material. `visualData` writes nothing at all for one in this state, so a
+// level that never touches the section stays byte-identical on disk.
+export const defaultVisual = (): EdVisual => ({
+  kind: "auto",
+  mesh: "",
+  offset: Vec2.ZERO,
+  offsetZ: 0,
+  rotX: 0,
+  rotY: 0,
+  rotZ: 0,
+  scale: 1,
+  depth: null,
+  texture: "",
+  bevel: null,
 });
 
 // Camera regions and notes are editor-only furniture — they are never drawn in
@@ -273,6 +321,50 @@ function edShape(s: ShapeData): EdShape {
   if (s.kind === "rect") return { kind: "rect", w: s.w, h: s.h };
   if (s.kind === "circle") return { kind: "circle", r: s.r };
   return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
+}
+
+// An on-disk visual, filled out into the live object the inspector edits. An
+// absent field takes the default, so a file that authored one number does not
+// come back with ten.
+export function edVisual(v: VisualData | undefined): EdVisual {
+  const d = defaultVisual();
+  if (!v) return d;
+  return {
+    kind: v.kind ?? d.kind,
+    mesh: v.mesh ?? d.mesh,
+    offset: new Vec2(v.offsetX ?? 0, v.offsetY ?? 0),
+    offsetZ: v.offsetZ ?? d.offsetZ,
+    rotX: v.rotX ?? d.rotX,
+    rotY: v.rotY ?? d.rotY,
+    rotZ: v.rotZ ?? d.rotZ,
+    scale: v.scale ?? d.scale,
+    depth: v.depth ?? null,
+    texture: v.texture ?? d.texture,
+    bevel: v.bevel ?? null,
+  };
+}
+
+// ...and back, writing ONLY what differs from the default. A body whose visual
+// section was never touched writes no `visual` key at all, which is what keeps
+// every level authored before the field byte-identical through a save - the same
+// rule `material` and `thickness` are written under.
+export function visualData(v: EdVisual): VisualData | undefined {
+  const d = defaultVisual();
+  const out: VisualData = {
+    ...(v.kind !== d.kind ? { kind: v.kind } : {}),
+    ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
+    ...(v.offset.x !== 0 ? { offsetX: v.offset.x } : {}),
+    ...(v.offset.y !== 0 ? { offsetY: v.offset.y } : {}),
+    ...(v.offsetZ !== 0 ? { offsetZ: v.offsetZ } : {}),
+    ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
+    ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
+    ...(v.rotZ !== 0 ? { rotZ: v.rotZ } : {}),
+    ...(v.scale !== d.scale ? { scale: v.scale } : {}),
+    ...(v.depth !== null ? { depth: v.depth } : {}),
+    ...(v.texture ? { texture: v.texture } : {}),
+    ...(v.bevel !== null ? { bevel: v.bevel } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 // An on-disk material name resolved to one the editor can put in its picker.
@@ -312,6 +404,7 @@ function fromLevelData(data: LevelData): EdModel {
     impermeable: b.impermeable === true,
     material: materialName(b.material),
     thickness: b.thickness ?? DEFAULT_THICKNESS,
+    visual: edVisual(b.visual),
     force: b.force ?? 0,
     cam: defaultCamera(),
     note: defaultNote(),
@@ -333,6 +426,8 @@ function fromLevelData(data: LevelData): EdModel {
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    // A panel DOES carry one: its `offsetZ` is what makes it a depth layer.
+    visual: edVisual(g.visual),
     force: 0,
     cam: defaultCamera(),
     note: defaultNote(),
@@ -352,6 +447,7 @@ function fromLevelData(data: LevelData): EdModel {
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    visual: defaultVisual(),
     force: 0,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
@@ -383,6 +479,7 @@ function fromLevelData(data: LevelData): EdModel {
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
+    visual: defaultVisual(),
     force: 0,
     cam: defaultCamera(),
     note: {
@@ -424,6 +521,14 @@ export function toLevelData(model: EdModel): LevelData {
     return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
   };
 
+  // `visual` as a spreadable fragment: absent entirely when the item's visual
+  // section was never touched, which is what keeps an old level byte-identical
+  // through a save.
+  const visualField = (i: EdItem): { visual?: VisualData } => {
+    const v = visualData(i.visual);
+    return v ? { visual: v } : {};
+  };
+
   const backgrounds: BackgroundData[] = model.items
     .filter((i) => i.layer === "background")
     .map((i) => ({
@@ -438,6 +543,9 @@ export function toLevelData(model: EdModel): LevelData {
       // Written as the same `g<id>` tag the bodies carry, so a panel and the
       // shapes it is welded to name one group (see the bodies below).
       ...(i.group !== null ? { group: `g${i.group}` } : {}),
+      // Render-only, and only if it says something. A panel's `offsetZ` is what
+      // makes it a parallax layer rather than a flat fill (see `VisualData`).
+      ...visualField(i),
     }));
 
   const cameraRegions: CameraRegionData[] = model.items
@@ -531,6 +639,8 @@ export function toLevelData(model: EdModel): LevelData {
       // of oak, so every level authored before materials stays byte-identical.
       ...(b.material !== DEFAULT_MATERIAL ? { material: b.material } : {}),
       ...(b.thickness !== DEFAULT_THICKNESS ? { thickness: b.thickness } : {}),
+      // Render-only, and only if it says something (see `visualData`).
+      ...visualField(b),
       // Only force areas carry a magnitude; omitting it elsewhere keeps saved
       // levels free of a field that would read as meaningful.
       ...(b.kind === "force" ? { force: b.force } : {}),
@@ -835,11 +945,11 @@ export function groupLead(members: readonly EdItem[]): EdItem | null {
 // the lead's onto the rest rather than letting a file disagree with what it
 // draws.
 //
-// `material` and `thickness` are deliberately NOT among them: they are per
-// shape, and a body whose pieces are made of different things is the case that
-// motivates them (a stone head on a wooden shaft). The build reads every
-// piece's own (`makePiece`), so copying the lead's would be the editor
-// overwriting authored material.
+// `material`, `thickness` and `visual` are deliberately NOT among them: they
+// are per shape, and a body whose pieces are made of different things is the
+// case that motivates them (a stone head on a wooden shaft). The build reads
+// every piece's own (`makePiece`, and `render3d/scene.ts` for the visual), so
+// copying the lead's would be the editor overwriting what was authored.
 //
 // Background members are left alone entirely: a panel is not a piece of the
 // body, it is decoration carried by it, and it has none of these properties -
@@ -927,6 +1037,7 @@ export function emptyModel(): EdModel {
         impermeable: false,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,
+        visual: defaultVisual(),
         force: 0,
         cam: defaultCamera(),
         note: defaultNote(),

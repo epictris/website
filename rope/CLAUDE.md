@@ -177,6 +177,10 @@ grey X = seam-occluded, face ticks colored by floor/wall/ceiling classification)
 arrow for the surface normal the player is currently touching (grounded/wall surface, or
 both ledge faces while hanging/climbing), colored by the same classification.
 
+`?render=2d` / `?render=3d` picks the renderer (see **3D rendering**): the ball
+level plays in 3D by default and the grapple levels stay 2D, and `?render=2d` is
+the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
+
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill).
 `LEVEL_2` is the grapple arena (the Godot-extracted scene).
@@ -682,6 +686,8 @@ bun run replay selftest                       # determinism + replay round-trip 
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
+bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, `visual` round trips
+bun run src/tools/cli.ts assets               # prop budget, LFS pointers, orphans, licences (see Prop assets)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
@@ -695,6 +701,7 @@ bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input 
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
 bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG snapshot of one frame
 bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the REAL renderer, headless
+bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
 bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
@@ -702,8 +709,8 @@ bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B th
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`corners`, `ledges`, every `playtests/*.json`, then the bundle corpus, in that
-order and under one exit code.
+`corners`, `render3d`, `assets`, `ledges`, every `playtests/*.json`, then the
+bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
 a stale marker is a lie about coverage, so the fix that closes the gap has to
@@ -877,6 +884,9 @@ launches, mover misbehavior):
    headless screenshot and tears the server down again.
    `cli shot --diff before.png after.png` gives a changed-pixel count and a
    highlight image, which is how a claim about a renderer change is evidenced.
+   `--3d` grabs the same frame through the WebGL renderer instead, which is the
+   only headless view that can see the 3D scene at all: every other one draws its
+   own picture of the sim state and is blind to the renderer by construction.
    Neither makes perceptual quality *assertable* - no number here says whether a
    settle looks convincing - they make perceptual claims cheap to evidence.
    Reach for it when the report is about what something *looks* like. The chain
@@ -1067,6 +1077,7 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
   Purely geometric wrongness - a rope through a wall, an anchor floating off a surface - replays HEALTHY (`234f`, `306f`); `cli render`/`cli chainpath` plus eyes are the only detectors.
   `cli scan` covers part of the gap (embedding depth and settled-body drift are geometric), but nothing detects a rope taking a wrong path that is still the right length.
 - **The real renderer has no automatic check.**
+  `cli render3d` covers the arithmetic the 3D scene stands on - the camera correspondence, the extrusion's winding, the `visual` round trips - but nothing at all covers what the scene *looks* like; `cli shot --3d` makes the grab one command and no more gates it than the 2D one does.
   Every CLI view draws its own picture of the sim, so a bug in the drawing itself (`1467f`) is invisible to all of them.
   `cli shot` makes the grab and the pixel diff one command each, but nothing runs them for you: a renderer change is evidenced on request, not gated.
 - **Perceptual quality has no oracle.**
@@ -1146,8 +1157,15 @@ borders always drawn fully opaque in the same colour (`DEFAULT_BODY_COLOR`/`_OPA
 `levelFormat.ts`, carried on the engine body as `fillColor`/`fillOpacity`, rendered the same
 way in editor and game via `src/render/color.ts`). Both the editor and the game render
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
+The editor gains the same stacked WebGL canvas the game page has, and a three-state **view toggle**: **2D** (exactly the editor as it was), **3D** (the scene alone, for judging how a level reads) and **3D + overlay** (the default - the scene beneath, collision outlines, handles and marquee on top with every fill dropped so the geometry stays visible through the thing describing it).
+The editor's free camera drives the same correspondence the game's does (see **3D rendering**), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
+The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies`/`buildSceneBackgrounds` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
+Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
+A **visual** section in the inspector authors `VisualData` per shape (kind, mesh, placement, depth, bevel, texture), and the two kinds that are *not* what the shape looks like - `mesh` and `none` - get a badge on the canvas, since the 2D view cannot otherwise show them at all.
+
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
+A test uses the real game render path, so it gets the 3D scene for free - drawn into the letterboxed frame rather than the whole canvas, since the bars are not part of the picture the player is shown.
 A test also plays in the game's own fixed 1920 × 1080 frame, fitted into the editor canvas and letterboxed (see **The view**): the point of ▶ Test is that the framing is what the player gets, and an editor-window-shaped view showed a different slice of the level from the one it will be played on.
 **B** is the same ball test but spawned **at the cursor**, so a corner of the level can be spot-checked without walking the spawn marker over to it and back.
 The override is baked into the `LevelData` the test level is built from rather than into the model, so it never edits the level, and a reset (and the exported P bundle) respawns at the same point.
@@ -1464,6 +1482,139 @@ A circle has no sides and a polygon's growth is a signed-distance offset with no
 
 `priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
 The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - the buffer belongs to the region currently in force, and the island became that region on entry, so the enclosing region's buffer is no longer what is holding.
+
+## 3D rendering
+
+The ball & chain is drawn in 3D (`src/render3d/`, three.js), in the style of *Getting Over It* and *A Difficult Game About Climbing*: gameplay on a single plane, a perspective camera, PBR surfaces, one warm sun with shadows, fog fading the layers behind.
+**The physics is untouched by all of it.**
+It is still 2D, still metres, still a fixed 1/60 step, still deterministic, and every replay in `playtests/` still replays bit-for-bit - the 3D renderer is a parallel consumer of exactly the interpolated state the 2D one reads (`renderPosition/renderRotation/renderShapes(alpha)`, `RopeContact.renderGlobalPosition(alpha)`), and it never writes anything the sim can see.
+
+`?render=2d` selects the old path anywhere; `?render=3d` selects the new one.
+The default is 3D for the ball level and 2D for the grapple levels, because the Player state-machine slice (its rig, its rope, its ledge overlay) is deliberately still 2D - a grapple level in 3D is a 3D world with a 2D avatar in it, which works but is not what anyone asked for yet.
+A machine with no WebGL falls back to the 2D renderer rather than to a blank page.
+
+### Two canvases, one camera
+
+The WebGL canvas sits **under** the existing 2D one, which clears transparent and keeps everything that is genuinely 2D: the debug overlay, the aim reticle, the area glyphs, the hook-only grate lattice, the FPS counter, the vignette, and in the editor the collision outlines, handles and marquee.
+`fitCanvas` sizes both from one arithmetic, so a pixel on one is a pixel on the other, and the top canvas keeps the pointer events - the scene below is drawn, never clicked.
+`overlayOnly` on `render`/`renderBall` is what drops the backdrop and the bodies from the 2D pass; it defaults **off**, so `shot.html`, `cli shot` and `cli render` are untouched.
+
+That stacking is what makes "see the collision boundary on top of the geometry it describes" free, and it stands entirely on the **camera correspondence**.
+The existing `Camera` (metres + zoom) and `CameraController` (regions, blending, locks, `viewportScale`) stay the authority; the perspective camera is derived from them every frame in `render3d/space.ts`, with **zoom becoming dolly distance**:
+
+```
+visibleHeight = camera.viewportHeight / (camera.zoom * PIXELS_PER_METER)   // metres at z = 0
+dist          = (visibleHeight / 2) / tan(fovY / 2)
+threeCam.position = (camera.position.x, -camera.position.y, dist)
+```
+
+So camera regions, blends and `viewportScale` keep working untouched, and props off the plane parallax naturally as the view zooms.
+The FOV is a narrow ~34° on purpose: the gameplay plane reads almost orthographic, so a wall at the top of the frame is barely foreshortened and the outline a level was authored against is still what the player sees, while off-plane layers still move at their own rate.
+
+The two projections agreeing is **asserted, not eyeballed**: `cli render3d` runs three.js's own projection against the 2D transform at five camera placements and through a pan, at the corners of the frame where a wrong dolly distance shows first, and holds them to a hundredth of a view pixel.
+`?probe3d=1` is the same claim made visible - a known world rect drawn as a plane in the scene and as an outline on the overlay, which must coincide at any zoom, position or mid-blend frame.
+
+### The coordinate mapping
+
+Physics is x right, y **down**, rotation clockwise-positive.
+Three is right-handed, y **up**.
+The single conversion lives in `space.ts` and nothing converts anywhere else:
+
+```
+three.position.x =  body.x
+three.position.y = -body.y
+three.position.z =  z          // 0 is the gameplay plane, +z toward the camera
+three.rotation.z = -body.rot
+```
+
+The y-negation also mirrors a polygon loop, which is why `extrude.ts` measures the loop's signed area and re-winds it: physics polygons are wound clockwise-on-screen with y down (see **Shapes**), and `ExtrudeGeometry` wants counter-clockwise in its own frame for the front cap to face the camera.
+That happens to be what the negation produces, which is a coincidence worth stating rather than relying on - `cli render3d` asserts the cap's normals.
+
+### Every body is drawn, from day one
+
+A body with **no authored visual** is drawn as its own collision outline extruded through z and textured from its `material`, centred on the gameplay plane.
+That is the default rather than a fallback, and it is the whole reason the game looked fully 3D before any asset existed: the player sees exactly what they collide with, and a level author can ship a level without ever touching a visual field.
+
+A body is a `THREE.Group` carrying the interpolated pose, with one child per collision shape at that piece's `localOffset`/`localRotation` - rigid within the body, so written **once** at build.
+The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
+
+Two rules are inherited from elsewhere rather than invented here:
+
+- A **code-built circle is a sphere and an authored one is a disc**, which is the same split `lib/shapeGeometry.ts` makes about mass (`computeMass` versus `prismMass`). Drawing them by the rule they are weighed by is what stops a 4 cm hook being drawn as a 20 cm slab.
+- An extrusion's depth is the shape's own **`thickness`**, so a body is as thick as it weighs.
+
+Authored colours are kept, but as a **tint with a brightness floor**: the levels were authored for a flat renderer where a body's colour *is* its appearance and most of them are near-black greys, so multiplying a stone texture by `#000000` leaves a hole where a wall should be. The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`, which preserves the authored ordering while leaving every surface enough albedo to show its grain and respond to the sun.
+
+Areas stay on the 2D overlay in both modes, and so does the hook-only grate: a killzone's skulls and a force area's arrows are flat marks on a region of *space*, and an anchor's lattice is what says the player passes through it (see **Area glyphs**, and "pass-through geometry must read as pass-through" in `docs/game-design.md`). Anchors do extrude, but a quarter of a metre behind the plane, so the lattice lands on the solid it belongs to.
+
+### The `visual` field
+
+`VisualData` (`levelFormat.ts`) is one optional field on `LevelBodyData` **and** on `BackgroundData`:
+
+- `kind: "auto"` (or absent) extrudes the outline; `depth`, `bevel` and `texture` override the defaults.
+- `kind: "mesh"` replaces it with a named GLTF prop from the manifest, placed by `offsetX/Y/Z`, `rotX/Y/Z` and a dimensionless `scale`.
+- `kind: "none"` draws nothing at all - an invisible wall.
+
+It is **per authored entry**, like `material`, `thickness` and `impermeable`, and for the same reason: a compound body of a stone head on a wooden shaft is two visuals on one body, each riding its own piece.
+`syncGroupProps` therefore leaves it alone.
+`BuiltBodies.shapeIndexByIndex` is what lets a visual find its piece - `byIndex` alone cannot, since several entries map to one body.
+
+Every length in it goes through `scaleVisual` both ways.
+Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely.
+A body whose visual section was never touched writes no `visual` key at all, so every level authored before the field stays byte-identical through a save.
+
+### Light and air
+
+`LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, background, fog colour, and a **dimensionless** `haze` 0..1.
+Dimensionless on purpose - a fog density in 1/metres would have to be scaled the *other* way by `scaleLevelData`, and designing that trap out beats commenting on it - so the whole block passes through the scaler untouched.
+Defaults reproduce the mood the game already had: `#1f2430` is both the sky and the page's letterbox colour, so the frame is not a window cut into a different game.
+
+Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
+
+Surfaces are keyed by the `MATERIALS` names the format already has, one shared `MeshStandardMaterial` each, so `material` alone picks a sensible surface.
+The maps are **generated** (value noise → albedo, a height-derived normal map, a roughness map from the same field) rather than loaded: this project ships no binary assets, and one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material.
+`TEXTURE_SETS` is the table to replace one entry at a time if authored PBR maps ever arrive; the UVs are already in **metres** (`extrude.ts`), so a real texture drops in with a `repeat` and nothing else moves.
+The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
+
+### Prop assets
+
+Props are `.glb` files under `public/meshes/`, stored in **Git LFS** (`.gitattributes`) so the repo's history carries pointers rather than the bytes.
+They are the only binary in a tree that otherwise generates its textures in code, which is why they carry a process the rest of the project does not need.
+
+They are also the one thing here that gets **worse silently**.
+A level renders identically whether its props are 40 KB or 6 MB, every test stays green, and what changes is how long the first frame takes and how much of the LFS bandwidth quota a month of CI spends - neither of which anybody reads off a build.
+So three things are asserted rather than advised.
+
+**A budget, in the suite.** `cli assets` holds the whole directory to **100 MB**, and any single file to **8 MB**.
+The total is set by Git LFS **bandwidth** rather than by disk: the free quota is 10 GiB/month and every CI checkout that pulls LFS objects spends the whole directory again, so the ceiling is roughly quota ÷ builds-per-month.
+100 MB at ~50 builds a month is half the quota, which leaves room for a busy month.
+Raising it is a real decision about that quota rather than a formality.
+The per-file bar is not a target to author up to - a textured prop in this game's style is well under 1 MB, and 8 MB is what catches a raw Blender export with 2k PNGs in it before that becomes the habit.
+
+**A pipeline, pinned.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
+Typically 5-10× off an unoptimised export, looking identical.
+
+Both format choices are about what has to be **paid at runtime**, and this is the trap the pipeline was written around: an optimisation that lands in a glTF's `extensionsRequired` is not a smaller read, it is a file the loader **refuses** - and the prop falls back to its placeholder box, which is a silent failure by design.
+So meshopt comes with `setMeshoptDecoder` wired into `gltfLoader()` (~25 KB, ships with three, rides the same dynamic import so a page with no props still fetches neither).
+Textures are **WebP rather than KTX2** for the same reason twice over: KTX2 needs the external `ktx` binary at build time *and* `KTX2Loader` plus its transcoder at runtime, where WebP needs neither - three.js reads it through `EXT_texture_webp` - and is within a few percent on disk.
+What KTX2 buys is staying compressed in **VRAM**, which is a decision for when there are enough props for VRAM to be the constraint rather than download size. It is not now.
+
+**Provenance, in the manifest.** `MeshAsset` requires `source` and `license`, and `cli assets` fails without them.
+The file is opaque and the licence lives on a web page nobody revisits, so a binary with no source is a liability rather than an asset - a year later "can this ship" has no answer but "delete it and remodel".
+
+`cli assets` separates four failures because they have four different fixes: an unfetched **LFS pointer** (a clone with no `git lfs` - `GLTFLoader` fails on it as a parse error deep in a dynamic import, so it is named here instead), a manifest key with no **file** (draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
+It is not part of `cli render3d`, which is deliberately pure - no GPU, no canvas, no level, and no filesystem.
+
+The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare inherits the generated surface for its `material` (`tintedSurface(spec?.visual?.texture ?? spec?.material, …)`), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import.
+
+New machine: `git lfs install` once, then `git lfs pull`. CI checks the build job out with `lfs: true`, because that checkout **is** the Docker build context.
+
+### Traps
+
+- **`PX`-sized constants do not survive projection.** A fixed on-screen size written as `<px> * PX` assumes the 2D renderer's uniform transform. Everything like that stays on the overlay, and nothing in the 3D scene may depend on `PIXELS_PER_METER` except through `space.ts`.
+- **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene.
+- **Transform sync must not allocate**, and must read `renderPosition/renderRotation(alpha)` only. The debug overlay is the one deliberate exception (it exists to show what the sim believes) and it stays 2D.
+- **Where the chain's links fall is shared code.** `render/chainMetrics.ts` holds the one continuous arc walk both renderers use, because that is the one part of chain drawing that has ever been wrong (`session-1467f`) and two copies of it would drift.
 
 ## Hook-proof surfaces
 

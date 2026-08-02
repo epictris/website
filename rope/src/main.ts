@@ -5,7 +5,8 @@ import { Level } from "./level/level";
 import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
-import { render, renderBall } from "./render/renderer";
+import { drawProbeOutline, render, renderBall } from "./render/renderer";
+import { Scene3D } from "./render3d/scene";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
@@ -27,7 +28,12 @@ import type { IInputSource } from "./input/frameInput";
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5; // avoid spiral-of-death after a long stall
 
+// Two canvases stacked on the play frame (see index.html): the WebGL scene
+// underneath, and the 2D one on top carrying everything that is genuinely 2D.
+// The top canvas keeps the pointer events and the 2D context; the bottom one is
+// handed to `Scene3D` and never touched again here.
 const canvas = document.getElementById("game") as HTMLCanvasElement;
+const sceneCanvas = document.getElementById("scene") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
 // The view is a fixed 16:9 frame (see render/viewport.ts), so the camera's
@@ -47,18 +53,48 @@ const cameraCtl = new CameraController();
 // the display's DPR as well as the fit.
 let view = viewTransform(VIEW_WIDTH, VIEW_HEIGHT);
 
-function resize(): void {
-  view = fitCanvas(canvas);
-}
+const params = new URLSearchParams(location.search);
 
 // Level selection via ?level=NAME (defaults to DEFAULT_LEVEL).
 const levelId = ((): string => {
-  const requested = new URLSearchParams(location.search).get("level") ?? DEFAULT_LEVEL;
+  const requested = params.get("level") ?? DEFAULT_LEVEL;
   return LEVELS[requested] ? requested : DEFAULT_LEVEL;
 })();
 const levelSpec = LEVELS[levelId]!;
 const isBall = levelSpec.controller === "ball";
 const baseZoom = isBall ? BALL_ZOOM : GRAPPLE_ZOOM;
+
+// Render mode. The ball & chain plays in 3D; the grapple levels stay on the 2D
+// path, because the Player state-machine slice is 2D-only (its rig, its rope and
+// its ledge overlay are all drawn on the top canvas) and nothing has asked for
+// it in 3D yet. `?render=2d` forces the old path anywhere - it is the escape
+// hatch for a machine with no working WebGL, and the mode `shot.html` and
+// `cli shot` implicitly use.
+const wants3d = (params.get("render") ?? (isBall ? "3d" : "2d")) === "3d";
+
+// The alignment probe (`?probe3d=1`): a known world rect drawn as a box in the
+// 3D scene and as an outline on the 2D overlay. They must coincide exactly, at
+// every zoom and camera position (see `drawProbeOutline`). Placed at the spawn,
+// so it is in frame the moment the page loads.
+const wantsProbe = params.get("probe3d") !== null;
+
+// A machine with no WebGL gets the 2D renderer rather than a blank page, so a
+// failure here is a downgrade and never a crash.
+const scene3d = ((): Scene3D | null => {
+  if (!wants3d) return null;
+  try {
+    return new Scene3D(sceneCanvas);
+  } catch (err) {
+    console.warn("[render3d] WebGL unavailable, falling back to the 2D renderer:", err);
+    return null;
+  }
+})();
+if (!scene3d) sceneCanvas.style.display = "none";
+
+function resize(): void {
+  view = scene3d ? fitCanvas([sceneCanvas, canvas]) : fitCanvas(canvas);
+  scene3d?.resize(view);
+}
 
 resize();
 window.addEventListener("resize", resize);
@@ -71,6 +107,9 @@ let level = makeLevel();
 function reset(): void {
   level = makeLevel();
   level.onReset = reset;
+  // A reset builds a new level, so it builds a new scene: every extrusion in it
+  // belongs to bodies that no longer exist.
+  buildScene();
   // Easing in from wherever the camera died would be a swoop across the level.
   cameraCtl.snap();
   recFrames.length = 0;
@@ -78,6 +117,19 @@ function reset(): void {
   recWorldDigests.length = 0;
 }
 level.onReset = reset;
+
+let probeRect: { x: number; y: number; w: number; h: number } | null = null;
+
+function buildScene(): void {
+  if (!scene3d) return;
+  scene3d.setLevel(level);
+  if (wantsProbe) {
+    const at = level.cameraRenderPosition(1);
+    probeRect = { x: at.x, y: at.y, w: 4, h: 2 };
+  }
+  scene3d.setProbe(probeRect);
+}
+buildScene();
 
 const ballInput = isBall
   ? new BallInputSource(canvas, camera, () => (level as BallLevel).ball.globalPosition)
@@ -169,8 +221,13 @@ function frame(now: number): void {
   // faster than the 60 Hz sim.
   input.pollAim?.();
 
+  // The 3D scene first, then the 2D canvas over it. Both read the same
+  // interpolated state at the same `alpha` and the same camera, so they are one
+  // picture rather than two that agree most of the time.
+  scene3d?.render(level, camera, alpha);
+
   if (level instanceof BallLevel) {
-    renderBall(ctx, view, level, camera, fps, ballInput!.aimPoint(), alpha);
+    renderBall(ctx, view, level, camera, fps, ballInput!.aimPoint(), alpha, scene3d !== null);
   } else {
     render(
       ctx,
@@ -182,8 +239,10 @@ function frame(now: number): void {
       liveInput!.gamepadAim(),
       alpha,
       cameraCtl.activeRegion,
+      scene3d !== null,
     );
   }
+  if (probeRect) drawProbeOutline(ctx, view, camera, probeRect);
 
   requestAnimationFrame(frame);
 }

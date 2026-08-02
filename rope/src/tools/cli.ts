@@ -15,7 +15,8 @@
 //   bun run src/tools/cli.ts trace     bundle.json [--from A] [--to B] [--body ID]
 //                                      [--out t.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
-//   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--out f.png]
+//   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--3d]
+//                                      [--out f.png]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
@@ -23,6 +24,7 @@
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts contacts
+//   bun run src/tools/cli.ts render3d
 //
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
@@ -644,11 +646,16 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
     waitForServer(port);
     const url =
       `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json&frame=${frame}` +
-      (zoom ? `&zoom=${zoom}` : "");
+      (zoom ? `&zoom=${zoom}` : "") +
+      // `--3d` grabs the frame through the WebGL renderer instead of the 2D one.
+      // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
+      // grab is otherwise identical and the two can be diffed against each other.
+      (o["3d"] ? "&render=3d" : "");
     const r = spawnSync(
       chromium,
       [
         "--headless",
+        ...(o["3d"] ? ["--enable-unsafe-swiftshader", "--disable-gpu"] : []),
         `--screenshot=${out}`,
         `--window-size=${size}`,
         // The page replays the bundle to the frame before it draws, so the grab
@@ -1299,10 +1306,50 @@ switch (cmd) {
   case "contacts":
     void cmdContacts();
     break;
+  case "render3d":
+    void cmdRender3d();
+    break;
+  case "assets":
+    void cmdAssets();
+    break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|contacts> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|contacts|render3d|assets> [file] [options]",
     );
+}
+
+// 3D rendering cases (src/sim/render3dCases.ts): the camera correspondence
+// between the WebGL scene and the 2D overlay stacked on it, the extrusion's
+// winding and depth, and the level format's `visual` round trip. All pure - no
+// GPU, no canvas, no level - which is what lets the claim the whole 3D renderer
+// stands on be a number in the suite rather than a screenshot someone looked at.
+async function cmdRender3d(): Promise<void> {
+  const { runRender3dCases } = await import("../sim/render3dCases");
+  const results = runRender3dCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[render3d] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// The prop directory's byte budget and provenance (src/tools/assetBudget.ts).
+// Kept out of `render3d`, which is deliberately pure - no GPU, no canvas, no
+// level, and no filesystem either. This one is entirely about what is on disk.
+async function cmdAssets(): Promise<void> {
+  const { runAssetChecks } = await import("./assetBudget");
+  const results = runAssetChecks();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[assets] ${results.length - failed}/${results.length} checks passed`);
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 // Rigid-body contact cases (src/sim/contactCases.ts). Pure physics — a world,

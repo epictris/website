@@ -1,0 +1,13 @@
+# Binary props for the 3D renderer are stored in Git LFS, so the repo's history
+# carries pointers rather than the bytes. Everything else here is text and stays
+# text - levels are JSON, textures are generated in code (see render3d/assets.ts),
+# and this is the only binary the tree has.
+#
+# A clone WITHOUT git-lfs installed gets a ~130 byte text pointer where a model
+# should be, which `cli assets` reports by name rather than leaving GLTFLoader to
+# fail on it obscurely. `git lfs install` once per machine; CI checks out with
+# `lfs: true` (see .github/workflows/deploy.yml).
+public/meshes/**/*.glb filter=lfs diff=lfs merge=lfs -text
+public/meshes/**/*.gltf filter=lfs diff=lfs merge=lfs -text
+public/meshes/**/*.bin filter=lfs diff=lfs merge=lfs -text
+public/meshes/**/*.ktx2 filter=lfs diff=lfs merge=lfs -text

@@ -20,11 +20,18 @@
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; overscroll-behavior: none; }
       body { display: flex; align-items: center; justify-content: center; }
       #frame { position: relative; }
-      #game { display: block; width: 100%; height: 100%; image-rendering: pixelated; cursor: crosshair; touch-action: none; }
+      /* Two canvases on one rectangle: the WebGL scene underneath and the 2D
+         overlay on top (see src/render3d/scene.ts). Both are sized by one call
+         to `fitCanvas`, so a pixel on one is a pixel on the other. Pointer
+         events belong to the top canvas alone - the scene below is drawn, never
+         clicked. In 2D mode `#scene` simply stays empty and hidden. */
+      #frame canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+      #scene { pointer-events: none; }
+      #game { image-rendering: pixelated; cursor: crosshair; touch-action: none; }
     </style>
   </head>
   <body>
-    <div id="frame"><canvas id="game"></canvas></div>
+    <div id="frame"><canvas id="scene"></canvas><canvas id="game"></canvas></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

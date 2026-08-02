@@ -10,11 +10,14 @@
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; }
       body { display: flex; align-items: center; justify-content: center; }
       #frame { position: relative; }
-      #game { display: block; width: 100%; height: 100%; }
+      /* Two canvases on one rectangle, exactly as the game page stacks them
+         (see index.html): `?render=3d` draws the scene into `#scene` and leaves
+         `#game` carrying the 2D overlay alone. */
+      #frame canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
     </style>
   </head>
   <body>
-    <div id="frame"><canvas id="game"></canvas></div>
+    <div id="frame"><canvas id="scene"></canvas><canvas id="game"></canvas></div>
     <script type="module" src="/src/shotMain.ts"></script>
   </body>
 </html>

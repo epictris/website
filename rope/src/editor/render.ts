@@ -40,6 +40,10 @@ import { REGION_EXIT_MARGIN } from "../render/cameraController";
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const SELECT = "#f4a460";
+// Marks a shape whose 3D visual is NOT its own outline (see the badge pass): a
+// muted violet, distinct from the selection orange and the hook-proof steel, and
+// from the camera layer's own violet by being fully saturated rather than a fill.
+const VISUAL_BADGE = "#b07cff";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
 // Editor-only outline of a background panel. In game a background is drawn with
@@ -551,9 +555,34 @@ export function drawEditor(
   // whether it is currently over a body it could land on - so the gesture says
   // in advance whether releasing will make a chain or drop it.
   chainDraft: { from: Vec2; to: Vec2; valid: boolean } | null = null,
+  // How much of the scene this canvas is responsible for drawing.
+  //
+  // "fill" is the editor as it has always been: every item filled and stroked,
+  // on the training-grid backdrop.
+  //
+  // With a 3D scene underneath, what an item IS is already drawn there, so the
+  // overlay's job changes: "outline" drops the backdrop and every fill and draws
+  // the collision boundaries, the handles and the marquee alone, so the geometry
+  // below stays visible through the thing describing it.
+  //
+  // The scene-only third state of the editor's view toggle needs nothing here -
+  // it simply does not call this - which is why there are two values and not
+  // three.
+  layers: "fill" | "outline" = "fill",
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawTrainingGrid(ctx, cam, w, h);
+  // The backdrop is the editor's own paper. With a 3D scene underneath, this
+  // canvas is a transparent sheet over it and painting paper on it would hide
+  // the level.
+  if (layers === "fill") drawTrainingGrid(ctx, cam, w, h);
+  else ctx.clearRect(0, 0, w, h); // in CSS pixels: the transform above carries the DPR
+
+  // Every fill goes through this. In outline mode it turns each of them fully
+  // transparent rather than each call site growing a branch: the strokes, the
+  // glyph lattices and the even-odd cutouts are all still computed and still
+  // land exactly where they did, so nothing about the drawing can drift between
+  // the two modes - only whether the paint is opaque.
+  const paint = (color: string): string => (layers === "fill" ? color : "rgba(0,0,0,0)");
 
   ctx.save();
   ctx.translate(w / 2, h / 2);
@@ -568,7 +597,7 @@ export function drawEditor(
     ? model.items.filter((i) => i.layer === "background")
     : [];
   for (const g of backgrounds) {
-    fillBackground(ctx, g.pos, g.rot, outlineOf(g), hexToRgba(g.color, g.opacity));
+    fillBackground(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
     if (selectedIds.has(g.id)) {
       pathBody(ctx, g);
       ctx.strokeStyle = SELECT;
@@ -607,7 +636,7 @@ export function drawEditor(
     if (members.length < 2) continue;
     for (const m of members) drawnAsGroup.add(m.id);
     const union = unionPath(members);
-    ctx.fillStyle = hexToRgba(body.color, body.opacity);
+    ctx.fillStyle = paint(hexToRgba(body.color, body.opacity));
     ctx.fill(union);
     if (members.some((m) => selectedIds.has(m.id))) {
       strokeCompoundOutline(ctx, members, () => {
@@ -643,7 +672,7 @@ export function drawEditor(
         body.rot,
         outlineOf(body),
         body.force,
-        hexToRgba(body.color, body.opacity),
+        paint(hexToRgba(body.color, body.opacity)),
       );
     } else if (body.kind === "killzone") {
       fillKillZone(
@@ -651,7 +680,7 @@ export function drawEditor(
         body.pos,
         body.rot,
         outlineOf(body),
-        hexToRgba(body.color, body.opacity),
+        paint(hexToRgba(body.color, body.opacity)),
       );
     } else if (body.kind === "anchor") {
       // Hook-only scenery: the same grate mesh the game punches through it.
@@ -660,11 +689,11 @@ export function drawEditor(
         body.pos,
         body.rot,
         outlineOf(body),
-        hexToRgba(body.color, body.opacity),
+        paint(hexToRgba(body.color, body.opacity)),
       );
     } else {
       pathBody(ctx, body);
-      ctx.fillStyle = hexToRgba(body.color, body.opacity);
+      ctx.fillStyle = paint(hexToRgba(body.color, body.opacity));
       ctx.fill();
     }
     pathBody(ctx, body);
@@ -695,6 +724,38 @@ export function drawEditor(
       ctx.lineWidth = worldLine;
       ctx.stroke();
     }
+  }
+
+  // What the 3D renderer will do with a shape, marked on the 2D view - which
+  // cannot otherwise show it at all. Only the two kinds that are NOT what the
+  // shape looks like are marked: `mesh` (a prop stands in for this outline) and
+  // `none` (nothing is drawn here at all, an invisible wall). `auto` is the
+  // default and is exactly the shape as drawn, so a badge on it would be a mark
+  // on almost every body saying nothing.
+  for (const body of [...(visibleLayers.has("geometry") ? geometry : []), ...backgrounds]) {
+    const kind = body.visual.kind;
+    if (kind === "auto") continue;
+    const r = 6 * PX;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.strokeStyle = VISUAL_BADGE;
+    ctx.beginPath();
+    if (kind === "mesh") {
+      // A cube seen in three-quarter: the mark for "a prop is drawn here".
+      ctx.rect(body.pos.x - r, body.pos.y - r, r * 2, r * 2);
+      ctx.moveTo(body.pos.x - r, body.pos.y - r);
+      ctx.lineTo(body.pos.x - r * 0.4, body.pos.y - r * 1.6);
+      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y - r * 1.6);
+      ctx.lineTo(body.pos.x + r, body.pos.y - r);
+      ctx.moveTo(body.pos.x + r, body.pos.y + r);
+      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y + r * 0.4);
+      ctx.lineTo(body.pos.x + r * 1.6, body.pos.y - r * 1.6);
+    } else {
+      // A struck-through ring: "solid, and drawn by nothing".
+      ctx.arc(body.pos.x, body.pos.y, r, 0, Math.PI * 2);
+      ctx.moveTo(body.pos.x - r * 0.71, body.pos.y + r * 0.71);
+      ctx.lineTo(body.pos.x + r * 0.71, body.pos.y - r * 0.71);
+    }
+    ctx.stroke();
   }
 
   // Compound-body marks, over the geometry they describe. A group is one body,
@@ -771,7 +832,7 @@ export function drawEditor(
     : [];
   for (const r of regions) {
     pathBody(ctx, r);
-    ctx.fillStyle = hexToRgba(CAMERA_REGION_COLOR, r.opacity);
+    ctx.fillStyle = paint(hexToRgba(CAMERA_REGION_COLOR, r.opacity));
     ctx.fill();
     if (selectedIds.has(r.id)) {
       ctx.strokeStyle = SELECT;
@@ -812,7 +873,7 @@ export function drawEditor(
       continue;
     }
     pathBody(ctx, n);
-    ctx.fillStyle = hexToRgba(NOTE_COLOR, n.opacity);
+    ctx.fillStyle = paint(hexToRgba(NOTE_COLOR, n.opacity));
     ctx.fill();
     if (selectedIds.has(n.id)) {
       ctx.strokeStyle = SELECT;

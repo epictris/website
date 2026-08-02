@@ -21,7 +21,7 @@ import {
   type CameraRegionData,
   type LevelData,
 } from "./levelFormat";
-import { buildLevelBodies } from "./buildBodies";
+import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
@@ -59,6 +59,12 @@ export class Level {
   // Chains strung between authored bodies, solved every frame after the world
   // integrates (see SceneChain).
   readonly sceneChains: SceneChain[];
+  // Render-only: the metre-scaled level as built, and the engine object each
+  // authored entry became. It is what lets the 3D renderer hand an authored
+  // `visual` to the exact piece of the exact body it decorates (see
+  // `render3d/scene.ts`); the sim never reads it, and neither does the 2D
+  // renderer, which draws bodies and knows nothing about the file they came from.
+  readonly visualSource: LevelVisualSource;
   onReset: (() => void) | null = null;
 
   constructor(rawData: LevelData, init?: (level: Level) => void) {
@@ -76,6 +82,7 @@ export class Level {
     // After the bodies, since a panel welded into a compound group is placed in
     // that group's engine body's frame.
     this.backgrounds = buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup);
+    this.visualSource = { data, built };
 
     init?.(this);
 

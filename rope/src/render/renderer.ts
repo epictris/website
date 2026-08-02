@@ -26,6 +26,7 @@ import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { CameraRegionData } from "../level/levelFormat";
+import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawBackgrounds } from "./background";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
@@ -409,10 +410,17 @@ export function render(
   alpha = 1,
   // The camera region in force, for the debug overlay (see drawDebugOverlay).
   heldCameraRegion: CameraRegionData | null = null,
+  // See `renderBall`: draw only the genuinely-2D layers, leaving the scene to
+  // the WebGL canvas underneath. The grapple avatar's rig and its rope STAY on
+  // this canvas even in overlay mode - the Player state-machine slice is 2D-only
+  // (see "Explicitly out of scope" in docs/3d-rendering-plan.md), so a 3D
+  // grapple level is a 3D world with a 2D avatar in it.
+  overlayOnly = false,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
-  drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
+  if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
+  else drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
 
   ctx.save();
   ctx.translate(viewWidth / 2, viewHeight / 2);
@@ -422,23 +430,28 @@ export function render(
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
-  // Authored decoration, under everything: nothing the player can touch may be
-  // hidden behind a backdrop.
-  drawBackgrounds(ctx, level.backgrounds, alpha);
+  if (!overlayOnly) {
+    // Authored decoration, under everything: nothing the player can touch may be
+    // hidden behind a backdrop.
+    drawBackgrounds(ctx, level.backgrounds, alpha);
 
-  // Chains hang among the decoration, behind every solid thing - which is the
-  // same statement as their passing through it (see `SceneChain`).
-  drawSceneChains(ctx, level.sceneChains, alpha);
+    // Chains hang among the decoration, behind every solid thing - which is the
+    // same statement as their passing through it (see `SceneChain`).
+    drawSceneChains(ctx, level.sceneChains, alpha);
+  }
 
   // Hook-only scenery is background the player passes through, so it goes down
-  // first and solid geometry draws over it.
+  // first and solid geometry draws over it. Its grate lattice is a flat mark and
+  // stays 2D in both modes (see `renderBall`).
   for (const body of level.world.bodies) {
     if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
   }
-  for (const body of level.world.bodies) {
-    if (body instanceof Player) continue; // drawn between the rig layers below
-    if (body instanceof AnchorBody) continue; // already drawn, behind
-    drawBody(ctx, body, alpha);
+  if (!overlayOnly) {
+    for (const body of level.world.bodies) {
+      if (body instanceof Player) continue; // drawn between the rig layers below
+      if (body instanceof AnchorBody) continue; // already drawn, behind
+      drawBody(ctx, body, alpha);
+    }
   }
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
@@ -491,6 +504,9 @@ export function render(
 
   ctx.restore();
 
+  // Atmosphere, over the scene and under the instruments (see drawVignette).
+  if (overlayOnly) drawVignette(ctx, viewWidth, viewHeight);
+
   // FPS counter (screen space, top-right).
   ctx.font = "14px monospace";
   ctx.textAlign = "right";
@@ -500,27 +516,12 @@ export function render(
   ctx.textAlign = "left";
 }
 
-const CHAIN_LINK_LEN = 3.8 * PX; // fixed on-screen link length (world metres)
-const CHAIN_LINK_W = 1.8 * PX; // half-width of the broad (in-plane) link
-
 // Metal chain along a polyline: interlocking oval links of a FIXED world length,
-// alternately rotated 90° so it reads as forged loops. Callers pass the anchored
-// (world-fixed) end FIRST and the ball-side last, so as the chain reels the links
-// stay put in the world and the last one is consumed into the ball rather than
-// the whole chain compressing toward the anchor.
+// alternately rotated 90° so it reads as forged loops.
 //
-// Links are laid by ONE continuous arc length measured from `points[0]`, so a
-// link straddles a vertex rather than the run restarting there. That is what a
-// chain of rigid links does over a corner, and it is also the only form that
-// survives a coil: `Rope` re-samples rope wound onto the ball every 0.25 rad,
-// which is a node every ~3.1 mm on the rim and SHORTER than one 3.8 mm link, so
-// laying links segment by segment floored every coil span to `floor(3.1/3.8)` =
-// zero links. The whole wound-on part of the chain drew as nothing, one node at
-// a time as the ball turned - the drawn chain vanishing where it lay on the
-// player.
-//
-// The sub-link remainder falls at the far end (the ball centre, hidden under the
-// body), so reeling consumes links into the ball rather than rescaling the chain.
+// Where the links FALL is `walkChain` (render/chainMetrics.ts), shared with the
+// 3D renderer so the two chains cannot disagree about the one part of this that
+// has ever been wrong; this function is only how a link is painted on a canvas.
 function drawChainPolyline(
   ctx: CanvasRenderingContext2D,
   points: Vec2[],
@@ -529,35 +530,9 @@ function drawChainPolyline(
   // the alternation still reads as interlocking loops.
   colors: { broad: string; narrow: string } = { broad: CHAIN, narrow: CHAIN_DARK },
 ): void {
-  // Cumulative arc length at each vertex, skipping degenerate repeats (a wrap
-  // node landing on its neighbour) so no link takes its heading from a zero span.
-  const verts: Vec2[] = [];
-  const at: number[] = [];
-  let total = 0;
-  for (const p of points) {
-    const last = verts[verts.length - 1];
-    if (last) {
-      const d = last.distanceTo(p);
-      if (d < 1e-3 * PX) continue;
-      total += d;
-    }
-    verts.push(p);
-    at.push(total);
-  }
-  if (verts.length < 2) return;
-
   const half = CHAIN_LINK_LEN * 0.62; // overlap neighbours so links interlock
-  const n = Math.floor(total / CHAIN_LINK_LEN);
   ctx.lineWidth = PX;
-  let seg = 0;
-  for (let i = 0; i < n; i++) {
-    const s = (i + 0.5) * CHAIN_LINK_LEN;
-    while (seg + 2 < verts.length && at[seg + 1]! < s) seg++;
-    const a = verts[seg]!;
-    const b = verts[seg + 1]!;
-    const dir = a.directionTo(b);
-    const mid = a.add(dir.mul(s - at[seg]!));
-    const broad = i % 2 === 0; // alternate link orientation
+  walkChain(points, ({ mid, dir, broad }) => {
     const w = broad ? CHAIN_LINK_W : CHAIN_LINK_W * 0.5;
     ctx.strokeStyle = broad ? colors.broad : colors.narrow;
     ctx.beginPath();
@@ -569,13 +544,63 @@ function drawChainPolyline(
     ctx.ellipse(0, 0, half, w, 0, 0, Math.PI * 2);
     ctx.restore();
     ctx.stroke();
-  }
+  });
 }
 
 // How far a chain's links are pushed toward the backdrop: the fill they are
 // drawn at, so they read as the same iron seen through the level's own haze
 // rather than as a different, thinner chain.
 const CHAIN_ALPHA = 0.55;
+
+// A soft darkening toward the corners of the frame, drawn on the OVERLAY canvas
+// rather than as a post-processing pass. That is not a shortcut: a vignette is a
+// screen-space multiply over the finished frame and the overlay canvas is
+// already exactly that, so drawing it here costs one gradient fill and saves the
+// whole render-target plumbing an effect composer would need for it.
+//
+// 3D mode only, and deliberately: the 2D renderer's flat fills carry no light
+// of their own, so darkening their corners reads as a smudge rather than as a
+// lens. Drawn under the reticle and the FPS counter, which are instruments and
+// must not be dimmed.
+const VIGNETTE_STRENGTH = 0.34;
+
+function drawVignette(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  const cx = width / 2;
+  const cy = height / 2;
+  const inner = Math.min(width, height) * 0.42;
+  const outer = Math.hypot(cx, cy);
+  const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(1, `rgba(0,0,0,${VIGNETTE_STRENGTH})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+}
+
+// The alignment probe (`?probe3d=1`): a known world rect outlined on THIS canvas
+// while `Scene3D` draws a box of the same rect on the one underneath. The two
+// coinciding at every zoom, camera position and mid-blend frame is the
+// acceptance criterion the whole 3D renderer stands on, and it is the one form
+// of it a person can see - `cli render3d` asserts the same claim numerically.
+//
+// Drawn in screen space from the 2D camera transform, deliberately: reading the
+// projection off the same arithmetic the bodies are drawn with is what makes a
+// disagreement with the 3D scene mean something.
+export function drawProbeOutline(
+  ctx: CanvasRenderingContext2D,
+  view: ViewTransform,
+  camera: Camera,
+  rect: { x: number; y: number; w: number; h: number },
+): void {
+  ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
+  ctx.save();
+  ctx.translate(view.width / 2, view.height / 2);
+  ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
+  ctx.translate(-camera.position.x, -camera.position.y);
+  ctx.strokeStyle = "#00ff88";
+  ctx.lineWidth = PX;
+  ctx.strokeRect(rect.x - rect.w / 2, rect.y - rect.h / 2, rect.w, rect.h);
+  ctx.restore();
+}
 
 // Authored scene chains: the same forged links, laid along each chain's wrap
 // path. Drawn from the wrap NODES against the render transforms, exactly as the
@@ -675,10 +700,19 @@ export function renderBall(
   aimWorld: Vec2 | null = null,
   // See `render`: fraction of a physics step elapsed since the last one.
   alpha = 1,
+  // Draw ONLY what is genuinely 2D, leaving the scene to the WebGL canvas
+  // underneath (see render3d/scene.ts). What stays is everything whose size is
+  // fixed on screen or whose meaning is a flat mark: the area glyphs, the
+  // hook-only grate, the aim reticle, the FPS counter. What goes is the backdrop
+  // and every body, ball and chain, because the 3D scene draws those.
+  //
+  // Default false, so the 2D path, `shot.html` and `cli shot` are untouched.
+  overlayOnly = false,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
-  drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
+  if (overlayOnly) ctx.clearRect(0, 0, viewWidth, viewHeight);
+  else drawTrainingGrid(ctx, camera, viewWidth, viewHeight);
 
   ctx.save();
   ctx.translate(viewWidth / 2, viewHeight / 2);
@@ -688,22 +722,34 @@ export function renderBall(
   ctx.scale(camera.zoom * PIXELS_PER_METER, camera.zoom * PIXELS_PER_METER);
   ctx.translate(-camera.position.x, -camera.position.y);
 
-  // Authored decoration under everything (see `render`).
-  drawBackgrounds(ctx, level.backgrounds, alpha);
+  if (!overlayOnly) {
+    // Authored decoration under everything (see `render`).
+    drawBackgrounds(ctx, level.backgrounds, alpha);
 
-  // Chains behind the solid geometry they pass through (see `render`).
-  drawSceneChains(ctx, level.sceneChains, alpha);
+    // Chains behind the solid geometry they pass through (see `render`).
+    drawSceneChains(ctx, level.sceneChains, alpha);
+  }
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
+  // Kept in overlay mode: its fill is a grate lattice punched out of the shape,
+  // and that lattice is what says the player passes through it. The 3D scene
+  // extrudes the same body behind the plane, so the mark lands on the solid it
+  // belongs to (see "Pass-through geometry must read as pass-through" in
+  // docs/game-design.md).
   for (const body of level.world.bodies) {
     if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
   }
-  for (const body of level.world.bodies) {
-    if (body instanceof BallPlayer) continue; // drawn over the chain below
-    if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
-    if (body instanceof AnchorBody) continue; // already drawn, behind
-    drawBody(ctx, body, alpha);
+  if (!overlayOnly) {
+    for (const body of level.world.bodies) {
+      if (body instanceof BallPlayer) continue; // drawn over the chain below
+      if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
+      if (body instanceof AnchorBody) continue; // already drawn, behind
+      drawBody(ctx, body, alpha);
+    }
   }
+  // Areas stay 2D in both modes: a killzone's skulls and a force area's flow
+  // arrows are flat marks on a region of space, and a region of space has no
+  // solid to extrude.
   for (const area of level.world.areas) drawBody(ctx, area, alpha);
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
@@ -715,7 +761,7 @@ export function renderBall(
   // the anchor.
   const ball = level.ball;
   const chain = ball.chain;
-  if (chain) {
+  if (chain && !overlayOnly) {
     const spans = chain.getSpans();
     // Node path loop→anchor (the loop is the first span's `from`, then each
     // span's `to`). Resolved against the render transforms, so the chain stays
@@ -739,20 +785,25 @@ export function renderBall(
       tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
     drawManacle(ctx, tip, dir);
   }
-  drawBody(ctx, ball, alpha);
+  if (!overlayOnly) {
+    drawBody(ctx, ball, alpha);
 
-  // Steel mounting loop: material point on the rim, rotating with the ball
-  // (its aim direction when no chain is out). Drawn on top of the body.
-  const loop = ball.renderLoopCenter(alpha);
-  ctx.strokeStyle = CHAIN;
-  ctx.lineWidth = PX;
-  ctx.beginPath();
-  ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
-  ctx.stroke();
+    // Steel mounting loop: material point on the rim, rotating with the ball
+    // (its aim direction when no chain is out). Drawn on top of the body.
+    const loop = ball.renderLoopCenter(alpha);
+    ctx.strokeStyle = CHAIN;
+    ctx.lineWidth = PX;
+    ctx.beginPath();
+    ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   if (aimWorld) drawAimReticle(ctx, aimWorld);
 
   ctx.restore();
+
+  // Atmosphere, over the scene and under the instruments (see drawVignette).
+  if (overlayOnly) drawVignette(ctx, viewWidth, viewHeight);
 
   // FPS counter (screen space, top-right).
   ctx.font = "14px monospace";

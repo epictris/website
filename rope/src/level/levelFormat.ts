@@ -57,6 +57,56 @@ export const DEFAULT_SURFACE_FRICTION = 1;
 // third of gravity: a current that carries but does not fling).
 export const DEFAULT_FORCE_MAGNITUDE = 300;
 
+// What a body LOOKS like in the 3D renderer (`src/render3d/`), as opposed to
+// what it collides as. Render-only data throughout: `sim/*`, the mass
+// computation in `buildBodies.ts` and `contactCases.ts` all ignore it, and a
+// level with none of it plays and looks identical to one authored before the
+// field, because the default is to extrude the collision outline.
+//
+// The default is the point. A body with no `visual` is drawn as its own
+// collision geometry given depth, so a level is fully 3D the moment it loads and
+// an authored visual is a decoration on top of a scene that already works -
+// rather than the scene being invisible until every body has a model.
+//
+// Lengths here are authored in scene pixels on disk exactly as every other
+// length is, and `scaleVisual` converts them; angles and the uniform `scale` are
+// dimensionless and pass through. Getting that wrong is silent: `scaleLevelData`
+// rebuilds objects field by field, so a field it does not enumerate is dropped
+// on the next save rather than reported.
+export interface VisualData {
+  // "auto" (and an absent `kind`): extrude the collision outline.
+  // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`).
+  // "none": physics-only, drawn by nothing - an invisible wall, or a body whose
+  //         look is carried entirely by a background panel welded to it.
+  kind?: "auto" | "mesh" | "none";
+  // Manifest key. `kind: "mesh"` only; an unknown key draws the placeholder
+  // rather than nothing, so a missing asset is visible instead of silent.
+  mesh?: string;
+  // Placement of the mesh in the BODY's frame. A compound body carries one
+  // visual per authored piece, each riding that piece's own local transform, so
+  // these are offsets from the piece rather than from the group's centre of mass.
+  offsetX?: number;
+  offsetY?: number;
+  // Depth placement: 0 is the gameplay plane, positive is toward the camera.
+  offsetZ?: number;
+  rotX?: number;
+  rotY?: number;
+  rotZ?: number;
+  // Uniform mesh scale, dimensionless: it multiplies a model's own size and is
+  // not a length, so it does NOT scale on the way in or out.
+  scale?: number;
+  // Auto-extrusion controls (`kind` "auto" or absent).
+  // Extrusion depth; absent = the shape's own `thickness`, which is the number
+  // its mass is already computed from, so a body is as thick as it weighs.
+  depth?: number;
+  // Texture-set key (`render3d/assets.ts`); absent = the one the shape's
+  // `material` name picks, so naming the stuff a thing is made of is still the
+  // only decision an author has to make.
+  texture?: string;
+  // Edge break. Absent = DEFAULT_BEVEL.
+  bevel?: number;
+}
+
 export interface LevelBodyData {
   // `normalizeLevelData` is what every level passes through on the way in, so
   // downstream this is a `BodyKind`; the wider type is only how the retired
@@ -135,6 +185,11 @@ export interface LevelBodyData {
   // `material`, `thickness` and `impermeable` are the exceptions and stay per
   // entry - see the fields.
   group?: string;
+  // What this shape looks like in 3D (see VisualData). Per authored entry like
+  // `material` and `thickness` and for the same reason: a compound body of a
+  // stone head on a wooden shaft is two visuals on one body, each riding its own
+  // piece, so `syncGroupProps` leaves it alone.
+  visual?: VisualData;
 }
 
 // A chain strung between two bodies: the same wrap-point rope the grapple and
@@ -286,6 +341,15 @@ export interface BackgroundData {
   // added, so a local offset in the file would be authored against a moving
   // point. That is the same reason chains author their anchors in world space.
   group?: string;
+  // What this panel looks like in 3D (see VisualData). A panel is decoration, so
+  // this is where the reference games' parallax comes from: a panel with an
+  // `offsetZ` is a prop at that depth rather than a flat fill, and the camera
+  // panning past it moves it at a different rate from the gameplay plane.
+  //
+  // Absent = a thin extrusion just behind the plane, which is what a flat fill
+  // drawn before every body already was, so a level authored before this field
+  // looks the same as it always did.
+  visual?: VisualData;
 }
 
 // Default glyph height of a text note, in scene pixels.
@@ -319,6 +383,40 @@ export interface NoteData {
   size?: number;
 }
 
+// The light and air a level is played in (`render3d/environment.ts`). Every
+// field is OPTIONAL and every default is the mood the game already had, so a
+// level authored before this block looks exactly as it did.
+//
+// Nothing in it is a length, which is deliberate rather than lucky. A sun
+// direction is a direction, the colours are colours, and the haze is a
+// dimensionless 0..1 rather than a fog density in 1/metres - an inverse length
+// would have to be scaled the OTHER way by `scaleLevelData`, which is a trap
+// worth designing out rather than commenting on. So the whole block passes
+// through the scaler untouched.
+export interface EnvironmentData {
+  // Direction the sunlight TRAVELS, in the sim's own frame (x right, y down),
+  // plus a z toward the camera. Not normalised; absent = a warm sun from the
+  // upper left and slightly in front, which is the reference look's key light.
+  sunX?: number;
+  sunY?: number;
+  sunZ?: number;
+  sunColor?: string;
+  // Multiplier on the sun's default strength. 0 is an overcast level lit by the
+  // sky alone, which is a legitimate thing to author.
+  sunIntensity?: number;
+  // Hemisphere fill: the sky above and the bounce off whatever is below.
+  skyColor?: string;
+  groundColor?: string;
+  fillIntensity?: number;
+  // What is behind everything, and what distance fades into. Absent = the page's
+  // own background, so the 3D scene's horizon and the letterbox bars agree.
+  backgroundColor?: string;
+  fogColor?: string;
+  // Atmospheric perspective, 0 (vacuum) .. 1 (thick). This is what makes a
+  // background layer at -20 m read as far away rather than as a small object.
+  haze?: number;
+}
+
 export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
@@ -335,6 +433,10 @@ export interface LevelData {
   // Chains strung between pairs of bodies (see ChainData). Absent = a level with
   // no chains, which is every level authored before this field.
   chains?: ChainData[];
+  // Light and air for the 3D renderer (see EnvironmentData). Render-only, and
+  // absent means the defaults, so the 2D renderer and every existing level are
+  // untouched by it.
+  environment?: EnvironmentData;
 }
 
 // Scale every length by `factor` (pass PX = 1 / PIXELS_PER_METER on load, or
@@ -348,6 +450,32 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
   if (s.kind === "rect") return { kind: "rect", w: s.w * factor, h: s.h * factor };
   if (s.kind === "circle") return { kind: "circle", r: s.r * factor };
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
+}
+
+// A visual's lengths, and only its lengths. The offsets (z included), the
+// extrusion depth and the bevel are metres in the sim and scene pixels on disk;
+// the kind, the mesh key, the texture key, the three rotations and the
+// dimensionless `scale` are not lengths and pass through untouched.
+//
+// It rebuilds the object field by field like everything else here, which is what
+// makes a forgotten field a silent loss rather than a type error - hence the
+// round-trip case in `cli render3d`, which is the thing that actually holds this
+// function to its list.
+export function scaleVisual(v: VisualData, factor: number): VisualData {
+  return {
+    ...(v.kind !== undefined ? { kind: v.kind } : {}),
+    ...(v.mesh !== undefined ? { mesh: v.mesh } : {}),
+    ...(v.offsetX !== undefined ? { offsetX: v.offsetX * factor } : {}),
+    ...(v.offsetY !== undefined ? { offsetY: v.offsetY * factor } : {}),
+    ...(v.offsetZ !== undefined ? { offsetZ: v.offsetZ * factor } : {}),
+    ...(v.rotX !== undefined ? { rotX: v.rotX } : {}),
+    ...(v.rotY !== undefined ? { rotY: v.rotY } : {}),
+    ...(v.rotZ !== undefined ? { rotZ: v.rotZ } : {}),
+    ...(v.scale !== undefined ? { scale: v.scale } : {}),
+    ...(v.depth !== undefined ? { depth: v.depth * factor } : {}),
+    ...(v.texture !== undefined ? { texture: v.texture } : {}),
+    ...(v.bevel !== undefined ? { bevel: v.bevel * factor } : {}),
+  };
 }
 
 // Fold the retired `impermeable` KIND into what it now is: a static body whose
@@ -414,6 +542,7 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
     ...(g.color !== undefined ? { color: g.color } : {}),
     ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
     ...(g.group !== undefined ? { group: g.group } : {}),
+    ...(g.visual !== undefined ? { visual: scaleVisual(g.visual, factor) } : {}),
   }));
   // A chain's anchor points and its length are lengths; the body indices and
   // the colour are not.
@@ -426,6 +555,10 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
   return {
     ...(backgrounds ? { backgrounds } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
+    // Nothing in the environment block is a length (see EnvironmentData), so it
+    // is copied rather than scaled - but copied, not shared, since everything
+    // else here hands the caller a fresh object.
+    ...(data.environment ? { environment: { ...data.environment } } : {}),
     ...(notes ? { notes } : {}),
     ...(chains ? { chains } : {}),
     player: {
@@ -449,6 +582,9 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
       ...(b.thickness !== undefined ? { thickness: b.thickness * factor } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
       ...(b.group !== undefined ? { group: b.group } : {}),
+      // Render-only, and scaled exactly like the geometry it decorates: see
+      // `scaleVisual` for which of its fields are lengths.
+      ...(b.visual !== undefined ? { visual: scaleVisual(b.visual, factor) } : {}),
     })),
   };
 }

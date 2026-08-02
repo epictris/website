@@ -71,27 +71,37 @@ export function viewTransform(width: number, height: number): ViewTransform {
 // The canvas's parent (if any) is sized with it, so an overlay positioned inside
 // it — the touch controls — is positioned against the play frame rather than
 // against the window, and never lands in a letterbox bar.
-export function fitCanvas(canvas: HTMLCanvasElement): ViewTransform {
+// Takes a LIST because the frame may be drawn by more than one canvas stacked on
+// the same rectangle: the WebGL scene underneath and the 2D overlay on top (see
+// render3d/scene.ts). They must be sized by one arithmetic rather than two, or
+// an outline drawn on the overlay lands a device pixel off the geometry it
+// describes at some window sizes and not others.
+export function fitCanvas(canvas: HTMLCanvasElement | HTMLCanvasElement[]): ViewTransform {
+  const canvases = Array.isArray(canvas) ? canvas : [canvas];
   const dpr = window.devicePixelRatio || 1;
   const scale = Math.min(window.innerWidth / VIEW_WIDTH, window.innerHeight / VIEW_HEIGHT);
   const cssWidth = VIEW_WIDTH * scale;
   const cssHeight = VIEW_HEIGHT * scale;
 
-  const frame = canvas.parentElement;
-  if (frame) {
-    frame.style.width = `${cssWidth}px`;
-    frame.style.height = `${cssHeight}px`;
-  }
-  canvas.style.width = `${cssWidth}px`;
-  canvas.style.height = `${cssHeight}px`;
-
   // The backing store is whole device pixels, and its height is derived from its
   // rounded width rather than rounded on its own: the frame is drawn under a
   // single uniform scale, so the two dimensions have to agree about what that
   // scale is or the bottom of the frame is drawn a pixel outside it.
-  canvas.width = Math.max(1, Math.round(cssWidth * dpr));
-  canvas.height = Math.max(1, Math.round((canvas.width * VIEW_HEIGHT) / VIEW_WIDTH));
-  return viewTransform(canvas.width, canvas.height);
+  const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
+  const pixelHeight = Math.max(1, Math.round((pixelWidth * VIEW_HEIGHT) / VIEW_WIDTH));
+
+  for (const c of canvases) {
+    const frame = c.parentElement;
+    if (frame) {
+      frame.style.width = `${cssWidth}px`;
+      frame.style.height = `${cssHeight}px`;
+    }
+    c.style.width = `${cssWidth}px`;
+    c.style.height = `${cssHeight}px`;
+    c.width = pixelWidth;
+    c.height = pixelHeight;
+  }
+  return viewTransform(pixelWidth, pixelHeight);
 }
 
 // A browser event's client coordinates → the view pixel they landed on. The

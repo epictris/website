@@ -77,7 +77,14 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
+      # `lfs: true` because rope's 3D props are Git LFS objects (see
+      # rope/.gitattributes) and this checkout IS the Docker build context: a
+      # plain checkout would bake 130-byte pointer files into the image, and the
+      # game would ship placeholder boxes where its props should be. Only this
+      # job needs it - the changes and deploy jobs never read the bytes.
       - uses: actions/checkout@v6
+        with:
+          lfs: true
 
       - uses: docker/setup-buildx-action@v3
 

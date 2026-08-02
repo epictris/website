@@ -33,6 +33,8 @@ import {
   bodyWithinRect,
   defaultCamera,
   defaultNote,
+  defaultVisual,
+  type EdVisual,
   distanceToChain,
   ED_LAYERS,
   emptyModel,
@@ -46,6 +48,7 @@ import {
   MIN_ARROW_LENGTH,
   modelFromDisk,
   modelToDisk,
+  toLevelData,
   newBodyId,
   NOTE_ARROW_BAND,
   NOTE_DEFAULT_ARROW_LENGTH,
@@ -81,6 +84,11 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
+import { MESH_ASSETS } from "../render3d/assets";
+import { Scene3D, type Scene3DLevel } from "../render3d/scene";
+import { World } from "../engine/world";
+import { buildLevelBodies } from "../level/buildBodies";
+import { buildSceneBackgrounds } from "../level/backgrounds";
 import {
   digest,
   digestBall,
@@ -174,8 +182,46 @@ const MAX_STEPS = 5;
 
 const M2PX = PIXELS_PER_METER;
 
-export function startEditor(canvas: HTMLCanvasElement): void {
+// Angles are authored in degrees everywhere in the inspector (`rot°`), and
+// stored in radians everywhere else.
+const deg = (r: number): number => (r * 180) / Math.PI;
+const rad = (d: number): number => (d * Math.PI) / 180;
+
+export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasElement): void {
   const ctx = canvas.getContext("2d")!;
+
+  // --- 3D view --------------------------------------------------------------
+  // The editor is the SECOND host of `Scene3D` (see its header): everything
+  // mutable lives on the instance, so the game page and this page each have
+  // their own and share only the immutable material cache.
+  //
+  // Three states rather than two, because collision authoring and looking at the
+  // level are different jobs:
+  //   "2d"      - exactly the editor as it was, no WebGL at all.
+  //   "3d"      - the scene alone, for judging how a level reads.
+  //   "overlay" - the default: the scene beneath, collision outlines and handles
+  //               on top, which is what makes placing geometry against a 3D
+  //               scene as precise as placing it against nothing.
+  type ViewMode = "2d" | "3d" | "overlay";
+  let viewMode: ViewMode = "overlay";
+  const scene3d = ((): Scene3D | null => {
+    if (!sceneCanvas) return null;
+    try {
+      return new Scene3D(sceneCanvas);
+    } catch (err) {
+      console.warn("[render3d] WebGL unavailable, the editor stays 2D:", err);
+      return null;
+    }
+  })();
+  if (!scene3d) viewMode = "2d";
+  // The scene is rebuilt from the model whenever the model changes. A full
+  // rebuild on every revision is deliberate: the model is small (a level is a
+  // couple of hundred shapes), a rebuild is a few milliseconds, and correctness
+  // beats cleverness where the alternative is a diff of what an edit touched.
+  // It is debounced to a frame rather than run per edit, so a drag rebuilds once
+  // per rendered frame instead of once per pointer move.
+  let sceneLevel: Scene3DLevel | null = null;
+  let sceneRev = -1;
   const camera: Camera = {
     position: Vec2.ZERO,
     zoom: 2,
@@ -196,6 +242,11 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     cssH = window.innerHeight;
     canvas.width = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
+    if (sceneCanvas) {
+      sceneCanvas.width = canvas.width;
+      sceneCanvas.height = canvas.height;
+      scene3d?.resizeTo(canvas.width, canvas.height);
+    }
     // Editing spans the whole canvas; a test plays in the game's fixed frame, so
     // a resize mid-test must not hand the camera the window's shape back.
     if (mode !== "test") {
@@ -236,7 +287,8 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   let currentName: string | null = null;
   let dirty = false;
   // Bumped by every model edit, so a save that started before an edit knows not
-  // to clear `dirty` on a model that has moved on under it.
+  // to clear `dirty` on a model that has moved on under it, and so the 3D scene
+  // knows to rebuild (see `syncEditorScene`).
   let modelRev = 0;
   let saveError: string | null = null;
   let drag: Drag | null = null;
@@ -262,6 +314,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       shape: cloneShape(b.shape),
       cam: { ...b.cam },
       note: { ...b.note },
+      // The visual is mutated in place by the inspector exactly as `cam` and
+      // `note` are, so an undo snapshot that shared it would alias the state it
+      // is meant to be restoring - the known trap on this line.
+      visual: { ...b.visual },
     })),
     chains: m.chains.map(cloneChain),
   });
@@ -279,13 +335,13 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function undo(): void {
     if (!history.length) return;
     future.push(snapshot(model));
-    model = history.pop()!;
+    replaceModel(history.pop()!);
     afterHistoryChange();
   }
   function redo(): void {
     if (!future.length) return;
     history.push(snapshot(model));
-    model = future.pop()!;
+    replaceModel(future.pop()!);
     afterHistoryChange();
   }
   function afterHistoryChange(): void {
@@ -390,9 +446,52 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     updateTitle();
   }
 
+  // The one way to replace the model WHOLESALE (New, Load, undo/redo). It exists
+  // so that `modelRev` cannot be forgotten: a load is not an edit - it neither
+  // dirties the model nor schedules a save, so it does not go through
+  // `markDirty` - but it is very much a change the 3D scene has to be rebuilt
+  // from, and leaving the rev alone left the scene showing the model that was on
+  // screen before the load while the overlay drew the one that had just arrived.
+  function replaceModel(next: EdModel): void {
+    model = next;
+    modelRev++;
+  }
+
+  // The edit-mode scene, rebuilt from the model whenever it has changed. It goes
+  // through exactly the same builders the game does - `buildLevelBodies` and
+  // `buildSceneBackgrounds` over `toLevelData(model)` - so what an author sees
+  // while editing is what the level will look like when it is played, rather
+  // than a second interpretation of the same file that can drift from it.
+  //
+  // The world it builds is a throwaway: nothing steps it, and it exists only to
+  // give the bodies the transforms and shapes the visuals hang off.
+  function syncEditorScene(): void {
+    if (!scene3d || sceneRev === modelRev) return;
+    sceneRev = modelRev;
+    const world = new World();
+    const data = toLevelData(model);
+    const built = buildLevelBodies(world, data, () => {});
+    sceneLevel = {
+      world,
+      backgrounds: buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup),
+      // Chains stay on the 2D canvas while editing: the editor draws a chain
+      // STRAIGHT on purpose (a span between wrap nodes is straight, and a
+      // guessed sag would be a drawing of something the level does not contain),
+      // and solving them here to draw them would be a second simulation running
+      // under the editor.
+      sceneChains: [],
+      visualSource: { data, built },
+    };
+    scene3d.setLevel(sceneLevel);
+  }
+
   // --- mode: edit | test ----------------------------------------------------
   // (`mode` itself is declared above `resize`, which reads it.)
   let testLevel: Level | BallLevel | null = null;
+  // The same object, typed as what the 3D renderer wants of it. Held separately
+  // so the render path does not have to re-narrow a union it has already
+  // narrowed for the 2D one.
+  let testLevel3d: Scene3DLevel | null = null;
   let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
@@ -445,6 +544,12 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       );
     }
     testLevel.onReset = () => startTest(controller, spawn);
+    // A test uses the real game render path, so the 3D scene comes with it: the
+    // level IS a `Scene3DLevel`, since both drivers carry the `visualSource` the
+    // renderer reads. A grapple test keeps its avatar and rope on the 2D canvas
+    // (the Player slice is 2D-only), which is what `overlayOnly` leaves there.
+    testLevel3d = testLevel;
+    if (scene3d && viewMode !== "2d") scene3d.setLevel(testLevel);
     accumulator = 0;
     lastNow = -1;
     mode = "test";
@@ -477,6 +582,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   function stopTest(): void {
     mode = "edit";
     testLevel = null;
+    testLevel3d = null;
+    // The edit-mode scene was replaced by the test level's, so it is rebuilt on
+    // the next frame rather than left showing the level that just stopped.
+    sceneRev = -1;
     // Back to editing the whole canvas (see startTest).
     camera.viewportWidth = cssW;
     camera.viewportHeight = cssH;
@@ -510,7 +619,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   const btnNew = button("New", () => {
     if (dirty && !confirm("Discard unsaved changes?")) return;
     cancelAutosave();
-    model = emptyModel();
+    replaceModel(emptyModel());
     resetHistory();
     selectedIds.clear();
     currentName = null;
@@ -704,6 +813,26 @@ export function startEditor(canvas: HTMLCanvasElement): void {
   testRow.append(button("▶ Test Grapple", () => startTest("grapple")), btnTestBall);
   const snapChk = checkbox("snap 10cm", snapOn, (v) => (snapOn = v));
   testRow.append(snapChk);
+
+  // View toggle. Only offered when there is a WebGL context to toggle: a machine
+  // that cannot draw the scene should not be shown two dead buttons.
+  const viewBtns: Partial<Record<ViewMode, HTMLButtonElement>> = {};
+  if (scene3d) {
+    const viewRow = el("div", "ed-row");
+    bar.appendChild(viewRow);
+    const setViewMode = (m: ViewMode): void => {
+      viewMode = m;
+      for (const [k, b] of Object.entries(viewBtns)) b.classList.toggle("active", k === m);
+      // The 3D canvas keeps its last frame otherwise, showing a stale scene
+      // under a 2D view that is meant to be the editor exactly as it was.
+      if (sceneCanvas) sceneCanvas.style.display = m === "2d" ? "none" : "";
+    };
+    viewBtns["2d"] = button("2D", () => setViewMode("2d"));
+    viewBtns["3d"] = button("3D", () => setViewMode("3d"));
+    viewBtns.overlay = button("3D + overlay", () => setViewMode("overlay"));
+    viewRow.append(viewBtns["2d"]!, viewBtns["3d"]!, viewBtns.overlay!);
+    setViewMode(viewMode);
+  }
 
   const title = el("div", "ed-title");
   bar.appendChild(title);
@@ -1123,6 +1252,173 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     g.appendChild(hint);
   }
 
+  // How the 3D renderer draws these shapes (see `VisualData`). Per SHAPE like
+  // material and thickness, and left alone by `syncGroupProps` for the same
+  // reason: a compound body of a stone head on a wooden shaft is two visuals on
+  // one body, each riding its own piece.
+  //
+  // The section is deliberately shallow. `auto` is the default and needs
+  // nothing, so a level author never has to open it; the fields that appear
+  // depend on the kind, because a mesh's placement means nothing to an
+  // extrusion and an extrusion's depth means nothing to a mesh.
+  function addVisualFields(g: HTMLElement, items: EdItem[]): void {
+    const kw = el("label", "ed-field");
+    kw.textContent = "visual";
+    const ks = document.createElement("select");
+    ks.className = "ed-select";
+    const sharedKind = items.every((b) => b.visual.kind === items[0]!.visual.kind)
+      ? items[0]!.visual.kind
+      : null;
+    if (!sharedKind) {
+      // Mixed: a blank entry holds the selection until one is picked, exactly as
+      // the kind and material pickers do.
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "mixed";
+      ks.appendChild(o);
+    }
+    for (const [value, label] of [
+      ["auto", "auto (extrude)"],
+      ["mesh", "mesh"],
+      ["none", "none (invisible)"],
+    ] as const) {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      ks.appendChild(o);
+    }
+    ks.value = sharedKind ?? "";
+    ks.addEventListener("change", () => {
+      if (!ks.value) return;
+      beginAction();
+      for (const b of items) b.visual.kind = ks.value as EdVisual["kind"];
+      markDirty();
+      // Which fields apply depends on the kind, so the panel is rebuilt rather
+      // than revalued - the same reason the body kind picker rebuilds.
+      rebuildInspector();
+    });
+    kw.appendChild(ks);
+    g.appendChild(kw);
+
+    const num = (
+      label: string,
+      get: (v: EdVisual) => number,
+      set: (v: EdVisual, x: number) => void,
+      step = 1,
+      opts: { placeholder?: string; onEmpty?: () => void } = {},
+    ): void => {
+      numField(
+        g,
+        label,
+        () => shared(items, (b) => get(b.visual)),
+        (x) => {
+          for (const b of items) set(b.visual, x);
+        },
+        step,
+        items.length > 1,
+        opts,
+      );
+    };
+
+    if (sharedKind === "mesh" || sharedKind === null) {
+      const mw = el("label", "ed-field");
+      mw.textContent = "mesh";
+      const ms = document.createElement("select");
+      ms.className = "ed-select";
+      // The manifest, plus a blank for "not chosen yet". An unlisted key already
+      // on the item is kept as an option of its own rather than silently
+      // rewritten, so opening a level built against a manifest this build does
+      // not have cannot lose what it named.
+      const keys = new Set<string>(Object.keys(MESH_ASSETS));
+      for (const b of items) if (b.visual.mesh) keys.add(b.visual.mesh);
+      for (const key of ["", ...[...keys].sort()]) {
+        const o = document.createElement("option");
+        o.value = key;
+        o.textContent = key || "(none)";
+        ms.appendChild(o);
+      }
+      ms.value = items.every((b) => b.visual.mesh === items[0]!.visual.mesh)
+        ? items[0]!.visual.mesh
+        : "";
+      ms.addEventListener("change", () => {
+        beginAction();
+        for (const b of items) b.visual.mesh = ms.value;
+        markDirty();
+        refreshFields();
+      });
+      mw.appendChild(ms);
+      g.appendChild(mw);
+
+      // Placement of the prop in the shape's own frame. Lengths in pixels like
+      // every other length; the rotations are angles and are authored in
+      // degrees, as `rot°` is.
+      num("off x", (v) => v.offset.x * M2PX, (v, x) => (v.offset = new Vec2(x * PX, v.offset.y)), 5);
+      num("off y", (v) => v.offset.y * M2PX, (v, y) => (v.offset = new Vec2(v.offset.x, y * PX)), 5);
+      num("rot x°", (v) => deg(v.rotX), (v, d) => (v.rotX = rad(d)), 5);
+      num("rot y°", (v) => deg(v.rotY), (v, d) => (v.rotY = rad(d)), 5);
+      num("rot z°", (v) => deg(v.rotZ), (v, d) => (v.rotZ = rad(d)), 5);
+      // Dimensionless: it multiplies the model's own size, so it is not a length
+      // and does not scale on the way to disk.
+      num("scale", (v) => v.scale, (v, s) => (v.scale = s), 0.1);
+    }
+
+    // Depth placement applies whatever the kind is: 0 is the gameplay plane and
+    // negative is away from the camera. On a background panel it is the whole
+    // point of the section - a panel at -20 m parallaxes as the camera pans,
+    // where a panel at 0 is the flat fill the 2D renderer draws.
+    if (sharedKind !== "none") {
+      num("off z", (v) => v.offsetZ * M2PX, (v, z) => (v.offsetZ = z * PX), 5);
+    }
+
+    if (sharedKind !== "mesh") {
+      // Extrusion controls. Both are optional overrides with a real third state
+      // - "take it from somewhere else" - so clearing the field is meaningful
+      // and the placeholder says what the fallback is.
+      num("depth", (v) => (v.depth ?? 0) * M2PX, (v, d) => (v.depth = Math.max(1, d) * PX), 5, {
+        placeholder: items.length > 1 ? "mixed" : "thickness",
+        onEmpty: () => {
+          for (const b of items) b.visual.depth = null;
+        },
+      });
+      num("bevel", (v) => (v.bevel ?? 0) * M2PX, (v, b) => (v.bevel = Math.max(0, b) * PX), 1, {
+        placeholder: items.length > 1 ? "mixed" : "default",
+        onEmpty: () => {
+          for (const b of items) b.visual.bevel = null;
+        },
+      });
+
+      const tw = el("label", "ed-field");
+      tw.textContent = "texture";
+      const ts = document.createElement("select");
+      ts.className = "ed-select";
+      for (const key of ["", ...MATERIAL_NAMES]) {
+        const o = document.createElement("option");
+        o.value = key;
+        // Blank means "whatever the material says", which is the answer for
+        // almost every body: naming the stuff a thing is made of is the decision
+        // an author is already making.
+        o.textContent = key || "(from material)";
+        ts.appendChild(o);
+      }
+      ts.value = items.every((b) => b.visual.texture === items[0]!.visual.texture)
+        ? items[0]!.visual.texture
+        : "";
+      ts.addEventListener("change", () => {
+        beginAction();
+        for (const b of items) b.visual.texture = ts.value;
+        markDirty();
+        refreshFields();
+      });
+      tw.appendChild(ts);
+      g.appendChild(tw);
+    }
+
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "How the 3D renderer draws this shape. `auto` extrudes the collision outline through z and textures it from the material, which is what every body gets for free; `mesh` replaces that with a prop; `none` draws nothing at all (an invisible wall). Per shape, so a compound body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
+    g.appendChild(hint);
+  }
+
   // Every layer's panel ends the same way: the two actions that apply to any
   // selection, whatever it is made of. Duplicate and Delete act on the *whole*
   // selection, so a cross-layer one carries a single shared row above the
@@ -1207,6 +1503,10 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       addImpermeableField(g, bodies);
     }
     if (!bodies.some(massless)) addMaterialFields(g, bodies);
+    // An area is a region of space with no solid to extrude, so it has no
+    // visual: its glyph lattice is a flat mark drawn on the 2D overlay in both
+    // render modes.
+    if (!bodies.some(massless)) addVisualFields(g, bodies);
 
     addFillFields(g, num, bodies, sync);
     addGroupSection(g);
@@ -1369,6 +1669,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     const num = groupNum(g, items);
     addTransformFields(g, num, items);
     addFillFields(g, num, items);
+    // A panel's `off z` is the whole of what makes it a depth layer rather than
+    // a flat fill, which is where the reference games' parallax comes from.
+    addVisualFields(g, items);
     addGroupSection(g);
     addActionsRow(g);
     inspector.appendChild(g);
@@ -1667,6 +1970,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         shape: cloneShape(b.shape),
         cam: { ...b.cam },
         note: { ...b.note },
+        visual: { ...b.visual },
       };
     });
     return { items, idOf };
@@ -1818,6 +2122,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
       thickness: DEFAULT_THICKNESS,
+      // A fresh shape is drawn as its own outline extruded, which is what every
+      // body authored before the 3D renderer existed is drawn as.
+      visual: defaultVisual(),
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
@@ -2011,7 +2318,7 @@ export function startEditor(canvas: HTMLCanvasElement): void {
     cancelAutosave(); // don't write the outgoing model to the incoming name
     try {
       const data = await loadLevel(name);
-      model = modelFromDisk(data);
+      replaceModel(modelFromDisk(data));
       resetHistory();
       selectedIds.clear();
       currentName = name;
@@ -2776,12 +3083,47 @@ export function startEditor(canvas: HTMLCanvasElement): void {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = LETTERBOX_COLOR;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // A test uses the real game render path, so it gets the 3D scene for free
+      // - drawn into the letterboxed frame rather than the whole canvas, since
+      // the bars are not part of the picture the player is shown. WebGL's
+      // viewport origin is the BOTTOM left, hence the flipped y.
+      const testIn3d = scene3d !== null && viewMode !== "2d" && testLevel3d !== null;
+      if (testIn3d) {
+        const w = Math.round(view.width * view.scale);
+        const h = Math.round(view.height * view.scale);
+        scene3d!.setViewportRect({
+          x: Math.round(view.originX),
+          y: canvas.height - Math.round(view.originY) - h,
+          w,
+          h,
+        });
+        scene3d!.render(testLevel3d!, camera, alpha);
+      }
       if (testLevel instanceof BallLevel) {
-        renderBall(ctx, view, testLevel, camera, fps, ballInput?.aimPoint() ?? null, alpha);
+        renderBall(ctx, view, testLevel, camera, fps, ballInput?.aimPoint() ?? null, alpha, testIn3d);
       } else {
-        render(ctx, view, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha);
+        render(ctx, view, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha, null, testIn3d);
       }
     } else {
+      // The scene first, then the editor's own canvas over it. Both are driven
+      // from the SAME free camera through `space.ts`, so an outline drawn on top
+      // lands on the geometry it describes underneath at any pan or zoom - which
+      // is the whole reason the editor can gain a 3D view without giving up
+      // precise collision authoring.
+      if (scene3d && viewMode !== "2d") {
+        scene3d.setViewportRect(null);
+        syncEditorScene();
+        if (sceneLevel) scene3d.render(sceneLevel, camera, 1);
+      }
+      // Scene only: the overlay draws nothing at all, so what is on screen is
+      // the level as it will be played. Selection chrome goes with it, which is
+      // the point - this mode is for looking, and "3D + overlay" is for editing.
+      if (viewMode === "3d") {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(frame);
+        return;
+      }
       drawEditor(
         ctx,
         dpr,
@@ -2795,6 +3137,9 @@ export function startEditor(canvas: HTMLCanvasElement): void {
         polyDraft ? { verts: polyDraft, cursor: pointerWorld() } : null,
         selectedChainIds,
         chainDraftView(),
+        // In 3D the scene below is what shows what a body IS; the overlay drops
+        // its fills to outlines so the geometry stays visible through them.
+        scene3d && viewMode !== "2d" ? "outline" : "fill",
       );
     }
     requestAnimationFrame(frame);

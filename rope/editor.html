@@ -6,10 +6,18 @@
     <title>rope editor</title>
     <style>
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; }
-      #game { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; cursor: default; }
+      /* Two canvases on one rectangle, as the game page stacks them (see
+         index.html): the WebGL scene underneath and the editor's own 2D canvas
+         on top, carrying the collision outlines, the handles and the marquee.
+         The 3D one takes no pointer events - the editor is driven entirely
+         through the overlay, which is what keeps picking exact. */
+      canvas { position: absolute; inset: 0; display: block; width: 100vw; height: 100vh; }
+      #scene { pointer-events: none; }
+      #game { image-rendering: pixelated; cursor: default; }
     </style>
   </head>
   <body>
+    <canvas id="scene"></canvas>
     <canvas id="game"></canvas>
     <script type="module" src="/src/editorMain.ts"></script>
   </body>

@@ -99,6 +99,23 @@ export interface BuiltBodies {
   // no body carries (a background-only group, or one whose bodies were all
   // deleted) is simply absent, and the panel stays where it was authored.
   byGroup: Map<string, CollisionObject2D>;
+  // Which SHAPE of that engine object each `data.bodies` entry became, by index.
+  // `byIndex` alone cannot answer this once groups exist: several entries map to
+  // one body, and a per-entry property (`material`, `impermeable`, and now
+  // `visual`) belongs to one piece of it. The 3D renderer needs the piece so a
+  // visual anchors to the local transform it was authored against; nothing in
+  // the sim reads it, which is why it is an additive field rather than a change
+  // to `byIndex`.
+  shapeIndexByIndex: number[];
+}
+
+// The level as built, from the 3D renderer's point of view: the metre-scaled
+// data and the mapping from its entries to engine objects and pieces. Both level
+// drivers keep one (`visualSource`), which is the whole of what the renderer
+// needs to know about the file a level came from.
+export interface LevelVisualSource {
+  data: LevelData;
+  built: BuiltBodies;
 }
 
 // Areas are single-shape everywhere they are used - `World.integrate` tests
@@ -235,6 +252,7 @@ export function buildLevelBodies(
   const wrapBodies: PhysicsBody2D[] = [];
   const byIndex: (CollisionObject2D | null)[] = data.bodies.map(() => null);
   const byGroup = new Map<string, CollisionObject2D>();
+  const shapeIndexByIndex: number[] = data.bodies.map(() => 0);
 
   for (const run of groupRuns(data.bodies)) {
     // A group's kind, style and friction come from its first member: a body has
@@ -243,14 +261,20 @@ export function buildLevelBodies(
     const lead = data.bodies[run.indices[0]!]!;
     const pieces = run.indices.map((i) => makePiece(data.bodies[i]!));
     const built = buildOne(world, lead, pieces, onReset);
-    for (const i of run.indices) byIndex[i] = built;
+    // `mountPieces` mounts the run's pieces in order, so entry `run.indices[k]`
+    // is shape `k` of the body it built - the same correspondence
+    // `setCompoundInertia` relies on to weigh each piece by its own material.
+    run.indices.forEach((i, k) => {
+      byIndex[i] = built;
+      shapeIndexByIndex[i] = k;
+    });
     if (run.tag !== null) byGroup.set(run.tag, built);
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and an AnchorBody reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, byIndex, byGroup };
+  return { wrapBodies, byIndex, byGroup, shapeIndexByIndex };
 }
 
 function buildOne(
