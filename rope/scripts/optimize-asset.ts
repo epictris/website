@@ -15,7 +15,7 @@
 //                        needs no separate decoder blob, and the size is close.
 //   --texture-compress webp / --texture-size 1024
 //                        textures at a ceiling of 1k, which is the art style's
-//                        own limit (see "Prop assets" in CLAUDE.md).
+//                        own limit (see "The asset store" in CLAUDE.md).
 //                        WebP rather than KTX2 deliberately, for two reasons
 //                        that both have to be paid to make KTX2 worth it: it
 //                        needs the external `ktx` binary at build time, and it

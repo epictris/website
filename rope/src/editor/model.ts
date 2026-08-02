@@ -19,6 +19,7 @@ import {
   polySignedArea2,
 } from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import { DECOR_Z } from "../level/decor";
 import {
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
@@ -27,8 +28,6 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import {
-  DEFAULT_BACKGROUND_COLOR,
-  DEFAULT_BACKGROUND_OPACITY,
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
   DEFAULT_NOTE_TEXT_SIZE,
@@ -36,7 +35,6 @@ import {
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
   scaleLevelData,
-  type BackgroundData,
   type BodyKind,
   type CameraRegionData,
   type ChainData,
@@ -47,11 +45,17 @@ import {
 } from "../level/levelFormat";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
-// `background` is decoration behind the level, `geometry` the scene bodies,
-// `camera` the camera-behaviour volumes and `notes` the authoring annotations
-// (invisible in play).
-export type EdLayer = "background" | "geometry" | "camera" | "notes";
-export const ED_LAYERS: EdLayer[] = ["background", "geometry", "camera", "notes"];
+// `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
+// `notes` the authoring annotations (invisible in play).
+//
+// There is deliberately NO decoration layer. Decoration is a shape with its
+// collision switched off (`EdItem.collision`, `LevelBodyData.collision`), which
+// is one flag on the thing an author already has rather than a second kind of
+// item with its own layer, its own inspector and its own resolve path - and it
+// means a wall can be turned into a backdrop, or back, without being re-drawn on
+// another layer.
+export type EdLayer = "geometry" | "camera" | "notes";
+export const ED_LAYERS: EdLayer[] = ["geometry", "camera", "notes"];
 
 // `poly` vertices are metres in the item's own local frame, kept **convex** and
 // centred on their area centroid — `setPolyVerts` is the one writer, so no edit
@@ -101,13 +105,13 @@ export interface EdItem {
   // the join between two pieces as an interior seam rather than as a corner (see
   // `LevelBodyData.group`). Null = a body of its own.
   //
-  // A BACKGROUND item may carry one too, and it means the same thing one layer
-  // down: the panel is part of that body, drawn in its frame, so decoration on a
-  // rigid assembly swings and falls with it (`BackgroundData.group`). It brings
-  // no shape to the body - a background is decoration and stays decoration - so
-  // it contributes nothing to the group's mass, centre of mass or seams. A group
-  // of backgrounds alone is a legitimate thing to author: several panels moved
-  // and turned as one piece of scenery, with no body behind them.
+  // A NON-COLLIDING item may carry one too, and it means the same thing: it is
+  // part of that body and drawn in its frame, so decoration on a rigid assembly
+  // swings and falls with it. It brings no shape to the body - decoration stays
+  // decoration - so it contributes nothing to the group's mass, centre of mass
+  // or seams. A group of decoration alone is a legitimate thing to author:
+  // several panels moved and turned as one piece of scenery, with no body
+  // behind them.
   //
   // The camera and notes layers stay ungrouped: neither is drawn in play, and
   // neither has anything a body could carry it in.
@@ -118,11 +122,16 @@ export interface EdItem {
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
-  // Geometry and background layers author these; camera regions and notes take
-  // the fixed editor-furniture colours below.
+  // The geometry layer authors these; camera regions and notes take the fixed
+  // editor-furniture colours below.
   color: string; // hex fill colour
   opacity: number; // 0..1 fill opacity (a body's border draws fully opaque)
   // Geometry layer:
+  // Does this shape take part in the simulation? False is decoration: it is
+  // drawn and nothing else, never built into the world, and every physics
+  // property below is ignored rather than refused, so a shape can be switched
+  // back and forth while a level is authored (see `LevelBodyData.collision`).
+  collision: boolean;
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
   // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
@@ -137,16 +146,37 @@ export interface EdItem {
   // pieces, and a piece brings its own material to them.
   material: MaterialName;
   thickness: number; // metres
-  // What the 3D renderer draws for this shape (see `EdVisual`). Carried on the
-  // BACKGROUND layer too, where its `offsetZ` is what turns a flat backdrop into
-  // a parallax layer; the camera and notes layers keep the default and never
-  // write it.
+  // What the 3D renderer draws for this shape (see `EdVisual`). On decoration
+  // its `offsetZ` is what turns a flat backdrop into a parallax layer; the
+  // camera and notes layers keep the default and never write it.
   visual: EdVisual;
   force: number; // force areas only: m/s² along the item's rotation
   // Camera layer:
   cam: EdCamera;
   // Notes layer:
   note: EdNote;
+}
+
+// How far toward the camera this item is drawn, in metres - the editor's side of
+// `depthOf` (`level/decor.ts`), which is the rule the game renders by.
+//
+// It is what orders overlapping shapes, both on the canvas and under a click:
+// the surface nearest the viewport is the one you see, so it is the one a click
+// has to select. Without it a parallax panel 20 m behind the level could swallow
+// a click meant for the wall drawn on top of it, purely because it was authored
+// later.
+//
+// Only the geometry layer has a depth at all; camera regions and notes are
+// editor furniture drawn in their own fixed order, and answering 0 for them
+// leaves the layer ordering to decide, which is what did decide before.
+export function itemDepth(i: EdItem): number {
+  if (i.layer !== "geometry") return 0;
+  // An `offsetZ` of exactly 0 on decoration is indistinguishable from an unset
+  // one both here and on disk (`visualData` omits a zero), and the renderer
+  // draws that case at `DECOR_Z` - so this agrees with what is drawn rather than
+  // with what the field literally holds.
+  if (!i.collision && i.visual.offsetZ === 0) return DECOR_Z;
+  return i.visual.offsetZ;
 }
 
 // A detached copy of a shape. Undo snapshots, duplicate, copy/paste and the
@@ -233,7 +263,12 @@ export interface EdVisual {
   rotZ: number;
   scale: number; // dimensionless
   depth: number | null; // metres; null = the shape's own thickness
-  texture: string; // texture-set key; "" = the one the material picks
+  texture: string; // texture key (authored set or material); "" = from material
+  tileScale: number | null; // multiple of the texture's own size; null = 1 (life size)
+  // Where the pattern starts, metres in level coordinates (+x right, +y down).
+  // A plain number rather than nullable: 0 is both the default and a perfectly
+  // ordinary authored value, so there is no third state to represent.
+  tileOffset: Vec2;
   bevel: number | null; // metres; null = the extruder's default
 }
 
@@ -285,6 +320,8 @@ export const defaultVisual = (): EdVisual => ({
   scale: 1,
   depth: null,
   texture: "",
+  tileScale: null,
+  tileOffset: Vec2.ZERO,
   bevel: null,
 });
 
@@ -295,10 +332,9 @@ export const CAMERA_REGION_OPACITY = 0.12;
 export const NOTE_COLOR = "#98c379";
 export const NOTE_OPACITY = 0.08;
 
-// Appearance a freshly drawn item starts with, per layer. Geometry and
-// background are authored from here on; the other two are fixed furniture.
+// Appearance a freshly drawn item starts with, per layer. Geometry is authored
+// from here on; the other two are fixed furniture.
 export const LAYER_STYLE: Record<EdLayer, { color: string; opacity: number }> = {
-  background: { color: DEFAULT_BACKGROUND_COLOR, opacity: DEFAULT_BACKGROUND_OPACITY },
   geometry: { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY },
   camera: { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY },
   notes: { color: NOTE_COLOR, opacity: NOTE_OPACITY },
@@ -332,6 +368,8 @@ export function edVisual(v: VisualData | undefined): EdVisual {
   return {
     kind: v.kind ?? d.kind,
     mesh: v.mesh ?? d.mesh,
+    tileScale: v.tileScale ?? d.tileScale,
+    tileOffset: new Vec2(v.tileOffsetX ?? 0, v.tileOffsetY ?? 0),
     offset: new Vec2(v.offsetX ?? 0, v.offsetY ?? 0),
     offsetZ: v.offsetZ ?? d.offsetZ,
     rotX: v.rotX ?? d.rotX,
@@ -362,6 +400,9 @@ export function visualData(v: EdVisual): VisualData | undefined {
     ...(v.scale !== d.scale ? { scale: v.scale } : {}),
     ...(v.depth !== null ? { depth: v.depth } : {}),
     ...(v.texture ? { texture: v.texture } : {}),
+    ...(v.tileScale !== null ? { tileScale: v.tileScale } : {}),
+    ...(v.tileOffset.x !== 0 ? { tileOffsetX: v.tileOffset.x } : {}),
+    ...(v.tileOffset.y !== 0 ? { tileOffsetY: v.tileOffset.y } : {}),
     ...(v.bevel !== null ? { bevel: v.bevel } : {}),
   };
   return Object.keys(out).length > 0 ? out : undefined;
@@ -393,8 +434,11 @@ function fromLevelData(data: LevelData): EdModel {
     layer: "geometry",
     group: groupIdFor(b.group),
     // `scaleLevelData` normalised the retired `impermeable` kind away on the
-    // way in, so what is left here is a real `BodyKind`.
+    // way in, so what is left here is a real `BodyKind`. It also folded the
+    // retired `backgrounds` list into these entries as non-colliding shapes, so
+    // decoration arrives here as an ordinary item and needs no second mapping.
     kind: b.kind as BodyKind,
+    collision: b.collision !== false,
     pos: new Vec2(b.x, b.y),
     rot: b.rot,
     shape: edShape(b.shape),
@@ -409,33 +453,11 @@ function fromLevelData(data: LevelData): EdModel {
     cam: defaultCamera(),
     note: defaultNote(),
   }));
-  const backgrounds: EdItem[] = (data.backgrounds ?? []).map((g) => ({
-    id: newBodyId(),
-    layer: "background",
-    // The same tag namespace the bodies use: a panel welded into a compound body
-    // rides it (see `EdItem.group` and `BackgroundData.group`).
-    group: groupIdFor(g.group),
-    kind: "static", // unused on this layer; keeps the field total
-    pos: new Vec2(g.x, g.y),
-    rot: g.rot,
-    shape: edShape(g.shape),
-    color: g.color ?? DEFAULT_BACKGROUND_COLOR,
-    opacity: g.opacity ?? DEFAULT_BACKGROUND_OPACITY,
-    friction: DEFAULT_SURFACE_FRICTION,
-    impermeable: false,
-    // Unused off the geometry layer; keeps the field total.
-    material: DEFAULT_MATERIAL,
-    thickness: DEFAULT_THICKNESS,
-    // A panel DOES carry one: its `offsetZ` is what makes it a depth layer.
-    visual: edVisual(g.visual),
-    force: 0,
-    cam: defaultCamera(),
-    note: defaultNote(),
-  }));
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
     id: newBodyId(),
     layer: "camera",
     group: null, // grouping is a geometry-layer notion; keeps the field total
+    collision: true, // unused on this layer; keeps the field total
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(r.x, r.y),
     rot: r.rot,
@@ -468,6 +490,7 @@ function fromLevelData(data: LevelData): EdModel {
     id: newBodyId(),
     layer: "notes",
     group: null, // grouping is a geometry-layer notion; keeps the field total
+    collision: true, // unused on this layer; keeps the field total
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(n.x, n.y),
     rot: n.rot,
@@ -507,7 +530,7 @@ function fromLevelData(data: LevelData): EdModel {
 
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
-    items: [...backgrounds, ...bodies, ...regions, ...notes],
+    items: [...bodies, ...regions, ...notes],
     chains,
   };
 }
@@ -528,25 +551,6 @@ export function toLevelData(model: EdModel): LevelData {
     const v = visualData(i.visual);
     return v ? { visual: v } : {};
   };
-
-  const backgrounds: BackgroundData[] = model.items
-    .filter((i) => i.layer === "background")
-    .map((i) => ({
-      x: i.pos.x,
-      y: i.pos.y,
-      rot: i.rot,
-      shape: shapeOf(i),
-      // Appearance is the whole point of a background, so it is always written
-      // rather than omitted at its default.
-      color: i.color,
-      opacity: i.opacity,
-      // Written as the same `g<id>` tag the bodies carry, so a panel and the
-      // shapes it is welded to name one group (see the bodies below).
-      ...(i.group !== null ? { group: `g${i.group}` } : {}),
-      // Render-only, and only if it says something. A panel's `offsetZ` is what
-      // makes it a parallax layer rather than a flat fill (see `VisualData`).
-      ...visualField(i),
-    }));
 
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera")
@@ -626,32 +630,44 @@ export function toLevelData(model: EdModel): LevelData {
     player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
     bodies: geometry.map((b) => ({
       kind: b.kind,
+      // Absent means "collides", so only decoration says anything - which keeps
+      // every level of ordinary walls byte-identical through a save.
+      ...(b.collision ? {} : { collision: false }),
       x: b.pos.x,
       y: b.pos.y,
       rot: b.rot,
       shape: shapeOf(b),
       color: b.color,
       opacity: b.opacity,
-      friction: b.friction,
-      // Absent means "an ordinary surface", so only a hook-proof one says so.
-      ...(b.impermeable ? { impermeable: true } : {}),
-      // Written only when the shape is something other than the default 20 cm
-      // of oak, so every level authored before materials stays byte-identical.
-      ...(b.material !== DEFAULT_MATERIAL ? { material: b.material } : {}),
-      ...(b.thickness !== DEFAULT_THICKNESS ? { thickness: b.thickness } : {}),
+      // The physics half is written only for a shape that HAS one. Decoration
+      // with a friction and a material on disk is a file stating properties
+      // nothing reads, which is how a field quietly starts lying about what it
+      // does - and it would make a migrated backdrop differ from the panel it
+      // came from on the very first save.
+      ...(b.collision
+        ? {
+            friction: b.friction,
+            // Absent means "an ordinary surface", so only a hook-proof one says so.
+            ...(b.impermeable ? { impermeable: true } : {}),
+            // Written only when the shape is something other than the default
+            // 20 cm of oak, so every level authored before materials stays
+            // byte-identical.
+            ...(b.material !== DEFAULT_MATERIAL ? { material: b.material } : {}),
+            ...(b.thickness !== DEFAULT_THICKNESS ? { thickness: b.thickness } : {}),
+          }
+        : {}),
       // Render-only, and only if it says something (see `visualData`).
       ...visualField(b),
       // Only force areas carry a magnitude; omitting it elsewhere keeps saved
       // levels free of a field that would read as meaningful.
-      ...(b.kind === "force" ? { force: b.force } : {}),
+      ...(b.collision && b.kind === "force" ? { force: b.force } : {}),
       // The tag is only meaningful against the other members, so it is written
       // as a plain `g<id>` rather than carrying the editor's numbering onto disk
       // as something to be interpreted.
       ...(b.group !== null ? { group: `g${b.group}` } : {}),
     })),
     // An empty list is the same as no list, and the absent field keeps levels
-    // authored before backgrounds (or camera regions, or notes) byte-identical.
-    ...(backgrounds.length ? { backgrounds } : {}),
+    // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
     ...(notes.length ? { notes } : {}),
     ...(chains.length ? { chains } : {}),
@@ -898,14 +914,14 @@ export function shapeMass(item: EdItem): number {
 // not the bounding-box centre: every rigid-body lever arm in the engine is
 // measured from the body origin, so the two have to agree.
 //
-// Measured over the group's SHAPES alone. A background panel is decoration and
-// brings no shape to the built body, so it brings no mass to this sum either -
-// welding a backdrop onto a body may not shift the point that body turns about,
-// or the editor would be rotating a group about a point the sim does not have.
-// A group with no geometry at all has no body to agree with, so its panels are
-// weighed among themselves and the group turns about their own centre.
+// Measured over the group's COLLIDING shapes alone. Decoration brings no shape
+// to the built body, so it brings no mass to this sum either - welding a
+// backdrop onto a body may not shift the point that body turns about, or the
+// editor would be rotating a group about a point the sim does not have. A group
+// of decoration alone has no body to agree with, so its members are weighed
+// among themselves and the group turns about their own centre.
 export function groupCentroid(items: readonly EdItem[]): Vec2 {
-  const shapes = items.filter((i) => i.layer === "geometry");
+  const shapes = items.filter((i) => i.layer === "geometry" && i.collision);
   const weighed = shapes.length ? shapes : items;
   let total = 0;
   let acc = Vec2.ZERO;
@@ -932,12 +948,12 @@ export function rotateGroupAbout(items: readonly EdItem[], centre: Vec2, delta: 
 }
 
 // The member whose body-level properties the group is built from: the first
-// GEOMETRY item in model order, which is the first of the group's entries in the
-// body list `toLevelData` writes, which is the entry `buildLevelBodies` takes a
-// group's kind, style, friction and force from. Null for a group of backgrounds
-// alone, which builds no body at all.
+// COLLIDING item in model order, which is the first of the group's colliding
+// entries in the body list `toLevelData` writes, which is the entry
+// `buildLevelBodies` takes a group's kind, style, friction and force from. Null
+// for a group of decoration alone, which builds no body at all.
 export function groupLead(members: readonly EdItem[]): EdItem | null {
-  return members.find((m) => m.layer === "geometry") ?? null;
+  return members.find((m) => m.layer === "geometry" && m.collision) ?? null;
 }
 
 // Body-level properties a compound body has exactly one of. When several items
@@ -951,11 +967,11 @@ export function groupLead(members: readonly EdItem[]): EdItem | null {
 // every piece's own (`makePiece`, and `render3d/scene.ts` for the visual), so
 // copying the lead's would be the editor overwriting what was authored.
 //
-// Background members are left alone entirely: a panel is not a piece of the
-// body, it is decoration carried by it, and it has none of these properties -
-// its fill is its own (a backdrop is authored to sit behind the geometry, so
-// painting it the geometry's colour is exactly wrong), and kind, friction and
-// force mean nothing on a layer nothing collides with.
+// Non-colliding members are left alone entirely: decoration is not a piece of
+// the body, it is carried by it, and it has none of these properties - its fill
+// is its own (a backdrop is authored to sit behind the geometry, so painting it
+// the geometry's colour is exactly wrong), and kind, friction and force mean
+// nothing on a shape nothing collides with.
 export function syncGroupProps(members: readonly EdItem[]): void {
   const lead = groupLead(members);
   if (!lead) return;
@@ -1027,6 +1043,7 @@ export function emptyModel(): EdModel {
         id: newBodyId(),
         layer: "geometry",
         group: null,
+        collision: true,
         kind: "static",
         pos: new Vec2(0, 0),
         rot: 0,

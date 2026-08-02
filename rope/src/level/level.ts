@@ -22,7 +22,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
-import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
+import type { SceneDecor } from "./decor";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 
@@ -52,10 +52,10 @@ export class Level {
   // Camera-behaviour volumes, in metres. Read by the render-side
   // CameraController; the sim never touches them.
   readonly cameraRegions: CameraRegionData[];
-  // Decoration drawn behind the level, in metres, resolved against the bodies
-  // any of it is welded to (see SceneBackground). Read only by the renderer;
-  // like the camera regions, the sim never touches them.
-  readonly backgrounds: SceneBackground[];
+  // The authored shapes that are drawn and never simulated, in metres, each
+  // resolved against the body it is welded to (see SceneDecor). Read only by
+  // the renderer; like the camera regions, the sim never touches them.
+  readonly decor: SceneDecor[];
   // Chains strung between authored bodies, solved every frame after the world
   // integrates (see SceneChain).
   readonly sceneChains: SceneChain[];
@@ -79,9 +79,7 @@ export class Level {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built.byIndex);
-    // After the bodies, since a panel welded into a compound group is placed in
-    // that group's engine body's frame.
-    this.backgrounds = buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup);
+    this.decor = built.decor;
     this.visualSource = { data, built };
 
     init?.(this);

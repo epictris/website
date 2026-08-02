@@ -23,26 +23,22 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { Hook } from "../classes/hook";
 import { Player } from "../classes/player";
 import type { World } from "../engine/world";
-import type { SceneBackground } from "../level/backgrounds";
-import { backgroundTransform } from "../level/backgrounds";
+import type { SceneDecor } from "../level/decor";
 import type { SceneChain } from "../level/chains";
 import type { LevelVisualSource } from "../level/buildBodies";
 import type { EnvironmentData } from "../level/levelFormat";
-import { outlineOfData } from "../render/shapePath";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import {
   BodyVisual,
-  backgroundGeometry,
-  backgroundZ,
+  DecorVisual,
   type AuthoredVisual,
   type VisualLookup,
 } from "./bodyVisuals";
-import { tintedSurface } from "./assets";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { configureRenderer, Environment } from "./environment";
-import { FOV_Y_DEG, orientTo, placeAt, syncCamera, VIEW_ASPECT } from "./space";
+import { FOV_Y_DEG, placeAt, syncCamera, VIEW_ASPECT } from "./space";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
@@ -50,7 +46,7 @@ import { FOV_Y_DEG, orientTo, placeAt, syncCamera, VIEW_ASPECT } from "./space";
 // branch per host.
 export interface Scene3DLevel {
   readonly world: World;
-  readonly backgrounds: readonly SceneBackground[];
+  readonly decor: readonly SceneDecor[];
   readonly sceneChains: readonly SceneChain[];
   readonly visualSource: LevelVisualSource;
   // The ball & chain avatar, when this level has one. Its sphere, its mounting
@@ -78,8 +74,7 @@ export class Scene3D {
   private readonly renderer: THREE.WebGLRenderer;
   private env: Environment;
   private readonly bodies = new Map<CollisionObject2D, BodyVisual>();
-  private readonly panels: Array<{ panel: SceneBackground; obj: THREE.Object3D }> = [];
-  private readonly panelGeometry: THREE.BufferGeometry[] = [];
+  private readonly decor: DecorVisual[] = [];
   private lookup: VisualLookup = () => undefined;
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
@@ -114,7 +109,7 @@ export class Scene3D {
     this.env = new Environment(this.scene, level.visualSource.data.environment);
     this.lookup = makeLookup(level.visualSource);
     for (const body of level.world.bodies) this.ensureBody(body);
-    this.buildPanels(level.backgrounds);
+    this.buildDecor(level.decor);
     if (level.ball) {
       this.ballVisual = new BallVisual(level.ball);
       this.scene.add(this.ballVisual.root);
@@ -138,26 +133,20 @@ export class Scene3D {
     return visual;
   }
 
-  private buildPanels(backgrounds: readonly SceneBackground[]): void {
-    for (const panel of backgrounds) {
-      const v = panel.data.visual;
-      if (v?.kind === "none") continue;
-      const geo = backgroundGeometry(v, outlineOfData(panel.data.shape));
-      this.panelGeometry.push(geo);
-      const mesh = new THREE.Mesh(
-        geo,
-        tintedSurface(v?.texture, panel.data.color),
-      );
-      // A backdrop takes the sun but casts nothing: it is decoration BEHIND the
-      // level, and a panel throwing a shadow across the geometry in front of it
-      // would be decoration the player has to read as an object.
-      mesh.receiveShadow = true;
-      mesh.castShadow = false;
-      const holder = new THREE.Group();
-      holder.add(mesh);
-      mesh.position.z = backgroundZ(v);
-      this.scene.add(holder);
-      this.panels.push({ panel, obj: holder });
+  // Drawn-only shapes. They never reached `world.bodies` - that is what
+  // `collision: false` means - so they are built from the level's resolved decor
+  // list rather than from the body reconciliation above, and each gets exactly
+  // the visual a body's piece gets.
+  private buildDecor(decor: readonly SceneDecor[]): void {
+    for (const d of decor) {
+      const visual = new DecorVisual(d, {
+        visual: d.data.visual,
+        material: d.data.material,
+        thickness: d.data.thickness,
+        color: d.data.color,
+      });
+      this.decor.push(visual);
+      this.scene.add(visual.root);
     }
   }
 
@@ -245,13 +234,7 @@ export class Scene3D {
 
     for (const visual of this.bodies.values()) visual.sync(alpha);
 
-    for (const { panel, obj } of this.panels) {
-      const t = backgroundTransform(panel, alpha);
-      // The panel's z lives on its mesh, so the holder carries only the
-      // gameplay-plane placement its body (or the world) gives it.
-      placeAt(obj, t.pos);
-      orientTo(obj, t.rot);
-    }
+    for (const d of this.decor) d.sync(alpha);
 
     this.chains.sync(level, alpha);
     this.ballVisual?.sync(alpha);
@@ -274,10 +257,11 @@ export class Scene3D {
       visual.dispose();
     }
     this.bodies.clear();
-    for (const { obj } of this.panels) this.scene.remove(obj);
-    this.panels.length = 0;
-    for (const g of this.panelGeometry) g.dispose();
-    this.panelGeometry.length = 0;
+    for (const d of this.decor) {
+      this.scene.remove(d.root);
+      d.dispose();
+    }
+    this.decor.length = 0;
     if (this.ballVisual) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();

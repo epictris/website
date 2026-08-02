@@ -21,6 +21,7 @@ import {
   ShapeGeometry,
 } from "../lib/shapeGeometry";
 import { KillZone } from "../classes/killZone";
+import { collides, resolveDecor, type SceneDecor } from "./decor";
 import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
@@ -92,13 +93,17 @@ export interface BuiltBodies {
   // of one compound group map to the SAME object, which is the whole point of a
   // group; chains resolve their authored body index through this.
   byIndex: (CollisionObject2D | null)[];
-  // The engine object each compound-group TAG became. Background panels resolve
-  // the body they ride through this, which is why it is keyed by the tag rather
-  // than by an index: a panel is a member of the group, not a thing attached to
-  // one particular entry of it, and the group is what has an engine body. A tag
-  // no body carries (a background-only group, or one whose bodies were all
-  // deleted) is simply absent, and the panel stays where it was authored.
+  // The engine object each compound-group TAG became. Keyed by the tag rather
+  // than by an index because a group's members belong to the group, not to one
+  // particular entry of it, and the group is what has an engine body. A tag no
+  // body carries (a group of decoration alone, or one whose colliding pieces
+  // were all deleted) is simply absent.
   byGroup: Map<string, CollisionObject2D>;
+  // The authored entries that are drawn but never simulated
+  // (`LevelBodyData.collision: false`), each resolved to the body it rides, in
+  // authored order. They are NOT in `byIndex`: they became no engine object and
+  // no piece of one, which is the whole of what the flag means.
+  decor: SceneDecor[];
   // Which SHAPE of that engine object each `data.bodies` entry became, by index.
   // `byIndex` alone cannot answer this once groups exist: several entries map to
   // one body, and a per-entry property (`material`, `impermeable`, and now
@@ -129,11 +134,19 @@ function groupable(kind: LevelBodyData["kind"]): boolean {
 // The authored entries in build order, each as the run of entries that make up
 // one engine body. A group's run is emitted where its FIRST member sits, so
 // z-order and the `byIndex` mapping stay in authored order.
+//
+// Decoration is in its run like any other member: it is what welds it to the
+// body, and it is dropped from the pieces (not from the run) further down, so
+// "which body does this ride" and "which shapes does that body have" are read
+// off one grouping rather than two that can disagree. Its own kind is not
+// consulted for `groupable` - a kind is a statement about physics and a
+// non-colliding shape makes none, so a piece of decoration a level happens to
+// leave marked `force` still rides the crate it was welded to.
 function groupRuns(bodies: readonly LevelBodyData[]): Array<{ tag: string | null; indices: number[] }> {
   const runs: Array<{ tag: string | null; indices: number[] }> = [];
   const byTag = new Map<string, { tag: string | null; indices: number[] }>();
   bodies.forEach((b, i) => {
-    const tag = b.group && groupable(b.kind) ? b.group : null;
+    const tag = b.group && (!collides(b) || groupable(b.kind)) ? b.group : null;
     if (tag === null) {
       runs.push({ tag: null, indices: [i] });
       return;
@@ -253,28 +266,54 @@ export function buildLevelBodies(
   const byIndex: (CollisionObject2D | null)[] = data.bodies.map(() => null);
   const byGroup = new Map<string, CollisionObject2D>();
   const shapeIndexByIndex: number[] = data.bodies.map(() => 0);
+  // Decoration, paired with the run it belongs to; resolved after the loop,
+  // since resolving needs the body's final origin and that is the run's combined
+  // centre of mass rather than anything an entry states.
+  const pending: Array<{ index: number; run: number }> = [];
+  const runBody: (CollisionObject2D | null)[] = [];
 
   for (const run of groupRuns(data.bodies)) {
-    // A group's kind, style and friction come from its first member: a body has
-    // one of each, and the editor keeps a group's members in agreement so a file
-    // never disagrees with what it draws.
-    const lead = data.bodies[run.indices[0]!]!;
-    const pieces = run.indices.map((i) => makePiece(data.bodies[i]!));
+    const runIndex = runBody.length;
+    // Drawn-only entries are dropped here and nowhere else. Not built means not
+    // in the world, not a collision shape, not a gram of mass and not a vertex
+    // the rope can wrap - the exclusion is the absence, so there is no physics
+    // path left to remember to exclude them from.
+    const solid = run.indices.filter((i) => collides(data.bodies[i]!));
+    for (const i of run.indices) {
+      if (!collides(data.bodies[i]!)) pending.push({ index: i, run: runIndex });
+    }
+    if (solid.length === 0) {
+      // A group of decoration alone: nothing to build, and its members stay
+      // where they were authored. Legitimate rather than an error - it is what
+      // several panels moved as one has always been.
+      runBody.push(null);
+      continue;
+    }
+    // A group's kind, style and friction come from its first COLLIDING member: a
+    // body has one of each, and the editor keeps a group's members in agreement
+    // so a file never disagrees with what it draws.
+    const lead = data.bodies[solid[0]!]!;
+    const pieces = solid.map((i) => makePiece(data.bodies[i]!));
     const built = buildOne(world, lead, pieces, onReset);
-    // `mountPieces` mounts the run's pieces in order, so entry `run.indices[k]`
-    // is shape `k` of the body it built - the same correspondence
+    // `mountPieces` mounts the run's pieces in order, so entry `solid[k]` is
+    // shape `k` of the body it built - the same correspondence
     // `setCompoundInertia` relies on to weigh each piece by its own material.
-    run.indices.forEach((i, k) => {
+    solid.forEach((i, k) => {
       byIndex[i] = built;
       shapeIndexByIndex[i] = k;
     });
+    runBody.push(built);
     if (run.tag !== null) byGroup.set(run.tag, built);
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and an AnchorBody reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, byIndex, byGroup, shapeIndexByIndex };
+  // Authored order, which is the order they are drawn in.
+  pending.sort((a, b) => a.index - b.index);
+  const decor = pending.map((p) => resolveDecor(data.bodies[p.index]!, runBody[p.run] ?? null));
+
+  return { wrapBodies, byIndex, byGroup, shapeIndexByIndex, decor };
 }
 
 function buildOne(

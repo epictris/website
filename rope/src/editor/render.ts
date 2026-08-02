@@ -6,7 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
-import { fillBackground } from "../render/background";
+import { fillDecor } from "../render/decor";
 import { fillAnchor, fillForceArea, fillKillZone } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import {
@@ -19,6 +19,7 @@ import {
   groupMembers,
   halfExtents,
   isArrowNote,
+  itemDepth,
   NOTE_COLOR,
   toWorld,
   type EdChain,
@@ -46,14 +47,16 @@ const SELECT = "#f4a460";
 const VISUAL_BADGE = "#b07cff";
 const MARQUEE_FILL = "rgba(244,164,96,0.10)";
 const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the region violet
-// Editor-only outline of a background panel. In game a background is drawn with
-// no border at all — that is what keeps it from reading as an object — but an
-// author still has to see where a dark or near-transparent panel ends, and has
-// to be able to find one to click. Dashed, like every other volume that is not
-// a body, and a saturated teal rather than a grey: the outline has to carry
-// against both the pale grid backdrop and whatever the panel is filled with,
-// and a neutral edge disappears into one or the other.
-const BACKGROUND_EDGE = "#4ec9b0";
+// Editor-only outline of a non-colliding shape. In game decoration is drawn
+// with no border at all — that is what keeps it from reading as an object — but
+// an author still has to see where a dark or near-transparent panel ends, has to
+// be able to find one to click, and above all has to be able to tell at a glance
+// which shapes on the canvas are part of the level and which are only drawn.
+// Dashed, like every other volume the player passes through, and a saturated
+// teal rather than a grey: the outline has to carry against both the pale grid
+// backdrop and whatever the shape is filled with, and a neutral edge disappears
+// into one or the other.
+const DECOR_EDGE = "#4ec9b0";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
 
@@ -591,13 +594,19 @@ export function drawEditor(
   ctx.translate(-cam.position.x, -cam.position.y);
 
   const worldLine = 1 / scale;
-  // Backgrounds first, exactly as the game draws them: decoration is under
-  // everything, so nothing the player can touch is ever hidden behind it.
-  const backgrounds = visibleLayers.has("background")
-    ? model.items.filter((i) => i.layer === "background")
-    : [];
-  for (const g of backgrounds) {
-    fillBackground(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
+  // Decoration first, exactly as the game draws it: a non-colliding shape is
+  // under everything, whatever its position in the list, so nothing the player
+  // can touch is ever hidden behind it.
+  // Back to front by the same depth the game draws (and a click selects) by, so
+  // the panel on top on screen is the panel on top everywhere. `sort` is stable,
+  // so decoration at one depth keeps its authored order.
+  const decor = (
+    visibleLayers.has("geometry")
+      ? model.items.filter((i) => i.layer === "geometry" && !i.collision)
+      : []
+  ).sort((a, b) => itemDepth(a) - itemDepth(b));
+  for (const g of decor) {
+    fillDecor(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
     if (selectedIds.has(g.id)) {
       pathBody(ctx, g);
       ctx.strokeStyle = SELECT;
@@ -605,7 +614,7 @@ export function drawEditor(
       ctx.stroke();
     }
     pathBody(ctx, g);
-    ctx.strokeStyle = BACKGROUND_EDGE;
+    ctx.strokeStyle = DECOR_EDGE;
     ctx.lineWidth = worldLine * 1.5;
     ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.stroke();
@@ -619,7 +628,7 @@ export function drawEditor(
   // Hook-only anchors first: they are background the player passes through, and
   // the game draws them behind solid geometry too. `sort` is stable, so the
   // authored order is preserved within each group.
-  const geometry = model.items.filter((i) => i.layer === "geometry");
+  const geometry = model.items.filter((i) => i.layer === "geometry" && i.collision);
   const ordered = visibleLayers.has("geometry")
     ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
     : [];
@@ -732,7 +741,7 @@ export function drawEditor(
   // `none` (nothing is drawn here at all, an invisible wall). `auto` is the
   // default and is exactly the shape as drawn, so a badge on it would be a mark
   // on almost every body saying nothing.
-  for (const body of [...(visibleLayers.has("geometry") ? geometry : []), ...backgrounds]) {
+  for (const body of [...(visibleLayers.has("geometry") ? geometry : []), ...decor]) {
     const kind = body.visual.kind;
     if (kind === "auto") continue;
     const r = 6 * PX;
@@ -763,12 +772,12 @@ export function drawEditor(
   // several shapes touching - so the marks are what make the seam rule visible
   // while a level is being laid out.
   //
-  // Backgrounds are in the same pass, spokes and hull included: a panel welded
+  // Decoration is in the same pass, spokes and hull included: a panel welded
   // into a body rides it in play, and the spoke reaching down to a backdrop is
   // the only thing on screen that says so. Only the VISIBLE members are marked,
   // so hiding a layer really does take it out of the picture; the diamond stays
   // put whatever is hidden, since it is the shapes' centre of mass alone.
-  const markable = [...(visibleLayers.has("geometry") ? geometry : []), ...backgrounds];
+  const markable = [...(visibleLayers.has("geometry") ? geometry : []), ...decor];
   drawGroupMarks(ctx, markable, model.items, selectedIds, worldLine);
 
   // Chains over the bodies they hold. Drawn STRAIGHT, because that is what the

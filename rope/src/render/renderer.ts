@@ -28,7 +28,7 @@ import type { ViewTransform } from "./viewport";
 import type { CameraRegionData } from "../level/levelFormat";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import { drawTrainingGrid } from "./trainingGrid";
-import { drawBackgrounds } from "./background";
+import { drawDecor } from "./decor";
 import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
 import {
   outlineHalfExtents,
@@ -433,7 +433,7 @@ export function render(
   if (!overlayOnly) {
     // Authored decoration, under everything: nothing the player can touch may be
     // hidden behind a backdrop.
-    drawBackgrounds(ctx, level.backgrounds, alpha);
+    drawDecor(ctx, level.decor, alpha);
 
     // Chains hang among the decoration, behind every solid thing - which is the
     // same statement as their passing through it (see `SceneChain`).
@@ -724,7 +724,7 @@ export function renderBall(
 
   if (!overlayOnly) {
     // Authored decoration under everything (see `render`).
-    drawBackgrounds(ctx, level.backgrounds, alpha);
+    drawDecor(ctx, level.decor, alpha);
 
     // Chains behind the solid geometry they pass through (see `render`).
     drawSceneChains(ctx, level.sceneChains, alpha);

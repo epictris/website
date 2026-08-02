@@ -10,15 +10,25 @@
 // shading. One `MeshStandardMaterial` per key, shared by every body that names
 // it, so 154 bodies are a handful of materials and a handful of draw states.
 //
-// The maps themselves are GENERATED rather than loaded. A real PBR texture set
-// is three 1k images per material and this project ships no binary assets; a
-// value-noise field turned into an albedo, a height-derived normal map and a
-// roughness map gets most of the way there - grain, tonal variation, a surface
-// that catches the sun differently as it turns - for a few hundred bytes of
-// code and no download. `TEXTURE_SETS` is the table to replace, one entry at a
-// time, if authored maps ever arrive: the loader below already keys on the same
-// names and the UVs are already in metres (see extrude.ts), so a real texture
-// drops in with a `repeat` and nothing else moves.
+// A surface comes from one of two places, and a level cannot tell which. Both
+// are keyed into ONE namespace that `surfaceFor` looks up authored-first:
+//
+// - GENERATED (`TEXTURE_SETS`): a value-noise field turned into an albedo, a
+//   height-derived normal map and a roughness map, one entry per material name.
+//   Grain, tonal variation, a surface that catches the sun differently as it
+//   turns - for a few hundred bytes of code and no download, which is why every
+//   level looked fully 3D before a single asset existed and why an unknown
+//   texture name still lands on something ordinary rather than on nothing.
+// - AUTHORED (`TEXTURE_ASSETS`): a real PBR set - albedo, normal, roughness,
+//   metallic and ambient occlusion - fetched from the release store like a prop,
+//   sha256-pinned, and swapped into the material once it arrives. Until then the
+//   generated surface is what is drawn, so an authored texture is never a white
+//   box on a slow connection.
+//
+// Tiling is a LENGTH in both halves: the extruder writes its UVs in metres
+// (extrude.ts), so `tile` is the size of one repeat in the world and a 4 m wall
+// and a 0.4 m plank of the same oak show the same grain rather than the same
+// number of repeats. A body may override it per shape (`VisualData.tile`).
 //
 // PROPS are the GLTF half: a hand-written manifest mapping a key to a file, an
 // async cached loader, and a neutral placeholder returned immediately so a
@@ -74,6 +84,152 @@ export const DEFAULT_TEXTURE: MaterialName = "wood";
 export function textureSetName(name: string | undefined): MaterialName {
   if (name !== undefined && (MATERIAL_NAMES as string[]).includes(name)) return name as MaterialName;
   return DEFAULT_TEXTURE;
+}
+
+// ---------------------------------------------------------------------------
+// Authored texture sets
+// ---------------------------------------------------------------------------
+
+// One map of an authored PBR set: a file under `public/`, pinned to the bytes
+// this revision was written against, exactly as a `MeshAsset` is and for the
+// same reasons (see `MeshAsset.file` / `.sha256`).
+export interface TextureMap {
+  file: string;
+  sha256: string;
+}
+
+// A surface made of AUTHORED images rather than generated noise. The five maps
+// are the five questions a PBR shader asks about a surface, and each is
+// optional: a set is whatever of them the author has, and every one absent
+// leaves the scalar below (or three.js's own default) doing the job, so a set of
+// nothing but an albedo is a legitimate - and often sufficient - thing to ship.
+//
+// Channel conventions are three.js's, which are glTF's:
+//   base       albedo, sRGB. The only one that is colour rather than data.
+//   normal     tangent space, linear. +Y up (OpenGL); a DirectX-convention map
+//              reads as lighting from the wrong vertical side, so flip it in the
+//              texture tool rather than in a shader here.
+//   roughness  GREEN channel. A greyscale file has R=G=B and simply works.
+//   metallic   BLUE channel, likewise.
+//   ao         RED channel, likewise. Read from the same UVs as everything else
+//              (`Texture.channel` 0), since the extruder writes one metre-scaled
+//              UV set and there is no second one to point it at.
+//
+// A set REPLACES the generated surface for the material it stands in for; it
+// does not blend with it. Until the images arrive the generated one is what is
+// drawn (see `fallback`), which is why a level dressed in authored textures is
+// never a scene of untextured white boxes on a slow connection.
+export interface TextureAsset {
+  // The images themselves, nested so the five map slots and the scalars below
+  // that scale them cannot collide over a name.
+  maps: {
+    base?: TextureMap;
+    normal?: TextureMap;
+    roughness?: TextureMap;
+    metallic?: TextureMap;
+    ao?: TextureMap;
+  };
+  // Size of one repeat in METRES: the world distance this surface was captured
+  // over, which is a fact about the texture rather than a choice. It is what a
+  // shape's `tileScale` multiplies, so life size is `1` everywhere in every level
+  // and stays life size if this set is later replaced by one captured at a
+  // different size.
+  tile: number;
+  // Multipliers, applied on top of whatever the maps say. With no roughness map
+  // `roughness` IS the roughness; with one it scales it. Absent = 1, which is
+  // "the map alone", and 1 for metalness would make an untextured set fully
+  // metal - so a set with no metallic map wants an explicit 0 here, and that is
+  // the default rather than a trap left to the author.
+  roughness?: number;
+  metalness?: number;
+  // Relief strength of the normal map, and how hard the AO map bites. Absent =
+  // 1 for both, which is the map as authored.
+  normalScale?: number;
+  aoIntensity?: number;
+  // The generated surface to wear until the images load, and to fall back to on
+  // a load failure. A missing texture is then a wall that looks like ordinary
+  // stone rather than a hole in the level - the same rule the prop placeholder
+  // follows. Absent = the default surface.
+  fallback?: MaterialName;
+  // WHERE THIS CAME FROM, who made it, and what it may be used under - required,
+  // and `cli assets` fails without them, for exactly the reasons `MeshAsset`
+  // states at length: the file is opaque, the licence lives on a web page nobody
+  // revisits, and a binary with no source is a liability rather than an asset.
+  source: string;
+  author: string;
+  license: string;
+}
+
+// The texture manifest. Hand-written like the prop manifest, and for the same
+// reason: an asset is a decision, and a directory scan would make dropping a
+// file into a folder silently change what a level looks like.
+//
+// Empty until sets are added. A `visual.texture` naming a key that is not here
+// falls through to the generated surfaces, so an unknown name is an ordinary
+// wall rather than an invisible one.
+//
+// Every entry is `assets:optimize-texture`d, then `assets:publish`ed, and
+// `cli assets` holds the whole directory to a byte budget; see "The asset store"
+// in CLAUDE.md.
+export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
+  // Keyed as "brick" - the MATERIAL name - which is the whole point of the one
+  // namespace: every body already made of brick wears this the moment it is in
+  // the manifest, with no level edited. Name a set something else only when it
+  // is a second brick rather than the brick.
+  //
+  // CC0, and that is a requirement rather than a preference for anything in this
+  // store: the maps are served from a PUBLIC release, which is a standalone,
+  // reusable copy of the asset however internal the intent - see "The asset
+  // store". A licence that forbids redistributing the files forbids that, so a
+  // licensed set has to stay off this manifest.
+  brick: {
+    maps: {
+      base: {
+        file: "/textures/factory-brick-base.webp",
+        sha256: "5a95a794e391636692452711f2d8aa7caf512f4d0b51929e1b7c2ae9cfac4840",
+      },
+      // Poly Haven ships `nor_gl`, which is the OpenGL convention (+Y up) this
+      // renderer wants; a `nor_dx` map would light every crack from the wrong
+      // vertical side and has to be flipped in the texture tool rather than here.
+      normal: {
+        file: "/textures/factory-brick-normal.webp",
+        sha256: "3770c43d120a4b3539ce3f6c924602422262d6a831440813048a937e39b9e0a0",
+      },
+      roughness: {
+        file: "/textures/factory-brick-roughness.webp",
+        sha256: "a66d5b69eaa985691c7edae9425dc64e5ebad5a0f992286f5b943ca7ec0b6e22",
+      },
+      // No AO and no metallic map in this set, which is ordinary: brick is a
+      // dielectric, so `metalness` below says so once rather than as 4 MB of
+      // black pixels, and the generated surface's own relief covers the AO.
+      // The displacement map the download also carries has nowhere to go - these
+      // are extruded prisms, not tessellated surfaces.
+    },
+    // Metres per repeat, and this one is a FACT rather than a judgement: Poly
+    // Haven publishes the real-world size it was captured at (1.5 x 1.5 m, see
+    // `scale` on https://api.polyhaven.com/info/factory_brick), and the UVs here
+    // are in metres, so the texture lands at life size with no eyeballing. Where
+    // a source states no size, this is the number to set by eye instead - and
+    // `VisualData.tile` is the per-shape override either way.
+    tile: 1.5,
+    // A roughness map is present, so this is its multiplier; metalness has no
+    // map and is therefore the value itself, which for brick is zero.
+    metalness: 0,
+    // What is drawn until the maps arrive, and what a failed load falls back to.
+    fallback: "brick",
+    source: "https://polyhaven.com/a/factory_brick",
+    author: "Rob Tuytel",
+    license: "CC0",
+  },
+};
+
+// Every map of every set, which is what the fetch, the budget and the collision
+// check all iterate.
+export function textureMaps(asset: TextureAsset): TextureMap[] {
+  const m = asset.maps;
+  return [m.base, m.normal, m.roughness, m.metallic, m.ao].filter(
+    (x): x is TextureMap => x !== undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -208,18 +364,259 @@ function buildMaps(set: TextureSet): {
 // on the scene.
 const materialCache = new Map<string, THREE.MeshStandardMaterial>();
 
-// The shared surface for a texture-set key. Callers must not mutate the result;
-// a body that needs its own tint clones it.
-export function surfaceMaterial(name: string | undefined): THREE.MeshStandardMaterial {
-  const key = textureSetName(name);
+// What an authored entry asks its surface to be. One request object rather than
+// a positional list, because the four are read together and three of them are
+// optional overrides of each other: the texture set falls back to the material
+// name, the tile to the set's own, the colour to no tint at all.
+export interface SurfaceRequest {
+  // A `TEXTURE_ASSETS` key (an authored PBR set) or a `TEXTURE_SETS` one (a
+  // generated surface, keyed by material name).
+  texture?: string;
+  // The shape's material, used when no texture is named - which is almost every
+  // body, since naming the stuff a thing is made of is the decision an author is
+  // already making.
+  material?: string;
+  // How large to wear it, as a MULTIPLE of the size the texture was authored at
+  // (`TextureAsset.tile` / `TextureSet.tile`, both metres). 1 (and absent) is
+  // life size, 2 is twice as large. The absolute size stays a fact about the
+  // texture and the level says only how it wants it - see `VisualData.tileScale`.
+  tileScale?: number;
+  // Where the pattern starts, as a shift in METRES in level coordinates: +x
+  // right, +y down. See `VisualData.tileOffsetX`.
+  offsetX?: number;
+  offsetY?: number;
+  // The authored fill colour, already lifted to its brightness floor by the
+  // caller. Multiplied against the albedo, so the grain survives the tint rather
+  // than being painted over by it.
+  color?: string;
+}
+
+// The shared surface for a request. Callers must not mutate the result.
+//
+// Cached on every part of the request that changes what the material IS, so a
+// level of 154 bodies in three colours at two tiling scales is six materials and
+// six draw states. The tile is part of the key because `repeat` lives on the
+// texture rather than on the material: two tiling scales are two texture
+// objects, sharing one uploaded image through `Texture.clone`.
+export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
+  const name = surfaceName(req.texture ?? req.material);
+  const tile = tileMetres(name, req.tileScale);
+  const ox = req.offsetX ?? 0;
+  const oy = req.offsetY ?? 0;
+  const key = `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}`;
   const cached = materialCache.get(key);
   if (cached) return cached;
-  const set = TEXTURE_SETS[key];
-  const maps = buildMaps(set);
-  for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) {
-    t.repeat.set(1 / set.tile, 1 / set.tile);
+  const authored = TEXTURE_ASSETS[name];
+  // An authored set is drawn in its fallback surface until its images arrive.
+  // The material is the same object throughout - the maps are swapped into it -
+  // so nothing that has already been handed this material has to be told.
+  const mat = buildSurface(authored ? (authored.fallback ?? DEFAULT_TEXTURE) : name, tile, ox, oy);
+  if (req.color) mat.color = new THREE.Color(req.color);
+  if (authored) void track(dressWithImages(mat, name, authored, tile, ox, oy));
+  materialCache.set(key, mat);
+  return mat;
+}
+
+// ---------------------------------------------------------------------------
+// Loading the authored maps
+// ---------------------------------------------------------------------------
+
+// Everything still in flight, props and texture maps alike.
+//
+// The game never waits on this - an asset arriving late is the whole design, and
+// the fallback surface (or the placeholder box) is what is drawn until it does.
+// A HEADLESS GRAB is the one caller that must: `shot.html` renders one frame and
+// declares itself done, so without a settle point it photographs whatever had
+// loaded by then. That is not a slow screenshot, it is a screenshot that is not
+// reproducible - the same command can produce a generated surface one run and an
+// authored one the next, which makes it useless as evidence of either.
+const pending = new Set<Promise<unknown>>();
+
+function track<T>(p: Promise<T>): Promise<T> {
+  pending.add(p);
+  void p.finally(() => pending.delete(p));
+  return p;
+}
+
+// Resolves when nothing is in flight. Loops rather than awaiting once, because
+// one load starts another: a prop's own textures are fetched by the GLTF loader
+// while the mesh promise is still settling.
+export async function assetsSettled(): Promise<void> {
+  while (pending.size > 0) {
+    await Promise.allSettled([...pending]);
   }
-  const mat = new THREE.MeshStandardMaterial({
+}
+
+// One decoded set of images per manifest key, however many tiling scales and
+// tints ask for it: an image is uploaded to the GPU once and a `Texture.clone`
+// shares that upload while carrying its own `repeat`.
+const imageCache = new Map<string, Promise<LoadedMaps>>();
+type Slot = "base" | "normal" | "roughness" | "metallic" | "ao";
+type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
+
+let textureLoader: THREE.TextureLoader | null = null;
+
+function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
+  const cached = imageCache.get(name);
+  if (cached) return cached;
+  textureLoader ??= new THREE.TextureLoader();
+  const loader = textureLoader;
+  const slots: Array<[Slot, TextureMap | undefined]> = [
+    ["base", asset.maps.base],
+    ["normal", asset.maps.normal],
+    ["roughness", asset.maps.roughness],
+    ["metallic", asset.maps.metallic],
+    ["ao", asset.maps.ao],
+  ];
+  const p = Promise.all(
+    slots.map(async ([slot, map]): Promise<[Slot, THREE.Texture | null]> => {
+      if (!map) return [slot, null];
+      try {
+        const tex = await loader.loadAsync(map.file);
+        // The albedo is the one map that is COLOUR; the rest are data and must
+        // stay linear, or a roughness of 0.5 is read as 0.21 and every authored
+        // surface comes out shinier than it was painted.
+        tex.colorSpace = slot === "base" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.anisotropy = 4;
+        return [slot, tex];
+      } catch (err: unknown) {
+        // One missing map is not a missing surface: the rest of the set still
+        // dresses the material and the generated fallback covers this slot.
+        console.warn(`[render3d] texture "${name}" map ${slot} failed to load:`, err);
+        return [slot, null];
+      }
+    }),
+  ).then((entries) => {
+    const out: LoadedMaps = {};
+    for (const [slot, tex] of entries) if (tex) out[slot] = tex;
+    return out;
+  });
+  imageCache.set(name, track(p));
+  return p;
+}
+
+// Swap an authored set's maps into a material already in the scene, at this
+// material's own tiling scale.
+async function dressWithImages(
+  mat: THREE.MeshStandardMaterial,
+  name: string,
+  asset: TextureAsset,
+  tile: number,
+  ox: number,
+  oy: number,
+): Promise<void> {
+  const maps = await loadMaps(name, asset);
+  const at = (slot: Slot): THREE.Texture | null => {
+    const tex = maps[slot];
+    if (!tex) return null;
+    const clone = tex.clone();
+    applyTiling(clone, tile, ox, oy);
+    clone.needsUpdate = true;
+    return clone;
+  };
+  // Each map REPLACES the generated one rather than joining it: a set that
+  // authors an albedo and a normal keeps the generated roughness, which is a
+  // sensible surface, and a set that authors all five owes nothing to the noise.
+  const base = at("base");
+  const normal = at("normal");
+  const roughness = at("roughness");
+  const metallic = at("metallic");
+  const ao = at("ao");
+  if (base) mat.map = base;
+  if (normal) mat.normalMap = normal;
+  if (roughness) mat.roughnessMap = roughness;
+  if (metallic) mat.metalnessMap = metallic;
+  if (ao) mat.aoMap = ao;
+  // With a map present these are multipliers; with none, they are the value.
+  // Metalness defaults to 0 rather than 1 because a set with no metallic map is
+  // a dielectric - stone, wood, plaster - and a fully metal wall lit by one sun
+  // reads as black.
+  mat.roughness = asset.roughness ?? (roughness ? 1 : 0.8);
+  mat.metalness = asset.metalness ?? (metallic ? 1 : 0);
+  const scale = asset.normalScale ?? 1;
+  mat.normalScale.set(scale, scale);
+  mat.aoMapIntensity = asset.aoIntensity ?? 1;
+  mat.needsUpdate = true;
+}
+
+// The generated surface for a material name, at life size and with no tint -
+// what the ball, its chain and the other code-built visuals wear.
+export function surfaceMaterial(name: string | undefined): THREE.MeshStandardMaterial {
+  return surfaceFor({ texture: name });
+}
+
+// Which named surface a key resolves to, and at what scale it is meant to be
+// seen. ONE namespace, looked up authored-first: a level names a surface, and
+// whether that surface is a downloaded set of maps or a few hundred bytes of
+// generated noise is an answer this module gives rather than a distinction the
+// level has to carry. Replacing a generated surface with an authored one is
+// therefore adding a manifest entry under the material's own name, and every
+// level already naming that material picks it up.
+//
+// Both answer for an unknown name the way `materialDensity` does for an unknown
+// material: a hand-edited level naming a texture this build does not have should
+// look ordinary rather than invisible.
+// Exported because it is the whole of the resolution rule and it is PURE - no
+// canvas, no GPU, no level - which is what lets `cli render3d` assert it (that
+// suite deliberately touches none of those).
+export function surfaceName(name: string | undefined): string {
+  if (name !== undefined && name in TEXTURE_ASSETS) return name;
+  return textureSetName(name);
+}
+
+// Metres per repeat: the texture's own captured size, scaled by what the shape
+// asked for. One multiply in one place, so "life size" stays a property of the
+// texture rather than a number every level has to know - and the editor's
+// readout, the material built for the GPU and `cli render3d` all get it from
+// here rather than each doing the arithmetic.
+export function tileMetres(name: string, tileScale?: number | null): number {
+  return surfaceTile(name) * (tileScale ?? 1);
+}
+
+export function surfaceTile(name: string): number {
+  const authored = TEXTURE_ASSETS[name];
+  if (authored) return authored.tile;
+  return TEXTURE_SETS[name as MaterialName].tile;
+}
+
+// The generated maps for one surface, built once however many tiling scales and
+// tints a level asks it for: generating a 256² value-noise field three times
+// over is the one part of this that is not free, and a clone shares the uploaded
+// image while carrying its own `repeat`.
+const mapsCache = new Map<string, ReturnType<typeof buildMaps>>();
+
+// How a world-space shift becomes a UV offset, for one texture at one tiling
+// scale. Three samples at `uv * repeat + offset`, and the extruder's UVs are
+// metres with the y axis NEGATED into three's frame (extrude.ts) - so moving the
+// pattern +x in the level means sampling further back along u, while moving it
+// +y (down the screen) means sampling further along v. The asymmetry is that one
+// negation and nothing else.
+function applyTiling(tex: THREE.Texture, tile: number, ox: number, oy: number): void {
+  tex.repeat.set(1 / tile, 1 / tile);
+  tex.offset.set(-ox / tile, oy / tile);
+}
+
+function buildSurface(
+  name: string,
+  tile: number,
+  ox: number,
+  oy: number,
+): THREE.MeshStandardMaterial {
+  const set = TEXTURE_SETS[name as MaterialName];
+  let maps = mapsCache.get(name);
+  if (!maps) {
+    maps = buildMaps(set);
+    mapsCache.set(name, maps);
+  }
+  maps = {
+    map: maps.map.clone(),
+    normalMap: maps.normalMap.clone(),
+    roughnessMap: maps.roughnessMap.clone(),
+  };
+  for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) applyTiling(t, tile, ox, oy);
+  return new THREE.MeshStandardMaterial({
     map: maps.map,
     normalMap: maps.normalMap,
     roughnessMap: maps.roughnessMap,
@@ -227,33 +624,6 @@ export function surfaceMaterial(name: string | undefined): THREE.MeshStandardMat
     metalness: set.metalness,
     normalScale: new THREE.Vector2(1, 1),
   });
-  materialCache.set(key, mat);
-  return mat;
-}
-
-// A body's authored fill colour, applied to a copy of its surface. Levels are
-// authored with colours and those colours are how an author distinguishes one
-// wall from another, so the 3D scene TINTS the material rather than ignoring it:
-// the texture supplies the grain and the relief, the authored colour supplies
-// the hue.
-//
-// Tints are cached on the same key-plus-colour, so a level of 154 bodies in
-// three colours is three materials.
-export function tintedSurface(
-  texture: string | undefined,
-  color: string | undefined,
-): THREE.MeshStandardMaterial {
-  const base = surfaceMaterial(texture);
-  if (!color) return base;
-  const key = `${textureSetName(texture)}|${color}`;
-  const cached = materialCache.get(key);
-  if (cached) return cached;
-  const mat = base.clone();
-  // Multiplied against the albedo map, so the grain survives the tint rather
-  // than being painted over by it.
-  mat.color = new THREE.Color(color);
-  materialCache.set(key, mat);
-  return mat;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +678,7 @@ export interface MeshAsset {
 // obviously wrong, and never a hole in the level.
 //
 // Every entry is `assets:optimize`d, then `assets:publish`ed, and `cli assets`
-// holds the whole directory to a byte budget; see "Prop assets" in CLAUDE.md.
+// holds the whole directory to a byte budget; see "The asset store" in CLAUDE.md.
 export const MESH_ASSETS: Record<string, MeshAsset> = {
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
@@ -373,6 +743,6 @@ export function loadMesh(key: string): Promise<THREE.Object3D | null> {
       console.warn(`[render3d] mesh "${key}" failed to load:`, err);
       return null;
     });
-  gltfCache.set(key, p);
+  gltfCache.set(key, track(p));
   return p.then((o) => (o ? o.clone(true) : null));
 }

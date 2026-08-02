@@ -686,8 +686,8 @@ bun run replay selftest                       # determinism + replay round-trip 
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
-bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, `visual` round trips
-bun run src/tools/cli.ts assets               # prop budget, LFS pointers, orphans, licences (see Prop assets)
+bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
+bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
@@ -1159,7 +1159,7 @@ way in editor and game via `src/render/color.ts`). Both the editor and the game 
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
 The editor gains the same stacked WebGL canvas the game page has, and a three-state **view toggle**: **2D** (exactly the editor as it was), **3D** (the scene alone, for judging how a level reads) and **3D + overlay** (the default - the scene beneath, collision outlines, handles and marquee on top with every fill dropped so the geometry stays visible through the thing describing it).
 The editor's free camera drives the same correspondence the game's does (see **3D rendering**), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
-The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies`/`buildSceneBackgrounds` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
+The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 A **visual** section in the inspector authors `VisualData` per shape (kind, mesh, placement, depth, bevel, texture), and the two kinds that are *not* what the shape looks like - `mesh` and `none` - get a badge on the canvas, since the 2D view cannot otherwise show them at all.
 
@@ -1172,9 +1172,12 @@ The override is baked into the `LevelData` the test level is built from rather t
 
 ### Layers
 
-The model is a flat list of `EdItem`s, each carrying a **`layer`**, listed in draw order: `background` (decoration behind the level, see below), `geometry` (the scene bodies), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
+The model is a flat list of `EdItem`s, each carrying a **`layer`**, listed in draw order: `geometry` (the scene's shapes, decoration included - see **Decoration** below), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
+There is deliberately **no decoration layer**: decoration is a geometry item with its collision unticked, which is one flag on the thing an author already has rather than a second kind of item with its own layer, its own inspector and its own resolve path.
 Every layer that is **visible and unlocked** is hit-testable, so a selection may span layers; the other two states are excluded from picking entirely, and both drop their items from the current selection when they are entered, rather than leaving things selected that a nudge, an inspector field or a Delete would still reach.
 The **active** layer is what new items are drawn onto, and it breaks a tie in the pick (`pickOrder`): a camera region blankets the geometry it governs, so a click that could mean either takes the active layer's item, and the layer switch is what says which.
+Within a layer the pick is by **depth**: two shapes whose outlines overlap are not ambiguous on screen - one of them is in front - so the click takes the one nearest the viewport (`itemDepth`, which is the editor's side of `depthOf` and therefore the same rule both renderers draw by), and authored order breaks only a genuine tie at one depth.
+Both canvases draw decoration back-to-front by that same number, so what is on top on screen, what is on top in the 3D scene and what a click selects cannot disagree - without it a backdrop 20 m behind the level swallows clicks meant for the wall drawn over it, purely because it was authored later.
 Every visible layer nevertheless draws at **full opacity**, active or not: dimming made a layer harder to read against the geometry it annotates, the layer list already says which one a click will hit, and visibility is the control for getting a layer out of the way.
 The toolbar's layer list picks it (**Tab** cycles) and carries a **visibility** and a **lock** toggle each; hiding the active layer moves the edit focus off it rather than leaving an invisible edit target, and the last visible layer refuses to go (hiding everything would leave a blank canvas nothing can be clicked on).
 The two toggles are deliberately independent: hiding gets a layer *out of the way*, locking keeps it **on screen but out of harm's way** — the reference you are working against.
@@ -1184,11 +1187,11 @@ A paste unlocks the layers it lands on for the same reason it un-hides them.
 The list stacks **vertically**, with the toggles in two icon columns down the left - eye then padlock - because a layer stack is a fixed, ordered set you read down rather than a row of toolbar buttons.
 Both are inline SVG (`eyeIcon`, `lockIcon`) rather than emoji or font glyphs, so they inherit the toolbar colour through `currentColor`, stay crisp at any DPI, and look the same on every platform.
 The eye is open when the layer draws and a dimmed closed lid when it does not; the padlock's *resting* state is unlocked, so it is the dim one (a row of lit padlocks would read as "everything is locked") and locked is amber, the layer list having already spent the accent blue on "active".
-A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 backgrounds" panel that also deleted the selected notes would be lying about its scope.
+A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 regions" panel that also deleted the selected notes would be lying about its scope.
 The inspector scrolls, because that stack can outgrow the viewport.
 A paste keeps each item on the layer it was copied from and reveals (and unlocks) any layer it lands on, rather than dropping items where they can be neither seen nor clicked.
-The draw tools are per-layer too (`LAYER_TOOLS`): `background`/`geometry`/`camera` offer `+Rect`/`+Circle`/`+Poly`, `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
-A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `background` and `geometry` start at their authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
+The draw tools are per-layer too (`LAYER_TOOLS`): `geometry`/`camera` offer `+Rect`/`+Circle`/`+Poly` (`geometry` adds `+Chain`), `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
+A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `geometry` starts at its authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s`, `buffer` and `priority`, plus `buf left`/`buf right`/`buf top`/`buf bottom` on a rect region.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` or `buffer` means the controller default, and a blank per-side buffer means the `buffer` above it.
@@ -1199,30 +1202,40 @@ An authored `buffer` draws too, as a finely dotted outline of the volume grown b
 One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
 The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.
 
-### Background
+### Decoration
 
-The **background** layer is decoration: shapes drawn behind the level with an authored colour and opacity, and **no interaction of any kind** - nothing collides with them, the rope never wraps them, no force reaches through them, and the sim never sees them.
-That is why they are not a `BodyKind` but their own `backgrounds` list (`BackgroundData` in `levelFormat.ts`), for the same reason camera regions are: a pass-through `BodyKind` would have to be excluded by every physics path, one call site at a time.
+**Collision is optional on every shape** (`LevelBodyData.collision`, the `collision` checkbox at the top of the inspector).
+Unticked, a shape is decoration: drawn with its authored colour and opacity, and with **no interaction of any kind** - nothing collides with it, the rope never wraps it, no force reaches through it, and the sim never sees it.
 
-It is the one editor layer besides `geometry` whose output the **player sees**, which makes two rules load-bearing rather than cosmetic (`render/background.ts` is the single implementation of both, shared by the editor and both game renderers, so what is authored is what plays):
+It used to be its own thing entirely - a `backgrounds` list beside the bodies, on the argument that a pass-through `BodyKind` would have to be excluded by every physics path one call site at a time.
+The argument was right about the danger and wrong about the remedy.
+A shape that is never **built** is excluded from everything by construction: `buildLevelBodies` drops non-colliding entries before they become `Piece`s, so there is no collision shape, no `World` membership, no mass and no vertex the rope can wrap - the exclusion IS the absence, and there is no call site left to remember.
+What that buys is that decoration stops being a second kind of thing with a second set of tools: it is drawn, picked, dragged, rotated, rubber-banded, grouped, copied, undone, given a 3D visual and a texture by exactly the code every wall goes through, and a wall becomes a backdrop (or back) by unticking a box rather than by being re-drawn on another layer.
+Levels on disk still carry the retired list; `normalizeLevelData` folds it into non-colliding bodies at the one gate every level passes through, writing out the panel list's own default fill explicitly so decoration cannot quietly turn grey on load, and **appending** rather than prepending because `ChainData` names bodies by index.
 
-- A panel is **drawn before every body**, so nothing the player can touch is ever hidden behind decoration.
-- A panel is **never stroked**. A border is what makes a shape read as an object; a backdrop has none, and every body draws over it with one. This is how a background stays distinguishable from a wall without a glyph - see **Backgrounds** in `docs/game-design.md`, which is the amendment to the pass-through rule that lets it off carrying one.
+Two rules make it read as decoration, and they are load-bearing rather than cosmetic (`render/decor.ts` is the single implementation of both, shared by the editor and both game renderers, so what is authored is what plays):
 
-The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a panel that is dark, huge or nearly transparent. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the panel's own fill, whichever it was picked to contrast with.
+- It is **drawn before every body**, whatever its position in the authored list, so nothing the player can touch is ever hidden behind it.
+- It is **never stroked**. A border is what makes a shape read as an object; a backdrop has none, and every body draws over it with one. This is how decoration stays distinguishable from a wall without a glyph - see **Decoration** in `docs/game-design.md`, which is the amendment to the pass-through rule that lets it off carrying one.
 
-A panel may be welded into a **compound body** with **Ctrl+G**, exactly as two shapes are - it carries the same `group` tag (`BackgroundData.group`), and `buildSceneBackgrounds` resolves that tag to the engine body the group built and stores the panel's placement in that body's frame.
-The panel is then drawn in the body's *interpolated* transform, so decoration on a rigid assembly swings, falls and turns with it instead of staying welded to the spot it was authored at, and a backdrop tracking the 60 Hz pose while its body draws interpolated cannot visibly detach from it between steps.
-It stays decoration throughout: it adds no shape, no mass and no seam to the body, so `groupCentroid` weighs the group's *shapes* alone and welding a backdrop on cannot move the point the body turns about.
-`syncGroupProps` leaves a panel's fill alone for the same reason material and thickness are left alone per shape - a backdrop is authored to sit *behind* the geometry, so painting it the lead shape's colour is exactly wrong.
-The tag is authored in world coordinates like a chain's anchors and for the same reason: a group's origin is a centre of mass that moves as pieces are added.
-A tag no body carries - several panels grouped together with no geometry, or a group whose bodies were deleted - is not an error and simply leaves the panel where it was authored, which is also what every level authored before the field does.
+The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a shape that is dark, huge or nearly transparent, and above all has to be able to tell at a glance which shapes on the canvas are part of the level. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the shape's own fill, whichever it was picked to contrast with.
+
+In 3D it keeps the full `visual` field, which is how it earns its place: an `offsetZ` of -20 m is a parallax layer, and a `kind: "mesh"` with the collision unticked is **a prop with no collision at all** - scenery, a lantern, a sign - which is the one thing the old layer could not express, since a background panel was always a flat fill.
+Its depth defaults are its own (`DECOR_Z`, `DECOR_DEPTH`): just behind the plane and thin, which is exactly what a flat fill drawn before every body already was, so every migrated panel looks as it did. `thickness` is deliberately not consulted - that is the number a shape's MASS comes from, and decoration has none - and decoration behind the plane casts no shadow across the level in front of it, which was the old panel rule and is kept for the same reason.
+
+Decoration may be welded into a **compound body** with **Ctrl+G**, exactly as two shapes are - it carries the same `group` tag - and the build resolves that tag to the engine body the group's *colliding* members made, storing the placement in that body's frame (`BuiltBodies.decor`, `resolveDecor`).
+It is then drawn in the body's *interpolated* transform, so decoration on a rigid assembly swings, falls and turns with it instead of staying welded to the spot it was authored at, and decoration tracking the 60 Hz pose while its body draws interpolated cannot visibly detach from it between steps.
+It stays decoration throughout: it adds no shape, no mass and no seam, so `groupCentroid` weighs the group's *colliding* shapes alone and welding a backdrop on cannot move the point the body turns about, and `groupLead` takes the group's kind, fill and friction from the first colliding member.
+`syncGroupProps` leaves a non-colliding member alone for the same reason material and thickness are left alone per shape - a backdrop is authored to sit *behind* the geometry, so painting it the lead shape's colour is exactly wrong.
+A group with no colliding member at all is not an error: it builds no body and its members stay where they were authored, which is what several panels moved as one has always been.
 Group membership beats layer visibility and lock in the editor's picking: a group is one object, and picking up half of it would silently re-place the other half against it.
-`cli contacts` `background-group` is the detector, and it exists because nothing else here can see this: a panel is never simulated, so a build that stopped attaching them violates no invariant, diverges no digest and passes every bundle while leaving the paint behind as the body swings away from it.
-It asserts the three halves together - the tagged panel holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled, the body still carries only the shapes its geometry authored (a panel is not a piece), and an untagged panel and one tagged into a group with no body are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case.
 
-The inspector panel is exactly the transform plus the fill (`color` + `opacity`) plus the group controls; a background has no kind, no friction and no behaviour to configure.
-**Images** (a source, plus `scale` / `crop` / `tile`) are designed for but not implemented: they land as three optional fields on `BackgroundData` read by `fillBackground`, and one more inspector section. Nothing else moves, because the placement, the shape, the layer and the entire editor pipeline are already shared with every other item.
+`cli contacts` `decor-group` is the detector, and it exists because nothing else here can see any of this: decoration is never simulated, so a build that stopped attaching it violates no invariant, diverges no digest and passes every bundle while leaving the paint behind as the body swings away from it.
+It asserts the five halves together - the tagged shape holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled; the body still carries only the shapes its colliding entries authored and the world holds only those bodies (decoration is not a piece and never reaches the sim); an untagged piece and one tagged into a group with no body are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case; and the retired `backgrounds` list migrates to exactly the same placement, body and fill, which is the half no level in the corpus can fail loudly, since every level on disk still carried panels in the old form.
+
+The inspector drops the whole physics half for a non-colliding shape - no kind, no friction, no material, no thickness, no hook-proof - because none of them mean anything on it, and a panel headed "Body #12" with its fields missing reads as a body that has lost them.
+On disk the same rule holds: `toLevelData` writes no `friction`, `material`, `thickness`, `impermeable` or `force` for decoration, so a migrated panel is byte-stable through a save.
+**Images** (a source, plus `scale` / `crop` / `tile`) remain designed for but not implemented; a decorative shape wearing an authored PBR texture set (see **Surfaces**) is most of what they were for.
 
 ### Notes
 
@@ -1265,9 +1278,9 @@ Neither caller asks it per query any more. Exposure is a property of how a body'
 So it is settled once and cached on the shape (`CollisionShape2D.isVertexExposed`, invalidated when the shape set changes), and `isSeamVertex` is a lookup by vertex index.
 `isSeamOccluded` takes that as its first answer and only then asks the *dynamic* half - neighbouring bodies, which do move relative to the corner. That decomposition is exact rather than an optimisation: coverage only grows as geometry is added, so a corner its own body has already closed off cannot be reopened by a neighbour.
 
-A **background panel** may be a member too (see **Background**): it rides the body as decoration rather than becoming a piece of it - no shape, no mass, no seam - which is how a moving object gets a look that is not built out of collision geometry.
+A **non-colliding shape** may be a member too (see **Decoration**): it rides the body as decoration rather than becoming a piece of it - no shape, no mass, no seam - which is how a moving object gets a look that is not built out of collision geometry.
 
-On disk it is a `group` tag on each member (`LevelBodyData.group`, and `BackgroundData.group` for a panel), and members are matched by tag alone, so the format stays a flat body list.
+On disk it is a `group` tag on each member (`LevelBodyData.group`), and members are matched by tag alone, so the format stays a flat body list.
 A body has one kind, one fill, one friction and one force, so the group takes its **first member's** and the editor keeps the rest in step (`syncGroupProps`) - a file can never disagree with what it draws.
 **Material and thickness are the exception** and stay per piece: a body's mass, centre of mass and inertia are sums over its shapes, so a stone head on a wooden shaft is a compound body of two materials and collapsing them onto the lead's would be the editor overwriting what was authored.
 Areas are deliberately not groupable: `World.integrate` tests area overlap against `primaryShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
@@ -1549,11 +1562,13 @@ Areas stay on the 2D overlay in both modes, and so does the hook-only grate: a k
 
 ### The `visual` field
 
-`VisualData` (`levelFormat.ts`) is one optional field on `LevelBodyData` **and** on `BackgroundData`:
+`VisualData` (`levelFormat.ts`) is one optional field on `LevelBodyData`, decoration included (see **Decoration**), and it is the choice between the two ways a shape gets a look:
 
-- `kind: "auto"` (or absent) extrudes the outline; `depth`, `bevel` and `texture` override the defaults.
-- `kind: "mesh"` replaces it with a named GLTF prop from the manifest, placed by `offsetX/Y/Z`, `rotX/Y/Z` and a dimensionless `scale`.
+- `kind: "auto"` (or absent) extrudes the shape's own **primitive** - the authored rect, circle or convex loop - and wears a tileable PBR surface; `depth`, `bevel`, `texture` and `tile` override the defaults.
+- `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by `offsetX/Y/Z`, `rotX/Y/Z` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the visual names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
 - `kind: "none"` draws nothing at all - an invisible wall.
+
+`mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, for a body's collision piece and for a drawn-only shape alike, so decoration and geometry cannot end up with two different ideas of what `VisualData` means.
 
 It is **per authored entry**, like `material`, `thickness` and `impermeable`, and for the same reason: a compound body of a stone head on a wooden shaft is two visuals on one body, each riding its own piece.
 `syncGroupProps` therefore leaves it alone.
@@ -1571,15 +1586,39 @@ Defaults reproduce the mood the game already had: `#1f2430` is both the sky and 
 
 Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
 
-Surfaces are keyed by the `MATERIALS` names the format already has, one shared `MeshStandardMaterial` each, so `material` alone picks a sensible surface.
-The maps are **generated** (value noise → albedo, a height-derived normal map, a roughness map from the same field) rather than loaded: this project ships no binary assets, and one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material.
-`TEXTURE_SETS` is the table to replace one entry at a time if authored PBR maps ever arrive; the UVs are already in **metres** (`extrude.ts`), so a real texture drops in with a `repeat` and nothing else moves.
 The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
 
-### Prop assets
+### Surfaces
 
-Props are `.glb` files under `public/meshes/`, which is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
-They are the only binary this tree has - it otherwise generates its textures in code - which is why they carry a process the rest of the project does not need.
+A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
+
+- **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so `material` alone picks a sensible surface and a level needs no visual authoring at all. The maps are value noise → albedo, a height-derived normal map and a roughness map from the same field: one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download.
+- **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic and ambient occlusion**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo in sRGB and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
+
+That the two share a namespace is the point of the arrangement: replacing a generated surface with an authored one is **adding a manifest entry under the material's own name**, and every level already naming that material picks it up with no edit at all. An unknown name still lands on a generated surface, so a hand-edited level naming a texture this build does not have looks ordinary rather than invisible.
+
+An authored set is **drawn in its generated fallback until its images arrive** and then swapped into the same material object, so a level dressed in real textures is never a scene of white boxes on a slow connection, and a map that fails to load leaves that one slot generated rather than the surface missing. `roughness`, `metalness`, `normalScale` and `aoIntensity` on the set are multipliers over whatever the maps say - and with no map, they *are* the value, which is why a set with no metallic map defaults to metalness 0 rather than three's 1.
+
+**Tiling is a length in the manifest and a multiple in the level.** The extruder writes its UVs in **metres** (`extrude.ts`), so one repeat covers a world distance rather than a fraction of a face: two walls of the same stuff show the same brick and only the count differs, whether they are 0.4 m or 40 m long.
+
+Which distance is a **fact about the texture**, and lives once, in the manifest: `TextureAsset.tile` is the size the surface was captured over in metres (Poly Haven publishes it per asset - `factory_brick` is 1.5 m). A shape then says only how large it wants it, as a **dimensionless multiple** of that: `VisualData.tileScale`, 1 (and absent) being life size, 2 twice as large. `tileMetres(name, scale)` is the one multiply, and the editor readout, the material and `cli render3d` all take their answer from it.
+
+Authoring the multiple rather than the metres is what makes `1` mean the same thing everywhere and keeps meaning it after a texture is swapped for one captured at a different size - where an absolute value in every level would silently become wrong. It is also why `tileScale` is one of the two fields `scaleVisual` must NOT touch (with `scale`): a dimensionless number scaled on the way in and back out again is the identity, so the round-trip case cannot see the mistake and `cli render3d` asserts the non-scaling directly instead.
+
+**Where the pattern starts** is the other half, and it is a length: `VisualData.tileOffsetX` / `tileOffsetY` shift the texture in level coordinates (+x right, +y down), in scene pixels on disk - which on this project's scale is centimetres exactly, 100 px to the metre. It is what lines a course of bricks up with the edge of the wall it is on rather than with the world origin, and it moves the pattern only: the collision geometry, which the shape's own `x`/`y` would have moved, stays put. Measured in world distance rather than in repeats, so it means the same thing at any `tileScale`.
+
+`applyTiling` is the one place both land on a texture (`uv * repeat + offset`), and the y sign is the extruder's negation into three's frame showing through - u shifts back where v shifts forward.
+
+The resolved size and offset are part of the material cache key, because `repeat` and `offset` live on the *texture* rather than the material: two tilings are two `Texture.clone`s sharing one uploaded image.
+
+`cli render3d` asserts the resolution rule directly (`surfaces: …`) - authored beats generated, a material name still resolves to its own surface, an unknown name falls back, and each side's tile is its own - because it is pure arithmetic over the two manifests, and because getting the precedence backwards is invisible: every level goes on wearing perfectly presentable noise while the downloaded maps sit unused.
+
+### The asset store
+
+Two kinds of binary: props (`.glb` under `public/meshes/`) and authored texture maps (`.webp` under `public/textures/`).
+Both directories are **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
+They are the only binaries this tree has - every other surface is generated in code - which is why they carry a process the rest of the project does not need.
+`storedAssets()` (`scripts/assetStore.ts`) flattens both manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so neither kind can be checked while the other quietly is not.
 
 **Not git, and specifically not Git LFS**, because an asset has to be **deletable**.
 A binary in git history is permanent, and an LFS object pushed to GitHub goes on consuming the quota after the file is removed - the only supported purge is deleting the repository, which is not an option for a repo with a deploy wired to it.
@@ -1604,35 +1643,53 @@ Two things pay for these bytes: the Docker image the VM pulls on every deploy, s
 It is deliberately **not** a quota, so raising it is allowed; do it by deciding those two costs are worth paying, not because the number was in the way.
 The per-file bar is not a target to author up to - a textured prop in this game's style is well under 1 MB, and 8 MB is what catches a raw Blender export with 2k PNGs in it before that becomes the habit.
 
-**A pipeline, pinned.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
+**A pipeline, pinned - one per kind.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
 Typically 5-10× off an unoptimised export, looking identical.
+
+`bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
+The `--map` is not bookkeeping, it picks the **encoding**: an albedo is a picture and goes to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
+1k is the ceiling for the same reason the prop pipeline caps its textures there.
 
 Both format choices are about what has to be **paid at runtime**, and this is the trap the pipeline was written around: an optimisation that lands in a glTF's `extensionsRequired` is not a smaller read, it is a file the loader **refuses** - and the prop falls back to its placeholder box, which is a silent failure by design.
 So meshopt comes with `setMeshoptDecoder` wired into `gltfLoader()` (~25 KB, ships with three, rides the same dynamic import so a page with no props still fetches neither).
 Textures are **WebP rather than KTX2** for the same reason twice over: KTX2 needs the external `ktx` binary at build time *and* `KTX2Loader` plus its transcoder at runtime, where WebP needs neither - three.js reads it through `EXT_texture_webp` - and is within a few percent on disk.
 What KTX2 buys is staying compressed in **VRAM**, which is a decision for when there are enough props for VRAM to be the constraint rather than download size. It is not now.
 
-**Provenance, in the manifest.** `MeshAsset` requires `source`, `author` and `license`, and `cli assets` fails without them.
+**CC0, or it does not go in the store.** The release is public, so an asset in it is a standalone, reusable copy of that file on a stable URL - which is redistribution however internal the intent, and is exactly what a stock-asset licence like Poliigon's forbids while permitting unlimited use of the same texture *in* a project. The distinction is not the purpose, it is whether the bytes are obtainable as bytes.
+Serving the same maps from the deployed game is the ordinary end-product case and is not the same thing; hosting them next to no product is.
+So anything that ships through this pipeline comes from a CC0 source (Poly Haven, ambientCG) - which costs nothing at this art style's quality bar - and a licensed asset stays off the manifest entirely. If one is ever genuinely needed, the shape of the answer is a private store with a build-time secret, not a quieter public one.
+
+**Provenance, in the manifest.** `MeshAsset` and `TextureAsset` both require `source`, `author` and `license`, and `cli assets` fails without them. It is per ENTRY rather than per file, so a texture set is credited once as a surface however many of its five maps it ships.
 The file is opaque and the licence lives on a web page nobody revisits, so a binary with no source is a liability rather than an asset - a year later "can this ship" has no answer but "delete it and remodel".
 `author` is separate from `source` because a licence like **CC-BY obliges you to credit a person**, and a link to the page you found it on is not that.
 
 `CREDITS.md` is **generated** from those fields (`bun run assets:credits`) and checked against them by `cli assets`, so it cannot drift.
-Attribution is a licence obligation, and a hand-kept credits list is one that gets forgotten on exactly the day the asset is added - a violation that looks like nothing at all. The manifest is the file you cannot avoid editing to add a prop, so the credits derive from it.
+Attribution is a licence obligation, and a hand-kept credits list is one that gets forgotten on exactly the day the asset is added - a violation that looks like nothing at all. The manifest is the file you cannot avoid editing to add an asset, so the credits derive from it - props and surfaces under their own headings.
 Note that the generated file discharges the *record*; a CC-BY asset shipping in the game also wants that credit reachable by a player, which is a UI decision rather than a tooling one.
+
+A grab through `cli shot --3d` **waits for every asset** before it draws (`assetsSettled`), and that is not a convenience: a screenshot that races the loads photographs whichever props and maps happened to have arrived, so the same command produces the placeholder box one run and the real prop the next - evidence of nothing. The game deliberately does not wait, since the placeholder and the generated surface exist precisely to cover that gap.
 
 `cli assets` separates five failures because they have five different fixes: a manifest key with no **file** (usually an unfetched clone, but also what a deleted release asset looks like - in game it draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), a **stale** file whose bytes are not the sha256 its entry names, two entries **colliding** on a basename (one flat namespace in the release, so the second would overwrite the first), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
 It is not part of `cli render3d`, which is deliberately pure - no GPU, no canvas, no level, and no filesystem.
 
-The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare inherits the generated surface for its `material` (`tintedSurface(spec?.visual?.texture ?? spec?.material, …)`), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import.
+The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare and given a `visual.texture` wears that surface (`mountVisual` assigns it over the file's own materials), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import. A prop that names no texture keeps the materials it was exported with.
 
-Two directories, and the split matters: `public/meshes/` is **build output** - only ever the optimised copy, only ever written by `assets:fetch` or `assets:optimize` - while `assets-src/` holds the **raw download** as it arrived.
+Three directories, and the split matters: `public/meshes/` and `public/textures/` are **build output** - only ever the optimised copy, only ever written by `assets:fetch` or the two `assets:optimize*` scripts - while `assets-src/` holds the **raw downloads** as they arrived.
 Both are gitignored. A raw is kept because re-optimising is what you do when the pipeline's settings change, and it is re-downloadable from the `source` its manifest entry records if it is ever lost.
 
 The whole loop:
 
 ```sh
-just asset assets-src/rock.glb public/meshes/rock.glb        # optimise + upload
+just asset assets-src/rock.glb public/meshes/rock.glb        # optimise + upload a prop
 # paste the printed MESH_ASSETS entry into src/render3d/assets.ts
+
+# a surface is the same loop, once per map it has:
+bun run assets:optimize-texture assets-src/stone_col.png public/textures/quarry-stone-base.webp --map base
+bun run assets:optimize-texture assets-src/stone_nrm.png public/textures/quarry-stone-normal.webp --map normal
+bun run assets:publish public/textures/quarry-stone-base.webp
+# paste the printed map lines into ONE TEXTURE_ASSETS entry, with its `tile`
+
+bun run assets:credits                                       # regenerate CREDITS.md
 bun run replay assets                                        # check it
 just assets                                                  # on another machine
 gh release delete-asset assets rock.glb                      # change your mind

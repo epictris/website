@@ -1,5 +1,5 @@
-// Upload one optimised prop to the release store and print the manifest entry it
-// wants. The printing is the point: the `sha256` is what pins a revision of this
+// Upload one optimised asset - a prop or a texture map - to the release store and
+// print the manifest entry it wants. The printing is the point: the `sha256` is what pins a revision of this
 // repo to a specific set of bytes (see fetch-assets.ts), and a hash anybody has
 // to compute by hand is a hash that ends up wrong or omitted.
 //
@@ -17,7 +17,7 @@ import { ASSET_REPO, ASSET_TAG, sha256 } from "./assetStore";
 
 const [input] = process.argv.slice(2);
 if (!input) {
-  console.error("usage: bun run assets:publish <public/meshes/file.glb>");
+  console.error("usage: bun run assets:publish <public/meshes/file.glb|public/textures/file.webp>");
   process.exit(2);
 }
 if (!existsSync(input)) {
@@ -50,9 +50,9 @@ if (!exists) {
       "--repo",
       ASSET_REPO,
       "--title",
-      "Prop assets",
+      "Binary assets",
       "--notes",
-      "Binary props for the rope 3D renderer, fetched at build time. Not a release of anything - see rope/CLAUDE.md, Prop assets.",
+      "Props and texture maps for the rope 3D renderer, fetched at build time. Not a release of anything - see rope/CLAUDE.md, The asset store.",
     ],
     { stdio: "inherit" },
   );
@@ -69,11 +69,27 @@ const up = spawnSync(
 if (up.status !== 0) process.exit(up.status ?? 1);
 
 console.log(`\n[assets] uploaded ${name} (${(bytes.length / 1024).toFixed(0)} KB)`);
-console.log(`[assets] MESH_ASSETS entry (src/render3d/assets.ts):\n`);
-console.log(`  "${name.replace(/\.[^.]+$/, "")}": {`);
-console.log(`    file: "/meshes/${name}",`);
-console.log(`    sha256: "${hash}",`);
-console.log(`    source: "<url the model came from>",`);
-console.log(`    license: "<e.g. CC0>",`);
-console.log(`  },\n`);
+
+// Which manifest an upload belongs in is decided by where the file was written,
+// which is the same thing that decides the URL it is served from. A texture map
+// is one SLOT of a set rather than an entry of its own, so what is printed is
+// the fragment to paste into the set - the whole entry would invite five
+// half-filled sets where one belongs.
+const stem = name.replace(/\.[^.]+$/, "");
+if (input.includes("textures/")) {
+  const slot = /-(base|normal|roughness|metallic|ao)$/.exec(stem)?.[1] ?? "base";
+  console.log(`[assets] TEXTURE_ASSETS map (src/render3d/assets.ts):\n`);
+  console.log(`    ${slot}: { file: "/textures/${name}", sha256: "${hash}" },\n`);
+  console.log(`[assets] in a set that also carries \`tile\` (metres per repeat), its`);
+  console.log(`[assets] source/author/license, and any of the other four maps.`);
+} else {
+  console.log(`[assets] MESH_ASSETS entry (src/render3d/assets.ts):\n`);
+  console.log(`  "${stem}": {`);
+  console.log(`    file: "/meshes/${name}",`);
+  console.log(`    sha256: "${hash}",`);
+  console.log(`    source: "<url the model came from>",`);
+  console.log(`    author: "<who made it>",`);
+  console.log(`    license: "<e.g. CC0>",`);
+  console.log(`  },\n`);
+}
 console.log(`[assets] then \`bun run replay assets\` to check it against the budget.`);

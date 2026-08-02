@@ -1,4 +1,4 @@
-// Populate `public/meshes/` from the release store. Run by hand after a clone
+// Populate `public/meshes/` and `public/textures/` from the release store. Run by hand after a clone
 // (`bun run assets:fetch`) and by the Dockerfile before `bun run build`, so the
 // bytes reach the image without ever entering git.
 //
@@ -12,15 +12,17 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MESH_ASSETS } from "../src/render3d/assets";
-import { assetName, assetUrl, sha256 } from "./assetStore";
+import { assetName, assetUrl, sha256, storedAssets } from "./assetStore";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = join(ROOT, "public");
 
-const entries = Object.entries(MESH_ASSETS);
+// Props and texture maps in one list: both live in the same flat release, both
+// are pinned by sha256, and a fetch that knew about only one of the two
+// manifests would leave a level half-dressed with nothing to report.
+const entries = storedAssets();
 if (entries.length === 0) {
-  console.log("[assets] manifest is empty, nothing to fetch");
+  console.log("[assets] manifests are empty, nothing to fetch");
   process.exit(0);
 }
 
@@ -33,7 +35,8 @@ let fetched = 0;
 let skipped = 0;
 const failures: string[] = [];
 
-for (const [key, asset] of entries) {
+for (const asset of entries) {
+  const key = asset.key;
   const dest = join(PUBLIC_DIR, asset.file.replace(/^\//, ""));
 
   // Already correct? Then leave it alone. This is what makes the fetch cheap to
@@ -73,7 +76,7 @@ for (const f of failures) console.error(`  FAIL  ${f}`);
 if (failures.length) {
   console.error(
     `\n[assets] a missing asset usually means it was deleted from the release, which is\n` +
-      `[assets] allowed and expected - remove its MESH_ASSETS entry, or re-upload it with\n` +
+      `[assets] allowed and expected - remove its manifest entry, or re-upload it with\n` +
       `[assets] \`bun run assets:publish <file>\`.`,
   );
 }

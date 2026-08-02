@@ -44,6 +44,7 @@ import {
   groupMembers,
   halfExtents,
   isArrowNote,
+  itemDepth,
   LAYER_STYLE,
   MIN_ARROW_LENGTH,
   modelFromDisk,
@@ -84,11 +85,10 @@ import {
   type MaterialName,
 } from "../lib/shapeGeometry";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
-import { MESH_ASSETS } from "../render3d/assets";
+import { MESH_ASSETS, surfaceName, tileMetres, TEXTURE_ASSETS } from "../render3d/assets";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
-import { buildSceneBackgrounds } from "../level/backgrounds";
 import {
   digest,
   digestBall,
@@ -107,7 +107,6 @@ type Tool = "select" | "rect" | "circle" | "poly" | "text" | "arrow" | "chain";
 // no longer applies. `+Chain` is geometry-only: a chain is strung between two
 // bodies, and no other layer has any.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  background: ["select", "rect", "circle", "poly"],
   geometry: ["select", "rect", "circle", "poly", "chain"],
   camera: ["select", "rect", "circle", "poly"],
   notes: ["select", "text", "arrow"],
@@ -116,14 +115,14 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
 // off a killzone or a current - so the chain tool passes straight through one.
 const CHAINABLE_KINDS: BodyKind[] = ["static", "anchor", "rigid"];
+// Decoration is excluded for the plainer reason that it builds no body at all:
+// a chain tied to one would have nothing to constrain, and the loader drops it.
 const chainable = (b: EdItem): boolean =>
-  b.layer === "geometry" && CHAINABLE_KINDS.includes(b.kind);
+  b.layer === "geometry" && b.collision && CHAINABLE_KINDS.includes(b.kind);
 
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
-  background:
-    "Background layer. Decoration drawn behind the level, with nothing to collide with, wrap or stand on. Pick +Rect / +Circle and drag one out, or +Poly and click out an outline. Tab switches layer.",
   geometry:
     "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). +Chain drags a chain from one body to another. Ctrl+G welds several shapes into one compound body (Ctrl+Shift+G splits it; Alt+click picks one piece out). Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. Any visible layer can be selected.",
   camera:
@@ -362,9 +361,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const pickableItems = () =>
     model.items.filter((b) => visibleLayers.has(b.layer) && !lockedLayers.has(b.layer));
   // The same set in click order, bottom-first (callers walk it backwards to take
-  // the topmost hit): draw order — layer, then model order — with the active
-  // layer lifted above the rest, so a camera region drawn over a wall does not
-  // swallow the click while geometry is the layer being edited.
+  // the topmost hit): draw order — layer, then DEPTH, then model order — with the
+  // active layer lifted above the rest, so a camera region drawn over a wall does
+  // not swallow the click while geometry is the layer being edited.
+  //
+  // Depth is what makes a click mean what it looks like it means. Two shapes
+  // whose outlines overlap are not ambiguous on screen - one of them is in front
+  // - so the pick takes the one nearest the viewport (`itemDepth`, the same rule
+  // both renderers draw by) rather than whichever happened to be authored later.
+  // A backdrop 20 m behind the level can no longer swallow a click meant for the
+  // wall drawn over it.
   const pickOrder = (): EdItem[] =>
     pickableItems()
       .map((b, i) => ({ b, i }))
@@ -372,6 +378,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         (p, q) =>
           Number(p.b.layer === activeLayer) - Number(q.b.layer === activeLayer) ||
           ED_LAYERS.indexOf(p.b.layer) - ED_LAYERS.indexOf(q.b.layer) ||
+          itemDepth(p.b) - itemDepth(q.b) ||
           p.i - q.i,
       )
       .map((p) => p.b);
@@ -458,8 +465,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // The edit-mode scene, rebuilt from the model whenever it has changed. It goes
-  // through exactly the same builders the game does - `buildLevelBodies` and
-  // `buildSceneBackgrounds` over `toLevelData(model)` - so what an author sees
+  // through exactly the same builder the game does - `buildLevelBodies` over
+  // `toLevelData(model)` - so what an author sees
   // while editing is what the level will look like when it is played, rather
   // than a second interpretation of the same file that can drift from it.
   //
@@ -473,7 +480,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const built = buildLevelBodies(world, data, () => {});
     sceneLevel = {
       world,
-      backgrounds: buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup),
+      decor: built.decor,
       // Chains stay on the 2D canvas while editing: the editor draws a chain
       // STRAIGHT on purpose (a span between wrap nodes is straight, and a
       // guessed sag would be a drawing of something the level does not contain),
@@ -853,7 +860,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     ).size;
     const extra =
       ([
-        ["background", "bg"],
         ["camera", "cam"],
         ["notes", "notes"],
       ] as const)
@@ -966,13 +972,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
 
   // May this item be welded into a compound body? Geometry that is not an area,
-  // and background panels, which ride the body as decoration (see `EdItem.group`
-  // and `groupable` in buildBodies.ts). Areas are single-shape everywhere they
+  // decoration included - it rides the body rather than adding a piece to it
+  // (see `EdItem.group` and `groupable` in buildBodies.ts). Areas are single-shape everywhere they
   // are used, so a grouped one would silently act through its first piece alone;
   // camera regions and notes are never drawn in play and have nothing to ride.
   const groupableItem = (b: EdItem) =>
-    b.layer === "background" ||
-    (b.layer === "geometry" && b.kind !== "killzone" && b.kind !== "force");
+    b.layer === "geometry" && (!b.collision || (b.kind !== "killzone" && b.kind !== "force"));
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
@@ -1090,9 +1095,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   }
 
-  // Authored appearance: a colour swatch plus a fill opacity. Shared by the
-  // geometry and background panels — the two layers whose look is saved and
-  // played, as against the fixed colours of the editor-only furniture.
+  // Authored appearance: a colour swatch plus a fill opacity. The geometry
+  // layer's, which is the one whose look is saved and played, as against the
+  // fixed colours of the editor-only furniture.
   function addFillFields(
     g: HTMLElement,
     num: GroupNum,
@@ -1130,6 +1135,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // compound wall with one attachable ledge among hook-proof faces. So it is
   // per shape and, like material and thickness, a group does not collapse it
   // onto its first member's.
+  // Does this shape take part in the simulation? Unticked, it is decoration:
+  // drawn and nothing else, never built into the world, and every physics
+  // property below it disappears from the panel because none of them mean
+  // anything on it (see `LevelBodyData.collision`).
+  //
+  // It is the FIRST control on the panel, above the kind, because it is the
+  // larger question - what kind of body this is only matters once there is a
+  // body - and because switching it is how a wall becomes a backdrop, or back,
+  // without being re-drawn as some other sort of item.
+  function addCollisionField(g: HTMLElement, items: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = items.every((b) => b.collision);
+    box.indeterminate = !box.checked && items.some((b) => b.collision);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) b.collision = box.checked;
+      markDirty();
+      // Which fields apply depends on it, and so does how the shape is drawn.
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "collision";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Off makes this decoration: drawn behind every solid shape, with a dashed teal edge here and no border in game, and never simulated — nothing collides with it, the rope does not wrap it and no force reaches it. It keeps its 3D visual, so it is also how a prop with no collision is placed. Group it with a colliding shape (Ctrl+G) to have it ride that body.";
+    g.appendChild(hint);
+  }
+
   function addImpermeableField(g: HTMLElement, items: EdItem[]): void {
     const box = document.createElement("input");
     box.type = "checkbox";
@@ -1386,18 +1422,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           for (const b of items) b.visual.bevel = null;
         },
       });
+    }
 
+    // The surface, offered whatever the kind. It is what an extrusion is
+    // textured with, and it is what a prop wears INSTEAD of the materials its
+    // own file carries - which is what dresses a bare geometry-only export as
+    // the same stone the walls are made of.
+    if (sharedKind !== "none") {
       const tw = el("label", "ed-field");
       tw.textContent = "texture";
       const ts = document.createElement("select");
       ts.className = "ed-select";
-      for (const key of ["", ...MATERIAL_NAMES]) {
+      // One namespace, authored sets first: a level names a surface, and whether
+      // it is a downloaded set of maps or generated noise is not a distinction
+      // the author has to carry (see `surfaceFor`). A key already on the item
+      // that this build has no manifest entry for is kept as an option of its
+      // own rather than silently rewritten, exactly as the mesh picker does.
+      const keys = new Set<string>([...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
+      for (const b of items) if (b.visual.texture) keys.add(b.visual.texture);
+      for (const key of ["", ...keys]) {
         const o = document.createElement("option");
         o.value = key;
         // Blank means "whatever the material says", which is the answer for
         // almost every body: naming the stuff a thing is made of is the decision
         // an author is already making.
-        o.textContent = key || "(from material)";
+        o.textContent = key
+          ? key in TEXTURE_ASSETS
+            ? `${key} (authored)`
+            : key
+          : "(from material)";
         ts.appendChild(o);
       }
       ts.value = items.every((b) => b.visual.texture === items[0]!.visual.texture)
@@ -1411,11 +1464,74 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       });
       tw.appendChild(ts);
       g.appendChild(tw);
+
+      // How large this shape wears the texture, as a MULTIPLE of the size the
+      // texture was authored at: 1 is life size, 2 twice as large. Dimensionless
+      // like `scale`, so it is typed as written and never converted - and blank
+      // is 1, which is why the placeholder says so rather than naming a fallback
+      // the author would have to go and look up.
+      num(
+        "tile scale",
+        (v) => v.tileScale ?? 1,
+        (v, x) => (v.tileScale = Math.max(0.01, x)),
+        0.1,
+        {
+          placeholder: items.length > 1 ? "mixed" : "1",
+          onEmpty: () => {
+            for (const b of items) b.visual.tileScale = null;
+          },
+        },
+      );
+      // What that multiple works out to on the ground. The scale is the right
+      // thing to AUTHOR - it survives swapping the texture for one captured at a
+      // different size, and 1 always means life size - but "×2" says nothing
+      // about whether these bricks will read as bricks, and the metres do. Same
+      // trick the material picker uses for density, re-derived per refresh so it
+      // tracks both this field and the texture picker above it.
+      const tileReadout = () => {
+        const first = items[0]!;
+        const same = items.every(
+          (b) =>
+            b.visual.tileScale === first.visual.tileScale &&
+            b.visual.texture === first.visual.texture,
+        );
+        if (!same) return "mixed";
+        const metres = tileMetres(
+          surfaceName(first.visual.texture || first.material),
+          first.visual.tileScale,
+        );
+        return `${metres.toFixed(2)} m per repeat`;
+      };
+      const trow = el("label", "ed-field");
+      trow.textContent = "";
+      const tval = document.createElement("span");
+      tval.textContent = tileReadout();
+      trow.appendChild(tval);
+      g.appendChild(trow);
+      readouts.push({ el: tval, get: tileReadout });
+
+      // Where the pattern starts on this shape, so a course of bricks can be
+      // lined up with the edge of the wall rather than with the world origin.
+      // In scene pixels like every other length here, which on this project's
+      // scale is centimetres exactly (100 px to the metre), and it shifts the
+      // texture rather than the geometry: +x right, +y down.
+      num(
+        "tile off x",
+        (v) => v.tileOffset.x * M2PX,
+        (v, x) => (v.tileOffset = new Vec2(x * PX, v.tileOffset.y)),
+        5,
+      );
+      num(
+        "tile off y",
+        (v) => v.tileOffset.y * M2PX,
+        (v, y) => (v.tileOffset = new Vec2(v.tileOffset.x, y * PX)),
+        5,
+      );
     }
 
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "How the 3D renderer draws this shape. `auto` extrudes the collision outline through z and textures it from the material, which is what every body gets for free; `mesh` replaces that with a prop; `none` draws nothing at all (an invisible wall). Per shape, so a compound body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
+      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). `tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. Per shape, so a compound body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
     g.appendChild(hint);
   }
 
@@ -1443,8 +1559,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // single and multi editing can't drift apart.
   function buildBodyGroup(bodies: EdItem[]): void {
     const g = el("div", "ed-group");
+    // Decoration is named as what it is. A panel called "Body #12" with no kind,
+    // no friction and no mass reads as a body whose fields have gone missing.
+    const solid = bodies.some((b) => b.collision);
+    const noun = solid ? "Body" : "Decoration";
     g.appendChild(
-      heading(bodies.length === 1 ? `Body #${bodies[0]!.id}` : `${bodies.length} bodies selected`),
+      heading(
+        bodies.length === 1
+          ? `${noun} #${bodies[0]!.id}`
+          : `${bodies.length} ${solid ? "shapes" : "pieces of decoration"} selected`,
+      ),
     );
     if (bodies.length > 1) {
       const hint = el("div", "ed-hint");
@@ -1452,6 +1576,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         "Edits apply to all of them. Shift+click adds or removes; rubber-band left→right encloses, right→left touches.";
       g.appendChild(hint);
     }
+
+    addCollisionField(g, bodies);
 
     const kw = el("label", "ed-field");
     kw.textContent = "kind";
@@ -1483,30 +1609,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       rebuildInspector();
     });
     kw.appendChild(ks);
-    g.appendChild(kw);
+    // A kind is a statement about physics, so it is offered only where there is
+    // any: on decoration it would be a control that changes nothing.
+    if (solid) g.appendChild(kw);
 
     const sync = () => syncEditedGroups(bodies);
     const num = groupNum(g, bodies, sync);
     addTransformFields(g, num, bodies);
-    if (bodies.every((b) => b.kind === "force")) {
+    if (solid && bodies.every((b) => b.kind === "force")) {
       // Acceleration along rot°, authored in px/s² like every other length.
       // Negative reverses the flow, so it is deliberately not clamped at 0.
       num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
     }
-    if (!bodies.some(frictionless)) {
+    if (solid && !bodies.some(frictionless)) {
       num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
     }
     // Hook-proof, offered for the solid kinds it means something on: an area is
     // a region the rope passes through, and a hook-only anchor exists to be
     // caught on, so neither has a hook to repel.
-    if (bodies.every((b) => b.kind === "static" || b.kind === "rigid")) {
+    if (solid && bodies.every((b) => b.kind === "static" || b.kind === "rigid")) {
       addImpermeableField(g, bodies);
     }
-    if (!bodies.some(massless)) addMaterialFields(g, bodies);
+    // Material and thickness are what a shape WEIGHS, and decoration weighs
+    // nothing - its extrusion depth is `visual.depth` instead.
+    if (solid && !bodies.some(massless)) addMaterialFields(g, bodies);
     // An area is a region of space with no solid to extrude, so it has no
     // visual: its glyph lattice is a flat mark drawn on the 2D overlay in both
     // render modes.
-    if (!bodies.some(massless)) addVisualFields(g, bodies);
+    if (!solid || !bodies.some(massless)) addVisualFields(g, bodies);
 
     addFillFields(g, num, bodies, sync);
     addGroupSection(g);
@@ -1550,16 +1680,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     if (groups.size === 1 && sel.every((b) => b.group !== null)) {
       const members = groupMembers(model.items, sel[0]!.group!);
-      const shapes = members.filter((m) => m.layer === "geometry").length;
+      const shapes = members.filter((m) => m.collision).length;
       const panels = members.length - shapes;
       const parts = [`${shapes} ${shapes === 1 ? "shape" : "shapes"}`];
-      if (panels) parts.push(`${panels} background ${panels === 1 ? "panel" : "panels"}`);
+      if (panels) parts.push(`${panels} decoration`);
       hint.textContent = shapes
         ? `One compound body of ${parts.join(" and ")}: they share a transform, and the rope and ledge grabs treat the seams between the shapes as interior. Alt+click a piece to edit it alone.`
-        : `${panels} background ${panels === 1 ? "panel" : "panels"} moved and turned as one. There is no body here, so they stay where they are authored in play; group them with a shape to have them ride it.`;
+        : `${panels} piece${panels === 1 ? "" : "s"} of decoration moved and turned as one. Nothing here collides, so there is no body: they stay where they are authored in play; group them with a colliding shape to have them ride it.`;
     } else {
       hint.textContent =
-        "Grouping builds these as ONE body, so the rope runs straight over the seams between them instead of snagging. Kind, fill and friction collapse onto the first shape's; material, thickness and hook-proof stay per shape. A background panel in the group is decoration carried by that body - it keeps its own fill, adds no mass, and is drawn in the body's frame, so it moves with it.";
+        "Grouping builds these as ONE body, so the rope runs straight over the seams between them instead of snagging. Kind, fill and friction collapse onto the first shape's; material, thickness and hook-proof stay per shape. A non-colliding member is decoration carried by that body - it keeps its own fill, adds no mass, and is drawn in the body's frame, so it moves with it.";
     }
     g.appendChild(hint);
   }
@@ -1647,33 +1777,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       button("Delete", () => deleteSelected()),
     );
     g.appendChild(row);
-    inspector.appendChild(g);
-  }
-
-  // Background-layer panel. A background is a placed shape and an appearance and
-  // nothing else — it has no kind, no friction and no behaviour of any sort —
-  // so the panel is exactly the transform plus the fill. An image fill (scale /
-  // crop / tile) is the one section still to come.
-  function buildBackgroundGroup(items: EdItem[]): void {
-    const g = el("div", "ed-group");
-    g.appendChild(
-      heading(
-        items.length === 1 ? `Background #${items[0]!.id}` : `${items.length} backgrounds selected`,
-      ),
-    );
-    const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Decoration only: drawn behind every body, with nothing to collide with, wrap or stand on. Group one with a body (Ctrl+G) to have it ride that body. Images are not implemented yet.";
-    g.appendChild(hint);
-
-    const num = groupNum(g, items);
-    addTransformFields(g, num, items);
-    addFillFields(g, num, items);
-    // A panel's `off z` is the whole of what makes it a depth layer rather than
-    // a flat fill, which is where the reference games' parallax comes from.
-    addVisualFields(g, items);
-    addGroupSection(g);
-    addActionsRow(g);
     inspector.appendChild(g);
   }
 
@@ -1922,8 +2025,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     for (const l of layers) {
       const items = sel.filter((b) => b.layer === l);
-      if (l === "background") buildBackgroundGroup(items);
-      else if (l === "camera") buildCameraGroup(items);
+      if (l === "camera") buildCameraGroup(items);
       else if (l === "notes") buildNotesGroup(items);
       else buildBodyGroup(items);
     }
@@ -2109,7 +2211,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const base = {
       id: newBodyId(),
       layer: activeLayer,
-      group: null, // a fresh shape is its own body until it is grouped
+      group: null,
+      // A freshly drawn shape is part of the level; decoration is the tick
+      // being taken off, which is a decision rather than a default.
+      collision: true,
+// a fresh shape is its own body until it is grouped
       pos: start,
       rot: 0,
       kind: newKind,

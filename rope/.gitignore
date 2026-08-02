@@ -1,9 +1,11 @@
 node_modules
 dist
 playtests/bundles/
-# 3D props are fetched from a GitHub Release at build time, never committed - see
-# "Prop assets" in CLAUDE.md. `bun run assets:fetch` populates this.
+# Binary assets - 3D props and authored PBR texture maps - are fetched from a
+# GitHub Release at build time, never committed; see "Asset store" in CLAUDE.md.
+# `bun run assets:fetch` populates both.
 public/meshes/
+public/textures/
 # Raw, un-optimised models as they were downloaded. Local scratch: the shippable
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.

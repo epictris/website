@@ -1,4 +1,5 @@
-// The prop directory, held to what the repo can afford to carry.
+// The binary asset directories - props and authored textures - held to what the
+// repo can afford to carry.
 //
 // Binary assets are the one thing here that gets worse silently. A level renders
 // identically whether its props are 40 KB or 6 MB, every test stays green, and
@@ -31,12 +32,16 @@ import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "no
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MESH_ASSETS } from "../render3d/assets";
+import { MESH_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
+import { storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PUBLIC_DIR = join(ROOT, "public");
-const MESH_DIR = join(PUBLIC_DIR, "meshes");
+// Both directories are build output, gitignored and written only by
+// `assets:fetch` / `assets:optimize*`. One walk over both, since the budget is
+// on the bytes the Docker image carries rather than on any one kind of them.
+const ASSET_DIRS = [join(PUBLIC_DIR, "meshes"), join(PUBLIC_DIR, "textures")];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
 // caps a single asset at 2 GiB and neither total size nor download bandwidth at
@@ -90,16 +95,23 @@ function mb(bytes: number): string {
 }
 
 export function runAssetChecks(): AssetCheck[] {
-  const files = walk(MESH_DIR);
+  const files = ASSET_DIRS.flatMap(walk).sort();
   const checks: AssetCheck[] = [];
 
-  // `MeshAsset.file` is a URL path under `public/` ("/meshes/rock.glb"), so it
-  // is resolved against `public/` rather than against the mesh directory - the
+  // Props and texture maps in one list (`storedAssets`), so neither manifest can
+  // be checked while the other quietly is not.
+  //
+  // A `file` is a URL path under `public/` ("/meshes/rock.glb"), so it is
+  // resolved against `public/` rather than against a directory chosen here - the
   // manifest is what says where a file lives, and a key naming something outside
   // `public/` could never be served at all.
+  const stored = storedAssets();
+  const wanted = new Map<string, string>(); // absolute path -> sha256
   const referenced = new Map<string, string>(); // absolute path -> manifest key
-  for (const [key, asset] of Object.entries(MESH_ASSETS)) {
-    referenced.set(join(PUBLIC_DIR, asset.file.replace(/^\//, "")), key);
+  for (const asset of stored) {
+    const path = join(PUBLIC_DIR, asset.file.replace(/^\//, ""));
+    referenced.set(path, asset.key);
+    wanted.set(path, asset.sha256);
   }
 
   const missing = [...referenced].filter(([path]) => !files.includes(path));
@@ -118,7 +130,7 @@ export function runAssetChecks(): AssetCheck[] {
   const stale: string[] = [];
   for (const [path, key] of referenced) {
     if (!files.includes(path)) continue;
-    const want = MESH_ASSETS[key]!.sha256;
+    const want = wanted.get(path)!;
     const got = createHash("sha256").update(readFileSync(path)).digest("hex");
     if (got !== want) stale.push(`${key}: manifest ${want.slice(0, 12)}…, disk ${got.slice(0, 12)}…`);
   }
@@ -133,9 +145,9 @@ export function runAssetChecks(): AssetCheck[] {
   // then both fetch the same bytes, which is a level quietly wearing the wrong
   // prop rather than any kind of error.
   const byName = new Map<string, string[]>();
-  for (const [key, asset] of Object.entries(MESH_ASSETS)) {
+  for (const asset of stored) {
     const name = basename(asset.file);
-    byName.set(name, [...(byName.get(name) ?? []), key]);
+    byName.set(name, [...(byName.get(name) ?? []), asset.key]);
   }
   const collisions = [...byName].filter(([, keys]) => keys.length > 1);
   checks.push({
@@ -151,22 +163,28 @@ export function runAssetChecks(): AssetCheck[] {
     name: "assets: no unreferenced files",
     pass: orphans.length === 0,
     detail: orphans.length
-      ? `not named by MESH_ASSETS: ${orphans.map((f) => relative(ROOT, f)).join(", ")}`
-      : "every file on disk is named by the manifest",
+      ? `named by no manifest: ${orphans.map((f) => relative(ROOT, f)).join(", ")}`
+      : "every file on disk is named by a manifest",
   });
 
-  const unsourced = Object.entries(MESH_ASSETS)
-    .filter(
-      ([, a]) =>
-        !a.source?.trim() || !a.license?.trim() || !a.author?.trim() || !a.sha256?.trim(),
-    )
-    .map(([key]) => key);
+  // Provenance is per ENTRY rather than per file: a texture set is credited as
+  // one surface however many of its five maps it ships (see `TextureAsset`).
+  const provenance: Array<[string, { source: string; author: string; license: string }]> = [
+    ...Object.entries(MESH_ASSETS),
+    ...Object.entries(TEXTURE_ASSETS),
+  ];
+  const unsourced = provenance
+    .filter(([, a]) => !a.source?.trim() || !a.license?.trim() || !a.author?.trim())
+    .map(([key]) => key)
+    // A pinned sha256 is the other half of an entry being complete, and it is
+    // per file.
+    .concat(stored.filter((a) => !a.sha256?.trim()).map((a) => a.key));
   checks.push({
     name: "assets: every entry records its source, author, licence and sha256",
     pass: unsourced.length === 0,
     detail: unsourced.length
       ? `incomplete: ${unsourced.join(", ")}`
-      : `${Object.keys(MESH_ASSETS).length} entr(ies) recorded`,
+      : `${provenance.length} entr(ies) recorded`,
   });
 
   // Attribution is a licence obligation for anything under CC-BY, and a credits

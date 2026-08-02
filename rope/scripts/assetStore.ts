@@ -20,17 +20,48 @@
 
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
-import type { MeshAsset } from "../src/render3d/assets";
+import { MESH_ASSETS, TEXTURE_ASSETS, textureMaps } from "../src/render3d/assets";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
 export const ASSET_REPO = process.env.ASSET_REPO ?? "epictris/website";
 export const ASSET_TAG = process.env.ASSET_TAG ?? "assets";
 
-export function assetName(asset: MeshAsset): string {
+// Everything the store holds, flattened: a prop is one file and a texture set is
+// up to five, and every consumer here - the fetch, the budget, the collision
+// check - wants the files rather than the manifests. One list means a texture map
+// cannot be left out of a check by being in the other manifest.
+export interface StoredAsset {
+  // Manifest key, qualified by the map slot for a texture, so a failure names
+  // the thing to go and fix.
+  key: string;
+  file: string;
+  sha256: string;
+}
+
+export function storedAssets(): StoredAsset[] {
+  const out: StoredAsset[] = [];
+  for (const [key, asset] of Object.entries(MESH_ASSETS)) {
+    out.push({ key, file: asset.file, sha256: asset.sha256 });
+  }
+  for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
+    const maps = asset.maps;
+    for (const [slot, map] of Object.entries(maps)) {
+      if (map) out.push({ key: `${key}.${slot}`, file: map.file, sha256: map.sha256 });
+    }
+    // Belt and braces: `textureMaps` is what the runtime iterates, so a slot
+    // added there and not here would be a file nothing checks.
+    if (textureMaps(asset).length !== Object.values(maps).filter(Boolean).length) {
+      throw new Error(`texture "${key}": textureMaps() disagrees with its own map slots`);
+    }
+  }
+  return out;
+}
+
+export function assetName(asset: { file: string }): string {
   return basename(asset.file);
 }
 
-export function assetUrl(asset: MeshAsset): string {
+export function assetUrl(asset: { file: string }): string {
   return `https://github.com/${ASSET_REPO}/releases/download/${ASSET_TAG}/${assetName(asset)}`;
 }
 

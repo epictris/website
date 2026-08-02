@@ -32,10 +32,10 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { Hook } from "../classes/hook";
 import { buildLevelBodies, RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
-import { backgroundTransform, buildSceneBackgrounds } from "../level/backgrounds";
+import { decorTransform } from "../level/decor";
 import {
   scaleLevelData,
-  type BackgroundData,
+  LEGACY_BACKGROUND_COLOR,
   type LevelBodyData,
   type LevelData,
 } from "../level/levelFormat";
@@ -1677,86 +1677,100 @@ function caseHookSeam(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
-// background-group — a background panel welded into a compound body rides it,
-// and everything else about it stays decoration.
+// decor-group — a non-colliding shape welded into a compound body rides it, and
+// stays out of the simulation entirely.
 //
 // Authored state that nothing checks is authored state that quietly stops being
-// read, and this one is invisible to every other detector here: a panel is never
-// simulated, so a build that dropped the attachment entirely would violate no
-// invariant, diverge no digest and pass every bundle. What it would do is leave
-// the paint behind while the body it decorates swings away from it - a thing only
-// a person looking at the game would notice, which is exactly the failure this
-// suite exists to turn into a number.
+// read, and this one is invisible to every other detector here: decoration is
+// never simulated, so a build that dropped the attachment entirely would violate
+// no invariant, diverge no digest and pass every bundle. What it would do is
+// leave the paint behind while the body it decorates swings away from it - a
+// thing only a person looking at the game would notice, which is exactly the
+// failure this suite exists to turn into a number.
 //
-// Three statements, and the third is what stops the first two passing for the
-// wrong reason:
+// Five statements, and the last three are what stop the first two passing for
+// the wrong reason:
 //
-// - the tagged panel resolves to the group's engine body, and after that body has
-//   fallen and turned by a real amount its drawn placement has followed - moved
-//   by what the body moved by, turned by what the body turned by;
-// - the panel is not a PIECE of that body: it brings no shape, so the built body
-//   still carries exactly the shapes its geometry authored;
-// - an untagged panel, and one tagged into a group no body carries, are drawn
-//   exactly where they were authored after all of it. Without those two, "every
-//   panel rides something" would pass this case just as well as the rule does.
+// - the tagged shape resolves to the group's engine body, and after that body
+//   has fallen and turned by a real amount its drawn placement has followed -
+//   moved by what the body moved by, turned by what the body turned by;
+// - it is not a PIECE of that body: it brings no shape, so the built body still
+//   carries exactly the shapes its colliding entries authored, and nothing
+//   non-colliding reached the world at all;
+// - an untagged one, and one tagged into a group with no colliding member, are
+//   drawn exactly where they were authored after all of it. Without those two,
+//   "everything rides something" would pass this case just as well as the rule
+//   does;
+// - the RETIRED `backgrounds` list migrates to exactly the same thing. That is
+//   the half no level in the corpus can fail loudly: every level on disk still
+//   carries panels in the old form, and a migration that dropped or displaced
+//   them is decoration silently gone from a game that still plays perfectly.
 // ---------------------------------------------------------------------------
-function caseBackgroundGroup(): ContactResult {
+function caseDecorGroup(): ContactResult {
   const panel = (
     x: number,
     y: number,
     rot: number,
     group?: string,
-  ): BackgroundData => ({
+  ) => ({
     x,
     y,
     rot,
-    shape: { kind: "rect", w: 3.4, h: 1.4 },
+    shape: { kind: "rect" as const, w: 3.4, h: 1.4 },
     ...(group !== undefined ? { group } : {}),
   });
+  const geometry: LevelBodyData[] = [
+    { kind: "static", x: 0, y: 3, rot: 0, shape: { kind: "rect", w: 20, h: 1 } },
+    // One shape, so the count below says whether the decoration joined it.
+    { kind: "rigid", x: 0, y: -1, rot: 0.35, shape: { kind: "rect", w: 2.2, h: 0.4 }, group: "slab" },
+  ];
+  // Offset from the body's origin on purpose: decoration drawn at the origin
+  // would follow the body under a rotation that was being ignored.
+  const panels = [panel(0.6, -1.3, 0.35, "slab"), panel(6, -1, 0), panel(-6, -1, 0, "nothing")];
   const data = scaleLevelData(
     {
       player: { x: 0, y: 0, radius: 0.08 },
       bodies: [
-        { kind: "static", x: 0, y: 3, rot: 0, shape: { kind: "rect", w: 20, h: 1 } },
-        // One shape, so the count below says whether the panel joined it.
-        { kind: "rigid", x: 0, y: -1, rot: 0.35, shape: { kind: "rect", w: 2.2, h: 0.4 }, group: "slab" },
+        ...geometry,
+        ...panels.map((p) => ({ kind: "static" as const, collision: false, ...p })),
       ],
-      // Offset from the body's origin on purpose: a panel drawn at the origin
-      // would follow the body under a rotation that was being ignored.
-      backgrounds: [panel(0.6, -1.3, 0.35, "slab"), panel(6, -1, 0), panel(-6, -1, 0, "nothing")],
     },
     1,
   );
 
   const world = new World();
   const built = buildLevelBodies(world, data, () => {});
-  const [rider, loose, orphan] = buildSceneBackgrounds(data.backgrounds!, built.byGroup);
+  const [rider, loose, orphan] = built.decor;
   const body = built.byGroup.get("slab") as RigidBody2D | undefined;
 
   const before = {
     body: body ? { pos: body.globalPosition, rot: body.globalRotation } : null,
-    rider: backgroundTransform(rider!, 1),
-    loose: backgroundTransform(loose!, 1),
-    orphan: backgroundTransform(orphan!, 1),
+    rider: decorTransform(rider!, 1),
+    loose: decorTransform(loose!, 1),
+    orphan: decorTransform(orphan!, 1),
   };
   for (let f = 0; f < 240; f++) world.integrate(DT);
   const after = {
-    rider: backgroundTransform(rider!, 1),
-    loose: backgroundTransform(loose!, 1),
-    orphan: backgroundTransform(orphan!, 1),
+    rider: decorTransform(rider!, 1),
+    loose: decorTransform(loose!, 1),
+    orphan: decorTransform(orphan!, 1),
   };
 
   const attached = rider!.body !== null && rider!.body === body;
   const onePiece = (body?.getShapes().length ?? 0) === 1;
+  // Nothing non-colliding may be in the world at all - that is what the flag
+  // means, and it is the reason no physics path has to exclude decoration.
+  const worldBodies = world.bodies.length;
+  const outOfWorld = worldBodies === 2;
   // The slab has to have actually gone somewhere, or "it followed" is a
   // statement about a body that never moved.
   const bodyMoved = body ? body.globalPosition.distanceTo(before.body!.pos) : 0;
   const bodyTurned = body ? Math.abs(wrapAngle(body.globalRotation - before.body!.rot)) : 0;
   const worthChecking = bodyMoved > 1 && bodyTurned > 0.02;
   // Followed means its placement IN THE BODY'S FRAME is what it was - not that
-  // it moved by what the body's origin moved by, which a panel held off that
+  // it moved by what the body's origin moved by, which decoration held off that
   // origin cannot do while the body turns: it swings, and the swing is the part
-  // being checked. Paired with the travel below, since a panel that stopped
+  // being checked. Paired with the travel below, since a piece that stopped
   // being attached altogether would hold its frame-relative placement in the
   // only way that matters here by not moving at all.
   const localOf = (t: { pos: Vec2; rot: number }, pose: { pos: Vec2; rot: number }) => ({
@@ -1779,14 +1793,39 @@ function caseBackgroundGroup(): ContactResult {
     after.orphan.pos.distanceTo(before.orphan.pos) === 0 &&
     after.orphan.rot === before.orphan.rot;
 
-  const passed = attached && onePiece && worthChecking && followed && looseStill && orphanStill;
-  return ok("background-group — a welded panel rides its body and adds nothing to it", passed, [
-    `${attached ? "ok  " : "BAD "} the tagged panel resolves to the group's engine body`,
-    `${onePiece ? "ok  " : "BAD "} the body carries ${body?.getShapes().length ?? 0} shape(s) — a panel is not a piece`,
+  // The same scene in the RETIRED form, through the one gate that migrates it.
+  const legacy = scaleLevelData(
+    { player: { x: 0, y: 0, radius: 0.08 }, bodies: geometry, backgrounds: panels },
+    1,
+  );
+  const legacyWorld = new World();
+  const legacyBuilt = buildLevelBodies(legacyWorld, legacy, () => {});
+  const migrated =
+    legacyBuilt.decor.length === 3 &&
+    // Against the placements BEFORE the world was stepped: this build is fresh,
+    // and the one above has since fallen 240 frames.
+    legacyBuilt.decor.every((d, i) => {
+      const a = decorTransform(d, 1);
+      const b = [before.rider, before.loose, before.orphan][i]!;
+      return a.pos.distanceTo(b.pos) === 0 && a.rot === b.rot;
+    }) &&
+    legacyBuilt.decor[0]!.body === legacyBuilt.byGroup.get("slab") &&
+    legacyWorld.bodies.length === 2 &&
+    // The panel list carried its own default fill, so the migration writes one
+    // rather than letting decoration turn body-grey on load.
+    legacyBuilt.decor[1]!.data.color === LEGACY_BACKGROUND_COLOR;
+
+  const passed =
+    attached && onePiece && outOfWorld && worthChecking && followed && looseStill && orphanStill && migrated;
+  return ok("decor-group — welded decoration rides its body and never reaches the sim", passed, [
+    `${attached ? "ok  " : "BAD "} the tagged shape resolves to the group's engine body`,
+    `${onePiece ? "ok  " : "BAD "} the body carries ${body?.getShapes().length ?? 0} shape(s) — decoration is not a piece`,
+    `${outOfWorld ? "ok  " : "BAD "} the world holds ${worldBodies} bodies — the 3 non-colliding shapes were never built`,
     `${worthChecking ? "ok  " : "BAD "} the body moved ${bodyMoved.toFixed(2)} m and turned ${(bodyTurned / DEG).toFixed(1)}°`,
-    `${followed ? "ok  " : "BAD "} the panel followed it ${riderTravelled.toFixed(2)} m, holding its place in the body's frame to ${(followedPos * 1000).toFixed(6)} mm / ${(followedRot / DEG).toFixed(6)}°`,
-    `${looseStill ? "ok  " : "BAD "} an untagged panel is drawn where it was authored`,
-    `${orphanStill ? "ok  " : "BAD "} a panel tagged into a group with no body is drawn where it was authored`,
+    `${followed ? "ok  " : "BAD "} it followed ${riderTravelled.toFixed(2)} m, holding its place in the body's frame to ${(followedPos * 1000).toFixed(6)} mm / ${(followedRot / DEG).toFixed(6)}°`,
+    `${looseStill ? "ok  " : "BAD "} an untagged piece is drawn where it was authored`,
+    `${orphanStill ? "ok  " : "BAD "} one tagged into a group with no body is drawn where it was authored`,
+    `${migrated ? "ok  " : "BAD "} the retired \`backgrounds\` list migrates to exactly the same placement, body and fill`,
   ]);
 }
 
@@ -1816,7 +1855,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseMaterials());
   results.push(caseImpermeableShape());
   results.push(caseHookSeam());
-  results.push(caseBackgroundGroup());
+  results.push(caseDecorGroup());
   results.push(caseAreaReach());
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));

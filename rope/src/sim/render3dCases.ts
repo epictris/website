@@ -23,7 +23,17 @@ import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import { FOV_Y_DEG, projectToView, syncCamera } from "../render3d/space";
 import { extrudeOutline } from "../render3d/extrude";
+import {
+  DEFAULT_TEXTURE,
+  surfaceName,
+  surfaceTile,
+  tileMetres,
+  textureMaps,
+  TEXTURE_ASSETS,
+  TEXTURE_SETS,
+} from "../render3d/assets";
 import { scaleLevelData, type LevelData } from "../level/levelFormat";
+import { DECOR_Z, depthOf } from "../level/decor";
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 
@@ -257,18 +267,35 @@ function visualRoundTrip(): CaseResult[] {
           scale: 1.4,
           depth: 90,
           texture: "stone",
+          tileScale: 2,
+          tileOffsetX: 25,
+          tileOffsetY: -40,
           bevel: 3,
         },
       },
       { kind: "rigid", x: 0, y: 0, rot: 0, shape: { kind: "circle", r: 25 }, visual: { kind: "none" } },
-    ],
-    backgrounds: [
+      // Decoration, in the form it is authored in now...
       {
+        kind: "static",
+        collision: false,
         x: -400,
         y: 120,
         rot: 0,
         shape: { kind: "rect", w: 900, h: 600 },
-        visual: { offsetZ: -600, depth: 20 },
+        visual: { offsetZ: -600, depth: 20, texture: "quarry-stone", tileScale: 0.5 },
+      },
+    ],
+    // ...and in the retired one, which `normalizeLevelData` folds into the list
+    // above. Both round trips run through that gate, so a migration that lost a
+    // field would show up here as the trip not being byte-identical.
+    backgrounds: [
+      {
+        x: 900,
+        y: 120,
+        rot: 0.2,
+        shape: { kind: "rect", w: 400, h: 300 },
+        group: "g7",
+        visual: { offsetZ: -300 },
       },
     ],
   };
@@ -278,11 +305,27 @@ function visualRoundTrip(): CaseResult[] {
   // What is being asserted is that every value survives the trip.
   const a = JSON.stringify(scaleLevelData(authored, 1));
   const b = JSON.stringify(scaleLevelData(scaleLevelData(authored, PX), PIXELS_PER_METER));
+  // A DIMENSIONLESS field cannot be checked by that round trip at all: scaling it
+  // on the way in and back out again is the identity, so `tileScale * factor`
+  // would be invisible here while silently making every authored tiling scale a
+  // hundred times off in the game. It has to be asserted one way.
+  const inMetres = scaleLevelData(authored, PX);
+  const dimensionless =
+    inMetres.bodies[0]!.visual!.tileScale === 2 &&
+    inMetres.bodies[0]!.visual!.scale === 1.4 &&
+    inMetres.bodies[2]!.visual!.tileScale === 0.5;
   return [
     {
       name: "level format: visual round-trips px -> m -> px",
       pass: a === b,
       detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
+    },
+    {
+      name: "level format: `scale` and `tileScale` are not scaled by the px -> m conversion",
+      pass: dimensionless,
+      detail: dimensionless
+        ? "unchanged in metres"
+        : `tileScale ${inMetres.bodies[0]!.visual!.tileScale} / ${inMetres.bodies[2]!.visual!.tileScale}, scale ${inMetres.bodies[0]!.visual!.scale}`,
     },
   ];
 }
@@ -330,7 +373,7 @@ function editorRoundTrip(): CaseResult[] {
         opacity: 0.5,
         friction: 1,
         material: "stone",
-        visual: { depth: 90, texture: "brick", bevel: 3 },
+        visual: { depth: 90, texture: "brick", tileScale: 1.5, bevel: 3 },
       },
       // ...an invisible wall...
       {
@@ -392,11 +435,127 @@ function editorRoundTrip(): CaseResult[] {
   ];
 }
 
+// How deep a shape is drawn, which is what orders two overlapping ones - on both
+// canvases and under a click in the editor (see `pickOrder`). One rule, asserted
+// here because a wrong answer is not an error anywhere: the level still draws,
+// and a backdrop simply swallows clicks meant for the wall in front of it.
+function depthOrdering(): CaseResult[] {
+  const shape = { kind: "rect" as const, w: 100, h: 100 };
+  const solid = { kind: "static" as const, x: 0, y: 0, rot: 0, shape };
+  const decoration = { ...solid, collision: false };
+  const checks: Array<[string, boolean, string]> = [
+    ["solid geometry sits on the gameplay plane", depthOf(solid) === 0, `${depthOf(solid)} m`],
+    [
+      "decoration falls back behind it rather than to zero",
+      depthOf(decoration) === DECOR_Z,
+      `${depthOf(decoration)} m`,
+    ],
+    [
+      "an authored offsetZ wins for either",
+      depthOf({ ...decoration, visual: { offsetZ: 3 } }) === 3 &&
+        depthOf({ ...solid, visual: { offsetZ: -20 } }) === -20,
+      "authored depth used as given",
+    ],
+    [
+      "nearest the viewport sorts last, which is what a click takes first",
+      [
+        { ...solid, visual: { offsetZ: -20 } },
+        { ...decoration },
+        { ...solid, visual: { offsetZ: 0.5 } },
+      ]
+        .sort((a, b) => depthOf(a) - depthOf(b))
+        .map((b) => depthOf(b))
+        .join(",") === `-20,${DECOR_Z},0.5`,
+      "back to front",
+    ],
+  ];
+  return checks.map(([name, pass, detail]) => ({ name: `depth: ${name}`, pass, detail }));
+}
+
+// Which surface a name resolves to, and at what tiling scale. Pure arithmetic
+// over the two manifests, which is why it can live in this suite at all - there
+// is no canvas here and no GPU, so the materials themselves cannot be built.
+//
+// What it is guarding is the ONE namespace. A level names a surface; whether
+// that surface is a downloaded set of maps or a few hundred bytes of generated
+// noise is `assets.ts`'s answer, and the point of the arrangement is that
+// dressing a level in authored textures is adding manifest entries rather than
+// re-authoring every body that named the material. Get the precedence backwards
+// and every level goes on wearing noise while the downloaded maps sit unused -
+// which looks like nothing at all, since the generated surfaces are perfectly
+// presentable.
+function surfaceResolution(): CaseResult[] {
+  const key = "test-quarry-stone";
+  // The manifest is a plain record and this is the only way to exercise a
+  // resolution rule with an empty one. Removed again below, so no other case
+  // (and no build) can see it.
+  TEXTURE_ASSETS[key] = {
+    maps: { base: { file: "/textures/x-base.webp", sha256: "0" } },
+    tile: 2.5,
+    source: "test",
+    author: "test",
+    license: "test",
+  };
+  try {
+    const checks: Array<[string, boolean, string]> = [
+      [
+        "an authored set resolves to itself",
+        surfaceName(key) === key,
+        surfaceName(key),
+      ],
+      [
+        "a material name still resolves to its generated surface",
+        surfaceName("stone") === "stone",
+        surfaceName("stone"),
+      ],
+      [
+        "an unknown name falls back rather than vanishing",
+        surfaceName("no-such-surface") === DEFAULT_TEXTURE,
+        surfaceName("no-such-surface"),
+      ],
+      [
+        "an authored set's tile is its own",
+        surfaceTile(key) === 2.5,
+        `${surfaceTile(key)} m`,
+      ],
+      [
+        "a generated set's tile is the table's",
+        surfaceTile("stone") === TEXTURE_SETS.stone.tile,
+        `${surfaceTile("stone")} m`,
+      ],
+      [
+        "life size is the texture's own size, whatever the texture",
+        tileMetres(key) === 2.5 && tileMetres("stone") === TEXTURE_SETS.stone.tile,
+        `${tileMetres(key)} m / ${tileMetres("stone")} m`,
+      ],
+      [
+        "a tile scale multiplies that rather than replacing it",
+        tileMetres(key, 2) === 5 && tileMetres(key, 0.5) === 1.25 && tileMetres(key, null) === 2.5,
+        `x2 -> ${tileMetres(key, 2)} m, x0.5 -> ${tileMetres(key, 0.5)} m`,
+      ],
+      [
+        "only the map slots a set actually carries are enumerated",
+        textureMaps(TEXTURE_ASSETS[key]!).length === 1,
+        `${textureMaps(TEXTURE_ASSETS[key]!).length} map(s)`,
+      ],
+    ];
+    return checks.map(([name, pass, detail]) => ({
+      name: `surfaces: ${name}`,
+      pass,
+      detail,
+    }));
+  } finally {
+    delete TEXTURE_ASSETS[key];
+  }
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...cameraCorrespondence(),
     ...blendStability(),
     ...extrusionGeometry(),
+    ...depthOrdering(),
+    ...surfaceResolution(),
     ...visualRoundTrip(),
     ...editorRoundTrip(),
   ];

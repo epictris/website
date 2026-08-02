@@ -107,40 +107,31 @@ An `anchor` is a body kind, because what it changes is what the body *is* — it
 occupies its own collision layer and is outside every collision path in the
 world, which is a statement about a body and cannot be made a piece at a time.
 
-### Backgrounds
+### Decoration
 
-A **background** is the one thing the player sees that carries no glyph, and it
-is worth being explicit about why the rule above does not reach it. Every type
-the rule covers is a body or a region: it *does* something to whatever is inside
-or against it, and the glyph names that behaviour. A background does nothing at
-all — no collision, no wrap, no force, no reset. It is not a region the player
-can be inside; it is paint. There is no behaviour to name, and stamping a glyph
-over authored artwork would defeat the only thing the layer is for.
+**Decoration** - a shape with its collision switched off (`LevelBodyData.collision: false`) - is the one thing the player sees that carries no glyph, and it is worth being explicit about why the rule above does not reach it.
+Every type the rule covers is a body or a region: it *does* something to whatever is inside or against it, and the glyph names that behaviour.
+Decoration does nothing at all - no collision, no wrap, no force, no reset.
+It is not a region the player can be inside; it is paint.
+There is no behaviour to name, and stamping a glyph over authored artwork would defeat the only thing it is for.
 
-What it must still carry is that it is **not a body**, and that is supplied
-compositionally rather than by a mark, which is why both halves are in one place
-(`render/background.ts`) and shared by the editor and the game:
+It is a flag on an ordinary shape rather than a type of its own, and that is a deliberate reversal: decoration used to be its own list (`backgrounds`) precisely so the sim could not see it.
+The exclusion is now made by never BUILDING the shape - it becomes no collision shape and enters no `World` - which is the same guarantee with none of the cost, since decoration is otherwise an ordinary authored shape with the ordinary 3D visual, the ordinary group tag and the ordinary tools.
+A wall becomes a backdrop by unticking a box.
 
-- **Drawn under everything.** Backgrounds go down before any body, so nothing
-  the player can touch is ever occluded by decoration. Anything drawn over a
-  background is real.
-- **Never stroked.** A border is what makes a shape read as an object; a
-  backdrop has none, and every body draws over it with one. A bordered panel is
-  the failure mode this forbids — that is exactly a wall that isn't there.
+What it must still carry is that it is **not a body**, and that is supplied compositionally rather than by a mark, which is why both halves are in one place (`render/decor.ts`) and shared by the editor and the game:
 
-The still-frame test is met the same way as before: in a screenshot, everything
-outlined is a body, everything flat and behind them is paint. The editor draws
-its own dashed teal outline on a panel, which is editor chrome (it also draws
-handles, marquees and camera guides) and never reaches the game.
+- **Drawn under everything.** Decoration goes down before any body, whatever its position in the authored list, so nothing the player can touch is ever occluded by it. Anything drawn over decoration is real.
+- **Never stroked.** A border is what makes a shape read as an object; a backdrop has none, and every body draws over it with one. A bordered panel is the failure mode this forbids - that is exactly a wall that isn't there.
 
-A panel may be **welded into a compound body** (the same `group` tag its shapes
-carry), which makes it decoration *of that body*: it is drawn in the body's
-frame, so a backdrop on a swinging rigid assembly swings with it. Nothing else
-changes — it is still paint, still under every body, still unstroked, and it adds
-no shape, no mass and no seam to the body it rides. That is the point of allowing
-it: without it, decoration can only be authored on scenery that never moves, and
-a level that wants a moving object to look like anything has to build the look
-out of collision geometry.
+The still-frame test is met the same way as before: in a screenshot, everything outlined is a body, everything flat and behind them is paint.
+The editor draws its own dashed teal outline on decoration, which is editor chrome (it also draws handles, marquees and camera guides), never reaches the game, and is what tells an author at a glance which shapes on the canvas are part of the level.
+
+Decoration may be **welded into a compound body** (the same `group` tag the shapes carry), which makes it decoration *of that body*: it is drawn in the body's frame, so a backdrop on a swinging rigid assembly swings with it.
+Nothing else changes - it is still paint, still under every body, still unstroked, and it adds no shape, no mass and no seam to the body it rides.
+That is the point of allowing it: without it, decoration can only be authored on scenery that never moves, and a level that wants a moving object to look like anything has to build the look out of collision geometry.
+
+It is also how a **prop with no collision** is placed, since it keeps the full `visual` field: a GLB with its physics unticked is scenery, and the collision it does not have is exactly what makes it scenery rather than an obstacle nobody can see the shape of.
 
 ## Convex-only polygons; compound bodies
 

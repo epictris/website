@@ -74,10 +74,16 @@ export const DEFAULT_FORCE_MAGNITUDE = 300;
 // rebuilds objects field by field, so a field it does not enumerate is dropped
 // on the next save rather than reported.
 export interface VisualData {
-  // "auto" (and an absent `kind`): extrude the collision outline.
-  // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`).
-  // "none": physics-only, drawn by nothing - an invisible wall, or a body whose
-  //         look is carried entirely by a background panel welded to it.
+  // How this shape is turned into something the GPU draws. The two real answers
+  // are the two ways a thing gets a look in this game, and they are a choice:
+  //
+  // "auto" (and an absent `kind`): the shape's own PRIMITIVE - the authored
+  //         rect, circle or convex loop - extruded through z and wearing a
+  //         tileable PBR surface (`texture` + `tileScale`). No file, no download, and
+  //         what the player sees is exactly the outline they collide with.
+  // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`) instead,
+  //         which may bring its own materials or wear the same surface set.
+  // "none": drawn by nothing - an invisible wall.
   kind?: "auto" | "mesh" | "none";
   // Manifest key. `kind: "mesh"` only; an unknown key draws the placeholder
   // rather than nothing, so a missing asset is visible instead of silent.
@@ -99,10 +105,58 @@ export interface VisualData {
   // Extrusion depth; absent = the shape's own `thickness`, which is the number
   // its mass is already computed from, so a body is as thick as it weighs.
   depth?: number;
-  // Texture-set key (`render3d/assets.ts`); absent = the one the shape's
-  // `material` name picks, so naming the stuff a thing is made of is still the
-  // only decision an author has to make.
+  // Which surface to wear. A key of `TEXTURE_ASSETS` (an authored PBR set:
+  // albedo, normal, roughness, metallic and ambient-occlusion maps) or of
+  // `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
+  // namespace, looked up in that order by `render3d/assets.ts`.
+  //
+  // Absent = the one the shape's `material` name picks, so naming the stuff a
+  // thing is made of is still the only decision an author has to make.
+  //
+  // It applies to BOTH visual kinds: an extrusion is textured with it, and a
+  // `mesh` wears it instead of the materials its own file carries. A mesh that
+  // authors none keeps its own, which is what lets a fully-textured prop drop in
+  // untouched and a bare one (geometry only, ~20 KB) be dressed as level stuff.
   texture?: string;
+  // Tiling scale: how large this shape wears the texture, as a MULTIPLE of the
+  // size the texture itself was authored at. 1 is life size - one repeat covers
+  // exactly the world distance the surface was captured over - 2 is twice as
+  // large, 0.5 is half. Absent is 1.
+  //
+  // DIMENSIONLESS, like `scale` and unlike every other number in this block, so
+  // it does NOT convert between pixels and metres. That is the whole point of
+  // expressing it this way: the absolute size lives once in the manifest, where
+  // it is a fact about the texture (`TextureAsset.tile`, in metres - Poly Haven
+  // publishes the capture size of every set), and a level says only whether this
+  // wall wants it bigger or smaller than intended. A level authoring absolute
+  // metres would restate that fact everywhere, and get it wrong wherever the
+  // texture was later swapped for one captured at a different size.
+  //
+  // It works because the extruder writes UVs in METRES (extrude.ts): a repeat is
+  // a world distance rather than a fraction of a face, so a 0.4 m plank and a
+  // 40 m wall of the same stuff show the same brick, and only the count differs.
+  tileScale?: number;
+  // Where the texture STARTS on this shape, as a shift in world space: +x moves
+  // it right, +y moves it down (level coordinates, the same sense as the shape's
+  // own `x`/`y`). Absent is 0.
+  //
+  // It is what aligns a pattern to the thing it is on rather than to the world
+  // origin: brick courses meeting a window head, a tiled floor whose grout lines
+  // land on the edges of the floor. Without it the only lever is the shape's own
+  // position, which moves the collision geometry too.
+  //
+  // A LENGTH, so it is scene pixels on disk and metres in the sim like every
+  // other - and since a scene pixel IS a centimetre here (PIXELS_PER_METER is
+  // 100), authoring it in centimetres and authoring it in the file's own units
+  // are the same act: `25` is 25 cm.
+  //
+  // The shift is applied in the SURFACE's frame after tiling, so it moves the
+  // pattern and never the geometry, and it is measured in world distance rather
+  // than in repeats: 25 cm is 25 cm whatever `tileScale` is set to, which is what
+  // makes the two fields independently adjustable instead of one undoing the
+  // other.
+  tileOffsetX?: number;
+  tileOffsetY?: number;
   // Edge break. Absent = DEFAULT_BEVEL.
   bevel?: number;
 }
@@ -123,6 +177,34 @@ export interface LevelBodyData {
   // what it is for, and which surface the hook reached is a question about a
   // shape rather than about a body.
   impermeable?: boolean;
+  // Does this shape take part in the simulation at all? Absent (and true) is a
+  // piece of the level; FALSE is decoration - it is drawn and nothing else. It
+  // never becomes a collision shape, never enters the `World`, carries no mass,
+  // and no physics path has to know it exists.
+  //
+  // That last clause is the whole design. Decoration used to be its own list
+  // (`backgrounds`) precisely to keep it out of the sim, on the argument that a
+  // pass-through `BodyKind` would have to be excluded by every physics query one
+  // call site at a time. The argument was right about the danger and wrong about
+  // the remedy: a shape that is never BUILT is excluded from everything by
+  // construction, exactly as a separate list was, while staying one authorable
+  // thing with one set of tools - drawn, picked, dragged, grouped, given a 3D
+  // visual and a texture by the same code as every wall.
+  //
+  // A non-colliding entry may still be a member of a `group`: it then rides that
+  // group's engine body, so a lantern hung on a swinging crate swings with it
+  // without adding a shape, a seam or a gram to what the crate collides as
+  // (`buildLevelBodies` resolves it into `BuiltBodies.decor`). Every physics
+  // property - kind, friction, material, thickness, impermeable - is meaningless
+  // on one and ignored rather than refused, since a shape may be switched back
+  // and forth while a level is authored.
+  //
+  // Drawing keeps the two rules the old background layer had, and they are
+  // structural rather than stylistic (see "Backgrounds" in docs/game-design.md):
+  // decoration is drawn BEFORE anything solid, so nothing the player can touch
+  // is ever hidden behind it, and it is never STROKED, since a border is what
+  // makes a shape read as an object.
+  collision?: boolean;
   x: number;
   y: number;
   rot: number;
@@ -290,33 +372,28 @@ export interface CameraRegionData {
   priority?: number;
 }
 
-// Default appearance of a background panel: an opaque dark slate, deliberately
-// distinct from the geometry grey so a fresh backdrop does not read as a wall.
-export const DEFAULT_BACKGROUND_COLOR = "#313244";
-export const DEFAULT_BACKGROUND_OPACITY = 1;
+// Appearance a retired background panel is migrated with: an opaque dark slate,
+// deliberately distinct from the geometry grey so a backdrop does not read as a
+// wall. It was the default of a list that no longer exists, so it is written out
+// EXPLICITLY by the migration rather than left to a default - the body defaults
+// are the grey, and a decoration silently changing colour on load is exactly the
+// kind of migration that looks like a rendering bug.
+export const LEGACY_BACKGROUND_COLOR = "#313244";
+export const LEGACY_BACKGROUND_OPACITY = 1;
 
-// A background panel: a shape drawn behind the level as pure decoration.
-// Deliberately NOT a body and NOT an area — it has no collision, nothing wraps
-// it, no force acts through it and the sim never sees it, so it lives in its own
-// list exactly as camera regions and notes do rather than gaining a `BodyKind`
-// every physics path would have to exclude.
+// THE RETIRED BACKGROUND LIST, as levels on disk still carry it.
 //
-// Unlike a note it *is* drawn in play — it is the one editor layer whose output
-// the player sees — which is what makes its z-order and its lack of a border
-// load-bearing rather than cosmetic: a background draws first, behind every
-// body, and with no outline at all. A border is what makes a shape read as an
-// object; a backdrop has none, and anything the player can touch is drawn over
-// it with one. See "Backgrounds" in docs/game-design.md.
+// Decoration was its own list because it had to stay out of the sim: nothing
+// collides with it, nothing wraps it, no force reaches through it. That is still
+// true and is now said by `LevelBodyData.collision: false`, which keeps it out
+// by never building it - so decoration stopped being a second kind of thing with
+// a second set of tools (its own layer, its own inspector, its own resolve path)
+// and became one flag on the shapes a level already has.
 //
-// Planned, not implemented: an image fill, which lands here as
-//   image?: string;                    // asset path
-//   fit?: "scale" | "crop" | "tile";   // how it maps into the shape
-//   tile?: number;                     // fit "tile": tile width in scene pixels
-// read by `drawBackground` alongside the colour, which stays underneath as the
-// panel's backing. Nothing else moves: the placement, the shape, the layer and
-// the whole editor plumbing are already shared with every other item, so images
-// are a change to one draw function and one inspector section.
-export interface BackgroundData {
+// `normalizeLevelData` folds each panel into a non-colliding body, keeping its
+// placement, its group tag, its visual, and its colour written out explicitly.
+// Nothing past that line has ever seen a `BackgroundData`.
+export interface LegacyBackgroundData {
   x: number;
   y: number;
   rot: number;
@@ -336,19 +413,11 @@ export interface BackgroundData {
   // group whose bodies were deleted - is simply decoration that does not move.
   //
   // The placement stays in WORLD coordinates like everything else on disk, and
-  // `buildSceneBackgrounds` converts it into the body's frame once, at load: a
+  // `buildLevelBodies` converts it into the body's frame once, at load: a
   // group's origin is its combined centre of mass, which shifts as pieces are
   // added, so a local offset in the file would be authored against a moving
   // point. That is the same reason chains author their anchors in world space.
   group?: string;
-  // What this panel looks like in 3D (see VisualData). A panel is decoration, so
-  // this is where the reference games' parallax comes from: a panel with an
-  // `offsetZ` is a prop at that depth rather than a flat fill, and the camera
-  // panning past it moves it at a different rate from the gameplay plane.
-  //
-  // Absent = a thin extrusion just behind the plane, which is what a flat fill
-  // drawn before every body already was, so a level authored before this field
-  // looks the same as it always did.
   visual?: VisualData;
 }
 
@@ -420,10 +489,10 @@ export interface EnvironmentData {
 export interface LevelData {
   player: { x: number; y: number; radius: number };
   bodies: LevelBodyData[];
-  // Decoration drawn behind the level (see BackgroundData). Absent = a level
-  // whose only visible shapes are its bodies, which is every level authored
-  // before this field.
-  backgrounds?: BackgroundData[];
+  // THE RETIRED decoration list (see LegacyBackgroundData). Read off disk and
+  // folded into `bodies` as non-colliding shapes by `normalizeLevelData`;
+  // nothing writes it any more, and nothing downstream of that gate reads it.
+  backgrounds?: LegacyBackgroundData[];
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
   cameraRegions?: CameraRegionData[];
@@ -454,8 +523,9 @@ function scaleShape(s: ShapeData, factor: number): ShapeData {
 
 // A visual's lengths, and only its lengths. The offsets (z included), the
 // extrusion depth and the bevel are metres in the sim and scene pixels on disk;
-// the kind, the mesh key, the texture key, the three rotations and the
-// dimensionless `scale` are not lengths and pass through untouched.
+// the kind, the mesh key, the texture key, the three rotations and the two
+// dimensionless factors (`scale`, `tileScale`) are not lengths and pass through
+// untouched.
 //
 // It rebuilds the object field by field like everything else here, which is what
 // makes a forgotten field a silent loss rather than a type error - hence the
@@ -474,29 +544,66 @@ export function scaleVisual(v: VisualData, factor: number): VisualData {
     ...(v.scale !== undefined ? { scale: v.scale } : {}),
     ...(v.depth !== undefined ? { depth: v.depth * factor } : {}),
     ...(v.texture !== undefined ? { texture: v.texture } : {}),
+    // A MULTIPLE of the texture's own size rather than a length - see
+    // `VisualData.tileScale` - so it passes through untouched, as `scale` does.
+    // The absolute size it multiplies lives in the manifest, in metres, and never
+    // reaches this function at all: it is code rather than level.
+    ...(v.tileScale !== undefined ? { tileScale: v.tileScale } : {}),
+    // These two ARE lengths (see `VisualData.tileOffsetX`), so unlike the scale
+    // above they convert like the geometry does.
+    ...(v.tileOffsetX !== undefined ? { tileOffsetX: v.tileOffsetX * factor } : {}),
+    ...(v.tileOffsetY !== undefined ? { tileOffsetY: v.tileOffsetY * factor } : {}),
     ...(v.bevel !== undefined ? { bevel: v.bevel * factor } : {}),
   };
 }
 
-// Fold the retired `impermeable` KIND into what it now is: a static body whose
-// shape is hook-proof. Idempotent, and a no-op for every level authored since,
-// so it costs nothing to run on the way out as well as on the way in.
+// Fold the two retired forms into what they now are: the `impermeable` KIND
+// into a static body whose shape is hook-proof, and the `backgrounds` LIST into
+// non-colliding bodies. Idempotent, and a no-op for a level carrying neither, so
+// it costs nothing to run on the way out as well as on the way in.
 //
 // It runs inside `scaleLevelData` rather than at each loader, because that is
 // the one gate a level cannot reach the sim (or the editor) without passing
 // through - the conversion between the pixels on disk and the metres everything
 // downstream is written in. A migration a caller can forget is a migration that
-// is missing wherever a new caller is added, and the failure is silent: the
-// body builds as an ordinary static and the hook simply starts anchoring to a
-// wall that has repelled it since the level was designed.
+// is missing wherever a new caller is added, and both failures here are silent:
+// a hook-proof wall builds as an ordinary static and simply starts catching the
+// hook it has repelled since the level was designed, and a dropped background
+// list is decoration that vanishes with nothing to report.
+//
+// Panels are APPENDED rather than prepended, because `ChainData` names bodies by
+// index into this array and a migration that renumbered them would re-anchor
+// every chain in the file. Where decoration is DRAWN is not a matter of list
+// order - a non-colliding shape draws before every solid one wherever it sits
+// (see `LevelBodyData.collision`) - which is what makes appending free.
 export function normalizeLevelData(data: LevelData): LevelData {
-  if (!data.bodies.some((b) => b.kind === LEGACY_IMPERMEABLE)) return data;
-  return {
-    ...data,
-    bodies: data.bodies.map((b) =>
-      b.kind === LEGACY_IMPERMEABLE ? { ...b, kind: "static" as const, impermeable: true } : b,
-    ),
-  };
+  const panels = data.backgrounds ?? [];
+  if (panels.length === 0 && !data.bodies.some((b) => b.kind === LEGACY_IMPERMEABLE)) return data;
+  const bodies: LevelBodyData[] = data.bodies.map((b) =>
+    b.kind === LEGACY_IMPERMEABLE ? { ...b, kind: "static" as const, impermeable: true } : b,
+  );
+  for (const p of panels) {
+    bodies.push({
+      // A kind is a statement about physics and a panel has none; `static` is
+      // what it reads as everywhere it is asked, and `collision: false` is what
+      // stops anything asking.
+      kind: "static",
+      collision: false,
+      x: p.x,
+      y: p.y,
+      rot: p.rot,
+      shape: p.shape,
+      // Written out rather than left to the body defaults: the panel list had
+      // its own, and decoration that quietly turns grey on load is a migration
+      // that looks exactly like a rendering bug.
+      color: p.color ?? LEGACY_BACKGROUND_COLOR,
+      opacity: p.opacity ?? LEGACY_BACKGROUND_OPACITY,
+      ...(p.group !== undefined ? { group: p.group } : {}),
+      ...(p.visual !== undefined ? { visual: p.visual } : {}),
+    });
+  }
+  const { backgrounds: _dropped, ...rest } = data;
+  return { ...rest, bodies };
 }
 
 export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
@@ -532,18 +639,6 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
     ...(n.text !== undefined ? { text: n.text } : {}),
     ...(n.size !== undefined ? { size: n.size * factor } : {}),
   }));
-  // A background panel is placement and extent and nothing else; its colour and
-  // opacity are dimensionless.
-  const backgrounds = data.backgrounds?.map((g) => ({
-    x: g.x * factor,
-    y: g.y * factor,
-    rot: g.rot,
-    shape: scaleShape(g.shape, factor),
-    ...(g.color !== undefined ? { color: g.color } : {}),
-    ...(g.opacity !== undefined ? { opacity: g.opacity } : {}),
-    ...(g.group !== undefined ? { group: g.group } : {}),
-    ...(g.visual !== undefined ? { visual: scaleVisual(g.visual, factor) } : {}),
-  }));
   // A chain's anchor points and its length are lengths; the body indices and
   // the colour are not.
   const chains = data.chains?.map((c) => ({
@@ -553,7 +648,6 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
     ...(c.color !== undefined ? { color: c.color } : {}),
   }));
   return {
-    ...(backgrounds ? { backgrounds } : {}),
     ...(regions ? { cameraRegions: regions } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
     // is copied rather than scaled - but copied, not shared, since everything
@@ -568,6 +662,9 @@ export function scaleLevelData(rawData: LevelData, factor: number): LevelData {
     },
     bodies: data.bodies.map((b) => ({
       kind: b.kind,
+      // Absent means "collides", so only the false is ever written - a level of
+      // ordinary walls stays byte-identical through a save.
+      ...(b.collision !== undefined ? { collision: b.collision } : {}),
       x: b.x * factor,
       y: b.y * factor,
       rot: b.rot,

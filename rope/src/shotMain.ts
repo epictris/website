@@ -16,6 +16,7 @@
 // costs the shipped app nothing.
 import { render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
+import { assetsSettled } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
 import type { Level } from "./level/level";
 import { levelFromRecording } from "./sim/replay";
@@ -53,6 +54,12 @@ const scene3d = use3d ? new Scene3D(sceneCanvas) : null;
 if (scene3d) {
   scene3d.resize(view);
   scene3d.setLevel(level);
+  // Props and authored texture maps arrive asynchronously, and in the GAME that
+  // is the point - the placeholder box and the generated surface cover the gap.
+  // A grab may not do the same: photographing whichever assets happened to have
+  // arrived makes the same command produce different images on different runs,
+  // so it is evidence of nothing. Wait for the scene to be dressed, then draw.
+  await assetsSettled();
   scene3d.render(level, camera, 1);
 }
 if (isBall) {

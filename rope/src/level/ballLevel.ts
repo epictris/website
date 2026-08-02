@@ -18,7 +18,7 @@ import {
   type LevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
-import { buildSceneBackgrounds, type SceneBackground } from "./backgrounds";
+import type { SceneDecor } from "./decor";
 import {
   buildSceneChains,
   settleChainBodies,
@@ -39,8 +39,8 @@ export class BallLevel {
   cameraPosition = Vec2.ZERO;
   // Camera-behaviour volumes, in metres (see Level.cameraRegions).
   readonly cameraRegions: CameraRegionData[];
-  // Decoration drawn behind the level, in metres (see Level.backgrounds).
-  readonly backgrounds: SceneBackground[];
+  // The authored shapes that are drawn and never simulated (see Level.decor).
+  readonly decor: SceneDecor[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
   // Render-only: the metre-scaled level as built, and the engine object each
@@ -111,9 +111,7 @@ export class BallLevel {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built.byIndex);
-    // After the bodies, since a panel welded into a compound group is placed in
-    // that group's engine body's frame.
-    this.backgrounds = buildSceneBackgrounds(data.backgrounds ?? [], built.byGroup);
+    this.decor = built.decor;
     this.visualSource = { data, built };
 
     this.cameraPosition = this.ball.globalPosition;
