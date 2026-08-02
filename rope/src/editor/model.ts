@@ -20,6 +20,7 @@ import {
 } from "../engine/shapes";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { DECOR_Z } from "../level/decor";
+import { worldPlacement } from "../level/buildBodies";
 import {
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
@@ -38,11 +39,36 @@ import {
   type BodyKind,
   type CameraRegionData,
   type ChainData,
+  type EnvironmentData,
   type LevelData,
+  type RawLevelData,
+  type LevelBodyData,
+  type GeometryObjectData,
+  type LightObjectData,
+  type SceneObjectData,
+  isCollisionObject,
+  isGeometryObject,
   type NoteData,
   type ShapeData,
-  type VisualData,
 } from "../level/levelFormat";
+import {
+  DEFAULT_FILL_INTENSITY,
+  DEFAULT_GROUND_FILL,
+  DEFAULT_SKY,
+  DEFAULT_SKY_FILL,
+  DEFAULT_SUN_COLOR,
+  DEFAULT_SUN_DIR,
+  DEFAULT_SUN_INTENSITY,
+  ENV_INTENSITY,
+} from "../render3d/environment";
+import {
+  DEFAULT_LIGHT_COLOR,
+  DEFAULT_LIGHT_INTENSITY,
+  DEFAULT_LIGHT_RANGE,
+  DEFAULT_LIGHT_Z,
+  DEFAULT_SPOT_ANGLE,
+  DEFAULT_SPOT_PENUMBRA,
+} from "../render3d/lights";
 
 // Editor layers, in draw order (the list also stacks bottom-up in the toolbar):
 // `geometry` is the scene's shapes, `camera` the camera-behaviour volumes and
@@ -54,8 +80,38 @@ import {
 // item with its own layer, its own inspector and its own resolve path - and it
 // means a wall can be turned into a backdrop, or back, without being re-drawn on
 // another layer.
-export type EdLayer = "geometry" | "camera" | "notes";
-export const ED_LAYERS: EdLayer[] = ["geometry", "camera", "notes"];
+//
+// `lights` is the level's own light sources (see `LightData`). It is a layer
+// rather than a property of a body because a light is not a piece of stuff: it
+// has no collision, no mass and no surface, it is placed where the lamp SHINES
+// from rather than where the lamp is, and a shaft coming down through a grate
+// has no geometry at all. It is the same argument the camera layer is built on,
+// and it earns the same thing - a light is drawn, picked, dragged, rubber-banded,
+// duplicated, nudged and undone by exactly the code every wall goes through.
+// The editor's layers. `scene` is the level itself - everything that is drawn
+// in play and lives in a body - and the other two are authoring furniture.
+//
+// Geometry and lights used to be two layers, and merging them is the same
+// correction as everything else here: a light is not a KIND OF LAYER, it is a
+// scene object like a shape, and it belongs to a body exactly as a shape does.
+// Two layers made that impossible to see - a lamp's fitting and its light sat on
+// different layers, so one could be hidden or locked without the other, and
+// welding them into a body meant a cross-layer selection. What distinguishes
+// them is `EdItem.object`, which is what the FORMAT distinguishes them by.
+export type EdLayer = "scene" | "camera" | "notes";
+export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
+
+// What KIND of scene object an item is - the SAME three the format has, and one
+// editor item per authored object.
+//
+// It used to be two, with a geometry object that had no shape of its own folded
+// onto the collision object it dressed as that object's `visual`. That is the
+// conflation this whole refactor exists to remove, seen from the other end: a
+// barrel is a body holding a collision box and a mesh, and an editor that shows
+// it as one thing called "mesh yellow_barrel" is teaching that a body, a
+// collision shape and a model are all the same object. They are three things,
+// and the outliner has to be able to say so.
+export type EdObject = "collision" | "geometry" | "light";
 
 // `poly` vertices are metres in the item's own local frame, kept **convex** and
 // centred on their area centroid — `setPolyVerts` is the one writer, so no edit
@@ -88,6 +144,31 @@ export interface EdCamera {
   priority: number;
 }
 
+// Lights-layer properties (see LightData for the semantics).
+//
+// Two of a light's fields deliberately live OUTSIDE this object, on the item
+// itself, because the item already has them and a second copy could disagree
+// with what is drawn:
+//
+// - its RANGE is the item's `shape`, a circle of exactly that radius. A light's
+//   reach is the one thing about it with a size and a place on the canvas, so
+//   making it the shape means the radius handle authors it, the rubber band
+//   catches what it covers, and the ring on screen is the volume rather than a
+//   drawing of it.
+// - its COLOUR is the item's `color`, which the geometry layer already authors
+//   and the other two layers leave as fixed furniture.
+export interface EdLight {
+  kind: "point" | "spot";
+  intensity: number; // candela, against metres (see LightData - never scaled)
+  z: number; // metres off the gameplay plane, positive toward the camera
+  angle: number; // degrees, spot half-angle
+  penumbra: number; // 0..1
+  dir: Vec2; // spot aim in the sim's frame (x right, y down); need not be unit
+  dirZ: number; // ...and its component toward the camera
+  castShadow: boolean;
+  flicker: number; // 0 (steady) .. 1 (guttering)
+}
+
 // Notes-layer properties (see NoteData). A note is always a rect: for a text
 // note the box holds the wrapped text, for an arrow it is the segment's length
 // and pick band.
@@ -100,25 +181,37 @@ export interface EdNote {
 export interface EdItem {
   id: number;
   layer: EdLayer;
-  // Compound-body membership: geometry items sharing a group id build into ONE
-  // engine body carrying all their shapes, so the rope and ledge detection treat
-  // the join between two pieces as an interior seam rather than as a corner (see
-  // `LevelBodyData.group`). Null = a body of its own.
+  // What kind of scene object this is. Only meaningful on the `scene` layer;
+  // camera regions and notes carry "shape" and never read it.
+  object: EdObject;
+  // WHICH BODY THIS OBJECT IS IN. Always set: an item is a scene object, and
+  // every scene object is in exactly one body, so an item on its own is a body
+  // of one rather than a body of none.
   //
-  // A NON-COLLIDING item may carry one too, and it means the same thing: it is
-  // part of that body and drawn in its frame, so decoration on a rigid assembly
-  // swings and falls with it. It brings no shape to the body - decoration stays
-  // decoration - so it contributes nothing to the group's mass, centre of mass
-  // or seams. A group of decoration alone is a legitimate thing to author:
-  // several panels moved and turned as one piece of scenery, with no body
-  // behind them.
+  // This replaced "grouping", and the difference is not only vocabulary. A group
+  // was an optional tag layered on top of items that were otherwise
+  // free-standing, so every path had to answer "is this grouped?" before it
+  // could answer anything else, and "no group" and "a group of one" were two
+  // states meaning the same thing. A body is the container itself: the question
+  // is always just which body, and Ctrl+G moves objects into one rather than
+  // welding loose things together.
   //
-  // The camera and notes layers stay ungrouped: neither is drawn in play, and
-  // neither has anything a body could carry it in.
+  // What being in one body MEANS is unchanged. Its collision objects build into
+  // ONE engine body carrying all their shapes, so the rope and ledge detection
+  // treat the join between two pieces as an interior seam rather than as a
+  // corner. A non-colliding object in the same body is drawn in that body's
+  // frame, so decoration on a rigid assembly swings and falls with it while
+  // bringing no shape, no mass and no seam. A light in the same body rides its
+  // fitting. And a body of nothing but decoration, or nothing but a light, is a
+  // legitimate thing to author - it simply builds no engine body.
   //
-  // The id is editor-local and never leaves it: `toLevelData` writes a `g<id>`
-  // tag, and loading mints fresh ids from whatever tags a file carries.
-  group: number | null;
+  // The camera and notes layers each sit in a body of their own and never share
+  // one: neither is drawn in play, and neither has anything a body could carry
+  // it in.
+  //
+  // The id is editor-local and never leaves it. `toLevelData` groups by it and
+  // writes the objects into one body; loading mints one id per authored body.
+  bodyId: number;
   pos: Vec2; // metres
   rot: number; // radians
   shape: EdShape; // metres
@@ -130,18 +223,33 @@ export interface EdItem {
   // Does this shape take part in the simulation? False is decoration: it is
   // drawn and nothing else, never built into the world, and every physics
   // property below is ignored rather than refused, so a shape can be switched
-  // back and forth while a level is authored (see `LevelBodyData.collision`).
-  collision: boolean;
+  // Does this GEOMETRY item carry an outline of its own? A form does - a
+  // backdrop, a sign - and is drawn and picked by it. A DRESSING does not: what
+  // it draws is the body's collision outlines wearing its surface, so it has no
+  // shape to author and is handled as a point gizmo, like a light. The `shape`
+  // below is then a placeholder the save never writes.
+  //
+  // Meaningless on a collision item (which always has one) and on a light
+  // (whose "shape" is its reach).
+  ownShape: boolean;
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
+  // How far the whole BODY sits off the gameplay plane, in metres, positive
+  // toward the camera. Body-level like `kind` and `friction`, so
+  // `syncBodyProps` keeps a body's objects in agreement about it.
+  //
+  // It is what makes the body a frame in all three axes rather than two and a
+  // half: an object's own `offsetZ` is an offset from this, so pulling an
+  // assembly forward is one edit rather than one per object.
+  bodyZ: number;
   // Hook-proof (see `LevelBodyData.impermeable`): still solid, but the grapple
   // hook is destroyed on it and the ball's is deflected. Per SHAPE, so it is
-  // among the properties `syncGroupProps` leaves alone - a compound wall with
+  // among the properties `syncBodyProps` leaves alone - a compound wall with
   // one attachable ledge among hook-proof faces is what it is for.
   impermeable: boolean;
   // What the shape is made of, and how thick it is through z - the dimension
   // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
-  // SHAPE, so they are the one geometry property `syncGroupProps` leaves alone:
+  // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
   // a compound body's mass, centre of mass and inertia are sums over its
   // pieces, and a piece brings its own material to them.
   material: MaterialName;
@@ -153,6 +261,8 @@ export interface EdItem {
   force: number; // force areas only: m/s² along the item's rotation
   // Camera layer:
   cam: EdCamera;
+  // Lights layer:
+  light: EdLight;
   // Notes layer:
   note: EdNote;
 }
@@ -170,12 +280,12 @@ export interface EdItem {
 // editor furniture drawn in their own fixed order, and answering 0 for them
 // leaves the layer ordering to decide, which is what did decide before.
 export function itemDepth(i: EdItem): number {
-  if (i.layer !== "geometry") return 0;
+  if (i.layer !== "scene" || i.object === "light") return 0;
   // An `offsetZ` of exactly 0 on decoration is indistinguishable from an unset
   // one both here and on disk (`visualData` omits a zero), and the renderer
   // draws that case at `DECOR_Z` - so this agrees with what is drawn rather than
   // with what the field literally holds.
-  if (!i.collision && i.visual.offsetZ === 0) return DECOR_Z;
+  if (i.object === "geometry" && i.visual.offsetZ === 0) return DECOR_Z;
   return i.visual.offsetZ;
 }
 
@@ -250,17 +360,19 @@ export interface EdChain {
 // (`depth` from the shape's thickness, `bevel` from the extruder's own), which
 // is a real third state and not a missing value.
 //
-// Per SHAPE like `material` and `thickness`, so `syncGroupProps` leaves it
+// Per SHAPE like `material` and `thickness`, so `syncBodyProps` leaves it
 // alone: a compound body of a stone head on a wooden shaft is two visuals on
 // one body, each riding its own piece.
 export interface EdVisual {
   kind: "auto" | "mesh" | "none";
   mesh: string; // manifest key; "" = none named yet
-  offset: Vec2; // metres, in the shape's own frame
-  offsetZ: number; // metres; 0 is the gameplay plane, positive toward the camera
+  // The object's placement is the ITEM's own `pos`/`rot` - a geometry object is
+  // an object with a transform like every other, so the look does not carry a
+  // second one that could disagree with it. What is left here is the two
+  // rotations and the depth the item's in-plane transform cannot express.
+  offsetZ: number; // metres; an offset from the BODY's own z
   rotX: number;
   rotY: number;
-  rotZ: number;
   scale: number; // dimensionless
   depth: number | null; // metres; null = the shape's own thickness
   texture: string; // texture key (authored set or material); "" = from material
@@ -270,13 +382,58 @@ export interface EdVisual {
   // ordinary authored value, so there is no third state to represent.
   tileOffset: Vec2;
   bevel: number | null; // metres; null = the extruder's default
+  // What the shape GIVES OFF (see `VisualData.emissive`). "" = nothing, which is
+  // every shape: emission is what makes a lamp's own geometry read as lit, and
+  // it is a statement rather than an appearance, so there is no sensible
+  // non-empty default.
+  emissive: string;
+  emissiveIntensity: number;
+  // A texture set whose EMISSION MAP this shape wears - where it glows, as
+  // against how much. "" = none named, which leaves the shape's own surface to
+  // decide (see `GeometryObjectData.emissiveTexture`).
+  //
+  // These three are ALL of emission now, and they are appearance and nothing
+  // else. A shape that emits used to derive a light out of seven more fields
+  // here - its reach, its cone, its aim, its shadow, its flicker - because a
+  // light had no way to be attached to the thing it belonged to. It has one now:
+  // a light item grouped into the same body IS the lamp's light, and it cannot
+  // drift from the fitting because they are one body.
+  emissiveTexture: string;
 }
 
 export interface EdModel {
   player: { pos: Vec2; radius: number };
   items: EdItem[];
   chains: EdChain[];
+  // The level's light and air (see `EnvironmentData`). One object rather than a
+  // list, because it is a property of the LEVEL and not of anything in it.
+  //
+  // It is carried here rather than left out because the editor rewrites the
+  // whole file every 750 ms, so anything it does not carry is DELETED from disk
+  // the first time a level is opened - and this block is exactly the thing a
+  // level lit from inside cannot do without (`sunIntensity: 0` is how a level
+  // says it is underground). Nothing about that failure is visible in the
+  // editor: the scene is rebuilt from the model, so it goes on looking however
+  // the model says, and the loss only shows up next time the game loads the file.
+  environment: EnvironmentData | undefined;
 }
+
+// Every field of the environment block, in the order the inspector shows them,
+// with the kind of control each wants. One table rather than a run of hand-written
+// fields, so a field added to `EnvironmentData` is one line here rather than
+// three places that can disagree.
+export const DEFAULT_ENVIRONMENT: Required<EnvironmentData> = {
+  sunX: DEFAULT_SUN_DIR.x,
+  sunY: DEFAULT_SUN_DIR.y,
+  sunZ: DEFAULT_SUN_DIR.z,
+  sunColor: DEFAULT_SUN_COLOR,
+  sunIntensity: DEFAULT_SUN_INTENSITY,
+  skyColor: DEFAULT_SKY_FILL,
+  groundColor: DEFAULT_GROUND_FILL,
+  fillIntensity: DEFAULT_FILL_INTENSITY,
+  envIntensity: ENV_INTENSITY,
+  backgroundColor: DEFAULT_SKY,
+};
 
 let nextId = 1;
 export function newBodyId(): number {
@@ -299,6 +456,24 @@ export const defaultCamera = (): EdCamera => ({
   priority: 0,
 });
 
+export const defaultLight = (): EdLight => ({
+  kind: "point",
+  intensity: DEFAULT_LIGHT_INTENSITY,
+  z: DEFAULT_LIGHT_Z,
+  angle: DEFAULT_SPOT_ANGLE,
+  penumbra: DEFAULT_SPOT_PENUMBRA,
+  // Down the level, which is what a shaft through a grate overhead does. It is
+  // only read by a spot, but it carries a real direction rather than a zero so
+  // switching a point light to a spot aims it somewhere sane instead of nowhere.
+  dir: new Vec2(0, 1),
+  dirZ: 0,
+  // Off by default: a point light's shadow is a cube map, six renders of the
+  // scene (see `render3d/lights.ts`), and a corridor of torches all asking is a
+  // frame rate that halves without announcing why.
+  castShadow: false,
+  flicker: 0,
+});
+
 export const defaultNote = (): EdNote => ({
   kind: "text",
   text: "",
@@ -312,17 +487,18 @@ export const defaultNote = (): EdNote => ({
 export const defaultVisual = (): EdVisual => ({
   kind: "auto",
   mesh: "",
-  offset: Vec2.ZERO,
   offsetZ: 0,
   rotX: 0,
   rotY: 0,
-  rotZ: 0,
   scale: 1,
   depth: null,
   texture: "",
   tileScale: null,
   tileOffset: Vec2.ZERO,
   bevel: null,
+  emissive: "",
+  emissiveIntensity: 1,
+  emissiveTexture: "",
 });
 
 // Camera regions and notes are editor-only furniture — they are never drawn in
@@ -334,11 +510,31 @@ export const NOTE_OPACITY = 0.08;
 
 // Appearance a freshly drawn item starts with, per layer. Geometry is authored
 // from here on; the other two are fixed furniture.
-export const LAYER_STYLE: Record<EdLayer, { color: string; opacity: number }> = {
-  geometry: { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY },
-  camera: { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY },
-  notes: { color: NOTE_COLOR, opacity: NOTE_OPACITY },
-};
+// A light's fill is very faint on purpose: the item is as big as the light
+// REACHES, which on a lamp lighting a room is most of that room, and a wash at
+// the other layers' opacity would sit over the geometry being lit. What makes it
+// legible is the ring and the star at its centre, not the fill.
+export const LIGHT_FILL_OPACITY = 0.06;
+
+// Half-size of the placeholder a DRESSING carries, in metres. It has no authored
+// outline, so this is only what the editor draws and picks it by - the save
+// writes no `shape` at all.
+const DRESSING_GIZMO = 0.3;
+
+// Keyed by what is being DRAWN rather than by the layer alone, since the scene
+// layer draws two different things: a shape starts at the body defaults and a
+// light at a warm flame it is then authored away from. A light's colour is the
+// one starting value here that is genuinely AUTHORED - it is the colour the
+// light shines - where the camera and note colours are fixed furniture.
+export function newItemStyle(
+  layer: EdLayer,
+  object: EdObject,
+): { color: string; opacity: number } {
+  if (layer === "camera") return { color: CAMERA_REGION_COLOR, opacity: CAMERA_REGION_OPACITY };
+  if (layer === "notes") return { color: NOTE_COLOR, opacity: NOTE_OPACITY };
+  if (object === "light") return { color: DEFAULT_LIGHT_COLOR, opacity: LIGHT_FILL_OPACITY };
+  return { color: DEFAULT_BODY_COLOR, opacity: DEFAULT_BODY_OPACITY };
+}
 
 // Default box of a freshly placed text note, in metres. A text note is usually
 // placed with a click rather than dragged out, so it needs a size worth typing
@@ -362,7 +558,7 @@ function edShape(s: ShapeData): EdShape {
 // An on-disk visual, filled out into the live object the inspector edits. An
 // absent field takes the default, so a file that authored one number does not
 // come back with ten.
-export function edVisual(v: VisualData | undefined): EdVisual {
+export function edVisual(v: GeometryObjectData | undefined): EdVisual {
   const d = defaultVisual();
   if (!v) return d;
   return {
@@ -370,15 +566,16 @@ export function edVisual(v: VisualData | undefined): EdVisual {
     mesh: v.mesh ?? d.mesh,
     tileScale: v.tileScale ?? d.tileScale,
     tileOffset: new Vec2(v.tileOffsetX ?? 0, v.tileOffsetY ?? 0),
-    offset: new Vec2(v.offsetX ?? 0, v.offsetY ?? 0),
-    offsetZ: v.offsetZ ?? d.offsetZ,
+    offsetZ: v.z ?? d.offsetZ,
     rotX: v.rotX ?? d.rotX,
     rotY: v.rotY ?? d.rotY,
-    rotZ: v.rotZ ?? d.rotZ,
     scale: v.scale ?? d.scale,
     depth: v.depth ?? null,
     texture: v.texture ?? d.texture,
     bevel: v.bevel ?? null,
+    emissive: v.emissive ?? d.emissive,
+    emissiveIntensity: v.emissiveIntensity ?? d.emissiveIntensity,
+    emissiveTexture: v.emissiveTexture ?? d.emissiveTexture,
   };
 }
 
@@ -386,17 +583,24 @@ export function edVisual(v: VisualData | undefined): EdVisual {
 // section was never touched writes no `visual` key at all, which is what keeps
 // every level authored before the field byte-identical through a save - the same
 // rule `material` and `thickness` are written under.
-export function visualData(v: EdVisual): VisualData | undefined {
+// ...and back, as the GEOMETRY OBJECT the look becomes, writing ONLY what
+// differs from the default. A body whose visual section was never touched
+// produces no geometry object at all, which is what keeps every level authored
+// before the field byte-identical through a save - the same rule `material` and
+// `thickness` are written under.
+//
+// `shape` is the caller's to add: a form of its own carries one and a dressing
+// does not, and that is the difference between decoration and a wall wearing
+// brick (see `GeometryObjectData.shape`).
+export function visualData(v: EdVisual): GeometryObjectData | undefined {
   const d = defaultVisual();
-  const out: VisualData = {
+  const out: GeometryObjectData = {
+    type: "geometry",
     ...(v.kind !== d.kind ? { kind: v.kind } : {}),
     ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
-    ...(v.offset.x !== 0 ? { offsetX: v.offset.x } : {}),
-    ...(v.offset.y !== 0 ? { offsetY: v.offset.y } : {}),
-    ...(v.offsetZ !== 0 ? { offsetZ: v.offsetZ } : {}),
+    ...(v.offsetZ !== 0 ? { z: v.offsetZ } : {}),
     ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
     ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
-    ...(v.rotZ !== 0 ? { rotZ: v.rotZ } : {}),
     ...(v.scale !== d.scale ? { scale: v.scale } : {}),
     ...(v.depth !== null ? { depth: v.depth } : {}),
     ...(v.texture ? { texture: v.texture } : {}),
@@ -404,8 +608,19 @@ export function visualData(v: EdVisual): VisualData | undefined {
     ...(v.tileOffset.x !== 0 ? { tileOffsetX: v.tileOffset.x } : {}),
     ...(v.tileOffset.y !== 0 ? { tileOffsetY: v.tileOffset.y } : {}),
     ...(v.bevel !== null ? { bevel: v.bevel } : {}),
+    ...(v.emissive ? { emissive: v.emissive } : {}),
+    // Only written alongside an emissive colour: a multiplier on nothing is a
+    // field that reads as meaningful and is not.
+    ...(v.emissive && v.emissiveIntensity !== d.emissiveIntensity
+      ? { emissiveIntensity: v.emissiveIntensity }
+      : {}),
+    // Not gated on the colour: an emission MAP is emission in its own right -
+    // it glows in the colours it was painted in, and the colour beside it is a
+    // tint over that rather than the thing being turned on.
+    ...(v.emissiveTexture ? { emissiveTexture: v.emissiveTexture } : {}),
   };
-  return Object.keys(out).length > 0 ? out : undefined;
+  // `type` alone means nothing was authored.
+  return Object.keys(out).length > 1 ? out : undefined;
 }
 
 // An on-disk material name resolved to one the editor can put in its picker.
@@ -429,36 +644,98 @@ function fromLevelData(data: LevelData): EdModel {
     groupIds.set(tag, id);
     return id;
   };
-  const bodies: EdItem[] = data.bodies.map((b) => ({
-    id: newBodyId(),
-    layer: "geometry",
-    group: groupIdFor(b.group),
-    // `scaleLevelData` normalised the retired `impermeable` kind away on the
-    // way in, so what is left here is a real `BodyKind`. It also folded the
-    // retired `backgrounds` list into these entries as non-colliding shapes, so
-    // decoration arrives here as an ordinary item and needs no second mapping.
-    kind: b.kind as BodyKind,
-    collision: b.collision !== false,
-    pos: new Vec2(b.x, b.y),
-    rot: b.rot,
-    shape: edShape(b.shape),
-    color: b.color ?? DEFAULT_BODY_COLOR,
-    opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
-    friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
-    impermeable: b.impermeable === true,
-    material: materialName(b.material),
-    thickness: b.thickness ?? DEFAULT_THICKNESS,
-    visual: edVisual(b.visual),
-    force: b.force ?? 0,
-    cam: defaultCamera(),
-    note: defaultNote(),
-  }));
+  // ONE ITEM PER SCENE OBJECT, and the objects of one body share a group id.
+  // That is exactly what the retired `group` TAG meant, so the editor's grouping
+  // machinery - selecting, moving and rotating a body as one - carries over
+  // unchanged, and what it gains is that a LIGHT can be in the group too.
+  //
+  // The two ways an item becomes a geometry object are the two things a geometry
+  // object is (see `GeometryObjectData.shape`): one with a shape of its own is a
+  // FORM, and becomes an item of its own; one without DRESSES the body's
+  // collision outlines, and is folded onto the collision item it dresses as that
+  // item's `visual`, since the editor has no way to draw a look with no outline.
+  //
+  // Placement is flattened to WORLD here and re-derived on the way out. The
+  // editor manipulates items in world metres throughout - every drag, handle and
+  // marquee is written that way - and a body's frame is a property of the file
+  // rather than of the gesture.
+  const bodies: EdItem[] = [];
+  // Which item stands for each authored body, so a chain naming a body by index
+  // finds something to hold. The first COLLISION item, since that is what a
+  // chain is bolted to; a body with none is a body a chain cannot name.
+  const itemOfBody: (EdItem | null)[] = [];
+  for (const b of data.bodies) {
+    const firstOfBody = bodies.length;
+    // ONE ITEM PER SCENE OBJECT. Nothing is folded together: a barrel is a body
+    // holding a collision box and a mesh, and it arrives here as two items in
+    // one body rather than as one item that is secretly both.
+    const bodyId = newBodyId();
+    const base = {
+      layer: "scene" as const,
+      bodyId,
+      kind: b.kind,
+      bodyZ: b.z ?? 0,
+      color: b.color ?? DEFAULT_BODY_COLOR,
+      opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
+      friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
+      force: b.force ?? 0,
+      cam: defaultCamera(),
+      light: defaultLight(),
+      note: defaultNote(),
+    };
+    for (const o of b.objects) {
+      const w = worldPlacement(b, o);
+      if (isCollisionObject(o)) {
+        bodies.push({
+          ...base,
+          id: newBodyId(),
+          object: "collision",
+          ownShape: true,
+          pos: w.pos,
+          rot: w.rot,
+          shape: edShape(o.shape),
+          impermeable: o.impermeable === true,
+          material: materialName(o.material),
+          thickness: o.thickness ?? DEFAULT_THICKNESS,
+          visual: defaultVisual(),
+        });
+        continue;
+      }
+      if (isGeometryObject(o)) {
+        bodies.push({
+          ...base,
+          id: newBodyId(),
+          object: "geometry",
+          // A form carries its own outline; a dressing has none and takes a
+          // placeholder it is never saved with.
+          ownShape: o.shape !== undefined,
+          pos: w.pos,
+          rot: w.rot,
+          shape: o.shape ? edShape(o.shape) : { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
+          impermeable: false,
+          material: DEFAULT_MATERIAL,
+          thickness: DEFAULT_THICKNESS,
+          // Its own fill, which decoration carries rather than taking the
+          // body's - a backdrop is authored to sit behind the geometry.
+          color: o.color ?? base.color,
+          opacity: o.opacity ?? base.opacity,
+          visual: edVisual(o),
+        });
+        continue;
+      }
+      bodies.push(lightItem(o, w.pos, w.rot, bodyId));
+    }
+    itemOfBody.push(bodies.slice(firstOfBody).find((i) => i.object === "collision") ?? null);
+  }
+
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
     id: newBodyId(),
     layer: "camera",
-    group: null, // grouping is a geometry-layer notion; keeps the field total
-    collision: true, // unused on this layer; keeps the field total
+    object: "collision",
+    ownShape: true,
+    bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
+    bodyZ: 0, // unused off the scene layer; keeps the field total
     pos: new Vec2(r.x, r.y),
     rot: r.rot,
     shape: edShape(r.shape),
@@ -484,14 +761,66 @@ function fromLevelData(data: LevelData): EdModel {
       bufferBottom: r.bufferBottom ?? null,
       priority: r.priority ?? 0,
     },
+    light: defaultLight(),
     note: defaultNote(),
   }));
+// One light OBJECT as the editor item that edits it. The lights layer is a view
+// over light objects wherever they live rather than a list of its own: a light
+// with no fitting is a body containing only this, and a lamp's light is this
+// grouped into the body its fitting is in. Both are the same item.
+function lightItem(
+  l: LightObjectData,
+  pos: Vec2,
+  rot: number,
+  bodyId: number,
+): EdItem {
+  return {
+    id: newBodyId(),
+    layer: "scene",
+    object: "light",
+    ownShape: true,
+    bodyId,
+    kind: "static", // unused on this layer; keeps the field total
+    bodyZ: 0, // unused off the scene layer; keeps the field total
+    pos,
+    // A light's item rotation IS its object rotation, which is what turns a
+    // spot's aim: the direction is authored in the object's own frame.
+    rot,
+    // The reach IS the shape - see `EdLight`.
+    shape: { kind: "circle", r: l.range ?? DEFAULT_LIGHT_RANGE },
+    color: l.color ?? DEFAULT_LIGHT_COLOR,
+    opacity: LIGHT_FILL_OPACITY,
+    friction: DEFAULT_SURFACE_FRICTION,
+    impermeable: false,
+    // Unused off the geometry layer; keeps the field total.
+    material: DEFAULT_MATERIAL,
+    thickness: DEFAULT_THICKNESS,
+    visual: defaultVisual(),
+    force: 0,
+    cam: defaultCamera(),
+    light: {
+      kind: l.kind ?? "point",
+      intensity: l.intensity ?? DEFAULT_LIGHT_INTENSITY,
+      z: l.z ?? DEFAULT_LIGHT_Z,
+      angle: l.angle ?? DEFAULT_SPOT_ANGLE,
+      penumbra: l.penumbra ?? DEFAULT_SPOT_PENUMBRA,
+      dir: new Vec2(l.dirX ?? 0, l.dirY ?? 1),
+      dirZ: l.dirZ ?? 0,
+      castShadow: l.castShadow === true,
+      flicker: l.flicker ?? 0,
+    },
+    note: defaultNote(),
+  };
+}
+
   const notes: EdItem[] = (data.notes ?? []).map((n) => ({
     id: newBodyId(),
     layer: "notes",
-    group: null, // grouping is a geometry-layer notion; keeps the field total
-    collision: true, // unused on this layer; keeps the field total
+    object: "collision",
+    ownShape: true,
+    bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
+    bodyZ: 0, // unused off the scene layer; keeps the field total
     pos: new Vec2(n.x, n.y),
     rot: n.rot,
     shape: { kind: "rect", w: n.w, h: n.h },
@@ -505,19 +834,22 @@ function fromLevelData(data: LevelData): EdModel {
     visual: defaultVisual(),
     force: 0,
     cam: defaultCamera(),
+    light: defaultLight(),
     note: {
       kind: n.kind,
       text: n.text ?? "",
       size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX,
     },
   }));
-  // Chains name bodies by their index in `data.bodies`, which is exactly the
-  // order `bodies` was just built in. A chain whose index is out of range (a
-  // hand-edited file) is dropped rather than left dangling.
+  // Chains name bodies by their index in `data.bodies`, and a body is now
+  // several items - so the anchor is tied to the body's first collision item,
+  // which is what it is actually bolted to. A chain whose index is out of range
+  // (a hand-edited file), or which names a body with nothing to hold, is dropped
+  // rather than left dangling.
   const chains: EdChain[] = [];
   for (const c of data.chains ?? []) {
-    const a = bodies[c.a.body];
-    const b = bodies[c.b.body];
+    const a = itemOfBody[c.a.body];
+    const b = itemOfBody[c.b.body];
     if (!a || !b) continue;
     chains.push({
       id: newBodyId(),
@@ -532,6 +864,9 @@ function fromLevelData(data: LevelData): EdModel {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
     items: [...bodies, ...regions, ...notes],
     chains,
+    // Copied rather than shared, since everything else here hands the caller a
+    // fresh object, and undo snapshots this by value.
+    environment: data.environment ? { ...data.environment } : undefined,
   };
 }
 
@@ -542,14 +877,6 @@ export function toLevelData(model: EdModel): LevelData {
     if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
     if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
     return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
-  };
-
-  // `visual` as a spreadable fragment: absent entirely when the item's visual
-  // section was never touched, which is what keeps an old level byte-identical
-  // through a save.
-  const visualField = (i: EdItem): { visual?: VisualData } => {
-    const v = visualData(i.visual);
-    return v ? { visual: v } : {};
   };
 
   const cameraRegions: CameraRegionData[] = model.items
@@ -601,20 +928,162 @@ export function toLevelData(model: EdModel): LevelData {
       };
     });
 
-  const geometry = model.items.filter((i) => i.layer === "geometry");
-  // Chains name their bodies by index into the list written below, so the two
-  // are derived from the same array in the same order.
-  const indexOfItem = new Map(geometry.map((b, i) => [b.id, i]));
+  // ITEMS BACK INTO BODIES. Items sharing a group id are one body; an ungrouped
+  // item is a body of its own. The run is emitted where its FIRST member sits,
+  // so the body order is the item order and a chain's index is stable across a
+  // save.
+  //
+  // Geometry first and then lights, so a body's collision objects come before
+  // the light in it - which is the order the renderers walk and the order the
+  // light budgets are spent in. A light grouped into a geometry body joins that
+  // body rather than making one of its own, which is the whole of what welding a
+  // lamp's light to its fitting now takes.
+  const runs = bodyRuns(
+    model.items.filter((i) => i.layer === "scene"),
+  );
+  // A run's members are written in layer order within the run, so a light
+  // authored before the wall it hangs on still lands after it.
+  for (const run of runs) {
+    run.sort((a, b) => (a.object === b.object ? 0 : a.object === "collision" ? -1 : a.object === "geometry" ? 0 : 1));
+  }
+
+  // The body's own frame is its first member's placement, and its objects are
+  // written local to it. That is what gives a body a real transform on disk -
+  // turning the body turns everything in it, aim included - while the editor
+  // goes on manipulating items in world metres, which is what every drag,
+  // handle and marquee is written in.
+  const bodies: LevelBodyData[] = runs.map((run) => {
+    const origin = run[0]!;
+    const lead = run.find((i) => i.object === "collision") ?? origin;
+    const cos = Math.cos(-origin.rot);
+    const sin = Math.sin(-origin.rot);
+    const localOf = (i: { pos: Vec2; rot: number }): { x?: number; y?: number; rot?: number } => {
+      const dx = i.pos.x - origin.pos.x;
+      const dy = i.pos.y - origin.pos.y;
+      const x = dx * cos - dy * sin;
+      const y = dx * sin + dy * cos;
+      const rot = i.rot - origin.rot;
+      return {
+        ...(x !== 0 ? { x } : {}),
+        ...(y !== 0 ? { y } : {}),
+        ...(rot !== 0 ? { rot } : {}),
+      };
+    };
+
+    const objects: SceneObjectData[] = [];
+    for (const i of run) {
+      if (i.object === "light") {
+        const d = defaultLight();
+        const spot = i.light.kind === "spot";
+        objects.push({
+          type: "light",
+          ...localOf(i),
+          // Omit anything left at its default, so a saved light carries only
+          // what was authored - the rule every other list here is written under.
+          ...(spot ? { kind: "spot" as const } : {}),
+          ...(i.light.z !== d.z ? { z: i.light.z } : {}),
+          ...(i.color !== DEFAULT_LIGHT_COLOR ? { color: i.color } : {}),
+          ...(i.light.intensity !== d.intensity ? { intensity: i.light.intensity } : {}),
+          // The reach lives in the shape (see `EdLight`). A light whose item is
+          // not a circle cannot happen through any edit path, but the fallback
+          // keeps the write total rather than saving a light with no reach.
+          ...(i.shape.kind === "circle" && i.shape.r !== DEFAULT_LIGHT_RANGE
+            ? { range: i.shape.r }
+            : {}),
+          // The cone and its aim mean nothing on a point light, and a field on
+          // disk the loader ignores is a field that lies about what it does.
+          ...(spot
+            ? {
+                ...(i.light.angle !== d.angle ? { angle: i.light.angle } : {}),
+                ...(i.light.penumbra !== d.penumbra ? { penumbra: i.light.penumbra } : {}),
+                ...(i.light.dir.x !== d.dir.x ? { dirX: i.light.dir.x } : {}),
+                ...(i.light.dir.y !== d.dir.y ? { dirY: i.light.dir.y } : {}),
+                ...(i.light.dirZ !== d.dirZ ? { dirZ: i.light.dirZ } : {}),
+              }
+            : {}),
+          ...(i.light.castShadow ? { castShadow: true } : {}),
+          ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
+        });
+        continue;
+      }
+      if (i.object === "collision") {
+        objects.push({
+          type: "collision",
+          ...localOf(i),
+          shape: shapeOf(i),
+          // Absent means "an ordinary surface", so only a hook-proof one says so.
+          ...(i.impermeable ? { impermeable: true } : {}),
+          // Written only when the piece is something other than the default
+          // 20 cm of oak, so every level authored before materials stays
+          // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
+          // mass, centre of mass and inertia are sums over its pieces, and what
+          // a thing is made of is a fact about the shape rather than about the
+          // model drawn over it.
+          ...(i.material !== DEFAULT_MATERIAL ? { material: i.material } : {}),
+          ...(i.thickness !== DEFAULT_THICKNESS ? { thickness: i.thickness } : {}),
+        });
+        continue;
+      }
+      // A geometry object: its own transform, and a `shape` only when it is a
+      // FORM. A dressing writes none, which is what says "the body's collision
+      // outlines, wearing this".
+      const look = visualData(i.visual) ?? { type: "geometry" as const };
+      objects.push({
+        ...look,
+        ...localOf(i),
+        ...(i.ownShape ? { shape: shapeOf(i) } : {}),
+        // Its own fill, which decoration carries rather than taking the body's.
+        // A dressing takes the body's, so it writes none and the tint comes from
+        // there.
+        ...(i.ownShape ? { color: i.color, opacity: i.opacity } : {}),
+      });
+    }
+
+    return {
+      kind: lead.object === "collision" ? lead.kind : "static",
+      x: origin.pos.x,
+      y: origin.pos.y,
+      rot: origin.rot,
+      // Absent means "on the plane", so only a body that is off it says so and
+      // an ordinary level stays byte-identical through a save.
+      ...(lead.bodyZ !== 0 ? { z: lead.bodyZ } : {}),
+      // Only a GEOMETRY lead has a body fill to give. A body that is nothing but
+      // a light has no fill at all, and writing the light's own faint editor
+      // colour as one would put a body colour on disk that nothing draws.
+      ...(lead.object === "collision" ? { color: lead.color, opacity: lead.opacity } : {}),
+      // The physics half is written only for a body that HAS some. A body of
+      // decoration with a friction on disk is a file stating properties nothing
+      // reads, which is how a field quietly starts lying about what it does.
+      ...(lead.object === "collision"
+        ? {
+            friction: lead.friction,
+            // Only force areas carry a magnitude; omitting it elsewhere keeps
+            // saved levels free of a field that would read as meaningful.
+            ...(lead.kind === "force" ? { force: lead.force } : {}),
+          }
+        : {}),
+      objects,
+    };
+  });
+
+  // Chains name their bodies by index into the list above, so the two are
+  // derived from the same runs in the same order.
+  const bodyOfItem = new Map<number, number>();
+  runs.forEach((run, i) => {
+    for (const item of run) bodyOfItem.set(item.id, i);
+  });
 
   const chains: ChainData[] = [];
   for (const c of model.chains) {
     const a = model.items.find((i) => i.id === c.a.itemId);
     const b = model.items.find((i) => i.id === c.b.itemId);
-    const ia = indexOfItem.get(c.a.itemId);
-    const ib = indexOfItem.get(c.b.itemId);
+    const ia = bodyOfItem.get(c.a.itemId);
+    const ib = bodyOfItem.get(c.b.itemId);
     // A chain whose body has been deleted (or is no longer geometry) has nothing
-    // to hold and is simply not written.
-    if (!a || !b || ia === undefined || ib === undefined) continue;
+    // to hold and is simply not written. Nor has one whose two ends have ended
+    // up in the SAME body - grouping the two things a chain held together is a
+    // chain tied to itself, which the loader would drop anyway.
+    if (!a || !b || ia === undefined || ib === undefined || ia === ib) continue;
     const wa = toWorld(a, c.a.local);
     const wb = toWorld(b, c.b.local);
     chains.push({
@@ -628,54 +1097,22 @@ export function toLevelData(model: EdModel): LevelData {
 
   return {
     player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
-    bodies: geometry.map((b) => ({
-      kind: b.kind,
-      // Absent means "collides", so only decoration says anything - which keeps
-      // every level of ordinary walls byte-identical through a save.
-      ...(b.collision ? {} : { collision: false }),
-      x: b.pos.x,
-      y: b.pos.y,
-      rot: b.rot,
-      shape: shapeOf(b),
-      color: b.color,
-      opacity: b.opacity,
-      // The physics half is written only for a shape that HAS one. Decoration
-      // with a friction and a material on disk is a file stating properties
-      // nothing reads, which is how a field quietly starts lying about what it
-      // does - and it would make a migrated backdrop differ from the panel it
-      // came from on the very first save.
-      ...(b.collision
-        ? {
-            friction: b.friction,
-            // Absent means "an ordinary surface", so only a hook-proof one says so.
-            ...(b.impermeable ? { impermeable: true } : {}),
-            // Written only when the shape is something other than the default
-            // 20 cm of oak, so every level authored before materials stays
-            // byte-identical.
-            ...(b.material !== DEFAULT_MATERIAL ? { material: b.material } : {}),
-            ...(b.thickness !== DEFAULT_THICKNESS ? { thickness: b.thickness } : {}),
-          }
-        : {}),
-      // Render-only, and only if it says something (see `visualData`).
-      ...visualField(b),
-      // Only force areas carry a magnitude; omitting it elsewhere keeps saved
-      // levels free of a field that would read as meaningful.
-      ...(b.collision && b.kind === "force" ? { force: b.force } : {}),
-      // The tag is only meaningful against the other members, so it is written
-      // as a plain `g<id>` rather than carrying the editor's numbering onto disk
-      // as something to be interpreted.
-      ...(b.group !== null ? { group: `g${b.group}` } : {}),
-    })),
+    bodies,
     // An empty list is the same as no list, and the absent field keeps levels
     // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
+    // Written back verbatim. It is not derived from anything in the item list,
+    // so there is nothing to rebuild - and leaving it out is not "the editor
+    // does not support it", it is the editor DELETING a level's lighting the
+    // first time the file is opened.
+    ...(model.environment ? { environment: { ...model.environment } } : {}),
     ...(notes.length ? { notes } : {}),
     ...(chains.length ? { chains } : {}),
   };
 }
 
 // On-disk pixel LevelData → editor model.
-export function modelFromDisk(pixelData: LevelData): EdModel {
+export function modelFromDisk(pixelData: RawLevelData): EdModel {
   return fromLevelData(scaleLevelData(pixelData, PX));
 }
 
@@ -759,7 +1196,7 @@ export function halfExtents(item: EdItem): Vec2 {
 
 // Axis-aligned bounds of a group of items, from their unrotated extents (the
 // same approximation `halfExtents` gives snapping). Empty group → a zero box.
-export function groupBounds(items: readonly EdItem[]): { min: Vec2; max: Vec2 } {
+export function bodyBounds(items: readonly EdItem[]): { min: Vec2; max: Vec2 } {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -878,19 +1315,86 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
   return true;
 }
 
-// --- groups -----------------------------------------------------------------
+// --- bodies -----------------------------------------------------------------
 
-// Every item of `group`, in model order. An item with no group is its own body,
-// so a null group has no members - callers pass a concrete id.
-export function groupMembers(items: readonly EdItem[], group: number): EdItem[] {
-  return items.filter((i) => i.group === group);
+// Every object in `bodyId`, in model order.
+export function bodyMembers(items: readonly EdItem[], bodyId: number): EdItem[] {
+  return items.filter((i) => i.bodyId === bodyId);
 }
 
-// The selection an item click means: the whole compound body it belongs to, or
-// just the item when it is ungrouped. A group IS one body, so picking one piece
-// of it and picking it are the same act.
-export function pickGroupOf(items: readonly EdItem[], item: EdItem): EdItem[] {
-  return item.group === null ? [item] : groupMembers(items, item.group);
+// The selection an item click means: the whole body it is in. A body IS one
+// object as far as the level is concerned, so picking one of its pieces and
+// picking it are the same act (Alt+click is what reaches past this to a single
+// object).
+export function pickBodyOf(items: readonly EdItem[], item: EdItem): EdItem[] {
+  return bodyMembers(items, item.bodyId);
+}
+
+// THE BODIES OF A MODEL, in the order their first object appears - which is the
+// order `toLevelData` writes them and therefore the order a chain's body index
+// counts in. One definition, so the save path and the outliner cannot disagree
+// about what a body is or how many there are.
+export function bodyRuns(items: readonly EdItem[]): EdItem[][] {
+  const runs: EdItem[][] = [];
+  const byId = new Map<number, EdItem[]>();
+  for (const i of items) {
+    const existing = byId.get(i.bodyId);
+    if (existing) {
+      existing.push(i);
+      continue;
+    }
+    const run = [i];
+    byId.set(i.bodyId, run);
+    runs.push(run);
+  }
+  return runs;
+}
+
+// WHAT A BODY IS CALLED in the outliner: its kind, and what it is made of. A
+// body has no authored name - there is nothing in the format to hold one - so
+// the label is derived, and it is derived from the same things the format
+// distinguishes rather than from anything the editor keeps on the side.
+export function bodyLabel(members: readonly EdItem[]): string {
+  const lead = bodyLead(members);
+  if (lead) return lead.kind;
+  const first = members[0];
+  if (!first) return "empty";
+  if (first.object === "light") return "light";
+  if (first.layer === "camera") return "camera";
+  if (first.layer === "notes") return "note";
+  return "decor";
+}
+
+// ...and what one of its objects is called: the type first, because that is the
+// thing being distinguished, then enough of its size to tell two of them apart.
+export function objectLabel(item: EdItem, metresToPx: number): string {
+  const n = (v: number) => Math.round(v * metresToPx).toString();
+  if (item.object === "geometry" && !item.ownShape) {
+    // A dressing has no form of its own - what it draws is the body's collision
+    // outlines wearing its surface - so it is named by what it puts on them.
+    return item.visual.kind === "mesh"
+      ? `mesh ${item.visual.mesh || "(none)"}`
+      : item.visual.texture
+        ? `surface ${item.visual.texture}`
+        : "surface";
+  }
+  if (item.object === "light") {
+    const reach = item.shape.kind === "circle" ? ` ${n(item.shape.r)}` : "";
+    return `${item.light.kind}${reach}`;
+  }
+  if (item.layer === "notes") return item.note.kind === "arrow" ? "arrow" : "text";
+  if (item.layer === "camera") return "region";
+  const form =
+    item.shape.kind === "rect"
+      ? `${n(item.shape.w)}×${n(item.shape.h)}`
+      : item.shape.kind === "circle"
+        ? `r${n(item.shape.r)}`
+        : `${item.shape.verts.length}v`;
+  // A mesh is named by its asset, since that is what tells two props apart -
+  // their outlines are placeholders and usually identical.
+  if (item.visual.kind === "mesh") return `mesh ${item.visual.mesh || "(none)"}`;
+  const what = item.object === "collision" ? item.shape.kind : `decor ${item.shape.kind}`;
+  return `${what} ${form}`;
 }
 
 // Area of an item's shape, in m².
@@ -920,8 +1424,8 @@ export function shapeMass(item: EdItem): number {
 // editor would be rotating a group about a point the sim does not have. A group
 // of decoration alone has no body to agree with, so its members are weighed
 // among themselves and the group turns about their own centre.
-export function groupCentroid(items: readonly EdItem[]): Vec2 {
-  const shapes = items.filter((i) => i.layer === "geometry" && i.collision);
+export function bodyCentroid(items: readonly EdItem[]): Vec2 {
+  const shapes = items.filter((i) => i.object === "collision");
   const weighed = shapes.length ? shapes : items;
   let total = 0;
   let acc = Vec2.ZERO;
@@ -952,8 +1456,8 @@ export function rotateGroupAbout(items: readonly EdItem[], centre: Vec2, delta: 
 // entries in the body list `toLevelData` writes, which is the entry
 // `buildLevelBodies` takes a group's kind, style, friction and force from. Null
 // for a group of decoration alone, which builds no body at all.
-export function groupLead(members: readonly EdItem[]): EdItem | null {
-  return members.find((m) => m.layer === "geometry" && m.collision) ?? null;
+export function bodyLead(members: readonly EdItem[]): EdItem | null {
+  return members.find((m) => m.object === "collision") ?? null;
 }
 
 // Body-level properties a compound body has exactly one of. When several items
@@ -972,12 +1476,13 @@ export function groupLead(members: readonly EdItem[]): EdItem | null {
 // is its own (a backdrop is authored to sit behind the geometry, so painting it
 // the geometry's colour is exactly wrong), and kind, friction and force mean
 // nothing on a shape nothing collides with.
-export function syncGroupProps(members: readonly EdItem[]): void {
-  const lead = groupLead(members);
+export function syncBodyProps(members: readonly EdItem[]): void {
+  const lead = bodyLead(members);
   if (!lead) return;
   for (const m of members) {
-    if (m === lead || m.layer !== "geometry") continue;
+    if (m === lead || m.object !== "collision") continue;
     m.kind = lead.kind;
+    m.bodyZ = lead.bodyZ;
     m.color = lead.color;
     m.opacity = lead.opacity;
     m.friction = lead.friction;
@@ -1038,13 +1543,18 @@ export function emptyModel(): EdModel {
   return {
     player: { pos: new Vec2(0, -1), radius: 0.08 },
     chains: [],
+    // A fresh level authors none, which is every level authored before the
+    // block and is what the renderer's own defaults are for.
+    environment: undefined,
     items: [
       {
         id: newBodyId(),
-        layer: "geometry",
-        group: null,
-        collision: true,
+        layer: "scene",
+        object: "collision",
+    ownShape: true,
+        bodyId: newBodyId(),
         kind: "static",
+        bodyZ: 0,
         pos: new Vec2(0, 0),
         rot: 0,
         shape: { kind: "rect", w: 8, h: 0.6 },
@@ -1057,6 +1567,7 @@ export function emptyModel(): EdModel {
         visual: defaultVisual(),
         force: 0,
         cam: defaultCamera(),
+        light: defaultLight(),
         note: defaultNote(),
       },
     ],

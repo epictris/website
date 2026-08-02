@@ -32,12 +32,13 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { Hook } from "../classes/hook";
 import { buildLevelBodies, RIGID_KINETIC_FRICTION, RIGID_STATIC_FRICTION } from "../level/buildBodies";
-import { decorTransform } from "../level/decor";
+import { collectDecor, decorTransform } from "../level/decor";
 import {
+  isCollisionObject,
   scaleLevelData,
   LEGACY_BACKGROUND_COLOR,
-  type LevelBodyData,
-  type LevelData,
+  type LegacyBodyData,
+  type RawLevelData,
 } from "../level/levelFormat";
 import { SceneChain, stepSceneChains } from "../level/chains";
 import { RopeContact } from "../lib/ropeContact";
@@ -1354,13 +1355,13 @@ function caseMaterials(): ContactResult {
   const SLAB = 0.2; // the default thickness, in metres
   const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(b) * 1e-9 + 1e-12;
 
-  const build = (bodies: LevelBodyData[]): (CollisionObject2D | null)[] => {
+  const build = (bodies: LegacyBodyData[]): (CollisionObject2D | null)[] => {
     const world = new World();
-    const data: LevelData = { player: { x: 0, y: 0, radius: 0.08 }, bodies };
-    return buildLevelBodies(world, data, () => {}).byIndex;
+    const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies }, 1);
+    return buildLevelBodies(world, data, () => {}).bodies.map((b) => b.body);
   };
 
-  const rect = (extra: Partial<LevelBodyData>): LevelBodyData => ({
+  const rect = (extra: Partial<LegacyBodyData>): LegacyBodyData => ({
     kind: "rigid",
     x: 0,
     y: 0,
@@ -1393,7 +1394,7 @@ function caseMaterials(): ContactResult {
   // pieces are 1 m apart, so a build that weighed them equally would put the
   // origin at x = 0 - the midpoint of the two, which is what the assertion is
   // written against.
-  const square = (x: number, material: string): LevelBodyData => ({
+  const square = (x: number, material: string): LegacyBodyData => ({
     kind: "rigid",
     x,
     y: 0,
@@ -1444,7 +1445,7 @@ function caseMaterials(): ContactResult {
 // ---------------------------------------------------------------------------
 function caseImpermeableShape(): ContactResult {
   // A compound wall: hook-proof on the left piece, attachable on the right.
-  const wall = (x: number, hookProof: boolean): LevelBodyData => ({
+  const wall = (x: number, hookProof: boolean): LegacyBodyData => ({
     kind: "static",
     x,
     y: 2,
@@ -1453,7 +1454,7 @@ function caseImpermeableShape(): ContactResult {
     group: "wall",
     ...(hookProof ? { impermeable: true } : {}),
   });
-  const bodies: LevelBodyData[] = [
+  const bodies: LegacyBodyData[] = [
     wall(-0.5, true),
     wall(0.5, false),
     // The case a kind could not express at all: a dynamic body that is also
@@ -1521,14 +1522,21 @@ function caseImpermeableShape(): ContactResult {
   };
 
   const { built, data } = build();
-  const legacy = data.bodies[3]!;
+  // The two grouped walls migrate to ONE body, so the four authored entries are
+  // three bodies and the retired-kind wall is the last of them. That renumbering
+  // is the migration doing its job rather than an accident of this case: a group
+  // was always one body, and a flat entry list was the only thing that could not
+  // say so.
+  const legacy = data.bodies[2]!;
+  const legacyShapes = legacy.objects.filter(isCollisionObject);
   const legacyFolded =
     legacy.kind === "static" &&
-    legacy.impermeable === true &&
-    built.byIndex[3]!.getShapes().every((s) => s.impermeable);
+    legacyShapes.length === 1 &&
+    legacyShapes[0]!.impermeable === true &&
+    built.bodies[2]!.body!.getShapes().every((s) => s.impermeable);
   // The group is ONE body of two pieces, and the pieces must disagree - that is
   // the whole statement.
-  const pieces = built.byIndex[0]!.getShapes();
+  const pieces = built.bodies[0]!.body!.getShapes();
   const perShape = pieces.length === 2 && pieces[0]!.impermeable && !pieces[1]!.impermeable;
 
   const ballProof = !ballAttaches(-0.5);
@@ -1585,7 +1593,7 @@ function caseHookSeam(): ContactResult {
   // Two separate bodies, coplanar top faces meeting at x = 0: hook-proof to the
   // left, attachable to the right. A hook on the seam reaches both at the same
   // instant, by identical arithmetic, so the tie is exact.
-  const proof: LevelBodyData = {
+  const proof: LegacyBodyData = {
     kind: "static",
     x: -0.5,
     y: 1,
@@ -1593,7 +1601,7 @@ function caseHookSeam(): ContactResult {
     shape: { kind: "rect", w: 1, h: 1 },
     impermeable: true,
   };
-  const attachable: LevelBodyData = {
+  const attachable: LegacyBodyData = {
     kind: "static",
     x: 0.5,
     y: 1,
@@ -1602,7 +1610,7 @@ function caseHookSeam(): ContactResult {
   };
   // Directly behind the hook-proof slab, so a throw down the left side reaches
   // the hook-proof face first and the attachable one only past it.
-  const behind: LevelBodyData = {
+  const behind: LegacyBodyData = {
     kind: "static",
     x: -0.5,
     y: 3,
@@ -1619,7 +1627,7 @@ function caseHookSeam(): ContactResult {
     x: number,
     y: number,
     speed: number,
-    order: LevelBodyData[],
+    order: LegacyBodyData[],
   ): { attached: boolean; point: Vec2 | null } => {
     const world = new World();
     const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies: order }, 1);
@@ -1719,7 +1727,7 @@ function caseDecorGroup(): ContactResult {
     shape: { kind: "rect" as const, w: 3.4, h: 1.4 },
     ...(group !== undefined ? { group } : {}),
   });
-  const geometry: LevelBodyData[] = [
+  const geometry: LegacyBodyData[] = [
     { kind: "static", x: 0, y: 3, rot: 0, shape: { kind: "rect", w: 20, h: 1 } },
     // One shape, so the count below says whether the decoration joined it.
     { kind: "rigid", x: 0, y: -1, rot: 0.35, shape: { kind: "rect", w: 2.2, h: 0.4 }, group: "slab" },
@@ -1740,8 +1748,11 @@ function caseDecorGroup(): ContactResult {
 
   const world = new World();
   const built = buildLevelBodies(world, data, () => {});
-  const [rider, loose, orphan] = built.decor;
-  const body = built.byGroup.get("slab") as RigidBody2D | undefined;
+  const [rider, loose, orphan] = collectDecor(built);
+  // The floor is body 0 and the slab is body 1: the tagged panel joins the
+  // slab's body rather than making one of its own, which is what a group tag
+  // always meant and is now simply what being in the same body means.
+  const body = built.bodies[1]!.body as RigidBody2D | undefined;
 
   const before = {
     body: body ? { pos: body.globalPosition, rot: body.globalRotation } : null,
@@ -1756,7 +1767,7 @@ function caseDecorGroup(): ContactResult {
     orphan: decorTransform(orphan!, 1),
   };
 
-  const attached = rider!.body !== null && rider!.body === body;
+  const attached = rider!.built.body !== null && rider!.built.body === body;
   const onePiece = (body?.getShapes().length ?? 0) === 1;
   // Nothing non-colliding may be in the world at all - that is what the flag
   // means, and it is the reason no physics path has to exclude decoration.
@@ -1789,7 +1800,7 @@ function caseDecorGroup(): ContactResult {
   const looseStill =
     after.loose.pos.distanceTo(before.loose.pos) === 0 && after.loose.rot === before.loose.rot;
   const orphanStill =
-    orphan!.body === null &&
+    orphan!.built.body === null &&
     after.orphan.pos.distanceTo(before.orphan.pos) === 0 &&
     after.orphan.rot === before.orphan.rot;
 
@@ -1800,20 +1811,21 @@ function caseDecorGroup(): ContactResult {
   );
   const legacyWorld = new World();
   const legacyBuilt = buildLevelBodies(legacyWorld, legacy, () => {});
+  const legacyDecor = collectDecor(legacyBuilt);
   const migrated =
-    legacyBuilt.decor.length === 3 &&
+    legacyDecor.length === 3 &&
     // Against the placements BEFORE the world was stepped: this build is fresh,
     // and the one above has since fallen 240 frames.
-    legacyBuilt.decor.every((d, i) => {
+    legacyDecor.every((d, i) => {
       const a = decorTransform(d, 1);
       const b = [before.rider, before.loose, before.orphan][i]!;
       return a.pos.distanceTo(b.pos) === 0 && a.rot === b.rot;
     }) &&
-    legacyBuilt.decor[0]!.body === legacyBuilt.byGroup.get("slab") &&
+    legacyDecor[0]!.built.body === legacyBuilt.bodies[1]!.body &&
     legacyWorld.bodies.length === 2 &&
     // The panel list carried its own default fill, so the migration writes one
     // rather than letting decoration turn body-grey on load.
-    legacyBuilt.decor[1]!.data.color === LEGACY_BACKGROUND_COLOR;
+    legacyDecor[1]!.object.color === LEGACY_BACKGROUND_COLOR;
 
   const passed =
     attached && onePiece && outOfWorld && worthChecking && followed && looseStill && orphanStill && migrated;

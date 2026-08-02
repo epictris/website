@@ -232,77 +232,85 @@
       "buffer": 0
     }
   ],
+  "environment": {
+    "sunIntensity": 0,
+    "skyColor": "#3d4d6b",
+    "groundColor": "#14181f",
+    "fillIntensity": 0.3,
+    "envIntensity": 0.1,
+    "backgroundColor": "#080a0f"
+  },
   "chains": [
     {
       "a": {
-        "body": 87,
+        "body": 80,
         "x": 2349.5569950978934,
         "y": 370
       },
       "b": {
-        "body": 81,
+        "body": 76,
         "x": 2349.513734043992,
         "y": 435.3715984202613
       }
     },
     {
       "a": {
-        "body": 123,
+        "body": 116,
         "x": 3360,
         "y": -1221.2243483463833
       },
       "b": {
-        "body": 125,
+        "body": 118,
         "x": 3359.501070856696,
         "y": -1099.999999999999
       }
     },
     {
       "a": {
-        "body": 125,
+        "body": 118,
         "x": 3359.501070856696,
         "y": -1079.999999999999
       },
       "b": {
-        "body": 124,
+        "body": 117,
         "x": 3278.336290226831,
         "y": -890.0584648379041
       }
     },
     {
       "a": {
-        "body": 125,
+        "body": 118,
         "x": 3359.954660623143,
         "y": -1079.999999999999
       },
       "b": {
-        "body": 124,
+        "body": 117,
         "x": 3413.9542213979303,
         "y": -926.3971799743802
       }
     },
     {
       "a": {
-        "body": 136,
+        "body": 128,
         "x": 3080.0000000000005,
         "y": -305.914878722082
       },
       "b": {
-        "body": 141,
+        "body": 129,
         "x": 3074.4338630669113,
         "y": -281.8912928568248
       }
     },
     {
       "a": {
-        "body": 145,
+        "body": 133,
         "x": 3486.3311015847985,
         "y": -309.99999999999994
       },
       "b": {
-        "body": 152,
+        "body": 129,
         "x": 3416.918392552796,
-        "y": -91.15738862426947
+        "y": -91.15738862426944
       }
     }
   ],
@@ -314,2629 +322,3316 @@
   "bodies": [
     {
       "kind": "static",
-      "x": -109.99999999999997,
-      "y": 445,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 980.0000000000001,
-        "h": 890
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "static",
       "x": 84.99999999999997,
       "y": -90,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 180
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 84.99999999999997,
       "y": -190,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 265,
       "y": -215.00000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 950,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 950,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 550.0000000000001,
       "y": 15.00000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 340.00000000000006,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 550,
       "y": -114.99999999999999,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 340.00000000000006,
-        "h": 170.00000000000003
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 170.00000000000003
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 550,
       "y": -469.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 340.00000000000006,
-        "h": 480.00000000000006
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 480.00000000000006
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": -59.999999999999964,
       "y": -445.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 880.0000000000001,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 880.0000000000001,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 85.00000000000001,
       "y": -420,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 85.00000000000003,
       "y": -320.00000000000017,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 180
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 775,
       "y": 335.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 210
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 210
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 725,
       "y": -245.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 430
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 430
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1160,
       "y": 345.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 420,
-        "h": 70
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone",
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 420,
+            "h": 70
+          },
+          "material": "stone",
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 820.0000000000001,
-      "y": 675.0000000000001,
+      "y": 640,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 260,
-        "h": 130
-      },
       "color": "#555555",
-      "opacity": 0.5,
+      "opacity": 1,
       "friction": 1,
-      "material": "brick",
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 260,
+            "h": 60.00000000000001
+          },
+          "material": "brick",
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1030,
       "y": 770,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 680.0000000000001,
-        "h": 200
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 680.0000000000001,
+            "h": 200
+          },
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 865,
       "y": -314.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 1470
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone",
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 1470
+          },
+          "material": "stone",
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 725,
       "y": 335.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 210
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 210
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 85.00000000000003,
       "y": -550,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 180
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 85.00000000000001,
       "y": -650.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 700.4118095489746,
       "y": 110.5259149626993,
       "rot": 2.0943951023931953,
-      "shape": {
-        "kind": "rect",
-        "w": 100,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 755.9999999999999,
       "y": 105,
       "rot": 2.0943951023931953,
-      "shape": {
-        "kind": "rect",
-        "w": 100,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 703.0000000000002,
       "y": 188.00000000000003,
       "rot": 1.0471975511965976,
-      "shape": {
-        "kind": "rect",
-        "w": 100,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 760,
       "y": 185,
       "rot": 1.0471975511965976,
-      "shape": {
-        "kind": "rect",
-        "w": 100,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 775.0000000000001,
       "y": -195.00000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 530.0000000000001
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 530.0000000000001
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 725,
       "y": 35.00000000000005,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 70
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 0.2,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 70
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 525,
       "y": 120.00000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 290.00000000000006,
-        "h": 180
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 290.00000000000006,
+            "h": 180
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 520,
       "y": 550.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 340.00000000000006,
-        "h": 680.0000000000001
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 680.0000000000001
+          },
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 5190.000000000001,
       "y": -1190.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 5410.000000000001,
       "y": -1140.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 5630,
       "y": -1220,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 5900.000000000001,
       "y": -1200.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4164.000000000002,
       "y": -370.9999999999998,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
       "color": "#141414",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4439.000000000002,
       "y": -315.99999999999955,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 560,
-        "h": 10
-      },
       "color": "#141414",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 560,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4164.000000000001,
       "y": -422.99999999999966,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 8
-      },
       "color": "#141414",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 8
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4474,
       "y": -355.9999999999997,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
       "color": "#828282",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4474,
       "y": -405.99999999999955,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
       "color": "#828282",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4474,
       "y": -455.9999999999998,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
       "color": "#828282",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4474,
       "y": -505.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
       "color": "#828282",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4709,
       "y": -586,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 240.00000000000003,
-        "h": 930.0000000000001
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 240.00000000000003,
+            "h": 930.0000000000001
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4330,
       "y": -935.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 460.00000000000006,
-        "h": 950
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 460.00000000000006,
+            "h": 950
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 2199.9999999999986,
       "y": -55.00000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3889.999999999999,
       "y": -565.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4095.0000000000005,
       "y": -570.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 20
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 20
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4080.0000000000005,
       "y": -985.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 20,
-        "h": 850
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 850
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4244.000000000007,
       "y": -221.00000000000014,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 180
-      },
       "color": "#141414",
       "opacity": 0.8,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1924.9999999999993,
       "y": -740,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10.000000000000142,
-        "h": 20.000000000000018
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 20.000000000000018
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1924.9999999999993,
       "y": -670.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10.000000000000142,
-        "h": 20.000000000000018
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 20.000000000000018
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1804.9999999999993,
       "y": -675.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 230.00000000000003,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 230.00000000000003,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1784.999999999999,
       "y": -735,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 270,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 270,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1749.9999999999989,
       "y": -830.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 79.99999999999972,
-        "h": 180.00000000000006
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 79.99999999999972,
+            "h": 180.00000000000006
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1794.9999999999989,
       "y": -510.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 20
-      },
       "color": "#000000",
       "opacity": 0.8,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 20
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1749.9999999999989,
       "y": -1185.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 79.99999999999972,
-        "h": 529.9999999999999
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 79.99999999999972,
+            "h": 529.9999999999999
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2689.9999999999995,
       "y": -1503.0000000000005,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 80.00000000000007,
-        "h": 529.9999999999999
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 80.00000000000007,
+            "h": 529.9999999999999
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1905,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1945.0000000000002,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1985.0000000000002,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2025.0000000000005,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2065,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2105,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2145.0000000000005,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2185,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2225.0000000000005,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2265,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2305,
       "y": -1445,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 785,
       "y": 434.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 715,
       "y": 434.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 704.9999999999999,
       "y": 330.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 180
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone",
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 180
+          },
+          "material": "stone",
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1221.000000000001,
       "y": 606.5000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 57.99999999999999,
-        "h": 87
-      },
       "color": "#ceb236",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true,
-      "visual": {
-        "kind": "mesh",
-        "mesh": "yellow_barrel",
-        "offsetY": -15,
-        "scale": 0.01
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 57.99999999999999,
+            "h": 87
+          },
+          "impermeable": true
+        },
+        {
+          "type": "geometry",
+          "y": -14.999999999999947,
+          "kind": "mesh",
+          "mesh": "yellow_barrel",
+          "scale": 0.01
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1215.0000000000007,
       "y": 660.0000000000002,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 20
-      },
       "color": "#37291f",
       "opacity": 1,
       "friction": 1,
-      "thickness": 50
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 20
+          },
+          "thickness": 50
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1149,
       "y": 623.5,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 57.99999999999999,
-        "h": 87
-      },
       "color": "#ceb236",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true,
-      "visual": {
-        "kind": "mesh",
-        "mesh": "yellow_barrel",
-        "offsetY": -15,
-        "scale": 0.01
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 57.99999999999999,
+            "h": 87
+          },
+          "impermeable": true
+        },
+        {
+          "type": "geometry",
+          "y": -15.000000000000036,
+          "kind": "mesh",
+          "mesh": "yellow_barrel",
+          "scale": 0.01
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1270.000000000001,
       "y": 620.0000000000005,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 20,
-        "h": 40
-      },
       "color": "#36412a",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 40
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1280.0000000000011,
       "y": 640.0000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 30.000000000000004
-      },
       "color": "#36412a",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1660.0000000000005,
       "y": 345,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 580.0000000000001,
-        "h": 50
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true,
-      "material": "stone"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 580.0000000000001,
+            "h": 50
+          },
+          "impermeable": true,
+          "material": "stone"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2620.0000000000005,
       "y": 800,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 2500,
-        "h": 100
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 2500,
+            "h": 100
+          },
+          "material": "stone"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 975,
       "y": 655.0000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "thickness": 100,
-      "visual": {
-        "texture": "rock wall"
-      }
-    },
-    {
-      "kind": "anchor",
-      "x": 1435,
-      "y": 414.99999999999994,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10.000000000000053
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "anchor",
-      "x": 1435,
-      "y": 475,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "anchor",
-      "x": 1435,
-      "y": 535.0000000000001,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10.000000000000053
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "anchor",
-      "x": 1435,
-      "y": 595,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 30.000000000000004
+          },
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "texture": "rock wall"
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1125,
       "y": 395,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 350,
-        "h": 10.000000000000009
-      },
       "color": "#000000",
       "opacity": 0.5,
       "friction": 1,
-      "visual": {
-        "texture": "steel"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 350,
+            "h": 10.000000000000009
+          }
+        },
+        {
+          "type": "geometry",
+          "texture": "steel"
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1295,
       "y": 385.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10.000000000000009
-      },
       "color": "#000000",
       "opacity": 0.5,
       "friction": 1,
-      "visual": {
-        "texture": "steel"
-      }
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
+        },
+        {
+          "type": "geometry",
+          "texture": "steel"
+        }
+      ]
     },
     {
       "kind": "rigid",
       "x": 2349.9999999999995,
       "y": 449.9999999999999,
       "rot": 0.7853981633974483,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
       "color": "#a29f44",
       "opacity": 1,
       "friction": 1,
-      "material": "steel"
-    },
-    {
-      "kind": "anchor",
-      "x": 1405,
-      "y": 509.99999999999994,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10.000000000000142,
-        "h": 280
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "thickness": 10
-    },
-    {
-      "kind": "anchor",
-      "x": 1465.0000000000002,
-      "y": 509.99999999999994,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 280
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          },
+          "material": "steel"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2685,
       "y": 345,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 90,
-        "h": 70
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 90,
+            "h": 70
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 1839.9999999999998,
       "y": 250,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 1780,
-        "h": 120.00000000000001
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 1780,
+            "h": 120.00000000000001
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2005.0000000000005,
       "y": 345,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 110.00000000000001,
-        "h": 70
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 70
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2350,
       "y": 345,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 580.0000000000001,
-        "h": 50
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 580.0000000000001,
+            "h": 50
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1890.0000000000002,
       "y": 260,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 2080,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 2665,
       "y": 410.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 60.00000000000001
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 2645.0000000000005,
       "y": 434.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2753.235428646924,
       "y": -999.0222252113274,
       "rot": -1.308996938995747,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2781,
       "y": -1066.9999999999998,
       "rot": -1.0471975511965976,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2825.0000000000005,
       "y": -1124.9999999999995,
       "rot": -0.7853981633974483,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2883,
       "y": -1169.9999999999995,
       "rot": -0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2951,
       "y": -1197.9999999999993,
       "rot": -0.2617993877991494,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3024,
       "y": -1207.9999999999995,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3096.999999999999,
       "y": -1197.9999999999993,
       "rot": 0.2617993877991494,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3165.0000000000005,
       "y": -1168.9999999999993,
       "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3223.0000000000005,
       "y": -1124.9999999999995,
       "rot": 0.7853981633974483,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3267,
       "y": -1065.9999999999995,
       "rot": 1.0471975511965976,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3295.0000000000005,
       "y": -997.9999999999993,
       "rot": 1.308996938995747,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 30.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 4179,
       "y": -1213.9999999999993,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 1780,
-        "h": 310
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 1780,
+            "h": 310
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1659.9999999999986,
       "y": 380,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1835.0000000000002,
       "y": 400,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 60.00000000000001
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1920.0000000000002,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 1985.0000000000002,
       "y": 400,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 40
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 40
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 2700.0000000000005,
       "y": 405,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3030,
       "y": 390.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 40
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 40
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2820,
       "y": -45.000000000000014,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 340.00000000000006,
-        "h": 710
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 710
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3030.000000000001,
       "y": 415.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 10
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2995.0000000000005,
       "y": 414.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10.000000000000009
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3065,
       "y": 414.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10.000000000000009
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
+        }
+      ]
     },
     {
       "kind": "force",
       "x": 3030.000000000001,
       "y": 554.9999999999999,
       "rot": 1.5707963267948966,
-      "shape": {
-        "kind": "rect",
-        "w": 270,
-        "h": 40
-      },
       "color": "#437a5b",
       "opacity": 1,
       "friction": 1,
-      "force": 300
+      "force": 300,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 270,
+            "h": 40
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3009.9999999999995,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#3b3b3b",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3029.9999999999995,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#3b3b3b",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3049.9999999999995,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 5
-      },
       "color": "#3b3b3b",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 2895.0000000000005,
       "y": 345,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 330,
-        "h": 50
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 330,
+            "h": 50
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3030,
       "y": 255.00000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 130
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 130
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3010,
       "y": 195.00000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 40,
-        "h": 70
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 70
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3025,
       "y": 195.00000000000003,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 35
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 35
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3935,
       "y": -74.99999999999996,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 350,
-        "h": 890
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 350,
+            "h": 890
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3175,
       "y": -1229.9999999999986,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 369.99999999999994,
-        "h": 20.000000000000004
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 369.99999999999994,
+            "h": 20.000000000000004
+          }
+        }
+      ]
     },
     {
       "kind": "rigid",
       "x": 3347.0590477448736,
       "y": -903.2962913144534,
       "rot": -0.2617993877991494,
-      "shape": {
-        "kind": "rect",
-        "w": 380,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "stone",
-      "group": "g127"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 380,
+            "h": 10
+          },
+          "material": "stone"
+        },
+        {
+          "type": "collision",
+          "x": 7.077671781985373e-13,
+          "y": 99.99999999999977,
+          "shape": {
+            "kind": "rect",
+            "w": 380,
+            "h": 10
+          },
+          "material": "stone"
+        },
+        {
+          "type": "geometry",
+          "x": 3.3029134982598407e-13,
+          "y": 49.999999999999964,
+          "shape": {
+            "kind": "rect",
+            "w": 380,
+            "h": 90
+          },
+          "z": -35,
+          "color": "#c2c2c2",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "rigid",
       "x": 3360,
       "y": -1089.999999999999,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 20.000000000000284,
-        "h": 19.999999999999996
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "steel"
-    },
-    {
-      "kind": "rigid",
-      "x": 3372.9409522551264,
-      "y": -806.703708685547,
-      "rot": -0.2617993877991494,
-      "shape": {
-        "kind": "rect",
-        "w": 380,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "material": "stone",
-      "group": "g127"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20.000000000000284,
+            "h": 19.999999999999996
+          },
+          "material": "steel"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3740.0000000000005,
       "y": 265.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 40,
-        "h": 70
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 70
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3725,
       "y": 265.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "circle",
-        "r": 35
-      },
       "color": "#000000",
       "opacity": 1,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "circle",
+            "r": 35
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3720.0000000000005,
       "y": -215,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 950
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 950
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3810,
       "y": 560,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 20,
-        "h": 380
-      },
       "color": "#000000",
       "opacity": 1,
       "friction": 1,
-      "impermeable": true
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 380
+          },
+          "impermeable": true
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3389.999999999999,
       "y": 305,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3229.9999999999995,
       "y": 305,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3594.9999999999995,
       "y": 150,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 80
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 80
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3679.9999999999995,
       "y": 185,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "anchor",
       "x": 3494.9999999999995,
       "y": 115.00000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 190,
-        "h": 10
-      },
       "color": "#000000",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 190,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3035.0000000000005,
       "y": -305.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 90,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 90,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "rigid",
       "x": 3203.16987298108,
       "y": -104.86860279185541,
       "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 400,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
-    },
-    {
-      "kind": "rigid",
-      "x": 3131.0769515458696,
-      "y": -209.9999999999993,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 10
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": -114.99999999999953,
+          "y": -55.00000000000001,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": 4.999999999998137,
+          "y": -54.999999999999346,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": -160,
+          "y": -89.99999999999997,
+          "shape": {
+            "kind": "rect",
+            "w": 80,
+            "h": 10
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": -55.000000000001194,
+          "y": -89.99999999999963,
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 10
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": 64.99999999999886,
+          "y": -89.99999999999977,
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 10
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": 124.9999999999983,
+          "y": -54.99999999999936,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "material": "cast iron"
+        },
+        {
+          "type": "collision",
+          "x": 164.99999999999923,
+          "y": -89.99999999999964,
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 10
+          },
+          "material": "cast iron"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3045.0000000000005,
       "y": -360.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "rigid",
-      "x": 3235,
-      "y": -149.99999999999991,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
-    },
-    {
-      "kind": "rigid",
-      "x": 3109.6058083755697,
-      "y": -262.8108891324548,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 80,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
-    },
-    {
-      "kind": "rigid",
-      "x": 3200.5384757729344,
-      "y": -210.31088913245517,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 110.00000000000001,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3065,
       "y": -395.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.00000000000007,
-        "h": 10.000000000000009
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 30.00000000000007,
+            "h": 10.000000000000009
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3015.0000000000005,
       "y": -395.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3585.000000000001,
       "y": -305,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 210,
-        "h": 10
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "rigid",
-      "x": 3304.4615242270675,
-      "y": -150.31088913245526,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 110.00000000000001,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
-    },
-    {
-      "kind": "rigid",
-      "x": 3338.923048454133,
-      "y": -89.99999999999983,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 210,
+            "h": 10
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3525,
       "y": -360.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "material": "cast iron"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3585.000000000001,
       "y": -395.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 110.00000000000014,
-        "h": 10.000000000000009
-      },
       "color": "#555555",
       "opacity": 0.5,
-      "friction": 1
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 10.000000000000009
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3644.9999999999995,
       "y": -360.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 100
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "material": "cast iron"
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3704.9999999999995,
       "y": -395.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 110.00000000000014,
-        "h": 10.000000000000009
-      },
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1
-    },
-    {
-      "kind": "rigid",
-      "x": 3391.0640646055112,
-      "y": -100.31088913245499,
-      "rot": 0.5235987755982988,
-      "shape": {
-        "kind": "rect",
-        "w": 70,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron",
-      "group": "g141"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 10.000000000000009
+          }
+        }
+      ]
     },
     {
       "kind": "static",
       "x": 3500.000000000001,
       "y": -395.00000000000034,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 40,
-        "h": 10
-      },
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "material": "cast iron"
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 10
+          },
+          "material": "cast iron"
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 4394.000000000001,
       "y": -425.9999999999996,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 210
-      },
-      "color": "#646464",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 210
+          },
+          "z": -35,
+          "color": "#646464",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 4554.000000000001,
       "y": -425.9999999999996,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10.000000000000142,
-        "h": 210
-      },
-      "color": "#646464",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 210
+          },
+          "z": -35,
+          "color": "#646464",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1829.9999999999982,
       "y": -705.0000000000001,
       "rot": -1.5707963267948966,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 200
-      },
-      "color": "#000000",
-      "opacity": 0.8
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 200
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 0.8
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
-      "x": 1405,
-      "y": 505,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 290.00000000000006
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
-      "x": 1465.0000000000002,
-      "y": 505,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 290.00000000000006
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
-      "x": 1435,
-      "y": 415.00000000000006,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
-      "x": 1435,
-      "y": 475,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
-      "x": 1435,
-      "y": 535.0000000000001,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10.000000000000053
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
-      "x": 1435,
-      "y": 595,
-      "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 50,
-        "h": 10
-      },
-      "color": "#313244",
-      "opacity": 1
-    },
-    {
-      "kind": "static",
-      "collision": false,
       "x": 1125,
       "y": 395,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 350,
-        "h": 10.000000000000009
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 350,
+            "h": 10.000000000000009
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1295,
       "y": 385.00000000000006,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 10.000000000000009
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 2080,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 2645.0000000000005,
       "y": 434.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 2665,
       "y": 409.99999999999994,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 60.00000000000001
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 2960,
       "y": 720,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 3180,
-        "h": 60.00000000000001
-      },
-      "color": "#437a5b",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 3180,
+            "h": 60.00000000000001
+          },
+          "z": -35,
+          "color": "#437a5b",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1835.0000000000005,
       "y": 400,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 60.00000000000001
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1914.9999999999998,
       "y": 425,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1659.9999999999986,
       "y": 380,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 30.000000000000004,
-        "h": 20
-      },
-      "color": "#e6e151",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          },
+          "z": -35,
+          "color": "#e6e151",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 1985.0000000000002,
       "y": 400,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 40
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 40
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 2700.0000000000005,
       "y": 405,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 60.00000000000001,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
-      "x": 3360,
-      "y": -855.0000000000001,
-      "rot": -0.2617993877991494,
-      "shape": {
-        "kind": "rect",
-        "w": 380,
-        "h": 90
-      },
-      "color": "#c2c2c2",
-      "opacity": 1,
-      "group": "g127"
-    },
-    {
-      "kind": "static",
-      "collision": false,
       "x": 3389.999999999999,
       "y": 305,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 3224.999999999999,
       "y": 305,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 170.00000000000003,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 3594.9999999999995,
       "y": 150,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 10,
-        "h": 80
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 80
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 3679.9999999999995,
       "y": 185,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 160,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
       "x": 3494.9999999999995,
       "y": 115.00000000000001,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 190,
-        "h": 10
-      },
-      "color": "#000000",
-      "opacity": 1
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 190,
+            "h": 10
+          },
+          "z": -35,
+          "color": "#000000",
+          "opacity": 1
+        }
+      ]
     },
     {
       "kind": "static",
-      "collision": false,
-      "x": 1900,
-      "y": 545.0000000000002,
+      "x": 1900.0000000000005,
+      "y": 545,
       "rot": 0,
-      "shape": {
-        "kind": "rect",
-        "w": 2420.0000000000005,
-        "h": 690
-      },
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 2420.0000000000005,
+            "h": 690
+          },
+          "z": -80,
+          "depth": 50,
+          "texture": "brick",
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1660.0000000000002,
+      "y": 300,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 6
+          },
+          "z": 60,
+          "depth": 5,
+          "color": "#ffb066",
+          "opacity": 1,
+          "emissive": "#ff8c33",
+          "emissiveIntensity": 1.2
+        },
+        {
+          "type": "light",
+          "kind": "spot",
+          "color": "#ff8c33",
+          "intensity": 16.8,
+          "range": 657.2670690061993,
+          "angle": 55,
+          "penumbra": 0.6,
+          "dirY": 0,
+          "dirZ": -1
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1585.0000000000002,
+      "y": 375,
+      "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
-      "visual": {
-        "texture": "brick"
-      }
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 29.999999999999893,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "bulkhead-lamp",
+          "rotX": 1.5707963267948966,
+          "emissive": "#ffb066",
+          "emissiveIntensity": 1.5
+        },
+        {
+          "type": "light",
+          "kind": "spot",
+          "intensity": 21,
+          "range": 430,
+          "angle": 89,
+          "penumbra": 0.6,
+          "dirY": 90
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1500.0000000000002,
+      "y": 820.0000000000001,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "color": "#66ffa1",
+          "range": 190
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1220,
+      "y": 530,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "z": 240,
+          "intensity": 30,
+          "range": 500
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 800,
+      "y": 500,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "z": 140,
+          "color": "#ffe8c8",
+          "range": 500
+        }
+      ]
     }
   ]
 }

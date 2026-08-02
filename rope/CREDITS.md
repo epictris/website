@@ -6,6 +6,7 @@ manifest and regenerate, which is what `cli assets` checks.
 
 ## 3D models
 
+- **bulkhead-lamp** - "andersonmat", [source](https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb), CC BY 4.0
 - **yellow_barrel** - "Anna Denisova (@Den1121)", [source](https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88), CC BY 4.0
 
 ## Surface textures

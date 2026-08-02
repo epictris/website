@@ -16,9 +16,10 @@ import {
   scaleLevelData,
   type CameraRegionData,
   type LevelData,
+  type RawLevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
-import type { SceneDecor } from "./decor";
+import { collectDecor, type SceneDecor } from "./decor";
 import {
   buildSceneChains,
   settleChainBodies,
@@ -99,7 +100,7 @@ export class BallLevel {
   // & chain than the grapple avatar, without hand-editing generated levelData.
   static readonly BALL_RADIUS_SCALE = 1.5;
 
-  constructor(rawData: LevelData) {
+  constructor(rawData: RawLevelData) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
@@ -110,8 +111,8 @@ export class BallLevel {
 
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
-    this.sceneChains = buildSceneChains(data, built.byIndex);
-    this.decor = built.decor;
+    this.sceneChains = buildSceneChains(data, built);
+    this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
     this.cameraPosition = this.ball.globalPosition;

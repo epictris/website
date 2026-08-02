@@ -23,21 +23,16 @@ import { BallPlayer } from "../classes/ballPlayer";
 import { Hook } from "../classes/hook";
 import { Player } from "../classes/player";
 import type { World } from "../engine/world";
-import type { SceneDecor } from "../level/decor";
 import type { SceneChain } from "../level/chains";
 import type { LevelVisualSource } from "../level/buildBodies";
 import type { EnvironmentData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
-import {
-  BodyVisual,
-  DecorVisual,
-  type AuthoredVisual,
-  type VisualLookup,
-} from "./bodyVisuals";
+import { BodyVisual } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { configureRenderer, Environment } from "./environment";
+import { LightRig } from "./lights";
 import { FOV_Y_DEG, placeAt, syncCamera, VIEW_ASPECT } from "./space";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -46,7 +41,6 @@ import { FOV_Y_DEG, placeAt, syncCamera, VIEW_ASPECT } from "./space";
 // branch per host.
 export interface Scene3DLevel {
   readonly world: World;
-  readonly decor: readonly SceneDecor[];
   readonly sceneChains: readonly SceneChain[];
   readonly visualSource: LevelVisualSource;
   // The ball & chain avatar, when this level has one. Its sphere, its mounting
@@ -79,9 +73,24 @@ export class Scene3D {
   // into a mip chain on the GPU. The lights and the fog are cheap; the
   // convolution is not, and nothing about dragging a wall changes it.
   private envKey: string | null = null;
+  // Every light in the level. It is rebuilt with the BODIES rather than kept
+  // across a level change, because a light is an object inside a body now: each
+  // one is a child of the group its body is drawn in, so its lifetime is that
+  // body's and there is nothing to key it separately on.
+  private readonly lights = new LightRig();
+  // Wall-clock seconds, or a PINNED value. Only the flicker reads it, and only
+  // a headless grab pins it: a screenshot whose lighting depends on when it was
+  // taken is evidence of nothing, which is the same reason the SVG snapshot
+  // pins the force areas' arrow phase at 0.
+  private pinnedClock: number | null = null;
+  // Bodies that are IN THE WORLD, keyed by their engine object. Reconciled every
+  // frame, because bodies come and go at runtime (the hook is destroyed and
+  // rebuilt on every throw, the sandbox spawns rocks).
   private readonly bodies = new Map<CollisionObject2D, BodyVisual>();
-  private readonly decor: DecorVisual[] = [];
-  private lookup: VisualLookup = () => undefined;
+  // Authored bodies that built no engine object - decoration, a light with no
+  // fitting. They are not in the world, so they can neither be found by the
+  // reconciliation nor go stale: they live exactly as long as the level does.
+  private readonly standing: BodyVisual[] = [];
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
   private probe: THREE.Mesh | null = null;
@@ -113,9 +122,23 @@ export class Scene3D {
   setLevel(level: Scene3DLevel): void {
     this.clearLevel();
     this.setEnvironment(level.visualSource.data.environment);
-    this.lookup = makeLookup(level.visualSource);
+    // Authored bodies FIRST, and in authored order, because the light budgets
+    // are spent in that order: a level whose lamps are drawn in a different
+    // order from the one it was authored in is a level whose lamps go out
+    // somewhere else every time it loads.
+    //
+    // A body that built an engine object is registered under it, so the
+    // reconciliation below finds it already made rather than building a second,
+    // authorless visual for the same body.
+    for (const built of level.visualSource.built.bodies) {
+      const visual = new BodyVisual(built.body, built, this.lights);
+      this.scene.add(visual.root);
+      if (built.body) this.bodies.set(built.body, visual);
+      else this.standing.push(visual);
+    }
+    // Then whatever else the world already holds - the avatar's debris, a
+    // sandbox rock spawned before the scene was built.
     for (const body of level.world.bodies) this.ensureBody(body);
-    this.buildDecor(level.decor);
     if (level.ball) {
       this.ballVisual = new BallVisual(level.ball);
       this.scene.add(this.ballVisual.root);
@@ -132,31 +155,24 @@ export class Scene3D {
     this.env = new Environment(this.scene, env, this.renderer);
   }
 
+  // Freeze the flicker clock at `seconds`, or hand it back to the wall clock
+  // with null. `cli shot --3d` pins it so the same command twice is the same
+  // picture.
+  pinClock(seconds: number | null): void {
+    this.pinnedClock = seconds;
+  }
+
+  // A body the world holds that the level did not author: a spawned rock, the
+  // hook. It extrudes what it collides as and has no objects of its own, which
+  // is why it is built with no `BuiltBody` behind it.
   private ensureBody(body: CollisionObject2D): BodyVisual | null {
     const existing = this.bodies.get(body);
     if (existing) return existing;
     if (drawnElsewhere(body) || !body.hasShape()) return null;
-    const visual = new BodyVisual(body, this.lookup);
+    const visual = new BodyVisual(body, null, this.lights);
     this.bodies.set(body, visual);
     this.scene.add(visual.root);
     return visual;
-  }
-
-  // Drawn-only shapes. They never reached `world.bodies` - that is what
-  // `collision: false` means - so they are built from the level's resolved decor
-  // list rather than from the body reconciliation above, and each gets exactly
-  // the visual a body's piece gets.
-  private buildDecor(decor: readonly SceneDecor[]): void {
-    for (const d of decor) {
-      const visual = new DecorVisual(d, {
-        visual: d.data.visual,
-        material: d.data.material,
-        thickness: d.data.thickness,
-        color: d.data.color,
-      });
-      this.decor.push(visual);
-      this.scene.add(visual.root);
-    }
   }
 
   // A known world rect drawn as a box on the gameplay plane, for checking that
@@ -224,6 +240,7 @@ export class Scene3D {
     }
     syncCamera(this.camera, camera);
     this.env.follow(camera);
+    this.lights.update(this.pinnedClock ?? performance.now() / 1000);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -231,6 +248,10 @@ export class Scene3D {
     // frame; a count that does not match the map is a body that has gone, and
     // only then is the map swept. One pass over an array of ~154, no allocation
     // unless the set actually changed.
+    //
+    // Only the ones in the world take part. An authored body that built nothing
+    // is not in `world.bodies` and never could be, so sweeping it would delete
+    // every backdrop on the first frame.
     this.stamp++;
     let seen = 0;
     for (const body of level.world.bodies) {
@@ -242,8 +263,6 @@ export class Scene3D {
     if (seen !== this.bodies.size) this.dropStaleBodies();
 
     for (const visual of this.bodies.values()) visual.sync(alpha);
-
-    for (const d of this.decor) d.sync(alpha);
 
     this.chains.sync(level, alpha);
     this.ballVisual?.sync(alpha);
@@ -266,51 +285,30 @@ export class Scene3D {
       visual.dispose();
     }
     this.bodies.clear();
-    for (const d of this.decor) {
-      this.scene.remove(d.root);
-      d.dispose();
+    for (const visual of this.standing) {
+      this.scene.remove(visual.root);
+      visual.dispose();
     }
-    this.decor.length = 0;
+    this.standing.length = 0;
     if (this.ballVisual) {
       this.scene.remove(this.ballVisual.root);
       this.ballVisual.dispose();
       this.ballVisual = null;
     }
     this.chains.clear();
+    // Every visual has handed its lights back on the way through, so this is the
+    // backstop rather than the mechanism: a rig holding a light whose parent has
+    // gone is a slot of the budget spent on nothing.
+    this.lights.dispose();
   }
 
   dispose(): void {
     this.clearLevel();
     this.chains.dispose();
+    this.lights.dispose();
     this.env.dispose();
     this.renderer.dispose();
   }
-}
-
-// The authored visual for a given piece of a given body, assembled once per
-// level from `LevelData.bodies` zipped with what `buildLevelBodies` made of
-// them. There is no stable authored id in this format - chains already link by
-// array index through `byIndex` - so this links the same way, and
-// `shapeIndexByIndex` says which PIECE of a compound body each entry became.
-function makeLookup(source: LevelVisualSource): VisualLookup {
-  const table = new Map<CollisionObject2D, AuthoredVisual[]>();
-  source.data.bodies.forEach((b, i) => {
-    const body = source.built.byIndex[i];
-    if (!body) return;
-    const shapeIndex = source.built.shapeIndexByIndex[i] ?? 0;
-    let entries = table.get(body);
-    if (!entries) {
-      entries = [];
-      table.set(body, entries);
-    }
-    entries[shapeIndex] = {
-      visual: b.visual,
-      material: b.material,
-      thickness: b.thickness,
-      color: b.color,
-    };
-  });
-  return (body, shapeIndex) => table.get(body)?.[shapeIndex];
 }
 
 // Hook-only scenery is drawn behind the solid geometry it sits among in the 2D

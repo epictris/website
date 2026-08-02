@@ -6,7 +6,7 @@ import { LEVEL_2 } from "./levelData";
 import { addSlidingPlatform, addWindmill } from "./movers";
 import { TEST_MOVERS, TEST_WINDMILL } from "./testLevel";
 import type { LevelSpec } from "./level";
-import type { LevelData } from "./levelFormat";
+import type { RawLevelData } from "./levelFormat";
 // The hand-authored ball arena, bundled straight from the editor's on-disk
 // store so the level has one source of truth. The dev-only /api/levels route
 // serves the same file to the editor; importing it here compiles it into the
@@ -34,7 +34,7 @@ export const LEVELS: Record<string, LevelSpec> = {
   TEST_WINDMILL,
   // Ball & chain controller in its own authored arena (no movers — the ball
   // level driver has no mover support yet).
-  BALL: { data: ballLevelJson as LevelData, controller: "ball" },
+  BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };

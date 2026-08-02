@@ -10,8 +10,10 @@
 // Two settings carry the whole file, and they differ per MAP because the maps
 // are not the same kind of image:
 //
-//   --map base                 an albedo is a picture, and lossy WebP at q90 is
-//                              indistinguishable from the source at this size.
+//   --map base|emissive        an albedo is a picture, and so is an emission map
+//                              (which parts of this surface glow, and in what
+//                              colour). Lossy WebP at q90 is indistinguishable
+//                              from the source at this size, and both are sRGB.
 //   --map normal|roughness|metallic|ao
 //                              these are DATA. A normal map's channels are a
 //                              vector and a roughness map's grey is a number, so
@@ -67,7 +69,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-const MAP_SLOTS = ["base", "normal", "roughness", "metallic", "ao"] as const;
+const MAP_SLOTS = ["base", "normal", "roughness", "metallic", "ao", "emissive"] as const;
 type MapSlot = (typeof MAP_SLOTS)[number];
 
 const args = process.argv.slice(2);
@@ -116,7 +118,7 @@ mkdirSync(dirname(resolve(output)), { recursive: true });
 // reinterpreted). A shifted roughness map is a surface that is uniformly shinier
 // or duller than it was authored, which reads as a lighting bug rather than as a
 // conversion one.
-const colour = slot === "base";
+const colour = slot === "base" || slot === "emissive";
 // One number per texel, as against the albedo's colour and the normal's vector.
 const scalar = slot === "roughness" || slot === "metallic" || slot === "ao";
 const channel = (flag("channel") ?? "r").toUpperCase();

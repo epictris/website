@@ -54,6 +54,12 @@ const scene3d = use3d ? new Scene3D(sceneCanvas) : null;
 if (scene3d) {
   scene3d.resize(view);
   scene3d.setLevel(level);
+  // Freeze the flicker clock. A guttering light is the one thing in the 3D
+  // scene driven by the wall rather than by the sim, so without this the same
+  // command produces a different exposure every run - which is exactly the
+  // "screenshot that is not reproducible" the asset settle below exists to
+  // avoid, one frame later.
+  scene3d.pinClock(0);
   // Props and authored texture maps arrive asynchronously, and in the GAME that
   // is the point - the placeholder box and the generated surface cover the gap.
   // A grab may not do the same: photographing whichever assets happened to have

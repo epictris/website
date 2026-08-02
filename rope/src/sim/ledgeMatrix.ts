@@ -11,7 +11,7 @@ import type { LevelData } from "../level/levelData";
 // The canonical (superset) format, for the cases whose geometry is a convex
 // polygon — `levelData.ts` is generated from a Godot scene and its narrower
 // shape union has no `poly`.
-import type { LevelData as FormatLevelData, ShapeData } from "../level/levelFormat";
+import type { RawLevelData as FormatLevelData, ShapeData } from "../level/levelFormat";
 import type { LevelSpec } from "../level/level";
 import { runScript, type HoldRange, type PlaytestScript } from "./playtest";
 

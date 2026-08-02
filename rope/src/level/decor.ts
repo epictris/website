@@ -1,69 +1,68 @@
-// Decoration - the authored shapes that are drawn and nothing else, resolved
-// against the bodies the level was built from.
+// Decoration - the geometry a level is drawn with that it is not built from -
+// resolved against the bodies the level was built from.
 //
-// A non-colliding shape (`LevelBodyData.collision: false`) is kept out of the
-// simulation by never being built: it becomes no collision shape, enters no
-// `World`, and carries no mass, so no physics query has to know it exists. That
-// is the same guarantee the retired `backgrounds` list gave, made by
-// construction rather than by keeping decoration in a type the sim has no name
-// for - and it costs decoration nothing, since it is otherwise an ordinary
-// authored shape with an ordinary 3D visual.
+// What decoration IS changed shape when bodies gained objects, and the new
+// statement is simpler than the flag it replaced. A body's COLLISION objects are
+// what the sim sees; its GEOMETRY objects are what it looks like. A geometry
+// object that authors its own `shape` is a form the level draws and never
+// simulates - a backdrop, a lantern, a sign - and that is decoration. One that
+// authors none is the body's own collision outline dressed differently, so it is
+// drawn as the body rather than in front of it and does not appear here at all.
+//
+// The exclusion from the sim needs no enforcing: a geometry object is never
+// built, so it becomes no collision shape, enters no `World`, carries no mass
+// and gives the rope no vertex to wrap. That is the same guarantee the retired
+// `backgrounds` list gave and the `collision: false` flag after it, made by
+// construction rather than by a rule every physics query has to honour.
 //
 // What resolving adds is the one thing a drawn-only shape still needs from the
-// build: WHICH body it rides. An entry tagged into a compound group is drawn in
-// that group's engine body's frame, so a lantern bolted to a swinging crate
-// swings, falls and turns with it.
+// build: WHICH body it rides. A geometry object in a body that also has
+// collision objects is drawn in that body's engine frame, so a lantern bolted to
+// a swinging crate swings, falls and turns with it; one in a body that built
+// nothing stands where it was authored.
 //
-// The conversion happens exactly once, here, for the reason chains convert their
-// anchors here: a group's origin is its combined centre of mass, which moves as
-// pieces are added, so the file authors a WORLD placement and the loader turns
-// it into the offset and angle the body actually carries.
-//
-// An untagged entry - or one whose group has no colliding piece at all, which is
-// a perfectly ordinary thing to author - resolves to `body: null` and is drawn
-// exactly where it says it is.
+// The conversion happens exactly once, at load, because the two frames genuinely
+// differ: a body's engine origin is its combined centre of mass and the authored
+// one is wherever the author put it (see `BuiltBody.origin`).
 
 import { Vec2 } from "../engine/vec2";
-import type { CollisionObject2D } from "../engine/body";
-import type { LevelBodyData } from "./levelFormat";
+import { localPlacement, type BuiltBodies, type BuiltBody } from "./buildBodies";
+import { isGeometryObject, type GeometryObjectData, type LevelBodyData } from "./levelFormat";
 
 export interface SceneDecor {
-  // The authored entry (metres): shape, colour, opacity and visual. The
-  // placement in it is the authored world one, and stays the answer for an
-  // unattached piece of decoration.
-  readonly data: LevelBodyData;
-  // The body this rides, or null for decoration fixed in the world.
-  readonly body: CollisionObject2D | null;
-  // Placement in that body's frame - meaningless when `body` is null.
+  // The body this belongs to, as built. Carries the authored data and whatever
+  // engine object (if any) it rides.
+  readonly built: BuiltBody;
+  // The geometry object itself. Always one with a `shape` of its own - that is
+  // what makes it a form rather than a re-dressing.
+  readonly object: GeometryObjectData;
+  // Placement in the frame that actually moves - the engine body's, or the
+  // authored one for a body that built nothing.
   readonly localPos: Vec2;
   readonly localRot: number;
 }
 
-// Does this authored entry take part in the simulation? Absent means yes, which
-// is what every entry authored before the field is. One predicate, so "is this
-// drawn only" is asked the same way by the builder, both renderers and the
-// editor rather than being spelled out per call site.
-export function collides(b: LevelBodyData): boolean {
-  return b.collision !== false;
-}
-
-// Where decoration sits, and how thick it is, when its visual says nothing.
-// Just behind the gameplay plane and thin: that is what a flat fill drawn before
-// every body already was, so a level that authors no depth looks exactly as it
-// did. A shape's `thickness` is deliberately not consulted - it is the number a
-// MASS is computed from, and decoration has none.
+// Where decoration sits, and how thick it is, when its geometry object says
+// nothing AND its body has no collision objects. Just behind the gameplay plane
+// and thin: that is what a flat fill drawn before every body already was, so a
+// level that authors no depth looks exactly as it did.
+//
+// A collision object's `thickness` is deliberately not consulted for the depth -
+// it is the number a MASS is computed from, and decoration has none.
 export const DECOR_Z = -0.35;
 export const DECOR_DEPTH = 0.1;
 
-// How far toward the camera this shape is drawn, in metres: 0 is the gameplay
-// plane and positive is nearer the viewer.
+// How far toward the camera a geometry object is drawn, in metres: 0 is the
+// gameplay plane and positive is nearer the viewer.
 //
 // It is what DEPTH-ORDERS the scene, and both renderers and the editor's picking
-// go through it so that what is drawn in front is what a click selects. Solid
-// geometry is on the plane unless the level says otherwise; decoration falls
-// back to `DECOR_Z` rather than to 0, which is what the 3D renderer draws it at.
-export function depthOf(b: LevelBodyData): number {
-  return b.visual?.offsetZ ?? (collides(b) ? 0 : DECOR_Z);
+// go through it so that what is drawn in front is what a click selects. Geometry
+// on a body with collision is on the plane unless the level says otherwise;
+// geometry on a body without falls back to `DECOR_Z` rather than to 0, which is
+// what the 3D renderer draws it at.
+export function depthOf(body: LevelBodyData, o?: GeometryObjectData): number {
+  const collides = body.objects.some((x) => x.type === "collision");
+  return o?.z ?? (collides ? 0 : DECOR_Z);
 }
 
 // Where a piece of decoration is drawn this render frame, in world metres. An
@@ -73,22 +72,29 @@ export function depthOf(b: LevelBodyData): number {
 // while the body it is bolted to draws interpolated would visibly detach from it
 // between steps.
 export function decorTransform(d: SceneDecor, alpha: number): { pos: Vec2; rot: number } {
-  if (!d.body) return { pos: new Vec2(d.data.x, d.data.y), rot: d.data.rot };
-  const rot = d.body.renderRotation(alpha);
-  return { pos: d.body.renderPosition(alpha).add(d.localPos.rotated(rot)), rot: rot + d.localRot };
+  const body = d.built.body;
+  if (!body) {
+    return {
+      pos: d.built.origin.add(d.localPos.rotated(d.built.rotation)),
+      rot: d.built.rotation + d.localRot,
+    };
+  }
+  const rot = body.renderRotation(alpha);
+  return { pos: body.renderPosition(alpha).add(d.localPos.rotated(rot)), rot: rot + d.localRot };
 }
 
-// Resolve one authored entry (metres) against the body its group built, if any.
-export function resolveDecor(
-  data: LevelBodyData,
-  body: CollisionObject2D | null,
-): SceneDecor {
-  if (!body) return { data, body: null, localPos: Vec2.ZERO, localRot: 0 };
-  const rot = body.globalRotation;
-  return {
-    data,
-    body,
-    localPos: new Vec2(data.x - body.globalPosition.x, data.y - body.globalPosition.y).rotated(-rot),
-    localRot: data.rot - rot,
-  };
+// Every drawn-only form in a built level, in authored order - by body, then by
+// object within the body. Depth ordering is applied where it is drawn rather
+// than here, since the editor's picking wants the same rule over a model that
+// has not been built.
+export function collectDecor(built: BuiltBodies): SceneDecor[] {
+  const out: SceneDecor[] = [];
+  for (const b of built.bodies) {
+    for (const o of b.data.objects) {
+      if (!isGeometryObject(o) || o.shape === undefined) continue;
+      const local = localPlacement(b, o);
+      out.push({ built: b, object: o, localPos: local.pos, localRot: local.rot });
+    }
+  }
+  return out;
 }

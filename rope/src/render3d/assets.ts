@@ -128,6 +128,18 @@ export interface TextureAsset {
     roughness?: TextureMap;
     metallic?: TextureMap;
     ao?: TextureMap;
+    // WHERE this surface glows, and in what colour: a picture, added after all
+    // lighting and multiplied by the shape's own `emissive` tint. It is what
+    // makes the emission a PATTERN rather than the whole face - lit windows in a
+    // dark wall, cracks in cooling slag, a strip along a machine - which a flat
+    // emissive colour cannot say at all.
+    //
+    // A set carrying one glows with no level authoring: the shape's `emissive`
+    // colour defaults to white, so the map's own colours are what is emitted,
+    // and a shape naming a colour tints it. Since a glowing shape LIGHTS (see
+    // `EmissiveRig`), a surface with this map lights the room by being worn -
+    // `VisualData.emissiveRange` 0 is the opt-out for one that should not.
+    emissive?: TextureMap;
   };
   // Size of one repeat in METRES: the world distance this surface was captured
   // over, which is a fact about the texture rather than a choice. It is what a
@@ -266,7 +278,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
 // check all iterate.
 export function textureMaps(asset: TextureAsset): TextureMap[] {
   const m = asset.maps;
-  return [m.base, m.normal, m.roughness, m.metallic, m.ao].filter(
+  return [m.base, m.normal, m.roughness, m.metallic, m.ao, m.emissive].filter(
     (x): x is TextureMap => x !== undefined,
   );
 }
@@ -428,6 +440,18 @@ export interface SurfaceRequest {
   // caller. Multiplied against the albedo, so the grain survives the tint rather
   // than being painted over by it.
   color?: string;
+  // What the surface GIVES OFF, added after all lighting (see
+  // `VisualData.emissive`). It is what makes a lamp's own geometry read as lit
+  // when the thing lighting the room is the lamp; it illuminates nothing itself,
+  // which is why an authored sconce is this AND a `LightData` at the same point.
+  emissive?: string;
+  emissiveIntensity?: number;
+  // A second manifest key, whose EMISSION MAP is worn over this surface: where
+  // the shape glows, as against how much. See `VisualData.emissiveTexture`. It
+  // is a separate request field rather than part of `texture` because the two
+  // answer different questions - what this is made of, and what is lit on it -
+  // and a level pairs them freely.
+  emissiveTexture?: string;
 }
 
 // The shared surface for a request. Callers must not mutate the result.
@@ -437,12 +461,68 @@ export interface SurfaceRequest {
 // six draw states. The tile is part of the key because `repeat` lives on the
 // texture rather than on the material: two tiling scales are two texture
 // objects, sharing one uploaded image through `Texture.clone`.
+// Everything about a request that changes what the material IS, as one string.
+//
+// Exported so it can be asserted directly (`cli render3d`), which is the only
+// way this claim can be checked at all: building a material needs a canvas, and
+// that case suite is deliberately pure. It also has to be checked, because
+// getting it wrong is invisible everywhere else - the level renders, every round
+// trip passes, and what happens is that whichever of two shapes was built first
+// wins, so either every wall of that stone glows or the lamp made of it does not.
+export function surfaceKey(req: SurfaceRequest): string {
+  const name = surfaceName(req.texture ?? req.material);
+  const tile = tileMetres(name, req.tileScale);
+  const ox = req.offsetX ?? 0;
+  const oy = req.offsetY ?? 0;
+  // A named emission map is worn whether or not a colour was authored, so it
+  // counts as emission for the purpose of the multiplier below.
+  const glowMap = emissiveMapName(req.emissiveTexture);
+  const emissive = req.emissive ?? "";
+  // A multiplier on no emission is not a difference: it multiplies black.
+  const emits = emissive !== "" || glowMap !== "" || surfaceEmits(name);
+  const emissiveIntensity = emits ? (req.emissiveIntensity ?? 1) : 1;
+  return `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}|${emissive}|${emissiveIntensity}|${glowMap}`;
+}
+
+// Does this surface glow of its own accord - is there an emission map in the
+// set? A shape wearing one is a lamp whether or not the level said so, which is
+// what both the material (its emissive must be non-black for the map to show)
+// and the light it throws (`EmissiveRig`) have to know.
+//
+// Generated surfaces never emit: they are noise standing in for stuff, and stuff
+// does not glow.
+export function surfaceEmits(name: string | undefined): boolean {
+  return TEXTURE_ASSETS[surfaceName(name)]?.maps.emissive !== undefined;
+}
+
+// A named emission map resolved to the set it is in, or "" for none. Unlike
+// `surfaceName` this does NOT fall back to a default surface: an emission map is
+// something a shape asked for by name, so a key this build does not have leaves
+// the shape unmapped rather than glowing in whatever the fallback happens to
+// carry. Every set is checked for the map itself, so naming one that has none is
+// the same as naming nothing.
+export function emissiveMapName(name: string | undefined): string {
+  if (!name) return "";
+  return TEXTURE_ASSETS[name]?.maps.emissive !== undefined ? name : "";
+}
+
+// Every set that HAS an emission map, which is what an emission-map picker can
+// offer. Sorted, so the editor's list is stable between builds.
+export function emissiveMapNames(): string[] {
+  return Object.keys(TEXTURE_ASSETS)
+    .filter((k) => TEXTURE_ASSETS[k]!.maps.emissive !== undefined)
+    .sort();
+}
+
 export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
   const name = surfaceName(req.texture ?? req.material);
   const tile = tileMetres(name, req.tileScale);
   const ox = req.offsetX ?? 0;
   const oy = req.offsetY ?? 0;
-  const key = `${name}|${tile}|${ox}|${oy}|${req.color ?? ""}`;
+  const emissive = req.emissive ?? "";
+  const emissiveIntensity = req.emissiveIntensity ?? 1;
+  const glowMap = emissiveMapName(req.emissiveTexture);
+  const key = surfaceKey(req);
   const cached = materialCache.get(key);
   if (cached) return cached;
   const authored = TEXTURE_ASSETS[name];
@@ -451,7 +531,26 @@ export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
   // so nothing that has already been handed this material has to be told.
   const mat = buildSurface(authored ? (authored.fallback ?? DEFAULT_TEXTURE) : name, tile, ox, oy);
   if (req.color) mat.color = new THREE.Color(req.color);
+  // A shape's own emissive colour, or - where the emission comes from a MAP and
+  // the level named no colour - white, so the map is emitted in the colours it
+  // was painted in. Three.js multiplies the two, so leaving the default black
+  // here is an emission map that renders as nothing at all, which looks exactly
+  // like the map having failed to load.
+  if (emissive || glowMap || surfaceEmits(name)) {
+    mat.emissive = new THREE.Color(emissive || "#ffffff");
+    mat.emissiveIntensity = emissiveIntensity;
+  }
   if (authored) void track(dressWithImages(mat, name, authored, tile, ox, oy));
+  // Where the emission map comes from: the one this shape named, or its own
+  // surface's. Tiled by the capture size of the set it is IN at this shape's
+  // scale, since a borrowed map is a different picture from the one under it and
+  // life size has to mean the same thing for both.
+  const glowFrom = glowMap || (surfaceEmits(name) ? surfaceName(name) : "");
+  if (glowFrom) {
+    void track(
+      dressEmissive(mat, glowFrom, TEXTURE_ASSETS[glowFrom]!, tileMetres(glowFrom, req.tileScale), ox, oy),
+    );
+  }
   materialCache.set(key, mat);
   return mat;
 }
@@ -490,7 +589,7 @@ export async function assetsSettled(): Promise<void> {
 // tints ask for it: an image is uploaded to the GPU once and a `Texture.clone`
 // shares that upload while carrying its own `repeat`.
 const imageCache = new Map<string, Promise<LoadedMaps>>();
-type Slot = "base" | "normal" | "roughness" | "metallic" | "ao";
+type Slot = "base" | "normal" | "roughness" | "metallic" | "ao" | "emissive";
 type LoadedMaps = Partial<Record<Slot, THREE.Texture>>;
 
 let textureLoader: THREE.TextureLoader | null = null;
@@ -506,16 +605,18 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
     ["roughness", asset.maps.roughness],
     ["metallic", asset.maps.metallic],
     ["ao", asset.maps.ao],
+    ["emissive", asset.maps.emissive],
   ];
   const p = Promise.all(
     slots.map(async ([slot, map]): Promise<[Slot, THREE.Texture | null]> => {
       if (!map) return [slot, null];
       try {
         const tex = await loader.loadAsync(map.file);
-        // The albedo is the one map that is COLOUR; the rest are data and must
+        // The albedo and the emission are COLOUR; the rest are data and must
         // stay linear, or a roughness of 0.5 is read as 0.21 and every authored
         // surface comes out shinier than it was painted.
-        tex.colorSpace = slot === "base" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        tex.colorSpace =
+          slot === "base" || slot === "emissive" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         tex.anisotropy = 4;
@@ -534,6 +635,28 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
   });
   imageCache.set(name, track(p));
   return p;
+}
+
+// Wear ANOTHER set's emission map over this material - `VisualData.emissiveTexture`,
+// which is how a brick wall gets lit windows without the brick being a different
+// surface. Only the one slot is taken; everything else the borrowed set carries
+// is left where it is.
+async function dressEmissive(
+  mat: THREE.MeshStandardMaterial,
+  name: string,
+  asset: TextureAsset,
+  tile: number,
+  ox: number,
+  oy: number,
+): Promise<void> {
+  const maps = await loadMaps(name, asset);
+  const tex = maps.emissive;
+  if (!tex) return;
+  const clone = tex.clone();
+  applyTiling(clone, tile, ox, oy);
+  clone.needsUpdate = true;
+  mat.emissiveMap = clone;
+  mat.needsUpdate = true;
 }
 
 // Swap an authored set's maps into a material already in the scene, at this
@@ -567,7 +690,10 @@ async function dressWithImages(
   if (normal) mat.normalMap = normal;
   if (roughness) mat.roughnessMap = roughness;
   if (metallic) mat.metalnessMap = metallic;
-  if (ao) mat.aoMap = ao;
+  // The emission slot is deliberately NOT dressed here: which set it comes from
+  // is a separate question (a shape may borrow another set's, see
+  // `VisualData.emissiveTexture`), and two async paths writing one slot is a
+  // race whose winner is whichever image happened to arrive first.
   // With a map present these are multipliers; with none, they are the value.
   // Metalness defaults to 0 rather than 1 because a set with no metallic map is
   // a dielectric - stone, wood, plaster - and a fully metal wall lit by one sun
@@ -725,6 +851,23 @@ export interface MeshAsset {
 // Every entry is `assets:optimize`d, then `assets:publish`ed, and `cli assets`
 // holds the whole directory to a byte budget; see "The asset store" in CLAUDE.md.
 export const MESH_ASSETS: Record<string, MeshAsset> = {
+  // A wall-mounted bulkhead lamp. Its material ships an EMISSION MAP, so the
+  // glass reads as lit on its own (via `wakeEmission` - the export carries no
+  // emissive factor, and glTF's default is black). What it does not do is light
+  // the wall: that comes from the shape it is mounted on carrying
+  // `VisualData.emissive`, which is where a light's colour and reach are
+  // authored. 25 x 14 x 9 cm as exported, a real bulkhead lamp's size, so it
+  // wears no `scale`.
+  "bulkhead-lamp": {
+    file: "/meshes/bulkhead-lamp.glb",
+    sha256: "1d9f7e121da014f7bdd06e7f4d67bd411f12f498dbc622a22ceb5106de7836f7",
+    // CC BY, so the author is an obligation rather than a note: the credit has
+    // to name the person, and a link to where it was found is not that (see
+    // "Provenance, in the manifest" in CLAUDE.md).
+    source: "https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb",
+    author: "andersonmat",
+    license: "CC BY 4.0",
+  },
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
     sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",
@@ -761,6 +904,38 @@ function gltfLoader(): Promise<{ loadAsync(url: string): Promise<{ scene: THREE.
   return loaderPromise;
 }
 
+// A prop that ships an emission MAP but no emissive FACTOR emits nothing, and
+// this lifts it to white so the map is emitted in the colours it was painted in.
+//
+// glTF's default `emissiveFactor` is [0,0,0] and three.js multiplies the map by
+// it, so a material carrying a beautifully authored emission map renders exactly
+// as if the map were not there. It is the single most common way a lamp arrives
+// dark, because a modelling tool will happily export the map while the material
+// it came from resolves to no emission at all - and the failure looks like the
+// texture having failed to load rather than like a value being zero.
+//
+// The repair is deliberately NARROW: a map, and a factor that is exactly black.
+// A prop that authors any emissive colour of its own is left alone, and one with
+// no map is untouched, so nothing here can make a surface glow that was not
+// already carrying a picture of its own glow. It is the same rule `surfaceFor`
+// applies to this project's own texture sets, which is the point - a prop and a
+// surface that both ship an emission map should not need different knowledge to
+// light up.
+//
+// Note what this does NOT do: the light a lamp throws comes from the shape's
+// `VisualData.emissive` (see `EmissiveRig`), never from a prop's own materials.
+// A prop is a picture, and reading a light's colour and reach out of one would
+// be guessing at both.
+export function wakeEmission(material: THREE.Material | THREE.Material[]): void {
+  for (const m of Array.isArray(material) ? material : [material]) {
+    const std = m as THREE.MeshStandardMaterial;
+    if (!std.emissiveMap || !std.emissive) continue;
+    if (std.emissive.r !== 0 || std.emissive.g !== 0 || std.emissive.b !== 0) continue;
+    std.emissive.setRGB(1, 1, 1);
+    std.needsUpdate = true;
+  }
+}
+
 // The prop for a manifest key, as a fresh instance the caller owns. Resolves to
 // null for an unknown key or a load failure, which is the caller's cue to keep
 // its placeholder.
@@ -777,10 +952,11 @@ export function loadMesh(key: string): Promise<THREE.Object3D | null> {
       root.scale.setScalar(s);
       root.rotation.set(asset.rotX ?? 0, asset.rotY ?? 0, asset.rotZ ?? 0);
       root.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) {
-          o.castShadow = true;
-          o.receiveShadow = true;
-        }
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        wakeEmission(mesh.material);
       });
       return root as THREE.Object3D;
     })

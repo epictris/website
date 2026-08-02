@@ -21,7 +21,7 @@ import type { Rope } from "../classes/rope";
 import type { World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
-import type { LevelData } from "../level/levelFormat";
+import type { RawLevelData } from "../level/levelFormat";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -56,7 +56,7 @@ export interface Recording {
   // isn't in the registry) embed their geometry + controller here. When
   // present, replay builds from `data` instead of looking `level` up.
   controller?: "grapple" | "ball";
-  data?: LevelData;
+  data?: RawLevelData;
 }
 
 export interface Digest {

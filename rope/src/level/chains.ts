@@ -32,6 +32,7 @@ import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
+import type { BuiltBodies } from "./buildBodies";
 import { type ChainData, type LevelData } from "./levelFormat";
 
 // The wrap-candidate list a chain solves against: nothing. Its two anchor bodies
@@ -392,28 +393,22 @@ function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
 }
 
 // Build every chain in `data` (metres) against the bodies `buildLevelBodies`
-// made. A chain naming a body index that built nothing, or naming the same
-// engine body at both ends (a chain tied to itself - which two members of one
-// compound group are), is dropped rather than fed to a solver that has no
+// made. A chain naming a body index that built nothing - decoration, a lone
+// light, an index past the end - or naming the same body at both ends (which has
+// nothing to constrain) is dropped rather than fed to a solver that has no
 // meaning for it.
-export function buildSceneChains(
-  data: LevelData,
-  byIndex: readonly (CollisionObject2D | null)[],
-): SceneChain[] {
+export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChain[] {
   const chains: SceneChain[] = [];
   for (const c of data.chains ?? []) {
-    const chain = buildOne(c, byIndex);
+    const chain = buildOne(c, built);
     if (chain) chains.push(chain);
   }
   return chains;
 }
 
-function buildOne(
-  c: ChainData,
-  byIndex: readonly (CollisionObject2D | null)[],
-): SceneChain | null {
-  const objA = byIndex[c.a.body] ?? null;
-  const objB = byIndex[c.b.body] ?? null;
+function buildOne(c: ChainData, built: BuiltBodies): SceneChain | null {
+  const objA = built.bodies[c.a.body]?.body ?? null;
+  const objB = built.bodies[c.b.body]?.body ?? null;
   if (!objA || !objB || objA === objB) return null;
   const worldA = snapToSurface(objA, new Vec2(c.a.x, c.a.y));
   const worldB = snapToSurface(objB, new Vec2(c.b.x, c.b.y));

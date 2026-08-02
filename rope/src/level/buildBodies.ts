@@ -3,6 +3,12 @@
 // wrap (statics + rigids, but not areas and not hook-only anchors). Used by
 // both level drivers so the grapple and ball controllers load identical
 // geometry, including rigid bodies.
+//
+// A body's COLLISION OBJECTS are the only thing that reaches the sim. A body
+// with none of them is never built: no collision shape, no `World` membership,
+// no mass, no vertex the rope can wrap - the exclusion IS the absence, so there
+// is no physics path left to remember to exclude decoration from. What such a
+// body still gets is a place to stand, which is what `BuiltBody.origin` is for.
 
 import { Vec2 } from "../engine/vec2";
 import {
@@ -21,13 +27,17 @@ import {
   ShapeGeometry,
 } from "../lib/shapeGeometry";
 import { KillZone } from "../classes/killZone";
-import { collides, resolveDecor, type SceneDecor } from "./decor";
 import {
+  collides,
+  isCollisionObject,
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
   DEFAULT_SURFACE_FRICTION,
+  type CollisionObjectData,
   type LevelBodyData,
   type LevelData,
+  type ObjectPlacement,
+  type ShapeData,
 } from "./levelFormat";
 import type { CollisionObject2D } from "../engine/body";
 
@@ -35,9 +45,9 @@ import type { CollisionObject2D } from "../engine/body";
 // it. Only polygons ever carry one: their vertices are re-centred on the area
 // centroid, because a body's origin is its centre of mass everywhere in this
 // engine (every RigidBody2D lever arm is measured from `globalPosition`). The
-// offset goes back onto the body's position, so the geometry lands exactly where
-// it was authored while the origin ends up where the physics needs it.
-function makeShape(shape: LevelBodyData["shape"]): { shape: Shape; offset: Vec2 } {
+// offset goes back onto the piece's position, so the geometry lands exactly
+// where it was authored while the origin ends up where the physics needs it.
+function makeShape(shape: ShapeData): { shape: Shape; offset: Vec2 } {
   if (shape.kind === "rect") return { shape: rectShape(shape.w, shape.h), offset: Vec2.ZERO };
   if (shape.kind === "circle") return { shape: circleShape(shape.r), offset: Vec2.ZERO };
   return polyShapeCentred(shape.verts.map((v) => new Vec2(v.x, v.y)));
@@ -47,6 +57,31 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
   body.fillColor = b.color ?? DEFAULT_BODY_COLOR;
   body.fillOpacity = b.opacity ?? DEFAULT_BODY_OPACITY;
   body.surfaceFriction = b.friction ?? DEFAULT_SURFACE_FRICTION;
+}
+
+// Where an object actually is, in world metres: its own placement composed
+// through its body's frame. One function, so the build, both renderers and the
+// editor cannot each have their own idea of what "local to the body" means.
+export function worldPlacement(
+  body: LevelBodyData,
+  o: ObjectPlacement,
+): { pos: Vec2; rot: number } {
+  const lx = o.x ?? 0;
+  const ly = o.y ?? 0;
+  const cos = Math.cos(body.rot);
+  const sin = Math.sin(body.rot);
+  return {
+    pos: new Vec2(body.x + lx * cos - ly * sin, body.y + lx * sin + ly * cos),
+    rot: body.rot + (o.rot ?? 0),
+  };
+}
+
+// ...and how far off the gameplay plane it ends up: the body's own depth plus
+// the object's offset from it. Kept beside the placement above because it is the
+// same statement about the same frame - z is simply the axis the 2D view cannot
+// show, and the one that used to be absolute while x, y and rot were not.
+export function worldDepth(body: LevelBodyData, z: number | undefined, fallback: number): number {
+  return (body.z ?? 0) + (z ?? fallback);
 }
 
 // Coulomb coefficients an authored `rigid` body brings to its own contacts.
@@ -84,111 +119,92 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
 export const RIGID_KINETIC_FRICTION = 0.6;
 export const RIGID_STATIC_FRICTION = 0.7;
 
+// One authored body as built.
+export interface BuiltBody {
+  // The authored body (metres), so a consumer that has a `BuiltBody` never has
+  // to carry the data alongside it.
+  readonly data: LevelBodyData;
+  // What moves. NULL for a body with no collision objects - decoration, a lone
+  // light - which entered no world and therefore stands wherever it was
+  // authored, for ever.
+  readonly body: CollisionObject2D | null;
+  // The frame this body's objects are resolved into, at rest. For a built body
+  // it is the engine object's own origin, which is the pieces' combined centre
+  // of mass and NOT the authored `x`/`y`; for an unbuilt one it is the authored
+  // transform itself.
+  //
+  // The two differ on purpose. The engine's origin has to be the centre of mass
+  // (every lever arm in the engine is measured from `globalPosition`) and it
+  // moves as collision objects are added; the authored one has to stay put, or
+  // every offset in a body would shift whenever a piece was added to it. This
+  // is where the difference is absorbed, once, at load - the same job
+  // `resolveDecor` used to do for decoration and `buildSceneChains` still does
+  // for chain anchors.
+  readonly origin: Vec2;
+  readonly rotation: number;
+}
+
+// Where one of a body's objects sits in the frame that actually moves - the
+// engine body's, or the authored one for a body that built nothing. Rigid, so
+// every caller works it out once at build and never per frame.
+export function localPlacement(
+  built: BuiltBody,
+  o: ObjectPlacement,
+): { pos: Vec2; rot: number } {
+  const world = worldPlacement(built.data, o);
+  return {
+    pos: world.pos.sub(built.origin).rotated(-built.rotation),
+    rot: world.rot - built.rotation,
+  };
+}
+
 // What `buildLevelBodies` hands back.
 export interface BuiltBodies {
   // Everything the rope may wrap: statics and rigids, but not areas (the rope
   // passes through) and not hook-only anchors (nothing catches on them).
   wrapBodies: PhysicsBody2D[];
-  // The engine object each `data.bodies` entry became, by index. Several entries
-  // of one compound group map to the SAME object, which is the whole point of a
-  // group; chains resolve their authored body index through this.
-  byIndex: (CollisionObject2D | null)[];
-  // The engine object each compound-group TAG became. Keyed by the tag rather
-  // than by an index because a group's members belong to the group, not to one
-  // particular entry of it, and the group is what has an engine body. A tag no
-  // body carries (a group of decoration alone, or one whose colliding pieces
-  // were all deleted) is simply absent.
-  byGroup: Map<string, CollisionObject2D>;
-  // The authored entries that are drawn but never simulated
-  // (`LevelBodyData.collision: false`), each resolved to the body it rides, in
-  // authored order. They are NOT in `byIndex`: they became no engine object and
-  // no piece of one, which is the whole of what the flag means.
-  decor: SceneDecor[];
-  // Which SHAPE of that engine object each `data.bodies` entry became, by index.
-  // `byIndex` alone cannot answer this once groups exist: several entries map to
-  // one body, and a per-entry property (`material`, `impermeable`, and now
-  // `visual`) belongs to one piece of it. The 3D renderer needs the piece so a
-  // visual anchors to the local transform it was authored against; nothing in
-  // the sim reads it, which is why it is an additive field rather than a change
-  // to `byIndex`.
-  shapeIndexByIndex: number[];
+  // One entry per `data.bodies` entry, in authored order. Chains resolve their
+  // authored body index straight through this - which is now an index into the
+  // bodies rather than into a flat entry list, so a chain names a body and
+  // there is nothing left to collapse.
+  bodies: BuiltBody[];
 }
 
-// The level as built, from the 3D renderer's point of view: the metre-scaled
-// data and the mapping from its entries to engine objects and pieces. Both level
-// drivers keep one (`visualSource`), which is the whole of what the renderer
-// needs to know about the file a level came from.
+// The level as built, from the renderers' point of view: the metre-scaled data
+// and what it became. Both level drivers keep one (`visualSource`), which is the
+// whole of what a renderer needs to know about the file a level came from.
 export interface LevelVisualSource {
   data: LevelData;
   built: BuiltBodies;
 }
 
-// Areas are single-shape everywhere they are used - `World.integrate` tests
-// overlap against `area.primaryShape()`, not `getShapes()` - so a grouped area would
-// silently act through its first piece alone. Grouping is geometry-only; an area
-// tagged into a group is built as its own body instead.
-function groupable(kind: LevelBodyData["kind"]): boolean {
-  return kind !== "killzone" && kind !== "force";
-}
-
-// The authored entries in build order, each as the run of entries that make up
-// one engine body. A group's run is emitted where its FIRST member sits, so
-// z-order and the `byIndex` mapping stay in authored order.
-//
-// Decoration is in its run like any other member: it is what welds it to the
-// body, and it is dropped from the pieces (not from the run) further down, so
-// "which body does this ride" and "which shapes does that body have" are read
-// off one grouping rather than two that can disagree. Its own kind is not
-// consulted for `groupable` - a kind is a statement about physics and a
-// non-colliding shape makes none, so a piece of decoration a level happens to
-// leave marked `force` still rides the crate it was welded to.
-function groupRuns(bodies: readonly LevelBodyData[]): Array<{ tag: string | null; indices: number[] }> {
-  const runs: Array<{ tag: string | null; indices: number[] }> = [];
-  const byTag = new Map<string, { tag: string | null; indices: number[] }>();
-  bodies.forEach((b, i) => {
-    const tag = b.group && (!collides(b) || groupable(b.kind)) ? b.group : null;
-    if (tag === null) {
-      runs.push({ tag: null, indices: [i] });
-      return;
-    }
-    const existing = byTag.get(tag);
-    if (existing) {
-      existing.indices.push(i);
-      return;
-    }
-    const run = { tag, indices: [i] };
-    byTag.set(tag, run);
-    runs.push(run);
-  });
-  return runs;
-}
-
-// One authored entry, resolved to the shape and the world placement it asks for.
+// One collision object, resolved to the shape and the world placement it asks
+// for.
 interface Piece {
   shape: Shape;
   pos: Vec2;
   rot: number;
   mass: number;
-  // Hook-proof (`LevelBodyData.impermeable`), carried per piece: one body may
-  // be attachable on one face and repel the hook on the next, which is why the
-  // flag lives on the mounted `CollisionShape2D` rather than on a body kind.
+  // Hook-proof (`CollisionObjectData.impermeable`), carried per piece: one body
+  // may be attachable on one face and repel the hook on the next, which is why
+  // the flag lives on the mounted `CollisionShape2D` rather than on a body kind.
   impermeable: boolean;
 }
 
-function makePiece(b: LevelBodyData): Piece {
-  const made = makeShape(b.shape);
+function makePiece(body: LevelBodyData, o: CollisionObjectData): Piece {
+  const made = makeShape(o.shape);
+  const world = worldPlacement(body, o);
   // A re-centred polygon's origin moved; put the geometry back where it was
   // authored by shifting it by the (rotated) offset that was removed.
-  const pos = new Vec2(b.x, b.y).add(made.offset.rotated(b.rot));
   return {
     shape: made.shape,
-    pos,
-    rot: b.rot,
-    impermeable: b.impermeable === true,
-    // The piece's own material and thickness, not the group's: they are the one
-    // authored property a compound body does not have just one of, and every
-    // sum below - centre of mass, mass, inertia - is written over the pieces
-    // precisely so each can bring its own.
+    pos: world.pos.add(made.offset.rotated(world.rot)),
+    rot: world.rot,
+    impermeable: o.impermeable === true,
+    // The piece's own material and thickness, not the body's: they are the one
+    // authored property a body does not have just one of, and every sum below -
+    // centre of mass, mass, inertia - is written over the pieces precisely so
+    // each can bring its own.
     //
     // A prism whatever the shape kind, a circle included: an authored circle is
     // a disc seen face on (a wheel, a barrel end), so it is `thickness` thick
@@ -197,8 +213,8 @@ function makePiece(b: LevelBodyData): Piece {
     // see `ShapeGeometry.computeMass`.
     mass: prismMass(
       ShapeGeometry.area(made.shape),
-      b.thickness ?? DEFAULT_THICKNESS,
-      materialDensity(b.material),
+      o.thickness ?? DEFAULT_THICKNESS,
+      materialDensity(o.material),
     ),
   };
 }
@@ -207,8 +223,8 @@ function makePiece(b: LevelBodyData): Piece {
 // each piece keeps its authored placement as a local offset and angle. The
 // centre of mass - not the first piece, not the bounding-box centre - because
 // every rigid-body lever arm in the engine is measured from `globalPosition`.
-// A single piece reduces to exactly the old behaviour: offset zero, local
-// rotation zero, the body carrying the authored transform itself.
+// A single piece reduces to the body carrying the piece's transform itself,
+// offset zero and local rotation zero.
 function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
   const total = pieces.reduce((m, p) => m + p.mass, 0);
   const centre =
@@ -263,57 +279,31 @@ export function buildLevelBodies(
   onReset: () => void,
 ): BuiltBodies {
   const wrapBodies: PhysicsBody2D[] = [];
-  const byIndex: (CollisionObject2D | null)[] = data.bodies.map(() => null);
-  const byGroup = new Map<string, CollisionObject2D>();
-  const shapeIndexByIndex: number[] = data.bodies.map(() => 0);
-  // Decoration, paired with the run it belongs to; resolved after the loop,
-  // since resolving needs the body's final origin and that is the run's combined
-  // centre of mass rather than anything an entry states.
-  const pending: Array<{ index: number; run: number }> = [];
-  const runBody: (CollisionObject2D | null)[] = [];
+  const bodies: BuiltBody[] = [];
 
-  for (const run of groupRuns(data.bodies)) {
-    const runIndex = runBody.length;
-    // Drawn-only entries are dropped here and nowhere else. Not built means not
-    // in the world, not a collision shape, not a gram of mass and not a vertex
-    // the rope can wrap - the exclusion is the absence, so there is no physics
-    // path left to remember to exclude them from.
-    const solid = run.indices.filter((i) => collides(data.bodies[i]!));
-    for (const i of run.indices) {
-      if (!collides(data.bodies[i]!)) pending.push({ index: i, run: runIndex });
-    }
-    if (solid.length === 0) {
-      // A group of decoration alone: nothing to build, and its members stay
-      // where they were authored. Legitimate rather than an error - it is what
-      // several panels moved as one has always been.
-      runBody.push(null);
+  for (const b of data.bodies) {
+    if (!collides(b)) {
+      // Nothing to build. It keeps its place in this list so that a chain, a
+      // renderer or the editor can still name it by index - a body that builds
+      // no engine object is a perfectly ordinary thing to author, and it is what
+      // decoration and a light with no visible source both are.
+      bodies.push({ data: b, body: null, origin: new Vec2(b.x, b.y), rotation: b.rot });
       continue;
     }
-    // A group's kind, style and friction come from its first COLLIDING member: a
-    // body has one of each, and the editor keeps a group's members in agreement
-    // so a file never disagrees with what it draws.
-    const lead = data.bodies[solid[0]!]!;
-    const pieces = solid.map((i) => makePiece(data.bodies[i]!));
-    const built = buildOne(world, lead, pieces, onReset);
-    // `mountPieces` mounts the run's pieces in order, so entry `solid[k]` is
-    // shape `k` of the body it built - the same correspondence
-    // `setCompoundInertia` relies on to weigh each piece by its own material.
-    solid.forEach((i, k) => {
-      byIndex[i] = built;
-      shapeIndexByIndex[i] = k;
+    const pieces = b.objects.filter(isCollisionObject).map((o) => makePiece(b, o));
+    const built = buildOne(world, b, pieces, onReset);
+    bodies.push({
+      data: b,
+      body: built,
+      origin: built.globalPosition,
+      rotation: built.globalRotation,
     });
-    runBody.push(built);
-    if (run.tag !== null) byGroup.set(run.tag, built);
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and an AnchorBody reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  // Authored order, which is the order they are drawn in.
-  pending.sort((a, b) => a.index - b.index);
-  const decor = pending.map((p) => resolveDecor(data.bodies[p.index]!, runBody[p.run] ?? null));
-
-  return { wrapBodies, byIndex, byGroup, shapeIndexByIndex, decor };
+  return { wrapBodies, bodies };
 }
 
 function buildOne(

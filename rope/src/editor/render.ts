@@ -14,9 +14,9 @@ import {
   CAMERA_REGION_COLOR,
   chainEnds,
   ED_LAYERS,
-  groupBounds,
-  groupCentroid,
-  groupMembers,
+  bodyBounds,
+  bodyCentroid,
+  bodyMembers,
   halfExtents,
   isArrowNote,
   itemDepth,
@@ -177,12 +177,12 @@ export function computeGroupHandles(
   cam: Camera,
   items: readonly EdItem[],
 ): { rotate: Vec2; rotateBase: Vec2; centre: Vec2 } {
-  const box = groupBounds(items);
+  const box = bodyBounds(items);
   const topMid = worldToScreen(cam, new Vec2((box.min.x + box.max.x) / 2, box.min.y));
   return {
     rotate: topMid.add(new Vec2(0, -ROT_OFFSET_PX)),
     rotateBase: topMid,
-    centre: worldToScreen(cam, groupCentroid(items)),
+    centre: worldToScreen(cam, bodyCentroid(items)),
   };
 }
 
@@ -256,7 +256,7 @@ function strokeCompoundOutline(
   // piece (a hook-proof face among ordinary ones) can say so.
   style: (item: EdItem) => void,
 ): void {
-  const box = groupBounds(items);
+  const box = bodyBounds(items);
   const pad = 1;
   for (let i = 0; i < items.length; i++) {
     ctx.save();
@@ -318,6 +318,160 @@ function midHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
 // One-line summary of what a camera region does, drawn above it. Lengths are in
 // scene pixels, matching the inspector's fields. A region with nothing authored
 // says so rather than showing an empty label.
+// One light, as editor furniture. Three marks, and each says a different thing:
+//
+// - THE REACH, a dashed ring at the item's own radius. This is the field that
+//   authors the look - falloff is inverse-square, so where the light ends is
+//   where the lit part of the level ends - and it is the one thing about a lamp
+//   with a size, so it is drawn as the volume rather than as a number.
+// - THE SOURCE, a small burst at the centre, in the light's own colour. It is
+//   world-scaled like everything else here, but with a floor in screen terms, so
+//   a lamp zoomed away to nothing is still findable and clickable.
+// - THE CONE, for a spot: the two edge rays out to the reach, so the aim is read
+//   off the canvas rather than out of three numbers in the inspector.
+function drawLightGizmo(
+  ctx: CanvasRenderingContext2D,
+  l: EdItem,
+  worldLine: number,
+  selected: boolean,
+  paint: (color: string) => string,
+): void {
+  const range = l.shape.kind === "circle" ? l.shape.r : 0;
+  // A light's reach is a SPHERE, and this is a plan view of one plane through
+  // it. What the level actually receives is the circle where that sphere cuts
+  // the gameplay plane, which shrinks as the lamp is pulled toward the camera
+  // and closes entirely once it is further off the plane than it reaches.
+  //
+  // Drawing that rather than the authored radius alone is the only feedback `z`
+  // has: a light is invisible, so moving one through z changes nothing on the
+  // canvas and nothing in the 2D overlay, and the field reads as doing nothing
+  // at all until the 3D view is consulted.
+  const planeReach = lightPlaneReach(l);
+  ctx.beginPath();
+  ctx.arc(l.pos.x, l.pos.y, planeReach, 0, Math.PI * 2);
+  ctx.fillStyle = paint(hexToRgba(l.color, l.opacity));
+  ctx.fill();
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.stroke();
+  }
+  // Dashed, like every other volume the player passes through: a light is not
+  // geometry and must never read as a wall in a screenshot.
+  ctx.strokeStyle = l.color;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([6 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // The authored reach itself, as a fainter outer ring, whenever the lamp is off
+  // the plane and the two differ. Without it the ring would shrink as `z` is
+  // typed and there would be nothing on screen still saying what `range` is.
+  if (planeReach < range - 1e-6) {
+    ctx.beginPath();
+    ctx.arc(l.pos.x, l.pos.y, range, 0, Math.PI * 2);
+    ctx.strokeStyle = l.color;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = worldLine;
+    ctx.setLineDash([2 * PX, 6 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  if (l.light.kind === "spot" && planeReach > 0) {
+    const aim = Math.atan2(l.light.dir.y, l.light.dir.x);
+    const half = (l.light.angle * Math.PI) / 180;
+    const range = planeReach;
+    // The cone is a 3D one and this is a plan view of the gameplay plane, so
+    // what is drawn is its section: correct wherever the aim lies in the plane,
+    // and a spot aimed mostly at the camera (`aim z`) is legitimately a small
+    // one here. The inspector carries the z; this carries the direction the
+    // author is steering by eye.
+    ctx.beginPath();
+    for (const s of [-1, 1]) {
+      ctx.moveTo(l.pos.x, l.pos.y);
+      ctx.lineTo(l.pos.x + Math.cos(aim + s * half) * range, l.pos.y + Math.sin(aim + s * half) * range);
+    }
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = worldLine;
+    ctx.setLineDash([4 * PX, 4 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // The source burst. Solid, and the one part of a light drawn at full strength:
+  // everything else about the gizmo is a faint volume, and without a hard mark
+  // there is nothing to aim a click at.
+  const r = Math.max(LIGHT_MARK_SIZE, worldLine * 4);
+  ctx.strokeStyle = l.color;
+  ctx.lineWidth = worldLine * 2;
+  ctx.beginPath();
+  for (let i = 0; i < LIGHT_MARK_RAYS; i++) {
+    const a = (i * Math.PI * 2) / LIGHT_MARK_RAYS;
+    ctx.moveTo(l.pos.x + Math.cos(a) * r * 0.4, l.pos.y + Math.sin(a) * r * 0.4);
+    ctx.lineTo(l.pos.x + Math.cos(a) * r, l.pos.y + Math.sin(a) * r);
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(l.pos.x, l.pos.y, r * 0.35, 0, Math.PI * 2);
+  ctx.fillStyle = l.color;
+  ctx.fill();
+}
+
+// Half-size of the source burst in metres, and how many rays it has.
+const LIGHT_MARK_SIZE = 0.18;
+const LIGHT_MARK_RAYS = 8;
+
+// What a click on a light has to land on: the source burst, and nothing else.
+//
+// The reach is a READOUT - it is as wide as the room the lamp lights, and on a
+// level lit from inside that is most of the level. Picking by it made a lamp a
+// transparent sheet over everything it lit: every click meant for a wall inside
+// the pool selected the light instead, and two lamps whose pools overlapped made
+// the geometry between them unreachable entirely.
+//
+// So the pick is the icon, which is the one part of the gizmo drawn at full
+// strength precisely because there has to be something to aim at. It grows with
+// the zoom exactly as the drawn burst does (`worldLine * 4`), so what you can
+// hit is always what you can see.
+export function lightPickRadius(worldLine: number): number {
+  return Math.max(LIGHT_MARK_SIZE, worldLine * 4);
+}
+
+// How far a light reaches ON THE GAMEPLAY PLANE, in metres.
+//
+// The authored `range` is the radius of a sphere and the level is a plane
+// through it, so the two are only the same for a lamp sitting exactly on the
+// plane. A lamp `z` off it cuts a circle of `sqrt(range² - z²)` - and once it is
+// further away than it reaches, it lights the plane not at all, which is a
+// perfectly reachable authoring mistake and one nothing else would report.
+export function lightPlaneReach(l: EdItem): number {
+  const range = l.shape.kind === "circle" ? l.shape.r : 0;
+  const z = Math.abs(l.light.z);
+  return z >= range ? 0 : Math.sqrt(range * range - z * z);
+}
+
+// What a light does, for the screen-space label beside it. Only what was
+// authored away from the defaults, so an ordinary lamp reads as `light` and a
+// guttering shadow-casting spot says so.
+export function lightLabel(l: EdItem): string {
+  const parts: string[] = [l.light.kind];
+  parts.push(`${Number(l.light.intensity.toFixed(1))}cd`);
+  const px = (v: number) => Math.round(v * PIXELS_PER_METER);
+  if (l.shape.kind === "circle") parts.push(`${px(l.shape.r)}reach`);
+  if (l.light.z !== 0) {
+    parts.push(`z${px(l.light.z)}`);
+    // What that `z` costs, in the units the reach is authored in. A lamp off
+    // the plane reaches less of it, and a lamp further off than it reaches
+    // lights the level not at all - which is silent everywhere else.
+    const plane = lightPlaneReach(l);
+    parts.push(plane > 0 ? `${px(plane)}on plane` : "MISSES PLANE");
+  }
+  if (l.light.flicker > 0) parts.push(`flicker ${Number(l.light.flicker.toFixed(2))}`);
+  if (l.light.castShadow) parts.push("shadows");
+  return parts.join(" · ");
+}
+
 export function cameraRegionLabel(r: EdItem): string {
   const px = (v: number) => String(Math.round(v * PIXELS_PER_METER));
   const parts: string[] = [];
@@ -502,16 +656,16 @@ function drawGroupMarks(
   selectedIds: ReadonlySet<number>,
   worldLine: number,
 ): void {
-  const groups = new Set<number>();
-  for (const b of visible) if (b.group !== null) groups.add(b.group);
-  for (const id of groups) {
-    if (groupMembers(all, id).length < 2) continue;
-    const members = groupMembers(visible, id);
-    const centre = groupCentroid(groupMembers(all, id));
+  const bodies = new Set<number>();
+  for (const b of visible) bodies.add(b.bodyId);
+  for (const id of bodies) {
+    if (bodyMembers(all, id).length < 2) continue;
+    const members = bodyMembers(visible, id);
+    const centre = bodyCentroid(bodyMembers(all, id));
     const selected = members.some((m) => selectedIds.has(m.id));
     ctx.strokeStyle = GROUP_MARK;
     if (selected) {
-      const box = groupBounds(members);
+      const box = bodyBounds(members);
       ctx.lineWidth = worldLine * 1.5;
       ctx.setLineDash([6 * PX, 4 * PX]);
       ctx.strokeRect(box.min.x, box.min.y, box.max.x - box.min.x, box.max.y - box.min.y);
@@ -601,8 +755,8 @@ export function drawEditor(
   // the panel on top on screen is the panel on top everywhere. `sort` is stable,
   // so decoration at one depth keeps its authored order.
   const decor = (
-    visibleLayers.has("geometry")
-      ? model.items.filter((i) => i.layer === "geometry" && !i.collision)
+    visibleLayers.has("scene")
+      ? model.items.filter((i) => i.object === "geometry")
       : []
   ).sort((a, b) => itemDepth(a) - itemDepth(b));
   for (const g of decor) {
@@ -628,8 +782,8 @@ export function drawEditor(
   // Hook-only anchors first: they are background the player passes through, and
   // the game draws them behind solid geometry too. `sort` is stable, so the
   // authored order is preserved within each group.
-  const geometry = model.items.filter((i) => i.layer === "geometry" && i.collision);
-  const ordered = visibleLayers.has("geometry")
+  const geometry = model.items.filter((i) => i.object === "collision");
+  const ordered = visibleLayers.has("scene")
     ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
     : [];
   // Compound bodies draw as one object rather than as their pieces - union fill,
@@ -638,12 +792,12 @@ export function drawEditor(
   // border each (a crack across a solid wall), neither of which is in the level.
   // Anchors keep the per-shape path: their fill is a grate lattice punched out of
   // each piece, which has no union form.
-  const drawnAsGroup = new Set<number>();
+  const drawnAsBody = new Set<number>();
   for (const body of ordered) {
-    if (body.group === null || body.kind === "anchor" || drawnAsGroup.has(body.id)) continue;
-    const members = groupMembers(ordered, body.group).filter((m) => m.kind !== "anchor");
+    if (body.kind === "anchor" || drawnAsBody.has(body.id)) continue;
+    const members = bodyMembers(ordered, body.bodyId).filter((m) => m.kind !== "anchor");
     if (members.length < 2) continue;
-    for (const m of members) drawnAsGroup.add(m.id);
+    for (const m of members) drawnAsBody.add(m.id);
     const union = unionPath(members);
     ctx.fillStyle = paint(hexToRgba(body.color, body.opacity));
     ctx.fill(union);
@@ -671,7 +825,7 @@ export function drawEditor(
     ctx.setLineDash([]);
   }
   for (const body of ordered) {
-    if (drawnAsGroup.has(body.id)) continue;
+    if (drawnAsBody.has(body.id)) continue;
     // Areas fill with their glyph cut out of them — the same calls the game
     // makes, so authoring shows exactly what play shows.
     if (body.kind === "force") {
@@ -741,7 +895,7 @@ export function drawEditor(
   // `none` (nothing is drawn here at all, an invisible wall). `auto` is the
   // default and is exactly the shape as drawn, so a badge on it would be a mark
   // on almost every body saying nothing.
-  for (const body of [...(visibleLayers.has("geometry") ? geometry : []), ...decor]) {
+  for (const body of [...(visibleLayers.has("scene") ? geometry : []), ...decor]) {
     const kind = body.visual.kind;
     if (kind === "auto") continue;
     const r = 6 * PX;
@@ -777,14 +931,14 @@ export function drawEditor(
   // the only thing on screen that says so. Only the VISIBLE members are marked,
   // so hiding a layer really does take it out of the picture; the diamond stays
   // put whatever is hidden, since it is the shapes' centre of mass alone.
-  const markable = [...(visibleLayers.has("geometry") ? geometry : []), ...decor];
+  const markable = [...(visibleLayers.has("scene") ? geometry : []), ...decor];
   drawGroupMarks(ctx, markable, model.items, selectedIds, worldLine);
 
   // Chains over the bodies they hold. Drawn STRAIGHT, because that is what the
   // solver renders: a chain's span is a straight line between wrap nodes, and
   // drawing a guessed sag here would be a drawing of something the level does
   // not contain.
-  if (visibleLayers.has("geometry")) {
+  if (visibleLayers.has("scene")) {
     for (const c of model.chains) {
       const ends = chainEnds(model, c);
       if (!ends) continue;
@@ -869,6 +1023,16 @@ export function drawEditor(
       ctx.setLineDash([]);
     }
     drawLockMarks(ctx, r, worldLine);
+  }
+
+  // Lights above the geometry they light, for the reason camera regions are:
+  // they are a statement ABOUT the scene rather than part of it, and a lamp
+  // hidden behind the wall it is mounted on could not be found to be clicked.
+  const lights = visibleLayers.has("scene")
+    ? model.items.filter((i) => i.object === "light")
+    : [];
+  for (const l of lights) {
+    drawLightGizmo(ctx, l, worldLine, selectedIds.has(l.id), paint);
   }
 
   // Notes on top of everything they annotate — they are commentary on the
@@ -958,6 +1122,17 @@ export function drawEditor(
     ctx.fillStyle = CAMERA_REGION_COLOR;
     ctx.fillText(cameraRegionLabel(r), anchor.x + 2, anchor.y - 3);
   }
+  // ...and the lights', for the same reason: what a lamp does is numbers, and a
+  // world-space label would shrink to nothing as the level is zoomed out. Placed
+  // beside the source rather than at the edge of the reach, which is where the
+  // thing being labelled actually is.
+  for (const l of lights) {
+    const anchor = worldToScreen(cam, l.pos);
+    ctx.font = "11px monospace";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = l.color;
+    ctx.fillText(lightLabel(l), anchor.x + 8, anchor.y - 6);
+  }
   for (const n of notes) {
     if (n.note.kind === "text") drawNoteText(ctx, cam, n);
   }
@@ -979,9 +1154,9 @@ export function drawEditor(
   // about marked at the other end of the stalk.
   const groupSel =
     selection.length > 1 &&
-    selection[0]!.group !== null &&
-    selection.every((b) => b.group === selection[0]!.group) &&
-    groupMembers(model.items, selection[0]!.group!).length === selection.length
+    selection[0]!.bodyId !== null &&
+    selection.every((b) => b.bodyId === selection[0]!.bodyId) &&
+    bodyMembers(model.items, selection[0]!.bodyId!).length === selection.length
       ? selection
       : null;
   if (groupSel) {

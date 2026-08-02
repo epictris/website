@@ -20,9 +20,10 @@ import {
   scaleLevelData,
   type CameraRegionData,
   type LevelData,
+  type RawLevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
-import type { SceneDecor } from "./decor";
+import { collectDecor, type SceneDecor } from "./decor";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
 import { PX } from "../engine/units";
 
@@ -36,7 +37,7 @@ export type MoverScript = (body: AnimatableBody2D, time: number) => void;
 // controller: "ball" runs the arena with the ball & chain controller
 // (BallLevel) instead of the grappling character controller.
 export interface LevelSpec {
-  data: LevelData;
+  data: RawLevelData;
   init?: (level: Level) => void;
   controller?: "ball";
 }
@@ -67,7 +68,7 @@ export class Level {
   readonly visualSource: LevelVisualSource;
   onReset: (() => void) | null = null;
 
-  constructor(rawData: LevelData, init?: (level: Level) => void) {
+  constructor(rawData: RawLevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
     this.player = new Player(data.player.radius);
@@ -78,8 +79,8 @@ export class Level {
 
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
-    this.sceneChains = buildSceneChains(data, built.byIndex);
-    this.decor = built.decor;
+    this.sceneChains = buildSceneChains(data, built);
+    this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
     init?.(this);

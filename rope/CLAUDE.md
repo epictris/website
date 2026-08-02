@@ -45,7 +45,7 @@ Level geometry names **its own material and thickness**, per *shape* rather than
 `MATERIALS` is the authorable table - wood, ice, flesh, rubber, brick, stone, glass, aluminium, cast iron, steel, lead, each at its real density - and a shape names one rather than carrying a raw number, because naming the stuff is the decision an author is making and the density is a fact about the material the level should not restate.
 Absent, a shape is 20 cm of oak, which is what every body authored before the fields was, so an old level loads with exactly the masses it always had; an unknown material name loads as that default rather than as a body of no mass.
 
-Per shape and not per body is the whole point, and it is the one property of a compound group that does **not** collapse onto its first member's (`syncGroupProps` leaves it alone): a body's mass, centre of mass and moment of inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for, and its origin lands near the head.
+Per shape and not per body is the whole point, and it is the one property a body does **not** have just one of (`syncBodyProps` leaves it alone): a body's mass, centre of mass and moment of inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for, and its origin lands near the head.
 That also means the build cannot re-derive a compound body's piece masses from its mounted shapes - a `CollisionShape2D` carries no material - so `setCompoundInertia` takes the masses `makePiece` computed, which is what stops the inertia disagreeing with the centre of mass the origin was just placed at.
 `cli contacts` `materials` is the detector: the arithmetic asserted directly (a slab in oak and in stone, twice as thick, a steel disc that is *not* the sphere's 4110 kg, and an oak+lead group whose centre of mass is at 0.44 m rather than the midpoint), because authored state nothing checks is authored state that quietly stops being read - a build ignoring one of these fields produces a level that looks identical, plays differently and violates no invariant.
 
@@ -104,7 +104,7 @@ A mounted shape carries a `localOffset` **and** a `localRotation`, both in the b
 The rotation exists because a compound body is authored as pieces at their own angles (an L of two rects meeting at 45°) and one body rotation cannot express that; the default 0 makes a shape's rotation exactly the body's, which is what every single-shape body has, so it is bit-identical for every level that predates it.
 The body's origin is the pieces' combined **centre of mass** and its mass/inertia are the sum with the parallel-axis term (`buildBodies.ts`), because every rigid-body lever arm in the engine is measured from `globalPosition`.
 That includes the rope's: `Rope.calculateTorqueArm` measures from `body.globalPosition`, never from a shape's, since the primary shape's origin is the body's only while the body has one shape.
-Levels author this with the `group` tag on `LevelBodyData` - see **Compound bodies** under the level editor.
+Levels author this by putting several collision objects in one body - see **Compound bodies** under the level editor.
 
 **Asking a body for "its shape" is almost always a bug**, and the accessor is called **`primaryShape()`** so that reads as the narrow thing it is.
 It answers the *first-mounted* shape, which is the whole body only for the single-shape bodies that were once all of them, and code that reads it as "this body's geometry" goes on believing the rest of the body is not there.
@@ -1077,9 +1077,11 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
   Purely geometric wrongness - a rope through a wall, an anchor floating off a surface - replays HEALTHY (`234f`, `306f`); `cli render`/`cli chainpath` plus eyes are the only detectors.
   `cli scan` covers part of the gap (embedding depth and settled-body drift are geometric), but nothing detects a rope taking a wrong path that is still the right length.
 - **The real renderer has no automatic check.**
-  `cli render3d` covers the arithmetic the 3D scene stands on - the camera correspondence, the extrusion's winding, the `visual` round trips - but nothing at all covers what the scene *looks* like; `cli shot --3d` makes the grab one command and no more gates it than the 2D one does.
+  `cli render3d` covers the arithmetic the 3D scene stands on - the camera correspondence, the extrusion's winding, the scene-object round trips (including the REAL ball level, on counts, which is what catches the editor silently dropping something) - but nothing at all covers what the scene *looks* like; `cli shot --3d` makes the grab one command and no more gates it than the 2D one does.
   Every CLI view draws its own picture of the sim, so a bug in the drawing itself (`1467f`) is invisible to all of them.
   `cli shot` makes the grab and the pixel diff one command each, but nothing runs them for you: a renderer change is evidenced on request, not gated.
+- **The editor autosaves, so anything reading a level while it is open is racing a writer.**
+  A named model writes itself back 750 ms after any edit, which means an open editor tab is a second author of `levels/*.json` - and a page holding a stale model will happily write that model over a newer file. It has already cost real authored content once. Close the editor before touching a level from a script, and treat a level file's mtime moving while you did not write it as exactly what it is.
 - **Perceptual quality has no oracle.**
   Whether a rotation or settle looks convincing is judged only by a human or a render; corpus numbers stayed green through three re-reports of unconvincing rotation.
 - **Recorded bundles cannot confirm fixes.**
@@ -1161,7 +1163,7 @@ The editor gains the same stacked WebGL canvas the game page has, and a three-st
 The editor's free camera drives the same correspondence the game's does (see **3D rendering**), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
 The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
-A **visual** section in the inspector authors `VisualData` per shape (kind, mesh, placement, depth, bevel, texture), and the two kinds that are *not* what the shape looks like - `mesh` and `none` - get a badge on the canvas, since the 2D view cannot otherwise show them at all.
+A **visual** section in the inspector authors a geometry object (kind, mesh, depth, bevel, texture), and the two kinds that are *not* an outline - `mesh` and `none` - get a badge on the canvas, since the 2D view cannot otherwise show them at all.
 
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
@@ -1172,8 +1174,14 @@ The override is baked into the `LevelData` the test level is built from rather t
 
 ### Layers
 
-The model is a flat list of `EdItem`s, each carrying a **`layer`**, listed in draw order: `geometry` (the scene's shapes, decoration included - see **Decoration** below), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
-There is deliberately **no decoration layer**: decoration is a geometry item with its collision unticked, which is one flag on the thing an author already has rather than a second kind of item with its own layer, its own inspector and its own resolve path.
+The model is a flat list of `EdItem`s - one per SCENE OBJECT - each carrying a **`layer`** and a **`bodyId`**, listed in draw order: `scene` (the level itself: every shape, every light, everything in a body), `camera` (the camera-behaviour volumes, see **Camera** below) and `notes` (authoring annotations, see below).
+
+There were four, and geometry and lights were two of them. Merging those is the same correction the format made: a light is not a KIND OF LAYER, it is a scene object like a shape and it belongs to a body exactly as a shape does. Two layers made that impossible to express - a lamp's fitting and its light sat on different layers, so one could be hidden or locked without the other, and putting them in one body was a cross-layer selection. What distinguishes them is `EdItem.object`, which is what the FORMAT distinguishes them by: `collision`, `geometry` or `light`, one item per authored object.
+There is deliberately **no decoration layer** either: decoration is a geometry object in a body with no collision object, and the inspector's `collision` tick converts a shape between the two kinds.
+
+`EdItem.bodyId` is always set - an item is a scene object, and every scene object is in exactly one body, so an item on its own is a body of ONE rather than a body of none. That replaced "grouping", and the difference is not only vocabulary: a group was an optional tag on items that were otherwise free-standing, so every path had to answer "is this grouped?" before it could answer anything else, and "no group" and "a group of one" were two states meaning the same thing. **Ctrl+G** now moves the selected objects into one body and **Ctrl+Shift+G** takes bodies apart again.
+
+Two of a light's fields deliberately live on the item rather than in its own property object, because the item already has them and a second copy could disagree with what is drawn: its **reach** is the item's `shape`, a circle of exactly that radius, so the radius handle authors it; and its **colour** is the item's `color`, which is the one authored-rather-than-fixed furniture colour. The reach is a READOUT and not a target, though - a click on a light has to land on its source burst (`lightPickRadius`), because the pool is as wide as the room the lamp lights and picking by it made a lamp a transparent sheet over everything it lit.
 Every layer that is **visible and unlocked** is hit-testable, so a selection may span layers; the other two states are excluded from picking entirely, and both drop their items from the current selection when they are entered, rather than leaving things selected that a nudge, an inspector field or a Delete would still reach.
 The **active** layer is what new items are drawn onto, and it breaks a tie in the pick (`pickOrder`): a camera region blankets the geometry it governs, so a click that could mean either takes the active layer's item, and the layer switch is what says which.
 Within a layer the pick is by **depth**: two shapes whose outlines overlap are not ambiguous on screen - one of them is in front - so the click takes the one nearest the viewport (`itemDepth`, which is the editor's side of `depthOf` and therefore the same rule both renderers draw by), and authored order breaks only a genuine tie at one depth.
@@ -1190,8 +1198,10 @@ The eye is open when the layer draws and a dimmed closed lid when it does not; t
 A cross-layer selection gets **one panel per layer** rather than a reconciled mixed one, since the layers' properties have nothing in common (a note has no kind, a camera region no fill); the panels come in layer order, under a summary that carries the single Duplicate/Delete row, which is why the per-layer panels drop theirs (`selectionSpansLayers`) — a row inside the "2 regions" panel that also deleted the selected notes would be lying about its scope.
 The inspector scrolls, because that stack can outgrow the viewport.
 A paste keeps each item on the layer it was copied from and reveals (and unlocks) any layer it lands on, rather than dropping items where they can be neither seen nor clicked.
-The draw tools are per-layer too (`LAYER_TOOLS`): `geometry`/`camera` offer `+Rect`/`+Circle`/`+Poly` (`geometry` adds `+Chain`), `notes` offers `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
-A fresh item's appearance comes from `LAYER_STYLE`, one table rather than a branch per layer: `geometry` starts at its authored defaults, `camera` and `notes` at the fixed editor-furniture colours.
+The draw tools are per-layer too (`LAYER_TOOLS`): `scene` offers `+Rect`/`+Circle`/`+Poly`/`+Light`/`+Chain`, `camera` the three shape tools, `notes` `+Text`/`+Arrow`, and switching to a layer that cannot draw the armed tool falls back to Select rather than leaving a dead button lit.
+`+Light` sits beside the shape tools rather than on a layer of its own, because that is what a light is: another kind of scene object, dropped into the same layer and put into a body with the shape it belongs to. It gets one tool and not the three shape ones because a light is a point with a reach, and a `+Rect` there would have to mean "a light shaped like this", which a light is not.
+It is placed with a click at a reach worth having and a drag overrides that - the rule a note is placed under, and for the same reason: dropping a lamp that reaches nowhere until a field is typed into is a lamp that looks broken.
+A fresh item's appearance comes from `newItemStyle`, keyed by what is being DRAWN rather than by the layer alone (the scene layer draws two different things): a shape starts at the body defaults, a light at a warm flame it then authors away from, and camera regions and notes at their fixed editor-furniture colours.
 
 The camera panel carries `off x`/`off y`, `view ×`, `lock x`/`lock y`, `blend s`, `buffer` and `priority`, plus `buf left`/`buf right`/`buf top`/`buf bottom` on a rect region.
 A lock is a checkbox plus a value: ticking it seeds the lock from the region's own centre (the sane start for "frame this room"), unticking shows `follow`; a blank `blend s` or `buffer` means the controller default, and a blank per-side buffer means the `buffer` above it.
@@ -1202,15 +1212,29 @@ An authored `buffer` draws too, as a finely dotted outline of the volume grown b
 One item type rather than a union per layer is deliberate: a camera region is drawn, picked, dragged, resized, rotated, rubber-banded, duplicated and undone exactly like a body, and one type means those paths cannot drift apart per layer.
 The cost is that an item carries the fields of every layer; `toLevelData` splits the list by layer and writes only the fields that layer gives meaning to, so nothing inapplicable reaches disk.
 
+### The body outliner
+
+The panel bottom-left lists every **body** in the level and expands each into the scene objects it is made of.
+
+It exists because a body is the unit the format is written in and the canvas cannot show one. On the canvas a body is a diamond and a dashed hull around shapes that look like separate things, and the objects with no outline at all - a light, the mesh a wall is dressed in - are either a faint ring or nothing whatever. So "which body is this in, and what else is in it" was a question you answered by clicking things and watching what else lit up.
+
+**Every body expands, including one holding a single object.** A body and a scene object are different things - one is a container with a transform, a kind and a fill, the other is a shape or a light inside it - and a row that collapsed the two whenever a body happened to hold one object would teach exactly the confusion the format was reshaped to remove.
+
+Selection follows the same distinction, and it is why a body has its **own selection** (`selectedBodyId`), exclusive with the item and chain selections. Clicking a body row selects THE BODY, and the inspector then shows the body's own properties - transform, kind, fill, friction, force - and no shape, material or look, because a body has none of those. Clicking an object row selects that object alone, which is the only way to reach one with no outline.
+
+On the canvas it is **click the body, then click into it**: a click on a body that is not the one being edited selects the body (and drags all of it), and clicking again once that body is current selects the object under the pointer. Alt still reaches an object directly. A canvas pick also **unfolds that body in the tree and scrolls to it**, so the two views cannot disagree about what is selected.
+
+An object's `x`/`y`/`rot°` in the inspector are **relative to its body**, because that is what the file records - a panel showing world coordinates would be showing a number the level does not contain. Moving the object that IS the body's origin moves the whole body, since its own offset is zero by definition.
+
 ### Decoration
 
-**Collision is optional on every shape** (`LevelBodyData.collision`, the `collision` checkbox at the top of the inspector).
+**Decoration is a body with no collision object in it** - a geometry object and nothing else (the `collision` checkbox in the inspector converts a shape between the two kinds).
 Unticked, a shape is decoration: drawn with its authored colour and opacity, and with **no interaction of any kind** - nothing collides with it, the rope never wraps it, no force reaches through it, and the sim never sees it.
 
-It used to be its own thing entirely - a `backgrounds` list beside the bodies, on the argument that a pass-through `BodyKind` would have to be excluded by every physics path one call site at a time.
+It used to be its own thing entirely - a `backgrounds` list beside the bodies, on the argument that a pass-through `BodyKind` would have to be excluded by every physics path one call site at a time - and then a `collision: false` flag on a body-shaped entry that had to carry, and then ignore, every physics field.
 The argument was right about the danger and wrong about the remedy.
 A shape that is never **built** is excluded from everything by construction: `buildLevelBodies` drops non-colliding entries before they become `Piece`s, so there is no collision shape, no `World` membership, no mass and no vertex the rope can wrap - the exclusion IS the absence, and there is no call site left to remember.
-What that buys is that decoration stops being a second kind of thing with a second set of tools: it is drawn, picked, dragged, rotated, rubber-banded, grouped, copied, undone, given a 3D visual and a texture by exactly the code every wall goes through, and a wall becomes a backdrop (or back) by unticking a box rather than by being re-drawn on another layer.
+What that buys is that decoration stops being a second kind of thing with a second set of tools: it is drawn, picked, dragged, rotated, rubber-banded, put in a body, copied, undone and textured by exactly the code every wall goes through, and a wall becomes a backdrop (or back) by unticking a box rather than by being re-drawn on another layer.
 Levels on disk still carry the retired list; `normalizeLevelData` folds it into non-colliding bodies at the one gate every level passes through, writing out the panel list's own default fill explicitly so decoration cannot quietly turn grey on load, and **appending** rather than prepending because `ChainData` names bodies by index.
 
 Two rules make it read as decoration, and they are load-bearing rather than cosmetic (`render/decor.ts` is the single implementation of both, shared by the editor and both game renderers, so what is authored is what plays):
@@ -1223,15 +1247,15 @@ The editor adds a dashed **teal outline** on top, editor chrome like a handle ra
 In 3D it keeps the full `visual` field, which is how it earns its place: an `offsetZ` of -20 m is a parallax layer, and a `kind: "mesh"` with the collision unticked is **a prop with no collision at all** - scenery, a lantern, a sign - which is the one thing the old layer could not express, since a background panel was always a flat fill.
 Its depth defaults are its own (`DECOR_Z`, `DECOR_DEPTH`): just behind the plane and thin, which is exactly what a flat fill drawn before every body already was, so every migrated panel looks as it did. `thickness` is deliberately not consulted - that is the number a shape's MASS comes from, and decoration has none - and decoration behind the plane casts no shadow across the level in front of it, which was the old panel rule and is kept for the same reason.
 
-Decoration may be welded into a **compound body** with **Ctrl+G**, exactly as two shapes are - it carries the same `group` tag - and the build resolves that tag to the engine body the group's *colliding* members made, storing the placement in that body's frame (`BuiltBodies.decor`, `resolveDecor`).
+Decoration may be put into a body with other objects using **Ctrl+G**, exactly as two collision shapes are - it is the same act, since being in a body is all "grouped" ever meant - and the build resolves its placement into that body's engine frame (`collectDecor`, `BuiltBody.origin`).
 It is then drawn in the body's *interpolated* transform, so decoration on a rigid assembly swings, falls and turns with it instead of staying welded to the spot it was authored at, and decoration tracking the 60 Hz pose while its body draws interpolated cannot visibly detach from it between steps.
 It stays decoration throughout: it adds no shape, no mass and no seam, so `groupCentroid` weighs the group's *colliding* shapes alone and welding a backdrop on cannot move the point the body turns about, and `groupLead` takes the group's kind, fill and friction from the first colliding member.
-`syncGroupProps` leaves a non-colliding member alone for the same reason material and thickness are left alone per shape - a backdrop is authored to sit *behind* the geometry, so painting it the lead shape's colour is exactly wrong.
+`syncBodyProps` leaves a geometry object alone for the same reason material and thickness stay on the collision object - a backdrop is authored to sit *behind* the geometry, so painting it the body's colour is exactly wrong.
 A group with no colliding member at all is not an error: it builds no body and its members stay where they were authored, which is what several panels moved as one has always been.
 Group membership beats layer visibility and lock in the editor's picking: a group is one object, and picking up half of it would silently re-place the other half against it.
 
 `cli contacts` `decor-group` is the detector, and it exists because nothing else here can see any of this: decoration is never simulated, so a build that stopped attaching it violates no invariant, diverges no digest and passes every bundle while leaving the paint behind as the body swings away from it.
-It asserts the five halves together - the tagged shape holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled; the body still carries only the shapes its colliding entries authored and the world holds only those bodies (decoration is not a piece and never reaches the sim); an untagged piece and one tagged into a group with no body are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case; and the retired `backgrounds` list migrates to exactly the same placement, body and fill, which is the half no level in the corpus can fail loudly, since every level on disk still carried panels in the old form.
+It asserts the five halves together - the shape sharing the body holds its place in the body's frame through a 3.3 m fall and a 20° turn *and* actually travelled; the body still carries only the shapes its collision objects authored and the world holds only those bodies (decoration is not a piece and never reaches the sim); a piece in a body of its own and one in a body with no collision object at all are both drawn exactly where they were authored, which is what stops "everything rides something" passing the case; and the retired `backgrounds` list migrates to exactly the same placement, body and fill, which is the half no level in the corpus can fail loudly, since every level on disk still carried panels in the old form.
 
 The inspector drops the whole physics half for a non-colliding shape - no kind, no friction, no material, no thickness, no hook-proof - because none of them mean anything on it, and a panel headed "Body #12" with its fields missing reads as a body that has lost them.
 On disk the same rule holds: `toLevelData` writes no `friction`, `material`, `thickness`, `impermeable` or `force` for decoration, so a migrated panel is byte-stable through a save.
@@ -1280,10 +1304,10 @@ So it is settled once and cached on the shape (`CollisionShape2D.isVertexExposed
 
 A **non-colliding shape** may be a member too (see **Decoration**): it rides the body as decoration rather than becoming a piece of it - no shape, no mass, no seam - which is how a moving object gets a look that is not built out of collision geometry.
 
-On disk it is a `group` tag on each member (`LevelBodyData.group`), and members are matched by tag alone, so the format stays a flat body list.
-A body has one kind, one fill, one friction and one force, so the group takes its **first member's** and the editor keeps the rest in step (`syncGroupProps`) - a file can never disagree with what it draws.
+On disk it is simply several collision objects in one body's `objects` list - there is no tag to agree about, because the containment IS the statement.
+A body has one kind, one fill, one friction and one force, and they live **on the body** rather than being authored per member and collapsed onto the first - which is what the flat form had to do, and what the editor had to keep in step behind it.
 **Material and thickness are the exception** and stay per piece: a body's mass, centre of mass and inertia are sums over its shapes, so a stone head on a wooden shaft is a compound body of two materials and collapsing them onto the lead's would be the editor overwriting what was authored.
-Areas are deliberately not groupable: `World.integrate` tests area overlap against `primaryShape()` rather than `getShapes()`, so a grouped killzone or force area would silently act through its first piece alone, and both the editor and `buildBodies` build one as its own body instead.
+An area may not share a body with anything: `World.integrate` tests area overlap against `primaryShape()` rather than `getShapes()`, so a killzone or force area of several pieces would silently act through its first one alone, and the editor refuses to merge one.
 
 Because a group is one body, it is **selected and moved as one**: clicking any piece selects all of them, a rubber band that touches one piece takes the whole body (`withWholeGroups`), and **Alt+click** reaches past that to a single piece when its own shape needs editing.
 It also **rotates as one**, about the group's area-weighted **centre of mass** - which is where `buildLevelBodies` puts the built body's origin, so the editor's rotation and the body's are the same operation.
@@ -1368,7 +1392,7 @@ Still open there: a hard jam ends 15 s at ~1 m/s rather than at rest, and `energ
 The chain's correction is part rotation and the push-out that answers it is a translation, so the difference is credit nothing takes back - the same fight one derivative up.
 An angular push-out is what that wants, and it belongs with the ball's phase, which has the identical hole.
 
-Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a grouped body's origin is a centre of mass that moves as pieces are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
+Anchors are authored in **world** coordinates (`ChainData`), not in a body's local frame, because a body's ENGINE origin is a centre of mass that moves as collision objects are added and a world point is what the editor has under the pointer; `buildSceneChains` converts each into the body's frame once, at load.
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
 That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.
 The loader applies the same rule rather than trusting the file, so a hand-edited level cannot author the degenerate case either.
@@ -1403,7 +1427,7 @@ into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid`, `anchor` and `force` kinds, the `cameraRegions` and
-`chains` lists, and the per-body `group` tag); `levelData.ts` stays
+`chains` lists, and bodies made of scene objects); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
 through the shared `src/level/buildBodies.ts` (statics, killzones, anchors,
 force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
@@ -1560,31 +1584,101 @@ Authored colours are kept, but as a **tint with a brightness floor**: the levels
 
 Areas stay on the 2D overlay in both modes, and so does the hook-only grate: a killzone's skulls and a force area's arrows are flat marks on a region of *space*, and an anchor's lattice is what says the player passes through it (see **Area glyphs**, and "pass-through geometry must read as pass-through" in `docs/game-design.md`). Anchors do extrude, but a quarter of a metre behind the plane, so the lattice lands on the solid it belongs to.
 
-### The `visual` field
+### Bodies and scene objects
 
-`VisualData` (`levelFormat.ts`) is one optional field on `LevelBodyData`, decoration included (see **Decoration**), and it is the choice between the two ways a shape gets a look:
+A level is a list of **bodies**, and a body is a list of **scene objects**: a collision shape, a piece of 3D geometry, or a light. Everything a body has exactly one of - what it collides as, its fill, its friction, a force area's magnitude - lives on the body; everything it may have several of lives on its objects, placed in the body's own frame.
 
-- `kind: "auto"` (or absent) extrudes the shape's own **primitive** - the authored rect, circle or convex loop - and wears a tileable PBR surface; `depth`, `bevel`, `texture` and `tile` override the defaults.
-- `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by `offsetX/Y/Z`, `rotX/Y/Z` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the visual names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
-- `kind: "none"` draws nothing at all - an invisible wall.
+That shape replaced three separate mechanisms at once, and each of them was working around the same missing thing:
 
-`mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, for a body's collision piece and for a drawn-only shape alike, so decoration and geometry cannot end up with two different ideas of what `VisualData` means.
+- A **compound body** was a `group` STRING TAG on several flat entries, matched by name at load. It is now one body with several collision objects, so nothing has to agree about a tag and the properties a body has one of cannot be authored several times and then quietly collapsed onto the first member's (`syncGroupProps` is gone with it, and the editor's own "grouping" with it: an item carries the body it is IN, always, so "ungrouped" stopped being a state).
+- **Decoration** was `collision: false` on a body-shaped entry - a shape that had to carry, and then ignore, every physics field. It is now a body with a geometry object and no collision object, so there is nothing to ignore.
+- A **light** was its own top-level list with no parent, so it could not ride anything (see **Light and air**).
 
-It is **per authored entry**, like `material`, `thickness` and `impermeable`, and for the same reason: a compound body of a stone head on a wooden shaft is two visuals on one body, each riding its own piece.
-`syncGroupProps` therefore leaves it alone.
-`BuiltBodies.shapeIndexByIndex` is what lets a visual find its piece - `byIndex` alone cannot, since several entries map to one body.
+The body's **authored** frame and its **engine** frame are deliberately different points. The engine origin has to be the collision objects' combined centre of mass - every lever arm in the engine is measured from `globalPosition` - and it moves as pieces are added; the authored one has to stay put, or every offset in a body would shift whenever a piece was added to it. `buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job the retired `resolveDecor` did for decoration and `buildSceneChains` still does for chain anchors.
 
-Every length in it goes through `scaleVisual` both ways.
-Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely.
-A body whose visual section was never touched writes no `visual` key at all, so every level authored before the field stays byte-identical through a save.
+A **geometry object** is the choice between the ways a thing gets a look:
+
+- `kind: "auto"` (or absent) extrudes a **primitive** - its own `shape`, or the body's collision outlines when it has none - and wears a tileable PBR surface; `depth`, `bevel`, `texture` and `tileScale` override the defaults.
+- `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by the object's own `x`/`y`/`rot` plus `z`, `rotX`, `rotY` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the object names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
+- `kind: "none"` draws nothing at all - an invisible wall. It exists because absence already means "the default look".
+
+**The default is the point.** A body with NO geometry object is drawn as its own collision shapes given depth, wearing the surface each one's `material` names - so a level is fully 3D the moment it loads, and a geometry object is a decoration on top of a scene that already works. A geometry object with **no shape** is the same outlines dressed differently, which is how a wall wears brick at twice life size without the file carrying its collision outline a second time where the two could drift apart. Dressings pair with collision objects in authored order, and one dressing covers all of them - which is the two cases that occur: a whole wall wearing one surface, and a compound body whose pieces are each their own prop. An `auto` dressing is drawn at its piece (what it draws IS that piece's outline); a `mesh` one is drawn at its own placement, since it replaces the outline rather than clothing it.
+
+`mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, and `BodyVisual` is now the ONE class for every body - a wall, a swinging crate, a backdrop 20 m behind the plane and a lamp with no fitting are all a body with objects in it. What used to be a second class for decoration is the case where the body built no engine body: its root stands at the authored transform instead of tracking one, and `sync` has nothing to do.
+
+`material` and `thickness` stay **per collision object**, which is the one property a body does not have just one of: its mass, centre of mass and inertia are sums over its pieces, so a stone head on a wooden shaft is exactly what those sums are for.
+
+Every length goes through `scaleObject` both ways.
+Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read), which is why `cli render3d` asserts both round trips: the format's px → m → px, and the editor's `modelFromDisk`/`modelToDisk`, which goes through a different shape entirely. Both are compared over **flattened** placements rather than bytes, because a body's transform and its objects' placements are two halves of one answer and the editor legitimately re-origins a body onto its first object when it saves; a byte comparison would read that as a lost field.
+
+**The retired flat form is still an input**, and permanently: the Godot extractor writes it, so `levelData.ts` arrives that way. `normalizeLevelData` folds every retired form - the flat entries, the `impermeable` kind, the `backgrounds` list and the top-level `lights` list - into this one, inside `scaleLevelData`, which is the one gate a level cannot reach the sim or the editor without passing through. It is **bit-identical by construction**: a migrated body's own origin is (0, 0, 0) and its objects keep the world placements the flat entries carried, so the centre-of-mass arithmetic reads exactly the numbers it read before, and a group's body is emitted where its first member sat so `World.add` stamps the same build index. The whole committed bundle corpus replays byte-for-byte across the change, which is the test that this is a re-shaping and not a rewrite.
 
 ### Light and air
 
-`LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, and background.
+`LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, how much generated environment is let in, and background.
 Nothing in it is a length, so the whole block passes through `scaleLevelData` untouched - and anything added should keep that property, since a fog density in 1/metres is an inverse length and would have to be scaled the *other* way, which is a trap worth designing out rather than commenting on.
 Defaults reproduce the mood the game already had: `#1f2430` is both the sky and the page's letterbox colour, so the frame is not a window cut into a different game.
 
-**There is no fog.** It was here as aerial perspective - saying which layer is further away over the ten metres of depth a level authors into - and what it also did was mute every distant surface at exactly the point where authored textures and the environment started giving those surfaces something worth seeing. Depth is said by parallax, by the sun's shadow and by the environment's own gradient instead. `THREE.FogExp2` is two lines if a level ever wants it back, and it would want to be authored per level rather than defaulted on.
+**All of that is the OUTDOOR answer, and a level may decline it.**
+A directional light is a light at infinity, so it reaches every surface in the frame equally.
+That is exactly what a sky does and exactly wrong underground: it lights a corridor and the rock around it the same, so nothing in the picture has an inside, and a scene meant to be below ground reads as a flat-shaded diagram of one.
+`sunIntensity: 0` removes it outright - no `DirectionalLight` is created, so there is no 2048² shadow map rendered every frame for a sun that contributes nothing, and no sun lobe in the generated sky.
+`envIntensity` near zero takes the ambient with it, and it has to: turning the sun off alone leaves the image-based lighting still washing every surface from every direction, which is the same flatness one step dimmer.
+
+What lights the level instead is a **light object** (`LightObjectData`, `render3d/lights.ts`): a point or spot light with a placement, a colour, an intensity and a **reach**, sitting inside a body like any other scene object.
+Falloff is inverse-square with a hard cut at the reach, and that falloff is doing three jobs a flat renderer needed a hand-authored gradient for:
+
+- **It says where the play space is.** A lamp near the gameplay plane lights the plane; parallax decoration 20 m behind it is far outside the same lamp, so the background darkens on its own and stays readable as background.
+- **It frames.** Geometry in *front* of the plane is out of reach too, so a pillar or wall drawn over the level reads as a black silhouette rather than as a lit object in the way. This is the reference look's left-hand edge falling to black, and it costs nothing to author beyond a `z`.
+- **It is depth.** Two walls at different depths are lit differently by the same lamp, which is the cue the deliberately narrow FOV takes out of the picture.
+
+The consequence for authoring is that **`range` is the field that shapes the look, not `intensity`**.
+Past a couple of metres a brighter lamp is barely a wider pool, and where the light *ends* is where the lit part of the level ends.
+
+**A LIGHT IS IN A BODY, and that is the whole mechanism.**
+A lamp is two things - a fitting the player can see and a light they cannot - and the difficulty has always been keeping them together.
+They were once *two authored objects at the same point*, a shape carrying an emissive colour and an entry in a top-level `lights` list beside it; either alone was a specific kind of wrong (a light with no emissive is a room lit by nothing visible; an emissive with no light is a lamp that does not work) and nothing kept the pair in step, so moving the sconce left its light behind.
+The patch for that was to **derive** a light from the glowing shape, out of seven more fields on the visual describing a light in a second vocabulary - its reach, its cone, its aim, its shadow, its flicker - plus a re-placement pass that measured a prop's bounding box once its GLB arrived, so the source could be pushed clear of the face it shone out of.
+All of it is gone.
+A light object in the same body as the fitting is a **child of the group that body is drawn in**, so it rides that body's pose for nothing at all: a lantern welded into a swinging crate swings with its light, and there is no per-frame transform in the light rig. One authored thing cannot disagree with itself, and this time that is structural rather than derived.
+
+Emission is therefore **appearance and nothing else**: `emissive`, `emissiveIntensity` and `emissiveTexture` on a geometry object say that this thing reads as bright, and three.js has no global illumination, so they reach nothing. What lights the room is the light object beside them. That separation is what makes both halves say what they mean - a deep-orange flame that lights a whole room is a dim emissive and a wide, bright light, which the fused version could only reach by fighting one knob against the other.
+
+Two things follow for authoring, and both are the light's own fields rather than a second spelling of them.
+A **spot** is what a wall fitting wants: it has a real **distance**, so `range` is a hard edge and the light ends where the author says the room does (an area light has no cutoff at all, and a point light's is a sphere in every direction, including back through the wall the lamp is bolted to), and its shadow is **one render** where a point light's is a cube of six - which is why a lamp can occlude at all.
+Its **aim** is authored in the object's own frame, so `rot` turns the beam and the lamp and its light cannot end up pointing different ways; `angle` and `penumbra` shape the cone.
+
+`LIGHT_BUDGET` (16) caps how many lights burn at once and `LIGHT_SHADOW_BUDGET` (4) how many of those occlude, both spent in authored order - by body, then by object within the body. The count budget exists because a light stopped being a scarce top-level thing and became an object anybody can drop into a body: a corridor authored as thirty identical sconces is now an easy thing to write and an expensive thing to draw.
+
+One thing the cone gives away, worth knowing before authoring: a spot lights **what it points at and nothing else**.
+A lamp close to the wall behind it throws a small circle rather than a wash - the pool's radius is the distance to the surface times the tangent of the cone angle - so a lamp meant to light a room wants either a wide angle, some distance from what it is lighting, or an aim along the plane rather than into it.
+
+A trap that has already been paid for once: three seeds a `SpotLight`'s position at `Object3D.DEFAULT_UP` rather than at zero, so a light left as constructed sits **a metre above** the fitting it belongs to. `LightRig` zeroes it explicitly, and `cli render3d`'s aim case is what caught it - the level renders either way, and a light in the wrong place is a level that is simply lit somewhere else.
+
+**Shadows are the asymmetry to budget for.**
+A directional light's shadow is one render of the scene into an orthographic map; a point light's is a **cube**, six.
+A corridor of eight shadow-casting torches is forty-eight shadow passes a frame, which announces itself only as the frame rate quietly halving.
+So `castShadow` is opt-in per light and capped at `LIGHT_SHADOW_BUDGET` (4), spent in authored order; past the cap a light still lights and simply does not occlude, which is a much smaller lie than it sounds, since most of what a torch contributes to a wall behind a crate is bounce that none of this models anyway.
+
+`flicker` is render-only and driven by the **wall clock**, exactly like the force areas' drifting arrows, so it can never reach the fixed-step sim.
+It is *handed* a clock rather than reading one, because `cli shot --3d` pins it (`Scene3D.pinClock`): a screenshot whose lighting depends on when it was taken is evidence of nothing, which is the same reason that command already waits for every asset before it draws.
+
+**Intensity is the one number in the level format that does not convert between the file's pixels and the sim's metres**, and it is worth knowing why rather than discovering it.
+A point light's brightness is candela, which is an irradiance times a distance *squared*, so a field converted with the rest would have to be converted as the **square** of the factor.
+Rather than carry the one field that scales differently from every other, it is defined against the sim's metres and passes through untouched.
+A round trip cannot see the difference between that and scaling it by the factor and back - the same blind spot `tileScale` has - so `cli render3d` asserts it one way, alongside the light list's px → m → px trip and the editor's.
+It also asserts that emission is part of the material **cache key** (`surfaceKey`), because getting that wrong is invisible in every other check: the level renders, every round trip passes, and whichever of two shapes was built first wins, so either every wall of that stone glows or the lamp made of it does not.
+
+Lights are authored on their own **editor layer** (see **Layers**), with `+Light`; the item's circle *is* the reach, so the radius handle authors it and the ring on screen is the volume rather than a drawing of one, and the item's colour *is* the light's colour.
+
+The ring is drawn at the reach **on the gameplay plane**, not at the authored `range`, and that is what gives `z` any feedback at all.
+A light has no geometry, so moving one through z changes nothing on the canvas and nothing in the 2D overlay; the field reads as doing nothing until the 3D view is consulted, and at small values its effect on the lighting is subtle enough to look like nothing there too.
+The authored reach is a **sphere**'s radius and the level is a plane through it, so what the level actually receives is `sqrt(range² - z²)` (`lightPlaneReach`), which shrinks visibly as the lamp is pulled toward the camera and closes entirely once it is further off the plane than it reaches - a reachable authoring mistake that is otherwise silent, and one the label names outright as `MISSES PLANE`.
+The authored `range` stays on screen as a fainter outer ring whenever the two differ, so shrinking one does not hide the other.
+`cli render3d` asserts the arithmetic, since it is the only feedback the field has.
+`levels/ball.json` is the worked example: sun off, environment near zero, small emissive discs throwing their own warm light, and a `LightData` where there is nothing to see - the cool spot, and the fill that has no fitting.
+
+**There is no fog.** It was here as aerial perspective - saying which layer is further away over the ten metres of depth a level authors into - and what it also did was mute every distant surface at exactly the point where authored textures and the environment started giving those surfaces something worth seeing. Depth is said by parallax, by the sun's shadow and by the environment's own gradient instead - and, in a level lit from inside, by the lights' own falloff, which darkens a distant layer more exactly than a fog density ever states it (see **Light and air**). `THREE.FogExp2` is two lines if a level ever wants it back, and it would want to be authored per level rather than defaulted on.
 
 **There is an environment, and it is generated.** A `MeshStandardMaterial` gets its specular response from what it can reflect, so with lights alone there is nothing in the world to reflect but one directional sun: a roughness map has almost no visible effect and a metal - which is nearly all reflection - renders as a dark, dead shape. The chains hanging in the ball arena were exactly that.
 
@@ -1603,11 +1697,20 @@ The GLTF loader is imported dynamically, so it lands in its own chunk and is fet
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
 
 - **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so `material` alone picks a sensible surface and a level needs no visual authoring at all. The maps are value noise → albedo, a height-derived normal map and a roughness map from the same field: one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download.
-- **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic and ambient occlusion**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo in sRGB and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
+- **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic, ambient occlusion and emission**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo and emission in sRGB (they are pictures) and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
 
 That the two share a namespace is the point of the arrangement: replacing a generated surface with an authored one is **adding a manifest entry under the material's own name**, and every level already naming that material picks it up with no edit at all. An unknown name still lands on a generated surface, so a hand-edited level naming a texture this build does not have looks ordinary rather than invisible.
 
 A **scalar map's channel is not a detail**: roughness, metallic and AO are one number per texel, three.js reads them from green, blue and red respectively, and texture libraries commonly ship the number in red alone. Handing three.js the file as it arrives therefore samples an empty channel and reads 0 - and roughness 0 is a mirror, which looks exactly like the texture not being applied rather than like a channel mistake (`factory_brick`'s roughness shipped this way and was invisible until its channel means were measured). `assets:optimize-texture` flattens every scalar map to grey, and `cli assets` measures the shipped files' channel means to say it happened; a normal map is never flattened, its channels being a vector.
+
+**An emission map is where a surface glows**, as against how much - lit windows in a dark wall, cracks in cooling slag, a strip along a machine, none of which a flat emissive colour can say at all.
+It is a picture like the albedo, so it is sRGB and encoded lossy; three.js multiplies it by the material's emissive colour, which means the default black renders the map as *nothing at all* and looks exactly like the map having failed to load.
+So a surface carrying one is given a white emissive unless the geometry object names a tint. What it does NOT do is light the room: emission is appearance, and what lights is a light object in the same body (see **Light and air**).
+
+A geometry object may also **borrow another set's** emission map with `emissiveTexture`, which is how a brick wall gets lit windows without the brick becoming a different surface: the base stays whatever it was and only the emission slot comes from elsewhere, tiled by the capture size of the set it is *in* at this shape's `tileScale`, so life size means the same thing for both pictures.
+Two rules hold it together.
+The emission slot has exactly **one owner** (`dressEmissive`) rather than being written by the general dressing as well - two async paths writing one slot is a race whose winner is whichever image arrived first.
+And an unknown key resolves to **no map** rather than to a fallback surface's, which is the one place the texture resolution rules deliberately differ from `texture`'s: an ordinary wall is a fine answer for a missing surface, and a borrowed glow the author never asked for is not.
 
 Authored surfaces are also **not tinted by the body's fill colour**, and that exception is why the tint exists at all: it carries the flat renderer's "colour IS appearance" onto generated noise, which has no colour of its own to defend. A photographed brick does, and multiplying it by the grey somebody typed to mean "this is a wall" makes it darker, flatter and less saturated - the opposite of what the photograph was added for.
 
@@ -1615,11 +1718,11 @@ An authored set is **drawn in its generated fallback until its images arrive** a
 
 **Tiling is a length in the manifest and a multiple in the level.** The extruder writes its UVs in **metres** (`extrude.ts`), so one repeat covers a world distance rather than a fraction of a face: two walls of the same stuff show the same brick and only the count differs, whether they are 0.4 m or 40 m long.
 
-Which distance is a **fact about the texture**, and lives once, in the manifest: `TextureAsset.tile` is the size the surface was captured over in metres (Poly Haven publishes it per asset - `factory_brick` is 1.5 m). A shape then says only how large it wants it, as a **dimensionless multiple** of that: `VisualData.tileScale`, 1 (and absent) being life size, 2 twice as large. `tileMetres(name, scale)` is the one multiply, and the editor readout, the material and `cli render3d` all take their answer from it.
+Which distance is a **fact about the texture**, and lives once, in the manifest: `TextureAsset.tile` is the size the surface was captured over in metres (Poly Haven publishes it per asset - `factory_brick` is 1.5 m). A geometry object then says only how large it wants it, as a **dimensionless multiple** of that: `tileScale`, 1 (and absent) being life size, 2 twice as large. `tileMetres(name, scale)` is the one multiply, and the editor readout, the material and `cli render3d` all take their answer from it.
 
-Authoring the multiple rather than the metres is what makes `1` mean the same thing everywhere and keeps meaning it after a texture is swapped for one captured at a different size - where an absolute value in every level would silently become wrong. It is also why `tileScale` is one of the two fields `scaleVisual` must NOT touch (with `scale`): a dimensionless number scaled on the way in and back out again is the identity, so the round-trip case cannot see the mistake and `cli render3d` asserts the non-scaling directly instead.
+Authoring the multiple rather than the metres is what makes `1` mean the same thing everywhere and keeps meaning it after a texture is swapped for one captured at a different size - where an absolute value in every level would silently become wrong. It is also why `tileScale` is one of the two fields `scaleObject` must NOT touch (with `scale`): a dimensionless number scaled on the way in and back out again is the identity, so the round-trip case cannot see the mistake and `cli render3d` asserts the non-scaling directly instead.
 
-**Where the pattern starts** is the other half, and it is a length: `VisualData.tileOffsetX` / `tileOffsetY` shift the texture in level coordinates (+x right, +y down), in scene pixels on disk - which on this project's scale is centimetres exactly, 100 px to the metre. It is what lines a course of bricks up with the edge of the wall it is on rather than with the world origin, and it moves the pattern only: the collision geometry, which the shape's own `x`/`y` would have moved, stays put. Measured in world distance rather than in repeats, so it means the same thing at any `tileScale`.
+**Where the pattern starts** is the other half, and it is a length: a geometry object's `tileOffsetX` / `tileOffsetY` shift the texture in level coordinates (+x right, +y down), in scene pixels on disk - which on this project's scale is centimetres exactly, 100 px to the metre. It is what lines a course of bricks up with the edge of the wall it is on rather than with the world origin, and it moves the pattern only: the collision geometry, which the shape's own `x`/`y` would have moved, stays put. Measured in world distance rather than in repeats, so it means the same thing at any `tileScale`.
 
 `applyTiling` is the one place both land on a texture (`uv * repeat + offset`), and the y sign is the extruder's negation into three's frame showing through - u shifts back where v shifts forward.
 
@@ -1660,8 +1763,8 @@ The per-file bar is not a target to author up to - a textured prop in this game'
 **A pipeline, pinned - one per kind.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
 Typically 5-10× off an unoptimised export, looking identical.
 
-`bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
-The `--map` is not bookkeeping, it picks the **encoding**: an albedo is a picture and goes to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
+`bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao|emissive> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
+The `--map` is not bookkeeping, it picks the **encoding**: an albedo and an emission map are pictures and go to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
 1k is the ceiling for the same reason the prop pipeline caps its textures there.
 
 Both format choices are about what has to be **paid at runtime**, and this is the trap the pipeline was written around: an optimisation that lands in a glTF's `extensionsRequired` is not a smaller read, it is a file the loader **refuses** - and the prop falls back to its placeholder box, which is a silent failure by design.
@@ -1673,7 +1776,7 @@ What KTX2 buys is staying compressed in **VRAM**, which is a decision for when t
 Serving the same maps from the deployed game is the ordinary end-product case and is not the same thing; hosting them next to no product is.
 So anything that ships through this pipeline comes from a CC0 source (Poly Haven, ambientCG) - which costs nothing at this art style's quality bar - and a licensed asset stays off the manifest entirely. If one is ever genuinely needed, the shape of the answer is a private store with a build-time secret, not a quieter public one.
 
-**Provenance, in the manifest.** `MeshAsset` and `TextureAsset` both require `source`, `author` and `license`, and `cli assets` fails without them. It is per ENTRY rather than per file, so a texture set is credited once as a surface however many of its five maps it ships.
+**Provenance, in the manifest.** `MeshAsset` and `TextureAsset` both require `source`, `author` and `license`, and `cli assets` fails without them. It is per ENTRY rather than per file, so a texture set is credited once as a surface however many of its six maps it ships.
 The file is opaque and the licence lives on a web page nobody revisits, so a binary with no source is a liability rather than an asset - a year later "can this ship" has no answer but "delete it and remodel".
 `author` is separate from `source` because a licence like **CC-BY obliges you to credit a person**, and a link to the page you found it on is not that.
 
@@ -1685,6 +1788,11 @@ A grab through `cli shot --3d` **waits for every asset** before it draws (`asset
 
 `cli assets` separates five failures because they have five different fixes: a manifest key with no **file** (usually an unfetched clone, but also what a deleted release asset looks like - in game it draws the grey placeholder, which is deliberate and therefore easy to ship without noticing), a **stale** file whose bytes are not the sha256 its entry names, two entries **colliding** on a basename (one flat namespace in the release, so the second would overwrite the first), an **orphan** file no entry names (bytes in the budget nothing can draw), and a **missing licence**.
 It is not part of `cli render3d`, which is deliberately pure - no GPU, no canvas, no level, and no filesystem.
+
+**A prop's own emission needs waking.** glTF's default `emissiveFactor` is black and three.js multiplies the emission map by it, so a prop exported with a beautiful emission map and no factor - which is what a modelling tool will happily write - renders exactly as if the map were not there, and looks like a texture that failed to load rather than like a value that is zero.
+`wakeEmission` lifts that one case (a map, and a factor that is exactly black) to white on load; a prop that authors any emissive colour of its own is left alone, and one with no map is untouched.
+It is the same rule `surfaceFor` applies to this project's own texture sets, which is the point - a prop and a surface that both ship an emission map should not need different knowledge to light up.
+What it does **not** do is light the room: emission is appearance, and what lights is a LIGHT OBJECT in the same body (see **Light and air**), never a prop's materials - reading a light's colour, reach and aim out of a picture is guessing at all three.
 
 The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare and given a `visual.texture` wears that surface (`mountVisual` assigns it over the file's own materials), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import. A prop that names no texture keeps the materials it was exported with.
 

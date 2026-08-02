@@ -25,7 +25,7 @@ import {
 import { deepestEmbedding } from "./query";
 import { BallLevel } from "../level/ballLevel";
 import { PIXELS_PER_METER } from "../engine/units";
-import type { LevelData } from "../level/levelFormat";
+import type { RawLevelData } from "../level/levelFormat";
 
 export type PlaytestAction =
   | "move_left"
@@ -153,7 +153,7 @@ export interface PlaytestScript {
   // it — a ceiling and an anchor, a floor and nothing else — and pinning those
   // scenarios to whatever the authored level happens to look like this month
   // would make them fail for reasons that are not the mechanic's.
-  data?: LevelData;
+  data?: RawLevelData;
   controller?: "grapple" | "ball";
   // Where the avatar starts, in METRES (the rest of the level format is in
   // scene pixels). Overrides the level's own spawn without editing it.
