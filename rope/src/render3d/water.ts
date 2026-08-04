@@ -120,6 +120,47 @@ async function loadFlipbook(tex: THREE.DataArrayTexture): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// The foam mask
+// ---------------------------------------------------------------------------
+
+// A baked tiling mask of where foam sits (see scripts/bake-foam.ts): long torn
+// ribbons stretched along u, histogram shaped for the shader's soft threshold.
+// One texture, image swapped in when the download lands - the placeholder is a
+// 1x1 black canvas, and `foamReady` gates the effect until then.
+const FOAM_URL = "/water/water-foam.webp";
+let foamTexture: THREE.Texture | null = null;
+const foamReady = { value: 0 };
+
+function ensureFoam(): THREE.Texture {
+  if (foamTexture) return foamTexture;
+  const placeholder = new OffscreenCanvas(1, 1);
+  placeholder.getContext("2d")!.fillRect(0, 0, 1, 1);
+  const tex = new THREE.Texture(placeholder as unknown as HTMLCanvasElement);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  foamTexture = tex;
+  void trackPending(
+    new THREE.ImageLoader().loadAsync(FOAM_URL).then((image) => {
+      tex.image = image as unknown as HTMLCanvasElement;
+      // The image is a different SIZE from the placeholder, and WebGL2 texture
+      // storage is immutable once allocated: without a dispose the upload is a
+      // texSubImage2D into the placeholder's 1x1 storage, which fails
+      // (GL_INVALID_VALUE, offset overflows texture dimensions) and leaves the
+      // foam black on any page that rendered before the download landed.
+      // dispose() frees the GL object so the next bind allocates at full size.
+      tex.dispose();
+      tex.needsUpdate = true;
+      foamReady.value = 1;
+    }),
+  ).catch(() => {
+    // Failed load leaves the placeholder: water without foam.
+  });
+  return tex;
+}
+
+// ---------------------------------------------------------------------------
 // Time
 // ---------------------------------------------------------------------------
 
@@ -164,12 +205,19 @@ const DEFAULT_WATER_DEPTH = 1.12;
 const WAVE_SEG = 0.06;
 const SURFACE_ROWS = 10;
 const FRONT_ROWS = 6;
-// The wave train riding the surface: spatial frequencies (rad/m), amplitudes
-// (of WAVE_HEIGHT), and each harmonic's own churn rate (rad/s) so the sum
-// tumbles rather than sliding past as one frozen shape.
+// The wave train riding the surface: spatial frequencies along the flow
+// (rad/m), amplitudes (of WAVE_HEIGHT), and each harmonic's own churn rate
+// (rad/s) so the sum tumbles rather than sliding past as one frozen shape.
 const WAVE_HARMONICS = [1.8, 4.1, 9.7, 17.3];
 const WAVE_AMPLITUDES = [0.45, 0.3, 0.18, 0.09];
 const WAVE_CHURN = [0.7, -1.3, 2.4, -3.8];
+// ...and each harmonic's wavenumber ACROSS the flow (rad/m). Without these the
+// wave sum is a function of x alone, so every crest is a perfect ridge
+// spanning the slab's whole depth - a corrugated sheet. With them the surface
+// is a genuine 2D field: crests wander and break up through depth, and the
+// silhouette stops matching the surface behind it. Kept below ~8 rad/m so the
+// grid's rows (SURFACE_ROWS across the depth) still resolve the finest one.
+const WAVE_CROSS = [0.7, -1.9, 4.2, -7.3];
 const WAVE_HEIGHT = 0.05;
 // How far below the waterline the front sheet keeps waving before it hangs
 // still, and how far down the murk swallows the light.
@@ -187,6 +235,36 @@ const DRIFT_FINE = 0.8;
 // Foam: where the two layers' combined steepness crosses the cut, the surface
 // is torn white. The product of two independent fields is what makes the foam
 // sparse ribbons rather than an even mottle.
+// Surface foam. The baked mask is sampled twice - different tiles, different
+// drift rates - and each sample's UVs are distorted by the flipbook normals,
+// so the foam churns with the water carrying it instead of sliding past as a
+// printed sheet. Where it appears is the PLACEMENT mask: a base coverage dial,
+// denser on wave crests, and collecting against the channel's ends.
+const FOAM_TILE_A = 2.6;
+const FOAM_TILE_B = 1.35;
+const FOAM_DRIFT_A = 0.9;
+const FOAM_DRIFT_B = 1.15;
+const FOAM_DISTORT_A = 0.05;
+const FOAM_DISTORT_B = 0.07;
+// Coverage weights feeding the threshold. PLACEMENT COMES FROM THE VISIBLE
+// SURFACE: the wave crests the silhouette shows and the steep patches of the
+// very flipbook samples the lighting shades by - so foam sits on the agitation
+// the player can see, and the baked mask only textures its interior. A large
+// independent base coverage is what reads as random white patches.
+// The web is PERSISTENT: base coverage keeps it visible everywhere it drifts,
+// and the surface's agitation (crests, ripple steepness) only thickens and
+// brightens the lacing. Gating placement on the fast-changing flipbook is what
+// made foam flash in and out of existence.
+const FOAM_BASE = 0.45;
+const FOAM_CREST_W = 0.3;
+const FOAM_STEEP_W = 0.35;
+const FOAM_BANK_W = 0.5;
+// How far from a channel end the bank foam reaches, in metres.
+const FOAM_BANK_REACH = 0.75;
+const FOAM_CUT = 0.45;
+const FOAM_SOFT = 0.3;
+const FOAM_COLOR = "#dce2d8";
+
 // The murk itself, and the faint self-glow that keeps unlit stretches of
 // channel readable (a trace, not the look - lamps light the water).
 const WATER_DEEP = "#0d120c";
@@ -201,10 +279,10 @@ const ALPHA_FRONT_BED = 0.8;
 
 const fmt = (n: number): string => n.toFixed(4);
 
-function waveSumGlsl(phase: string): string {
+function waveSumGlsl(phase: string, across: string): string {
   return WAVE_HARMONICS.map(
     (k, i) =>
-      `sin(${phase} * ${fmt(k)} + uTime * ${fmt(WAVE_CHURN[i]!)}) * ${fmt(WAVE_AMPLITUDES[i]!)}`,
+      `sin(${phase} * ${fmt(k)} + ${across} * ${fmt(WAVE_CROSS[i]!)} + uTime * ${fmt(WAVE_CHURN[i]!)}) * ${fmt(WAVE_AMPLITUDES[i]!)}`,
   ).join(" + ");
 }
 
@@ -375,6 +453,9 @@ function waterGeometry(
 interface WaterLook {
   color: string | undefined;
   flow: number;
+  // Half-length of the run along its local flow axis, for the bank-foam band
+  // at its two ends.
+  halfX: number;
   // Dimensionless multiple over the ripple tiling, the same meaning `tileScale`
   // has on every other surface: 1 (and absent) is the tuned size, 2 twice as
   // large.
@@ -407,6 +488,11 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
   mat.envMapIntensity = 0.55;
 
   const flip = ensureFlipbook();
+  // Both loads start HERE, at material build, not inside onBeforeCompile:
+  // that hook first runs at first render, which is after `assetsSettled` has
+  // already been awaited - a load kicked off there is invisible to the settle
+  // point and a headless grab photographs foamless water.
+  const foam = ensureFoam();
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = waterTime;
     shader.uniforms.uFlip = { value: flip };
@@ -417,6 +503,10 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
     // constant would hand every body whichever tiling compiled first.
     shader.uniforms.uTileCoarse = { value: TILE_COARSE * look.tileScale };
     shader.uniforms.uTileFine = { value: TILE_FINE * look.tileScale };
+    shader.uniforms.uFoam = { value: foam };
+    shader.uniforms.uFoamReady = foamReady;
+    shader.uniforms.uFoamColor = { value: new THREE.Color(FOAM_COLOR) };
+    shader.uniforms.uHalfX = { value: look.halfX };
     shader.uniforms.uGlowColor = {
       value: new THREE.Color(look.emissive ?? look.color ?? "#3d6b52").multiplyScalar(
         look.emissiveIntensity ?? GLOW_INTENSITY,
@@ -435,6 +525,7 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       varying float vUp;
       varying float vCrest;
       varying float vWaveW;
+      varying float vLocalX;
       varying vec2 vAlongAcross;
       varying vec3 vTanV;
       varying vec3 vBitanV;
@@ -455,6 +546,7 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       vAlpha = aAlpha;
       vUp = aUp;
       vWaveW = aWave;
+      vLocalX = position.x;
       // Phase measured along the body's OWN flow axis in world space, so two
       // stretches of one channel share a continuous surface and a rotated run
       // (the outfall) streams down itself rather than across.
@@ -464,7 +556,10 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // The waves ride the current: their phase translates at the authored flow
       // speed, and each harmonic churns at its own rate on top.
       float wPhase = wAlong - uFlow * uTime;
-      float wWave = ${waveSumGlsl("wPhase")};
+      // The across coordinate is the UNDISPLACED z, shared by both faces: the
+      // front sheet sits at the same z as the top face's front row, so the
+      // waterline seam stays watertight by construction.
+      float wWave = ${waveSumGlsl("wPhase", "wWp.z")};
       wWave = sign(wWave) * pow(abs(wWave), 0.75);
       vCrest = wWave * aWave;
       float wDisp = aWave * ${fmt(WAVE_HEIGHT)} * wWave;
@@ -486,11 +581,16 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       uniform float uTileCoarse;
       uniform float uTileFine;
       uniform vec3 uGlowColor;
+      uniform sampler2D uFoam;
+      uniform float uFoamReady;
+      uniform vec3 uFoamColor;
+      uniform float uHalfX;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
       varying float vCrest;
       varying float vWaveW;
+      varying float vLocalX;
       varying vec2 vAlongAcross;
       varying vec3 vTanV;
       varying vec3 vBitanV;
@@ -514,6 +614,12 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // declared there and every later stage shares them).
       vec3 wMapN = normalize(vec3(wNa.xy + wNb.xy * 0.75, wNa.z * wNb.z));
       wMapN = mix(vec3(0.0, 0.0, 1.0), wMapN, uFlipReady);
+      // THE FOAM BLANKET FLATTENS THE RIPPLES UNDER IT. Without this the
+      // water's specular glints continue straight through the foam and it
+      // reads as extra shine on the same surface; matte, ripple-free patches
+      // against glinting water is what reads as a different substance ON it.
+      wMapN.xy *= 1.0 - 0.85 * wFoam;
+      wMapN = normalize(wMapN);
       normal = normalize(
         vTanV * wMapN.x + vBitanV * wMapN.y + normal * wMapN.z);`,
       )
@@ -535,15 +641,67 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // The murk: darker with depth down the front sheet, so the one face the
       // player mostly sees is a gradient into the water rather than a flat bar.
       diffuseColor.rgb *= mix(${fmt(DEPTH_FADE)}, 1.0, vLit);
-      diffuseColor.a = vAlpha;`,
+      // SURFACE FOAM, from the baked mask - and on the surface only (vUp):
+      // foam floats, and painted down the cross-section it reads as noise on a
+      // wall. Two samples at different tiles and drift rates, each with its
+      // UVs distorted by the flipbook normals so the foam churns with the
+      // water carrying it rather than sliding past as a printed sheet.
+      vec2 wFoamBaseA = vec2(
+        vAlongAcross.x - uFlow * uTime * ${fmt(FOAM_DRIFT_A)}, vAlongAcross.y);
+      vec2 wFoamBaseB = vec2(
+        vAlongAcross.x - uFlow * uTime * ${fmt(FOAM_DRIFT_B)}, vAlongAcross.y);
+      float wFa = texture(uFoam,
+        wFoamBaseA / ${fmt(FOAM_TILE_A)} + wNa.xy * ${fmt(FOAM_DISTORT_A)}).r;
+      float wFb = texture(uFoam,
+        wFoamBaseB / ${fmt(FOAM_TILE_B)} + vec2(0.5, 0.41) + wNb.xy * ${fmt(FOAM_DISTORT_B)}).r;
+      float wFoamTex = max(wFa, wFb * 0.85);
+      // WHERE foam sits - on the water the player can SEE being agitated:
+      // the travelling wave crests (the silhouette's own displacement) and the
+      // steep patches of the exact samples the lighting shades the ripples by,
+      // plus a band collecting against the run's two ends. The baked mask then
+      // only breaks up the interior of those regions; it never places foam on
+      // calm water by itself.
+      float wSteep = length(wNa.xy) * 1.4 + length(wNb.xy) * 0.5;
+      float wAgit = smoothstep(0.3, 0.75, wSteep);
+      float wBank = 1.0 - smoothstep(0.0, ${fmt(FOAM_BANK_REACH)}, uHalfX - abs(vLocalX));
+      float wCover = ${fmt(FOAM_BASE)}
+        + ${fmt(FOAM_CREST_W)} * clamp(vCrest, 0.0, 1.0)
+        + ${fmt(FOAM_STEEP_W)} * wAgit
+        + ${fmt(FOAM_BANK_W)} * wBank;
+      // NEAR-BINARY edge: foam is a material boundary, not a gradient - a soft
+      // shoulder reads as a specular highlight on the same surface. The ragged
+      // silhouette comes from the mask's own detail crossing the hard cut.
+      float wFoamV = wCover * (0.3 + 0.9 * wFoamTex);
+      float wFoam = smoothstep(${fmt(FOAM_CUT)}, ${fmt(FOAM_CUT + 0.09)}, wFoamV)
+        * vUp * uFoamReady;
+      // Matte white with bubbly internal variation from the mask, never flat.
+      vec3 wFoamCol = uFoamColor * (0.72 + 0.28 * wFa);
+      diffuseColor.rgb = mix(diffuseColor.rgb, wFoamCol, wFoam);
+      // A thin darker contact rim just OUTSIDE the foam edge - the blanket
+      // shading the water it sits on - which is what visually lifts it ON TOP
+      // of the surface instead of into it.
+      float wRim = smoothstep(${fmt(FOAM_CUT - 0.12)}, ${fmt(FOAM_CUT)}, wFoamV)
+        - smoothstep(${fmt(FOAM_CUT)}, ${fmt(FOAM_CUT + 0.09)}, wFoamV);
+      diffuseColor.rgb *= 1.0 - 0.3 * wRim * vUp * uFoamReady;
+      // Foam is churned air: not glassy and not transparent.
+      diffuseColor.a = vAlpha + (1.0 - vAlpha) * wFoam;`,
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        `#include <roughnessmap_fragment>
+      roughnessFactor = mix(roughnessFactor, 0.95, wFoam);`,
       )
       .replace(
         "#include <emissivemap_fragment>",
         `#include <emissivemap_fragment>
       // A trace of glow so an unlit stretch is not a black hole, modulated by
-      // the animation's own churn so it shimmers as the water moves.
+      // the animation's own churn so it shimmers as the water moves; the foam
+      // carries a whisper of its own so it stays legible in the dark.
       float wChurn = length(wNa.xy) * length(wNb.xy) * 4.0;
-      totalEmissiveRadiance += uGlowColor * (0.4 + 0.6 * wChurn) * vLit;`,
+      totalEmissiveRadiance += uGlowColor * (0.4 + 0.6 * wChurn) * vLit;
+      // A whisper only: emission is glow, and glow is the "extra shiny"
+      // misread - the matte albedo under the lamps is what carries the foam.
+      totalEmissiveRadiance += uFoamColor * wFoam * 0.07;`,
       );
   };
   // Different flows compile different uniforms but share the program cache key
@@ -594,6 +752,7 @@ export function buildWater(
   const mat = waterMaterial({
     color: visual?.color ?? body.fillColor ?? undefined,
     flow: body.flow,
+    halfX,
     tileScale: visual?.tileScale ?? 1,
     emissive: visual?.emissive,
     emissiveIntensity: visual?.emissiveIntensity,
