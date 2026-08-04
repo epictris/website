@@ -648,6 +648,12 @@ function track<T>(p: Promise<T>): Promise<T> {
   return p;
 }
 
+// For loads that live outside this module (the water flipbook) but must still
+// hold up a headless grab: same set, same settle point.
+export function trackPending<T>(p: Promise<T>): Promise<T> {
+  return track(p);
+}
+
 // Resolves when nothing is in flight. Loops rather than awaiting once, because
 // one load starts another: a prop's own textures are fetched by the GLTF loader
 // while the mesh promise is still settling.

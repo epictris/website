@@ -478,8 +478,9 @@ export function render(
   }
   for (const area of level.world.areas) {
     // Water is the exception to "areas stay 2D": it is a volume with a surface
-    // rather than a mark on a region, so in 3D the scene draws the real thing
-    // and a lattice of streaks over the top would only fight it.
+    // rather than a mark on a region, so in 3D (`overlayOnly`) the scene draws
+    // the real thing and a lattice of streaks over the top would only fight it.
+    if (overlayOnly && area instanceof WaterArea) continue;
     drawBody(ctx, area, alpha);
   }
 
@@ -780,8 +781,9 @@ export function renderBall(
   // solid to extrude.
   for (const area of level.world.areas) {
     // Water is the exception to "areas stay 2D": it is a volume with a surface
-    // rather than a mark on a region, so in 3D the scene draws the real thing
-    // and a lattice of streaks over the top would only fight it.
+    // rather than a mark on a region, so in 3D (`overlayOnly`) the scene draws
+    // the real thing and a lattice of streaks over the top would only fight it.
+    if (overlayOnly && area instanceof WaterArea) continue;
     drawBody(ctx, area, alpha);
   }
 

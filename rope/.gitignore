@@ -6,6 +6,7 @@ playtests/bundles/
 # `bun run assets:fetch` populates both.
 public/meshes/
 public/textures/
+public/water/
 # Raw, un-optimised models as they were downloaded. Local scratch: the shippable
 # copy is what `assets:publish` uploads, and a raw is re-downloadable from the
 # `source` its manifest entry records.

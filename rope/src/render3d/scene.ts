@@ -34,6 +34,7 @@ import { ChainLayer } from "./chainVisual";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
 import { FOV_Y_DEG, placeAt, syncCamera, VIEW_ASPECT } from "./space";
+import { updateWater } from "./water";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
@@ -243,6 +244,7 @@ export class Scene3D {
     this.env.follow(camera);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     this.lights.update(clock);
+    updateWater(clock);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather

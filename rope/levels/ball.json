@@ -576,6 +576,7 @@
         },
         {
           "type": "geometry",
+          "depth": 100,
           "texture": "rock wall"
         }
       ]
@@ -1894,7 +1895,8 @@
           "material": "stone"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "depth": 100
         }
       ]
     },
@@ -2671,7 +2673,7 @@
     {
       "kind": "water",
       "x": 2585,
-      "y": 727,
+      "y": 730.0000000000001,
       "rot": 0,
       "color": "#3d6b52",
       "opacity": 1,
@@ -2684,11 +2686,13 @@
           "shape": {
             "kind": "rect",
             "w": 2430,
-            "h": 46
+            "h": 40
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "y": -3.000000000000025,
+          "depth": 100
         }
       ]
     },
@@ -4079,6 +4083,46 @@
           "z": 150,
           "color": "#ffdab8",
           "range": 300
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1655,
+      "y": 565,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 29.999999999999893,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "y": -3.9999999999999147,
+          "kind": "mesh",
+          "mesh": "bulkhead-lamp",
+          "rotX": 1.5707963267948966,
+          "emissive": "#ffb066",
+          "emissiveIntensity": 1.5
+        },
+        {
+          "type": "light",
+          "y": -20.999999999999996,
+          "kind": "spot",
+          "z": 0,
+          "color": "#ffead6",
+          "intensity": 24,
+          "range": 430,
+          "angle": 89,
+          "penumbra": 0.6,
+          "dirY": 90
         }
       ]
     }

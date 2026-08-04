@@ -42,7 +42,7 @@
 import * as THREE from "three";
 
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
-import { AnchorBody } from "../engine/body";
+import { AnchorBody, WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
 import { DECOR_DEPTH, DECOR_Z } from "../level/decor";
@@ -57,6 +57,7 @@ import {
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
+import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
 import { orientTo, placeAt, threeY } from "./space";
 
@@ -299,6 +300,9 @@ export class BodyVisual {
   // Geometry this visual owns and must free. Materials are shared and cached
   // (see assets.ts), so they are deliberately NOT in here.
   private readonly owned: THREE.BufferGeometry[] = [];
+  // The exception: water's material is built per body (it carries the body's
+  // own flow and colour in its uniforms), so this visual frees it.
+  private readonly ownedMaterials: THREE.Material[] = [];
   // Lights this body's light objects hang on it. Children of the root, so they
   // ride the pose with no per-frame cost; handed back to the rig at dispose,
   // which is what frees the budget slot as well as the objects.
@@ -323,20 +327,19 @@ export class BodyVisual {
     const solidZ = body instanceof AnchorBody ? ANCHOR_Z : 0;
 
     if (data?.kind === "water") {
-      // WATER DRAWS NOTHING IN 3D, and falls to the 2D overlay's flow-streak
-      // glyphs like every other area.
-      //
-      // There was a renderer here that drew it as a real volume - an extruded
-      // slab with a displaced waterline wearing a transmissive material - and it
-      // is gone. It is not skipped here by oversight: routing water through
-      // `buildAuthored` instead would extrude its collision outline and dress it
-      // in an ordinary surface, so the channel would come out as a solid slab of
-      // stone, which is worse than nothing and much harder to notice.
-      //
-      // Whatever replaces it wants its own path again rather than the dressing
-      // machinery, for the reason the old one had: water is the one body whose
-      // look is not a surface worn over an outline, so a geometry object stating
-      // a depth, a texture and a material describes none of it.
+      // Water has its own renderer (see `water.ts`) rather than the dressing
+      // machinery: its look is not a surface worn over an outline, so a
+      // geometry object stating a depth, a texture and a material describes
+      // none of it. Routing it through `buildAuthored` would extrude its
+      // collision outline and dress it in ordinary stone.
+      if (body instanceof WaterArea) {
+        // The render controls live on the body's geometry object (water is a
+        // visual effect); flow and drag stay on the body. Every water body has
+        // one - `withGeometryTwin` gives a body that authors none its twin.
+        const water = buildWater(this.root, body, data.objects.find(isGeometryObject));
+        this.owned.push(...water.geometries);
+        this.ownedMaterials.push(...water.materials);
+      }
     } else if (data) {
       this.buildAuthored(data, solidZ);
     } else if (body) {
@@ -486,6 +489,8 @@ export class BodyVisual {
     this.lights.length = 0;
     for (const g of this.owned) g.dispose();
     this.owned.length = 0;
+    for (const m of this.ownedMaterials) m.dispose();
+    this.ownedMaterials.length = 0;
     this.root.clear();
   }
 }
