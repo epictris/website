@@ -2669,20 +2669,45 @@
       ]
     },
     {
-      "kind": "force",
-      "x": 3030.000000000001,
-      "y": 554.9999999999999,
-      "rot": 1.5707963267948966,
-      "color": "#437a5b",
+      "kind": "water",
+      "x": 2585,
+      "y": 727,
+      "rot": 0,
+      "color": "#3d6b52",
       "opacity": 1,
       "friction": 1,
-      "force": 300,
+      "flow": -280,
+      "drag": 5,
       "objects": [
         {
           "type": "collision",
           "shape": {
             "kind": "rect",
-            "w": 270,
+            "w": 2430,
+            "h": 46
+          }
+        },
+        {
+          "type": "geometry"
+        }
+      ]
+    },
+    {
+      "kind": "water",
+      "x": 3030.000000000001,
+      "y": 562,
+      "rot": 1.5707963267948966,
+      "color": "#437a5b",
+      "opacity": 1,
+      "friction": 1,
+      "flow": 300,
+      "drag": 5,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 284,
             "h": 40
           }
         },
@@ -3590,25 +3615,6 @@
     },
     {
       "kind": "static",
-      "x": 2960,
-      "y": 720,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 3180,
-            "h": 60.00000000000001
-          },
-          "z": -35,
-          "color": "#437a5b",
-          "opacity": 1
-        }
-      ]
-    },
-    {
-      "kind": "static",
       "x": 1835.0000000000005,
       "y": 400,
       "rot": 0,
@@ -3833,19 +3839,6 @@
           "angle": 89,
           "penumbra": 0.6,
           "dirY": 90
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1500.0000000000002,
-      "y": 820.0000000000001,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "light",
-          "color": "#66ffa1",
-          "range": 190
         }
       ]
     },
@@ -4077,8 +4070,8 @@
     },
     {
       "kind": "static",
-      "x": 1410.0000000000002,
-      "y": 490.00000000000006,
+      "x": 1540,
+      "y": 610,
       "rot": 0,
       "objects": [
         {

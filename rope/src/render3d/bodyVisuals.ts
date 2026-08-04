@@ -322,7 +322,22 @@ export class BodyVisual {
     // sits on the gameplay plane unless the level says otherwise.
     const solidZ = body instanceof AnchorBody ? ANCHOR_Z : 0;
 
-    if (data) {
+    if (data?.kind === "water") {
+      // WATER DRAWS NOTHING IN 3D, and falls to the 2D overlay's flow-streak
+      // glyphs like every other area.
+      //
+      // There was a renderer here that drew it as a real volume - an extruded
+      // slab with a displaced waterline wearing a transmissive material - and it
+      // is gone. It is not skipped here by oversight: routing water through
+      // `buildAuthored` instead would extrude its collision outline and dress it
+      // in an ordinary surface, so the channel would come out as a solid slab of
+      // stone, which is worse than nothing and much harder to notice.
+      //
+      // Whatever replaces it wants its own path again rather than the dressing
+      // machinery, for the reason the old one had: water is the one body whose
+      // look is not a surface worn over an outline, so a geometry object stating
+      // a depth, a texture and a material describes none of it.
+    } else if (data) {
       this.buildAuthored(data, solidZ);
     } else if (body) {
       // A body the level never authored: extrude what it collides as, which is

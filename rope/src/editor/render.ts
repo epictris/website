@@ -7,7 +7,7 @@ import { PIXELS_PER_METER, PX } from "../engine/units";
 import { worldToScreen, type Camera } from "../render/camera";
 import { drawTrainingGrid } from "../render/trainingGrid";
 import { fillDecor } from "../render/decor";
-import { fillAnchor, fillForceArea, fillKillZone } from "../render/areaFill";
+import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "../render/areaFill";
 import { hexToRgba } from "../render/color";
 import {
   arrowEnds,
@@ -109,10 +109,13 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   const up = new Vec2(0, -1).rotated(body.rot).normalized();
   if (body.shape.kind === "circle") {
     const r = body.shape.r;
-    // A circle's rotation is invisible — except on a force area, where it aims
-    // the current, so those get the knob too rather than only the rot° field.
+    // A circle's rotation is invisible - except on a force area or a body of
+    // water, where it aims the current, so those get the knob too rather than
+    // only the rot° field.
     const base =
-      body.kind === "force" ? worldToScreen(cam, toWorld(body, new Vec2(0, -r))) : null;
+      body.kind === "force" || body.kind === "water"
+        ? worldToScreen(cam, toWorld(body, new Vec2(0, -r)))
+        : null;
     return {
       ...none,
       body,
@@ -835,6 +838,15 @@ export function drawEditor(
         body.rot,
         outlineOf(body),
         body.force,
+        paint(hexToRgba(body.color, body.opacity)),
+      );
+    } else if (body.kind === "water") {
+      fillWaterArea(
+        ctx,
+        body.pos,
+        body.rot,
+        outlineOf(body),
+        body.flow,
         paint(hexToRgba(body.color, body.opacity)),
       );
     } else if (body.kind === "killzone") {

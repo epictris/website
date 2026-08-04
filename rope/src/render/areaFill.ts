@@ -11,7 +11,13 @@
 // what play shows.
 
 import { Vec2 } from "../engine/vec2";
-import { anchorGlyphs, forceAreaGlyphs, killZoneGlyphs, type PolyPath } from "./areaGlyphs";
+import {
+  anchorGlyphs,
+  forceAreaGlyphs,
+  killZoneGlyphs,
+  waterAreaGlyphs,
+  type PolyPath,
+} from "./areaGlyphs";
 import { outlineHalfExtents, outlineIsRound, pathOutline, type Outline } from "./shapePath";
 
 // The glyph lattice is laid out over the shape's bounding half-extents whatever
@@ -70,6 +76,23 @@ export function fillForceArea(
   const half = outlineHalfExtents(shape);
   fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
     forceAreaGlyphs(p, half, outlineIsRound(shape), magnitude, timeMs),
+  );
+}
+
+// A water area: flow streaks drifting at the current's own speed. A still body
+// of water simply fills, which is what a level authoring zero flow means.
+export function fillWaterArea(
+  ctx: CanvasRenderingContext2D,
+  center: Vec2,
+  rotation: number,
+  shape: Outline,
+  flow: number,
+  fillStyle: string,
+  timeMs: number = performance.now(),
+): void {
+  const half = outlineHalfExtents(shape);
+  fillWithCutouts(ctx, center, rotation, shape, fillStyle, (p) =>
+    waterAreaGlyphs(p, half, outlineIsRound(shape), flow, timeMs),
   );
 }
 

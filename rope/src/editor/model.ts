@@ -265,6 +265,10 @@ export interface EdItem {
   // camera and notes layers keep the default and never write it.
   visual: EdVisual;
   force: number; // force areas only: m/s² along the item's rotation
+  // Water areas only: the current's speed in m/s along the item's rotation, and
+  // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
+  flow: number;
+  drag: number;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -688,6 +692,8 @@ function fromLevelData(data: LevelData): EdModel {
       opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
       friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
       force: b.force ?? 0,
+      flow: b.flow ?? 0,
+      drag: b.drag ?? 0,
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
@@ -776,6 +782,8 @@ function fromLevelData(data: LevelData): EdModel {
     thickness: DEFAULT_THICKNESS,
     visual: defaultVisual(),
     force: 0,
+    flow: 0,
+    drag: 0,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
@@ -825,6 +833,8 @@ function lightItem(
     thickness: DEFAULT_THICKNESS,
     visual: defaultVisual(),
     force: 0,
+    flow: 0,
+    drag: 0,
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
@@ -861,6 +871,8 @@ function lightItem(
     thickness: DEFAULT_THICKNESS,
     visual: defaultVisual(),
     force: 0,
+    flow: 0,
+    drag: 0,
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
@@ -1093,6 +1105,9 @@ export function toLevelData(model: EdModel): LevelData {
             // Only force areas carry a magnitude; omitting it elsewhere keeps
             // saved levels free of a field that would read as meaningful.
             ...(lead.kind === "force" ? { force: lead.force } : {}),
+            // Water carries a current and a rate for the same reason, and only
+            // where it means something.
+            ...(lead.kind === "water" ? { flow: lead.flow, drag: lead.drag } : {}),
           }
         : {}),
       objects,
@@ -1521,6 +1536,8 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.opacity = lead.opacity;
     m.friction = lead.friction;
     m.force = lead.force;
+    m.flow = lead.flow;
+    m.drag = lead.drag;
   }
 }
 
@@ -1607,6 +1624,8 @@ export function emptyModel(): EdModel {
         thickness: DEFAULT_THICKNESS,
         visual: defaultVisual(),
         force: 0,
+        flow: 0,
+        drag: 0,
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),

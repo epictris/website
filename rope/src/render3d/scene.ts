@@ -78,7 +78,8 @@ export class Scene3D {
   // one is a child of the group its body is drawn in, so its lifetime is that
   // body's and there is nothing to key it separately on.
   private readonly lights = new LightRig();
-  // Wall-clock seconds, or a PINNED value. Only the flicker reads it, and only
+  // Wall-clock seconds, or a PINNED value. The flicker and the water read it,
+  // and only
   // a headless grab pins it: a screenshot whose lighting depends on when it was
   // taken is evidence of nothing, which is the same reason the SVG snapshot
   // pins the force areas' arrow phase at 0.
@@ -240,7 +241,8 @@ export class Scene3D {
     }
     syncCamera(this.camera, camera);
     this.env.follow(camera);
-    this.lights.update(this.pinnedClock ?? performance.now() / 1000);
+    const clock = this.pinnedClock ?? performance.now() / 1000;
+    this.lights.update(clock);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather
@@ -254,12 +256,22 @@ export class Scene3D {
     // every backdrop on the first frame.
     this.stamp++;
     let seen = 0;
-    for (const body of level.world.bodies) {
+    const stamp = (body: CollisionObject2D): void => {
       const visual = this.ensureBody(body);
-      if (!visual) continue;
+      if (!visual) return;
       visual.stamp = this.stamp;
       seen++;
-    }
+    };
+    for (const body of level.world.bodies) stamp(body);
+    // AREAS ARE A SECOND LIST. `World` keeps them apart from the physics bodies
+    // (they are regions rather than things that collide), so a sweep that walked
+    // `bodies` alone stamped none of them - and every area visual built in
+    // `setLevel` was therefore swept as stale on the very first frame. Nothing
+    // reported it, because for every area the 2D overlay's glyphs are the whole
+    // of what the player is meant to see and the extrusion behind them is not
+    // load-bearing - but a visual that cannot survive frame one is a bug waiting
+    // for the first area that does need to be drawn.
+    for (const area of level.world.areas) stamp(area);
     if (seen !== this.bodies.size) this.dropStaleBodies();
 
     for (const visual of this.bodies.values()) visual.sync(alpha);

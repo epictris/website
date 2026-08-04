@@ -51,7 +51,7 @@ nothing alike:
   they stop you.
 - **Areas** — regions. Nothing rests on them, the rope passes straight through,
   and they act on whatever is inside (a killzone resets the level, a force area
-  accelerates you).
+  accelerates you, water drags you toward its current).
 - **Hook-only anchors** — scenery. Nothing collides with them and the rope never
   wraps them; only the hook catches on them, so they are something to swing
   from rather than something to land on.
@@ -87,9 +87,18 @@ Consequences for how the glyphs are drawn:
   that skips them is a bug, not a simplification — the snapshot is exactly the
   case this rule exists for.
 
-Current glyphs: `killzone` → skulls, `force` → flow arrows, `anchor` → a grate
-mesh (holes you can see the backdrop through, which is what the body is). A new
-pass-through type must bring its own before it ships.
+Current glyphs: `killzone` → skulls, `force` → flow arrows, `water` → flow
+streaks drifting at the current's own speed, `anchor` → a grate mesh (holes you
+can see the backdrop through, which is what the body is). A new pass-through type
+must bring its own before it ships.
+
+**Water is the one area that is a thing rather than a mark**, and in 3D it is
+drawn as one: a translucent volume with a waterline, deep enough through z that
+the ball is inside it (`render3d/water.ts`), with the 2D overlay standing down
+where the scene draws it. That is not an exception to the rule above but the
+same rule met a different way - nobody has ever mistaken a running channel for a
+floor - and the streak glyphs are still what the 2D renderer, the editor and the
+SVG snapshot stamp, so a still of the level names it there too.
 
 The mirror-image pair is worth stating outright, because the two are one bit
 apart and confusing them would be lethal to a level: an **impermeable** surface

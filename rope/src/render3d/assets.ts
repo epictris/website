@@ -356,11 +356,14 @@ export function textureMaps(asset: TextureAsset): TextureMap[] {
 // Procedural maps
 // ---------------------------------------------------------------------------
 
-const MAP_SIZE = 256;
+// Shared with `water.ts`, which builds its ripple normals from the same value
+// noise: a procedural map is a procedural map, and two generators drifting apart
+// is two surfaces that stop looking like they belong in one level.
+export const MAP_SIZE = 256;
 
 // Value noise on a wrapping lattice, so the map tiles seamlessly. Fractal over a
 // few octaves, which is what stops it reading as a single blur.
-function noiseField(cells: number, octaves = 4): Float32Array {
+export function noiseField(cells: number, octaves = 4): Float32Array {
   const out = new Float32Array(MAP_SIZE * MAP_SIZE);
   let amp = 1;
   let total = 0;
@@ -402,7 +405,7 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function canvasTexture(write: (data: Uint8ClampedArray) => void): THREE.Texture {
+export function canvasTexture(write: (data: Uint8ClampedArray) => void): THREE.Texture {
   const canvas = document.createElement("canvas");
   canvas.width = MAP_SIZE;
   canvas.height = MAP_SIZE;
@@ -876,6 +879,16 @@ export interface MeshAsset {
   // given commit meant; the fetch verifies it and fails hard on a mismatch.
   // `bun run assets:publish` prints it.
   sha256: string;
+  // The `--simplify` ratio this prop was decimated at, absent if its geometry
+  // was left alone (which is the default - see scripts/optimize-asset.ts).
+  //
+  // Recorded because it is the one thing about the shipped bytes that cannot be
+  // recovered from them: a decimated prop and a prop somebody modelled at that
+  // density are the same file, so without this the raw in `assets-src/` cannot
+  // be re-optimised into the same asset, and the next person to run the pipeline
+  // over it silently ships the full-density mesh again. It is also the argument
+  // for the decimation, in the one place somebody weighing it up will look.
+  simplify?: number;
   // Uniform scale from the model's own units to metres. A model authored at a
   // real-world size in metres is 1; anything else states its conversion here
   // rather than every level that uses it restating it in `visual.scale`.
@@ -936,9 +949,25 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // surface. Both are authored in real-world metres - the arch is 3.0 x 1.9 x
   // 1.9 m (`Sewer_Walls_Arch_02`), the wall a 3.0 x 3.0 m panel half a metre
   // thick (`Sewer_Walls_01`) - so neither wears a `scale`.
+  //
+  // BOTH ARE DECIMATED, and this set is why `--simplify` exists at all. It is a
+  // UE5 **Nanite** set, which is to say it is authored for a renderer that
+  // streams its own level of detail: the wall panel shipped 134,041 triangles
+  // and the arch 57,885. This one has no LOD whatever, and the ball arena stands
+  // four of each two metres behind a gameplay plane it views almost
+  // orthographically - 768k triangles of background scenery, 95% of the whole
+  // scene, which the water's transmission pass then draws a SECOND time on every
+  // frame it is visible (see "Water" in CLAUDE.md).
+  //
+  // A tenth of the triangles costs 1.5% RMSE on that frame, because the brick
+  // relief that reads on screen is in the normal map rather than in the mesh -
+  // the geometry was buying self-shadowing at grazing angles and very little
+  // else. Decimating is what a Nanite asset needs to enter a renderer without
+  // one, not a corner cut.
   "sewer-arch": {
     file: "/meshes/sewer-arch.glb",
-    sha256: "fb662f0f000675b1642e1a8833a5023ac70b3b973375c9cd6f0454229da2d75e",
+    sha256: "db582f170e41f459690e3bc9cfb41c44b88b7b47c01ac85ae6a66b59fa92b980",
+    simplify: 0.1, // 57,885 -> 5,787 triangles
     source:
       "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
     author: "MightyPinecone",
@@ -946,7 +975,8 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   },
   "sewer-wall": {
     file: "/meshes/sewer-wall.glb",
-    sha256: "3cb78d536663b1435aa6eccfe453e50c1ff7f2565b2351f629616f551d4d2a24",
+    sha256: "d1e9d88eee42649cf9ac306766363c3e0dcb435350447593c1ce94013f1122d5",
+    simplify: 0.1, // 134,041 -> 13,404 triangles
     source:
       "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
     author: "MightyPinecone",

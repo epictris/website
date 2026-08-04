@@ -17,6 +17,8 @@ import {
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
+  WaterArea,
+  WATER_GRIP_RELEASE,
 } from "./body";
 import {
   circleOverlap,
@@ -518,6 +520,7 @@ export class World {
 
   integrate(dt: number): void {
     this.applyAreaForces(dt);
+    this.applyWaterDrag(dt);
     PhaseTrace.mark("areas", this);
     for (const body of this.bodies) {
       if (body instanceof RigidBody2D && !body.removed) {
@@ -553,6 +556,78 @@ export class World {
           // grounded basis discards the into-surface component, so a current
           // pushes along a floor rather than through it.
           body.velocity = body.velocity.add(dv);
+        }
+      }
+    }
+  }
+
+  // Water areas: a drag toward the current, and how deep each body is in it.
+  //
+  // Runs beside the force areas and before gravity, so a body entering water is
+  // already carried on its first frame inside and its fall is already resisted
+  // on the step it enters. Velocity ONLY, never position: the ball's chain phase
+  // turns the position it realises into velocity (`BallLevel.physicsProcess`),
+  // so a positional nudge here would be laundered into speed the body was never
+  // given - the mechanism behind several of the chain launches in CLAUDE.md.
+  //
+  // A level with no water areas returns before touching a single body, which is
+  // what keeps every recorded replay bit-identical: `submerged` stays 0, and
+  // `surfaceFriction` therefore answers exactly the number the level authored.
+  private applyWaterDrag(dt: number): void {
+    let any = false;
+    for (const area of this.areas) {
+      if (area instanceof WaterArea && !area.removed && area.hasShape() && area.drag > 0) {
+        any = true;
+        break;
+      }
+    }
+    if (!any) return;
+
+    // Submersion is re-derived every frame rather than accumulated, so a body
+    // that leaves the water is dry on the next one with nothing to remember.
+    for (const body of this.bodies) body.submerged = 0;
+
+    for (const area of this.areas) {
+      if (!(area instanceof WaterArea) || area.removed || !area.hasShape()) continue;
+      if (area.drag <= 0) continue;
+      const ashape = area.primaryShape();
+      const flow = area.flowVelocity;
+      for (const body of this.bodies) {
+        if (body.removed || !body.hasShape()) continue;
+        if (!(body instanceof RigidBody2D) && !(body instanceof CharacterBody2D)) continue;
+        // The exact overlap test decides whether the body is in the water at
+        // all - the same one the force areas and the killzone use, and for the
+        // reason written over `shapesOverlap`: a bounding-circle answer makes a
+        // long thin area vastly bigger than it is drawn. The boxes below only
+        // ever say HOW MUCH, and only for a body the exact test has already
+        // placed inside.
+        if (!body.getShapes().some((s) => shapesOverlap(ashape, s))) continue;
+        const frac = submergedFraction(body, ashape);
+        if (frac <= 0) continue;
+        body.submerged = Math.max(body.submerged, frac);
+
+        // The implicit step: v ← (v + k·dt·flow) / (1 + k·dt). `keep` is the
+        // share of the body's own velocity that survives, and 1 − keep the
+        // share of the current it has taken on, so the two always sum to one
+        // and the body can neither overshoot the current nor be reversed by a
+        // single step however large `drag` is.
+        const keep = 1 / (1 + area.drag * frac * dt);
+        if (body instanceof RigidBody2D) {
+          body.linearVelocity = body.linearVelocity.mul(keep).add(flow.mul(1 - keep));
+          // Spin is damped by the same water, at a lower rate: a body tumbling
+          // under water is stopped by it, and the ratio is what keeps that
+          // slower than being carried off. A kinematically steered body is
+          // excluded, because its spin is a control input with no force behind
+          // it - the aim steering overwrites `angularVelocity` outright, so
+          // damping it here would be a number written and immediately lost.
+          if (!body.kinematicRotation) {
+            body.angularVelocity *= 1 / (1 + area.drag * frac * WATER_ANGULAR_DRAG * dt);
+          }
+        } else {
+          // The character's state machine reads this next frame; its grounded
+          // basis discards the into-surface component, so water pushes it along
+          // a floor rather than through it (as a force area does).
+          body.velocity = body.velocity.mul(keep).add(flow.mul(1 - keep));
         }
       }
     }
@@ -1554,6 +1629,17 @@ export class World {
         body.releaseStick();
         return;
       }
+      // Under water there is nothing to grip with. The traction scaling on
+      // `surfaceFriction` is not enough on its own here, because this grip is a
+      // position pin rather than a force: its budget test below compares
+      // gravity's tangential component against the cone, and on level ground
+      // that is zero against anything positive, so it holds at any friction at
+      // all. A ball sitting in a river would then be a ball the river cannot
+      // move - the one place the player actually meets the water.
+      if (body.submerged >= WATER_GRIP_RELEASE) {
+        body.releaseStick();
+        return;
+      }
 
       const otherRigid = other instanceof RigidBody2D ? other : null;
       // The same combination the kinetic path and `applyStaticGrip` use: the
@@ -1777,6 +1863,39 @@ function brakeScale(a: RigidBody2D, bRigid: RigidBody2D | null, dir: Vec2): numb
 //
 // `killzone` runs through the same test (`notifyAreas`), where the same slop
 // would reset the level from outside the volume.
+// How much of a spinning body's spin the water takes, as a fraction of what it
+// takes of its travel. Lower, because a body is carried off by a current long
+// before it is stopped from tumbling in it.
+const WATER_ANGULAR_DRAG = 0.5;
+
+// How much of `body` is inside `area`, 0..1 - the fraction of the body's
+// bounding box the area's bounding box covers, taken at the piece that is
+// deepest in.
+//
+// Boxes rather than the exact intersection ON PURPOSE, and the two questions are
+// kept apart: whether a body is in the water at all is decided by the exact
+// overlap test (see `shapesOverlap`, and the arena-wide current that a bounding
+// answer once produced), and this only says how much of a body already known to
+// be inside it is under. What it buys is the surface: a ball dipping into the
+// channel is dragged by the part of it that is wet and not by all of it, so it
+// slows as it enters instead of stopping the instant it touches.
+function submergedFraction(body: PhysicsBody2D, area: ShapeTransform): number {
+  const ac = area.globalPosition;
+  const ae = shapeExtents(area);
+  let best = 0;
+  for (const s of body.getShapes()) {
+    const bc = s.globalPosition;
+    const be = shapeExtents(s);
+    if (be.x <= 0 || be.y <= 0) continue;
+    const ox = Math.min(bc.x + be.x, ac.x + ae.x) - Math.max(bc.x - be.x, ac.x - ae.x);
+    const oy = Math.min(bc.y + be.y, ac.y + ae.y) - Math.max(bc.y - be.y, ac.y - ae.y);
+    if (ox <= 0 || oy <= 0) continue;
+    const f = Math.min(1, ox / (2 * be.x)) * Math.min(1, oy / (2 * be.y));
+    if (f > best) best = f;
+  }
+  return best;
+}
+
 function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {
   if (a.shape.kind === "circle") {
     return circleOverlap(a.globalPosition, a.shape.radius, b) !== null;

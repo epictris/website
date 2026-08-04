@@ -1201,6 +1201,71 @@ function realLevelRoundTrip(): CaseResult[] {
   ];
 }
 
+// WATER: one authored speed, one authored rate, and a surface to displace.
+//
+// The format half is the units. `flow` is a speed and `drag` is a reciprocal
+// time, so exactly one of them converts between the file's pixels and the sim's
+// metres - and both failure modes are silent. A `drag` scaled by 1/100 is water
+// that takes twenty seconds to notice a body has fallen in it; a `flow` left in
+// pixels is a current a hundred times too fast, which reads as the level
+// exploding rather than as a units bug. Neither is visible in a screenshot of
+// the editor, where both numbers are shown in the units they were typed in.
+//
+// The geometry half is the waterline. A rect has four corners, and a four-corner
+// top edge cannot ripple however good the shader is: the vertices the waves live
+// on have to be built, and `aWave` has to say which of them are the surface.
+function waterFormat(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "water",
+        x: 100,
+        y: 200,
+        rot: 0,
+        color: "#3d6b52",
+        opacity: 1,
+        friction: 1,
+        flow: -150,
+        drag: 5,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 2430, h: 46 } },
+          { type: "geometry" },
+        ],
+      },
+    ],
+  };
+  const a = flattened(scaleLevelData(normalizeLevelData(authored), 1));
+  const b = flattened(
+    scaleLevelData(scaleLevelData(normalizeLevelData(authored), PX), PIXELS_PER_METER),
+  );
+  const inMetres = normalizeLevelData(authored);
+  const scaled = scaleLevelData(inMetres, PX);
+  const units = scaled.bodies[0]!.flow === -1.5 && scaled.bodies[0]!.drag === 5;
+  const saved = modelToDisk(modelFromDisk(authored));
+  const kept = saved.bodies[0]!.flow === -150 && saved.bodies[0]!.drag === 5;
+
+  return [
+    {
+      name: "level format: water round-trips px -> m -> px",
+      pass: a === b,
+      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
+    },
+    {
+      name: "level format: a water current is a speed and its drag is a rate",
+      pass: units,
+      detail: units
+        ? "flow -150 px/s -> -1.5 m/s, drag 5/s unchanged"
+        : `flow ${scaled.bodies[0]!.flow}, drag ${scaled.bodies[0]!.drag}`,
+    },
+    {
+      name: "editor: a water area keeps its current through a save",
+      pass: kept,
+      detail: kept ? "flow and drag survive" : JSON.stringify(saved.bodies[0]),
+    },
+  ];
+}
+
 // NOTHING BUT A GEOMETRY OBJECT DRAWS. A collision shape used to draw itself
 // whenever no one said otherwise, and this is the case that keeps that from
 // creeping back: the old default was invisible by construction (a level that
@@ -1409,5 +1474,6 @@ export function runRender3dCases(): CaseResult[] {
     ...propEmission(),
     ...emissiveMaterials(),
     ...realLevelRoundTrip(),
+    ...waterFormat(),
   ];
 }

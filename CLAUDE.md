@@ -23,3 +23,15 @@ All text must use the same font size and font family — never set `font-size` o
 cd app
 bun run dev
 ```
+
+## Working practices
+
+### Bash timeouts
+
+Never run a Bash command with a timeout greater than 30s unless a long timeout is explicitly necessary and justified.
+
+A high timeout is almost always guessing.
+When the guess is wrong the command does not fail fast - it sits there, and fifteen minutes are spent learning nothing at all.
+A command that would genuinely take minutes is nearly always the wrong command: shrink the workload (fewer frames, fewer iterations, a smaller input) until it fits inside 30s, and measure from that.
+
+If something really does need longer, say why before running it, and prefer `run_in_background` over a long blocking timeout so the session is not held hostage while it runs.

@@ -870,7 +870,8 @@ launches, mover misbehavior):
    path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
    whole scene at frame N (bodies, hook-proof surfaces = dashed steel border, hook-only
    anchors = a grate mesh, areas with
-   their glyphs — skulls for a killzone, flow arrows for a force area — chain
+   their glyphs — skulls for a killzone, flow arrows for a force area, flow
+   streaks for water — chain
    wrap path + wrap-node markers, avatar); convert with `magick f.svg f.png` and
    look.
    `cli chainpath bundle.json --from A --to B` prints the wrap-node polyline per
@@ -1148,7 +1149,7 @@ unselected body).
 There is deliberately no body section above a selected object: that is exactly what made a
 collision shape look like it had a `kind: static` and a friction of its own, when the file has
 never had a place to put them.
-The kind picker covers `static`, `rigid`, `killzone`, `anchor`, `force`; the **hook-proof**
+The kind picker covers `static`, `rigid`, `killzone`, `anchor`, `force`, `water`; the **hook-proof**
 checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
 and it stays on the object panel for that reason (see **Hook-proof surfaces**).
 Body fields read and write the body's **collision lead** - the object its record is written from -
@@ -1159,12 +1160,14 @@ the body's fill is reading the wrong field.
 The one fill that is *not* the body's is an own-shape geometry object's, which `toLevelData`
 writes onto the object; a dressing has no shape of its own to fill and takes the body's.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
-Everything that is a piece of stuff rather than a region of space - every kind but the two areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
+Everything that is a piece of stuff rather than a region of space - every kind but the three areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See **Mass and materials**; both are per shape, so a selection spanning a compound body edits its pieces individually.
 A
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
 knob steers the current, and force-kind circles get that knob too (a plain circle's rotation
-is invisible, so it has none). A toggleable snap (fixed 10 cm, the
+is invisible, so it has none). A `water` area is aimed the same way and carries the two
+numbers a current is made of instead: a signed **flow** speed and the **drag** rate it takes
+hold at (see **Water**). A toggleable snap (fixed 10 cm, the
 backdrop's minor-grid spacing) keeps geometry aligned - **moves** snap the body's top-left
 corner, and **corner-resize** anchors the opposite corner (grows toward the drag). Each body
 **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) keeps 50 model snapshots - one step per
@@ -1817,7 +1820,19 @@ Two things pay for these bytes: the Docker image the VM pulls on every deploy, s
 It is deliberately **not** a quota, so raising it is allowed; do it by deciding those two costs are worth paying, not because the number was in the way.
 The per-file bar is not a target to author up to - a textured prop in this game's style is well under 1 MB, and 8 MB is what catches a raw Blender export with 2k PNGs in it before that becomes the habit.
 
-**A pipeline, pinned - one per kind.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no** mesh simplification - decimation changes the silhouette, the silhouette is what this look is made of, and that decision belongs in the modelling tool where it can be seen rather than in a build step that quietly reshapes what someone authored.
+**A pipeline, pinned - one per kind.** `bun run assets:optimize <in> <out>` runs `gltf-transform` with the settings recorded in `scripts/optimize-asset.ts`: meshopt for geometry, WebP textures capped at 1k, and **no mesh simplification by default** - decimation changes the silhouette, the silhouette is what this look is made of, and that is not something a build step gets to do quietly to every prop that passes through.
+
+What that argument does not justify is refusing decimation outright, which is where this stood until a 3 x 3 m background wall panel turned out to be carrying **134,041 triangles**.
+`sewer-wall` and `sewer-arch` are a UE5 **Nanite** set: authored for a renderer that streams its own level of detail, dropped into one that has none and draws every triangle.
+The ball arena stands four of each two metres behind a gameplay plane it views almost orthographically, so 768k triangles - **95% of the whole scene** - were background scenery, which water's transmission pass then drew a second time on every frame it was visible (see **Water**).
+At a tenth of the triangles the same frame differs by 1.5% RMSE, because the brick relief that reads on screen is in the normal map; the geometry was buying self-shadowing at grazing angles and very little else.
+
+So `--simplify <ratio>` is **opt-in, per asset, and recorded**: `bun run assets:optimize in.glb out.glb --simplify 0.1`, with the ratio stored in that prop's `MESH_ASSETS` entry beside its sha256.
+Recording it is not bookkeeping - it is the one fact about the shipped bytes that cannot be recovered from them, since a decimated prop and a prop modelled at that density are the same file.
+Without it the raw in `assets-src/` cannot be re-optimised into the same asset, and the next person to run the pipeline over it silently ships the full-density mesh again.
+The error budget is fixed at 1% of the mesh's own extent so the ratio is what binds; a tight one quietly stops the decimation early and reports success, which reads as the flag not working.
+
+The rule of thumb the sewer set establishes: **check a prop's triangle count against what it is for.** `gltf-transform inspect` prints it. Background parallax geometry wearing a normal map wants thousands, not hundreds of thousands, and an asset advertising Nanite, ZBrush or photogrammetry is one to measure before believing.
 Typically 5-10× off an unoptimised export, looking identical.
 
 `bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao|emissive> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
@@ -2083,6 +2098,94 @@ legitimate 58 now sits inside that band, so no threshold can separate the two on
 `rope-grew` is what holds the gap, and it is the invariant to sharpen if a runaway ever slips
 through - raising `CHAIN_STALL_FRAMES_TOLERANCE` buys margin by giving up detection, which is
 the wrong trade in the one place a runaway is still cheap to catch.
+
+## Water
+
+A **`water`** body is a `WaterArea` (`engine/body.ts`, an `Area2D` beside `ForceArea`): a
+region that **drags** whatever is inside it toward a current instead of pushing it along one.
+It is the same slot in the frame as a force area - `World.applyWaterDrag` runs from
+`World.integrate` before gravity, on both velocity-carrying body types, using the same exact
+`shapesOverlap` containment test - and a different law:
+
+```
+v <- (v + drag*dt*flow) / (1 + drag*dt)
+```
+
+`flow` is a **speed** along the area's own rotation (px/s on disk, m/s in the sim, signed as
+`force` is) and `drag` is a **rate** in 1/s. Exactly one of them is a length, which is the
+thing to get right in `scaleLevelData`: a `drag` scaled by `PX` is water that takes twenty
+seconds to notice a body is in it, and neither error shows in the editor, where both are
+displayed in the units they were typed in. `cli render3d`'s `water round-trips px -> m -> px`
+is what holds it.
+
+Everything a level wants from running water falls out of that one line. The current is a
+speed things settle **at** rather than an acceleration with no ceiling, so being slowed by
+the water and being pushed by it are the same act - which is what a force area cannot say,
+since a body left in one is flung. It is written **implicitly**, so it is stable at any
+`drag` and any step and can never overshoot; the explicit form of the same equation diverges
+past `drag*dt = 2`, and what that looks like is a body fired backwards out of a river. And
+being an acceleration law it is **mass-independent**: the 52 kg ball and the 70 kg avatar
+drift at the same speed, which is what makes "carried at a constant speed" a property of the
+water rather than of what fell in it.
+
+`submergedFraction` is how much of a body is under, from the boxes, and it scales the drag so
+a ball dipping into the channel is slowed by the part of it that is wet. The two questions
+are kept apart deliberately: **whether** a body is in the water is the exact overlap test
+(see the arena-wide current under **Force areas**), and the boxes only ever say **how much**
+of a body already known to be inside is under.
+
+### Water takes traction with it
+
+A current that only pushes free bodies is a current the player never feels, because the
+player is not free: the ball rests on the floor of the channel, and the steered ball **grips**
+what it rolls on. Two things follow, and both are needed.
+
+`CollisionObject2D.submerged` (0..1, rewritten every frame) scales `surfaceFriction`,
+`RigidBody2D.contactFriction` and `staticFriction` through getters, so every friction term in
+the engine - the Coulomb cone, the stiction pin, the contact damping, the character
+controller's ground and wall friction - reads a submerged body as the greasy thing it is
+(`WATER_TRACTION_LOSS`, a fifth of dry grip when fully under). Both halves are needed and they
+are not the same statement: the friction against a static floor is the moving body's
+coefficient times the floor's, so scaling only what the water is standing **in** leaves a ball
+gripping a dry-authored channel bed as though the water were not there. A level with no water
+has `submerged === 0` everywhere and every getter answers the authored number, untouched.
+
+Scaling is not enough for the **grip** itself, because that is a position pin rather than a
+force: `applySteeringGrip`'s budget test compares gravity's tangential component against the
+cone, and on level ground that is zero against anything positive, so it holds at any friction
+at all - and the grip writes the ball's whole tangential velocity from the roll, so a gripped
+ball in a river is a ball the river cannot move. Past `WATER_GRIP_RELEASE` of submersion the
+grip is released outright and the solver's (now much smaller) Coulomb friction is what is left
+holding the ball. In the sewer channel that is 0.7 m/s of steady drift against a 1.5 m/s
+current: pushed back, but not swept away.
+
+`cli contacts` `water-current` is the case, and its last two lines are the ones worth keeping:
+a ball standing in the water is washed 2 m downstream in three seconds, and **the same ball on
+the same dry floor holds**. The pair is what says the water did it rather than that the grip is
+broken.
+
+### Drawing a body of water
+
+**There is no 3D water renderer. Water is an area like every other one**: nothing is drawn for it in the 3D scene, and the 2D overlay's flow-streak glyphs are the whole of what the player sees, in both renderers.
+
+There was one - an extruded slab with a displaced waterline wearing a transmissive material - and it was removed because it never looked like water.
+`buildWater` and `render3d/water.ts` are gone; `bodyVisuals` skips a `water` body explicitly rather than letting it fall through to `buildAuthored`, which would extrude its collision outline and dress it as ordinary stone.
+A copy of the removed file is kept at `assets-src/water-removed/water.ts` with the two normal maps it used, since none of it was ever committed.
+
+What follows is what that attempt learned, because every one of these was expensive to find and none of it is visible in the code any more.
+
+- **`transmission` draws the whole scene twice.** Any transmissive object in the frustum makes three.js run `renderTransmissionPass`: every opaque object re-rendered into an offscreen target at full resolution with at least 4x MSAA, resolved, then given a full mipmap chain, once per frame before the visible frame is drawn. Measured on the ball arena: **42 draw calls and 788,844 triangles became 85 and 1,579,340**, and the frame cost 2.2x. Nothing can narrow what that pass renders - it takes the camera's whole opaque list - so the only lever is how heavy the scene already is. `renderer.transmissionResolutionScale` shrinks the target and its mipmap chain, though not the draw calls.
+- **Emission is added AFTER transmission resolves**, so water bright enough to see by its own light is water you cannot see *through*. The glow paints over whatever the surface was refracting and the result reads as coloured plastic - which also means paying for that extra scene render to produce something invisible under the paint. A dark sewer wants the lamps to light the water, not the water to light itself.
+- **The player sees the FRONT of the slab, not the surface.** The camera is near enough orthographic that a channel's top face is edge-on and a few pixels tall while its front face fills the screen, so ripple normals - the entire authored surface detail - land on a face no lamp reaches and do nothing. Any approach that puts its detail on the top surface is drawing something the player is not looking at. Raising the camera over the channel (a camera region) is the lever that changes this, and it is level authoring rather than rendering.
+- **A slab's two faces need different texture coordinates.** On the front, y varies and z is constant; on the top, z varies and y is constant. One shared coordinate is constant on whichever face it is not built from, so a threshold on it has nothing to vary against and every patch smears into a vertical bar.
+- **A displaced surface needs a GRID, not an extruded outline.** `ExtrudeGeometry` triangulates its caps by earcut over the perimeter with no interior vertices, so a long thin channel gets triangles running its full depth: measured, **1394 of them spanned more than 0.2 m of a 0.46 m channel**. A displacement with a vertical gradient shears every one of those, and what it draws is smooth hills the size of the channel with the triangulation creasing across them.
+- **A wave sum is sampled by the vertices**, so the vertex spacing has to resolve its highest harmonic or the surface is an alias. At a 0.12 m resample a 29.3 rad/m term got 1.79 samples per wavelength, under Nyquist, and drew a beat the size of the channel. Six samples per wavelength is where a sum of sines stops looking sampled.
+- **A texture must ride the surface it is painted on.** UVs taken from the undisplaced vertex leave the mesh rising and falling through a texture that stays put, and the surface visibly slides against its own markings.
+- **Stretching noise by sampling `x / stretch` breaks tiling**, since it reads only the first `1 / stretch` of the field's width. Every repeat then draws a hard seam. Stretch in the lattice instead.
+- **three ships `Water2`** (the Valve dual-cycle flow-map technique) and it does not transfer: its flow-map machinery solves *spatially varying* flow shearing a texture, which a straight channel at constant speed does not have; it targets a flat horizontal surface seen from above; it brings a reflector and a refractor, two more full scene renders on top of the transmission pass; and it draws no side face, which is most of what this water is.
+
+Water's PHYSICS is untouched by any of this - see **Water** above for the drag law, and **Water takes traction with it** for what being submerged does to grip.
+
 
 ## Positional recovery
 

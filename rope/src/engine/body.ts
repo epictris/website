@@ -136,7 +136,34 @@ export abstract class CollisionObject2D {
   // friction, stiction and contact damping. 1 is the default and multiplies
   // those constants by exactly 1, so untouched levels — and recorded replays,
   // which predate this field — stay bit-identical.
-  surfaceFriction = 1;
+  //
+  // What it ANSWERS is the authored value scaled by how much of the body is in
+  // water, which is why it is a getter: a submerged body is a body whose grip on
+  // whatever it is resting on has largely gone, and every friction term in the
+  // engine already reads this one property. Doing it here rather than at the
+  // half-dozen places that combine two bodies' frictions is what stops the
+  // Coulomb cone, the stiction pin and the contact damping disagreeing about
+  // whether the ball is under water.
+  private authoredFriction = 1;
+
+  get surfaceFriction(): number {
+    // `submerged === 0` is the whole of every level that authors no water, and
+    // the branch is what keeps it EXACTLY the authored number rather than the
+    // authored number times one - which is the same value, but only because
+    // IEEE-754 says so, and the recorded corpus should not have to rely on it.
+    if (this.submerged <= 0) return this.authoredFriction;
+    return this.authoredFriction * (1 - this.submerged * WATER_TRACTION_LOSS);
+  }
+
+  set surfaceFriction(value: number) {
+    this.authoredFriction = value;
+  }
+
+  // How much of this body is inside a `WaterArea`, 0 (dry) .. 1 (under). Written
+  // once per frame by `World.applyWaterDrag` and never read by anything the sim
+  // does not run: it is 0 for every body in a level with no water areas, so the
+  // whole mechanism is invisible to a level that authors none.
+  submerged = 0;
 
   // Reset the body to a single centred shape (Godot's usual one-CollisionShape
   // node). Replaces any auxiliaries.
@@ -410,7 +437,23 @@ export class RigidBody2D extends PhysicsBody2D {
   // motion so sliding becomes rolling. 0 preserves the historical
   // frictionless-rotation behaviour and MUST stay the default: recorded
   // replays predate this field.
-  contactFriction = 0;
+  //
+  // Submerged, a body brings less of it, exactly as `surfaceFriction` scales
+  // what it OFFERS another body (see the note there). Both halves are needed and
+  // they are not the same statement: the friction against a static floor is the
+  // moving body's coefficient times the floor's, so scaling only what the water
+  // is standing in leaves a ball resting on a dry-authored channel bed gripping
+  // it as though the water were not there.
+  private authoredContactFriction = 0;
+
+  get contactFriction(): number {
+    if (this.submerged <= 0) return this.authoredContactFriction;
+    return this.authoredContactFriction * (1 - this.submerged * WATER_TRACTION_LOSS);
+  }
+
+  set contactFriction(value: number) {
+    this.authoredContactFriction = value;
+  }
   // Per-frame velocity damp applied while touching static geometry. The
   // historical 0.98 MUST stay the default (recorded replays); rolling bodies
   // set it lighter and get their resistance from the Coulomb model instead.
@@ -439,8 +482,17 @@ export class RigidBody2D extends PhysicsBody2D {
   // off — it breaks loose only past the breakaway angle atan(μ_s). This is a
   // deliberately non-physical grip (a real point-contact ball rolls down any
   // slope). 0 disables it and MUST stay the default: recorded replays predate
-  // this field.
-  staticFriction = 0;
+  // this field. Scaled by submersion as the kinetic coefficient above is.
+  private authoredStaticFriction = 0;
+
+  get staticFriction(): number {
+    if (this.submerged <= 0) return this.authoredStaticFriction;
+    return this.authoredStaticFriction * (1 - this.submerged * WATER_TRACTION_LOSS);
+  }
+
+  set staticFriction(value: number) {
+    this.authoredStaticFriction = value;
+  }
   // The anchor held while static friction has the body gripped: its
   // along-surface position is pinned here so gravity cannot ratchet it downhill
   // one integration step at a time. Null when not gripped; cleared the first
@@ -566,5 +618,66 @@ export class ForceArea extends Area2D {
 
   get acceleration(): Vec2 {
     return Vec2.RIGHT.rotated(this.globalRotation).mul(this.magnitude);
+  }
+}
+
+// How much grip a body loses when it is fully submerged. A sewer channel is a
+// slimed floor under moving water, and a body resting on one keeps a fifth of
+// the traction it has in the dry.
+//
+// It exists because a current cannot otherwise be felt by anything standing on
+// the bottom. The steered ball GRIPS what it rolls on (`applySteeringGrip`
+// writes its whole tangential velocity from the roll), and a flat floor passes
+// the grip's budget test at any friction at all - so without this a ball sitting
+// in a river is a ball the river does not touch, and the one place the player
+// meets the water is the one place it does nothing.
+export const WATER_TRACTION_LOSS = 0.8;
+
+// Past this much of a body being under, the steered ball's grip is released
+// outright and what is left holding it is the solver's (now much smaller)
+// Coulomb friction. Traction scaling alone is not enough for the grip, which is
+// a position pin rather than a force: on level ground its budget test compares
+// gravity's tangential component (zero) against the cone (anything positive), so
+// it holds however slippery the floor is.
+export const WATER_GRIP_RELEASE = 0.25;
+
+// A body of water: a region that drags whatever is inside it toward a current
+// rather than pushing it along one.
+//
+// The difference from `ForceArea` is the whole reason this is its own kind. A
+// force is an acceleration and has no terminal speed, so a body left in one is
+// flung; water has a speed it carries things AT, and reaching that speed is the
+// same act as being slowed to it. One relative-velocity drag says both:
+//
+//     v ← v + (flow − v) · (1 − 1/(1 + drag·dt))
+//
+// which is the implicit form of `dv/dt = drag · (flow − v)`, so it is stable at
+// any `drag` and any step and cannot overshoot the current the way the explicit
+// form does past `drag·dt = 2`. Being an acceleration law it is also
+// MASS-INDEPENDENT: the 52 kg ball and the 70 kg avatar drift downstream at the
+// same speed, which is what makes "pushed back at a constant speed" a property
+// of the water rather than of what fell in it.
+//
+// Its direction is the area's own rotation, as a force area's is, so the same
+// rotate handle that aims one aims the other; `flow` is signed and negative
+// reverses it.
+export class WaterArea extends Area2D {
+  // Current speed along the area's local +X, in m/s. This is the speed a body
+  // left in the water ends up travelling at, not a force.
+  flow = 0;
+  // How hard the water couples a body to that current, in 1/s: the reciprocal is
+  // the time constant of the approach, so 5 has a body at two thirds of the
+  // current in a fifth of a second. It also sets how much the water resists
+  // motion ACROSS the flow, which is what makes a body dropped in it sink
+  // slowly rather than fall.
+  drag = 0;
+
+  constructor() {
+    super();
+    this.name = "WaterArea";
+  }
+
+  get flowVelocity(): Vec2 {
+    return Vec2.RIGHT.rotated(this.globalRotation).mul(this.flow);
   }
 }

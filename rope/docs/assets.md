@@ -11,6 +11,8 @@ bulkhead lamp:
 - https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb
 pallet:
 - https://sketchfab.com/3d-models/barrels-and-pallet-da8bc019be634479a121aede1a47faab
+sewer walls:
+- https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd
 
 # Tileable Meshes
 red brick wall:

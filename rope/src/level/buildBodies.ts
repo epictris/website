@@ -17,6 +17,7 @@ import {
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
+  WaterArea,
 } from "../engine/body";
 import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
 import { World } from "../engine/world";
@@ -332,6 +333,20 @@ function buildOne(
     applyStyle(fa, b);
     world.add(fa);
     return fa;
+  }
+
+  if (b.kind === "water") {
+    // A body of water: drags whatever is inside it toward its current, aimed by
+    // the area's rotation. Not a wrap body either - the rope passes straight
+    // through it, and a chain hanging in a sewer channel is a chain in water
+    // rather than a chain caught on it.
+    const wa = new WaterArea();
+    mountPieces(wa, pieces);
+    wa.flow = b.flow ?? 0;
+    wa.drag = b.drag ?? 0;
+    applyStyle(wa, b);
+    world.add(wa);
+    return wa;
   }
 
   if (b.kind === "anchor") {

@@ -35,6 +35,11 @@ export interface PolyPath {
 const GLYPH_SPACING = 0.42; // nominal gap between glyph centres
 const ARROW_LEN = 0.26;
 const SKULL_SIZE = 0.3; // total height
+// A water streak, in metres: longer and much thinner than an arrow, which is
+// what makes a stretch of them read as a surface running rather than as a row
+// of marks pointing.
+const STREAK_LEN = 0.38;
+const STREAK_THICKNESS = 0.035;
 // A grate is a mesh rather than a stamp, so it gets its own, much finer pitch:
 // holes on a 10 cm lattice leave 3 cm of bar between them.
 const GRATE_SPACING = 0.1;
@@ -58,7 +63,10 @@ function lattice(
   half: Vec2,
   circle: boolean,
   driftMetres: number,
-  visit: (x: number, y: number) => void,
+  // The cell's own indices come with it, so a glyph can vary from one cell to
+  // the next without deriving an index from the scrolled position - which
+  // re-labels every cell as the lattice drifts and makes the variation crawl.
+  visit: (x: number, y: number, ix: number, iy: number) => void,
   spacing: number = GLYPH_SPACING,
 ): void {
   if (half.x <= 0 || half.y <= 0) return;
@@ -79,7 +87,7 @@ function lattice(
     const y = (iy - (rows - 1) / 2) * step;
     // One extra column at each end, so a glyph enters as another leaves.
     for (let ix = -1; ix <= cols; ix++) {
-      visit((ix - (cols - 1) / 2) * step + phase, y);
+      visit((ix - (cols - 1) / 2) * step + phase, y, ix, iy);
     }
   }
 }
@@ -179,6 +187,45 @@ export function forceAreaGlyphs(
   if (magnitude === 0) return;
   const dir = magnitude < 0 ? -1 : 1;
   lattice(half, circle, arrowDrift(magnitude, timeMs), (x, y) => arrowGlyph(p, x, y, dir));
+}
+
+// One flow streak: a lozenge lying along the current, tapered at both ends so
+// it reads as water moving rather than as a bar. Shorter and blunter than an
+// arrow, because water carries and does not point.
+function streakGlyph(p: PolyPath, cx: number, cy: number, len: number): void {
+  const half = len / 2;
+  const t = STREAK_THICKNESS / 2;
+  p.moveTo(cx - half, cy);
+  p.lineTo(cx - half * 0.45, cy - t);
+  p.lineTo(cx + half * 0.45, cy - t);
+  p.lineTo(cx + half, cy);
+  p.lineTo(cx + half * 0.45, cy + t);
+  p.lineTo(cx - half * 0.45, cy + t);
+  p.closePath();
+}
+
+// Flow streaks for a water area, in its local frame (+X is the current). The
+// lattice drifts at the water's OWN speed rather than at a speed derived from
+// it: this is the one area whose authored number is already a velocity, so the
+// marks travel at exactly the rate a body left in it would.
+//
+// The streaks come in two lengths on alternating rows, which is what stops a
+// regular lattice reading as a printed pattern: real water shows long smooth
+// runs and short broken ones in the same stretch.
+export function waterAreaGlyphs(
+  p: PolyPath,
+  half: Vec2,
+  circle: boolean,
+  flow: number,
+  timeMs: number,
+): void {
+  if (flow === 0) return;
+  const drift = (timeMs / 1000) * Math.max(-MAX_DRIFT, Math.min(MAX_DRIFT, flow));
+  // Long and short alternating along the flow as well as across it, so a
+  // channel one glyph tall - which a shallow one is - still breaks up.
+  lattice(half, circle, drift, (x, y, ix, iy) => {
+    streakGlyph(p, x, y, (ix + iy) % 2 === 0 ? STREAK_LEN : STREAK_LEN * 0.5);
+  });
 }
 
 // Skulls for a killzone, in its local frame. Static: a killzone does not flow,

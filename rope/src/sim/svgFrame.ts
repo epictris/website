@@ -8,6 +8,7 @@ import { BallLevel } from "../level/ballLevel";
 import {
   AnchorBody,
   ForceArea,
+  WaterArea,
   StaticBody2D,
   RigidBody2D,
 } from "../engine/body";
@@ -18,6 +19,7 @@ import { Vec2 } from "../engine/vec2";
 import {
   anchorGlyphs,
   forceAreaGlyphs,
+  waterAreaGlyphs,
   killZoneGlyphs,
   type PolyPath,
 } from "../render/areaGlyphs";
@@ -202,7 +204,7 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     }
   }
 
-  // Areas (killzones, force areas). Drawn after geometry so their glyphs read
+  // Areas (killzones, force areas, water). Drawn after geometry so their glyphs read
   // over anything they overlap, and with the same even-odd cutout the canvas
   // uses, so a snapshot and the running game agree.
   const areaEls: string[] = [];
@@ -222,17 +224,21 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     growXY(box, cx, cy, ext.x, ext.y);
 
     const glyphs = new SvgPolyPath();
+    // Pin the phase on anything that drifts: a snapshot of a frame must not
+    // depend on the wall clock.
     if (area instanceof ForceArea) {
-      // Pin the phase: a snapshot of a frame must not depend on the wall clock.
       forceAreaGlyphs(glyphs, half, circle, area.magnitude, 0);
+    } else if (area instanceof WaterArea) {
+      waterAreaGlyphs(glyphs, half, circle, area.flow, 0);
     } else {
       killZoneGlyphs(glyphs, half, circle);
     }
 
     const outline = outlinePath(shape);
     const isForce = area instanceof ForceArea;
-    const fill = area.fillColor ?? (isForce ? "#65bddb" : "#dc3c50");
-    const op = area.fillColor ? area.fillOpacity : isForce ? 0.2 : 0.4;
+    const isWater = area instanceof WaterArea;
+    const fill = area.fillColor ?? (isForce ? "#65bddb" : isWater ? "#3a5e4a" : "#dc3c50");
+    const op = area.fillColor ? area.fillOpacity : isForce ? 0.2 : isWater ? 0.55 : 0.4;
     const deg = (s.globalRotation * 180) / Math.PI;
     const rot = deg !== 0 ? ` rotate(${deg.toFixed(2)})` : "";
     const clipId = `area${area.id}`;

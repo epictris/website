@@ -638,9 +638,17 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
   // handed. Written next to the corpus and removed afterwards.
   const served = join(ROPE_DIR, "playtests", "_shot.json");
   writeFileSync(served, JSON.stringify(loadRecording(bundle)));
+  // Its OWN process group, so the kill below takes the whole tree. `bunx vite`
+  // is a wrapper around the real server, and killing the wrapper alone leaves
+  // the server holding the port - after which the next `cli shot` fails to bind
+  // (`--strictPort`), finds the OLD server answering, and screenshots the code
+  // as it was BEFORE the change being checked. Three grabs of an edited water
+  // material came back pixel-identical that way, which is the most misleading
+  // possible answer to "did that look any different".
   const vite = spawn("bunx", ["vite", "--port", String(port), "--strictPort", "--host", "127.0.0.1"], {
     cwd: ROPE_DIR,
     stdio: "ignore",
+    detached: true,
   });
   try {
     waitForServer(port);
@@ -668,7 +676,12 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
     if (r.status !== 0) fail(`chromium failed: ${(r.stderr || "").trim()}`, 1);
     console.log(`[shot] ${first} @f${frame} → ${out}`);
   } finally {
-    vite.kill("SIGTERM");
+    // Negative pid: the group, not just the wrapper (see the spawn above).
+    try {
+      process.kill(-vite.pid!, "SIGTERM");
+    } catch {
+      vite.kill("SIGTERM");
+    }
     rmSync(served, { force: true });
   }
   process.exit(0);

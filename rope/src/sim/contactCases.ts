@@ -18,6 +18,7 @@ import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
 import {
   ForceArea,
+  WaterArea,
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
@@ -1148,6 +1149,117 @@ function caseAreaReach(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// water-current - water carries what is in it at ITS OWN speed, and lets a body
+// standing in it be carried.
+//
+// The whole of a `WaterArea` is one relative-velocity drag, and everything a
+// level author expects of running water is a property of that one line:
+//
+// - a body left in it ends up travelling at the current's speed, and NOT past
+//   it. That is the difference from a force area, which is an acceleration and
+//   has no speed it settles at;
+// - a heavy body and a light one settle at the SAME speed, because the law is an
+//   acceleration and carries no mass;
+// - it is stable at any `drag`. The explicit form of the same equation diverges
+//   past `drag·dt = 2`, and what that looks like is a body flung backwards out of
+//   a river, so the case runs a rate an author could plausibly type;
+// - and the one that is not arithmetic: a ball RESTING ON THE FLOOR of the
+//   channel is carried off it. The steered ball grips what it rolls on and the
+//   grip writes its whole tangential velocity, so without the submerged release
+//   in `applySteeringGrip` the water would move everything in the level except
+//   the player standing in it. The dry twin is measured beside it, because what
+//   is being asserted is that the WATER did it and not that the grip is broken.
+// ---------------------------------------------------------------------------
+function caseWaterCurrent(): ContactResult {
+  const FLOW = -1.5;
+  const pool = (world: World, drag: number, half: Vec2, at: Vec2): WaterArea => {
+    const w = new WaterArea();
+    w.globalPosition = at;
+    w.setShape(rectShape(half.x * 2, half.y * 2));
+    w.flow = FLOW;
+    w.drag = drag;
+    world.add(w);
+    return w;
+  };
+
+  // Drift with gravity off: what is asserted here is the water's own answer, and
+  // a body falling out of the volume mid-case would confuse the two.
+  const carried = (drag: number, massScale: number): RigidBody2D => {
+    const world = new World();
+    pool(world, drag, new Vec2(20, 4), Vec2.ZERO);
+    const b = new RigidBody2D();
+    b.globalPosition = new Vec2(0, 0);
+    b.setShape(circleShape(0.25));
+    b.mass = ShapeGeometry.computeMass(b.primaryShape()) * massScale;
+    b.gravityScale = 0;
+    world.add(b);
+    for (let f = 0; f < 240; f++) world.integrate(DT);
+    return b;
+  };
+
+  const light = carried(5, 1);
+  const heavy = carried(5, 400);
+  // 20/s at a 60 Hz step is drag·dt = 0.33; the explicit form of this drag is
+  // fine there and diverges at 120/s, which is why the stability probe below
+  // runs that instead.
+  const stiff = carried(120, 1);
+
+  const atFlow = (b: RigidBody2D): boolean => Math.abs(b.linearVelocity.x - FLOW) < 0.01;
+  const settled = atFlow(light);
+  const massless = Math.abs(light.linearVelocity.x - heavy.linearVelocity.x) < 1e-9;
+  // Never past the current, at any rate: the implicit step is a blend between
+  // the body's velocity and the water's, so the answer is bounded by the two.
+  const stable = stiff.linearVelocity.x >= FLOW - 1e-9 && atFlow(stiff);
+
+  // A ball standing on the channel floor, in the water and out of it. Everything
+  // but the water is identical: the same floor, the same ball, the same steering
+  // asking for no spin at all.
+  const standing = (wet: boolean): number => {
+    const world = new World();
+    const floor = new StaticBody2D();
+    floor.globalPosition = new Vec2(0, 1);
+    floor.setShape(rectShape(40, 1));
+    world.add(floor);
+    if (wet) pool(world, 5, new Vec2(20, 0.3), new Vec2(0, 0.2));
+    const ball = new RigidBody2D();
+    ball.globalPosition = new Vec2(0, 0.25);
+    ball.setShape(circleShape(0.25));
+    ball.mass = ShapeGeometry.computeMass(ball.primaryShape());
+    ball.inertia = ShapeGeometry.computeMomentOfInertia(ball.primaryShape(), ball.mass);
+    ball.contactFriction = 1.8;
+    ball.staticFriction = 0.58;
+    ball.contactDamp = 0.99;
+    ball.kinematicRotation = true;
+    world.add(ball);
+    const startX = ball.globalPosition.x;
+    for (let f = 0; f < 180; f++) {
+      ball.kinematicRotation = true;
+      ball.angularVelocity = 0;
+      world.integrate(DT);
+    }
+    return ball.globalPosition.x - startX;
+  };
+
+  const wet = standing(true);
+  const dry = standing(false);
+  // Three seconds of a 1.5 m/s current on a ball that cannot roll (the steering
+  // is holding its spin at zero, so what carries it is the water against the
+  // floor's friction): a metre is most of what the current is worth and well
+  // clear of anything the dry twin does.
+  const washed = wet < -1;
+  const held = Math.abs(dry) < 0.01;
+
+  const passed = settled && massless && stable && washed && held;
+  return ok("water-current - water carries what is in it, at its own speed", passed, [
+    `${settled ? "ok  " : "BAD "} a body left in it settles at the current: vx ${light.linearVelocity.x.toFixed(4)} m/s (want ${FLOW})`,
+    `${massless ? "ok  " : "BAD "} 400x the mass, same speed: vx ${heavy.linearVelocity.x.toFixed(4)} m/s`,
+    `${stable ? "ok  " : "BAD "} drag 120/s (drag*dt = 2) does not overshoot: vx ${stiff.linearVelocity.x.toFixed(4)} m/s`,
+    `${washed ? "ok  " : "BAD "} a ball standing in it is washed downstream: ${(wet * 100).toFixed(1)}cm in 3s (want <= -100cm)`,
+    `${held ? "ok  " : "BAD "} the same ball on the same dry floor holds: ${(dry * 100).toFixed(2)}cm`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // chain-order — a symmetrical rig hangs symmetrically, whichever order its
 // chains are written in.
 //
@@ -1869,6 +1981,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseHookSeam());
   results.push(caseDecorGroup());
   results.push(caseAreaReach());
+  results.push(caseWaterCurrent());
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());

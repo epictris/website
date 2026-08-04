@@ -10,6 +10,7 @@ import {
   ForceArea,
   RigidBody2D,
   StaticBody2D,
+  WaterArea,
   type CollisionObject2D,
   type CollisionShape2D,
 } from "../engine/body";
@@ -29,7 +30,7 @@ import type { CameraRegionData } from "../level/levelFormat";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
-import { fillAnchor, fillForceArea, fillKillZone } from "./areaFill";
+import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
 import {
   outlineHalfExtents,
   outlineOfShape,
@@ -62,6 +63,9 @@ const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
+// Water with no authored colour: sewer green, dark and murky rather than the
+// force area's clean blue, and opaque enough that what is under it is dimmed.
+const WATER_FILL = "rgba(58,94,74,0.55)";
 // Ball & chain aim reticle: the OS cursor is hidden there, so this white ring is
 // the cursor. World-sized (not fixed pixels) so it keeps its size relative to
 // the ball and its reach at any zoom. The thin dark edge keeps it legible
@@ -299,6 +303,25 @@ function drawGeometryShape(
     return;
   }
 
+  // Water: authored fill (or a murky green default) with the flow streaks
+  // punched out of it, in BOTH renderers.
+  //
+  // There was a 3D water renderer that drew it as a real volume, and while it
+  // existed the overlay stood down for water alone. It is gone, so water is back
+  // to being an area like every other one - if it is ever drawn as a volume
+  // again, this is the other half of that change.
+  if (body instanceof WaterArea) {
+    fillWaterArea(
+      ctx,
+      t.globalPosition,
+      t.globalRotation,
+      outlineOfShape(t.shape),
+      body.flow,
+      body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : WATER_FILL,
+    );
+    return;
+  }
+
   // Killzones: authored fill (or translucent red) stamped with skulls, so a
   // lethal region is never mistakable for standable geometry. Before the
   // generic authored branch so a killzone given a colour still gets its mark.
@@ -453,7 +476,12 @@ export function render(
       drawBody(ctx, body, alpha);
     }
   }
-  for (const area of level.world.areas) drawBody(ctx, area, alpha);
+  for (const area of level.world.areas) {
+    // Water is the exception to "areas stay 2D": it is a volume with a surface
+    // rather than a mark on a region, so in 3D the scene draws the real thing
+    // and a lattice of streaks over the top would only fight it.
+    drawBody(ctx, area, alpha);
+  }
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -750,7 +778,12 @@ export function renderBall(
   // Areas stay 2D in both modes: a killzone's skulls and a force area's flow
   // arrows are flat marks on a region of space, and a region of space has no
   // solid to extrude.
-  for (const area of level.world.areas) drawBody(ctx, area, alpha);
+  for (const area of level.world.areas) {
+    // Water is the exception to "areas stay 2D": it is a volume with a surface
+    // rather than a mark on a region, so in 3D the scene draws the real thing
+    // and a lattice of streaks over the top would only fight it.
+    drawBody(ctx, area, alpha);
+  }
 
   // Metal chain behind the ball. Links are laid at a fixed length from the
   // ANCHOR toward the ball, then on through the loop into the ball CENTRE

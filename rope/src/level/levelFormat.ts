@@ -49,6 +49,12 @@
 // - rigid:       a dynamic RigidBody2D (gravity + collisions), authored in place.
 // - force:       an Area2D that accelerates every body inside it along the
 //                area's own rotation (a river current, wind, an updraft).
+// - water:       an Area2D that DRAGS every body inside it toward a current
+//                running along the area's own rotation (a sewer channel, a
+//                sluice, a falling stream). A force area pushes and has no
+//                terminal speed; water has a speed it carries things at, and
+//                being slowed to it and being pushed by it are the same act.
+//                See `WaterArea`.
 //
 // Hook-proof (`impermeable`) is deliberately NOT among them - it is a per-object
 // flag below. It was a kind while it could only ever be static scene geometry,
@@ -61,7 +67,7 @@
 // consulted. It is still written (and defaults to `static`), because a shape may
 // be switched back and forth while a level is authored and silently losing the
 // kind on the way through would be a field that forgets.
-export type BodyKind = "static" | "anchor" | "killzone" | "rigid" | "force";
+export type BodyKind = "static" | "anchor" | "killzone" | "rigid" | "force" | "water";
 
 // The retired kind, as levels on disk (and the generated `levelData.ts`) still
 // carry it. `normalizeLevelData` folds it into `static` + `impermeable: true`
@@ -93,6 +99,16 @@ export const DEFAULT_SURFACE_FRICTION = 1;
 // Default strength of a new force area, in scene pixels/s² (→ 3 m/s², roughly a
 // third of gravity: a current that carries but does not fling).
 export const DEFAULT_FORCE_MAGNITUDE = 300;
+
+// A new water area's current, in scene pixels/s (→ 2 m/s: a brisk walk, fast
+// enough to be fought and slow enough to be swum against), and how hard it takes
+// hold, in 1/s (a fifth of a second to two thirds of the current).
+//
+// The pair is deliberately one speed and one rate rather than two forces: the
+// speed is the thing an author is choosing (how fast the water runs) and the
+// rate only says how quickly it wins.
+export const DEFAULT_WATER_FLOW = 200;
+export const DEFAULT_WATER_DRAG = 5;
 
 // ---------------------------------------------------------------------------
 // Scene objects
@@ -507,6 +523,18 @@ export interface LevelBodyData {
   // scaled), applied along the body's own rotation — rot 0 flows right, so
   // rotating the area steers the current. Negative reverses it.
   force?: number;
+  // Water areas only. `flow` is the current's SPEED in pixels/s (metres/s once
+  // scaled) along the body's own rotation, aimed exactly as `force` is and
+  // signed the same way; `drag` is how hard the water couples a body to it, in
+  // 1/s.
+  //
+  // A speed and a rate, and only one of them is a length: `flow` converts
+  // between the file's pixels and the sim's metres, `drag` is a reciprocal time
+  // and passes through `scaleLevelData` untouched. Getting that wrong is the
+  // silent kind of wrong - a rate scaled by 1/100 is water that takes twenty
+  // seconds to notice a body is in it.
+  flow?: number;
+  drag?: number;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -828,6 +856,8 @@ export interface LegacyBodyData {
   material?: string;
   thickness?: number;
   force?: number;
+  flow?: number;
+  drag?: number;
   group?: string;
   visual?: LegacyVisualData;
 }
@@ -1104,6 +1134,8 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
             ...(lead.opacity !== undefined ? { opacity: lead.opacity } : {}),
             ...(lead.friction !== undefined ? { friction: lead.friction } : {}),
             ...(lead.force !== undefined ? { force: lead.force } : {}),
+            ...(lead.flow !== undefined ? { flow: lead.flow } : {}),
+            ...(lead.drag !== undefined ? { drag: lead.drag } : {}),
           }
         : {}),
       objects: legacy.flatMap(objectsOfLegacy),
@@ -1565,6 +1597,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
+      // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
+      ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
+      ...(b.drag !== undefined ? { drag: b.drag } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

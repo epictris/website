@@ -19,6 +19,8 @@ import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
   DEFAULT_FORCE_MAGNITUDE,
+  DEFAULT_WATER_DRAG,
+  DEFAULT_WATER_FLOW,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
 } from "../level/levelFormat";
@@ -172,7 +174,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
-const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "anchor", "force"];
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "anchor", "force", "water"];
 
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
@@ -1333,10 +1335,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Nothing rests on a region or on hook-only scenery, so neither carries a
-  // friction. A force area does carry a direction, hence a rot° even when it is
-  // a circle (whose rotation is otherwise invisible).
+  // friction. A force area and a body of water both carry a direction, hence a
+  // rot° even when they are circles (whose rotation is otherwise invisible).
+  //
+  // Water's own effect on friction is not this: it scales the friction of
+  // whatever is INSIDE it (see `WATER_TRACTION_LOSS`), which is a property of
+  // the submerged body rather than a number the water authors.
   const frictionless = (b: EdItem) =>
-    b.kind === "killzone" || b.kind === "force" || b.kind === "anchor";
+    b.kind === "killzone" ||
+    b.kind === "force" ||
+    b.kind === "water" ||
+    b.kind === "anchor";
 
   // May this item be welded into one body? Geometry that is not an area,
   // decoration included - it rides the body rather than adding a piece to it -
@@ -1351,14 +1360,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // deriving a light out of the fitting's emissive colour.
   const canShareBody = (b: EdItem) =>
     b.layer === "scene" &&
-    (b.object !== "collision" || (b.kind !== "killzone" && b.kind !== "force"));
+    (b.object !== "collision" ||
+      (b.kind !== "killzone" && b.kind !== "force" && b.kind !== "water"));
 
   // An area is a region of space rather than a piece of stuff, so it is made of
   // nothing and carries no density. Every other kind does, `anchor` included:
   // a grate is a real object, and its material fixes the centre of mass a
   // compound one is built and rotated about even though nothing collides with
   // it.
-  const massless = (b: EdItem) => b.kind === "killzone" || b.kind === "force";
+  const massless = (b: EdItem) =>
+    b.kind === "killzone" || b.kind === "force" || b.kind === "water";
 
   // A number field bound to one panel and one selection: it shows the value the
   // group agrees on (blank if they differ) and writes to every member. `after`
@@ -2278,6 +2289,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Acceleration along rot°, authored in px/s² like every other length.
         // Negative reverses the flow, so it is deliberately not clamped at 0.
         num("force", (b) => b.force * M2PX, (b, v) => (b.force = v * PX), 50);
+      }
+      if (leads.every((b) => b.kind === "water")) {
+        // The current's SPEED along rot°, in px/s - a length per second, so it
+        // converts like every other length, and signed for the same reason the
+        // force does.
+        num("flow", (b) => b.flow * M2PX, (b, v) => (b.flow = v * PX), 25);
+        // ...and the rate it takes hold at, in 1/s. NOT a length: it is a
+        // reciprocal time, so it is authored and stored as the same number.
+        num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
       }
     }
     // ...and the fill, which only a body written from a collision lead has: a
@@ -3260,6 +3280,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
+      // Likewise only meaningful on a water area, and likewise non-zero so a
+      // fresh one runs and drags rather than sitting there as a coloured box.
+      flow: DEFAULT_WATER_FLOW * PX,
+      drag: DEFAULT_WATER_DRAG,
       // A fresh region is a no-op until a framing field is authored.
       cam: defaultCamera(),
       light: defaultLight(),
