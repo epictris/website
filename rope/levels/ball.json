@@ -576,7 +576,8 @@
         },
         {
           "type": "geometry",
-          "depth": 100,
+          "z": -100,
+          "depth": 300,
           "texture": "rock wall"
         }
       ]
@@ -1896,7 +1897,8 @@
         },
         {
           "type": "geometry",
-          "depth": 100
+          "z": -100,
+          "depth": 300
         }
       ]
     },
@@ -2678,7 +2680,7 @@
       "color": "#3d6b52",
       "opacity": 1,
       "friction": 1,
-      "flow": -280,
+      "flow": -200,
       "drag": 5,
       "objects": [
         {
@@ -2692,7 +2694,8 @@
         {
           "type": "geometry",
           "y": -3.000000000000025,
-          "depth": 1000
+          "z": -100,
+          "depth": 300
         }
       ]
     },
@@ -4123,6 +4126,42 @@
           "angle": 89,
           "penumbra": 0.6,
           "dirY": 90
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1961.0000000000027,
+      "y": 667,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "sewer-wall",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          },
+          "z": -220.00000000000003,
+          "color": "#555555",
+          "opacity": 0.5
+        },
+        {
+          "type": "geometry",
+          "x": 2.9999999999997584,
+          "y": -228.0000000000002,
+          "kind": "mesh",
+          "mesh": "sewer-arch",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          },
+          "z": -150,
+          "color": "#555555",
+          "opacity": 0.5
         }
       ]
     }

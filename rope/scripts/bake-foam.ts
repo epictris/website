@@ -27,14 +27,14 @@ const SIZE = 512;
 // Cell counts of the Worley lattice: few along the flow, many across, which is
 // what stretches every cell - and therefore every ridge between cells - into a
 // ribbon running with the current.
-const WORLEY_X = 5;
-const WORLEY_Y = 22;
+const WORLEY_X = 9;
+const WORLEY_Y = 14;
 // A second, finer cellular layer for flecks and ribbon raggedness.
-const WORLEY2_X = 11;
-const WORLEY2_Y = 44;
+const WORLEY2_X = 18;
+const WORLEY2_Y = 28;
 // Periodic value-noise octaves that modulate ribbon strength along the flow.
-const FBM_X = 4;
-const FBM_Y = 10;
+const FBM_X = 6;
+const FBM_Y = 8;
 
 // Deterministic PRNG (mulberry32) so the same script is the same picture.
 function rng(seed: number): () => number {
