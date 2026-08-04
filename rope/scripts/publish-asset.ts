@@ -76,7 +76,16 @@ console.log(`\n[assets] uploaded ${name} (${(bytes.length / 1024).toFixed(0)} KB
 // the fragment to paste into the set - the whole entry would invite five
 // half-filled sets where one belongs.
 const stem = name.replace(/\.[^.]+$/, "");
-if (input.includes("textures/")) {
+if (input.includes("water/")) {
+  console.log(`[assets] RAW_ASSETS entry (src/render3d/assets.ts):\n`);
+  console.log(`  "${stem}": {`);
+  console.log(`    file: "/water/${name}",`);
+  console.log(`    sha256: "${hash}",`);
+  console.log(`    source: "<where it came from>",`);
+  console.log(`    author: "<who made it>",`);
+  console.log(`    license: "<e.g. CC0>",`);
+  console.log(`  },\n`);
+} else if (input.includes("textures/")) {
   const slot = /-(base|normal|roughness|metallic|ao)$/.exec(stem)?.[1] ?? "base";
   console.log(`[assets] TEXTURE_ASSETS map (src/render3d/assets.ts):\n`);
   console.log(`    ${slot}: { file: "/textures/${name}", sha256: "${hash}" },\n`);

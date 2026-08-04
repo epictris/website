@@ -25,9 +25,9 @@
 //   fixed-step sim never sees any of it and a pinned-clock headless grab is the
 //   same picture twice.
 //
-// The flipbook is deliberately NOT in the release asset store yet: it lives at
-// `public/water/` (outside the store's sweep) until its provenance is settled
-// and it is published like every other asset.
+// The flipbook and the foam mask live in the release asset store like every
+// other binary (`RAW_ASSETS` in assets.ts - fetched to `public/water/`, sha256
+// pinned, provenance recorded, budgeted by `cli assets`).
 
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";

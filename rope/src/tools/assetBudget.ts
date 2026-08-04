@@ -33,7 +33,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MESH_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
+import { MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS } from "../render3d/assets";
 import { storedAssets } from "../../scripts/assetStore";
 import { CREDITS_PATH, renderCredits } from "../../scripts/credits";
 
@@ -42,7 +42,7 @@ const PUBLIC_DIR = join(ROOT, "public");
 // Both directories are build output, gitignored and written only by
 // `assets:fetch` / `assets:optimize*`. One walk over both, since the budget is
 // on the bytes the Docker image carries rather than on any one kind of them.
-const ASSET_DIRS = [join(PUBLIC_DIR, "meshes"), join(PUBLIC_DIR, "textures")];
+const ASSET_DIRS = [join(PUBLIC_DIR, "meshes"), join(PUBLIC_DIR, "textures"), join(PUBLIC_DIR, "water")];
 
 // The store itself imposes nothing worth budgeting against - a GitHub Release
 // caps a single asset at 2 GiB and neither total size nor download bandwidth at
@@ -173,6 +173,7 @@ export function runAssetChecks(): AssetCheck[] {
   const provenance: Array<[string, { source: string; author: string; license: string }]> = [
     ...Object.entries(MESH_ASSETS),
     ...Object.entries(TEXTURE_ASSETS),
+    ...Object.entries(RAW_ASSETS),
   ];
   const unsourced = provenance
     .filter(([, a]) => !a.source?.trim() || !a.license?.trim() || !a.author?.trim())

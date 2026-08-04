@@ -20,7 +20,7 @@
 
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
-import { MESH_ASSETS, TEXTURE_ASSETS, textureMaps } from "../src/render3d/assets";
+import { MESH_ASSETS, RAW_ASSETS, TEXTURE_ASSETS, textureMaps } from "../src/render3d/assets";
 
 // Overridable so a fork, or a private mirror, does not have to patch source.
 export const ASSET_REPO = process.env.ASSET_REPO ?? "epictris/website";
@@ -41,6 +41,11 @@ export interface StoredAsset {
 export function storedAssets(): StoredAsset[] {
   const out: StoredAsset[] = [];
   for (const [key, asset] of Object.entries(MESH_ASSETS)) {
+    out.push({ key, file: asset.file, sha256: asset.sha256 });
+  }
+  // The water renderer's raw maps (flipbook, foam) - one file per entry, like a
+  // prop; see `RawAsset` for why they are not texture-set slots.
+  for (const [key, asset] of Object.entries(RAW_ASSETS)) {
     out.push({ key, file: asset.file, sha256: asset.sha256 });
   }
   for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
