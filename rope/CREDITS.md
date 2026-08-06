@@ -7,6 +7,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 ## 3D models
 
 - **bulkhead-lamp** - "andersonmat", [source](https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb), CC BY 4.0
+- **cage** - "AAA (@BitoRaccoon)", [source](https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc), CC BY 4.0
 - **pipe-concrete** - "PT34", [source](https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6), CC BY 4.0
 - **pipe-long** - "Mehdi Shahsavan (@ahmagh2e)", [source](https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b), CC BY 4.0
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0

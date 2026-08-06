@@ -136,9 +136,20 @@ export class Environment {
       cam.right = SHADOW_DISTANCE / 2;
       cam.top = SHADOW_DISTANCE / 2;
       cam.bottom = -SHADOW_DISTANCE / 2;
+      // AND SAY SO. `DirectionalLightShadow` never calls this for you - three
+      // only re-derives a shadow camera's projection where it derives the
+      // camera's own parameters, which for a spot is the cone and for the sun is
+      // nothing at all. Every line above is therefore inert without it, and
+      // inert in the quietest possible way: the shadow still renders, through
+      // the class default's 10 m box at a far plane of 500, so a level wider
+      // than that box simply has shadows over part of itself and none over the
+      // rest, which reads as the geometry rather than as the frustum.
+      cam.updateProjectionMatrix();
       // Peter-panning versus acne: a normal-offset bias handles the sloped faces
       // an extruded level is mostly made of, and the constant bias is small enough
-      // that a shadow still touches the thing casting it.
+      // that a shadow still touches the thing casting it. It is safe HERE, where
+      // a spot's is not, because an orthographic depth buffer is linear - see
+      // the note in `lights.ts`.
       this.sun.shadow.bias = -0.0008;
       this.sun.shadow.normalBias = 0.03;
       scene.add(this.sun);

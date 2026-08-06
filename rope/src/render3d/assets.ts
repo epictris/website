@@ -960,6 +960,47 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "andersonmat",
     license: "CC BY 4.0",
   },
+  // A barred cage, the kind a sewer level hangs over a drop. 1.18 x 2.0 x
+  // 1.18 m as exported, a real cage's size, so it wears no `scale`, and it
+  // stands upright about its own y with nothing to face, so it wears no
+  // rotation either - the two pipes need one because a pipe has a direction and
+  // a cage does not.
+  //
+  // Its materials are doubleSided, and here that is the whole prop rather than a
+  // detail left as exported: every bar is seen from both sides at once and the
+  // far side of the cage is back-facing from every angle, so single-sided it is
+  // a half a cage.
+  //
+  // `simplify` because it was MEASURED, and the obvious argument against it was
+  // wrong. A cage is see-through, so unlike a wall panel its silhouette is not
+  // one outline but forty - every bar is its own edge against the background,
+  // and no normal map recovers a bar that decimation ate. That reasoning is
+  // sound and it is about the wrong meshes: 59% of the 28,920 triangles are
+  // EIGHT meshes at 2,118 each, the wooden posts, whose relief is in the normal
+  // map exactly as the sewer wall's is. The bars are the 128-triangle meshes,
+  // and the simplifier's 1% error budget stops early on them rather than
+  // thinning them, so they come through every ratio intact.
+  //
+  // 0.3 rather than the wall's 0.1: measured at 1.27% / 1.81% / 4.16% RMSE over
+  // the prop's own pixels at 0.5 / 0.3 / 0.1, the first two are
+  // indistinguishable and the third visibly facets the posts. (Over the prop's
+  // crop, so it is a stricter number than the wall's 1.5% whole-frame one.)
+  //
+  // The bytes are NOT what this buys: the file is texture, and the whole
+  // decimation is worth 124 KB of 567. What it buys is the draw, on a prop a
+  // level will stand several of behind a nearly orthographic camera - which is
+  // the sewer set's lesson and the reason to check a count against what a prop
+  // is for. Its 12.53 MB raw was a 2048² normal PNG at 5.66 MB, a 2048²
+  // occlusion/metallic-roughness PNG at 4.67 MB and a 2048² JPEG albedo, which
+  // the pipeline's 1k WebP ceiling takes to 443 KB.
+  cage: {
+    file: "/meshes/cage.glb",
+    sha256: "a74b6e26e6de89963b542dce1395509d9519fe1ab83a0dc1b91d6f7814ebc6ee",
+    simplify: 0.3, // 28,920 -> 8,675 triangles
+    source: "https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc",
+    author: "AAA (@BitoRaccoon)",
+    license: "CC BY 4.0",
+  },
   // A concrete drainage pipe, the kind stacked on a construction site. 63 cm
   // across and 2 m long as exported, a real culvert section's size, so it wears
   // no `scale`, and the same `rotY` as `pipe-long` for the same reason: it is

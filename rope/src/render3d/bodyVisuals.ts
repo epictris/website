@@ -375,14 +375,22 @@ export class BodyVisual {
         () => primitiveGeometry(outline, g, solid ? SOLID_DEFAULTS : DECOR_DEFAULTS),
         spec,
         defaultZ,
-        // Decoration BEHIND the gameplay plane is backdrop and throws no shadow
-        // across the level in front of it - the rule the retired background
-        // layer had, kept because the reason is unchanged: a shadow is what
-        // makes a shape read as an object in the scene rather than as a painted
-        // distance. Anything on or in front of the plane casts like an object,
-        // and on a solid body that plane is the body's own - hook-only scenery
-        // sits a quarter-metre back and still casts, as it always has.
-        solid ? defaultZ >= solidZ : defaultZ >= 0,
+        // WHAT COLLIDES, CASTS - wherever its dressing has been nudged to.
+        // A body with a collision object is a thing in the play space, and how
+        // far behind its own plane the form drawn for it happens to sit is a
+        // decision about how it READS, not about whether it is there: a hanging
+        // cage set back 20 cm so the ball reads in front of it is still the
+        // object the ball is standing in. Testing its depth is what silently
+        // took the shadow off every prop authored that way, and a prop with no
+        // shadow does not look like a prop set back - it looks like a sticker.
+        //
+        // Decoration keeps the rule the retired background layer had, because
+        // the reason there is unchanged: a backdrop is a painted distance rather
+        // than an object, and one throwing a shadow across the level in front of
+        // it reads as geometry the player ought to be able to touch. Behind the
+        // gameplay plane it casts nothing; on or in front of it, it is in the
+        // scene and casts like anything else.
+        solid || defaultZ >= 0,
       );
     }
 

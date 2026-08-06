@@ -169,7 +169,19 @@ export class EditorGizmo {
     const on = axes !== null;
     this.controls.enabled = on;
     this.controls.getHelper().visible = on;
-    if (!axes) return;
+    if (!axes) {
+      // The handles going away must take the POINTER STATE with them.
+      // `TransformControls` records which handle the pointer is over in `axis`,
+      // and its hover listener returns early while disabled - so an axis the
+      // pointer happened to be on when the target went is one nothing ever
+      // clears. `busy` then reports the pointer as the gizmo's for ever and the
+      // editor's own press handler returns early on every press: after deleting
+      // a body with the pointer resting on an arrow, nothing selects, pans,
+      // orbits or draws again, and there is no gesture that recovers it.
+      this.controls.axis = null;
+      this.controls.dragging = false;
+      return;
+    }
     this.controls.showX = axes.x;
     this.controls.showY = axes.y;
     this.controls.showZ = axes.z;

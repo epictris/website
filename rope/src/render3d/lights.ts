@@ -105,11 +105,26 @@ export const LIGHT_BUDGET = 16;
 // several shadow-casting lamps wants them to be spots.
 export const LIGHT_SHADOW_BUDGET = 4;
 
-// Small on purpose. A lamp's shadow is soft and short-range - it is not the
-// sun's long hard edge across the whole level - so the resolution that matters
-// is the one near the source, and 512 per cube face is six 512s rather than six
-// 2048s.
-const LIGHT_SHADOW_MAP_SIZE = 512;
+// Read as a TEXEL SIZE rather than as a count, because a texel is the STEP a
+// shadow moves in. A caster's silhouette is rasterised into this grid, so its
+// edge cannot land between two texels: a slowly swinging prop does not slide its
+// shadow, it holds it still and then jumps it a whole texel, which is what reads
+// as the shadows updating at some lower frame rate than everything else.
+//
+// A spot's map covers a disc `2·range·tan(angle)` across at the end of its
+// reach, so this level's 12 m lamps at 30° spend it over 13.9 m: 27 mm a texel
+// at 512 and 14 mm at 1024. That the number is a grid and not a resolution is
+// directly visible - the same frame drawn at 512 and at 4096 differs by 37,576
+// pixels, all of them shadow edges standing in different places for geometry
+// that has not moved.
+//
+// 1024 rather than more because it is one render per spot (a point light's is
+// six) against the sun's single 2048, and because halving the step twice more
+// costs sixteen times the memory for a step that is already under the width of
+// the things casting it. What it cannot do is remove the step; only a filtered
+// shadow map (VSM) would, at the price of light bleeding through thin geometry,
+// which this level is made of.
+const LIGHT_SHADOW_MAP_SIZE = 1024;
 
 // Nearest the light a shadow is computed from. Too small and the depth range is
 // wasted on space nothing occupies (which is what makes shadow acne); a lamp is
@@ -241,7 +256,21 @@ export class LightRig {
       // can be shadowed either: the depth range is spent exactly where it is
       // used, which is most of what keeps a small map from banding.
       light.shadow.camera.far = Math.max(range, LIGHT_SHADOW_NEAR * 2);
-      light.shadow.bias = -0.002;
+      // NO CONSTANT BIAS. `shadow.bias` is an offset in the shadow camera's own
+      // DEPTH BUFFER, and a lamp's camera is a perspective one, so that buffer
+      // is wildly nonlinear: almost all of it is spent in the first metre and
+      // the whole of the far half of a 12 m lamp's reach is worth about a
+      // thousandth of it. A value that reads as a hair's breadth near the bulb
+      // is therefore metres of peter-panning at the other end - and a shadow
+      // whose caster is nearer its receiver than that simply never appears.
+      // A cage hanging a metre off the floor under a lamp 9 m above it is
+      // separated by 0.0012 of that buffer, against a bias of 0.002: the whole
+      // shadow, cancelled by a number that was tuned against the sun's LINEAR
+      // orthographic map, where the same figure is a millimetre.
+      //
+      // `normalBias` is the one that transfers, being a push along the surface
+      // normal in METRES - the same distance wherever in the frustum it is
+      // applied - and it is what handles the acne a constant bias was there for.
       light.shadow.normalBias = 0.03;
     }
 

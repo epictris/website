@@ -3603,9 +3603,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (to.id === from.id) return;
     if (to.bodyId === from.bodyId) return;
     beginAction();
+    // One at a time, and IN THE MODEL before the next is minted: `newAnchorId`
+    // reads the model to find the next free id, so minting both against the
+    // model as it was gives them the SAME id. A chain then names one anchor
+    // twice, `buildSceneChains` resolves both ends to the first body carrying
+    // that id, and a chain whose two ends are one body is dropped at load - so
+    // the thing it was holding up simply falls, in a level that looks correct
+    // in the editor and carries no error anywhere.
     const a = newAnchorOn(from, fromWorld);
+    model.items.push(a);
     const b = newAnchorOn(to, world);
-    model.items.push(a, b);
+    model.items.push(b);
     const chain: EdChain = {
       id: newBodyId(),
       a: a.id,
