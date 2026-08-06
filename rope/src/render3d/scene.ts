@@ -40,6 +40,8 @@ import {
   syncCamera,
   VIEW_ASPECT,
   type CameraOrbit,
+  type ViewCamera,
+  type ViewProjection,
 } from "./space";
 import { updateWater } from "./water";
 
@@ -80,7 +82,15 @@ export interface Scene3DOptions {
 
 export class Scene3D {
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, 400);
+  // The two lenses (see `ViewProjection`). Both exist for the whole life of the
+  // scene rather than one being rebuilt on a toggle: a camera is a transform and
+  // a frustum, both rewritten from the 2D camera every frame, so keeping the
+  // pair costs nothing and leaves the gizmo something stable to be attached to.
+  private readonly perspective = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, 400);
+  private readonly orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+  // The game never touches this: it is played through the perspective camera the
+  // levels are framed against, and only the editor offers the other.
+  private projection: ViewProjection = "perspective";
   private readonly renderer: THREE.WebGLRenderer;
   private env: Environment;
   // What the current `Environment` was built from. The editor rebuilds the whole
@@ -334,6 +344,17 @@ export class Scene3D {
   // letterbox rather than being filled with more scene.
   setViewportRect(rect: { x: number; y: number; w: number; h: number } | null): void {
     this.viewportRect = rect;
+  }
+
+  // The camera the next frame will be drawn through. It is the object the
+  // editor's gizmo raycasts against, which is why the pair is stable: a toggle
+  // hands out the other camera rather than replacing one.
+  get camera(): ViewCamera {
+    return this.projection === "orthographic" ? this.orthographic : this.perspective;
+  }
+
+  setProjection(projection: ViewProjection): void {
+    this.projection = projection;
   }
 
   // One rendered frame. `alpha` is the interpolation factor the 2D renderer

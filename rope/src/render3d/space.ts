@@ -121,11 +121,36 @@ export function isHeadOn(orbit: CameraOrbit): boolean {
   return orbit.yaw === 0 && orbit.pitch === 0;
 }
 
+// Which lens the scene is drawn through. It is EDITOR-ONLY furniture like the
+// orbit, and for the same kind of reason: the game is played through the one
+// perspective camera the levels are authored and framed against, and the
+// orthographic one is an authoring instrument.
+//
+// What it is for is ALIGNING GEOMETRY. A perspective camera foreshortens
+// everything off the gameplay plane, so a prop 2 m behind the plane is drawn
+// slightly smaller and offset toward the frame's centre - which means two things
+// that are exactly in line in the level do not look it, and two that look it are
+// not. Orthographic removes the divide entirely: a metre is the same number of
+// pixels at every depth, so what is drawn IS the plan, and the 2D overlay lands
+// on off-plane geometry as exactly as it lands on the plane.
+//
+// Head-on, the two agree about the gameplay plane itself to the pixel (`cli
+// render3d` asserts it), because both are driven from the same visible height -
+// which is what lets the overlay, the handles and the picking carry on unchanged
+// through the toggle.
+export type ViewProjection = "perspective" | "orthographic";
+export type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
 // Drive `threeCam` from the 2D camera. Called every rendered frame, before
 // drawing; the 2D camera has already been updated by the CameraController, so
 // the two are the same view by construction rather than by being kept in step.
+//
+// The camera's PLACEMENT is the same arithmetic for both lenses - an orthographic
+// camera is dollied to exactly the distance the perspective one would be, so it
+// clips the same scene and orbits about the same point - and only the projection
+// differs.
 export function syncCamera(
-  threeCam: THREE.PerspectiveCamera,
+  threeCam: ViewCamera,
   camera: Camera,
   fovYDeg = FOV_Y_DEG,
   orbit: CameraOrbit = NO_ORBIT,
@@ -133,8 +158,21 @@ export function syncCamera(
   const x = camera.position.x;
   const y = threeY(camera.position.y);
   const dist = cameraDistance(camera, fovYDeg);
-  threeCam.fov = fovYDeg;
-  threeCam.aspect = camera.viewportWidth / camera.viewportHeight;
+  const aspect = camera.viewportWidth / camera.viewportHeight;
+  if (threeCam instanceof THREE.OrthographicCamera) {
+    // The frustum IS the 2D renderer's transform, read off the same visible
+    // height the dolly distance comes from: no divide, so this holds at every
+    // depth rather than only on the plane.
+    const halfH = visibleHeightMetres(camera) / 2;
+    const halfW = halfH * aspect;
+    threeCam.left = -halfW;
+    threeCam.right = halfW;
+    threeCam.top = halfH;
+    threeCam.bottom = -halfH;
+  } else {
+    threeCam.fov = fovYDeg;
+    threeCam.aspect = aspect;
+  }
   // The head-on view is written out rather than reached through the orbit path
   // at zero, so the game's camera is the same arithmetic it has always been: a
   // `lookAt` that ought to produce the identity rotation is not a thing to take

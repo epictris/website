@@ -250,6 +250,74 @@ function orbitView(): CaseResult[] {
   return out;
 }
 
+// The editor's orthographic lens (see `ViewProjection`). Two claims, and the
+// second is the whole reason the toggle exists: the gameplay plane is framed
+// exactly as the 2D renderer frames it - so the overlay, the handles and the
+// picking are as exact through this lens as through the other - and geometry OFF
+// the plane is drawn at the plane's own scale, which is what "no perspective, so
+// things that are in line look in line" means arithmetically.
+function orthographicView(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const cams: Array<{ name: string; cam: Camera }> = [
+    { name: "origin @ base zoom", cam: camera(0, 0, 2) },
+    { name: "off-centre, zoomed out", cam: camera(13.5, -7.25, 1) },
+  ];
+  const project = (cam: Camera, world: Vec2, z: number): { x: number; y: number } => {
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    syncCamera(ortho, cam);
+    ortho.updateMatrixWorld(true);
+    const ndc = new THREE.Vector3(world.x, -world.y, z).project(ortho);
+    return { x: ((ndc.x + 1) / 2) * VIEW_WIDTH, y: ((1 - ndc.y) / 2) * VIEW_HEIGHT };
+  };
+  for (const { name, cam } of cams) {
+    const halfH = VIEW_HEIGHT / 2 / (cam.zoom * PIXELS_PER_METER);
+    const halfW = VIEW_WIDTH / 2 / (cam.zoom * PIXELS_PER_METER);
+    const probes = [
+      cam.position,
+      cam.position.add(new Vec2(halfW, halfH)),
+      cam.position.add(new Vec2(-halfW, -halfH)),
+      cam.position.add(new Vec2(halfW * 0.37, -halfH * 0.81)),
+    ];
+    let worst = 0;
+    for (const p of probes) {
+      const a = projectToView(cam, p);
+      const b = project(cam, p, 0);
+      worst = Math.max(worst, Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    }
+    out.push({
+      name: `orthographic: the plane is framed as the 2D renderer frames it (${name})`,
+      pass: worst <= PIXEL_TOL,
+      detail: `worst ${worst.toExponential(2)} px over ${probes.length} points`,
+    });
+
+    // The same point at four depths, out at a corner where a divide shows first.
+    // Orthographic must draw all four in one place; perspective must not, or the
+    // case would pass against a camera that is not actually orthographic.
+    const corner = cam.position.add(new Vec2(halfW * 0.9, -halfH * 0.9));
+    const flat = project(cam, corner, 0);
+    let spread = 0;
+    for (const z of [-20, -2, 2, 8]) {
+      const q = project(cam, corner, z);
+      spread = Math.max(spread, Math.abs(q.x - flat.x), Math.abs(q.y - flat.y));
+    }
+    const persp = projectThroughThree(cam, corner);
+    const perspShift = ((): number => {
+      const c = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+      syncCamera(c, cam);
+      c.updateMatrixWorld(true);
+      const ndc = new THREE.Vector3(corner.x, -corner.y, -20).project(c);
+      const p = { x: ((ndc.x + 1) / 2) * VIEW_WIDTH, y: ((1 - ndc.y) / 2) * VIEW_HEIGHT };
+      return Math.max(Math.abs(p.x - persp.x), Math.abs(p.y - persp.y));
+    })();
+    out.push({
+      name: `orthographic: depth does not move a point on screen (${name})`,
+      pass: spread <= PIXEL_TOL && perspShift > 1,
+      detail: `ortho spread ${spread.toExponential(2)} px over 20 m of depth, perspective ${perspShift.toFixed(1)} px`,
+    });
+  }
+  return out;
+}
+
 // The extrusion's winding and depth. A physics polygon is wound clockwise ON
 // SCREEN with y down (see engine/shapes.ts); after the y-negation that is
 // counter-clockwise in three's frame, which is the winding `ExtrudeGeometry`
@@ -1592,6 +1660,7 @@ export function runRender3dCases(): CaseResult[] {
     ...cameraCorrespondence(),
     ...blendStability(),
     ...orbitView(),
+    ...orthographicView(),
     ...extrusionGeometry(),
     ...depthOrdering(),
     ...surfaceResolution(),

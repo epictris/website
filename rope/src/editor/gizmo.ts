@@ -97,6 +97,17 @@ export class EditorGizmo {
     return this.controls.dragging || this.controls.axis !== null;
   }
 
+  // Follow the scene's camera when the editor switches lens (see
+  // `ViewProjection`). `TransformControls` reads it for the handle sizing and
+  // for the raycast a press is picked with, so a gizmo left on the old camera is
+  // one whose handles are drawn where they cannot be grabbed. Guarded so this
+  // can be called every frame: the property is reactive and setting it re-runs
+  // the helper's whole update.
+  setCamera(camera: THREE.Camera): void {
+    if (this.controls.camera === camera) return;
+    this.controls.camera = camera;
+  }
+
   setMode(mode: GizmoMode): void {
     this.currentMode = mode;
     this.controls.setMode(mode);

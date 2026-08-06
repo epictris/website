@@ -112,7 +112,14 @@ import {
 } from "../render3d/assets";
 import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
-import { isHeadOn, MAX_ORBIT_PITCH, threeY, threeRotation, type CameraOrbit } from "../render3d/space";
+import {
+  isHeadOn,
+  MAX_ORBIT_PITCH,
+  threeY,
+  threeRotation,
+  type CameraOrbit,
+  type ViewProjection,
+} from "../render3d/space";
 import { EditorGizmo, GIZMO_MODES, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
@@ -311,6 +318,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // editing it.
   const orbit: CameraOrbit = { yaw: 0, pitch: 0 };
   const orbited = (): boolean => scene3d !== null && viewMode !== "2d" && !isHeadOn(orbit);
+  // Which lens the scene is drawn through (see `ViewProjection`). Perspective is
+  // what the level is played in and so the default; orthographic is the
+  // authoring instrument - with no perspective divide, geometry at any depth is
+  // drawn at exactly the scale the plane is, so two things being in line on
+  // screen means they are in line in the level.
+  //
+  // It is a property of EDITING rather than of the scene: a ▶ Test is played
+  // through the perspective camera whatever this says, since the whole point of
+  // a test is that the framing is the player's (see the frame loop).
+  let projection: ViewProjection = "perspective";
+  let projectionBtn: HTMLButtonElement | null = null;
+  function setProjection(p: ViewProjection): void {
+    projection = p;
+    projectionBtn?.classList.toggle("active", p === "orthographic");
+  }
   let resetViewBtn: HTMLButtonElement | null = null;
   function refreshOrbitBtn(): void {
     resetViewBtn?.classList.toggle("active", orbited());
@@ -1296,9 +1318,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // rather than as a button that usually does nothing.
     resetViewBtn = button("⟲ Reset view", resetOrbit);
     resetViewBtn.title = "Face the gameplay plane again (Ctrl + middle-drag orbits)";
-    viewRow.append(viewBtns["2d"]!, viewBtns["3d"]!, viewBtns.overlay!, resetViewBtn);
+    // The lens. One toggle rather than two buttons, because unlike the view
+    // modes these are not three jobs: it is one view, drawn with the perspective
+    // divide or without it, and what the button says is which.
+    projectionBtn = button("⧉ Ortho", () =>
+      setProjection(projection === "orthographic" ? "perspective" : "orthographic"),
+    );
+    projectionBtn.title =
+      "Orthographic view: no perspective, so geometry at any depth is drawn at the plane's scale and lines up exactly (O)";
+    viewRow.append(
+      viewBtns["2d"]!,
+      viewBtns["3d"]!,
+      viewBtns.overlay!,
+      resetViewBtn,
+      projectionBtn,
+    );
     setViewMode(viewMode);
     refreshOrbitBtn();
+    setProjection(projection);
 
     // What the 3D handles do. One row, because the three are one control: a
     // gizmo is always in exactly one of these modes and the buttons say which.
@@ -4915,6 +4952,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     else if (e.code === "KeyW") setGizmoMode("translate");
     else if (e.code === "KeyE") setGizmoMode("rotate");
     else if (e.code === "KeyS") setGizmoMode("scale");
+    // The lens (see `ViewProjection`), on the letter it is named by.
+    else if (e.code === "KeyO")
+      setProjection(projection === "orthographic" ? "perspective" : "orthographic");
   });
 
   // Releasing an arrow closes the nudge run, so the next press starts a fresh
@@ -4992,6 +5032,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // viewport origin is the BOTTOM left, hence the flipped y.
       const testIn3d = scene3d !== null && viewMode !== "2d" && testLevel3d !== null;
       if (testIn3d) {
+        // A test is the player's view, so it is always the perspective camera:
+        // the editor's orthographic lens is an authoring instrument, and a level
+        // judged through it would be judged through a lens nobody plays in.
+        scene3d!.setProjection("perspective");
         const w = Math.round(view.width * view.scale);
         const h = Math.round(view.height * view.scale);
         scene3d!.setViewportRect({
@@ -5020,6 +5064,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // precise collision authoring.
       if (scene3d && viewMode !== "2d") {
         scene3d.setViewportRect(null);
+        // Set per frame rather than only at the toggle, because ▶ Test borrows
+        // the same scene and puts it back on the perspective camera.
+        scene3d.setProjection(projection);
+        gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
         // After the scene is rebuilt and before it is drawn: the handles are on
         // a proxy rather than on a visual precisely so a rebuild cannot take
