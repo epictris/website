@@ -74,11 +74,13 @@ import {
   setArrowEnds,
   shapeMass,
   setPolyVerts,
+  scaleShape,
   syncBodyProps,
   toWorld,
   visualData,
   type EdChain,
   type EdItem,
+  type EdShape,
   type EdLayer,
   type EdModel,
 } from "./model";
@@ -91,6 +93,7 @@ import {
   CHAIN_HIT_PX,
   HANDLE_HIT_PX,
   lightPickRadius,
+  depthOf,
 } from "./render";
 import {
   DEFAULT_MATERIAL,
@@ -107,8 +110,10 @@ import {
   tileMetres,
   TEXTURE_ASSETS,
 } from "../render3d/assets";
+import * as THREE from "three";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
-import { isHeadOn, MAX_ORBIT_PITCH, type CameraOrbit } from "../render3d/space";
+import { isHeadOn, MAX_ORBIT_PITCH, threeY, threeRotation, type CameraOrbit } from "../render3d/space";
+import { EditorGizmo, GIZMO_MODES, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import {
@@ -209,10 +214,25 @@ type Drag =
   | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean }
   // The lead body follows the pointer (and the grid); the rest of the
   // selection rides along at a fixed offset from it.
-  | { mode: "move"; lead: EdItem; others: Array<{ body: EdItem; offset: Vec2 }>; grab: Vec2 }
+  // `press` and `moved` are what keep a click apart from a drag on something
+  // already selected: until the pointer has really travelled, the gesture is
+  // still a click and `pick` is what it means (drilling into the body under it).
+  | {
+      mode: "move";
+      lead: EdItem;
+      others: Array<{ body: EdItem; offset: Vec2 }>;
+      grab: Vec2;
+      press: Vec2;
+      moved: boolean;
+      pick?: () => void;
+    }
   | { mode: "movePlayer"; grab: Vec2 }
   | { mode: "corner"; body: EdItem; anchor: Vec2 }
   | { mode: "radius"; body: EdItem }
+  // The one axis the canvas has no direction for: dragging up moves the object
+  // toward the camera. Measured from where the press was rather than per move,
+  // so the grid's rounding cannot accumulate across the drag.
+  | { mode: "depth"; body: EdItem; base: number; press: Vec2 }
   | { mode: "rotate"; body: EdItem }
   // One vertex of a convex polygon follows the pointer. `accepted` is the last
   // position the loop stayed convex at, so a drag that would dent the shape
@@ -301,6 +321,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshOrbitBtn();
     applyToolCursor();
   }
+
+  // The 3D transform gizmo (see `editor/gizmo.ts`). It lives in the scene, so it
+  // is offered exactly when there is a scene to put it in - and it is the only
+  // way to author the three fields the plane has no axis for: how far off the
+  // plane a form sits, how it is tipped about x and y, and how large a mesh is
+  // drawn.
+  const gizmo = scene3d ? new EditorGizmo(scene3d.scene, scene3d.camera, canvas) : null;
+  const gizmoBtns: Partial<Record<GizmoMode, HTMLButtonElement>> = {};
+  // What the handles are attached to right now, so the target is rebuilt when
+  // the selection changes and left alone when it has not.
+  let gizmoKey = "";
   // The scene is rebuilt from the model whenever the model changes. A full
   // rebuild on every revision is deliberate: the model is small (a level is a
   // couple of hundred shapes), a rebuild is a few milliseconds, and correctness
@@ -638,6 +669,224 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const step = Math.PI / 12; // 15°
     return Math.round(a / step) * step;
   };
+  const ANGLE_STEP = Math.PI / 12; // the gizmo's rotation snap, same 15° as above
+
+  // --- the 3D gizmo's side of the model -------------------------------------
+  //
+  // Nothing below writes anything the 2D handles do not also write; what it adds
+  // is the axes the plane has none: `EdVisual.offsetZ`, `rotX`, `rotY` and a
+  // mesh's `scale`. Every one of them was a number typed into the inspector.
+  //
+  // A handle is offered ONLY where the format has somewhere to put its answer -
+  // a collision shape has no rotation about x, a body has no z of its own, a
+  // light has no size - so the gizmo shows a level's real degrees of freedom
+  // rather than three of everything, two thirds of which would do nothing.
+
+  // The smallest a gizmo drag may make a shape: one on-disk pixel. Zero is a
+  // shape that can never be grabbed again, and negative is a shape inside out.
+  const MIN_EXTENT = PX;
+
+  // The item's orientation as three sees it: the same composition the renderer
+  // builds (`mountVisual` turns the piece about z and the holder about x and y),
+  // which is why the decomposition below reads Euler order ZXY and gets exactly
+  // `rotX`, `rotY` and `-rot` back.
+  function itemQuat(i: EdItem): THREE.Quaternion {
+    const geo = i.object === "geometry";
+    return new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(
+        geo ? i.visual.rotX : 0,
+        geo ? i.visual.rotY : 0,
+        threeRotation(i.rot),
+        "ZXY",
+      ),
+    );
+  }
+
+  // A gizmo drag is one undo step and one save, exactly like a 2D drag.
+  const gizmoBegin = (): void => beginAction();
+  function gizmoTouched(): void {
+    markDirty();
+    refreshFields();
+  }
+
+  // The item the handles are on, resolved by id every time rather than held:
+  // undo and redo replace the model wholesale, so a captured object is a stale
+  // one the moment a drag is undone.
+  function itemHandlers(id: number): GizmoHandlers {
+    const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
+    // The sizes a scale drag is measured against (see `GizmoHandlers.apply`).
+    let base: { shape: EdShape; depth: number; scale: number } | null = null;
+    return {
+      pose() {
+        const it = find();
+        if (!it) return { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
+        return {
+          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), depthOf(it)),
+          quat: itemQuat(it),
+        };
+      },
+      axes(mode): GizmoAxes {
+        const it = find();
+        if (!it) return null;
+        // Off-plane placement and tipping belong to the things that are DRAWN.
+        // A light is placed through z as well - a lamp pulled toward the camera
+        // lights a smaller circle of the plane (see `lightPlaneReach`).
+        const offPlane = it.object === "geometry" || it.object === "light";
+        if (mode === "translate") return { x: true, y: true, z: offPlane };
+        if (mode === "rotate") {
+          // A shape's rotation in the plane is the only one the level records
+          // for it; the two out-of-plane ones exist on a drawn form alone.
+          return { x: it.object === "geometry", y: it.object === "geometry", z: true };
+        }
+        // Scale. An anchor is a point and a light is a reach authored by its own
+        // radius handle, so neither has a size this could write.
+        if (it.object === "anchor" || it.object === "light") return null;
+        // A mesh has ONE scale, so any axis scales it; a primitive's third axis
+        // is its extrusion depth, and a collision shape has no depth at all -
+        // `thickness` is what its mass is computed from and is not a size on
+        // screen.
+        return { x: true, y: true, z: it.object === "geometry" };
+      },
+      begin() {
+        const it = find();
+        gizmoBegin();
+        if (!it) return;
+        base = {
+          shape: cloneShape(it.shape),
+          // `null` depth means the shape's own thickness, which is what the
+          // extrusion falls back to - so that is what a scale starts from.
+          depth: it.visual.depth ?? it.thickness,
+          scale: it.visual.scale,
+        };
+      },
+      apply(mode, pos, quat, scale) {
+        const it = find();
+        if (!it) return;
+        if (mode === "translate") {
+          it.pos = new Vec2(pos.x, threeY(pos.y));
+          if (it.object === "geometry") it.visual.offsetZ = pos.z;
+          else if (it.object === "light") it.light.z = pos.z;
+        } else if (mode === "rotate") {
+          const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
+          it.rot = threeRotation(e.z);
+          if (it.object === "geometry") {
+            it.visual.rotX = e.x;
+            it.visual.rotY = e.y;
+          }
+        } else if (base) {
+          if (it.object === "geometry" && it.visual.kind === "mesh") {
+            // One number, so every axis of the handle drives it: the mean of the
+            // three factors, which makes the uniform (centre) handle exact and
+            // any single axis a sensible approximation of "bigger".
+            const f = (scale.x + scale.y + scale.z) / 3;
+            it.visual.scale = Math.max(0.01, base.scale * f);
+          } else {
+            const round = snapOn ? snapLen : undefined;
+            scaleShape(it, base.shape, scale.x, scale.y, round);
+            if (it.object === "geometry") {
+              const depth = base.depth * scale.z;
+              it.visual.depth = Math.max(MIN_EXTENT, round ? round(depth) : depth);
+            }
+          }
+        }
+        gizmoTouched();
+      },
+      end() {
+        base = null;
+        rebuildInspector();
+      },
+    };
+  }
+
+  // A whole body. It has no z, no size and no rotation of its own - what it has
+  // is a placement and an arrangement - so the handles offered are a move in the
+  // plane and a turn about the centre of mass, which is the point the built body
+  // rotates about and exactly what the 2D group handle turns it about.
+  function bodyHandlers(id: number): GizmoHandlers {
+    const members = (): EdItem[] => bodyMembers(model.items, id);
+    let base: { centre: Vec2; pos: Map<number, Vec2>; applied: number } | null = null;
+    return {
+      pose() {
+        const c = bodyCentroid(members());
+        return {
+          pos: new THREE.Vector3(c.x, threeY(c.y), 0),
+          quat: new THREE.Quaternion(),
+        };
+      },
+      axes(mode): GizmoAxes {
+        if (!members().length) return null;
+        if (mode === "translate") return { x: true, y: true, z: false };
+        if (mode === "rotate") return { x: false, y: false, z: true };
+        return null; // a body has no size: its objects do
+      },
+      begin() {
+        gizmoBegin();
+        const items = members();
+        base = {
+          centre: bodyCentroid(items),
+          pos: new Map(items.map((m) => [m.id, m.pos])),
+          applied: 0,
+        };
+      },
+      apply(mode, pos, quat) {
+        if (!base) return;
+        if (mode === "translate") {
+          // Measured from where the body was, so a drag cannot accumulate the
+          // grid's rounding across its own moves.
+          const d = new Vec2(pos.x - base.centre.x, threeY(pos.y) - base.centre.y);
+          for (const m of members()) {
+            const from = base.pos.get(m.id);
+            if (from) m.pos = from.add(d);
+          }
+        } else if (mode === "rotate") {
+          // The ring returns to zero when the drag ends (`pose` answers the
+          // identity), so what it means is a DELTA, exactly as the 2D group
+          // handle does - a body has no angle of its own to write.
+          const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
+          const wanted = threeRotation(e.z);
+          rotateGroupAbout(members(), base.centre, wanted - base.applied);
+          base.applied = wanted;
+        }
+        gizmoTouched();
+      },
+      end() {
+        base = null;
+        rebuildInspector();
+      },
+    };
+  }
+
+  // What the handles are on: a single object, or a single body. A wider
+  // selection keeps the 2D handles alone - there is one transform to show and a
+  // group of things has several - and a chain has no transform at all.
+  function gizmoSpec(): { kind: "item" | "body"; id: number } | null {
+    if (mode === "test" || !scene3d || viewMode === "2d") return null;
+    if (selectedChainIds.size) return null;
+    if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
+    if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
+    return null;
+  }
+
+  function syncGizmo(): void {
+    if (!gizmo) return;
+    const spec = gizmoSpec();
+    const key = spec ? `${spec.kind}:${spec.id}` : "";
+    if (key !== gizmoKey) {
+      gizmoKey = key;
+      gizmo.attach(
+        spec === null ? null : spec.kind === "body" ? bodyHandlers(spec.id) : itemHandlers(spec.id),
+      );
+    }
+    // The same grid and the same 15° the 2D drags snap to, so a gizmo drag and a
+    // handle drag cannot land a body in different places.
+    gizmo.setSnap(snapOn ? gridStep : null, snapOn ? ANGLE_STEP : null);
+    gizmo.follow();
+  }
+
+  function setGizmoMode(m: GizmoMode): void {
+    gizmo?.setMode(m);
+    for (const [k, b] of Object.entries(gizmoBtns)) b.classList.toggle("active", k === m);
+  }
 
   function markDirty(): void {
     dirty = true;
@@ -1050,6 +1299,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     viewRow.append(viewBtns["2d"]!, viewBtns["3d"]!, viewBtns.overlay!, resetViewBtn);
     setViewMode(viewMode);
     refreshOrbitBtn();
+
+    // What the 3D handles do. One row, because the three are one control: a
+    // gizmo is always in exactly one of these modes and the buttons say which.
+    const gizmoRow = el("div", "ed-row");
+    bar.appendChild(gizmoRow);
+    const GIZMO_LABELS: Record<GizmoMode, [string, string]> = {
+      translate: ["✥ move", "Move the selection along the level's axes (W)"],
+      rotate: ["⟳ rotate", "Turn it about its own axes (E)"],
+      scale: ["⤢ scale", "Size it along its own axes (S)"],
+    };
+    for (const m of GIZMO_MODES) {
+      const [label, tip] = GIZMO_LABELS[m];
+      const b = button(label, () => setGizmoMode(m));
+      b.title = tip;
+      gizmoBtns[m] = b;
+      gizmoRow.append(b);
+    }
+    setGizmoMode("translate");
   }
 
   const title = el("div", "ed-title");
@@ -3798,6 +4065,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         return { mode: "polyVertex", body: s, index: i + 1, accepted: mid };
       }
     }
+    if (h.depth && scr.distanceTo(h.depth) <= HANDLE_HIT_PX) {
+      return { mode: "depth", body: s, base: depthOf(s), press: scr };
+    }
     if (h.rotate && scr.distanceTo(h.rotate) <= HANDLE_HIT_PX) return { mode: "rotate", body: s };
     if (h.radius && scr.distanceTo(h.radius) <= HANDLE_HIT_PX) return { mode: "radius", body: s };
     if (s.shape.kind === "rect") {
@@ -3817,6 +4087,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
+    // The gizmo took this press. Its own listener is on `pointerdown`, which
+    // fires first, so by now it has already decided whether a handle was hit -
+    // and a press that grabs an arrow must not also select, pan or rubber-band
+    // whatever happens to be under it.
+    if (gizmo?.busy) return;
     // Pan is the middle button (right too, as a convenience) and CTRL+middle
     // ORBITS the 3D view; the left button belongs to the level - it selects,
     // drags what is selected, and pans everything else (see `panPick`).
@@ -3951,20 +4226,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Geometry cannot be nudged out of place by a gesture that meant to look
       // around, which is the one editing mistake that leaves no trace on screen.
       if (selectedBodyIds.has(hit.bodyId)) {
-        // The whole body drags, since the body is what is selected.
+        // The whole body drags, since the body is what is selected - and a press
+        // that turns out to be a CLICK still drills into the object under it,
+        // which is the second half of "click the body, then click into it".
         const members = bodyMembers(model.items, hit.bodyId);
         const others = members
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
-        drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
+        drag = {
+          mode: "move",
+          lead: hit,
+          others,
+          grab: hit.pos.sub(world),
+          press: scr,
+          moved: false,
+          pick: () => setSelection(clickTargets(hit, true).map((t) => t.id)),
+        };
         return;
       }
       if (selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
-        // An object picked out of a body drags with everything else selected.
+        // An object picked out of a body drags with everything else selected. A
+        // click on it means what it already is, so there is nothing to pick.
         const others = selectedBodies()
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
-        drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
+        drag = {
+          mode: "move",
+          lead: hit,
+          others,
+          grab: hit.pos.sub(world),
+          press: scr,
+          moved: false,
+        };
         return;
       }
       // Not selected: what the press MEANS if it turns out to be a click. The
@@ -4122,6 +4415,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const world = screenToWorld(camera, scr.x, scr.y);
     dragMoved = true;
 
+    // A press on something selected is not a move until the pointer has left the
+    // click's slop, so a click that drills into a body cannot also nudge it by
+    // the pixel the hand shook by - and, since nothing is written before that,
+    // there is no undo step for the nudge that did not happen either.
+    if (drag.mode === "move" && !drag.moved) {
+      if (scr.distanceTo(drag.press) < CLICK_SLOP_PX) return;
+      drag.moved = true;
+    }
+
     // Snapshot once, on the first movement of a model-mutating drag (pan and
     // marquee don't touch the model; draw already snapshotted at mousedown;
     // a chain being strung out has not created anything yet, and takes its
@@ -4247,6 +4549,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         }
         break;
       }
+      case "depth": {
+        // Screen up is +z, at the same scale x and y move at, so a metre of
+        // depth is a metre of the level on screen.
+        const dz = (drag.press.y - scr.y) / (camera.zoom * PIXELS_PER_METER);
+        const z = snap(drag.base + dz);
+        if (drag.body.object === "geometry") drag.body.visual.offsetZ = z;
+        else if (drag.body.object === "light") drag.body.light.z = z;
+        markDirty();
+        refreshFields();
+        break;
+      }
       case "radius": {
         const b = drag.body;
         if (b.shape.kind === "circle") {
@@ -4344,6 +4657,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A press that panned nowhere was a click, and it means what a click on that
     // item has always meant.
     if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
+    if (drag.mode === "move" && !drag.moved) drag.pick?.();
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       if (box) {
@@ -4489,6 +4803,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     else if (e.code === "KeyT") setTool("text");
     else if (e.code === "KeyA") setTool("arrow");
     else if (e.code === "KeyK") setTool("chain");
+    // The gizmo's three modes. W/E/S rather than the usual W/E/R because R is
+    // the rect tool here and a key that means two things is a key that draws a
+    // wall when you meant to resize one.
+    else if (e.code === "KeyW") setGizmoMode("translate");
+    else if (e.code === "KeyE") setGizmoMode("rotate");
+    else if (e.code === "KeyS") setGizmoMode("scale");
   });
 
   // Releasing an arrow closes the nudge run, so the next press starts a fresh
@@ -4595,6 +4915,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (scene3d && viewMode !== "2d") {
         scene3d.setViewportRect(null);
         syncEditorScene();
+        // After the scene is rebuilt and before it is drawn: the handles are on
+        // a proxy rather than on a visual precisely so a rebuild cannot take
+        // them with it, and this is where they pick the model's pose back up.
+        syncGizmo();
         if (sceneLevel) scene3d.render(sceneLevel, camera, 1, orbit);
       }
       // Scene only: the overlay draws nothing at all, so what is on screen is

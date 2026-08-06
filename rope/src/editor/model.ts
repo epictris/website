@@ -1229,6 +1229,44 @@ export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
   return true;
 }
 
+// Resize `item` to `base` scaled by (fx, fy) in its own frame. A circle takes
+// the mean of the two, since it has one radius and a squashed circle is not a
+// shape this format has - which is the same answer `radius` handle gives.
+export function scaleShape(
+  item: EdItem,
+  base: EdShape,
+  fx: number,
+  fy: number,
+  // What a resulting extent is rounded to, so a gizmo drag lands on the same
+  // grid a corner drag does. A polygon is deliberately exempt: rounding each
+  // vertex on its own is not a size, it is a different shape.
+  round: (v: number) => number = (v) => v,
+): void {
+  const floor = (v: number) => Math.max(MIN_SHAPE_EXTENT, round(v));
+  if (item.shape.kind === "rect" && base.kind === "rect") {
+    item.shape.w = floor(base.w * Math.abs(fx));
+    item.shape.h = floor(base.h * Math.abs(fy));
+    return;
+  }
+  if (item.shape.kind === "circle" && base.kind === "circle") {
+    item.shape.r = floor((base.r * (Math.abs(fx) + Math.abs(fy))) / 2);
+    return;
+  }
+  if (item.shape.kind === "poly" && base.kind === "poly") {
+    // Scaling a convex loop leaves it convex, so `setPolyVerts` refuses nothing
+    // here - it is used for the re-centring, which keeps `pos` the centroid the
+    // rigid-body lever arms assume.
+    setPolyVerts(
+      item,
+      base.verts.map((v) => new Vec2(v.x * fx, v.y * fy)),
+    );
+  }
+}
+
+// One on-disk pixel. A shape scaled to nothing can never be grabbed again, and
+// one scaled through zero is inside out.
+const MIN_SHAPE_EXTENT = 0.01;
+
 // Half-extents of an item's (unrotated) bounding box, i.e. centre → top-left.
 export function halfExtents(item: EdItem): Vec2 {
   if (item.shape.kind === "circle") return new Vec2(item.shape.r, item.shape.r);

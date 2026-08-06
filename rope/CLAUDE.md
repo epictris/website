@@ -1340,8 +1340,48 @@ The camera swings about the point it is centred on at exactly the dolly distance
 
 **A turned view draws no overlay**, and that is the whole cost of it.
 The overlay is the gameplay plane projected straight onto the screen, so at any other angle its outlines, handles and bands would sit somewhere the geometry is not - which is worse than drawing nothing, because it looks exactly like an editor that is still aligned.
-So the canvas stops picking too, the cursor says so, and orbiting is a way of LOOKING at a scene with `Reset view` as the way back to editing it.
+So the canvas stops picking too and the cursor says so.
+What still edits there is the **transform gizmo** below, which is in the scene rather than on the overlay - which is the point of it: the fields worth authoring from an angle are the ones a turned view is the only way to judge.
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
+
+### The transform gizmo
+
+A single selected object or body carries the standard **red/green/blue handles** in the 3D scene - arrows to move, rings to turn, boxes to size - through three.js's own `TransformControls` (`editor/gizmo.ts`).
+**W / E / S** and the toolbar's `move` / `rotate` / `scale` pick between them.
+
+It is the answer to the question the overlay cannot even ask.
+The 2D canvas is the gameplay plane seen head on, so it has handles for the two axes that lie in it and no way to say "10 cm toward the camera", "tipped 15° about x" or "a bit bigger" about a mesh whose outline is not what is drawn - and those are exactly the fields a level is dressed with (`EdVisual.offsetZ`, `rotX`, `rotY`, `scale`), every one of which was a number typed into the inspector and checked by looking.
+It is also the only editing there is while the view is **orbited**, which is the view those fields are judged in: the gizmo is in the scene, so it is drawn from wherever the camera is.
+The two features are a pair - orbit to see the depth, drag the blue arrow to author it.
+
+**The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
+
+**A handle is offered only where the format has somewhere to put its answer** (`GizmoHandlers.axes`), so what is on screen is the level's real degrees of freedom rather than three of everything:
+
+| Target | move | rotate | scale |
+|---|---|---|---|
+| geometry object | x, y, z | x, y, z | w/h + depth, or a mesh's one `scale` |
+| collision shape | x, y | z | w/h |
+| light | x, y, z | z (its aim) | - (its reach is the 2D radius handle) |
+| body | x, y | z, as a delta about the centre of mass | - (a body has no size; its objects do) |
+
+Two consequences worth knowing before reaching for it.
+A **mesh has one `scale`**, so any axis of the handle drives it, by the mean of the three factors - the uniform centre handle is exact and a single axis is an approximation of "bigger", because the file has one number and cannot record more.
+And **an axis pointing at the camera cannot be dragged**, which head on is z for a move and the ring for a turn: `TransformControls` hides a handle within a few degrees of the view direction, and maps a ring drag onto the screen direction perpendicular to both the axis and the view, which degenerates as the two line up.
+Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which a geometry object gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
+Orbited, both gizmo handles behave normally - which is the pairing: orbit to see the depth, drag the blue arrow to author it.
+
+### The depth handle
+
+A selected object that HAS a z - a geometry object or a light - carries one more 2D handle: a small blue up/down arrow beside its right edge, labelled with the value in the inspector's own units.
+Dragging it up moves the object toward the camera, at the same scale x and y move at, snapped to the same grid.
+
+It exists because z is the one axis the authoring view has no direction for, and the gizmo cannot cover it in that view for exactly the same reason (above).
+So the two are complements rather than duplicates: **this is the head-on control, the gizmo's blue arrow is the orbited one**, and they are drawn in the same blue so they read as the same axis.
+A collision shape gets none, because it has no z at all - it is the gameplay plane, which is what makes it collision (`hasDepth` / `depthOf` in `editor/render.ts` are the one statement of both).
+A light's handle sits by its source icon rather than out at its reach, for the reason a click on a light lands on the icon: the reach is as wide as the room it lights.
+
+Snapping is the editor's own: the same 10 cm grid and 15° step the 2D drags use, including on the sizes a scale drag writes (`scaleShape`'s `round`), so a gizmo drag and a handle drag cannot land a body in two different places.
 The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.

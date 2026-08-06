@@ -82,6 +82,19 @@ const BODY_MEMBER = "#4f9dff";
 export const HANDLE_SIZE_PX = 8; // drawn square side
 export const HANDLE_HIT_PX = 9; // pointer pick radius
 const ROT_OFFSET_PX = 26; // rotate handle distance beyond the top edge
+const DEPTH_OFFSET_PX = 26; // depth handle distance beyond the right edge
+
+// Which objects have a z at all: the ones that are DRAWN, and lights. A
+// collision shape has none - it is the gameplay plane, which is what makes it
+// collision - so it gets no depth handle rather than one that writes nothing.
+export function hasDepth(item: EdItem): boolean {
+  return item.object === "geometry" || item.object === "light";
+}
+
+// What that handle is dragging, in metres off the plane.
+export function depthOf(item: EdItem): number {
+  return item.object === "geometry" ? item.visual.offsetZ : item.object === "light" ? item.light.z : 0;
+}
 
 export interface Handles {
   body: EdItem;
@@ -96,6 +109,15 @@ export interface Handles {
   // box. The midpoints between them are where a new vertex is inserted.
   verts: Vec2[] | null;
   vertMids: Vec2[] | null;
+  // Screen position of the DEPTH handle: the one axis the canvas cannot show,
+  // dragged up and down beside the shape (see `drawDepthHandle`). Only the
+  // objects that have a z - a drawn form and a light - get one.
+  //
+  // The 3D gizmo has a blue z arrow and it is not a substitute: three's
+  // `TransformControls` hides an axis pointing at the camera, which is exactly
+  // what z is in the view this editor authors in. So the gizmo's arrow is what
+  // an ORBITED view offers and this is what the head-on one does.
+  depth: Vec2 | null;
 }
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
@@ -103,7 +125,23 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   // An arrow is a segment, so it is edited by its endpoints: dragging either one
   // sets the position, length and direction at once, which is what a corner box
   // plus a rotate knob would take three gestures to do.
-  const none = { corners: [], rotate: null, rotateBase: null, radius: null, ends: null, verts: null, vertMids: null };
+  const none = {
+    corners: [],
+    rotate: null,
+    rotateBase: null,
+    radius: null,
+    ends: null,
+    verts: null,
+    vertMids: null,
+    depth: null,
+  };
+  // Beside the shape's right edge, on the body's own +x, so it sits clear of the
+  // corner boxes and turns with the shape exactly as the rotate knob does.
+  const depthHandle = (edge: number): Vec2 | null => {
+    if (!hasDepth(body)) return null;
+    const right = new Vec2(1, 0).rotated(body.rot).normalized();
+    return worldToScreen(cam, toWorld(body, new Vec2(edge, 0))).add(right.mul(DEPTH_OFFSET_PX));
+  };
   if (isArrowNote(body)) {
     const { tail, head } = arrowEnds(body);
     return {
@@ -129,6 +167,12 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       rotate: base ? base.add(up.mul(ROT_OFFSET_PX)) : null,
       rotateBase: base,
       radius: worldToScreen(cam, toWorld(body, new Vec2(r, 0))),
+      // A light's circle is its REACH, which is as wide as the room it lights,
+      // so its depth handle goes beside the source icon instead - the same
+      // reason a click on a light lands on the icon and not on the pool.
+      depth: depthHandle(
+        body.object === "light" ? lightPickRadius(1 / (cam.zoom * PIXELS_PER_METER)) : r,
+      ),
     };
   }
   const h = halfExtents(body);
@@ -147,6 +191,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       vertMids: world.map((w, i) =>
         worldToScreen(cam, w.add(world[(i + 1) % n]!).mul(0.5)),
       ),
+      depth: depthHandle(h.x),
     };
   }
   const hw = body.shape.w / 2;
@@ -163,6 +208,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     corners,
     rotate: topMid.add(up.mul(ROT_OFFSET_PX)),
     rotateBase: topMid,
+    depth: depthHandle(hw),
   };
 }
 
@@ -288,6 +334,36 @@ function strokeCompoundOutline(
     ctx.stroke(own);
     ctx.restore();
   }
+}
+
+// The depth handle: an up/down arrow beside the shape, in the gizmo's own blue
+// so the two ways of authoring the same axis read as the same axis. Dragging it
+// up is toward the camera, which is +z, and the value is drawn beside it in the
+// inspector's units - a handle for a quantity with no on-screen extent has to
+// say what it is at, or a drag has no feedback but the shading.
+function drawDepthHandle(ctx: CanvasRenderingContext2D, p: Vec2, z: number): void {
+  const r = HANDLE_SIZE_PX / 2 + 1;
+  ctx.strokeStyle = BODY_MEMBER;
+  ctx.fillStyle = HANDLE_FILL;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r + 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y - r);
+  ctx.lineTo(p.x, p.y + r);
+  for (const s of [-1, 1]) {
+    ctx.moveTo(p.x - 3, p.y + s * (r - 3));
+    ctx.lineTo(p.x, p.y + s * r);
+    ctx.lineTo(p.x + 3, p.y + s * (r - 3));
+  }
+  ctx.stroke();
+  // Scene pixels, which is what the inspector's `off z` field shows: two
+  // readouts of one number in two units is a number nobody trusts.
+  ctx.fillStyle = BODY_MEMBER;
+  ctx.textBaseline = "middle";
+  ctx.fillText(`z ${Math.round(z * PIXELS_PER_METER)}`, p.x + r + 4, p.y);
 }
 
 function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
@@ -1269,6 +1345,7 @@ export function drawEditor(
     // An arrow's endpoints are round, so they read as "drag me somewhere"
     // rather than as the corners of a box.
     if (hs.ends) for (const e of hs.ends) circleHandle(ctx, e);
+    if (hs.depth) drawDepthHandle(ctx, hs.depth, depthOf(selected));
   }
 
   // Rubber-band box, in screen space so its outline stays one pixel at any zoom.
