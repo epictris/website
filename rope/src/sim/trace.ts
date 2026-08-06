@@ -687,11 +687,24 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   // accelerate it. A positive solver speed-gain on the anchoring frame means
   // the anchor was born over its max length and the solve dumped the excess
   // into the ball as a one-frame velocity kick (the tip-anchor lurch).
-  if (level.anchorKickSpeedGain !== null && level.anchorKickSpeedGain > ANCHOR_KICK_TOLERANCE) {
+  //
+  // Except by the winch, and for exactly the reason `rope-solve-kick` below
+  // subtracts the same budget: a ball spinning as its hook lands is winding
+  // chain onto its own rim, the free span shortens by |omega| x the spool rate,
+  // and hauling the ball towards its anchor is what pays for that. It is the
+  // mechanic, not a lurch, and it is not rare on an anchoring frame - the shot
+  // leaves through the loop, so the ball is usually still turning when the hook
+  // lands. Charged to the bare bar it read as the bug at 1.1 m/s out of a 2.7
+  // m/s entitlement, on frames whose over-length was 100% the winding's
+  // (`session-234f` f84, `session-576f` f61).
+  const anchorKick = (level.anchorKickSpeedGain ?? 0) - level.chainWinchSpeedBudget;
+  if (level.anchorKickSpeedGain !== null && anchorKick > ANCHOR_KICK_TOLERANCE) {
     out.push({
       frame,
       kind: "rope-anchor-kick",
-      detail: `solve added ${level.anchorKickSpeedGain.toFixed(1)} px/s as the chain anchored`,
+      detail:
+        `solve added ${level.anchorKickSpeedGain.toFixed(1)} m/s as the chain anchored, ` +
+        `${anchorKick.toFixed(1)} of it beyond what winding paid for`,
     });
   }
   // Measured against what the frame's own winding entitles the solve to. Winding

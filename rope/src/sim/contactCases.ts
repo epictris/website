@@ -940,6 +940,86 @@ function caseLoopCap(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// loop-wall: a spinning ball must not climb a wall on its loop.
+//
+// `loop-cap` above is about the NORMAL half of the same object: the loop is
+// mounted off the ball's centre, so its contact point carries a normal component
+// of omega x r, and driving it into a surface presses with a force the
+// kinematic spin never paid for. The cap takes that back out of the outgoing
+// normal velocity - and left the tangential half alone, where it is worse,
+// because friction is sized from the very normal impulse the spin fabricated.
+//
+// Scrubbed against a wall, the ball therefore funded its own traction: 135 N.s
+// of normal impulse out of a ball whose own approach to the wall was zero, spent
+// as 120 N.s of friction pointing straight up, +2.1 m/s per touch. It ratcheted
+// 90 cm up a flat wall in 35 frames, on nothing but the spin (`session-200f`),
+// and no invariant saw it - the run replays HEALTHY, because a ball going up is
+// only a bug if you know it had nothing to climb with.
+//
+// So the fabricated share is taken off the friction cone
+// (`spinFabricatedNormal`) and the wall gives nothing back.
+//
+// The floor here is FRICTIONLESS, which is the whole design of the scene: what
+// is on trial is the loop, and a ball rolling on an ordinary floor drives itself
+// into the wall through its own rim - the conveyor that IS the mechanic
+// (`spin-drive`) - and then bounces up it off a normal load its own impact
+// genuinely paid for. That is a different question with a different answer, and
+// mixing the two makes a detector that cannot say which one it is watching. With
+// no traction under it the ball has no approach to the wall at all, so every
+// newton the wall ever pushes with is the spin's own doing, and the only honest
+// answer is that it stays where it is.
+// ---------------------------------------------------------------------------
+function caseLoopWall(sims: Sim[]): ContactResult {
+  // Both signs: the drive is whichever way the loop is scrubbing, so a fix that
+  // bounded one direction would read green on half the phases.
+  const SPINS = [-45, -20, 20, 45];
+  const PHASES = 8;
+
+  const climb = (spin: number): number => {
+    let worst = 0;
+    for (let i = 0; i < PHASES; i++) {
+      const sim = new Sim(`loop-wall-${spin}-${i}`);
+      sims.push(sim);
+      sim.addStatic(rectShape(40, 1), Vec2.ZERO, 0, 0);
+      // A wall to the ball's right, its face at x = 0.14 — the ball's own rim
+      // just touching it, so what reaches past it is the loop.
+      sim.addStatic(rectShape(1, 8), new Vec2(0.64, -4));
+      const ball = new BallPlayer(0.12);
+      ball.globalPosition = new Vec2(0.02, -0.62);
+      ball.globalRotation = (i * 2 * Math.PI) / PHASES;
+      sim.world.add(ball);
+      const restY = ball.globalPosition.y;
+      let before = ball.linearVelocity;
+      sim.step(240, () => {
+        // What aim steering does every frame: drive the spin kinematically.
+        ball.kinematicRotation = true;
+        ball.angularVelocity = spin;
+        ball.applyLoopCap(sim.world.frameContacts, before);
+        before = ball.linearVelocity;
+        // Up is -y: how far above its resting height the wall has carried it.
+        worst = Math.max(worst, restY - ball.globalPosition.y);
+      });
+    }
+    return worst;
+  };
+
+  // The loop driven into the FLOOR still lifts the ball by the bounce `loop-cap`
+  // allows it — 0.85 m/s, which is 3.7 cm of arc — so the bar is above that and
+  // far below a climb. Uncapped, these phases reach 29 cm at the mildest and
+  // 7.4 m at the worst.
+  const NO_CLIMB = 0.08;
+  const runs = SPINS.map((spin) => ({ spin, rise: climb(spin) }));
+  const passed = runs.every((r) => r.rise < NO_CLIMB);
+  return ok("loop-wall — a spinning ball cannot climb a wall on its loop", passed, [
+    ...runs.map(
+      (r) =>
+        `${r.rise < NO_CLIMB ? "ok  " : "BAD "} ${r.spin} rad/s: rose ` +
+        `${(r.rise * 100).toFixed(2)}cm over ${PHASES} phases (want <${NO_CLIMB * 100}cm)`,
+    ),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // grip-reseed: a steered ball that loses its footing and gets it back must not
 // be dragged back to where it lost it.
 //
@@ -1973,6 +2053,7 @@ export function runContactCases(): ContactResult[] {
     caseSpinDrive(sims),
     caseRollDrive(sims),
     caseLoopCap(sims),
+    caseLoopWall(sims),
     caseGripReseed(sims),
   ];
   ContactAudit.enabled = false;

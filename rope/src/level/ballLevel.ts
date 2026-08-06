@@ -235,7 +235,6 @@ export class BallLevel {
       this.ball.chain !== null && !(this.ball.chain.end.contact.obj instanceof BallHook);
     const anchoredThisFrame = endFixed && !this.endWasFixed;
     if (this.ball.chainAnchored && this.ball.chain) {
-      if (anchoredThisFrame) this.chainAnchorLength = this.ball.chain.maxRopeLength;
       const speedBefore = this.ball.linearVelocity.length();
       const positionBeforeChain = this.ball.globalPosition;
       const velocityBeforeChain = this.ball.linearVelocity;
@@ -255,11 +254,34 @@ export class BallLevel {
         this.sceneChains.length > 0 ? snapshotChainBodies(this.sceneChains, this.ball) : [];
       this.ball.chain.beginFrame(delta);
       this.ball.chain.syncWraps(this.bodies);
-      const overLengthBeforeSolve =
-        this.ball.chain.getCurrentLength() - this.ball.chain.constraintLength;
       const spinLength =
         Math.abs(this.ball.globalRotation - ballRotationAtFrameStart) *
         Math.abs(this.ball.chain.lengthPerRadian(this.ball));
+      // An anchor is born at the length the chain had reached, which is what
+      // leaves the constraint already satisfied on its first frame and the
+      // solver with nothing to correct (`BallPlayer`'s attach callback). That
+      // measurement is taken where the hook attaches - in the swept check at the
+      // TOP of the frame, before `integrate` and the push-out move the ball - so
+      // the promise holds only for a ball that then does not move. One that does
+      // is charged, on its very first frame, for the distance it travelled after
+      // the chain was already attached: a ball falling the last 2.5 cm onto the
+      // ground had its 6 cm chain measured 2 cm short and the solve flicked it
+      // back off the floor at 0.9 m/s (`session-1195f` f590), which is precisely
+      // the resting-ball lurch `rope-anchor-kick` is named for.
+      //
+      // So the birth length is re-taken here, where the frame actually leaves
+      // the ball. Not the winding's share of it: chain wound onto the ball's own
+      // rim this frame is the winch's to haul in and the unwind's to refuse (see
+      // below), and handing it to the length instead would pay the ball for its
+      // own kinematic spin. It only ever lengthens, so an anchor born slack -
+      // the ball travelling towards it - keeps the length it reached at.
+      if (anchoredThisFrame) {
+        const born = this.ball.chain.getCurrentLength() - spinLength;
+        if (born > this.ball.chain.maxRopeLength) this.ball.chain.maxRopeLength = born;
+        this.chainAnchorLength = this.ball.chain.maxRopeLength;
+      }
+      const overLengthBeforeSolve =
+        this.ball.chain.getCurrentLength() - this.ball.chain.constraintLength;
       const spinShare =
         overLengthBeforeSolve > 0
           ? Mathf.clamp(spinLength / overLengthBeforeSolve, 0, 1)

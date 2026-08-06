@@ -477,6 +477,50 @@ before and are identical now).
 The high spin is what stops the hop coming back as a threshold nobody notices:
 the phases agree just as well when a launch is being written over them.
 
+The cap is one half of the loop, and the **friction cone** is the other.
+A shape mounted at the body's own centre reaches a contact only as slip - its
+contact point lies along the normal, so `omega x r` there is purely tangential -
+and that slip is the conveyor belt that *is* the rolling mechanic, Coulomb-capped
+by the ball's own weight.
+The loop is mounted off the centre, so its contact point carries a **normal**
+component of `omega x r` as well: spinning presses it into whatever it is
+against, which fabricates a normal impulse out of a kinematic spin nothing paid
+for, and `mu * Pn` then sizes a friction cone from it.
+The cone is the drive, so the ball funded its own traction against a **wall**:
+135 N·s of normal impulse out of a ball whose own approach to the wall was zero,
+spent as 120 N·s of friction pointing straight up, +2.1 m/s per touch.
+It ratcheted 90 cm up a flat wall in 35 frames on nothing but the spin
+(`session-200f`), and no invariant saw it - the run replays HEALTHY, because a
+ball going up is only a bug once you know it had nothing to climb with.
+`World.spinFabricatedNormal` measures that share and takes it off the cone: what
+the spin pressed the surface with is not something the surface may press back
+with.
+It is the same statement the cap makes about the outgoing normal velocity, made
+about the tangential half, and as there it is the spin's **own contribution** and
+not a fraction of the answer - sized as the impulse that kills the spin's
+approach and pays its bounce, so a contact keeps the whole of the cone its own
+linear approach earned.
+Removing the spin from the tangential **slip** as well is the tempting second
+half and it is wrong: a loop bearing down on the floor is bearing the ball's
+weight, and there the drive is the mechanic working.
+Taken out, a rolling ball loses a fifth of its travel (`ball-roll-drive`, 2.4 m
+against 4.9) and a ground wind-up stops paying its chain in
+(`ball-ground-wind-up`).
+The load is what was fabricated; the slip was always real.
+The gate is the **mount** and not the arithmetic - for a centred shape the term
+is identically zero, and asking the shape where it is mounted keeps it exactly
+zero in floats rather than nearly so, which is what leaves every recorded replay
+of a ball rolling on its own rim bit-identical.
+`cli contacts` `loop-wall` is the detector, and its floor is **frictionless** on
+purpose: a ball rolling on an ordinary floor drives itself into the wall through
+its own rim and then bounces up it off a load its impact genuinely paid for,
+which is a different question with a different answer, and a scene mixing the two
+cannot say which one it is watching.
+With no traction under it the ball has no approach to the wall at all, every
+newton the wall pushes with is the spin's own doing, and the only honest answer
+is that it stays where it is - 3.8 cm of the capped bounce off its own loop,
+against 44 cm and 7.4 m uncapped.
+
 ### The coil
 
 Rope wound onto the circular body the rope *starts* on — the ball winding its own
@@ -742,6 +786,34 @@ A launch has no winding behind it, so subtracting the budget leaves that case
 exactly as visible while taking the mechanic out of the measurement: past the
 subtraction the whole corpus sits under 1 m/s, against a bar of 4. It is the general form of
 `rope-anchor-kick`, which only ever watched the anchoring frame.
+
+`rope-anchor-kick` subtracts **the same budget**, and for the same reason.
+The shot leaves through the loop, so the ball is usually still turning when the
+hook lands, and a ball spinning as its anchor is born is winding chain onto its
+own rim exactly as it is on any other frame - hauling it towards the anchor is
+what pays for that, and it is the mechanic rather than a lurch.
+Charged to the bare bar it read as the bug at 1.1 m/s out of a 2.7 m/s
+entitlement, on frames whose over-length was 100% the winding's (`session-234f`
+f84, `session-576f` f61).
+
+What the invariant *is* for still happens, and the cause is an ordering one.
+An anchor is born at the length the chain had reached (`BallPlayer`'s attach
+callback), which is what leaves the constraint already satisfied on its first
+frame and the solver with nothing to correct - but that measurement is taken in
+the hook's swept attach check at the **top** of the frame, before `integrate` and
+the push-out move the ball, so the promise holds only for a ball that then does
+not move.
+One that does is charged on its very first frame for the distance it travelled
+after the chain was already attached: a ball falling the last 2.5 cm onto the
+ground had its 6 cm chain measured 2 cm short, and the solve flicked it back off
+the floor at 0.9 m/s (`session-1195f` f590) - precisely the resting-ball lurch
+the invariant is named for.
+So `BallLevel` re-takes the birth length in the chain phase, where the frame
+actually leaves the ball, less the **winding's** share of it: chain wound onto
+the rim this frame is the winch's to haul in and the unwind's to refuse, and
+handing it to the length instead would pay the ball for its own kinematic spin.
+It only ever lengthens, so an anchor born slack - the ball travelling towards it -
+keeps the length it reached at.
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
 may not rise beyond a tolerance.

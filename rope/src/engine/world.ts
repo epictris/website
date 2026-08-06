@@ -219,6 +219,10 @@ interface SolverContact {
   // body on this contact is an aiming ball (see `contactBrakeScale`).
   readonly brakePos: number;
   readonly brakeNeg: number;
+  // How much of this contact's normal impulse a KINEMATIC spin fabricated, and
+  // so may not fund friction with — see `spinFabricatedNormal`. 0 for every
+  // contact that is not an off-centre shape on a kinematically spun body.
+  readonly spinNormal: number;
   readonly key: string;
 }
 
@@ -1004,6 +1008,7 @@ export class World {
         friction: combinedFriction(c.a, c.b, bRigid),
         brakePos: brakeScale(c.a, bRigid, tangent),
         brakeNeg: brakeScale(c.a, bRigid, tangent.neg()),
+        spinNormal: spinFabricatedNormal(c, bRigid, rA, rB, restitution, invEffN),
         key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
       });
     }
@@ -1137,7 +1142,10 @@ export class World {
     // shed momentum, while impulses that drive it still land in full. Written on
     // the cone rather than on the applied increment so the running total stays a
     // true record of what was applied, which is what warm starting reads.
-    const cone = s.friction * c.normalImpulse;
+    // ...and it is scaled by the part of the normal impulse a real load put
+    // there. A kinematic spin driving an off-centre shape into a surface is not
+    // one, and what it fabricated buys nothing (see `spinFabricatedNormal`).
+    const cone = s.friction * Math.max(0, c.normalImpulse - s.spinNormal);
     const total = clamp(
       c.tangentImpulse - vt / s.invEffT,
       -cone * s.brakeNeg,
@@ -1840,6 +1848,78 @@ function brakeScale(a: RigidBody2D, bRigid: RigidBody2D | null, dir: Vec2): numb
     scale = Math.min(scale, bRigid.contactBrakeScale);
   }
   return scale;
+}
+
+// How much of a contact's normal impulse a KINEMATICALLY DRIVEN spin put there.
+//
+// A driven spin is an infinite reservoir - `kinematicRotation` means the ball's
+// aim steering overwrites `angularVelocity` every frame, so no impulse can be
+// taken back out of it - and the friction cone above is written on the
+// understanding that the normal impulse it is scaled by is a real load: a
+// weight, an impact, a constraint pressing two bodies together. Everything a
+// contact drives with is bought from that.
+//
+// A shape mounted at the body's own centre cannot break it. Its contact point
+// lies along the normal, so `omega x r` there is purely tangential: the spin
+// reaches the surface as SLIP and nothing else, which is the conveyor belt that
+// IS the rolling mechanic, Coulomb-capped by the ball's own weight.
+//
+// A shape mounted OFF the centre is a different object. The ball's loop is a
+// second circle on the rim, so its contact point carries a NORMAL component of
+// `omega x r` and spinning drives it into whatever it is against. That
+// fabricates a normal impulse out of nothing, the cone is sized from it, and the
+// friction it buys is a drive with no force behind it. A ball resting in a
+// corner scrubbed its loop against the wall and climbed it: +2.1 m/s upward per
+// touch, out of a 135 N.s normal impulse the ball's own motion contributed
+// nothing to, ratcheting 90 cm up a flat wall in 35 frames (`session-200f`).
+// With no traction under it at all it goes 7.4 m up (`loop-wall`).
+//
+// So the fabricated share is measured and taken off the cone: what the spin
+// pressed the surface with is not something the surface may press back with.
+// That is the same statement `BallPlayer.applyLoopCap` makes about the outgoing
+// NORMAL velocity of a loop landing, made about the tangential half - and, as
+// there, it is the spin's own contribution and not a fraction of the answer.
+// Sizing it as the impulse that kills the spin's approach and pays its bounce -
+// `(1 + restitution) * approach / invEffN` - is exactly what the normal solve
+// does with an approach, so a contact keeps the whole of the cone its own linear
+// approach earned and only the surplus goes.
+//
+// What must NOT go with it is the slip: removing the spin from the tangential
+// velocity as well is the tempting second half and it is wrong, because a loop
+// bearing down on the FLOOR is bearing the ball's weight, and there the drive is
+// the mechanic doing its job. Taken out, a rolling ball loses a fifth of its
+// travel (`ball-roll-drive`, 2.4 m against 4.9) and a ground wind-up stops
+// paying its chain in (`ball-ground-wind-up`). The load is what was fabricated;
+// the slip was always real.
+//
+// The gate is the MOUNT and not the arithmetic: for a centred shape the term is
+// identically zero, and asking the shape where it is mounted keeps it exactly
+// zero in floats rather than nearly so - which is what leaves every recorded
+// replay of a ball rolling on its own rim untouched, bit for bit.
+function spinFabricatedNormal(
+  c: ContactConstraint,
+  bRigid: RigidBody2D | null,
+  rA: Vec2,
+  rB: Vec2,
+  restitution: number,
+  invEffN: number,
+): number {
+  let vn = 0;
+  if (spinsOffCentre(c.a, c.shapeA)) vn += c.a.angularVelocity * rA.cross(c.normal);
+  if (bRigid && spinsOffCentre(bRigid, c.shapeB)) vn -= bRigid.angularVelocity * rB.cross(c.normal);
+  // Only a spin pressing INTO the surface fabricates anything; one lifting the
+  // shape away has already cost the contact its impulse rather than bought it.
+  const approach = Math.max(0, -vn);
+  if (approach === 0) return 0;
+  return (approach * (1 + restitution)) / invEffN;
+}
+
+// Is this contact on a shape whose spin can press it into a surface without
+// anything paying for the spin?
+function spinsOffCentre(body: RigidBody2D, shapeIndex: number): boolean {
+  if (!body.kinematicRotation) return false;
+  const shape = body.getShapes()[shapeIndex];
+  return shape !== undefined && shape.localOffset.lengthSquared() > 0;
 }
 
 // Symmetric overlap test between two shape transforms.
