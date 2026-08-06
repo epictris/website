@@ -33,7 +33,14 @@ import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
-import { FOV_Y_DEG, placeAt, syncCamera, VIEW_ASPECT } from "./space";
+import {
+  FOV_Y_DEG,
+  NO_ORBIT,
+  placeAt,
+  syncCamera,
+  VIEW_ASPECT,
+  type CameraOrbit,
+} from "./space";
 import { updateWater } from "./water";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
@@ -331,7 +338,14 @@ export class Scene3D {
 
   // One rendered frame. `alpha` is the interpolation factor the 2D renderer
   // takes, and every transform below is read at it.
-  render(level: Scene3DLevel, camera: Camera, alpha: number): void {
+  // `orbit` turns the view about what it is looking at, and only the editor ever
+  // passes one (see `CameraOrbit`); the game's view is always head-on.
+  render(
+    level: Scene3DLevel,
+    camera: Camera,
+    alpha: number,
+    orbit: CameraOrbit = NO_ORBIT,
+  ): void {
     const rect = this.viewportRect;
     if (rect) {
       this.renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
@@ -345,7 +359,7 @@ export class Scene3D {
       this.renderer.setViewport(0, 0, this.size.x, this.size.y);
       this.renderer.setScissorTest(false);
     }
-    syncCamera(this.camera, camera);
+    syncCamera(this.camera, camera, FOV_Y_DEG, orbit);
     this.env.follow(camera);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     this.lights.update(clock);

@@ -98,6 +98,29 @@ export function cameraDistance(camera: Camera, fovYDeg = FOV_Y_DEG): number {
   return visibleHeightMetres(camera) / 2 / Math.tan(fovY / 2);
 }
 
+// A turn of the view about the point the camera is looking at, in radians. It is
+// EDITOR-ONLY furniture and the game never sets it: the whole correspondence
+// below (and every overlay drawn on top of it) holds because the gameplay plane
+// is parallel to the image plane, so a level is played from the one view it was
+// authored against.
+//
+// What it is for is judging the scene - how deep a prop reads, whether a light
+// pool falls where it looks like it does on the plane - which is a question the
+// head-on view cannot answer at all. Its cost is that the 2D overlay no longer
+// lines up with what is drawn, so the editor stops drawing the overlay while the
+// view is turned rather than drawing outlines in the wrong place (see the reset
+// button in `editor.ts`).
+export interface CameraOrbit {
+  yaw: number;
+  pitch: number;
+}
+export const NO_ORBIT: CameraOrbit = { yaw: 0, pitch: 0 };
+// Short of the poles, where the up vector degenerates and the view rolls.
+export const MAX_ORBIT_PITCH = (80 * Math.PI) / 180;
+export function isHeadOn(orbit: CameraOrbit): boolean {
+  return orbit.yaw === 0 && orbit.pitch === 0;
+}
+
 // Drive `threeCam` from the 2D camera. Called every rendered frame, before
 // drawing; the 2D camera has already been updated by the CameraController, so
 // the two are the same view by construction rather than by being kept in step.
@@ -105,18 +128,39 @@ export function syncCamera(
   threeCam: THREE.PerspectiveCamera,
   camera: Camera,
   fovYDeg = FOV_Y_DEG,
+  orbit: CameraOrbit = NO_ORBIT,
 ): void {
   const x = camera.position.x;
   const y = threeY(camera.position.y);
   const dist = cameraDistance(camera, fovYDeg);
   threeCam.fov = fovYDeg;
   threeCam.aspect = camera.viewportWidth / camera.viewportHeight;
-  threeCam.position.set(x, y, dist);
-  // Looking straight down -z keeps the gameplay plane parallel to the image
-  // plane, which is what makes the alignment with the 2D overlay exact rather
-  // than exact-at-the-centre. `lookAt` would give the same rotation, but this
-  // states it: the camera never tilts, whatever the level does with the view.
-  threeCam.rotation.set(0, 0, 0);
+  // The head-on view is written out rather than reached through the orbit path
+  // at zero, so the game's camera is the same arithmetic it has always been: a
+  // `lookAt` that ought to produce the identity rotation is not a thing to take
+  // on trust when every overlay in the project is aligned against it.
+  if (isHeadOn(orbit)) {
+    threeCam.position.set(x, y, dist);
+    // Looking straight down -z keeps the gameplay plane parallel to the image
+    // plane, which is what makes the alignment with the 2D overlay exact rather
+    // than exact-at-the-centre. `lookAt` would give the same rotation, but this
+    // states it: the camera never tilts, whatever the level does with the view.
+    threeCam.rotation.set(0, 0, 0);
+    threeCam.updateProjectionMatrix();
+    return;
+  }
+  // Orbited: the camera swings around the point it was looking at, at exactly
+  // the dolly distance the zoom asks for, so turning the view neither zooms it
+  // nor slides what it is centred on.
+  const pitch = Math.max(-MAX_ORBIT_PITCH, Math.min(MAX_ORBIT_PITCH, orbit.pitch));
+  const cp = Math.cos(pitch);
+  threeCam.position.set(
+    x + dist * Math.sin(orbit.yaw) * cp,
+    y + dist * Math.sin(pitch),
+    dist * Math.cos(orbit.yaw) * cp,
+  );
+  threeCam.up.set(0, 1, 0);
+  threeCam.lookAt(x, y, 0);
   threeCam.updateProjectionMatrix();
 }
 

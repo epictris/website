@@ -108,6 +108,7 @@ import {
   TEXTURE_ASSETS,
 } from "../render3d/assets";
 import { Scene3D, type Scene3DLevel } from "../render3d/scene";
+import { isHeadOn, MAX_ORBIT_PITCH, type CameraOrbit } from "../render3d/space";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import {
@@ -179,8 +180,30 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 // they can't drift apart.
 const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "anchor", "force", "water"];
 
+// How far the pointer must travel before a press that could mean either becomes
+// a drag rather than a click, in screen pixels. Small enough that a deliberate
+// drag never reads as a click, large enough that a hand shaking on a mouse
+// button does not turn a selection into a pan.
+const CLICK_SLOP_PX = 4;
+// Orbit sensitivity: a drag across a 1600px window is a bit over a half turn,
+// which is enough to see round a prop without a level swinging past under a
+// nudge.
+const ORBIT_RADIANS_PER_PX = 0.006;
+
 type Drag =
   | { mode: "pan"; lastScreen: Vec2 }
+  // A press on something that is NOT selected yet: it pans, and selects only if
+  // the pointer never really moved. The level is the thing you are looking at
+  // most of the time, so dragging it about has to be the cheapest gesture there
+  // is - and moving geometry by accident, while reaching for the view, is the
+  // one editing mistake that is silent (it looks like the level, and the level
+  // is different). Selecting first and dragging second is what makes moving a
+  // body deliberate.
+  | { mode: "panPick"; lastScreen: Vec2; travel: number; pick: () => void }
+  // Turning the 3D view about what it is centred on (see `CameraOrbit`). Middle
+  // button, and only while a scene is drawn: in the 2D view there is nothing to
+  // orbit, so the button keeps panning there.
+  | { mode: "orbit"; lastScreen: Vec2 }
   // Rubber-band select. `additive` (shift) unions the hits into the existing
   // selection instead of replacing it.
   | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean }
@@ -257,6 +280,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   })();
   if (!scene3d) viewMode = "2d";
+  // How far the 3D view is turned from the side-on view the level is authored
+  // against. Editor-only, and zero for every other host (see `CameraOrbit`).
+  //
+  // Turned at all, the overlay is not drawn: it is a projection of the gameplay
+  // plane straight onto the screen, so at any other angle its outlines, handles
+  // and marquee would sit somewhere the geometry is not - a level authored
+  // against a picture that is a few degrees out is a level authored wrongly. So
+  // orbiting is a way of LOOKING at a scene, and `Reset view` is the way back to
+  // editing it.
+  const orbit: CameraOrbit = { yaw: 0, pitch: 0 };
+  const orbited = (): boolean => scene3d !== null && viewMode !== "2d" && !isHeadOn(orbit);
+  let resetViewBtn: HTMLButtonElement | null = null;
+  function refreshOrbitBtn(): void {
+    resetViewBtn?.classList.toggle("active", orbited());
+  }
+  function resetOrbit(): void {
+    orbit.yaw = 0;
+    orbit.pitch = 0;
+    refreshOrbitBtn();
+    applyToolCursor();
+  }
   // The scene is rebuilt from the model whenever the model changes. A full
   // rebuild on every revision is deliberate: the model is small (a level is a
   // couple of hundred shapes), a rebuild is a few milliseconds, and correctness
@@ -989,12 +1033,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // The 3D canvas keeps its last frame otherwise, showing a stale scene
       // under a 2D view that is meant to be the editor exactly as it was.
       if (sceneCanvas) sceneCanvas.style.display = m === "2d" ? "none" : "";
+      // A turned view is only a turned view while a scene is drawn: the 2D mode
+      // is the plane itself and edits normally, orbit or no orbit.
+      refreshOrbitBtn();
+      applyToolCursor();
     };
     viewBtns["2d"] = button("2D", () => setViewMode("2d"));
     viewBtns["3d"] = button("3D", () => setViewMode("3d"));
     viewBtns.overlay = button("3D + overlay", () => setViewMode("overlay"));
-    viewRow.append(viewBtns["2d"]!, viewBtns["3d"]!, viewBtns.overlay!);
+    // Back to the view the level is authored against. A turned view has no
+    // overlay and nothing to click (see `orbit`), so this is the only way out of
+    // one, and it lights up while the view is turned so it reads as the way back
+    // rather than as a button that usually does nothing.
+    resetViewBtn = button("⟲ Reset view", resetOrbit);
+    resetViewBtn.title = "Face the gameplay plane again (Ctrl + middle-drag orbits)";
+    viewRow.append(viewBtns["2d"]!, viewBtns["3d"]!, viewBtns.overlay!, resetViewBtn);
     setViewMode(viewMode);
+    refreshOrbitBtn();
   }
 
   const title = el("div", "ed-title");
@@ -1261,6 +1316,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
+    // A turned view has nothing to click - the overlay is not drawn and a pick
+    // would land on the plane rather than on what is on screen - so the pointer
+    // says so: the canvas is something to move the view with and nothing else.
+    if (orbited()) {
+      canvas.style.cursor = "grab";
+      return;
+    }
     canvas.style.cursor = tool === "select" ? "default" : "crosshair";
   }
   function setTool(t: Tool): void {
@@ -3755,8 +3817,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   canvas.addEventListener("mousedown", (e) => {
     if (mode !== "edit") return;
-    // Pan is a middle-button drag (right too, as a convenience): the left button
-    // draws the rubber-band selection instead.
+    // Pan is the middle button (right too, as a convenience) and CTRL+middle
+    // ORBITS the 3D view; the left button belongs to the level - it selects,
+    // drags what is selected, and pans everything else (see `panPick`).
+    //
+    // Orbit is the modified gesture rather than the plain one because it is the
+    // rarer act and the one you come back from: panning is how you get around a
+    // level and is wanted on every view, orbiting is how you judge one. With no
+    // scene to turn, Ctrl+middle simply pans like any other middle drag.
+    if (e.button === 1 && e.ctrlKey && scene3d && viewMode !== "2d") {
+      drag = { mode: "orbit", lastScreen: pointerScreen(e) };
+      canvas.style.cursor = "grabbing";
+      e.preventDefault();
+      return;
+    }
     if (e.button === 1 || e.button === 2) {
       drag = { mode: "pan", lastScreen: pointerScreen(e) };
       canvas.style.cursor = "grabbing";
@@ -3764,6 +3838,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (e.button !== 0) return;
+    // A turned view is for looking: the overlay that says what a click would hit
+    // is not on screen, and the pick would be resolved against the plane rather
+    // than against what is drawn. So the left button only moves the view until
+    // `Reset view` puts it back.
+    if (orbited()) {
+      drag = { mode: "pan", lastScreen: pointerScreen(e) };
+      canvas.style.cursor = "grabbing";
+      return;
+    }
     const scr = pointerScreen(e);
     const world = screenToWorld(camera, scr.x, scr.y);
     dragMoved = false;
@@ -3862,9 +3945,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag = null;
         return;
       }
-      if (!e.shiftKey && !e.altKey && !insideCurrentBody(hit)) {
-        setBodySelection(hit.bodyId);
-        // The whole body drags, since the body is what was selected.
+      // SELECTED FIRST, MOVED SECOND. A press on something already selected
+      // drags it; a press on anything else pans and selects on release, so
+      // reaching for the view over a wall moves the view and not the wall.
+      // Geometry cannot be nudged out of place by a gesture that meant to look
+      // around, which is the one editing mistake that leaves no trace on screen.
+      if (selectedBodyIds.has(hit.bodyId)) {
+        // The whole body drags, since the body is what is selected.
         const members = bodyMembers(model.items, hit.bodyId);
         const others = members
           .filter((o) => o !== hit)
@@ -3872,27 +3959,46 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
         return;
       }
-      // Reached here means the click has drilled in (Alt), the body under the
-      // pointer is already the one being edited, or Shift is extending an item
-      // selection. The first two select the OBJECT; a Shift-extension onto a
-      // body that is not current still means that whole body.
-      const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
-      if (e.shiftKey) {
-        // Shift+click only edits the selection — no drag, so it can't nudge
-        // geometry while picking bodies out of a group.
-        if (targets.length === 1) toggleSelection(hit.id);
-        else setSelection(withWholeBodies([...selectedIds, ...targets.map((t) => t.id)]));
-        drag = null;
+      if (selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
+        // An object picked out of a body drags with everything else selected.
+        const others = selectedBodies()
+          .filter((o) => o !== hit)
+          .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
+        drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
         return;
       }
-      // Clicking inside an existing multi-selection drags the whole group.
-      if (!targets.every((t) => selectedIds.has(t.id))) {
+      // Not selected: what the press MEANS if it turns out to be a click. The
+      // decisions are exactly the ones a press used to make outright, and they
+      // are read at release rather than captured here - nothing between the two
+      // touches the selection, since the drag can only have panned.
+      const pick = (): void => {
+        // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
+        // one being edited selects the BODY - the thing with the transform, the
+        // kind and the fill - because that is what you are pointing at: a wall, a
+        // barrel, a lamp. Clicking again, once that body is the current one,
+        // selects the OBJECT under the pointer, which is how you reach the
+        // collision box or the mesh inside it.
+        //
+        // It is the drill-in every scene editor has, and it exists here for the
+        // reason the whole refactor does: a body and the objects in it are
+        // different things, and a single click cannot mean both.
+        if (!e.shiftKey && !e.altKey && !insideCurrentBody(hit)) {
+          setBodySelection(hit.bodyId);
+          return;
+        }
+        // Reached here means the click has drilled in (Alt), the body under the
+        // pointer is already the one being edited, or Shift is extending an item
+        // selection. The first two select the OBJECT; a Shift-extension onto a
+        // body that is not current still means that whole body.
+        const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
+        if (e.shiftKey) {
+          if (targets.length === 1) toggleSelection(hit.id);
+          else setSelection(withWholeBodies([...selectedIds, ...targets.map((t) => t.id)]));
+          return;
+        }
         setSelection(targets.map((t) => t.id));
-      }
-      const others = selectedBodies()
-        .filter((o) => o !== hit)
-        .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
-      drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
+      };
+      drag = { mode: "panPick", lastScreen: scr, travel: 0, pick };
       return;
     }
     // 5. A chain under the pointer. Tested after the bodies, since a chain is
@@ -4023,6 +4129,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (
       !dragPushed &&
       drag.mode !== "pan" &&
+      drag.mode !== "panPick" &&
+      drag.mode !== "orbit" &&
       drag.mode !== "marquee" &&
       drag.mode !== "chainDraw"
     ) {
@@ -4036,6 +4144,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const d = scr.sub(drag.lastScreen);
         camera.position = camera.position.sub(d.div(scale));
         drag.lastScreen = scr;
+        break;
+      }
+      case "panPick": {
+        // Nothing happens at all until the pointer has really travelled: a click
+        // that jitters by a pixel is a click, and it must still select what it
+        // was aimed at rather than panning the level by a pixel instead.
+        drag.travel += scr.distanceTo(drag.lastScreen);
+        if (drag.travel >= CLICK_SLOP_PX) {
+          const scale = camera.zoom * PIXELS_PER_METER;
+          camera.position = camera.position.sub(scr.sub(drag.lastScreen).div(scale));
+          canvas.style.cursor = "grabbing";
+        }
+        drag.lastScreen = scr;
+        break;
+      }
+      case "orbit": {
+        const d = scr.sub(drag.lastScreen);
+        orbit.yaw -= d.x * ORBIT_RADIANS_PER_PX;
+        // Both axes read the same way: the pointer drags the SCENE, so dragging
+        // down tips the level's far side down and the camera rises to look at
+        // it. The two signs agree for that reason - a control whose axes
+        // disagree about which of the two things is being dragged is one you
+        // have to re-learn every time you touch it.
+        orbit.pitch = Math.max(
+          -MAX_ORBIT_PITCH,
+          Math.min(MAX_ORBIT_PITCH, orbit.pitch + d.y * ORBIT_RADIANS_PER_PX),
+        );
+        drag.lastScreen = scr;
+        refreshOrbitBtn();
         break;
       }
       case "marquee":
@@ -4204,6 +4341,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   window.addEventListener("mouseup", () => {
     if (mode !== "edit" || !drag) return;
+    // A press that panned nowhere was a click, and it means what a click on that
+    // item has always meant.
+    if (drag.mode === "panPick" && drag.travel < CLICK_SLOP_PX) drag.pick();
     if (drag.mode === "marquee") {
       const box = marqueeBand();
       if (box) {
@@ -4455,12 +4595,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (scene3d && viewMode !== "2d") {
         scene3d.setViewportRect(null);
         syncEditorScene();
-        if (sceneLevel) scene3d.render(sceneLevel, camera, 1);
+        if (sceneLevel) scene3d.render(sceneLevel, camera, 1, orbit);
       }
       // Scene only: the overlay draws nothing at all, so what is on screen is
       // the level as it will be played. Selection chrome goes with it, which is
       // the point - this mode is for looking, and "3D + overlay" is for editing.
-      if (viewMode === "3d") {
+      //
+      // A TURNED VIEW IS THE SAME STATEMENT. The overlay is the gameplay plane
+      // projected straight onto the screen, so at any other angle every outline,
+      // handle and band it draws would be somewhere the geometry is not - which
+      // is worse than drawing nothing, since it looks exactly like the editor
+      // still being aligned. `Reset view` is the way back.
+      if (viewMode === "3d" || orbited()) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         requestAnimationFrame(frame);

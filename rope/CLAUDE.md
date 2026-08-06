@@ -1246,8 +1246,12 @@ DOM overlay). Dev serves `/editor` via a rewrite in `vite.config.ts`; production
 `dist/editor.html` in `serve.ts`; the build emits both pages (`rollupOptions.input`). It
 edits an `EdModel` (positions in world **metres**, one
 stable id per body) and manipulates it with the mouse: pan (**middle**-button drag, or the
-right button), wheel-zoom about the cursor, click-select, drag to move, corner/rotate/
+right button, or a **left** drag on anything not selected), wheel-zoom about the cursor,
+click-select, drag a *selected* body to move it, corner/rotate/
 radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies.
+**Selected first, moved second.**
+A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
+The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
 `+Poly` is the one draw tool that is a run of clicks rather than a drag, because a convex
 outline is a vertex list and not a box: each click places a vertex, **Enter** or a click on
 the first vertex closes the loop, **Esc** drops it, and the title carries the count so the
@@ -1269,7 +1273,7 @@ Dragging from empty space rubber-bands a **rectangle selection**, and the drag *
 The mode has to be legible while the drag is still live, and the box alone cannot show a direction, so the band draws **solid** for a window and **dashed** for a crossing - the CAD convention, so it reads the same way it does there.
 A drag with no horizontal travel counts as a window, so a degenerate one falls into the stricter mode.
 **Shift** unions the hits into the current selection instead of replacing it, and a click that never moves clears it.
-That is why pan is on the middle button: the left button belongs to the band.
+A band is dragged from EMPTY SPACE, which is what keeps it and the left-button pan apart: over nothing there is nothing to pan away from, and over a body there is nothing to band.
 Resize handles only appear for a *single* selection, but the inspector is a **group panel** at
 any size: every property the selection has in common is shown and every edit applies to all of
 them (position and colour always; `rot°` when each body has a meaningful one, `w`/`h` or
@@ -1329,6 +1333,15 @@ way in editor and game via `src/render/color.ts`). Both the editor and the game 
 on the shared `src/render/trainingGrid.ts` backdrop (Smash training-mode graph paper).
 The editor gains the same stacked WebGL canvas the game page has, and a three-state **view toggle**: **2D** (exactly the editor as it was), **3D** (the scene alone, for judging how a level reads) and **3D + overlay** (the default - the scene beneath, collision outlines, handles and marquee on top with every fill dropped so the geometry stays visible through the thing describing it).
 The editor's free camera drives the same correspondence the game's does (see **3D rendering**), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
+
+**Ctrl + middle-drag ORBITS** that view (`CameraOrbit` in `render3d/space.ts`, editor-only - the game's camera is always head-on), and `⟲ Reset view` in the toolbar faces the gameplay plane again.
+It is the one question the authoring view cannot answer on its own: how deep a prop reads, whether a light pool falls where the ring on the plane says it does, what a wall looks like from the side it will be seen from.
+The camera swings about the point it is centred on at exactly the dolly distance the zoom asks for, so a turn is a turn - it neither zooms nor slides what it is looking at, and the reset is a return to the picture the level was authored against rather than an approximation of it (`cli render3d` asserts all three, plus that a zero orbit is the head-on camera to the bit).
+
+**A turned view draws no overlay**, and that is the whole cost of it.
+The overlay is the gameplay plane projected straight onto the screen, so at any other angle its outlines, handles and bands would sit somewhere the geometry is not - which is worse than drawing nothing, because it looks exactly like an editor that is still aligned.
+So the canvas stops picking too, the cursor says so, and orbiting is a way of LOOKING at a scene with `Reset view` as the way back to editing it.
+Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
@@ -1396,7 +1409,12 @@ It is a **set**, because merging is an operation on two bodies and the tree is w
 Split is the inverse and hands the selection back to the objects, since the bodies it took apart no longer exist; `afterHistoryChange` drops retired body ids for the same reason, which is what undoing a merge would otherwise leave the panel pointing at.
 `operandItems` is what Delete, Duplicate, Copy and a nudge act on - a selected body means **all of it** - and they read it rather than `selectedIds`, which is what left the body panel's own Delete button doing nothing at all.
 
-On the canvas it is **click the body, then click into it**: a click on a body that is not the one being edited selects the body (and drags all of it), and clicking again once that body is current selects the object under the pointer. Alt still reaches an object directly. A canvas pick also **unfolds that body in the tree and scrolls to it**, so the two views cannot disagree about what is selected.
+On the canvas it is **click the body, then click into it**: a click on a body that is not the one being edited selects the body (and a drag on it, once selected, moves all of it), and clicking again once that body is current selects the object under the pointer. Alt still reaches an object directly. A canvas pick also **unfolds that body in the tree and scrolls to it**, so the two views cannot disagree about what is selected.
+
+A selected body **outlines its objects in blue**, each on its own rather than as the body's union outline.
+That is the question it answers - how many objects there are and where each one is, which the union deliberately hides - and it is the only thing on the canvas that says what a body is made of while none of its objects is selected.
+It is blue and not the selection orange for the same reason: orange everywhere else means "an edit applies to this", and these objects are outlined precisely because they are NOT selected.
+The objects with no outline of their own get a ring at the mark a click has to land on, since a light's own circle is its reach and an anchor has no shape at all.
 
 An object's `x`/`y`/`rot°` in the inspector are **relative to its body**, because that is what the file records - a panel showing world coordinates would be showing a number the level does not contain. Moving the object that IS the body's origin moves the whole body, since its own offset is zero by definition.
 

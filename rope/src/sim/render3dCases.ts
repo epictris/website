@@ -21,7 +21,7 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
-import { FOV_Y_DEG, projectToView, syncCamera } from "../render3d/space";
+import { cameraDistance, FOV_Y_DEG, projectToView, syncCamera } from "../render3d/space";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import {
   DEFAULT_TEXTURE,
@@ -171,6 +171,83 @@ function blendStability(): CaseResult[] {
       detail: `worst ${worst.toExponential(2)} px over ${offsets.length} camera positions`,
     },
   ];
+}
+
+// The editor's orbit (see `CameraOrbit`). It is the one thing that moves the
+// camera off the axis every overlay in the project is aligned against, so what
+// is asserted is that it changes nothing at all until it is asked to, and that
+// when it is asked to it only TURNS: the view neither zooms nor slides off what
+// it was centred on, which is what makes `Reset view` a return to exactly the
+// picture the level was authored against.
+function orbitView(): CaseResult[] {
+  const out: CaseResult[] = [];
+  const cam = camera(13.5, -7.25, 2);
+  const dist = cameraDistance(cam);
+  const make = (): THREE.PerspectiveCamera =>
+    new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_WIDTH / VIEW_HEIGHT, 0.1, 1000);
+
+  // Zero orbit is the head-on camera, to the bit: the game passes no orbit at
+  // all, and a feature that moved its camera by a float's worth would be a
+  // feature that changed every level's framing.
+  const plain = make();
+  syncCamera(plain, cam);
+  const zero = make();
+  syncCamera(zero, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  const same =
+    plain.position.equals(zero.position) &&
+    plain.rotation.x === zero.rotation.x &&
+    plain.rotation.y === zero.rotation.y &&
+    plain.rotation.z === zero.rotation.z;
+  out.push({
+    name: "orbit: zero is the head-on camera, unchanged",
+    pass: same,
+    detail: `${plain.position.toArray().join(",")} vs ${zero.position.toArray().join(",")}`,
+  });
+
+  // Turned: the focus stays at the frame's centre and at the same distance, so
+  // the gesture is a turn and nothing else.
+  const focus = new THREE.Vector3(cam.position.x, -cam.position.y, 0);
+  let worstCentre = 0;
+  let worstDist = 0;
+  for (const yaw of [-1.2, -0.3, 0.45, 1.9, 3.0]) {
+    for (const pitch of [-1.0, -0.2, 0, 0.35, 1.1]) {
+      const c = make();
+      syncCamera(c, cam, FOV_Y_DEG, { yaw, pitch });
+      c.updateMatrixWorld(true);
+      const ndc = focus.clone().project(c);
+      worstCentre = Math.max(worstCentre, Math.abs(ndc.x), Math.abs(ndc.y));
+      worstDist = Math.max(worstDist, Math.abs(c.position.distanceTo(focus) - dist));
+    }
+  }
+  out.push({
+    name: "orbit: the view turns about what it is centred on, at a fixed distance",
+    pass: worstCentre <= 1e-6 && worstDist <= 1e-9,
+    detail: `centre off by ${worstCentre.toExponential(2)} ndc, distance by ${worstDist.toExponential(2)} m`,
+  });
+
+  // A quarter turn of yaw looks along the level's own +x axis, which is what
+  // says the sign and the axis are the ones the drag handler thinks they are.
+  const side = make();
+  syncCamera(side, cam, FOV_Y_DEG, { yaw: Math.PI / 2, pitch: 0 });
+  out.push({
+    name: "orbit: a quarter turn puts the camera out along +x",
+    pass:
+      Math.abs(side.position.x - (focus.x + dist)) <= 1e-9 &&
+      Math.abs(side.position.y - focus.y) <= 1e-9 &&
+      Math.abs(side.position.z) <= 1e-9,
+    detail: `at (${side.position.x.toFixed(3)}, ${side.position.y.toFixed(3)}, ${side.position.z.toFixed(3)}), focus x ${focus.x.toFixed(3)} + ${dist.toFixed(3)}`,
+  });
+
+  // Past the poles the up vector degenerates and the view rolls, so the pitch is
+  // clamped inside `syncCamera` rather than only at the drag that writes it.
+  const over = make();
+  syncCamera(over, cam, FOV_Y_DEG, { yaw: 0, pitch: Math.PI / 2 });
+  out.push({
+    name: "orbit: pitch is clamped short of the pole",
+    pass: over.position.z > 0 && Math.abs(over.position.y - focus.y) < dist,
+    detail: `z ${over.position.z.toFixed(3)}, rise ${(over.position.y - focus.y).toFixed(3)} of ${dist.toFixed(3)}`,
+  });
+  return out;
 }
 
 // The extrusion's winding and depth. A physics polygon is wound clockwise ON
@@ -1514,6 +1591,7 @@ export function runRender3dCases(): CaseResult[] {
     ...chainAnchors(),
     ...cameraCorrespondence(),
     ...blendStability(),
+    ...orbitView(),
     ...extrusionGeometry(),
     ...depthOrdering(),
     ...surfaceResolution(),
