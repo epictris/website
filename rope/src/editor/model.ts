@@ -415,10 +415,42 @@ export interface EdVisual {
   emissiveTexture: string;
 }
 
+// A body's own frame: the transform its objects are placed in, and what the file
+// records as the body's `x`/`y`/`rot`.
+export interface EdBodyFrame {
+  pos: Vec2; // metres
+  rot: number; // radians
+}
+
 export interface EdModel {
   player: { pos: Vec2; radius: number };
   items: EdItem[];
   chains: EdChain[];
+  // THE FRAME EACH BODY'S OBJECTS ARE PLACED IN, by body id.
+  //
+  // It is STORED rather than read off a member, and that is the whole point. It
+  // used to be "wherever the body's FIRST object is", which made that object
+  // secretly the body itself: nudging it moved the body, and since every sibling
+  // is recorded as an offset from the frame, every sibling's offset changed by
+  // the same amount to compensate. One object moved 10 cm and the file recorded
+  // the body moving 10 cm and every other object moving 10 cm back - the same
+  // geometry, written as an edit nobody made, in a panel that then read as the
+  // body having moved.
+  //
+  // Stored, a body's frame is its own: an edit to one object inside it changes
+  // that object's offset and nothing else, and the frame moves only when the
+  // BODY moves (`translateItems` / `rotateItemsAbout` carry it exactly when the
+  // whole body is in the set being moved).
+  //
+  // Absent means "wherever the body's first object is", which is where a body's
+  // frame has always been measured from and is what a freshly loaded level
+  // carries. That is exact for the body of ONE object almost every body is - any
+  // move of that object is a move of the whole body - so a level of simple
+  // bodies stores nothing and saves byte-for-byte as it did. What makes it safe
+  // for the rest is that every body holding more than one object has its frame
+  // written down before anything is edited (`pinBodyFrame`, from the editor's
+  // `beginAction`), so a body that can be edited a piece at a time always has one.
+  bodyFrames: Map<number, EdBodyFrame>;
   // The level's light and air (see `EnvironmentData`). One object rather than a
   // list, because it is a property of the LEVEL and not of anything in it.
   //
@@ -905,6 +937,13 @@ function lightItem(
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
     items: [...bodies, ...regions, ...notes],
     chains,
+    // None recorded on load. A body's frame is derived from its first object
+    // until something is edited (`EdModel.bodyFrames`), which is the origin this
+    // has always re-measured every body against on the way back out - so a level
+    // opened and saved untouched is byte-stable exactly as it was, and a body
+    // migrated out of a retired flat entry is still re-origined onto its shape
+    // rather than left measuring from the (0, 0) the migration gave it.
+    bodyFrames: new Map(),
     // Copied rather than shared, since everything else here hands the caller a
     // fresh object, and undo snapshots this by value.
     environment: data.environment ? { ...data.environment } : undefined,
@@ -988,14 +1027,14 @@ export function toLevelData(model: EdModel): LevelData {
     run.sort((a, b) => (a.object === b.object ? 0 : a.object === "collision" ? -1 : a.object === "geometry" ? 0 : 1));
   }
 
-  // The body's own frame is its first member's placement, and its objects are
-  // written local to it. That is what gives a body a real transform on disk -
-  // turning the body turns everything in it, aim included - while the editor
-  // goes on manipulating items in world metres, which is what every drag,
-  // handle and marquee is written in.
+  // The body's own frame (`EdModel.bodyFrames`), with its objects written local
+  // to it. That is what gives a body a real transform on disk - turning the body
+  // turns everything in it, aim included - while the editor goes on manipulating
+  // items in world metres, which is what every drag, handle and marquee is
+  // written in.
   const bodies: LevelBodyData[] = runs.map((run) => {
-    const origin = run[0]!;
-    const lead = run.find((i) => i.object === "collision") ?? origin;
+    const origin = bodyFrameOf(model, run[0]!.bodyId);
+    const lead = run.find((i) => i.object === "collision") ?? run[0]!;
     const cos = Math.cos(-origin.rot);
     const sin = Math.sin(-origin.rot);
     const localOf = (i: { pos: Vec2; rot: number }): { x?: number; y?: number; rot?: number } => {
@@ -1578,11 +1617,68 @@ export function bodyCentroid(items: readonly EdItem[]): Vec2 {
   return weighed.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, weighed.length));
 }
 
-// Turn a whole group about `centre` by `delta` radians: each piece's placement
+// --- body frames ------------------------------------------------------------
+
+// The frame `bodyId`'s objects are placed in. Absent from the model it is the
+// body's first object, which is exact for a body of one - see `EdModel.bodyFrames`.
+export function bodyFrameOf(model: EdModel, bodyId: number): EdBodyFrame {
+  const stored = model.bodyFrames.get(bodyId);
+  if (stored) return stored;
+  const first = model.items.find((i) => i.bodyId === bodyId);
+  return first ? { pos: first.pos, rot: first.rot } : { pos: Vec2.ZERO, rot: 0 };
+}
+
+// Write down where a body's frame currently is, so that it stops following the
+// object it was being read off. Called wherever a body gains a second member:
+// past that point the body can be edited a piece at a time, and a frame derived
+// from one of those pieces is a frame that piece silently moves.
+export function pinBodyFrame(model: EdModel, bodyId: number): void {
+  if (!model.bodyFrames.has(bodyId)) model.bodyFrames.set(bodyId, bodyFrameOf(model, bodyId));
+}
+
+// Carry the frames of the bodies `items` touches, but only where the WHOLE body
+// is in the set: a body's frame moves when the body moves, and an edit to some
+// of its objects is not that. Returns nothing - it is called for its effect on
+// the model, before the items themselves are moved (the derived frame of a body
+// with none stored has to be read while it still means what it meant).
+function carryBodyFrames(
+  model: EdModel,
+  items: readonly EdItem[],
+  move: (f: EdBodyFrame) => EdBodyFrame,
+): void {
+  const moving = new Map<number, number>();
+  for (const i of items) moving.set(i.bodyId, (moving.get(i.bodyId) ?? 0) + 1);
+  for (const [bodyId, count] of moving) {
+    if (count < bodyMembers(model.items, bodyId).length) continue; // part of a body: its frame stays
+    const stored = model.bodyFrames.get(bodyId);
+    // With none stored the frame is the first object's and moves with it, which
+    // is what moving the whole body does to it anyway.
+    if (stored) model.bodyFrames.set(bodyId, move(stored));
+  }
+}
+
+// Translate a set of items, carrying the frame of any body moving in full.
+export function translateItems(model: EdModel, items: readonly EdItem[], d: Vec2): void {
+  if (d.x === 0 && d.y === 0) return;
+  carryBodyFrames(model, items, (f) => ({ pos: f.pos.add(d), rot: f.rot }));
+  for (const i of items) i.pos = i.pos.add(d);
+}
+
+// Turn a set of items about `centre` by `delta` radians: each piece's placement
 // swings round the centre and its own angle follows. That is exactly what
 // rotating the built body does, since a piece is mounted at a local offset and
-// a local angle off that origin.
-export function rotateGroupAbout(items: readonly EdItem[], centre: Vec2, delta: number): void {
+// a local angle off that origin - so a body turning in full turns its frame too.
+export function rotateItemsAbout(
+  model: EdModel,
+  items: readonly EdItem[],
+  centre: Vec2,
+  delta: number,
+): void {
+  if (delta === 0) return;
+  carryBodyFrames(model, items, (f) => ({
+    pos: centre.add(f.pos.sub(centre).rotated(delta)),
+    rot: f.rot + delta,
+  }));
   for (const i of items) {
     i.pos = centre.add(i.pos.sub(centre).rotated(delta));
     i.rot += delta;
@@ -1690,6 +1786,9 @@ export function emptyModel(): EdModel {
   return {
     player: { pos: new Vec2(0, -1), radius: 0.08 },
     chains: [],
+    // Nothing stored: a fresh level's one body holds one object, whose placement
+    // IS the frame (see `EdModel.bodyFrames`).
+    bodyFrames: new Map(),
     // A fresh level authors none, which is every level authored before the
     // block and is what the renderer's own defaults are for.
     environment: undefined,

@@ -1473,7 +1473,18 @@ That is the question it answers - how many objects there are and where each one 
 It is blue and not the selection orange for the same reason: orange everywhere else means "an edit applies to this", and these objects are outlined precisely because they are NOT selected.
 The objects with no outline of their own get a ring at the mark a click has to land on, since a light's own circle is its reach and an anchor has no shape at all.
 
-An object's `x`/`y`/`rot°` in the inspector are **relative to its body**, because that is what the file records - a panel showing world coordinates would be showing a number the level does not contain. Moving the object that IS the body's origin moves the whole body, since its own offset is zero by definition.
+An object's `x`/`y`/`rot°` in the inspector are **relative to its body**, because that is what the file records - a panel showing world coordinates would be showing a number the level does not contain.
+Relative means in the body's own **frame**, rotation included (`localPlacement`, the inspector's side of `toLevelData`'s `localOf`): the world-axis distance to the body's origin is a different number the moment the body is turned, and a body turned 15° showed an object the file records at (20, 20) as (14.1, 24.5).
+
+**The body's frame is the body's own** (`EdModel.bodyFrames`), and not a member's.
+It was read off the body's FIRST object for as long as the editor had nowhere else to put it, and that made that object secretly the body: moving it moved the frame, and since every sibling is recorded as an offset from the frame, every sibling's offset changed by the same amount to compensate.
+Nudging one collision shape 10 cm therefore wrote a body moving 10 cm and every other object in it moving 10 cm back - the same geometry on screen, recorded as an edit nobody made, in a panel that then read as the body having moved rather than the shape.
+Stored, an edit to one object changes that object's offset and nothing else.
+
+The frame moves when the BODY moves, and `translateItems` / `rotateItemsAbout` are the one statement of what that means: they carry a body's frame exactly when every one of its objects is in the set being moved.
+So it is one rule rather than a decision at each of the dozen gestures that move something - a drag, a nudge, an inspector field, a gizmo handle, a group rotate - and a gesture cannot move a body's frame by accident.
+A frame is **absent** until a body holds more than one object, where it means "wherever the first object is": that is exact for a body of one, since any move of that object is a move of the whole body, so a level of simple bodies stores nothing and saves byte-for-byte as it did (a load records none either, which is what keeps the re-origining a save has always done unchanged).
+What makes the rest safe is that every body holding more than one object has its frame written down before anything is edited, once per undo step in `beginAction` - membership grows by merging, by drawing into a selected body, by dressing a shape and by pasting, and settling it in one place is what stops the next of those forgetting a rule it is not written into.
 
 **A new object drawn while a body is selected joins that body.** With a body selected the thing being authored is a part of it - the collision box under a mesh, a second shape for a compound wall, the light a lamp throws - and making it a body of its own would mean drawing it, selecting both and merging, every time. It takes the body's kind, fill and friction on the way in (`syncBodyProps`), since a body has one of each. An area is refused for the reason `canShareBody` gives; camera regions and notes are never in a body in any meaningful sense and keep getting one of their own.
 

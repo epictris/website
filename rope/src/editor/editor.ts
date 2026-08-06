@@ -70,7 +70,10 @@ import {
   DRESSING_GIZMO,
   pickBodyOf,
   pointInBody,
-  rotateGroupAbout,
+  rotateItemsAbout,
+  translateItems,
+  bodyFrameOf,
+  pinBodyFrame,
   setArrowEnds,
   shapeMass,
   setPolyVerts,
@@ -79,6 +82,7 @@ import {
   toWorld,
   visualData,
   type EdChain,
+  type EdBodyFrame,
   type EdItem,
   type EdShape,
   type EdLayer,
@@ -479,6 +483,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       visual: { ...b.visual },
     })),
     chains: m.chains.map(cloneChain),
+    // A frame is never mutated in place - `translateItems` and friends replace
+    // the entry - so copying the map is enough to detach the snapshot.
+    bodyFrames: new Map(m.bodyFrames),
     // Mutated in place by the environment panel exactly as `cam` and `light`
     // are, so a snapshot sharing it would alias the state it restores.
     environment: m.environment ? { ...m.environment } : undefined,
@@ -487,9 +494,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     history.length = 0;
     future.length = 0;
   };
+  // Every body holding more than one object has its frame written down (see
+  // `EdModel.bodyFrames`): past one object a body can be edited a piece at a
+  // time, and a frame still being read off a member is a frame that member
+  // silently moves. Settled here, once per action and before anything is
+  // mutated, rather than at each of the half-dozen places a body gains one -
+  // membership grows by merging, by drawing into a selected body, by dressing a
+  // shape, by pasting, and the next of those cannot forget a rule it is not
+  // written into.
+  function pinCompoundFrames(): void {
+    const held = new Map<number, number>();
+    for (const i of model.items) held.set(i.bodyId, (held.get(i.bodyId) ?? 0) + 1);
+    for (const [id, n] of held) if (n > 1) pinBodyFrame(model, id);
+  }
+
   // Record the current state before a mutating action, so it can be undone.
   function beginAction(): void {
     nudging = false; // any other action ends the current nudge run
+    pinCompoundFrames();
     history.push(snapshot(model));
     if (history.length > HISTORY_MAX) history.shift();
     future.length = 0;
@@ -564,10 +586,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
   function setSelection(ids: readonly number[]): void {
+    // Every selection this clears has to be in the test, or the early return is
+    // the selection surviving a call that meant to replace it: `setSelection([])`
+    // with a BODY selected read as "already empty" and left it selected, so a
+    // click on empty space deselected an object and did nothing to a body.
     const unchanged =
       ids.length === selectedIds.size &&
       ids.every((id) => selectedIds.has(id)) &&
-      selectedChainIds.size === 0;
+      selectedChainIds.size === 0 &&
+      selectedBodyIds.size === 0;
     if (unchanged) return;
     selectedIds.clear();
     selectedChainIds.clear();
@@ -826,7 +853,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // rotates about and exactly what the 2D group handle turns it about.
   function bodyHandlers(id: number): GizmoHandlers {
     const members = (): EdItem[] => bodyMembers(model.items, id);
-    let base: { centre: Vec2; pos: Map<number, Vec2>; applied: number } | null = null;
+    let base: {
+      centre: Vec2;
+      pos: Map<number, Vec2>;
+      frame: EdBodyFrame;
+      applied: number;
+    } | null = null;
     return {
       pose() {
         const c = bodyCentroid(members());
@@ -847,6 +879,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         base = {
           centre: bodyCentroid(items),
           pos: new Map(items.map((m) => [m.id, m.pos])),
+          frame: bodyFrameOf(model, id),
           applied: 0,
         };
       },
@@ -860,13 +893,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             const from = base.pos.get(m.id);
             if (from) m.pos = from.add(d);
           }
+          // Written from the base for the same reason the members are: the drag
+          // re-applies its whole displacement each frame rather than adding to
+          // what it did last, so the frame has to be re-derived, not advanced.
+          model.bodyFrames.set(id, { pos: base.frame.pos.add(d), rot: base.frame.rot });
         } else if (mode === "rotate") {
           // The ring returns to zero when the drag ends (`pose` answers the
           // identity), so what it means is a DELTA, exactly as the 2D group
           // handle does - a body has no angle of its own to write.
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           const wanted = threeRotation(e.z);
-          rotateGroupAbout(members(), base.centre, wanted - base.applied);
+          rotateItemsAbout(model, members(), base.centre, wanted - base.applied);
           base.applied = wanted;
         }
         gizmoTouched();
@@ -1793,11 +1830,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Placement and size. Shared by every layer's panel: whatever layer an item
   // lives on, it is a placed shape and moves, rotates and resizes the same way.
-  // The body an object is placed FROM: the first object in it, in model order,
-  // which is the origin `toLevelData` measures every object against. One rule,
-  // so what the inspector shows and what the file records cannot disagree.
-  const bodyOrigin = (b: EdItem): EdItem =>
-    model.items.find((i) => i.bodyId === b.bodyId) ?? b;
+  // The frame an object is placed IN, which is the origin `toLevelData` measures
+  // every object against. One rule, so what the inspector shows and what the
+  // file records cannot disagree.
+  const bodyOrigin = (b: EdItem): EdBodyFrame => bodyFrameOf(model, b.bodyId);
+  // An item's placement IN its body's frame, which is the pair of numbers the
+  // file records for it - so the frame's rotation is taken out on the way in and
+  // put back on the way out, exactly as `toLevelData`'s `localOf` does. Without
+  // that the panel showed the world-axis distance to the body's origin instead,
+  // which for a turned body is a different number from the one on disk: a
+  // compound body turned 15° had an object the file records at (20, 20) reading
+  // as (14.1, 24.5). Identical for the unturned body almost every body is.
+  const localPlacement = (b: EdItem): Vec2 => {
+    const f = bodyOrigin(b);
+    return b.pos.sub(f.pos).rotated(-f.rot);
+  };
 
   function addTransformFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
     // RELATIVE TO THE BODY, because that is what an object's placement IS - the
@@ -1809,32 +1856,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // before it put it on the world's.
     //
     // The camera and notes layers are not in a body in any meaningful sense -
-    // each sits alone in one - so for them the origin is the item itself and
-    // these read as world coordinates, exactly as they always did.
-    // Moving the object that IS the origin moves the whole BODY, because that
-    // is what it means: its offset is 0 by definition, so there is nothing for
-    // it to be moved to within its own frame. Without this the field would read
-    // 0, accept a number, shift the object, and read 0 again - a control that
-    // nudges and then denies it.
+    // each sits alone in one - so for them the frame is the item's own placement
+    // and these read as world coordinates, exactly as they always did.
+    //
+    // It moves THE OBJECT and nothing else, whichever object it is. The frame is
+    // the body's own (`EdModel.bodyFrames`) rather than a member's, so there is
+    // no longer an object that secretly IS the body and moves it when it moves.
     const moveRelative = (b: EdItem, axis: "x" | "y", v: number): void => {
       const origin = bodyOrigin(b);
-      if (origin !== b) {
-        b.pos = axis === "x" ? b.pos.withX(origin.pos.x + v) : b.pos.withY(origin.pos.y + v);
-        return;
-      }
-      const delta = v;
-      for (const m of bodyMembers(model.items, b.bodyId)) {
-        m.pos = axis === "x" ? m.pos.withX(m.pos.x + delta) : m.pos.withY(m.pos.y + delta);
-      }
+      const local = localPlacement(b);
+      const want = axis === "x" ? local.withX(v) : local.withY(v);
+      translateItems(model, [b], origin.pos.add(want.rotated(origin.rot)).sub(b.pos));
     };
     num(
       "x",
-      (b) => (b.pos.x - bodyOrigin(b).pos.x) * M2PX,
+      (b) => localPlacement(b).x * M2PX,
       (b, v) => moveRelative(b, "x", v * PX),
     );
     num(
       "y",
-      (b) => (b.pos.y - bodyOrigin(b).pos.y) * M2PX,
+      (b) => localPlacement(b).y * M2PX,
       (b, v) => moveRelative(b, "y", v * PX),
     );
     // A circle's rotation is invisible, so it only gets the field where it aims
@@ -1853,35 +1894,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // A compound body has ONE rotation, about the centre of mass its built
         // body's origin sits at. Turning each piece about its own centre would
         // pull the body apart, so the field is a delta applied to the group -
-        // shown against the lead shape's angle, which is the built body's own
-        // frame of reference.
-        const lead = bodyLead(whole) ?? whole[0]!;
+        // shown against the BODY's own angle, which is what the file records and
+        // what the body panel's `rot°` reads, so the two cannot disagree.
+        // Read per use rather than captured, for the reason the body panel's own
+        // transform fields are: a frame is replaced, not mutated.
+        const frame = (): EdBodyFrame => bodyFrameOf(model, whole[0]!.bodyId);
         numField(
           g,
           "rot°",
-          () => (lead.rot * 180) / Math.PI,
-          (v) => rotateGroupAbout(whole, bodyCentroid(whole), (v * Math.PI) / 180 - lead.rot),
+          () => (frame().rot * 180) / Math.PI,
+          (v) =>
+            rotateItemsAbout(model, whole, bodyCentroid(whole), (v * Math.PI) / 180 - frame().rot),
         );
       } else {
         // Also relative: an object's `rot` is an offset from its body's, which
-        // is what the file writes and what turning the body then carries.
+        // is what the file writes and what turning the body then carries. It
+        // turns THE OBJECT in place, whichever object it is - the body's angle
+        // is the frame's, not a member's, so there is no object here that
+        // secretly is the body.
         num(
           "rot°",
           (b) => ((b.rot - bodyOrigin(b).rot) * 180) / Math.PI,
           (b, v) => {
-            const origin = bodyOrigin(b);
-            const want = (v * Math.PI) / 180;
-            // Turning the origin turns the body, for the reason moving it moves
-            // the body: its own angle is the frame the others are measured in.
-            if (origin === b) {
-              rotateGroupAbout(
-                bodyMembers(model.items, b.bodyId),
-                bodyCentroid(bodyMembers(model.items, b.bodyId)),
-                want,
-              );
-              return;
-            }
-            b.rot = origin.rot + want;
+            b.rot = bodyOrigin(b).rot + (v * Math.PI) / 180;
           },
         );
       }
@@ -2699,12 +2734,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The transform. It is the frame every object in the body is placed from,
     // so moving it moves them: the fields write a DELTA onto the members rather
     // than a position onto a body the model does not separately store.
-    const origin = members[0]!;
-    const nudgeBy = (dx: number, dy: number) => {
-      for (const m of members) m.pos = m.pos.add(new Vec2(dx, dy));
-    };
-    numField(g, "x", () => origin.pos.x * M2PX, (v) => nudgeBy(v * PX - origin.pos.x, 0));
-    numField(g, "y", () => origin.pos.y * M2PX, (v) => nudgeBy(0, v * PX - origin.pos.y));
+    // Read on every use, never captured: a frame is REPLACED rather than mutated
+    // (see `translateItems`), so a reference taken when the panel was built goes
+    // stale the moment the body moves.
+    const origin = (): EdBodyFrame => bodyFrameOf(model, id);
+    const nudgeBy = (dx: number, dy: number) => translateItems(model, members, new Vec2(dx, dy));
+    numField(g, "x", () => origin().pos.x * M2PX, (v) => nudgeBy(v * PX - origin().pos.x, 0));
+    numField(g, "y", () => origin().pos.y * M2PX, (v) => nudgeBy(0, v * PX - origin().pos.y));
     // No z beside them: a body's position is x and y, and depth belongs to the
     // objects that draw (see `LevelBodyData`), where the geometry panel's
     // `off z` authors it.
@@ -2714,10 +2750,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     numField(
       g,
       "rot°",
-      () => deg(origin.rot),
+      () => deg(origin().rot),
       // About the point the built body actually turns about - its centre of
       // mass - so the editor's rotation and the engine's are the same operation.
-      (v) => rotateGroupAbout(members, bodyCentroid(members), rad(v) - origin.rot),
+      (v) => rotateItemsAbout(model, members, bodyCentroid(members), rad(v) - origin().rot),
     );
 
     addBodyProps(g, members);
@@ -3832,7 +3868,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       nudging = true;
     }
     const d = dir.mul(fine ? NUDGE_FINE : gridStep);
-    for (const b of sel) b.pos = b.pos.add(d);
+    // The body's frame comes along only where the whole body is being nudged, so
+    // nudging ONE object inside a body moves that object and leaves its body and
+    // its siblings exactly where they were.
+    translateItems(model, sel, d);
     markDirty();
     refreshFields();
   }
@@ -4627,8 +4666,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Snap the lead body's corner; the rest keep their relative offsets so
         // a group's internal layout survives the move.
         const lead = snapCorner(drag.lead, world.add(drag.grab));
-        drag.lead.pos = lead;
-        for (const o of drag.others) o.body.pos = lead.add(o.offset);
+        // Written as the translation it is, so a body dragged whole carries its
+        // frame and a piece dragged out of one does not (see `translateItems`).
+        // The others keep their offsets, which is the same delta by definition.
+        translateItems(model, [drag.lead, ...drag.others.map((o) => o.body)], lead.sub(drag.lead.pos));
         markDirty();
         refreshFields();
         break;
@@ -4740,7 +4781,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // per-move delta so snapping cannot accumulate rounding across a drag.
         const d = world.sub(drag.centre);
         const wanted = snapAngle(Math.atan2(d.y, d.x) - drag.grabAngle);
-        rotateGroupAbout(drag.items, drag.centre, wanted - drag.applied);
+        rotateItemsAbout(model, drag.items, drag.centre, wanted - drag.applied);
         drag.applied = wanted;
         markDirty();
         refreshFields();
