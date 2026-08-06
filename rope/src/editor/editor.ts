@@ -4482,6 +4482,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // In 3D the scene below is what shows what a body IS; the overlay drops
         // its fills to outlines so the geometry stays visible through them.
         scene3d && viewMode !== "2d" ? "outline" : "fill",
+        selectedBodyIds,
       );
     }
     requestAnimationFrame(frame);

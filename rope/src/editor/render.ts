@@ -72,6 +72,12 @@ const CHAIN_ANCHOR_R_PX = 3.5;
 // the built body's origin sits at and the point it rotates about, so it has to
 // be visible while a group is being laid out.
 const GROUP_MARK = "#7fd6a8";
+// The objects of the body currently selected. A body is selected and its objects
+// are NOT - clicking again is what drills into one - so this cannot be the
+// selection orange, which everywhere else means "an edit applies to this". Blue
+// says the opposite: these are what the selected body is made of, shown so the
+// body's extent is visible without the pieces being picked.
+const BODY_MEMBER = "#4f9dff";
 
 export const HANDLE_SIZE_PX = 8; // drawn square side
 export const HANDLE_HIT_PX = 9; // pointer pick radius
@@ -696,6 +702,39 @@ function drawGroupMarks(
   }
 }
 
+// The objects of the selected BODY, outlined where they are - which is the only
+// thing on the canvas that says what a body is made of while none of its objects
+// is selected.
+//
+// Each piece is outlined on its own rather than as the body's union outline (the
+// shape the selection halo takes), because that is the question this answers: how
+// many objects there are and where each one is, which a union deliberately hides.
+// The objects with no outline of their own get a ring at the mark a click has to
+// land on, since a light's own circle is its reach and an anchor has no shape at
+// all.
+function drawBodyMembers(
+  ctx: CanvasRenderingContext2D,
+  items: readonly EdItem[],
+  bodyIds: ReadonlySet<number>,
+  visibleLayers: ReadonlySet<EdLayer>,
+  worldLine: number,
+): void {
+  if (!bodyIds.size) return;
+  ctx.strokeStyle = BODY_MEMBER;
+  ctx.lineWidth = worldLine * 3;
+  for (const i of items) {
+    if (!bodyIds.has(i.bodyId) || !visibleLayers.has(i.layer)) continue;
+    if (i.object === "light" || i.object === "anchor") {
+      ctx.beginPath();
+      ctx.arc(i.pos.x, i.pos.y, lightPickRadius(worldLine) * 1.6, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
+    pathBody(ctx, i);
+    ctx.stroke();
+  }
+}
+
 export function drawEditor(
   ctx: CanvasRenderingContext2D,
   dpr: number,
@@ -730,6 +769,10 @@ export function drawEditor(
   // it simply does not call this - which is why there are two values and not
   // three.
   layers: "fill" | "outline" = "fill",
+  // The bodies selected as BODIES (see `selectedBodyIds` in editor.ts). Their
+  // objects are outlined rather than haloed: the body is what is selected, and
+  // nothing an edit reaches may wear the selection colour.
+  selectedBodyIds: ReadonlySet<number> = new Set<number>(),
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -1060,6 +1103,11 @@ export function drawEditor(
   for (const l of lights) {
     drawLightGizmo(ctx, l, worldLine, selectedIds.has(l.id), paint);
   }
+
+  // Over every object it marks - a body's pieces are drawn in several passes and
+  // an outline under one of them would be half hidden - and under the handles,
+  // which are still the topmost thing on the canvas.
+  drawBodyMembers(ctx, model.items, selectedBodyIds, visibleLayers, worldLine);
 
   // Notes on top of everything they annotate — they are commentary on the
   // scene, and a note hidden behind the geometry it explains would be useless.
