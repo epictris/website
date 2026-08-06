@@ -1451,6 +1451,14 @@ Split is the inverse and hands the selection back to the objects, since the bodi
 
 On the canvas it is **click the body, then click into it**: a click on a body that is not the one being edited selects the body (and a drag on it, once selected, moves all of it), and clicking again once that body is current selects the object under the pointer. Alt still reaches an object directly. A canvas pick also **unfolds that body in the tree and scrolls to it**, so the two views cannot disagree about what is selected.
 
+**And clicking again walks on down whatever else is under the pointer** (`pickAt`).
+Every rule the pick has - depth, containment, the active layer - can only ever name ONE winner, so an object nested inside or behind other outlines was unreachable with the mouse by construction: every point of it is also a point of the things drawn over it, and there is no pointer position that means it rather than them.
+A click that lands where the last one did therefore takes the NEXT answer instead of repeating the same one, cycling body, its object, the next body, its object, and back round.
+The candidates are `topmostAt`'s own rule applied down the stack rather than a second ordering beside it (`pickCandidatesAt` takes its answer, removes it, and asks again), so the first candidate IS the pick and the cycle cannot disagree with it about what is on top.
+A fresh click starts exactly where it always did, so the first two clicks anywhere are unchanged and this is only what happens past the point the pick used to stop.
+What counts as a repeat is the same point (within `CLICK_SLOP_PX`), the same stack of candidates, AND the selection still being what the last step left: anything else - the outliner, a rubber band, an undo, a shift or alt click - has moved on, and continuing the cycle from there would jump to something nobody pointed at.
+A multi-selection is the one press that still has no pick at all, since a click that meant to drag it and did not travel must not silently collapse it to one object.
+
 A selected body **outlines its objects in blue**, each on its own rather than as the body's union outline.
 That is the question it answers - how many objects there are and where each one is, which the union deliberately hides - and it is the only thing on the canvas that says what a body is made of while none of its objects is selected.
 It is blue and not the selection orange for the same reason: orange everywhere else means "an edit applies to this", and these objects are outlined precisely because they are NOT selected.

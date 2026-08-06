@@ -4240,13 +4240,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           grab: hit.pos.sub(world),
           press: scr,
           moved: false,
-          pick: () => setSelection(clickTargets(hit, true).map((t) => t.id)),
+          pick: pickAt(world, scr),
         };
         return;
       }
       if (selectedIds.has(hit.id) && !e.shiftKey && !e.altKey) {
         // An object picked out of a body drags with everything else selected. A
-        // click on it means what it already is, so there is nothing to pick.
+        // click on it is the cycle's next step - which for a lone object is what
+        // it already is, and past that is how the thing underneath is reached. A
+        // multi-selection has no pick at all: a click that meant to grab it and
+        // did not travel must not silently collapse it to one object.
         const others = selectedBodies()
           .filter((o) => o !== hit)
           .map((o) => ({ body: o, offset: o.pos.sub(hit.pos) }));
@@ -4257,39 +4260,42 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           grab: hit.pos.sub(world),
           press: scr,
           moved: false,
+          pick: selectedIds.size === 1 ? pickAt(world, scr) : undefined,
         };
         return;
       }
-      // Not selected: what the press MEANS if it turns out to be a click. The
-      // decisions are exactly the ones a press used to make outright, and they
-      // are read at release rather than captured here - nothing between the two
-      // touches the selection, since the drag can only have panned.
+      // Not selected: what the press MEANS if it turns out to be a click.
+      //
+      // CLICK THE BODY, THEN CLICK INTO IT, THEN INTO WHAT IS BEHIND IT. A click
+      // on a body that is not the one being edited selects the BODY - the thing
+      // with the transform, the kind and the fill - because that is what you are
+      // pointing at: a wall, a barrel, a lamp. Clicking again, once that body is
+      // the current one, selects the OBJECT under the pointer, which is how you
+      // reach the collision box or the mesh inside it; clicking again walks on
+      // down whatever else is under the pointer (see `pickAt`).
+      //
+      // It is the drill-in every scene editor has, and it exists here for the
+      // reason the whole refactor does: a body and the objects in it are
+      // different things, and a single click cannot mean both.
+      const cycle = pickAt(world, scr);
       const pick = (): void => {
-        // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
-        // one being edited selects the BODY - the thing with the transform, the
-        // kind and the fill - because that is what you are pointing at: a wall, a
-        // barrel, a lamp. Clicking again, once that body is the current one,
-        // selects the OBJECT under the pointer, which is how you reach the
-        // collision box or the mesh inside it.
-        //
-        // It is the drill-in every scene editor has, and it exists here for the
-        // reason the whole refactor does: a body and the objects in it are
-        // different things, and a single click cannot mean both.
-        if (!e.shiftKey && !e.altKey && !insideCurrentBody(hit)) {
-          setBodySelection(hit.bodyId);
+        // Alt and Shift say outright what the click means, so they answer it
+        // themselves rather than taking a turn in the cycle: Alt drills straight
+        // to the object under the pointer, Shift extends what is selected. Both
+        // end the cycle, since the next plain click at that point is starting a
+        // fresh question rather than continuing this one.
+        if (e.shiftKey || e.altKey) {
+          const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
+          pickCycle = null;
+          if (e.shiftKey) {
+            if (targets.length === 1) toggleSelection(hit.id);
+            else setSelection(withWholeBodies([...selectedIds, ...targets.map((t) => t.id)]));
+            return;
+          }
+          setSelection(targets.map((t) => t.id));
           return;
         }
-        // Reached here means the click has drilled in (Alt), the body under the
-        // pointer is already the one being edited, or Shift is extending an item
-        // selection. The first two select the OBJECT; a Shift-extension onto a
-        // body that is not current still means that whole body.
-        const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
-        if (e.shiftKey) {
-          if (targets.length === 1) toggleSelection(hit.id);
-          else setSelection(withWholeBodies([...selectedIds, ...targets.map((t) => t.id)]));
-          return;
-        }
-        setSelection(targets.map((t) => t.id));
+        cycle();
       };
       drag = { mode: "panPick", lastScreen: scr, travel: 0, pick };
       return;
@@ -4350,7 +4356,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // taking the LAST hit that qualifies so that two siblings inside one box are
   // still separated by the ordinary top-first rule.
   function topmostAt(world: Vec2, accept?: (b: EdItem) => boolean): EdItem | null {
-    const hits = pickOrder().filter((b) => hitsItem(b, world) && (!accept || accept(b)));
+    return bestHit(pickOrder().filter((b) => hitsItem(b, world) && (!accept || accept(b))));
+  }
+
+  // The one this rule prefers out of a set of hits already in pick order. Split
+  // out of `topmostAt` so the cycle below can ask it repeatedly and get the same
+  // preference at every step rather than a second opinion about what is on top.
+  function bestHit(hits: readonly EdItem[]): EdItem | null {
     if (!hits.length) return null;
     const bounds = new Map(hits.map((b) => [b, pickBounds(b)] as const));
     let best = hits[hits.length - 1]!;
@@ -4366,6 +4378,100 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (!inner) return best;
       best = inner;
     }
+  }
+
+  // Everything under a world point, in the order the pick prefers it: what
+  // `topmostAt` answers, then what it would answer with that taken away, and so
+  // on. It is the same rule applied down the stack rather than a second ordering
+  // beside it, so the first candidate IS the pick and nothing can disagree.
+  function pickCandidatesAt(world: Vec2): EdItem[] {
+    const left = pickOrder().filter((b) => hitsItem(b, world));
+    const out: EdItem[] = [];
+    for (;;) {
+      const best = bestHit(left);
+      if (!best) return out;
+      out.push(best);
+      left.splice(left.indexOf(best), 1);
+    }
+  }
+
+  // One click, and what a REPEAT of it at the same point means.
+  //
+  // Every rule the pick has - depth, containment, the active layer - can only
+  // ever name ONE winner, and an object nested inside or behind other outlines
+  // is by definition not it: there is no pointer position that reaches it,
+  // because every point of it is also a point of the things over it. So a click
+  // that lands where the last one did takes the NEXT answer instead of repeating
+  // the same one, which is what makes the whole stack reachable with the mouse.
+  //
+  // The steps are the editor's own "click the body, then click into it" (see
+  // `insideCurrentBody`) run down the candidate list: body, its object, the next
+  // body, its object. A fresh click starts exactly where it always did, so the
+  // first two clicks anywhere are unchanged and the cycle is only what happens
+  // past the point the pick used to stop.
+  type PickStep = { apply: () => void; isCurrent: () => boolean };
+
+  function pickSteps(cands: readonly EdItem[]): PickStep[] {
+    const steps: PickStep[] = [];
+    let prevBody: number | null = null;
+    for (const it of cands) {
+      // One step per body rather than per object, since a body is what a click
+      // on any of its objects means. A body appears twice only where the stack
+      // genuinely interleaves - its own object, something else's, then its next
+      // one - which is the order those things are drawn in.
+      if (it.bodyId !== prevBody) {
+        const bodyId = it.bodyId;
+        steps.push({
+          apply: () => setBodySelection(bodyId),
+          isCurrent: () =>
+            soleBodyId() === bodyId && !selectedIds.size && !selectedChainIds.size,
+        });
+        prevBody = it.bodyId;
+      }
+      const id = it.id;
+      steps.push({
+        apply: () => setSelection([id]),
+        isCurrent: () => selectedIds.size === 1 && selectedIds.has(id),
+      });
+    }
+    return steps;
+  }
+
+  // Where the last cycling click landed, so the next one at that point can take
+  // the step after it. Keyed on the candidates as well as the point, because a
+  // pan under a resting cursor asks a different question rather than continuing
+  // the old one.
+  let pickCycle: { screen: Vec2; key: string; index: number } | null = null;
+
+  // What a press MEANS if it turns out to be a click. Read at release rather
+  // than captured at press: nothing between the two touches the selection, since
+  // the drag can only have panned or moved what was already selected.
+  function pickAt(world: Vec2, scr: Vec2): () => void {
+    return () => {
+      const cands = pickCandidatesAt(world);
+      if (!cands.length) return;
+      const steps = pickSteps(cands);
+      const key = cands.map((c) => c.id).join(",");
+      // A repeat is the same point, the same stack, AND the selection still
+      // being what the last step left - anything else (the outliner, a band, an
+      // undo) has moved on, and continuing the cycle from there would jump to
+      // something nobody pointed at.
+      const repeat =
+        pickCycle !== null &&
+        pickCycle.key === key &&
+        scr.distanceTo(pickCycle.screen) <= CLICK_SLOP_PX &&
+        (steps[pickCycle.index]?.isCurrent() ?? false);
+      const index = repeat
+        ? (pickCycle!.index + 1) % steps.length
+        : // A fresh click is exactly the old behaviour: the body under the
+          // pointer, or the object in it when that body is already the one being
+          // edited.
+          insideCurrentBody(cands[0]!)
+          ? 1
+          : 0;
+      steps[index]!.apply();
+      pickCycle = { screen: scr, key, index };
+    };
   }
 
   // The chain nearest a world point, within the pick band, or null. Chains are
