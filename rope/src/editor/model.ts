@@ -1240,6 +1240,52 @@ export function halfExtents(item: EdItem): Vec2 {
   return new Vec2(x, y);
 }
 
+// One item's axis-aligned bounds IN THE WORLD, rotation included - the box it
+// actually occupies on screen, which is what "this shape is inside that one"
+// has to be decided from. `halfExtents` is deliberately not that: it is the
+// unrotated approximation snapping and `bodyBounds` are written against, and a
+// long bar turned 45° occupies a far bigger box than it reports.
+export function itemBounds(item: EdItem): { min: Vec2; max: Vec2 } {
+  if (item.shape.kind === "circle") {
+    const r = new Vec2(item.shape.r, item.shape.r);
+    return { min: item.pos.sub(r), max: item.pos.add(r) };
+  }
+  // A rect and a convex polygon are both the hull of their vertices, so the
+  // placed loop's extremes are the box.
+  const verts = worldVertices(item);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const w of verts) {
+    minX = Math.min(minX, w.x);
+    minY = Math.min(minY, w.y);
+    maxX = Math.max(maxX, w.x);
+    maxY = Math.max(maxY, w.y);
+  }
+  if (!verts.length) return { min: item.pos, max: item.pos };
+  return { min: new Vec2(minX, minY), max: new Vec2(maxX, maxY) };
+}
+
+// Is one box wholly inside another, and STRICTLY smaller? The strictness is
+// what makes "keep taking the box inside this one" terminate: area falls at
+// every step, so two identical boxes cannot hand the answer back and forth.
+export function boundsInside(
+  inner: { min: Vec2; max: Vec2 },
+  outer: { min: Vec2; max: Vec2 },
+): boolean {
+  if (
+    inner.min.x < outer.min.x ||
+    inner.min.y < outer.min.y ||
+    inner.max.x > outer.max.x ||
+    inner.max.y > outer.max.y
+  ) {
+    return false;
+  }
+  const area = (b: { min: Vec2; max: Vec2 }) => (b.max.x - b.min.x) * (b.max.y - b.min.y);
+  return area(inner) < area(outer);
+}
+
 // Axis-aligned bounds of a group of items, from their unrotated extents (the
 // same approximation `halfExtents` gives snapping). Empty group → a zero box.
 export function bodyBounds(items: readonly EdItem[]): { min: Vec2; max: Vec2 } {

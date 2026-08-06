@@ -42,6 +42,8 @@ import {
   ED_LAYERS,
   emptyModel,
   bodyBounds,
+  boundsInside,
+  itemBounds,
   bodyCentroid,
   bodyLabel,
   bodyLead,
@@ -541,18 +543,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedBodyIds.has(hit.bodyId) ||
     model.items.some((i) => i.bodyId === hit.bodyId && selectedIds.has(i.id));
 
-  // The items a click on `hit` selects once it has drilled in: its whole body,
-  // since a body IS one object as far as the level is concerned. Alt reaches
-  // past that to the single piece, which is what the per-vertex and per-shape
-  // edits need.
+  // The items a click on `hit` selects. A click that has DRILLED IN - Alt, or a
+  // second click on the body already being edited - means the single object
+  // under the pointer, which is what the per-vertex and per-shape edits need.
+  // Anything else means the whole body, since a body IS one object as far as
+  // the level is concerned.
   //
   // Group membership beats layer state here, and deliberately: a group that
   // spans layers (a backdrop welded to the body it decorates) is still one
   // object, and picking up half of it would silently re-place the other half
   // against it. Hiding or locking a layer stops its items being TARGETED - it
   // cannot dismantle a body that is already welded.
-  const clickTargets = (hit: EdItem, alt: boolean): EdItem[] =>
-    alt ? [hit] : pickBodyOf(model.items, hit);
+  const clickTargets = (hit: EdItem, drill: boolean): EdItem[] =>
+    drill ? [hit] : pickBodyOf(model.items, hit);
   // Expand a set of item ids so no group is ever half-selected - a rubber band
   // that touches one piece of a body has touched the body.
   function withWholeBodies(ids: Iterable<number>): number[] {
@@ -3858,7 +3861,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag = { mode: "move", lead: hit, others, grab: hit.pos.sub(world) };
         return;
       }
-      const targets = clickTargets(hit, e.altKey);
+      // Reached here means the click has drilled in (Alt), the body under the
+      // pointer is already the one being edited, or Shift is extending an item
+      // selection. The first two select the OBJECT; a Shift-extension onto a
+      // body that is not current still means that whole body.
+      const targets = clickTargets(hit, e.altKey || insideCurrentBody(hit));
       if (e.shiftKey) {
         // Shift+click only edits the selection — no drag, so it can't nudge
         // geometry while picking bodies out of a group.
@@ -3910,16 +3917,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return pointInBody(b, world);
   }
 
+  // The box a click is judged to have landed in. A LIGHT is its icon and not
+  // its reach, exactly as `hitsItem` has it: a lamp's pool is as wide as the
+  // room it lights, and taken as the lamp's own box it would contain every wall
+  // in that room and hand each of them the click.
+  function pickBounds(b: EdItem): { min: Vec2; max: Vec2 } {
+    if (b.object !== "light") return itemBounds(b);
+    const r = new Vec2(lightPickRadius(worldLine()), lightPickRadius(worldLine()));
+    return { min: b.pos.sub(r), max: b.pos.add(r) };
+  }
+
   // Topmost pickable item at a world point (optionally filtered), or null.
+  //
+  // CONTAINMENT BEATS DEPTH. A shape drawn wholly inside another - a hatch in a
+  // door, a collision box inside the wall it belongs to - is the smaller thing
+  // the pointer is on, and the bigger one is what it is on TOP of; taking the
+  // topmost there would mean the inner shape could never be clicked at all,
+  // since every point of it is also a point of its container. Depth still
+  // decides between shapes that merely overlap, which is the case it is for.
+  //
+  // Applied repeatedly, so nesting several deep lands on the innermost, and
+  // taking the LAST hit that qualifies so that two siblings inside one box are
+  // still separated by the ordinary top-first rule.
   function topmostAt(world: Vec2, accept?: (b: EdItem) => boolean): EdItem | null {
-    const pickable = pickOrder();
-    for (let i = pickable.length - 1; i >= 0; i--) {
-      const b = pickable[i]!;
-      if (!hitsItem(b, world)) continue;
-      if (accept && !accept(b)) continue;
-      return b;
+    const hits = pickOrder().filter((b) => hitsItem(b, world) && (!accept || accept(b)));
+    if (!hits.length) return null;
+    const bounds = new Map(hits.map((b) => [b, pickBounds(b)] as const));
+    let best = hits[hits.length - 1]!;
+    for (;;) {
+      let inner: EdItem | null = null;
+      for (let i = hits.length - 1; i >= 0; i--) {
+        const b = hits[i]!;
+        if (b !== best && boundsInside(bounds.get(b)!, bounds.get(best)!)) {
+          inner = b;
+          break;
+        }
+      }
+      if (!inner) return best;
+      best = inner;
     }
-    return null;
   }
 
   // The chain nearest a world point, within the pick band, or null. Chains are
