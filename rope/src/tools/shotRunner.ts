@@ -37,8 +37,9 @@ export interface GrabRequest {
   // Where to write the PNG. Null takes no screenshot at all, which is what a
   // caller wanting only the page's log asks for.
   out: string | null;
-  // The 3D path needs SwiftShader spelled out (headless has no GPU) and a
-  // readable drawing buffer; the 2D path wants neither.
+  // The 3D path needs a GL implementation spelled out (headless has no GPU by
+  // default) and a readable drawing buffer; the 2D path wants neither. Which
+  // implementation is `GL_BACKENDS`, tried in order.
   gpu: boolean;
   width: number;
   height: number;
@@ -66,7 +67,67 @@ export function findChromium(): string | null {
   );
 }
 
+// How a 3D grab is given a GL implementation, in the order they are tried.
+//
+// SwiftShader stays FIRST because it is the reproducible one: it is the same
+// rasteriser on every machine and in CI, where there is no GPU at all, so a
+// grab taken here and a grab taken there are comparable pictures. It is also
+// the slow one - see "Performance claims need real-GPU numbers" in CLAUDE.md.
+//
+// It is no longer guaranteed to exist, which is why there is a second entry.
+// A distribution may ship a chromium whose SwiftShader cannot start (Fedora's
+// Chromium 142 is one: `libvk_swiftshader.so` is present and the context is
+// refused anyway), and what that looks like from here is every `--3d` grab in
+// the project failing at once, on every scene, with a page that never becomes
+// ready - which reads as the renderer being broken rather than as the browser
+// having no software GL.
+//
+// ANGLE over the host's EGL is the fallback: it uses whatever GL the machine
+// really has, so it is a picture of this machine rather than of SwiftShader.
+// That is a fine trade for the thing a grab is usually FOR (does the scene
+// draw, is the prop the right way round) and the wrong one for a pixel diff
+// across two machines - so the fallback announces itself.
+const GL_BACKENDS: readonly (readonly string[])[] = [
+  ["--enable-unsafe-swiftshader", "--disable-gpu"],
+  ["--use-gl=angle", "--use-angle=gl-egl"],
+];
+
+// Did this run fail for want of a GL context, as against for any of the
+// ordinary reasons a page does not become ready? Only that one failure is worth
+// re-launching for; anything else is the page's own problem and a second
+// attempt would just cost another timeout.
+function webglRefused(log: readonly PageLogEntry[]): boolean {
+  return log.some((e) => /WebGL context could not be created|Error creating WebGL context/i.test(e.text));
+}
+
 export async function grab(chromium: string, req: GrabRequest): Promise<GrabResult> {
+  if (!req.gpu) return grabWith(chromium, req, []);
+  let last: unknown;
+  for (const [i, flags] of GL_BACKENDS.entries()) {
+    const lastBackend = i === GL_BACKENDS.length - 1;
+    try {
+      const result = await grabWith(chromium, req, flags);
+      // A page can also come up READY with no GL - the blank-frame detector is
+      // what catches that - so the refusal is checked on the way out too.
+      if (!lastBackend && webglRefused(result.log)) continue;
+      return result;
+    } catch (err: unknown) {
+      last = err;
+      if (lastBackend || !(err instanceof PageNotReady) || !webglRefused(err.log)) throw err;
+      console.warn(
+        `[shot] no software GL (${flags.join(" ")} refused a context); retrying with ${GL_BACKENDS[i + 1]!.join(" ")}.`,
+      );
+      console.warn(`[shot] the frame is this machine's GL rather than SwiftShader's.`);
+    }
+  }
+  throw last;
+}
+
+async function grabWith(
+  chromium: string,
+  req: GrabRequest,
+  glFlags: readonly string[],
+): Promise<GrabResult> {
   const started = Date.now();
   const profile = mkdtempSync(join(tmpdir(), "rope-shot-"));
   let child: ChildProcess | null = null;
@@ -86,7 +147,7 @@ export async function grab(chromium: string, req: GrabRequest): Promise<GrabResu
         "--no-default-browser-check",
         "--disable-extensions",
         "--hide-scrollbars",
-        ...(req.gpu ? ["--enable-unsafe-swiftshader", "--disable-gpu"] : []),
+        ...glFlags,
         "about:blank",
       ],
       { stdio: ["ignore", "ignore", "pipe"], detached: true },

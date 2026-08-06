@@ -960,6 +960,29 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "andersonmat",
     license: "CC BY 4.0",
   },
+  // A length of large-bore metal pipe - the kind that runs along a sewer wall.
+  // 48 cm across and 1.23 m long as exported, a real pipe's size, so it wears
+  // no `scale`.
+  //
+  // It DOES wear a `rotY`, which is what that field is for: the model is
+  // extruded along its own z, so head on it draws as a 48 cm disc with 1.23 m
+  // of pipe hidden behind it, pointing at the camera. A quarter turn about y
+  // lays it along x, running across the level, which is the orientation a
+  // length of pipe is placed in. A level turns it further with the geometry
+  // object's own `rotX`/`rotY` (which compose over this one) - so a pipe end
+  // poking out of a wall is still one field away.
+  //
+  // No `simplify`: at 2,058 triangles the geometry is already a background
+  // prop's worth, and everything this file weighed was texture - three 2048²
+  // PNGs, 15.43 MB, which the pipeline's 1k WebP ceiling takes to 397 KB.
+  "pipe-long": {
+    file: "/meshes/pipe-long.glb",
+    sha256: "42bb6ae3b07fda693df314a9215d2859210d52f5885421ea00f11a10a1bedd21",
+    rotY: Math.PI / 2,
+    source: "https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b",
+    author: "Mehdi Shahsavan (@ahmagh2e)",
+    license: "CC BY 4.0",
+  },
   // Two pieces of the same sewer brick set, credited once each because the
   // manifest is per ENTRY and these are two files rather than two maps of one
   // surface. Both are authored in real-world metres - the arch is 3.0 x 1.9 x

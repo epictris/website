@@ -55,10 +55,15 @@ import { resolve } from "node:path";
 const argv = process.argv.slice(2);
 const simplifyAt = argv.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
+// Guarded on the flag being present at all: an absent one is index -1, and
+// skipping `simplifyAt + 1` would then skip index 0 - which silently ate the
+// INPUT path on the default (no-decimation) invocation, leaving `output`
+// undefined and the command printing its own usage.
 const simplify = simplifyAt === -1 ? null : Number(argv[simplifyAt + 1]);
-const [input, output] = argv.filter(
-  (_, i) => i !== simplifyAt && i !== simplifyAt + 1,
-);
+const [input, output] =
+  simplifyAt === -1
+    ? argv
+    : argv.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
     "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>]",
