@@ -439,6 +439,9 @@ export function render(
   // (see "Explicitly out of scope" in docs/3d-rendering-plan.md), so a 3D
   // grapple level is a 3D world with a 2D avatar in it.
   overlayOnly = false,
+  // Extra instrument lines under the FPS counter (`?hud=1`, see PerfProbe).
+  // Empty everywhere else, so the counter is exactly what it was.
+  hudLines: string[] = [],
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -536,12 +539,15 @@ export function render(
   // Atmosphere, over the scene and under the instruments (see drawVignette).
   if (overlayOnly) drawVignette(ctx, viewWidth, viewHeight);
 
-  // FPS counter (screen space, top-right).
+  // FPS counter (screen space, top-right), and under it whatever the perf HUD
+  // asked for: a frame time and a draw-call count a human can read while
+  // playing, which is the same thing `window.__perf` reports to a script.
   ctx.font = "14px monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#5a6472";
   ctx.fillText(`${Math.round(fps)} fps`, viewWidth - 8, 6);
+  hudLines.forEach((line, i) => ctx.fillText(line, viewWidth - 8, 24 + 18 * i));
   ctx.textAlign = "left";
 }
 
@@ -737,6 +743,8 @@ export function renderBall(
   //
   // Default false, so the 2D path, `shot.html` and `cli shot` are untouched.
   overlayOnly = false,
+  // See `render`: the `?hud=1` instrument lines.
+  hudLines: string[] = [],
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -840,11 +848,14 @@ export function renderBall(
   // Atmosphere, over the scene and under the instruments (see drawVignette).
   if (overlayOnly) drawVignette(ctx, viewWidth, viewHeight);
 
-  // FPS counter (screen space, top-right).
+  // FPS counter (screen space, top-right), and under it whatever the perf HUD
+  // asked for: a frame time and a draw-call count a human can read while
+  // playing, which is the same thing `window.__perf` reports to a script.
   ctx.font = "14px monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#5a6472";
   ctx.fillText(`${Math.round(fps)} fps`, viewWidth - 8, 6);
+  hudLines.forEach((line, i) => ctx.fillText(line, viewWidth - 8, 24 + 18 * i));
   ctx.textAlign = "left";
 }

@@ -746,6 +746,7 @@ bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.
 bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG snapshot of one frame
 bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the REAL renderer, headless
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer
+bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a filmstrip + motion profile
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
 bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
@@ -953,19 +954,29 @@ launches, mover misbehavior):
    sim state, which is exactly why none of it can see a bug in the drawing.
    `cli shot bundle.json --frame N --out f.png` draws the frame with the **real**
    renderer: it starts the dev server, loads `shot.html` (which replays the
-   bundle to that frame at `alpha = 1`, so the grab is reproducible), takes a
-   headless screenshot and tears the server down again.
+   bundle to that frame at `alpha = 1`, so the grab is reproducible), drives
+   headless chromium over the DevTools protocol and tears the server down again.
    `cli shot --diff before.png after.png` gives a changed-pixel count and a
    highlight image, which is how a claim about a renderer change is evidenced.
    `--3d` grabs the same frame through the WebGL renderer instead, which is the
    only headless view that can see the 3D scene at all: every other one draws its
    own picture of the sim state and is blind to the renderer by construction.
+   `--frames A..B --every K` draws a filmstrip instead of a frame, in one page
+   load, and prints the changed-pixel count between adjacent tiles - which is the
+   only headless evidence there is for anything that MOVES (see **Debugging
+   rendering**).
    Neither makes perceptual quality *assertable* - no number here says whether a
    settle looks convincing - they make perceptual claims cheap to evidence.
    Reach for it when the report is about what something *looks* like. The chain
    wound onto the ball drew as blank space for want of one `floor` (see
    `drawChainPolyline`), and every CLI tool called that run perfectly healthy,
    because it was.
+   **The grab comes with the page's console**, printed as `[page] <level>: ...`,
+   and an `error`-level line fails the command (`--allow-errors` to override) and
+   puts a red banner on the PNG itself.
+   That is not a nicety: a shader that fails to compile draws nothing at all, so
+   without it the command reports a perfectly ordinary-looking screenshot of a
+   renderer that never ran.
 4d. **Leave it alone and watch.** `cli settle bundle.json --from N --frames M`
    continues from a frame with zero input and reports the kinetic-energy
    trajectory, the fastest body, and the net drift, failing unless the scene
@@ -1149,10 +1160,11 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
 - **Invariants are velocity-shaped.**
   Purely geometric wrongness - a rope through a wall, an anchor floating off a surface - replays HEALTHY (`234f`, `306f`); `cli render`/`cli chainpath` plus eyes are the only detectors.
   `cli scan` covers part of the gap (embedding depth and settled-body drift are geometric), but nothing detects a rope taking a wrong path that is still the right length.
-- **The real renderer has no automatic check.**
-  `cli render3d` covers the arithmetic the 3D scene stands on - the camera correspondence, the extrusion's winding, the scene-object round trips (including the REAL ball level, on counts, which is what catches the editor silently dropping something) - but nothing at all covers what the scene *looks* like; `cli shot --3d` makes the grab one command and no more gates it than the 2D one does.
+- **Nothing GATES a render.**
+  `cli render3d` covers the arithmetic the 3D scene stands on - the camera correspondence, the extrusion's winding, the scene-object round trips (including the REAL ball level, on counts, which is what catches the editor silently dropping something) - and `cli shot` makes the grab, the pixel diff and the motion profile one command each, but nothing runs any of them for you.
+  A renderer change is evidenced on request, not gated, and `bun run test` stays green through a scene that looks wrong.
   Every CLI view draws its own picture of the sim, so a bug in the drawing itself (`1467f`) is invisible to all of them.
-  `cli shot` makes the grab and the pixel diff one command each, but nothing runs them for you: a renderer change is evidenced on request, not gated.
+  What is no longer blind: the page's console reaches the CLI and fails the grab (see **Debugging rendering**), motion is evidencable in one command, and a blank 3D frame reports itself.
 - **The editor autosaves, so anything reading a level while it is open is racing a writer.**
   A named model writes itself back 750 ms after any edit, which means an open editor tab is a second author of `levels/*.json` - and a page holding a stale model will happily write that model over a newer file. It has already cost real authored content once. Close the editor before touching a level from a script, and treat a level file's mtime moving while you did not write it as exactly what it is.
 - **Perceptual quality has no oracle.**
@@ -1162,6 +1174,69 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
 - **The A/B cannot reach far back.**
   `cli compare` runs current tooling against old physics, which works only while the tooling's imports exist in that revision: it breaks at anything older than `bodyOverlapCircle` and `World.collectContacts`, which is exactly where several of the historical defects live.
   Re-introducing such a defect locally is then the only way to prove a detector catches it.
+
+## Debugging rendering
+
+The physics loop above has a section of discipline because every rule in it was paid for by a debugging day.
+The renderer now has one for the same reason: the 2026-08-04 water sessions violated all six of these, and each cost hours.
+
+- **A headless screenshot without its captured console is not evidence.**
+  A three.js shader that fails to compile draws nothing and reports the reason only in the page log, so a grab of it looks like an ordinary picture of a scene with something missing.
+  Three separate "works in the headless screenshot, broken live" failures happened in one afternoon that way, and zero THREE warnings were seen across a whole day of renderer work.
+  `cli shot` now captures `window.__shotLog` (installed by an inline script in `shot.html`, ahead of the module, so a module that throws while evaluating is caught too), prints every entry as `[page] <level>: ...`, **exits nonzero on any `error`** unless `--allow-errors` is passed, and paints a red banner onto the PNG so the artifact says why it is wrong.
+  Shader errors are surfaced synchronously before `shotReady`: `Scene3D`'s diagnostic mode (opt-in, `shotMain` only) sets `checkShaderErrors` and an `onShaderError` reporter, and `compilePrograms()` walks every material's program and asks it for its uniforms - which is the call that actually runs three's link check, since neither `compile()` nor `compileAsync()` does.
+  A change to a shader is claimed working only with a clean `[page]` log or a live-browser check.
+- **Motion claims need multi-frame evidence.**
+  Flashing, flicker, wrong advection speed and anything else that only exists BETWEEN frames are structurally invisible to a single grab, and the user was the only detector for two such bugs across 36 grabs and nine rejection rounds.
+  `cli shot bundle --frames A..B --every K [--3d]` replays once, draws a labelled filmstrip and prints the changed-pixel count between adjacent tiles, plus min/median/max.
+  A steady flow is a flat series and a flashing artifact is a spike pattern in it; the wall clock is pinned per tile (`pinClock(frame / 60)`) so wall-driven animation advances with the sim rather than with when the command was run.
+  Nothing gates on the numbers - this is `--diff` for motion, making the claim cheap to evidence rather than assertable.
+  Note the whole frame is measured, so a moving camera swamps a small effect: profile a scene at REST when the thing being measured is the animation itself.
+- **No tuning on unmeasured geometry.**
+  Sampling density against the highest harmonic, UV anchoring and triangulation shape are checkable numbers, and a morning went into tuning aesthetic constants over geometry whose defects were all three at once.
+  Check them before touching a constant; constants tuned against broken geometry are rework, all of them.
+- **Prefer the textbook, renderer edition.**
+  Before hand-rolling a visual effect, survey what three.js ships and what the established technique is - the same rule the physics side states as "what does Box2D do".
+  It cuts both ways: `Water2` was surveyed and correctly rejected, with the reasons written down under **Water**, which is worth as much as adopting it would have been.
+- **Two rejected aesthetic rounds mean stop.**
+  Re-derive the approach and ask for a reference image rather than burning the user as a per-round oracle.
+  Nine rounds happened because no rule said stop.
+- **Performance claims need real-GPU numbers.**
+  Headless chromium runs SwiftShader: the ball arena draws at **4 fps / 250 ms a frame** there and at 60 fps on the 2D path in the same browser, so a frame time measured through `cli shot` is a number about SwiftShader.
+  Draw-call and triangle counts ARE transferable and are worth quoting; label them as what they are.
+  FPS comes from the live page (below).
+
+### The live-verification workflow
+
+`cli shot` is the channel for reproducible geometry and shading evidence.
+The live browser is the channel for anything SwiftShader cannot represent: frame rate, tuned-constant sign-off, and the page's own console.
+
+1. `cd rope && bun run dev`.
+2. Drive Chrome with the claude-in-chrome extension (or a human): navigate to the level, `?hud=1` for the on-screen instruments, `?level=NAME` and `?render=2d|3d` as usual.
+3. Read `window.__perf` by JS evaluation - `{fps, frameMsP50, frameMsP99, drawCalls, triangles, programs}`, rewritten once a second (`render/perfProbe.ts`).
+   The 2D path reports the FPS half and zeros for the rest, since it has no draw calls to speak of.
+4. Screenshot on a real GPU, and read the live console.
+
+`?hud=1` draws exactly those numbers under the FPS counter, so what a human eyeballs and what a script reads cannot disagree.
+The probe is render-side, allocated once, and touches no sim state, so it can never reach the fixed step.
+
+### What a grab is doing under the hood
+
+`cli shot` drives chromium over CDP (`src/tools/shotRunner.ts`, Bun's own `fetch` and `WebSocket`, no dependency) rather than through `--screenshot`.
+Three things follow, and each replaced a guess:
+
+- **The grab is gated on `window.shotReady`**, which the page had always set and nothing had ever polled.
+  A grab is taken the moment the page says it is done (a 2D frame in ~0.6 s, a dressed 3D one in ~1.3 s) instead of when a 20 s virtual-time budget expires.
+  A page that never becomes ready fails the command inside the wall-clock timeout (`--timeout`, 30 s) with its partial log printed, rather than stalling.
+- **`Emulation.setDeviceMetricsOverride` plus a clip** fix the viewport at the game's own 1920x1080 frame.
+  That retired the "headless chromium keeps 87px of the window" hack, which never worked: every grab carried an 87px letterbox band along the bottom.
+  The frame's pixels are unchanged - a clean-tree grab diffs to 0 against the old runner's top 1080 rows.
+- **Virtual time is kept**, because it is what makes a grab reproducible, but the budget is generous (600 s) and is not the ceiling.
+  Virtual time is spent by WORK rather than by waiting: one mesh decode burns tens of virtual seconds, and a page that exhausts its budget has its timers frozen, which stalls three's own `compileAsync` poll and looks exactly like a hang.
+  For the same reason the page does not give up on its assets by its own clock; it names what it is still waiting for (`still waiting for assets: mesh "sewer-arch"`) and the harness's wall clock is what fails the run.
+
+`shotMain` also reports a **blank 3D frame** as an error (`Scene3D.litFraction()`, read off the drawing buffer), since an empty frame is a valid PNG that every other view calls healthy.
+The historical late-frame blank flake did not reproduce in 20 consecutive gated runs at `--frame 40`, nor under the old runner, so its cause is still unidentified; what exists now is the detector, which is the half that makes the next occurrence loud instead of silent.
 
 ## Level editor
 

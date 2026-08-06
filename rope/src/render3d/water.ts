@@ -84,7 +84,7 @@ function ensureFlipbook(): THREE.DataArrayTexture {
     // Tracked so `assetsSettled` (and therefore `cli shot --3d`) waits for it:
     // a screenshot that races this load photographs flat water one run and
     // rippled water the next, which is evidence of nothing.
-    void trackPending(loadFlipbook(tex)).catch(() => {
+    void trackPending(loadFlipbook(tex), "water flipbook").catch(() => {
       // Failed load leaves the neutral normal in place: flat, dark water.
     });
   }
@@ -154,6 +154,7 @@ function ensureFoam(): THREE.Texture {
       tex.needsUpdate = true;
       foamReady.value = 1;
     }),
+    "water foam",
   ).catch(() => {
     // Failed load leaves the placeholder: water without foam.
   });

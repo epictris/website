@@ -10,6 +10,7 @@ import { Scene3D } from "./render3d/scene";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
+import { PerfProbe } from "./render/perfProbe";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import {
   digest,
@@ -180,6 +181,15 @@ let last = -1;
 let accumulator = 0;
 let fps = 0;
 
+// What the renderer is costing on THIS machine, which is the one thing a
+// headless grab cannot report (see render/perfProbe.ts). `window.__perf` is a
+// live handle a script can read; `?hud=1` puts the same numbers on the overlay
+// for a human. The probe itself is always on - it is a few adds a frame and one
+// sort a second - and only the HUD is opt-in.
+const perf = new PerfProbe();
+(window as unknown as { __perf: typeof perf.snapshot }).__perf = perf.snapshot;
+const wantsHud = params.get("hud") !== null;
+
 function frame(now: number): void {
   if (last < 0) last = now;
   let dt = (now - last) / 1000;
@@ -227,7 +237,17 @@ function frame(now: number): void {
   scene3d?.render(level, camera, alpha);
 
   if (level instanceof BallLevel) {
-    renderBall(ctx, view, level, camera, fps, ballInput!.aimPoint(), alpha, scene3d !== null);
+    renderBall(
+      ctx,
+      view,
+      level,
+      camera,
+      fps,
+      ballInput!.aimPoint(),
+      alpha,
+      scene3d !== null,
+      wantsHud ? perf.hudLines() : [],
+    );
   } else {
     render(
       ctx,
@@ -240,8 +260,13 @@ function frame(now: number): void {
       alpha,
       cameraCtl.activeRegion,
       scene3d !== null,
+      wantsHud ? perf.hudLines() : [],
     );
   }
+  // After the frame is drawn, so the draw-call and triangle counts are this
+  // frame's rather than the last one's.
+  perf.sample(dt, scene3d?.renderStats() ?? null);
+
   if (probeRect) drawProbeOutline(ctx, view, camera, probeRect);
 
   requestAnimationFrame(frame);

@@ -16,7 +16,8 @@
 //                                      [--out t.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
 //   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--3d]
-//                                      [--out f.png]
+//                                      [--out f.png] [--allow-errors]
+//   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
@@ -58,6 +59,8 @@ import { BallLevel } from "../level/ballLevel";
 import { RigidBody2D } from "../engine/body";
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
+import { findChromium, grab, PageNotReady, type PageLogEntry } from "./shotRunner";
+import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import {
   ACTIONS,
   checkBallInvariants,
@@ -588,10 +591,15 @@ function cmdRecord(first: string, o: Record<string, string>, extra: string[]): v
 //
 // This does not make perceptual quality assertable — nothing here judges whether
 // a settle looks convincing. It makes perceptual CLAIMS cheap to evidence: one
-// command for a frame grab, one for a before/after pixel diff.
+// command for a frame grab, one for a before/after pixel diff, one for a
+// filmstrip and the motion profile that goes with it.
+//
+// The grab itself is driven over CDP (see shotRunner.ts), which is what makes it
+// wait for the page rather than for a guessed time budget and what brings the
+// page's own console back with the picture.
 const SHOT_PORT = 3179;
 
-function cmdShot(first: string, o: Record<string, string>, extra: string[]): void {
+async function cmdShot(first: string, o: Record<string, string>, extra: string[]): Promise<void> {
   if (o.diff !== undefined) {
     // `--diff a.png b.png` puts the first image in the flag's value slot and the
     // second in a positional, so the pair is read off the raw arguments: the two
@@ -617,19 +625,18 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
   }
 
   const bundle = resolve(first);
+  // `--frames A..B [--every K]` is the motion form: one page load, one chromium
+  // session, a filmstrip of tiles and a changed-pixel count between adjacent
+  // ones. A single frame cannot show flashing, flicker or the speed something
+  // flows at, and until this existed the user was the only detector for both.
+  const range = /^(\d+)\.\.(\d+)$/.exec(o.frames ?? "");
+  if (o.frames !== undefined && !range) fail("usage: cli shot <bundle> --frames A..B [--every K]");
   const frame = Number(o.frame ?? 1);
-  const out = resolve(o.out ?? `${first.replace(/\.json(\.gz)?$/, "")}.f${frame}.png`);
+  const label = range ? `f${range[1]}-${range[2]}` : `f${frame}`;
+  const out = resolve(o.out ?? `${first.replace(/\.json(\.gz)?$/, "")}.${label}.png`);
   const zoom = o.zoom;
-  // The game's fixed frame is 1920×1080 (render/viewport.ts) and the page fits it
-  // into whatever viewport it gets, so anything else grabs the same picture with
-  // letterbox bars around it. `--window-size` is the *window*, and headless
-  // chromium keeps 87px of it for itself, so the height asks for that on top to
-  // leave a 1920×1080 viewport (measured; both headless modes agree).
-  const size = o.size ?? "1920,1167";
   const port = Number(o.port ?? SHOT_PORT);
-  const chromium = ["chromium-browser", "chromium", "google-chrome"].find(
-    (b) => spawnSync("which", [b]).status === 0,
-  );
+  const chromium = findChromium();
   if (!chromium) fail("no headless chromium found (chromium-browser | chromium | google-chrome)", 1);
 
   // The page fetches its bundle over HTTP, so the bundle has to be inside the
@@ -650,31 +657,61 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
     stdio: "ignore",
     detached: true,
   });
+  let failure: string | null = null;
   try {
     waitForServer(port);
     const url =
-      `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json&frame=${frame}` +
+      `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json` +
+      (range ? `&frames=${range[1]}..${range[2]}&every=${o.every ?? 1}` : `&frame=${frame}`) +
       (zoom ? `&zoom=${zoom}` : "") +
       // `--3d` grabs the frame through the WebGL renderer instead of the 2D one.
       // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
       // grab is otherwise identical and the two can be diffed against each other.
       (o["3d"] ? "&render=3d" : "");
-    const r = spawnSync(
-      chromium,
-      [
-        "--headless",
-        ...(o["3d"] ? ["--enable-unsafe-swiftshader", "--disable-gpu"] : []),
-        `--screenshot=${out}`,
-        `--window-size=${size}`,
-        // The page replays the bundle to the frame before it draws, so the grab
-        // has to wait for real work rather than for a fixed animation frame.
-        "--virtual-time-budget=20000",
+    let log: PageLogEntry[] = [];
+    try {
+      const result = await grab(chromium, {
         url,
-      ],
-      { encoding: "utf8" },
-    );
-    if (r.status !== 0) fail(`chromium failed: ${(r.stderr || "").trim()}`, 1);
-    console.log(`[shot] ${first} @f${frame} → ${out}`);
+        out,
+        gpu: o["3d"] !== undefined,
+        width: VIEW_WIDTH,
+        height: VIEW_HEIGHT,
+        // The 30s discipline: a page that is not ready by then is hung, and a
+        // hung page has to kill the run with its partial log rather than stall.
+        timeoutMs: Number(o.timeout ?? 30000),
+        // Generous, because virtual time is spent by WORK and not by waiting: a
+        // mesh decode burns tens of virtual seconds in a blink, and a page that
+        // exhausts its budget has its timers frozen - which stalls three's own
+        // `compileAsync` poll and looks exactly like a hang. The wall-clock
+        // timeout above is the real ceiling; this only has to be past anything
+        // a healthy page spends.
+        virtualBudgetMs: 600000,
+      });
+      log = result.log;
+      console.log(`[shot] ${first} @${label} → ${out} (${result.elapsedMs}ms)`);
+    } catch (e) {
+      if (e instanceof PageNotReady) {
+        log = e.log;
+        failure = e.message;
+      } else {
+        throw e;
+      }
+    }
+    // The page's console, printed whatever happened. A headless screenshot
+    // without it is not evidence: a shader that fails to compile draws nothing
+    // and says so only here.
+    printPageLog(log);
+    // A failure is REPORTED past the `finally` below rather than here, because
+    // `fail` exits the process: raised inside the block it skips the teardown,
+    // and what is left behind is a detached dev server holding the port - which
+    // the next grab then screenshots instead of the code being checked.
+    //
+    // A screenshot taken over a page error is the most misleading possible
+    // answer to "does this look right", so it is a failure by default.
+    const errors = log.filter((e) => e.level === "error");
+    if (failure === null && errors.length > 0 && o["allow-errors"] === undefined) {
+      failure = `${errors.length} page error(s); the PNG carries the banner (pass --allow-errors to ignore)`;
+    }
   } finally {
     // Negative pid: the group, not just the wrapper (see the spawn above).
     try {
@@ -684,7 +721,40 @@ function cmdShot(first: string, o: Record<string, string>, extra: string[]): voi
     }
     rmSync(served, { force: true });
   }
+  if (failure) fail(failure, 1);
   process.exit(0);
+}
+
+// Everything the page said, in the order it said it. The `motion` line a
+// filmstrip emits is data rather than a message, so it is printed as the
+// per-pair profile it is: a flashing artifact is a spike pattern in that series
+// and a steady flow is a flat one. Nothing gates on it - this is `--diff` for
+// motion, making the claim cheap to evidence rather than assertable.
+function printPageLog(log: PageLogEntry[]): void {
+  for (const entry of log) {
+    const motion = /^motion (\{.*\})$/.exec(entry.text);
+    if (motion) {
+      printMotion(motion[1]!);
+      continue;
+    }
+    for (const line of entry.text.split("\n")) console.log(`[page] ${entry.level}: ${line}`);
+  }
+}
+
+function printMotion(json: string): void {
+  const m = JSON.parse(json) as {
+    frames: number[];
+    tile: { width: number; height: number };
+    changed: number[];
+  };
+  console.log(`[shot] motion profile (${m.tile.width}x${m.tile.height} tiles):`);
+  m.changed.forEach((n, i) => {
+    console.log(`  f${m.frames[i]}->f${m.frames[i + 1]}: ${n} px changed`);
+  });
+  if (m.changed.length === 0) return;
+  const sorted = [...m.changed].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)]!;
+  console.log(`  min ${sorted[0]} · median ${median} · max ${sorted[sorted.length - 1]}`);
 }
 
 // Block until the dev server answers, or give up loudly: a screenshot taken
@@ -1267,8 +1337,8 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N] [--zoom Z] [--out f.png]  |  cli shot --diff a.png b.png [--out d.png]");
-    cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":
     if (!arg) fail("usage: cli record [<level>] <script.json> [--out session.json]");

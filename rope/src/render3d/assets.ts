@@ -612,7 +612,7 @@ export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
     mat.emissive = new THREE.Color(emissive || "#ffffff");
     mat.emissiveIntensity = emissiveIntensity;
   }
-  if (authored) void track(dressWithImages(mat, name, authored, tile, ox, oy));
+  if (authored) void track(dressWithImages(mat, name, authored, tile, ox, oy), `surface "${name}"`);
   // Where the emission map comes from: the one this shape named, or its own
   // surface's. Tiled by the capture size of the set it is IN at this shape's
   // scale, since a borrowed map is a different picture from the one under it and
@@ -621,6 +621,7 @@ export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
   if (glowFrom) {
     void track(
       dressEmissive(mat, glowFrom, TEXTURE_ASSETS[glowFrom]!, tileMetres(glowFrom, req.tileScale), ox, oy),
+      `emission map "${glowFrom}"`,
     );
   }
   materialCache.set(key, mat);
@@ -640,18 +641,27 @@ export function surfaceFor(req: SurfaceRequest): THREE.MeshStandardMaterial {
 // loaded by then. That is not a slow screenshot, it is a screenshot that is not
 // reproducible - the same command can produce a generated surface one run and an
 // authored one the next, which makes it useless as evidence of either.
-const pending = new Set<Promise<unknown>>();
+// Each load is kept under a NAME, because "the grab is still waiting" is not a
+// usable report: a load that never settles hangs the page for ever and the
+// screenshot harness had nothing to print but a blank picture. Named, the
+// watchdog in `shotMain` can say which asset it is waiting on.
+const pending = new Map<Promise<unknown>, string>();
 
-function track<T>(p: Promise<T>): Promise<T> {
-  pending.add(p);
+function track<T>(p: Promise<T>, what: string): Promise<T> {
+  pending.set(p, what);
   void p.finally(() => pending.delete(p));
   return p;
 }
 
 // For loads that live outside this module (the water flipbook) but must still
 // hold up a headless grab: same set, same settle point.
-export function trackPending<T>(p: Promise<T>): Promise<T> {
-  return track(p);
+export function trackPending<T>(p: Promise<T>, what: string): Promise<T> {
+  return track(p, what);
+}
+
+// What is still in flight, for a harness reporting a hang.
+export function pendingAssets(): string[] {
+  return [...pending.values()];
 }
 
 // Resolves when nothing is in flight. Loops rather than awaiting once, because
@@ -659,7 +669,7 @@ export function trackPending<T>(p: Promise<T>): Promise<T> {
 // while the mesh promise is still settling.
 export async function assetsSettled(): Promise<void> {
   while (pending.size > 0) {
-    await Promise.allSettled([...pending]);
+    await Promise.allSettled([...pending.keys()]);
   }
 }
 
@@ -711,7 +721,7 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
     for (const [slot, tex] of entries) if (tex) out[slot] = tex;
     return out;
   });
-  imageCache.set(name, track(p));
+  imageCache.set(name, track(p, `texture images "${name}"`));
   return p;
 }
 
@@ -1133,6 +1143,6 @@ export function loadMesh(key: string): Promise<THREE.Object3D | null> {
       console.warn(`[render3d] mesh "${key}" failed to load:`, err);
       return null;
     });
-  gltfCache.set(key, track(p));
+  gltfCache.set(key, track(p, `mesh "${key}"`));
   return p.then((o) => (o ? o.clone(true) : null));
 }

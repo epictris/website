@@ -18,6 +18,52 @@
   </head>
   <body>
     <div id="frame"><canvas id="scene"></canvas><canvas id="game"></canvas></div>
+    <!-- The page's console, buffered where the harness can read it.
+
+         A headless screenshot with no console behind it is not evidence: a
+         three.js shader that fails to compile draws nothing at all and says so
+         only in the page log, so `cli shot --3d` reported "working" three times
+         in one session on code whose shader never compiled.
+
+         Inline, and BEFORE the module script, because a module that throws
+         during evaluation has to be caught too - a hook installed inside that
+         module is not installed when it is needed most. Plain ES5 in a classic
+         script, so it runs synchronously with nothing to transform or import. -->
+    <script>
+      (function () {
+        var log = [];
+        window.__shotLog = log;
+        var say = function (level, text) {
+          log.push({ level: level, text: String(text) });
+        };
+        ["log", "info", "warn", "error"].forEach(function (level) {
+          var original = console[level];
+          console[level] = function () {
+            var parts = [];
+            for (var i = 0; i < arguments.length; i++) {
+              var a = arguments[i];
+              // An Error's message is the useful half and String(err) drops its
+              // stack, so both are kept.
+              parts.push(a instanceof Error ? a.message + "\n" + a.stack : String(a));
+            }
+            say(level, parts.join(" "));
+            // Delegate: the harness reads the buffer, a human watching the page
+            // reads devtools, and neither may cost the other anything.
+            if (original) original.apply(console, arguments);
+          };
+        });
+        window.addEventListener("error", function (e) {
+          say(
+            "error",
+            e.message + (e.filename ? " (" + e.filename + ":" + e.lineno + ")" : ""),
+          );
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e.reason;
+          say("error", "unhandled rejection: " + ((r && (r.stack || r.message)) || String(r)));
+        });
+      })();
+    </script>
     <script type="module" src="/src/shotMain.ts"></script>
   </body>
 </html>

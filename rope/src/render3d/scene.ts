@@ -63,6 +63,14 @@ function drawnElsewhere(body: CollisionObject2D): boolean {
   );
 }
 
+export interface Scene3DOptions {
+  // Report shader compile/link failures where a harness can see them, and keep
+  // the drawing buffer readable after a frame (see the constructor). `shotMain`
+  // is the only caller: the game wants neither, and `preserveDrawingBuffer`
+  // costs real frame time.
+  diagnostics?: boolean;
+}
+
 export class Scene3D {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(FOV_Y_DEG, VIEW_ASPECT, 0.1, 400);
@@ -101,7 +109,12 @@ export class Scene3D {
   private viewportRect: { x: number; y: number; w: number; h: number } | null = null;
   private readonly size = new THREE.Vector2();
 
-  constructor(canvas: HTMLCanvasElement) {
+  // Diagnostics: the shader-error log and the frame readback below cost the game
+  // nothing because only `shotMain` asks for them.
+  private readonly diagnostics: boolean;
+
+  constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
+    this.diagnostics = opts.diagnostics === true;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -110,7 +123,14 @@ export class Scene3D {
       // sky instead of the scene's own.
       alpha: false,
       powerPreference: "high-performance",
+      // A frame grab has to read the drawing buffer back after it is drawn -
+      // `drawImage` into a filmstrip tile, and the all-black check - and without
+      // this the buffer is cleared the moment the frame is composited, so a
+      // readback a task later hands back an empty picture that looks exactly
+      // like a scene that drew nothing.
+      preserveDrawingBuffer: this.diagnostics,
     });
+    if (this.diagnostics) this.installShaderErrorReporting();
     this.renderer.setPixelRatio(1); // the canvas is already sized in device pixels
     configureRenderer(this.renderer);
     this.env = new Environment(this.scene, undefined, this.renderer);
@@ -162,6 +182,91 @@ export class Scene3D {
   // picture.
   pinClock(seconds: number | null): void {
     this.pinnedClock = seconds;
+  }
+
+  // A shader that fails to compile draws NOTHING, so the failure reaches a
+  // screenshot as an ordinary-looking scene with one mesh missing, or as a blank
+  // page - which is why an entire day of renderer work went by with zero THREE
+  // diagnostics seen. Reported through `console.error`, which the page-side
+  // buffer (see shot.html) picks up like any other message.
+  //
+  // WHEN it fires is the part worth knowing. three checks the link status in
+  // `onFirstUse`, which runs from `WebGLProgram.getUniforms()` - so neither
+  // `compile()` nor `compileAsync()` triggers it, and the first `render()` does,
+  // synchronously, whether or not `KHR_parallel_shader_compile` is present. A
+  // grab that renders before it sets `shotReady` therefore has the diagnostic in
+  // the buffer by then; `compilePrograms` below is what widens that from "every
+  // material drawn this frame" to "every material in the scene".
+  private installShaderErrorReporting(): void {
+    this.renderer.debug.checkShaderErrors = true;
+    this.renderer.debug.onShaderError = (gl, program, vertexShader, fragmentShader) => {
+      const logs = [
+        `program: ${gl.getProgramInfoLog(program)?.trim() ?? ""}`,
+        `vertex: ${gl.getShaderInfoLog(vertexShader)?.trim() ?? ""}`,
+        `fragment: ${gl.getShaderInfoLog(fragmentShader)?.trim() ?? ""}`,
+      ].filter((l) => !l.endsWith(": "));
+      console.error(`THREE shader error - ${logs.join(" | ")}`);
+    };
+  }
+
+  // Force every material in the scene through the compiler AND through the link
+  // check, so a broken program belonging to something off screen - or culled
+  // this frame - is reported before the grab rather than whenever the camera
+  // happens to reach it.
+  //
+  // The sweep is the load-bearing half. `compile()` creates and links the
+  // programs and `compileAsync()` waits for the driver, but neither looks at the
+  // result: three checks the link status in `onFirstUse`, which runs from
+  // `WebGLProgram.getUniforms()`. Asking each program for its uniforms is
+  // therefore what turns a silent failure into the `console.error` above, and
+  // it costs nothing - the answer is cached and the renderer asks for it on the
+  // next frame anyway.
+  async compilePrograms(): Promise<void> {
+    const materials = this.renderer.compile(this.scene, this.camera);
+    await this.renderer.compileAsync(this.scene, this.camera);
+    for (const material of materials) {
+      // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
+      // material is the program three built for it.
+      const props = this.renderer.properties.get(material) as {
+        currentProgram?: { getUniforms(): unknown };
+      };
+      props.currentProgram?.getUniforms();
+    }
+  }
+
+  // Fraction of the drawn frame that is not the clear colour, sampled from the
+  // drawing buffer itself rather than from a composited canvas. The late-frame
+  // blank flake (`shot --3d` returning a uniformly empty picture) has no other
+  // detector: an empty frame is a perfectly valid PNG and every CLI view of the
+  // sim calls the same run healthy.
+  //
+  // Diagnostics-only, since it needs `preserveDrawingBuffer` and reads the whole
+  // buffer back off the GPU.
+  litFraction(): number {
+    const gl = this.renderer.getContext();
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    if (w === 0 || h === 0) return 0;
+    const pixels = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    // Against BLACK rather than against the clear colour: what is being detected
+    // is a frame that never drew, and a canvas that has only been cleared still
+    // carries the sky, which is exactly the case this must not call blank.
+    let lit = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i]! > 2 || pixels[i + 1]! > 2 || pixels[i + 2]! > 2) lit++;
+    }
+    return lit / (w * h);
+  }
+
+  // What the renderer drew this frame. Read-only, and read from three's own
+  // counters rather than kept alongside them.
+  renderStats(): { calls: number; triangles: number; programs: number } {
+    return {
+      calls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      programs: this.renderer.info.programs?.length ?? 0,
+    };
   }
 
   // A body the world holds that the level did not author: a spawned rock, the
