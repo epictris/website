@@ -202,8 +202,7 @@
         "w": 880.0000000000001,
         "h": 770
       },
-      "offsetY": -70,
-      "viewportScale": 0.9
+      "offsetY": -50
     }
   ],
   "environment": {
@@ -212,7 +211,9 @@
     "groundColor": "#14181f",
     "fillIntensity": 10,
     "envIntensity": 0.1,
-    "backgroundColor": "#080a0f"
+    "backgroundColor": "#080a0f",
+    "fogAmount": 0.4,
+    "fogColor": "#2b2e33"
   },
   "chains": [
     {
@@ -234,7 +235,7 @@
   ],
   "player": {
     "x": 820.0000000000001,
-    "y": 560,
+    "y": 580.0000000000001,
     "radius": 8
   },
   "bodies": [
@@ -3477,27 +3478,6 @@
     },
     {
       "kind": "static",
-      "x": 628.5000000000003,
-      "y": 624,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "geometry",
-          "kind": "mesh",
-          "mesh": "sewer-wall",
-          "shape": {
-            "kind": "rect",
-            "w": 10,
-            "h": 10
-          },
-          "z": -220.00000000000003,
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
       "x": 1672.0000000000007,
       "y": 667.0000000000002,
       "rot": 0,
@@ -3615,6 +3595,66 @@
           "material": "cast iron"
         },
         {
+          "type": "collision",
+          "x": 50,
+          "y": -45.00000000000011,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        },
+        {
+          "type": "collision",
+          "x": 49.99999999999982,
+          "y": -85.00000000000006,
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 10
+          }
+        },
+        {
+          "type": "collision",
+          "x": 50,
+          "y": -125.00000000000009,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        },
+        {
+          "type": "collision",
+          "x": -50.000000000000085,
+          "y": -125.00000000000009,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        },
+        {
+          "type": "collision",
+          "x": -50.000000000000085,
+          "y": -85.00000000000006,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        },
+        {
+          "type": "collision",
+          "x": -50.000000000000085,
+          "y": -45.00000000000011,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
+        },
+        {
           "type": "geometry",
           "y": -85.00000000000006,
           "kind": "mesh",
@@ -3624,7 +3664,7 @@
             "w": 10,
             "h": 10
           },
-          "z": -20
+          "z": 20
         },
         {
           "type": "anchor",
@@ -3636,7 +3676,7 @@
     },
     {
       "kind": "static",
-      "x": 864.9999999999999,
+      "x": 819.9999999999995,
       "y": 145.00000000000003,
       "rot": 0,
       "color": "#555555",
@@ -3647,7 +3687,7 @@
           "type": "collision",
           "shape": {
             "kind": "rect",
-            "w": 790,
+            "w": 140,
             "h": 10
           },
           "thickness": 100
@@ -3656,7 +3696,7 @@
           "type": "geometry",
           "shape": {
             "kind": "rect",
-            "w": 790,
+            "w": 140,
             "h": 10
           },
           "depth": 10,
@@ -3665,15 +3705,28 @@
         {
           "type": "anchor",
           "id": 8,
-          "x": -40.499999999999226,
+          "x": 4.500000000001059,
           "y": 5.000000000000004
+        },
+        {
+          "type": "geometry",
+          "x": 3.552713678800501e-13,
+          "y": 9.999999999999986,
+          "shape": {
+            "kind": "rect",
+            "w": 140,
+            "h": 30.000000000000004
+          },
+          "z": 114.00000000000001,
+          "depth": 100,
+          "texture": "rock wall"
         }
       ]
     },
     {
       "kind": "static",
       "x": 819.9999999999999,
-      "y": 855.0000000000002,
+      "y": 825.0000000000003,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -3696,8 +3749,7 @@
             "w": 700,
             "h": 170.00000000000003
           },
-          "z": -100,
-          "depth": 300,
+          "depth": 325,
           "texture": "rock wall"
         }
       ]
@@ -3737,28 +3789,7 @@
     },
     {
       "kind": "static",
-      "x": 627.9999999999999,
-      "y": 343.99999999999983,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "geometry",
-          "kind": "mesh",
-          "mesh": "sewer-wall",
-          "shape": {
-            "kind": "rect",
-            "w": 10,
-            "h": 10
-          },
-          "z": -220.00000000000003,
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 350.00000000000017,
+      "x": 469.99999999999994,
       "y": 540,
       "rot": 0,
       "color": "#555555",
@@ -3782,28 +3813,145 @@
             "w": 240.00000000000003,
             "h": 800
           },
-          "z": -100,
-          "depth": 300,
+          "depth": 325,
           "texture": "rock wall"
         }
       ]
     },
     {
       "kind": "static",
-      "x": 1055.0000000000005,
-      "y": 494.99999999999983,
+      "x": 1040.0000000000002,
+      "y": 334.99999999999994,
       "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
       "objects": [
         {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 330
+          }
+        },
+        {
           "type": "geometry",
-          "rot": 1.5707963267948966,
+          "x": 5.000000000000249,
+          "y": 235.00000000000006,
           "kind": "mesh",
-          "mesh": "cage",
+          "mesh": "sewer-doorway",
           "shape": {
             "kind": "rect",
             "w": 10,
             "h": 10
           },
+          "z": 10,
+          "rotY": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 925,
+      "y": 445.00000000000017,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 670,
+            "h": 590
+          },
+          "z": -160,
+          "depth": 50,
+          "texture": "rock wall",
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 669.9999999999999,
+      "y": 154.99999999999997,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 30.000000000000004
+          },
+          "z": 1,
+          "depth": 325,
+          "texture": "rock wall",
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 969.9999999999999,
+      "y": 155,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 30.000000000000004
+          },
+          "z": 1,
+          "depth": 325,
+          "texture": "rock wall",
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 820.0000000000001,
+      "y": 155,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 140,
+            "h": 30.000000000000004
+          },
+          "z": -110.00000000000001,
+          "depth": 100,
+          "texture": "rock wall",
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1045,
+      "y": 300,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "sewer-wall",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          },
+          "z": 15,
+          "rotY": 1.5707963267948966,
           "color": "#555555",
           "opacity": 0.5
         }

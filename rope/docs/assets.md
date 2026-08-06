@@ -16,6 +16,7 @@ cages:
 - https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0
 sewer walls:
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd
+- https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567
 
 # Tileable Meshes
 red brick wall:

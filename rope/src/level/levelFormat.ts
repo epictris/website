@@ -784,11 +784,26 @@ export interface EnvironmentData {
   // What is behind everything. Absent = the page's own background, so the 3D
   // scene's horizon and the letterbox bars agree and the frame does not read as
   // a window cut into a different game.
-  //
-  // There is no fog here any more (see `render3d/environment.ts`): distance is
-  // said by parallax, by the sun's shadow and by the environment's own gradient
-  // rather than by muting everything behind the gameplay plane.
   backgroundColor?: string;
+  // Air, thickening with distance from the CAMERA (see `render3d/environment.ts`).
+  //
+  // `fogAmount` is how much of the fog colour a surface `FOG_REFERENCE_DISTANCE`
+  // from the camera takes on - 20 m, about where the gameplay plane sits - so 0
+  // (and absent) is no fog at all, which is what every level authored before
+  // these fields gets. Everything nearer takes less and everything further
+  // takes more, on the exponential law that says so.
+  //
+  // It is a FRACTION rather than a density, and that is the point rather than a
+  // simplification. A density is in 1/metres - an inverse length, the one thing
+  // this block must not contain (see the note above it), since it would have to
+  // be scaled the opposite way from every other number in the file. A fraction
+  // passes through `scaleLevelData` untouched like the colours and the sun
+  // direction, and the metres it is measured over live once, in the renderer.
+  fogAmount?: number;
+  // Absent = `backgroundColor`, which is what aerial perspective means: distance
+  // fades into whatever is behind everything, rather than into a second colour
+  // that has to be kept in step with it by hand.
+  fogColor?: string;
 }
 
 export interface LevelData {

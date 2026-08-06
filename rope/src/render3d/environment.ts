@@ -13,14 +13,34 @@
 // `LevelData.lights` puts in the level, which falls off with distance and
 // therefore has somewhere it ENDS. See `render3d/lights.ts`.
 //
-// There is deliberately NO FOG. It was here to say which layer is further away -
-// aerial perspective over the ten metres of depth a level authors into - and
-// what it also did was mute every distant surface at exactly the moment the
-// authored textures and the environment started giving those surfaces something
-// worth seeing. Depth is said by parallax, by the shadow the sun throws and by
-// the environment's own gradient instead. `THREE.FogExp2` is two lines if a
-// level ever wants it back, and it would want to be per level rather than a
-// default.
+// FOG IS OFF BY DEFAULT AND AUTHORED PER LEVEL (`fogAmount`), which is the
+// arrangement the removed version should have had. As a default it muted every
+// distant surface at exactly the moment the authored textures and the
+// environment started giving those surfaces something worth seeing, and depth
+// was already said by parallax, by the shadow the sun throws, by the
+// environment's own gradient and - in a level lit from inside - by the lights'
+// own falloff. None of that is an argument against a level ASKING for air.
+//
+// IT THICKENS WITH DISTANCE FROM THE CAMERA, which is what air does: every
+// surface in the frame is behind some of it, and one further back is behind more.
+// `THREE.FogExp2` is that law directly - the density is a property of the air
+// rather than of where the level happens to be, so nothing has to be re-anchored
+// per frame and the picture cannot disagree with itself about which of two
+// surfaces is further away.
+//
+// It was briefly a LINEAR fog pinned to the gameplay plane, on the argument that
+// the plane sits ~16 m from the camera (zoom is dolly distance here - see
+// `space.ts`) so a camera-relative fog thick enough to see also tints the plane
+// itself. That is true and it is not a defect: the plane IS 16 m of air away,
+// the level's own foreground props stand 3 m in front of it and its scenery 2 m
+// behind, and a fog that starts exactly at the plane draws those three at the
+// same haze as each other and the foreground at none. Pinning it also made the
+// fog a function of the zoom, so a camera region that pulled back moved the fog
+// with it - the air thinning as you zoom out, which is the wrong way round.
+//
+// What that costs, stated once: zooming out now puts more air between the camera
+// and the level, so a pulled-back camera region is hazier. That is the same
+// statement as the one above and it is the correct direction.
 //
 // The environment is what makes the PBR maps mean anything. A
 // `MeshStandardMaterial` gets its specular response from reflections, so with
@@ -89,6 +109,27 @@ const ENV_MAP_HEIGHT = 64;
 // the ambient.
 const SUN_LOBE_SIZE = 0.09;
 const SUN_LOBE_GAIN = 6;
+
+// The distance `fogAmount` is measured at, in metres. 20 m is about where the
+// gameplay plane sits at the ball level's own zoom, so the authored number reads
+// as "how much haze the level itself has" while everything nearer and further
+// scales off it continuously.
+export const FOG_REFERENCE_DISTANCE = 20;
+
+// The `FogExp2` density that puts `amount` of fog on a surface
+// `FOG_REFERENCE_DISTANCE` away. Exponential fog leaves `exp(-(density*z)^2)` of
+// the surface showing, so the fraction the air takes is `1 - that`, and this is
+// what inverts it. Exported because it is the whole of what the authored number
+// means, and `cli render3d` checks it without a GPU.
+//
+// Clamped just below 1 because a surface fully replaced by fog at a finite
+// distance needs infinite density, and an author dragging the field to its top
+// should get "very thick" rather than a scene of flat colour and a NaN.
+export function fogDensity(amount: number): number {
+  const f = Math.min(0.99, Math.max(0, amount));
+  if (f <= 0) return 0;
+  return Math.sqrt(-Math.log(1 - f)) / FOG_REFERENCE_DISTANCE;
+}
 
 export class Environment {
   // NULL when the level authors `sunIntensity: 0`, which is how a level says it
@@ -190,8 +231,17 @@ export class Environment {
       pmrem.dispose();
     }
 
-    scene.background = new THREE.Color(env?.backgroundColor ?? DEFAULT_SKY);
-    scene.fog = null;
+    const background = env?.backgroundColor ?? DEFAULT_SKY;
+    scene.background = new THREE.Color(background);
+
+    // Absent, zero (and a negative, which means nothing) are all "no fog", so a
+    // level that authors none has no `scene.fog` at all rather than a fog of zero
+    // density - three.js runs the fog chunks either way.
+    const amount = env?.fogAmount ?? 0;
+    scene.fog =
+      amount > 0
+        ? new THREE.FogExp2(new THREE.Color(env?.fogColor ?? background), fogDensity(amount))
+        : null;
   }
 
   // Keep the shadow frustum around what the camera is looking at. A single
@@ -200,6 +250,8 @@ export class Environment {
   // texel density constant as the view zooms, which is what stops shadow edges
   // shimmering during a camera blend.
   follow(camera: Camera): void {
+    // The fog needs nothing here: its density is a property of the air, and the
+    // distance it is applied over is the one three.js already has per fragment.
     if (!this.sun) return;
     const cx = camera.position.x;
     const cy = threeY(camera.position.y);
@@ -214,6 +266,10 @@ export class Environment {
   }
 
   dispose(): void {
+    // The scene outlives this object (a level change rebuilds the environment
+    // into the same scene), so the fog has to go with the environment that
+    // authored it or the next level inherits this one's air.
+    this.scene.fog = null;
     this.scene.remove(this.fill, this.target);
     if (this.sun) {
       this.scene.remove(this.sun);

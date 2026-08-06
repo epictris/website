@@ -61,6 +61,7 @@ import { World } from "../engine/world";
 import { buildLevelBodies, localPlacement, worldPlacement } from "../level/buildBodies";
 import { modelFromDisk, modelToDisk, type EdItem } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
+import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 
 export interface CaseResult {
@@ -995,6 +996,7 @@ function lightRoundTrip(): CaseResult[] {
       detail: envKept ? "carried verbatim" : `became ${JSON.stringify(envBack.environment)}`,
     },
     ...planeReach(),
+    ...fogBand(),
     {
       name: "editor: a level with no environment gains none",
       pass: back.environment === undefined,
@@ -1039,6 +1041,60 @@ function planeReach(): CaseResult[] {
       detail: ok
         ? "5 m reach: 5 m on the plane at z 0, 4 m at z 3, none at z >= 5"
         : `on ${on}, near ${near}, exact ${exact}, past ${past}`,
+    },
+  ];
+}
+
+// Fog is authored as a FRACTION at a fixed distance and drawn as an exponential
+// falloff from the camera, so the two ends of that translation are the whole
+// feature and neither is visible in a picture: a fog measured over the wrong
+// distance, or one that does not actually thicken with depth, still renders a
+// perfectly plausible hazy scene - just not the one that was authored.
+//
+// Asserted rather than eyeballed for the same reason the light's plane reach is,
+// and it is pure arithmetic, so it needs no GPU and no canvas.
+function fogBand(): CaseResult[] {
+  // What a surface actually receives at distance `z`, which is three.js's own
+  // `FogExp2` law: the fraction of the surface the air has replaced.
+  const received = (amount: number, z = FOG_REFERENCE_DISTANCE): number =>
+    1 - Math.exp(-((fogDensity(amount) * z) ** 2));
+  // The round trip the authored number promises: at the reference distance, the
+  // fog IS the amount.
+  const honoured = [0.1, 0.25, 0.5, 0.9].every(
+    (a) => Math.abs(received(a) - a) < 1e-9,
+  );
+  // ...and the thing the author asked for: further away is foggier, nearer is
+  // clearer, monotonically, with none of it at the camera itself.
+  const near = received(0.2, 5);
+  const mid = received(0.2, FOG_REFERENCE_DISTANCE);
+  const far = received(0.2, 40);
+  const ramp = received(0.2, 0) === 0 && near < mid && mid < far && far < 1;
+  // A dimensionless fraction must pass through the px <-> m conversion
+  // untouched, exactly as the colours and the sun direction do - it is the trap
+  // the block's own comment names, and a round trip cannot see a value scaled
+  // one way and back, so it is asserted one way.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 10, h: 10 } }],
+    environment: { fogAmount: 0.25, fogColor: "#2b2f36" },
+  };
+  const converted = scaleLevelData(authored, PX).environment!;
+  const unscaled = converted.fogAmount === 0.25 && converted.fogColor === "#2b2f36";
+  return [
+    {
+      name: "render3d: fog thickens with camera distance, and is the authored fraction at the reference one",
+      pass: ramp && honoured,
+      detail:
+        ramp && honoured
+          ? `0.2 authored: ${(near * 100).toFixed(1)}% at 5 m, 20.0% at ${FOG_REFERENCE_DISTANCE} m, ${(far * 100).toFixed(1)}% at 40 m`
+          : `near ${near}, mid ${mid}, far ${far}, received ${[0.1, 0.25, 0.5, 0.9].map((a) => received(a)).join(", ")}`,
+    },
+    {
+      name: "level format: fog is dimensionless and does not scale",
+      pass: unscaled,
+      detail: unscaled
+        ? "amount and colour carried verbatim into metres"
+        : `became ${JSON.stringify(converted)}`,
     },
   ];
 }

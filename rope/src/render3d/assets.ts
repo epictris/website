@@ -1137,6 +1137,39 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "MightyPinecone",
     license: "CC BY 4.0",
   },
+  // An arched stone doorway, from the SAME author's second sewer set - a
+  // separate model page, so a separate credit. 3.04 x 3.03 m and 47 cm thick as
+  // exported, real-world metres, so it wears no `scale`. Nor a rotation: it is
+  // a flat panel already standing in the xy plane with its face towards the
+  // camera, which is the plane a level is authored in (the pipes need a `rotY`
+  // because they are extruded along their own z; a doorway is not).
+  //
+  // Its origin is neither the base nor the centre - the panel runs from -1.78 to
+  // +1.25 in y - so it is placed by a point about two thirds of the way up the
+  // opening. `mountVisual` does not recentre a prop, so that is the point the
+  // geometry object's position puts on the level.
+  //
+  // DECIMATED, this being Nanite geometry again (see `sewer-arch`), but at 0.3
+  // rather than 0.1 and that ratio was measured rather than inherited: 1.28% /
+  // 1.98% / 3.74% RMSE at 0.5 / 0.3 / 0.1, over a frame the prop FILLS, which is
+  // a stricter test than the wall's whole-frame number. At 0.1 the stones stop
+  // reading as stones - unlike the wall panel, whose brick relief lives in its
+  // normal map, this one's per-brick rounding is in the MESH, so the simplifier
+  // flattens each face and the picture turns smooth and glassy. 0.3 is
+  // indistinguishable from the full 56,286 triangles and keeps a third of them.
+  //
+  // Its 57.51 MB raw was texture, and mostly one file: a 4096² normal PNG at
+  // 34.58 MB plus a 4096² occlusion/metallic-roughness PNG at 20.12 MB, which
+  // the pipeline's 1k WebP ceiling takes to 769 KB all in.
+  "sewer-doorway": {
+    file: "/meshes/sewer-doorway.glb",
+    sha256: "437af23c1dfa0ba50133843e44def247d0b9294b27dc298ee9e1213a2d292484",
+    simplify: 0.3, // 56,286 -> 16,884 triangles
+    source:
+      "https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567",
+    author: "MightyPinecone",
+    license: "CC BY 4.0",
+  },
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
     sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",

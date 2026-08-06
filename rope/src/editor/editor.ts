@@ -3325,6 +3325,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // interior being lit from every direction by a sky it cannot see.
     numEnv("env ×", "envIntensity", 0.05, nonNeg);
     colorEnv("background", "backgroundColor");
+    // Air, thickening with distance from the camera. The number is how much of
+    // it a surface 20 m away takes on (`FOG_REFERENCE_DISTANCE`, about where the
+    // gameplay plane sits): 0 is none, and it is a fraction rather than a density
+    // so it is neither a length nor scaled on the way to disk. Stepped in
+    // twentieths, since the useful range is the bottom of it.
+    numEnv("fog", "fogAmount", 0.05, (v) => Math.min(1, Math.max(0, v)));
+    colorEnv("fog col", "fogColor");
 
     if (authored) {
       const row = el("div", "ed-row");

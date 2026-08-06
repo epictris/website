@@ -1811,7 +1811,7 @@ The consequence to author around is that leaving that priority island drops to w
 
 ## 3D rendering
 
-The ball & chain is drawn in 3D (`src/render3d/`, three.js), in the style of *Getting Over It* and *A Difficult Game About Climbing*: gameplay on a single plane, a perspective camera, PBR surfaces, one warm sun with shadows, fog fading the layers behind.
+The ball & chain is drawn in 3D (`src/render3d/`, three.js), in the style of *Getting Over It* and *A Difficult Game About Climbing*: gameplay on a single plane, a perspective camera, PBR surfaces, one warm sun with shadows, and - where a level asks for it - fog fading the layers behind.
 **The physics is untouched by all of it.**
 It is still 2D, still metres, still a fixed 1/60 step, still deterministic, and every replay in `playtests/` still replays bit-for-bit - the 3D renderer is a parallel consumer of exactly the interpolated state the 2D one reads (`renderPosition/renderRotation/renderShapes(alpha)`, `RopeContact.renderGlobalPosition(alpha)`), and it never writes anything the sim can see.
 
@@ -1934,7 +1934,7 @@ Forgetting one is silent (the editor rewrites the whole file every 750 ms, so a 
 ### Light and air
 
 `LevelData.environment` is an optional per-level block: sun direction and colour, hemisphere fill, how much generated environment is let in, and background.
-Nothing in it is a length, so the whole block passes through `scaleLevelData` untouched - and anything added should keep that property, since a fog density in 1/metres is an inverse length and would have to be scaled the *other* way, which is a trap worth designing out rather than commenting on.
+Nothing in it is a length, so the whole block passes through `scaleLevelData` untouched - and anything added should keep that property, since a fog density in 1/metres is an inverse length and would have to be scaled the *other* way, which is a trap worth designing out rather than commenting on. `fogAmount` is that rule being applied rather than a hypothetical: it is a fraction at a depth the renderer owns, precisely so the block stays free of lengths (see **There is fog only where a level asks for it**).
 Defaults reproduce the mood the game already had: `#1f2430` is both the sky and the page's letterbox colour, so the frame is not a window cut into a different game.
 
 **All of that is the OUTDOOR answer, and a level may decline it.**
@@ -1996,7 +1996,19 @@ The authored `range` stays on screen as a fainter outer ring whenever the two di
 `cli render3d` asserts the arithmetic, since it is the only feedback the field has.
 `levels/ball.json` is the worked example: sun off, environment near zero, small emissive discs throwing their own warm light, and a `LightData` where there is nothing to see - the cool spot, and the fill that has no fitting.
 
-**There is no fog.** It was here as aerial perspective - saying which layer is further away over the ten metres of depth a level authors into - and what it also did was mute every distant surface at exactly the point where authored textures and the environment started giving those surfaces something worth seeing. Depth is said by parallax, by the sun's shadow and by the environment's own gradient instead - and, in a level lit from inside, by the lights' own falloff, which darkens a distant layer more exactly than a fog density ever states it (see **Light and air**). `THREE.FogExp2` is two lines if a level ever wants it back, and it would want to be authored per level rather than defaulted on.
+**There is fog only where a level asks for it.** That is the arrangement the removed version should have had.
+As a default it muted every distant surface at exactly the point where the authored textures and the environment started giving those surfaces something worth seeing, and depth was already being said by parallax, by the sun's shadow, by the environment's own gradient and - in a level lit from inside - by the lights' own falloff, which darkens a distant layer more exactly than a fog density ever states it.
+None of that is an argument against a level ASKING for air, so `fogAmount` (with `fogColor`, defaulting to the background) authors it per level and `levels/ball.json` is the worked example at 0.2.
+
+Two things about the shape of it are the whole feature, and neither is visible in a picture - a fog measured over the wrong distance still renders a perfectly plausible hazy scene, just not the one that was authored.
+
+**It thickens with distance from the CAMERA**, which is what air does: every surface in the frame is behind some of it and one further back is behind more. `THREE.FogExp2` is that law directly, so the density is a property of the air rather than of where the level happens to be, nothing is re-anchored per frame, and the picture cannot disagree with itself about which of two surfaces is further away.
+
+It was briefly a **linear fog pinned to the gameplay plane**, on the argument that the plane sits ~16 m from the camera (zoom is dolly distance) so a camera-relative fog thick enough to see also tints the plane itself. That is true and it is not a defect - the plane IS 16 m of air away, and a fog starting exactly at it draws the level's foreground props (3 m in front) and the plane at the same haze as each other, which is none. Pinning also made the fog a function of the zoom, so a camera region that pulled back carried the fog with it: the air thinning as you zoom out, which is the wrong way round. The cost of the current form is the same statement pointing the right way - zooming out puts more air between camera and level, so a pulled-back region is hazier.
+
+**The authored number is a FRACTION, not a density**, and that is the trap the environment block's own comment names being designed out rather than commented on. A density is in 1/metres - an inverse length, which would have to be scaled the *opposite* way from every other number in the file. `fogAmount` is instead how much of the fog colour a surface `FOG_REFERENCE_DISTANCE` (20 m, about where the gameplay plane sits at the ball level's zoom) from the camera takes on, so it passes through `scaleLevelData` untouched like the colours and the sun direction, and the metres live once, in the renderer. `fogDensity` is that one conversion, and `cli render3d` asserts both ends of it without a GPU - the round trip at the reference distance, and that the fog actually rises with depth and is zero at the camera.
+
+Measured on the ball arena at 0.2: 0.73% RMSE over the frame - 10% of haze on the props in front of the plane, 14% on the plane, 18% on the scenery behind it.
 
 **There is an environment, and it is generated.** A `MeshStandardMaterial` gets its specular response from what it can reflect, so with lights alone there is nothing in the world to reflect but one directional sun: a roughness map has almost no visible effect and a metal - which is nearly all reflection - renders as a dark, dead shape. The chains hanging in the ball arena were exactly that.
 

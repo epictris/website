@@ -479,6 +479,11 @@ export const DEFAULT_ENVIRONMENT: Required<EnvironmentData> = {
   fillIntensity: DEFAULT_FILL_INTENSITY,
   envIntensity: ENV_INTENSITY,
   backgroundColor: DEFAULT_SKY,
+  // Off, which is what every level that authors nothing gets. The colour still
+  // needs a value for the picker to show, and the background is what an absent
+  // `fogColor` resolves to anyway.
+  fogAmount: 0,
+  fogColor: DEFAULT_SKY,
 };
 
 let nextId = 1;
