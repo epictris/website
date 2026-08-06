@@ -11,6 +11,9 @@ bulkhead lamp:
 - https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb
 pallet:
 - https://sketchfab.com/3d-models/barrels-and-pallet-da8bc019be634479a121aede1a47faab
+cages:
+- https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8
+- https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0
 sewer walls:
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd
 

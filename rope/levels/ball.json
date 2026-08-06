@@ -202,7 +202,8 @@
         "w": 880.0000000000001,
         "h": 770
       },
-      "offsetY": -50
+      "offsetY": -70,
+      "viewportScale": 0.9
     }
   ],
   "environment": {
@@ -3476,8 +3477,8 @@
     },
     {
       "kind": "static",
-      "x": 1382.999999999999,
-      "y": 667.0000000000003,
+      "x": 628.5000000000003,
+      "y": 624,
       "rot": 0,
       "objects": [
         {
@@ -3490,21 +3491,6 @@
             "h": 10
           },
           "z": -220.00000000000003,
-          "color": "#555555",
-          "opacity": 0.5
-        },
-        {
-          "type": "geometry",
-          "x": 2.9999999999997584,
-          "y": -228.00000000000028,
-          "kind": "mesh",
-          "mesh": "sewer-arch",
-          "shape": {
-            "kind": "rect",
-            "w": 10,
-            "h": 10
-          },
-          "z": -150,
           "color": "#555555",
           "opacity": 0.5
         }
@@ -3650,7 +3636,7 @@
     },
     {
       "kind": "static",
-      "x": 830.0000000000001,
+      "x": 864.9999999999999,
       "y": 145.00000000000003,
       "rot": 0,
       "color": "#555555",
@@ -3659,20 +3645,18 @@
       "objects": [
         {
           "type": "collision",
-          "x": -5.000000000000071,
           "shape": {
             "kind": "rect",
-            "w": 190,
+            "w": 790,
             "h": 10
           },
           "thickness": 100
         },
         {
           "type": "geometry",
-          "x": -5.000000000000249,
           "shape": {
             "kind": "rect",
-            "w": 190,
+            "w": 790,
             "h": 10
           },
           "depth": 10,
@@ -3681,7 +3665,7 @@
         {
           "type": "anchor",
           "id": 8,
-          "x": -5.499999999999439,
+          "x": -40.499999999999226,
           "y": 5.000000000000004
         }
       ]
@@ -3689,7 +3673,7 @@
     {
       "kind": "static",
       "x": 819.9999999999999,
-      "y": 780.0000000000002,
+      "y": 855.0000000000002,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -3700,7 +3684,7 @@
           "shape": {
             "kind": "rect",
             "w": 700,
-            "h": 20
+            "h": 170.00000000000003
           },
           "thickness": 100
         },
@@ -3710,75 +3694,11 @@
           "shape": {
             "kind": "rect",
             "w": 700,
-            "h": 20
+            "h": 170.00000000000003
           },
           "z": -100,
           "depth": 300,
           "texture": "rock wall"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 545,
-      "y": 155.00000000000003,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 370,
-            "h": 30.000000000000004
-          },
-          "thickness": 100
-        },
-        {
-          "type": "geometry",
-          "x": -1.7763568394002505e-13,
-          "shape": {
-            "kind": "rect",
-            "w": 370,
-            "h": 30.000000000000004
-          },
-          "z": -100,
-          "depth": 300,
-          "texture": "steel"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1105,
-      "y": 155.00000000000003,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 370,
-            "h": 30.000000000000004
-          },
-          "thickness": 100
-        },
-        {
-          "type": "geometry",
-          "x": -1.7763568394002505e-13,
-          "shape": {
-            "kind": "rect",
-            "w": 370,
-            "h": 30.000000000000004
-          },
-          "z": -100,
-          "depth": 300,
-          "texture": "steel"
         }
       ]
     },
@@ -3796,6 +3716,96 @@
           "intensity": 1000,
           "range": 1200,
           "castShadow": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 830.0000000000001,
+      "y": 400,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "light",
+          "z": 300,
+          "color": "#ffdab8",
+          "intensity": 20,
+          "range": 1200,
+          "castShadow": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 627.9999999999999,
+      "y": 343.99999999999983,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "sewer-wall",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          },
+          "z": -220.00000000000003,
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 350.00000000000017,
+      "y": 540,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 240.00000000000003,
+            "h": 800
+          },
+          "thickness": 100
+        },
+        {
+          "type": "geometry",
+          "x": -1.7763568394002505e-13,
+          "shape": {
+            "kind": "rect",
+            "w": 240.00000000000003,
+            "h": 800
+          },
+          "z": -100,
+          "depth": 300,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1055.0000000000005,
+      "y": 494.99999999999983,
+      "rot": 0,
+      "objects": [
+        {
+          "type": "geometry",
+          "rot": 1.5707963267948966,
+          "kind": "mesh",
+          "mesh": "cage",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          },
+          "color": "#555555",
+          "opacity": 0.5
         }
       ]
     }

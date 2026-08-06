@@ -1001,6 +1001,61 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "AAA (@BitoRaccoon)",
     license: "CC BY 4.0",
   },
+  // A square barred cage standing on a stone plinth - the dungeon's own cage,
+  // where `cage` is the hanging one. Both of these two are by the same author
+  // and are credited separately for the same reason the sewer pair is: the
+  // manifest is per ENTRY, and these are two files rather than two maps of one
+  // surface.
+  //
+  // It is the one prop here that is NOT authored in metres, which is what
+  // `scale` is for: as exported it is 2.28 x 5.70 x 2.28 m, a cage three times
+  // the height of a person and wide enough to park in. 0.4 puts it at 0.91 x
+  // 2.28 x 0.91 - a cage somebody stands up in, its plinth included - which is
+  // the size the other two cages already are and the size the sewer set is
+  // built around. Stating it here rather than in `visual.scale` is the point of
+  // the field: every level that places one gets the same cage.
+  //
+  // ITS PIVOT IS ITS BASE (min y is 0 as exported), and `mountVisual` does not
+  // recentre a prop - the file's origin is where the geometry object's position
+  // lands. So this one is placed by the point it STANDS on, while `cage`, which
+  // was exported centred on its own origin, is placed by its middle. Worth
+  // knowing before assuming a cage is half a metre out.
+  //
+  // No `simplify`: 1,817 triangles across the cage, the plinth and the cap ring
+  // is already a background prop's worth, and every byte of the 2.36 MB raw was
+  // texture - two 1024² PNGs, which the pipeline's WebP re-encode takes to
+  // 233 KB without touching a pixel of resolution. Its materials are
+  // doubleSided as exported, which is what a see-through prop wants: every bar
+  // is seen from both sides at once and the far side of the cage is back-facing
+  // from every angle.
+  "cage-dungeon": {
+    file: "/meshes/cage-dungeon.glb",
+    sha256: "8632afc6dada82dcdc32380174c917736cd0b1a0fbf55ea8ca5bea2d1da9e68f",
+    scale: 0.4, // 2.28 x 5.70 x 2.28 m as exported -> 0.91 x 2.28 x 0.91
+    source: "https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8",
+    author: "Samuel F. Angrick-Johanns (@oneironauticus)",
+    license: "CC BY 4.0",
+  },
+  // A round, very rusty one-person cage. 1.01 x 2.00 x 1.01 m as exported, a
+  // real cage's size, so it wears no `scale`; base-pivoted like `cage-dungeon`
+  // above, and doubleSided for the same reason. It stands upright about its own
+  // y and is a body of revolution, so there is nothing for a rotation to face.
+  //
+  // No `simplify`, and unlike `cage` that is not a measurement - it is the
+  // shape of the prop. 6,704 triangles is one see-through mesh of bars and
+  // hoops with no solid post anywhere in it, so there is no relief a normal map
+  // is already carrying and nothing for a simplifier to take that is not an
+  // edge against the background. `cage`'s decimation paid off because 59% of
+  // its triangles were eight wooden posts; there is no equivalent here, and the
+  // 2.24 MB raw was again all texture (a 1k JPEG albedo and a 1k PNG
+  // occlusion/metallic-roughness, 259 KB as WebP).
+  "cage-rusty": {
+    file: "/meshes/cage-rusty.glb",
+    sha256: "0ebbe7a821d0910a7d28c1368eccc3eff3c1ce93f699ecff8b9c8ecc687b6a79",
+    source: "https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0",
+    author: "Samuel F. Angrick-Johanns (@oneironauticus)",
+    license: "CC BY 4.0",
+  },
   // A concrete drainage pipe, the kind stacked on a construction site. 63 cm
   // across and 2 m long as exported, a real culvert section's size, so it wears
   // no `scale`, and the same `rotY` as `pipe-long` for the same reason: it is

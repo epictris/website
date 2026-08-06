@@ -1845,6 +1845,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const f = bodyOrigin(b);
     return b.pos.sub(f.pos).rotated(-f.rot);
   };
+  // Is this object its body's ONLY member, with no frame of the body's own?
+  // Then `bodyFrameOf` derives the frame FROM IT (see `EdModel.bodyFrames`), and
+  // measuring its placement against that frame measures the thing being edited
+  // against itself: the offset is always (0, 0, 0), and a value typed into one
+  // of these fields lands as a DELTA - typing 10 into `rot°` turned the object
+  // by another 10 every time, and the field went on reading 0.
+  //
+  // Such an object IS its body, so it is placed in the world exactly as the body
+  // panel places a body: the value is absolute and applied as a move of the
+  // whole (one-member) body, which carries the derived frame with it.
+  //
+  // A body of one that DOES have a stored frame - one whose siblings were
+  // deleted - is left alone: its frame is a real frame, an offset from it is a
+  // real offset, and the ordinary local reading is right.
+  const framedByItself = (b: EdItem): boolean =>
+    !model.bodyFrames.has(b.bodyId) && bodyMembers(model.items, b.bodyId).length === 1;
 
   function addTransformFields(g: HTMLElement, num: GroupNum, items: EdItem[]): void {
     // RELATIVE TO THE BODY, because that is what an object's placement IS - the
@@ -1855,27 +1871,43 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // typing 0 into a scene object's x puts it on its body's origin, where
     // before it put it on the world's.
     //
-    // The camera and notes layers are not in a body in any meaningful sense -
-    // each sits alone in one - so for them the frame is the item's own placement
-    // and these read as world coordinates, exactly as they always did.
-    //
     // It moves THE OBJECT and nothing else, whichever object it is. The frame is
     // the body's own (`EdModel.bodyFrames`) rather than a member's, so there is
     // no longer an object that secretly IS the body and moves it when it moves.
+    //
+    // ...with ONE exception, and it is the case a level is mostly made of: an
+    // object that is its body's only member (`framedByItself`), which is also
+    // every camera region and every note. There the body's frame is not a frame
+    // the object sits in, it is the object - so a relative reading measures the
+    // thing against itself, shows 0 whatever it is, and turns each value typed
+    // into a delta on top of the last (typing 10 into `rot°` turned it by 10
+    // again, every time). Those fields read and write WORLD coordinates instead,
+    // which for a body of one are the numbers the body panel shows.
     const moveRelative = (b: EdItem, axis: "x" | "y", v: number): void => {
+      if (framedByItself(b)) {
+        // Through `translateItems` rather than by writing `b.pos`, so the move
+        // goes the one way a body moves and the derived frame follows it.
+        translateItems(
+          model,
+          [b],
+          axis === "x" ? new Vec2(v - b.pos.x, 0) : new Vec2(0, v - b.pos.y),
+        );
+        return;
+      }
       const origin = bodyOrigin(b);
       const local = localPlacement(b);
       const want = axis === "x" ? local.withX(v) : local.withY(v);
       translateItems(model, [b], origin.pos.add(want.rotated(origin.rot)).sub(b.pos));
     };
+    const placement = (b: EdItem): Vec2 => (framedByItself(b) ? b.pos : localPlacement(b));
     num(
       "x",
-      (b) => localPlacement(b).x * M2PX,
+      (b) => placement(b).x * M2PX,
       (b, v) => moveRelative(b, "x", v * PX),
     );
     num(
       "y",
-      (b) => localPlacement(b).y * M2PX,
+      (b) => placement(b).y * M2PX,
       (b, v) => moveRelative(b, "y", v * PX),
     );
     // A circle's rotation is invisible, so it only gets the field where it aims
@@ -1912,11 +1944,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // turns THE OBJECT in place, whichever object it is - the body's angle
         // is the frame's, not a member's, so there is no object here that
         // secretly is the body.
+        //
+        // An object that is its body's only member is the same exception the x
+        // and y fields make (`framedByItself`): its body's angle is its own, so
+        // the offset would always read 0 and the angle typed would be added to
+        // what is already there. It turns as its body turns - about the centre
+        // of mass the built body's origin sits at, which is what the body
+        // panel's `rot°` does with the very same object.
         num(
           "rot°",
-          (b) => ((b.rot - bodyOrigin(b).rot) * 180) / Math.PI,
+          (b) => deg(framedByItself(b) ? b.rot : b.rot - bodyOrigin(b).rot),
           (b, v) => {
-            b.rot = bodyOrigin(b).rot + (v * Math.PI) / 180;
+            if (framedByItself(b)) {
+              rotateItemsAbout(model, [b], bodyCentroid([b]), rad(v) - b.rot);
+              return;
+            }
+            b.rot = bodyOrigin(b).rot + rad(v);
           },
         );
       }
