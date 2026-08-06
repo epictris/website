@@ -1231,8 +1231,10 @@ Three things follow, and each replaced a guess:
 - **`Emulation.setDeviceMetricsOverride` plus a clip** fix the viewport at the game's own 1920x1080 frame.
   That retired the "headless chromium keeps 87px of the window" hack, which never worked: every grab carried an 87px letterbox band along the bottom.
   The frame's pixels are unchanged - a clean-tree grab diffs to 0 against the old runner's top 1080 rows.
-- **Virtual time is kept**, because it is what makes a grab reproducible, but the budget is generous (600 s) and is not the ceiling.
-  Virtual time is spent by WORK rather than by waiting: one mesh decode burns tens of virtual seconds, and a page that exhausts its budget has its timers frozen, which stalls three's own `compileAsync` poll and looks exactly like a hang.
+- **Virtual time is gone**, and the wall-clock timeout is the only ceiling.
+  `Emulation.setVirtualTimePolicy` used to bracket the navigation so the page's clocks ran as fast as its work allowed. What it also does, on chromium 142, is stop OFF-MAIN-THREAD IMAGE DECODING from ever completing: `createImageBitmap` of a JPEG or a WebP returns a promise that never settles, while PNG - decoded on the main thread - is unaffected.
+  That is every 3D grab in the project, because `assets:optimize` puts every prop's textures through `--texture-compress webp` and `GLTFLoader` takes the `ImageBitmapLoader` path whenever `createImageBitmap` exists: the mesh promise never resolves, `assetsSettled` never returns, and every scene at once fails with `still waiting for assets: mesh "..."` - which reads as the renderer being broken rather than as an emulation setting.
+  The grab does not need it. What makes a picture reproducible is that the page pins its own clock (`Scene3D.pinClock`), waits for every asset before it draws, and is polled on `shotReady` rather than on elapsed time, so the frame is the same frame whether the wall took 1 s or 5; virtual time was only buying speed.
   For the same reason the page does not give up on its assets by its own clock; it names what it is still waiting for (`still waiting for assets: mesh "sewer-arch"`) and the harness's wall clock is what fails the run.
 
 `shotMain` also reports a **blank 3D frame** as an error (`Scene3D.litFraction()`, read off the drawing buffer), since an empty frame is a valid PNG that every other view calls healthy.

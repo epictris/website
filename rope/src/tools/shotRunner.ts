@@ -44,13 +44,9 @@ export interface GrabRequest {
   width: number;
   height: number;
   // Wall-clock ceiling on the whole run. A page that never becomes ready must
-  // kill the run and print what it did say, never stall.
+  // kill the run and print what it did say, never stall. It is the ONLY ceiling
+  // now that virtual time is gone (see `Emulation.setVirtualTimePolicy` below).
   timeoutMs: number;
-  // Virtual-time budget, in virtual milliseconds. Virtual time is kept because it
-  // is what makes a grab reproducible - the page's clocks advance as fast as the
-  // work allows rather than with the wall - and this is only the point past which
-  // a page that has not finished is not going to.
-  virtualBudgetMs: number;
 }
 
 export interface GrabResult {
@@ -194,13 +190,30 @@ async function grabWith(
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await cdp.send("Emulation.setVirtualTimePolicy", { policy: "pause" });
+    // No `Emulation.setVirtualTimePolicy`. It used to bracket this navigation -
+    // paused before it, `pauseIfNetworkFetchesPending` with a budget after - so
+    // the page's clocks ran as fast as its work allowed rather than with the
+    // wall. What that also does, on chromium 142, is stop OFF-MAIN-THREAD IMAGE
+    // DECODING from ever completing: a `createImageBitmap` of a JPEG or a WebP
+    // returns a promise that never settles. PNG is unaffected, because it is
+    // decoded on the main thread and never reaches the task that virtual time
+    // does not schedule.
+    //
+    // Which is every 3D grab in the project, because `assets:optimize` puts
+    // every prop's textures through `--texture-compress webp`: `GLTFLoader`
+    // takes the `ImageBitmapLoader` path whenever `createImageBitmap` exists, so
+    // the mesh promise never resolves, `assetsSettled` never returns and the
+    // page never sets `shotReady`. From the outside that is a 30s timeout and
+    // `still waiting for assets: mesh "..."` on every scene at once, which reads
+    // as the renderer being broken rather than as an emulation setting.
+    //
+    // The grab does not need it. What made a picture reproducible was never the
+    // clock policy: the page pins its own clock (`Scene3D.pinClock`), waits for
+    // every asset before it draws, and is polled on `shotReady` rather than on
+    // elapsed time - so the frame is the same frame whether the wall took 1s or
+    // 5. Virtual time was only ever buying speed, and it is not buying enough of
+    // it to be worth a class of hang that is invisible from here.
     await cdp.send("Page.navigate", { url: req.url });
-    await cdp.send("Emulation.setVirtualTimePolicy", {
-      policy: "pauseIfNetworkFetchesPending",
-      budget: req.virtualBudgetMs,
-      waitForNavigation: true,
-    });
 
     const ready = await pollReady(cdp, started + req.timeoutMs);
     // The page's own buffer, read whether or not it ever became ready: a partial

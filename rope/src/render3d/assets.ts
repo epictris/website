@@ -960,6 +960,26 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "andersonmat",
     license: "CC BY 4.0",
   },
+  // A concrete drainage pipe, the kind stacked on a construction site. 63 cm
+  // across and 2 m long as exported, a real culvert section's size, so it wears
+  // no `scale`, and the same `rotY` as `pipe-long` for the same reason: it is
+  // extruded along its own z, so untouched it points its bore at the camera.
+  //
+  // Its material is doubleSided, which is what a pipe you can see through wants
+  // - the far inside wall is back-facing from every angle - and is left as
+  // exported rather than normalised away.
+  //
+  // No `simplify`: 768 triangles is a cylinder's worth already, and the file's
+  // 1.04 MB was texture - a 1k JPEG albedo and two 1k PNGs, which the pipeline
+  // takes to 86 KB by re-encoding rather than by resizing.
+  "pipe-concrete": {
+    file: "/meshes/pipe-concrete.glb",
+    sha256: "6b5eed66d54fc1f39660cb07b0e35e78f4450cffba67352d6634f16a76cea158",
+    rotY: Math.PI / 2,
+    source: "https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6",
+    author: "PT34",
+    license: "CC BY 4.0",
+  },
   // A length of large-bore metal pipe - the kind that runs along a sewer wall.
   // 48 cm across and 1.23 m long as exported, a real pipe's size, so it wears
   // no `scale`.

@@ -678,14 +678,10 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
         height: VIEW_HEIGHT,
         // The 30s discipline: a page that is not ready by then is hung, and a
         // hung page has to kill the run with its partial log rather than stall.
+        // It is also the ONLY ceiling: the grab no longer runs the page on
+        // virtual time, which on chromium 142 hangs every JPEG and WebP decode
+        // (see `grabWith`).
         timeoutMs: Number(o.timeout ?? 30000),
-        // Generous, because virtual time is spent by WORK and not by waiting: a
-        // mesh decode burns tens of virtual seconds in a blink, and a page that
-        // exhausts its budget has its timers frozen - which stalls three's own
-        // `compileAsync` poll and looks exactly like a hang. The wall-clock
-        // timeout above is the real ceiling; this only has to be past anything
-        // a healthy page spends.
-        virtualBudgetMs: 600000,
       });
       log = result.log;
       console.log(`[shot] ${first} @${label} → ${out} (${result.elapsedMs}ms)`);
