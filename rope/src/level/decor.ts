@@ -83,15 +83,35 @@ export function decorTransform(d: SceneDecor, alpha: number): { pos: Vec2; rot: 
   return { pos: body.renderPosition(alpha).add(d.localPos.rotated(rot)), rot: rot + d.localRot };
 }
 
-// Every drawn-only form in a built level, in authored order - by body, then by
-// object within the body. Depth ordering is applied where it is drawn rather
-// than here, since the editor's picking wants the same rule over a model that
-// has not been built.
+// Every form in a built level that the 2D view would otherwise not show, in
+// authored order - by body, then by object within the body. Depth ordering is
+// applied where it is drawn rather than here, since the editor's picking wants
+// the same rule over a model that has not been built.
+//
+// "Would otherwise not show" is the whole filter, and it exists because a
+// geometry object states its own form now: a body that collides has one per
+// collision shape, saying the same outline in the same place, and the 2D
+// renderer already draws that outline as the body. Filling it here as well lays
+// the same colour down twice and darkens every wall in the level by its own
+// opacity.
+//
+// So a form on a COLLIDING body is drawn only when it is off that body's plane,
+// which is what makes it scenery rather than the body's own face: a backdrop
+// welded into a swinging crate has a `z` and is exactly what this is for, and it
+// is drawn in the crate's frame so it swings with it. A body that collides with
+// nothing is drawn whatever its depth, since nothing else in the 2D view stands
+// for it at all.
+//
+// The 3D renderer makes no such distinction and needs none - it draws a body's
+// geometry objects and never its collision shapes, so there is nothing there for
+// a form to be drawn twice by.
 export function collectDecor(built: BuiltBodies): SceneDecor[] {
   const out: SceneDecor[] = [];
   for (const b of built.bodies) {
+    const collides = b.data.objects.some((o) => o.type === "collision");
     for (const o of b.data.objects) {
       if (!isGeometryObject(o) || o.shape === undefined) continue;
+      if (collides && depthOf(b.data, o) === 0) continue;
       const local = localPlacement(b, o);
       out.push({ built: b, object: o, localPos: local.pos, localRot: local.rot });
     }

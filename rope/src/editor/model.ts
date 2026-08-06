@@ -233,15 +233,6 @@ export interface EdItem {
   // conversion between them - authoring one or the other is the `+ Rect` /
   // `+ Geometry` choice, made where the shape is drawn.
   //
-  // Does this GEOMETRY item carry an outline of its own? A form does - a
-  // backdrop, a sign - and is drawn and picked by it. A DRESSING does not: what
-  // it draws is the body's collision outlines wearing its surface, so it has no
-  // shape to author and is handled as a point gizmo, like a light. The `shape`
-  // below is then a placeholder the save never writes.
-  //
-  // Meaningless on a collision item (which always has one) and on a light
-  // (whose "shape" is its reach).
-  ownShape: boolean;
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
   // There is no body depth here, and none on a collision item either: a body is
@@ -294,14 +285,23 @@ export interface EdItem {
 // Only the geometry layer has a depth at all; camera regions and notes are
 // editor furniture drawn in their own fixed order, and answering 0 for them
 // leaves the layer ordering to decide, which is what did decide before.
-export function itemDepth(i: EdItem): number {
+export function itemDepth(i: EdItem, bodyCollides: boolean): number {
   if (i.layer !== "scene" || i.object === "light") return 0;
-  // An `offsetZ` of exactly 0 on decoration is indistinguishable from an unset
-  // one both here and on disk (`visualData` omits a zero), and the renderer
-  // draws that case at `DECOR_Z` - so this agrees with what is drawn rather than
-  // with what the field literally holds.
-  if (i.object === "geometry" && i.visual.offsetZ === 0) return DECOR_Z;
-  return i.visual.offsetZ;
+  if (i.object !== "geometry") return 0;
+  // An `offsetZ` of exactly 0 is indistinguishable from an unset one both here
+  // and on disk (`visualData` omits a zero), and what the renderer draws that
+  // case at depends on the BODY: a geometry object on something solid is on that
+  // body's own plane, and one on a body that collides with nothing falls back to
+  // `DECOR_Z` - which is what a flat fill drawn before every body already was.
+  // The same two answers `depthOf` gives, from the same two facts.
+  if (i.visual.offsetZ !== 0) return i.visual.offsetZ;
+  return bodyCollides ? 0 : DECOR_Z;
+}
+
+// Which bodies of a model have a collision object in them - the one fact
+// `itemDepth` needs about a body and an item cannot answer about itself.
+export function collidingBodyIds(items: readonly EdItem[]): Set<number> {
+  return new Set(items.filter((i) => i.object === "collision").map((i) => i.bodyId));
 }
 
 // A detached copy of a shape. Undo snapshots, duplicate, copy/paste and the
@@ -378,7 +378,7 @@ export interface EdChain {
 // alone: a compound body of a stone head on a wooden shaft is two visuals on
 // one body, each riding its own piece.
 export interface EdVisual {
-  kind: "auto" | "mesh" | "none";
+  kind: "primitive" | "mesh";
   mesh: string; // manifest key; "" = none named yet
   // The object's placement is the ITEM's own `pos`/`rot` - a geometry object is
   // an object with a transform like every other, so the look does not carry a
@@ -494,12 +494,13 @@ export const defaultNote = (): EdNote => ({
   size: DEFAULT_NOTE_TEXT_SIZE * PX,
 });
 
-// A fresh visual is `auto` with everything defaulted, which is what every body
-// authored before the field is: the collision outline extruded and textured from
-// the material. `visualData` writes nothing at all for one in this state, so a
-// level that never touches the section stays byte-identical on disk.
+// A fresh look is a `primitive` with everything defaulted: this object's own
+// form given the default depth and wearing the default generated surface.
+// `visualData` writes nothing at all for one in this state beyond the object's
+// own shape, so a level that never touches the section stays as small on disk as
+// its geometry allows.
 export const defaultVisual = (): EdVisual => ({
-  kind: "auto",
+  kind: "primitive",
   mesh: "",
   offsetZ: 0,
   rotX: 0,
@@ -706,7 +707,6 @@ function fromLevelData(data: LevelData): EdModel {
           ...base,
           id: newBodyId(),
           object: "collision",
-          ownShape: true,
           pos: w.pos,
           rot: w.rot,
           shape: edShape(o.shape),
@@ -722,11 +722,14 @@ function fromLevelData(data: LevelData): EdModel {
           ...base,
           id: newBodyId(),
           object: "geometry",
-          // A form carries its own outline; a dressing has none and takes a
-          // placeholder it is never saved with.
-          ownShape: o.shape !== undefined,
           pos: w.pos,
           rot: w.rot,
+          // Every geometry object carries its own form. One from a file that
+          // predates that (a dressing, which drew the body's collision
+          // outlines) gets the same placeholder gizmo an orphan prop does, and
+          // is saved with it - the editor is where such a file is finished
+          // being migrated, and a shape it can neither see nor drag is worse
+          // than a small one it can.
           shape: o.shape ? edShape(o.shape) : { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
           impermeable: false,
           material: DEFAULT_MATERIAL,
@@ -744,7 +747,6 @@ function fromLevelData(data: LevelData): EdModel {
           ...base,
           id: newBodyId(),
           object: "anchor",
-          ownShape: true,
           pos: w.pos,
           rot: w.rot,
           // A point has no size. The gizmo is what the canvas draws and what a
@@ -767,7 +769,6 @@ function fromLevelData(data: LevelData): EdModel {
     id: newBodyId(),
     layer: "camera",
     object: "collision",
-    ownShape: true,
     bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(r.x, r.y),
@@ -815,7 +816,6 @@ function lightItem(
     id: newBodyId(),
     layer: "scene",
     object: "light",
-    ownShape: true,
     bodyId,
     kind: "static", // unused on this layer; keeps the field total
     pos,
@@ -856,7 +856,6 @@ function lightItem(
     id: newBodyId(),
     layer: "notes",
     object: "collision",
-    ownShape: true,
     bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
     pos: new Vec2(n.x, n.y),
@@ -1072,18 +1071,21 @@ export function toLevelData(model: EdModel): LevelData {
         });
         continue;
       }
-      // A geometry object: its own transform, and a `shape` only when it is a
-      // FORM. A dressing writes none, which is what says "the body's collision
-      // outlines, wearing this".
+      // A geometry object: its own transform, its own form, and its own look.
       const look = visualData(i.visual) ?? { type: "geometry" as const };
+      // Its fill is written only where it DIFFERS from the body's, which is what
+      // a body-level fill is for: a wall's primitive takes the colour the wall
+      // is painted and writes nothing, and a backdrop welded into that body -
+      // authored to sit behind the geometry rather than to match it - carries
+      // its own. A body with no collision object has no fill of its own to
+      // inherit, so its decoration always states one.
+      const bodyFill = lead.object === "collision" ? lead : undefined;
+      const ownFill = i.color !== bodyFill?.color || i.opacity !== bodyFill?.opacity;
       objects.push({
         ...look,
         ...localOf(i),
-        ...(i.ownShape ? { shape: shapeOf(i) } : {}),
-        // Its own fill, which decoration carries rather than taking the body's.
-        // A dressing takes the body's, so it writes none and the tint comes from
-        // there.
-        ...(i.ownShape ? { color: i.color, opacity: i.opacity } : {}),
+        shape: shapeOf(i),
+        ...(ownFill ? { color: i.color, opacity: i.opacity } : {}),
       });
     }
 
@@ -1461,15 +1463,6 @@ export function bodyLabel(members: readonly EdItem[]): string {
 // thing being distinguished, then enough of its size to tell two of them apart.
 export function objectLabel(item: EdItem, metresToPx: number): string {
   const n = (v: number) => Math.round(v * metresToPx).toString();
-  if (item.object === "geometry" && !item.ownShape) {
-    // A dressing has no form of its own - what it draws is the body's collision
-    // outlines wearing its surface - so it is named by what it puts on them.
-    return item.visual.kind === "mesh"
-      ? `mesh ${item.visual.mesh || "(none)"}`
-      : item.visual.texture
-        ? `surface ${item.visual.texture}`
-        : "surface";
-  }
   if (item.object === "light") {
     const reach = item.shape.kind === "circle" ? ` ${n(item.shape.r)}` : "";
     return `${item.light.kind}${reach}`;
@@ -1487,11 +1480,22 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
         ? `r${n(item.shape.r)}`
         : `${item.shape.verts.length}v`;
   // A mesh is named by its asset, since that is what tells two props apart -
-  // their outlines are placeholders and usually identical.
+  // their placeholders are usually identical.
   if (item.visual.kind === "mesh") return `mesh ${item.visual.mesh || "(none)"}`;
-  const what = item.object === "collision" ? item.shape.kind : `decor ${item.shape.kind}`;
+  // A geometry object is named by the SOLID it draws rather than by the outline
+  // it is authored through, since that is what the player sees and what tells it
+  // apart from the collision shape it may be sitting on top of.
+  const what = item.object === "collision" ? item.shape.kind : PRIMITIVE_NAME[item.shape.kind];
   return `${what} ${form}`;
 }
+
+// What a primitive's outline is drawn as in 3D - the same mapping
+// `primitiveGeometry` makes, said in words for the outliner.
+const PRIMITIVE_NAME: Record<EdShape["kind"], string> = {
+  rect: "box",
+  circle: "cylinder",
+  poly: "prism",
+};
 
 // Area of an item's shape, in m².
 export function shapeArea(item: EdItem): number {
@@ -1656,7 +1660,6 @@ export function emptyModel(): EdModel {
         id: newBodyId(),
         layer: "scene",
         object: "collision",
-    ownShape: true,
         bodyId: newBodyId(),
         kind: "static",
         pos: new Vec2(0, 0),

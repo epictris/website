@@ -205,35 +205,45 @@ export interface CollisionObjectData extends ObjectPlacement {
 // and nothing else, and a loader that invented a look for it would make "drawn"
 // and "simulated" one decision again by the back door.
 //
-// A geometry object with no `shape` of its own draws the body's COLLISION
-// outlines: that is how a wall wears brick at twice life size without the file
-// carrying its outline a second time where the two could drift apart, and it is
-// what the migrated twin is. An authored `shape` is a form of its own, which is
-// what decoration and a prop's placeholder are.
+// A GEOMETRY OBJECT CARRIES ITS OWN FORM, always. Its `shape` and its placement
+// are what is drawn and where, and no part of them is read off a collision
+// object: a primitive nudged 10 cm left, turned 5° and made twice as wide moves,
+// turns and grows on screen while the body goes on colliding exactly as it did.
+//
+// It used to be able to have NO shape, and then it drew the body's collision
+// outlines - which is how a wall wore brick without restating its outline, and
+// what every migrated body was given. The saving was real and the cost was that
+// the two were not actually separate things: the geometry object's own `x`, `y`,
+// `rot`, `w` and `h` were dead fields on the commonest object in every level,
+// silently overridden by the shape it was standing in for. Levels are migrated
+// to primitives that state the outline they were drawing (see
+// `scripts/migrate-primitives.ts`), so nothing changed appearance and every one
+// of those fields now means what it says.
 export interface GeometryObjectData extends ObjectPlacement {
   type: "geometry";
-  // How this is turned into something the GPU draws. The three answers are the
-  // three ways a thing gets a look in this game, and they are a choice:
+  // How this is turned into something the GPU draws. The two answers are the two
+  // ways a thing gets a look in this game, and they are a choice:
   //
-  // "auto" (and an absent `kind`): a PRIMITIVE - this object's own `shape`, or
-  //         the body's collision outlines when it has none - extruded through z
-  //         and wearing a tileable PBR surface (`texture` + `tileScale`). No
-  //         file, no download, and what the player sees is exactly the outline
-  //         they collide with.
+  // "primitive" (and an absent `kind`): this object's own `shape`, given depth -
+  //         a rect is a rectangular prism, a circle a cylinder, a polygon that
+  //         outline extruded - wearing a tileable PBR surface (`texture` +
+  //         `tileScale`). No file, no download.
   // "mesh": a named GLTF asset from the manifest (`render3d/assets.ts`) instead,
   //         which may bring its own materials or wear the same surface set.
-  // "none": drawn by nothing - an invisible wall. It exists because absence
-  //         already means "the default look": without an explicit way to say it,
-  //         a body could not opt out of being drawn at all.
-  kind?: "auto" | "mesh" | "none";
+  //
+  // There is deliberately no "drawn by nothing": a body draws what its geometry
+  // objects say and nothing else, so an invisible wall is a body with collision
+  // objects and NO geometry object - which needs no field to say it, and is what
+  // an editor draw produces before anything is dressed.
+  kind?: "primitive" | "mesh";
   // Manifest key. `kind: "mesh"` only; an unknown key draws the placeholder
   // rather than nothing, so a missing asset is visible instead of silent.
   mesh?: string;
-  // The outline this is drawn as. Absent = the body's own collision shapes,
-  // which is what dresses a wall without restating its geometry. Required in
-  // practice for a body that has no collision objects (decoration), since there
-  // would otherwise be no outline at all; a `mesh` with neither draws a unit
-  // placeholder until its file arrives.
+  // The form this is drawn as, in this object's own frame. A primitive without
+  // one draws the unit placeholder, exactly as a prop with no file does - a
+  // geometry object that draws nothing at all would be indistinguishable from a
+  // body that authors no look, which is a different statement with its own
+  // spelling (no geometry object).
   shape?: ShapeData;
   // Depth placement, as an OFFSET from the body's own `z` (which is 0 unless
   // the body says otherwise). Positive is toward the camera. Absent = the
@@ -249,19 +259,27 @@ export interface GeometryObjectData extends ObjectPlacement {
   // Uniform mesh scale, dimensionless: it multiplies a model's own size and is
   // not a length, so it does NOT scale on the way in or out.
   scale?: number;
-  // Extrusion depth; absent = the collision object's own `thickness`, which is
-  // the number its mass is already computed from, so a body is as thick as it
-  // weighs.
+  // Depth through z. Absent = `DEFAULT_THICKNESS` on a body that collides and
+  // `DECOR_DEPTH` on one that does not, which is what a flat fill drawn before
+  // every body already was. It is NOT the collision object's `thickness`: that
+  // is the number a piece's MASS is computed from and this is how thick the
+  // thing looks, and a migrated body states its own so the two start out
+  // agreeing (see `scripts/migrate-primitives.ts`).
   depth?: number;
-  // Edge break. Absent = DEFAULT_BEVEL.
+  // Edge break, metres. Absent = none: a level is boxes meeting boxes, and a
+  // chamfer on every one of them softens the corners its silhouette is made
+  // of, so this is authored where a solid actually wants one.
   bevel?: number;
   // Which surface to wear. A key of `TEXTURE_ASSETS` (an authored PBR set:
   // albedo, normal, roughness, metallic, ambient-occlusion and emission maps) or
   // of `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
   // namespace, looked up in that order by `render3d/assets.ts`.
   //
-  // Absent = the one the collision object's `material` name picks, so naming the
-  // stuff a thing is made of is still the only decision an author has to make.
+  // Absent = the generated surface `DEFAULT_MATERIAL` names. A collision
+  // object's `material` is NOT consulted: what a piece is made of is a fact
+  // about its mass, and reading it as a statement about the look is the coupling
+  // this object was separated out to remove. A migrated body carries the
+  // material name here explicitly, so nothing on disk changed appearance.
   //
   // It applies to BOTH visual kinds: an extrusion is textured with it, and a
   // `mesh` wears it instead of the materials its own file carries. A mesh that
@@ -920,20 +938,35 @@ function isLegacyBody(b: LevelBodyData | LegacyBodyData): b is LegacyBodyData {
   return !Array.isArray((b as LevelBodyData).objects);
 }
 
-// The appearance half of a retired visual, as a geometry object. `shape` is left
-// absent when the entry had a collision shape of its own (the geometry is the
-// body's own outline, which is what an extruded body already was) and set when it
-// did not.
+// The appearance half of a retired visual, as a geometry object.
+//
+// A retired entry drew ONE shape, whether it collided or not, so that shape is
+// what the geometry object is - stated outright rather than borrowed from the
+// collision object beside it. `depth` and `texture` fall back to what the entry
+// collided as (`thickness`, `material`), which is what the extruded outline used
+// to read off it: the migration is where that reading happens, once, instead of
+// on every frame for ever.
 function geometryFromLegacy(
   v: LegacyVisualData | undefined,
   shape: ShapeData | undefined,
   decorZ: number | undefined,
   color: string | undefined,
   opacity: number | undefined,
+  solid?: { thickness?: number; material?: string },
 ): GeometryObjectData {
   return {
     type: "geometry",
-    ...(v?.kind !== undefined ? { kind: v.kind } : {}),
+    ...(v?.depth === undefined && solid?.thickness !== undefined
+      ? { depth: solid.thickness }
+      : {}),
+    ...(v?.texture === undefined && solid?.material !== undefined
+      ? { texture: solid.material }
+      : {}),
+    // The retired `auto` is what a primitive is now called, and it is the
+    // default either way. `none` never reaches here - a legacy entry that drew
+    // nothing produces no geometry object at all (`objectsOfLegacy`), which is
+    // how that state is spelt now.
+    ...(v?.kind === "mesh" ? { kind: "mesh" as const } : {}),
     ...(v?.mesh !== undefined ? { mesh: v.mesh } : {}),
     ...(shape !== undefined ? { shape } : {}),
     // The retired visual placed itself in the BODY's frame with its own
@@ -1113,11 +1146,11 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
     }
     const legacy = members as LegacyBodyData[];
     const lead = legacy.find((e) => e.collision !== false) ?? first;
-    // `withGeometryTwin` here and nowhere else: a legacy entry is exactly a body
-    // authored when a collision shape drew itself, so this is where that default
-    // has to be written down. A body already in the nested form (above) is left
-    // with the objects it has, however few.
-    bodies.push(withGeometryTwin({
+    // `withGeometryPrimitives` here and nowhere else: a legacy entry is exactly
+    // a body authored when a collision shape drew itself, so this is where that
+    // default has to be written down. A body already in the nested form (above)
+    // is left with the objects it has, however few.
+    bodies.push(withGeometryPrimitives({
       // A retired `impermeable` KIND is a static whose shapes are hook-proof;
       // `objectsOfLegacy` has already put the flag on the collision object.
       kind: lead.kind === LEGACY_IMPERMEABLE ? "static" : lead.kind,
@@ -1277,47 +1310,48 @@ function withChainAnchors(
 
 // Drawing is a GEOMETRY object's job, and collision is a collision object's. A
 // file written before that split has bodies whose outlines were drawn BECAUSE
-// they collided, so they get the geometry object that says so: one with no shape
-// of its own, which already means "draw this body's collision outlines". The
-// level looks exactly as it did, and the file now says why instead of leaning on
-// a default that no longer exists.
+// they collided, so they get the geometry objects that say so: one PRIMITIVE per
+// collision object, standing exactly where that piece stands, in its form, as
+// thick as its `thickness` and wearing the surface its `material` names. The
+// level looks exactly as it did and the file now says why.
 //
-// The outline is deliberately NOT copied onto it. A second copy is a second
-// thing to resize, and the two would drift apart the first time only one of them
-// was.
+// The outline IS copied, which is the change decoupling made and the cost it
+// carries: a second copy is a second thing to resize, and the two drift apart
+// the first time only one of them is. That is the point - a body may now look
+// like something other than what it collides as - and the editor makes the pair
+// together on a draw so the common case still needs one gesture.
 //
 // Applied ONLY to a body converted from a legacy entry (see `finish`), which is
 // what stops it inventing a look for a body deliberately authored without one.
 // Idempotent all the same: the legacy path is reached by a file that still
 // carries retired panels or lights, and a run through it must not stack twins.
-function withGeometryTwin(body: LevelBodyData): LevelBodyData {
-  if (!body.objects.some(isCollisionObject)) return body;
+function withGeometryPrimitives(body: LevelBodyData): LevelBodyData {
+  const collisions = body.objects.filter(isCollisionObject);
+  if (!collisions.length) return body;
   // ANY geometry object at all is the body saying how it looks, and that answer
   // stands. A lamp whose collision box carries an authored mesh looks like the
   // lamp; adding an extrusion of the box beside it draws a grey brick inside the
   // fitting - visible in play, invisible in the editor, and exactly the kind of
   // thing a migration should never invent. Only a body that says NOTHING about
-  // its appearance is given the object stating what it used to look like.
+  // its appearance is given the objects stating what it used to look like.
   if (body.objects.some(isGeometryObject)) return body;
-  // Placed where the first collision object is. A shapeless auto dressing is
-  // drawn at each piece it dresses, so this changes nothing about the picture -
-  // but it is what the editor shows and what a later save writes, and a geometry
-  // object sitting half a screen from the wall it draws is a lie about the
-  // level even while it renders correctly. It matters for the legacy form in
-  // particular, where a migrated body sits at the origin and its objects carry
-  // the world placement.
-  const lead = body.objects.find(isCollisionObject)!;
+  return { ...body, objects: [...body.objects, ...collisions.map(primitiveOf)] };
+}
+
+// The primitive a collision object used to be drawn as: its form, at its
+// placement, with the depth and surface the extrusion read off it. The one place
+// that reading is written down, shared by the legacy migration here and by the
+// editor's own draw (`geometryTwinFor`), so a body migrated from disk and a body
+// drawn in the editor start out saying the same thing.
+export function primitiveOf(c: CollisionObjectData): GeometryObjectData {
   return {
-    ...body,
-    objects: [
-      ...body.objects,
-      {
-        type: "geometry",
-        ...(lead.x !== undefined ? { x: lead.x } : {}),
-        ...(lead.y !== undefined ? { y: lead.y } : {}),
-        ...(lead.rot !== undefined ? { rot: lead.rot } : {}),
-      },
-    ],
+    type: "geometry",
+    shape: c.shape,
+    ...(c.x !== undefined ? { x: c.x } : {}),
+    ...(c.y !== undefined ? { y: c.y } : {}),
+    ...(c.rot !== undefined ? { rot: c.rot } : {}),
+    ...(c.thickness !== undefined ? { depth: c.thickness } : {}),
+    ...(c.material !== undefined ? { texture: c.material } : {}),
   };
 }
 
@@ -1381,24 +1415,26 @@ function objectsOfLegacy(b: LegacyBodyData): SceneObjectData[] {
       ...(b.thickness !== undefined ? { thickness: b.thickness } : {}),
     });
   }
-  // A colliding entry's geometry took its outline from the collision shape, so
-  // it needs none of its own; decoration was only ever the shape, so it does.
-  // Both are written only when the entry authored a visual at all - a plain wall
-  // gets the implicit default and no object, which is what keeps a migrated file
-  // the same size as the one it replaced.
+  // The entry's own shape, either way: a colliding entry's geometry is the
+  // outline it drew because it collided, and decoration was only ever the shape.
+  // Written only when the entry authored a visual at all - a plain wall gets the
+  // one `withGeometryPrimitives` states, and a `none` visual is a wall that drew
+  // nothing, which is now spelt as having no geometry object rather than as a
+  // kind that means "ignore me".
   //
   // Decoration carries its OWN fill and not the body's, which is the rule
   // `syncGroupProps` had for exactly the reason material and thickness were per
   // entry: a backdrop is authored to sit behind the geometry, so painting it the
   // lead shape's colour is precisely wrong.
-  if (b.visual !== undefined || drawn) {
+  if ((b.visual !== undefined && b.visual.kind !== "none") || drawn) {
     objects.push(
       geometryFromLegacy(
         b.visual,
-        drawn ? b.shape : undefined,
+        b.shape,
         drawn ? LEGACY_DECOR_Z : undefined,
         drawn ? b.color : undefined,
         drawn ? b.opacity : undefined,
+        drawn ? undefined : { thickness: b.thickness, material: b.material },
       ),
     );
   }

@@ -49,6 +49,10 @@ export function decorHalfExtents(o: GeometryObjectData): Vec2 {
 // Every drawn-only form of a (metre-scaled) level, in authored order, in the
 // caller's world transform. Called first by both game renderers.
 //
+// Which forms reach this at all is `collectDecor`'s decision and is the half of
+// the 2D contract worth reading before this one: a form the body's own collision
+// outline already stands for is not drawn here twice.
+//
 // A form in a body that also has collision objects is drawn in that body's frame
 // (`decorTransform`), so it moves with the thing it decorates; one in a body
 // that built nothing draws exactly where it was authored. `alpha` is the render

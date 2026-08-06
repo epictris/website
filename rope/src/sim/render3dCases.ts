@@ -22,7 +22,7 @@ import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
 import { FOV_Y_DEG, projectToView, syncCamera } from "../render3d/space";
-import { extrudeOutline } from "../render3d/extrude";
+import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import {
   DEFAULT_TEXTURE,
   emissiveMapName,
@@ -53,7 +53,7 @@ import {
   type SceneObjectData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { outlineDressings } from "../render3d/bodyVisuals";
+import { drawnObjects } from "../render3d/bodyVisuals";
 import { DECOR_Z, depthOf } from "../level/decor";
 import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
@@ -253,6 +253,29 @@ function extrusionGeometry(): CaseResult[] {
     detail: `${triFront} front-facing, ${triBack} back-facing cap vertices`,
   });
 
+  // A BEVELLED solid must be CONTAINED by the outline it states, and this is the
+  // case the two above cannot make: both ask for `bevel: 0`, and the default
+  // bevel ran from the outline OUTWARD, so every drawn body stood 2 cm proud of
+  // its own shape on all four sides. On a floor that is a slab 2 cm taller than
+  // the collision box the ball rests on, seen as the ball sinking into the
+  // ground - which no test here could see and no invariant ever will, the sim
+  // being entirely correct throughout.
+  const broken = extrudeOutline({ kind: "rect", half }, { depth: 0.4 });
+  broken.computeBoundingBox();
+  const kb = broken.boundingBox!;
+  const contained =
+    Math.abs(kb.min.x + 1) < F32 &&
+    Math.abs(kb.max.x - 1) < F32 &&
+    Math.abs(kb.min.y + 0.5) < F32 &&
+    Math.abs(kb.max.y - 0.5) < F32 &&
+    Math.abs(kb.min.z + 0.2) < F32 &&
+    Math.abs(kb.max.z - 0.2) < F32;
+  out.push({
+    name: "extrude: a bevelled solid is contained by the outline it states",
+    pass: contained,
+    detail: `bbox (${kb.min.x},${kb.min.y},${kb.min.z}) .. (${kb.max.x},${kb.max.y},${kb.max.z}) for a 2x1x0.4 shape`,
+  });
+
   // A circle extrudes to a disc of the authored radius, not to its bounding box.
   const disc = extrudeOutline({ kind: "circle", radius: 0.35 }, { depth: 0.1, bevel: 0 });
   disc.computeBoundingBox();
@@ -262,6 +285,24 @@ function extrusionGeometry(): CaseResult[] {
     name: "extrude: circle radius survives",
     pass: Math.abs(r - 0.35) < 2e-3,
     detail: `radius ${r.toFixed(5)} (curve-sampled, so a hair under 0.35)`,
+  });
+
+  // ...and an authored circle is drawn as a CYLINDER rather than as that
+  // extrusion, which is a different solid only in its shading - so what is
+  // checked here is the two things that are not shading: it is the authored
+  // radius and the authored depth, both to the surface rather than to a
+  // circumscribed box.
+  const cyl = cylinderSolid(0.35, 0.1);
+  cyl.computeBoundingBox();
+  const cb = cyl.boundingBox!;
+  const cylOk =
+    Math.abs(Math.max(cb.max.x, cb.max.y) - 0.35) < F32 &&
+    Math.abs(cb.min.z + 0.05) < F32 &&
+    Math.abs(cb.max.z - 0.05) < F32;
+  out.push({
+    name: "extrude: an authored circle is a cylinder of that radius and depth",
+    pass: cylOk,
+    detail: `radius ${Math.max(cb.max.x, cb.max.y).toFixed(5)}, z ${cb.min.z.toFixed(5)}..${cb.max.z.toFixed(5)}`,
   });
   return out;
 }
@@ -303,17 +344,11 @@ function flattened(data: LevelData): string {
   );
 }
 
-// The geometry object that DRESSES a body's own outlines - the one with no shape
-// of its own. It is what the retired per-entry `visual` became, so the round-trip
-// assertions below read it where they used to read that field.
-function dressingOf(b: LevelBodyData): GeometryObjectData | undefined {
-  return b.objects.find((o): o is GeometryObjectData => isGeometryObject(o) && o.shape === undefined);
-}
-
-// A body's own FORM - a geometry object carrying a shape, which is what
-// decoration is.
-function formOf(b: LevelBodyData): GeometryObjectData | undefined {
-  return b.objects.find((o): o is GeometryObjectData => isGeometryObject(o) && o.shape !== undefined);
+// What a body is drawn as: its geometry object, which is what the retired
+// per-entry `visual` became - so the round-trip assertions below read it where
+// they used to read that field.
+function lookOf(b: LevelBodyData): GeometryObjectData | undefined {
+  return b.objects.find(isGeometryObject);
 }
 
 // Every length in a `visual` has to survive the px -> m -> px round trip, or the
@@ -398,9 +433,9 @@ function visualRoundTrip(): CaseResult[] {
   // hundred times off in the game. It has to be asserted one way.
   const inMetres = scaleLevelData(authored, PX);
   const dimensionless =
-    dressingOf(inMetres.bodies[0]!)!.tileScale === 2 &&
-    dressingOf(inMetres.bodies[0]!)!.scale === 1.4 &&
-    formOf(inMetres.bodies[2]!)!.tileScale === 0.5;
+    lookOf(inMetres.bodies[0]!)!.tileScale === 2 &&
+    lookOf(inMetres.bodies[0]!)!.scale === 1.4 &&
+    lookOf(inMetres.bodies[2]!)!.tileScale === 0.5;
   return [
     {
       name: "level format: visual round-trips px -> m -> px",
@@ -412,7 +447,7 @@ function visualRoundTrip(): CaseResult[] {
       pass: dimensionless,
       detail: dimensionless
         ? "unchanged in metres"
-        : `tileScale ${dressingOf(inMetres.bodies[0]!)?.tileScale} / ${formOf(inMetres.bodies[2]!)?.tileScale}, scale ${dressingOf(inMetres.bodies[0]!)?.scale}`,
+        : `tileScale ${lookOf(inMetres.bodies[0]!)?.tileScale} / ${lookOf(inMetres.bodies[2]!)?.tileScale}, scale ${lookOf(inMetres.bodies[0]!)?.scale}`,
     },
   ];
 }
@@ -514,12 +549,13 @@ function editorRoundTrip(): CaseResult[] {
   const a = flattened(scaleLevelData(authored, 1));
   const b = flattened(scaleLevelData(back, 1));
   // Nothing draws a collision shape but a geometry object, so a body authored
-  // under the old default must come back carrying the one that states it - with
-  // NO shape of its own, since copying the outline is the drift this avoided.
+  // under the old default must come back carrying the PRIMITIVE that states it:
+  // the same outline, stated once on each object, which is what decoupling the
+  // two costs and what makes either of them separately editable.
   const twinned = JSON.stringify(back.bodies[3]!.objects) ===
     JSON.stringify([
       { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
-      { type: "geometry" },
+      { type: "geometry", shape: { kind: "rect", w: 80, h: 80 } },
     ]);
   // A shape DRAWN in the editor is a collision object and nothing else, and this
   // is the trip that has to leave it that way. It is the same assertion as
@@ -557,7 +593,7 @@ function editorRoundTrip(): CaseResult[] {
       name: "editor: a body with no visual gains the geometry object that draws it",
       pass: twinned,
       detail: twinned
-        ? "one collision object and one shapeless geometry object"
+        ? "one collision object and one primitive stating the same outline"
         : `wrote ${JSON.stringify(back.bodies[3]!.objects)}`,
     },
     {
@@ -1285,30 +1321,50 @@ function renderNeedsGeometry(): CaseResult[] {
     bodies: [{ kind: "static", x: 0, y: 0, rot: 0, objects }],
   });
   const shape = { kind: "rect" as const, w: 1, h: 1 };
-  const drawnBy = (objects: SceneObjectData[]) => outlineDressings(level(objects).bodies[0]!);
+  const drawnBy = (objects: SceneObjectData[]) => drawnObjects(level(objects).bodies[0]!);
 
   const bare = drawnBy([{ type: "collision", shape }]);
-  const dressed = drawnBy([{ type: "collision", shape }, { type: "geometry" }]);
-  // One dressing over a compound body covers every piece of it, which is a whole
-  // wall wearing one surface rather than the first brick of it being drawn.
+  // A geometry object draws its OWN form, wherever the collision objects are and
+  // however many of them there are. A compound body of two pieces dressed by one
+  // primitive draws ONE thing - the primitive - and not one per piece.
   const compound = drawnBy([
     { type: "collision", shape },
     { type: "collision", x: 2, shape },
-    { type: "geometry", texture: "brick" },
+    { type: "geometry", texture: "brick", shape: { kind: "rect", w: 3, h: 1 } },
   ]);
+  const decoupled =
+    compound.length === 1 &&
+    compound[0]!.shape?.kind === "rect" &&
+    (compound[0]!.shape as { w: number }).w === 3;
 
   // ...and the migration that keeps every level authored under the old default
   // looking as it did. It is asked of a LEGACY body - a flat entry carrying its
   // own shape - because that is the only form the old default was ever expressed
   // in, and the only form the migration still runs on.
+  //
+  // What it must produce is the whole claim of the decoupling: a PRIMITIVE that
+  // states the outline, the placement, the depth and the surface the extrusion
+  // used to read off the collision object, so the level looks identical while
+  // nothing is being read off anything any more.
   const legacy: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 * PX },
-    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape }],
+    bodies: [
+      { kind: "static", x: 3, y: -5, rot: 0.25, shape, thickness: 0.4, material: "stone" },
+    ],
   };
   const once = normalizeLevelData(legacy);
   const twice = normalizeLevelData(once);
   const twin = once.bodies[0]!.objects.filter(isGeometryObject);
-  const migrated = twin.length === 1 && twin[0]!.shape === undefined;
+  const collision = once.bodies[0]!.objects.filter(isCollisionObject)[0]!;
+  const g = twin[0];
+  const migrated =
+    twin.length === 1 &&
+    JSON.stringify(g!.shape) === JSON.stringify(collision.shape) &&
+    g!.x === collision.x &&
+    g!.y === collision.y &&
+    g!.rot === collision.rot &&
+    g!.depth === collision.thickness &&
+    g!.texture === collision.material;
   const stable = twice.bodies[0]!.objects.length === once.bodies[0]!.objects.length;
   // ...and the other half of that rule, which is what makes a bare collision
   // shape an authorable thing rather than a state the loader edits away. A body
@@ -1330,24 +1386,21 @@ function renderNeedsGeometry(): CaseResult[] {
   return [
     {
       name: "render: a collision shape with no geometry object draws nothing",
-      pass: bare.length === 1 && bare[0] === undefined,
-      detail: bare[0] === undefined ? "not drawn" : "drawn by something",
+      pass: bare.length === 0,
+      detail: bare.length === 0 ? "not drawn" : "drawn by something",
     },
     {
-      name: "render: a shapeless geometry object draws the body's collision outlines",
-      pass: dressed.length === 1 && dressed[0] !== undefined,
-      detail: dressed[0] !== undefined ? "drawn by the geometry object" : "not drawn",
+      name: "render: a geometry object draws its own form, not the body's outlines",
+      pass: decoupled,
+      detail: decoupled
+        ? "one primitive, its own 3 m shape"
+        : `${compound.length} drawn: ${JSON.stringify(compound.map((o) => o.shape))}`,
     },
     {
-      name: "render: one dressing covers every piece of a compound body",
-      pass: compound.length === 2 && compound.every((d) => d?.texture === "brick"),
-      detail: `${compound.filter(Boolean).length} of ${compound.length} pieces drawn`,
-    },
-    {
-      name: "render: a level authored under the old default gains the object that draws it",
+      name: "render: a level authored under the old default gains the primitive that draws it",
       pass: migrated,
       detail: migrated
-        ? "one geometry object, no shape of its own"
+        ? "one primitive stating the outline, placement, depth and surface"
         : `wrote ${JSON.stringify(twin)}`,
     },
     {

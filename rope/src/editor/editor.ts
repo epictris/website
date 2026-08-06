@@ -52,6 +52,7 @@ import {
   objectLabel,
   halfExtents,
   isArrowNote,
+  collidingBodyIds,
   itemDepth,
   newItemStyle,
   type EdObject,
@@ -440,17 +441,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // both renderers draw by) rather than whichever happened to be authored later.
   // A backdrop 20 m behind the level can no longer swallow a click meant for the
   // wall drawn over it.
-  const pickOrder = (): EdItem[] =>
-    pickableItems()
+  const pickOrder = (): EdItem[] => {
+    // What a geometry object's depth means turns on whether its body collides
+    // (see `itemDepth`), which is a fact about the model rather than the item.
+    const colliding = collidingBodyIds(model.items);
+    const depth = (b: EdItem) => itemDepth(b, colliding.has(b.bodyId));
+    return pickableItems()
       .map((b, i) => ({ b, i }))
       .sort(
         (p, q) =>
           Number(p.b.layer === activeLayer) - Number(q.b.layer === activeLayer) ||
           ED_LAYERS.indexOf(p.b.layer) - ED_LAYERS.indexOf(q.b.layer) ||
-          itemDepth(p.b) - itemDepth(q.b) ||
+          depth(p.b) - depth(q.b) ||
+          // At the same depth a COLLISION object wins, and that tie is now the
+          // common case: a body's primitive states the same outline in the same
+          // place, so on the canvas the two are one shape. A click means the
+          // thing that decides where the player can go; the form drawn over it
+          // is one row away in the tree, which a canvas pick has already
+          // unfolded and scrolled to.
+          Number(p.b.object === "collision") - Number(q.b.object === "collision") ||
           p.i - q.i,
       )
       .map((p) => p.b);
+  };
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
   function setSelection(ids: readonly number[]): void {
@@ -1740,7 +1753,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // extrusion and an extrusion's depth means nothing to a mesh.
   function addVisualFields(g: HTMLElement, items: EdItem[]): void {
     const kw = el("label", "ed-field");
-    kw.textContent = "visual";
+    kw.textContent = "kind";
     const ks = document.createElement("select");
     ks.className = "ed-select";
     const sharedKind = items.every((b) => b.visual.kind === items[0]!.visual.kind)
@@ -1755,9 +1768,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ks.appendChild(o);
     }
     for (const [value, label] of [
-      ["auto", "auto (extrude)"],
+      ["primitive", "primitive"],
       ["mesh", "mesh"],
-      ["none", "none (invisible)"],
     ] as const) {
       const o = document.createElement("option");
       o.value = value;
@@ -1844,22 +1856,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // negative is away from the camera. On a background panel it is the whole
     // point of the section - a panel at -20 m parallaxes as the camera pans,
     // where a panel at 0 is the flat fill the 2D renderer draws.
-    if (sharedKind !== "none") {
-      num("off z", (v) => v.offsetZ * M2PX, (v, z) => (v.offsetZ = z * PX), 5);
-    }
+    num("off z", (v) => v.offsetZ * M2PX, (v, z) => (v.offsetZ = z * PX), 5);
 
     if (sharedKind !== "mesh") {
       // Extrusion controls. Both are optional overrides with a real third state
       // - "take it from somewhere else" - so clearing the field is meaningful
       // and the placeholder says what the fallback is.
       num("depth", (v) => (v.depth ?? 0) * M2PX, (v, d) => (v.depth = Math.max(1, d) * PX), 5, {
-        placeholder: items.length > 1 ? "mixed" : "thickness",
+        placeholder: items.length > 1 ? "mixed" : "default",
         onEmpty: () => {
           for (const b of items) b.visual.depth = null;
         },
       });
       num("bevel", (v) => (v.bevel ?? 0) * M2PX, (v, b) => (v.bevel = Math.max(0, b) * PX), 1, {
-        placeholder: items.length > 1 ? "mixed" : "default",
+        placeholder: items.length > 1 ? "mixed" : "none",
         onEmpty: () => {
           for (const b of items) b.visual.bevel = null;
         },
@@ -1870,7 +1880,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // textured with, and it is what a prop wears INSTEAD of the materials its
     // own file carries - which is what dresses a bare geometry-only export as
     // the same stone the walls are made of.
-    if (sharedKind !== "none") {
+    {
       const tw = el("label", "ed-field");
       tw.textContent = "texture";
       const ts = document.createElement("select");
@@ -1885,14 +1895,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       for (const key of ["", ...keys]) {
         const o = document.createElement("option");
         o.value = key;
-        // Blank means "whatever the material says", which is the answer for
-        // almost every body: naming the stuff a thing is made of is the decision
-        // an author is already making.
+        // Blank is the default generated surface. It is NOT "whatever the
+        // collision object's material says" any more: what a piece is made of is
+        // a fact about its mass, and a geometry object states its own surface -
+        // one made with **Add geometry** starts out carrying the material's name
+        // here explicitly, which is the same thing said where it can be edited.
         o.textContent = key
           ? key in TEXTURE_ASSETS
             ? `${key} (authored)`
             : key
-          : "(from material)";
+          : "(default)";
         ts.appendChild(o);
       }
       ts.value = items.every((b) => b.visual.texture === items[0]!.visual.texture)
@@ -1980,7 +1992,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A colour input has no empty state, so the tick is what says whether the
     // shape emits at all; unticking clears the colour rather than leaving a hex
     // string on disk that nothing renders.
-    if (sharedKind !== "none") {
+    {
       const on = items.map((b) => b.visual.emissive !== "");
       const box = document.createElement("input");
       box.type = "checkbox";
@@ -2159,12 +2171,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // fields on one edited a value that never reached disk.
     if (!solid) addVisualFields(g, bodies);
 
-    // Decoration carries its OWN fill - `toLevelData` writes an own-shape
-    // geometry object's colour and opacity onto the object. A collision shape
-    // does not: the colour a wall is painted is its BODY's, and it is edited
-    // there. A dressing has no shape of its own to fill, so it takes the body's
-    // too and gets no swatch here.
-    if (!solid && bodies.every((b) => b.ownShape)) addFillFields(g, num, bodies, sync);
+    // A geometry object carries its OWN fill - `toLevelData` writes its colour
+    // and opacity onto the object. A collision shape does not: the colour a wall
+    // is painted is its BODY's, and it is edited there.
+    if (!solid) addFillFields(g, num, bodies, sync);
 
     addGroupSection(g);
     addActionsRow(g);
@@ -3168,7 +3178,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ...host,
       id: newBodyId(),
       object: "anchor",
-      ownShape: true,
       // Snapped to the surface, because that is what bolting a chain to a body
       // means - and because an anchor in a body's interior leaves the chain's
       // span starting inside it, which the wrap generator resolves as a
@@ -3279,7 +3288,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A fresh shape is drawn as its own outline extruded, which is what every
       // body authored before the 3D renderer existed is drawn as.
       visual: defaultVisual(),
-      ownShape: true,
       // Only meaningful on a force area, but a new one needs a non-zero pull
       // or it would draw no arrows and do nothing until the field is touched.
       force: DEFAULT_FORCE_MAGNITUDE * PX,
@@ -3353,24 +3361,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // separately - which is the whole of the collision/geometry split, and was
   // undermined by a draw that quietly made one of each.
   //
-  // It carries its OWN copy of the outline rather than dressing the body's
-  // collision shapes. The two objects are then independent in both directions:
-  // the collision shape can be resized, replaced or deleted and the look stays
-  // exactly as authored, which is what a body of two objects should mean. The
-  // cost is real and is the point - a wall widened after it is dressed is
-  // widened twice - and a dressing (`ownShape: false`) is still what a level
-  // loaded from the legacy default has.
+  // It carries its OWN copy of the outline, and of the two things the extrusion
+  // used to read off the collision object: how thick it is (`thickness`, which
+  // is the number that piece's MASS is computed from) and what it is made of
+  // (`material`, which names a surface). Copied ONCE, here, so the two objects
+  // are independent in both directions from the moment they exist - the
+  // collision shape can be resized, re-materialled or deleted and the look stays
+  // exactly as authored. The cost is real and is the point: a wall widened after
+  // it is dressed is widened twice.
+  //
+  // The same statement `primitiveOf` (`levelFormat.ts`) makes for a level
+  // migrated from the legacy form, which is why the two copy the same fields.
   function addGeometryFor(items: EdItem[]): void {
     const made = items.map((item) => ({
       ...item,
       id: newBodyId(),
       object: "geometry" as const,
-      ownShape: true,
       shape: cloneShape(item.shape),
       cam: { ...item.cam },
       light: { ...item.light },
       note: { ...item.note },
-      visual: { ...item.visual },
+      visual: { ...item.visual, depth: item.thickness, texture: item.material },
     }));
     if (!made.length) return;
     beginAction();

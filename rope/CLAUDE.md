@@ -1304,8 +1304,10 @@ and `syncBodyProps` pushes the values to the rest. Going through all the members
 `mixed` in the opacity field of a body whose decoration is deliberately a different opacity from
 its walls: that decoration's own opacity is not the body's, and reading it as a second opinion on
 the body's fill is reading the wrong field.
-The one fill that is *not* the body's is an own-shape geometry object's, which `toLevelData`
-writes onto the object; a dressing has no shape of its own to fill and takes the body's.
+The one fill that is *not* the body's is a geometry object's, which `toLevelData`
+writes onto the object - and only where it DIFFERS from the body's, so a wall's primitive
+takes the colour the wall is painted and states nothing, while a backdrop welded into that
+body carries its own.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
 Everything that is a piece of stuff rather than a region of space - every kind but the three areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See **Mass and materials**; both are per shape, so a selection spanning a compound body edits its pieces individually.
@@ -1329,7 +1331,8 @@ The editor gains the same stacked WebGL canvas the game page has, and a three-st
 The editor's free camera drives the same correspondence the game's does (see **3D rendering**), so the overlay stays pixel-locked at any pan or zoom and collision authoring is exactly as precise as it was.
 The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
-A **visual** section in the inspector authors a geometry object (kind, mesh, depth, bevel, texture), and the two kinds that are *not* an outline - `mesh` and `none` - get a badge on the canvas, since the 2D view cannot otherwise show them at all.
+A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
+`mesh` gets a badge on the canvas, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
 
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
@@ -1416,6 +1419,10 @@ Two rules make it read as decoration, and they are load-bearing rather than cosm
 - It is **never stroked**. A border is what makes a shape read as an object; a backdrop has none, and every body draws over it with one. This is how decoration stays distinguishable from a wall without a glyph - see **Decoration** in `docs/game-design.md`, which is the amendment to the pass-through rule that lets it off carrying one.
 
 The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a shape that is dark, huge or nearly transparent, and above all has to be able to tell at a glance which shapes on the canvas are part of the level. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the shape's own fill, whichever it was picked to contrast with.
+
+That edge is drawn for **every** geometry object and the fill for only some, by the same rule the game's 2D view follows: a primitive on a colliding body, on that body's own plane, is already filled by the collision shape it was made from, so filling it again would darken every wall in the editor by its own opacity and show the author a level that is not what plays.
+One that has been resized or moved off its collision shape then reads as exactly that - a dashed outline standing away from the solid, with the fill still where the body is.
+For the same reason a click at that tie takes the **collision** object: the two are one shape on screen, a click means the thing that decides where the player can go, and the form drawn over it is one row away in the tree the pick has already unfolded.
 
 In 3D it keeps the full `visual` field, which is how it earns its place: an `offsetZ` of -20 m is a parallax layer, and a `kind: "mesh"` with the collision unticked is **a prop with no collision at all** - scenery, a lantern, a sign - which is the one thing the old layer could not express, since a background panel was always a flat fill.
 Its depth defaults are its own (`DECOR_Z`, `DECOR_DEPTH`): just behind the plane and thin, which is exactly what a flat fill drawn before every body already was, so every migrated panel looks as it did. `thickness` is deliberately not consulted - that is the number a shape's MASS comes from, and decoration has none - and decoration behind the plane casts no shadow across the level in front of it, which was the old panel rule and is kept for the same reason.
@@ -1766,15 +1773,26 @@ That happens to be what the negation produces, which is a coincidence worth stat
 A collision object is what a body is **made of**; a geometry object is what it **looks like**; and a body with no geometry object is drawn by nothing at all - a solid, invisible wall, which is a thing a level may want.
 They used to be one authored thing: a collision shape drew itself whenever nobody said otherwise, which meant there was no way to say "this collides differently from how it looks" without also saying how it looks, and every question about appearance had to be asked of a shape that had opinions about mass.
 
-The old default is not lost, it is **written down**. `withGeometryTwin` (`levelFormat.ts`) gives every body that has collision objects and **no geometry object at all** exactly one - carrying **no shape of its own**, which already means "draw this body's collision outlines" - at the one gate every level passes through on load.
-So a level authored under the old default looks pixel-identical and now says why, and `ball.json` goes from 187 objects to 317 the moment it loads.
+**AND IT IS DECOUPLED IN BOTH DIRECTIONS.** A geometry object carries its own `shape` and its own placement, always, and nothing about what is drawn is read off a collision object - not the form, not the position, not the rotation, not the depth, not the surface.
+A primitive nudged 10 cm left, turned 5° and made twice as wide moves, turns and grows on screen while the body goes on colliding exactly as it did.
 
-"No geometry object **at all**" is the load-bearing half. Any geometry object is the body saying how it looks, and that answer stands: a lamp whose collision box carries an authored mesh looks like the lamp, and twinning it too extrudes a grey brick inside the fitting - visible in play, invisible in the editor, and exactly the kind of thing a migration must never invent. The first cut of the rule skipped only bodies with a *shapeless* geometry object and did precisely that to two bodies.
-The outline is deliberately **not copied** onto the twin: a second copy is a second thing to resize, and the two would drift the first time only one of them was.
-It is idempotent because it has to be - a body that gains a twin has a shapeless geometry object the next time it passes through, and it passes through on every load.
+It was not always: a geometry object with no shape used to draw the body's collision outlines, which is how a wall wore brick without restating its outline and what every migrated body was given.
+The saving was real and the cost was that the two were not actually separate things - the geometry object's own `x`, `y`, `rot`, `w` and `h` were **dead fields on the commonest object in every level**, silently overridden by the shape it was standing in for, and "this collides differently from how it looks" was still unsayable for the one case (a different SIZE or PLACE) an author reaches for first.
 
-The editor holds the same line at the other end: drawing a collision shape creates its geometry twin on mouse-up (`geometryTwinFor`), because a draw that produced an invisible wall would be a trap the author found out about in `▶ Test`.
+The old default is still written down, twice, and both halves state the outline rather than borrowing it:
+
+- `withGeometryPrimitives` (`levelFormat.ts`) gives a body converted from a **legacy flat entry** one primitive per collision object, each carrying that piece's shape, placement, `thickness` as its `depth` and `material` as its `texture`. That is the only form the old default was ever authored in, and `levelData.ts` still arrives that way from the Godot extractor.
+- `scripts/migrate-primitives.ts` did the same thing **once, on disk**, to the levels already in the nested form (`levels/*.json`: 159 dressings became primitives). It inverts the retired `outlineDressings` pairing, so a compound body dressed by one geometry object gets one primitive per piece, and it is kept because it is the record of what those files were.
+
+Both are pixel-identical by construction, and the second is why there is no load-time migration for the nested form at all: a file says what it draws, and the loader does not edit it on the way past.
+
+"No geometry object **at all**" is the load-bearing half of the legacy one. Any geometry object is the body saying how it looks, and that answer stands: a lamp whose collision box carries an authored mesh looks like the lamp, and twinning it too extrudes a grey brick inside the fitting - visible in play, invisible in the editor, and exactly the kind of thing a migration must never invent.
+It is idempotent because it has to be - the legacy path is reached by any file still carrying retired panels or lights.
+
+The editor holds the same line at the other end: **Add geometry** on a selected collision shape makes the primitive that draws it (`addGeometryFor`), copying the same five things `primitiveOf` copies, and a draw alone still produces a collision object and nothing else.
 The look fields sit on the geometry panel alone; on a collision shape they edited a value `toLevelData` has never written for a collision object, which is a dial connected to nothing.
+
+What this costs, stated plainly because it is the trade the decoupling makes: **a wall widened after it is dressed is widened twice.** That is the point - there is no longer a single edit that silently means both - and the fix if it ever bites is a "match the collision shape" button in the editor, not a fallback in the format.
 
 A body is a `THREE.Group` carrying the interpolated pose, with one child per collision shape at that piece's `localOffset`/`localRotation` - rigid within the body, so written **once** at build.
 The per-frame sync is therefore two writes per body into vectors it already owns; chain links go through one `InstancedMesh` with `count` set per frame rather than per-link `Mesh` churn.
@@ -1782,7 +1800,7 @@ The per-frame sync is therefore two writes per body into vectors it already owns
 Two rules are inherited from elsewhere rather than invented here:
 
 - A **code-built circle is a sphere and an authored one is a disc**, which is the same split `lib/shapeGeometry.ts` makes about mass (`computeMass` versus `prismMass`). Drawing them by the rule they are weighed by is what stops a 4 cm hook being drawn as a 20 cm slab.
-- An extrusion's depth is the shape's own **`thickness`**, so a body is as thick as it weighs.
+- A geometry object's `depth` is its own, and the migration seeded it from the collision object's **`thickness`** - so a migrated body is as thick as it weighs, and stays that way only for as long as an author wants it to. `thickness` is what a piece's MASS is computed from and is never read for the look again.
 
 Authored colours are kept, but as a **tint with a brightness floor**: the levels were authored for a flat renderer where a body's colour *is* its appearance and most of them are near-black greys, so multiplying a stone texture by `#000000` leaves a hole where a wall should be. The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`, which preserves the authored ordering while leaving every surface enough albedo to show its grain and respond to the sun.
 
@@ -1800,16 +1818,21 @@ That shape replaced three separate mechanisms at once, and each of them was work
 
 The body's **authored** frame and its **engine** frame are deliberately different points. The engine origin has to be the collision objects' combined centre of mass - every lever arm in the engine is measured from `globalPosition` - and it moves as pieces are added; the authored one has to stay put, or every offset in a body would shift whenever a piece was added to it. `buildLevelBodies` absorbs the difference once, at load (`BuiltBody.origin`), which is the same job the retired `resolveDecor` did for decoration and `buildSceneChains` still does for chain anchors.
 
-A **geometry object** is the choice between the ways a thing gets a look:
+A **geometry object** is the choice between the two ways a thing gets a look:
 
-- `kind: "auto"` (or absent) extrudes a **primitive** - its own `shape`, or the body's collision outlines when it has none - and wears a tileable PBR surface; `depth`, `bevel`, `texture` and `tileScale` override the defaults.
+- `kind: "primitive"` (or absent) draws its own `shape` as a solid: a **rect is a rectangular prism**, a **circle is a cylinder** (three's own lathe rather than a 24-gon extrusion, so a barrel's highlight travels round it smoothly) and a polygon is that outline extruded. `depth`, `bevel`, `texture` and `tileScale` are its own; `depth` defaults to `DEFAULT_THICKNESS` on a body that collides and `DECOR_DEPTH` on one that does not, and `bevel` to none.
 - `kind: "mesh"` replaces it with a named **GLB prop** from the manifest, placed by the object's own `x`/`y`/`rot` plus `z`, `rotX`, `rotY` and a dimensionless `scale`. It keeps the materials its own file carries **unless** the object names a `texture`, in which case it wears that instead - which is what lets a bare, geometry-only export (~20 KB) be dressed as the same stone the walls are made of, and what makes "a GLB **or** a primitive" the real choice rather than "a GLB or a textured primitive".
-- `kind: "none"` draws nothing at all - an invisible wall on a body that has geometry. (A body with no geometry object at all is invisible too; `none` is how one object among several opts out.)
 
-A geometry object with **no shape** draws the body's **collision outlines**, which is how a wall wears brick at twice life size without the file carrying its outline a second time where the two could drift apart - and it is what the migrated twin is.
-`outlineDressings` (`render3d/bodyVisuals.ts`) is the whole rule, and it is split out of `BodyVisual` so it can be checked without a GPU, a canvas or a DOM: it returns which geometry object draws each collision outline, `undefined` where nothing does.
-Dressings pair with collision objects in authored order and one dressing covers all of them - the two cases that occur are a whole wall wearing one surface and a compound body whose pieces are each their own prop.
-An `auto` dressing is drawn at its piece (what it draws IS that piece's outline); a `mesh` one is drawn at its own placement, since it replaces the outline rather than clothing it.
+There is deliberately no third answer for "drawn by nothing": a body draws its geometry objects and nothing else, so an invisible wall is a body with **no geometry object**, which is also what an editor draw produces before anything dresses it.
+A primitive with no `shape` at all draws the same unit placeholder an unfetched prop does - visible and obviously wrong, rather than silently absent.
+
+`drawnObjects` (`render3d/bodyVisuals.ts`) is the whole rule and is one line - a body's geometry objects, in authored order - and it is exported so the claim can be checked without a GPU, a canvas or a DOM: a collision object never appears in it, however bare the body.
+
+The **2D** renderer draws the other half - a body's collision shapes - so it must not also fill the primitive stating the same outline in the same place, which would lay the same colour down twice and darken every wall by its own opacity.
+`collectDecor` is where that is decided: a form on a colliding body reaches the 2D pass only if it is **off that body's plane** (a backdrop welded into a swinging crate, which is what a welded `z` means), and a body that collides with nothing is drawn whatever its depth, nothing else in that view standing for it at all.
+The 3D renderer needs no such rule, since it never draws a collision shape.
+
+An **extruded solid is contained by the outline it states.** Three's bevel runs from the caps *outward*, so the old 2 cm default put every drawn body 2 cm proud of its own shape on all four sides - a floor slab taller than the collision box the ball rests on, seen as the ball sinking into the ground, and invisible to every check here because the sim was right throughout. `bevelOffset: -bevelSize` makes it a chamfer off the outline instead, and `cli render3d` asserts the bounding box against the authored size *with the bevel on*, which is the case the old size assertions could not make (both asked for `bevel: 0`).
 
 `mountVisual` (`render3d/bodyVisuals.ts`) is the single place that choice is cashed out, and `BodyVisual` is now the ONE class for every body - a wall, a swinging crate, a backdrop 20 m behind the plane and a lamp with no fitting are all a body with objects in it. What used to be a second class for decoration is the case where the body built no engine body: its root stands at the authored transform instead of tracking one, and `sync` has nothing to do.
 
@@ -1903,7 +1926,7 @@ The GLTF loader is imported dynamically, so it lands in its own chunk and is fet
 
 A surface comes from one of two places and a level cannot tell which, because both are keyed into **one namespace** that `surfaceFor` looks up authored-first:
 
-- **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so `material` alone picks a sensible surface and a level needs no visual authoring at all. The maps are value noise → albedo, a height-derived normal map and a roughness map from the same field: one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download.
+- **Generated** (`TEXTURE_SETS`), keyed by the `MATERIALS` names the format already has, so naming the stuff a thing is made of is all it takes to get a sensible surface - a geometry object's `texture` takes a material name as readily as an authored set's, which is what the migration wrote onto every primitive it made. The maps are value noise → albedo, a height-derived normal map and a roughness map from the same field: one height field driving all three is what makes them agree - a dark patch of grain is also a dip and also a rougher spot, as it is on the real material - for a few hundred bytes of code and no download.
 - **Authored** (`TEXTURE_ASSETS`), a real PBR set: **base, normal, roughness, metallic, ambient occlusion and emission**, each optional, each a `.webp` fetched from the release store and pinned by `sha256` exactly as a prop is. Channels are three.js's, which are glTF's: albedo and emission in sRGB (they are pictures) and everything else linear, roughness read from green, metallic from blue, AO from red and from the same UV set as everything else (there is only one).
 
 That the two share a namespace is the point of the arrangement: replacing a generated surface with an authored one is **adding a manifest entry under the material's own name**, and every level already naming that material picks it up with no edit at all. An unknown name still lands on a generated surface, so a hand-edited level naming a texture this build does not have looks ordinary rather than invisible.

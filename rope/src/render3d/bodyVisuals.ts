@@ -15,24 +15,17 @@
 // `sync` has nothing to do. Nothing else about it differs, which is the point -
 // a prop, its light and the wall behind it are drawn by one path.
 //
-// WHAT A BODY LOOKS LIKE is decided by its geometry objects, and the default is
-// the whole design:
+// WHAT A BODY LOOKS LIKE is decided by its geometry objects and by NOTHING
+// ELSE. A collision object is never drawn and is never read for a form, a
+// placement, a depth or a surface: a geometry object states its own, so a body
+// can be drawn as something other than what it collides as, which is the whole
+// point of there being two kinds of object. A body with no geometry object is
+// drawn by nothing at all - a solid, invisible wall, which is a thing a level
+// may perfectly well want and which needs no field to say it.
 //
-// - NO geometry object: every collision shape is extruded through z and wears
-//   the surface its own `material` names. The player then sees exactly what they
-//   collide with, which is the property the reference games' silhouettes have
-//   and the reason this is the default rather than a fallback - a level is fully
-//   3D the moment it loads.
-// - A geometry object with NO `shape`: the same outlines, dressed by that
-//   object instead. This is how a wall wears brick at twice life size without
-//   the file carrying its collision outline a second time where the two could
-//   drift apart.
-// - A geometry object WITH a `shape`: a form of its own - a backdrop, a sign, a
-//   prop's placeholder - drawn wherever the object is placed.
-//
-// and `mountVisual` is where the mesh-or-primitive choice inside any of those is
-// cashed out, so a body's own outline and a drawn-only form cannot end up with
-// two different ideas of what a geometry object means.
+// `mountVisual` is where the mesh-or-primitive choice is cashed out, and the one
+// remaining case that is not authored at all is a body the SIM spawned (a rock,
+// the hook), which has no authored objects and simply extrudes its own shapes.
 //
 // Interpolation discipline: every transform read here is
 // `renderPosition/renderRotation(alpha)`, never raw sim state. A body drawn at
@@ -51,11 +44,10 @@ import {
   isCollisionObject,
   isGeometryObject,
   isLightObject,
-  type CollisionObjectData,
   type GeometryObjectData,
   type LevelBodyData,
 } from "../level/levelFormat";
-import { DEFAULT_BEVEL, extrudeOutline } from "./extrude";
+import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
 import { isAuthoredSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
@@ -91,20 +83,28 @@ function tintFor(color: string | undefined): string | undefined {
   return `#${c.getHexString()}`;
 }
 
-// What one drawn thing is made of, gathered from the object that draws it and
-// the body it belongs to. A body with no geometry object at all still has one of
-// these, assembled from its collision object alone, which is exactly what makes
-// the implicit default and an authored dressing the same code path.
+// What one drawn thing wears: the object that draws it, and the one thing its
+// BODY contributes to how it looks - the fill the level authored, which a
+// geometry object may override and usually does not.
 export interface DrawSpec {
-  // The geometry object, when there is one.
+  // The geometry object, when there is one. A body the sim spawned has none, and
+  // is the only thing drawn without one.
   geometry?: GeometryObjectData;
-  // The collision object whose outline is being drawn and whose material and
-  // thickness stand in for anything the geometry object does not say. Absent for
-  // a form with a shape of its own, which has no collision object behind it.
-  collision?: CollisionObjectData;
-  // The body's own fill, for the tint.
+  // The body's own fill, for the tint. A geometry object's own `color` wins.
   color?: string;
 }
+
+// What a primitive falls back to where its geometry object says nothing, which
+// is a property of the BODY rather than of any collision shape: something solid
+// is a slab on the gameplay plane, and something that collides with nothing is
+// the thin backdrop a flat fill drawn before every body already was.
+interface PrimitiveDefaults {
+  depth: number;
+  bevel: number;
+}
+
+const SOLID_DEFAULTS: PrimitiveDefaults = { depth: DEFAULT_THICKNESS, bevel: DEFAULT_BEVEL };
+const DECOR_DEFAULTS: PrimitiveDefaults = { depth: DECOR_DEPTH, bevel: 0 };
 
 // A code-built circle is a SPHERE and an authored one is a disc seen face on.
 // That is not a rendering choice, it is the same split `lib/shapeGeometry.ts`
@@ -112,25 +112,24 @@ export interface DrawSpec {
 // and go through `computeMass`'s sphere rule, while authored level geometry is a
 // prism `thickness` deep whatever its outline. Drawing them by the same rule is
 // what keeps a 4 cm hook from being drawn as a 20 cm slab.
-function autoGeometry(shape: CollisionShape2D, spec: DrawSpec): THREE.BufferGeometry {
+function spawnedGeometry(shape: CollisionShape2D): THREE.BufferGeometry {
   const s = shape.shape;
-  if (s.kind === "circle" && spec.collision === undefined && spec.geometry === undefined) {
-    return new THREE.SphereGeometry(s.radius, 24, 16);
-  }
-  return primitiveGeometry(outlineOfShape(s), spec);
+  if (s.kind === "circle") return new THREE.SphereGeometry(s.radius, 24, 16);
+  return primitiveGeometry(outlineOfShape(s), undefined, SOLID_DEFAULTS);
 }
 
-// An authored outline as the solid it stands for: the primitive extruded to the
-// thickness the shape's own mass is computed from, so a body is as thick as it
-// weighs unless the geometry object says otherwise.
-function primitiveGeometry(outline: Outline, spec: DrawSpec): THREE.BufferGeometry {
-  return extrudeOutline(outline, {
-    depth:
-      spec.geometry?.depth ??
-      spec.collision?.thickness ??
-      (spec.collision ? DEFAULT_THICKNESS : DECOR_DEPTH),
-    bevel: spec.geometry?.bevel ?? (spec.collision ? DEFAULT_BEVEL : 0),
-  });
+// An authored form as the solid it stands for. A rect is a rectangular prism, a
+// circle a cylinder and a polygon that outline extruded, each `depth` thick -
+// which is what the geometry object says it is and NOT what the body's collision
+// weighs, those having been separate statements since the two objects were.
+function primitiveGeometry(
+  outline: Outline,
+  g: GeometryObjectData | undefined,
+  defaults: PrimitiveDefaults,
+): THREE.BufferGeometry {
+  const depth = g?.depth ?? defaults.depth;
+  if (outline.kind === "circle") return cylinderSolid(outline.radius, depth);
+  return extrudeOutline(outline, { depth, bevel: g?.bevel ?? defaults.bevel });
 }
 
 // The surface a drawn thing wears: its texture set (an authored PBR set or a
@@ -148,10 +147,13 @@ function primitiveGeometry(outline: Outline, spec: DrawSpec): THREE.BufferGeomet
 // like, and it outranks the stand-in.
 export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
   const g = spec.geometry;
-  const name = surfaceName(g?.texture ?? spec.collision?.material);
+  // The geometry object's own `texture` and nothing else. A collision object's
+  // `material` is what its MASS is computed from; reading it as a statement
+  // about the look is the coupling these two objects exist to keep apart, and a
+  // migrated level names the material here explicitly instead.
+  const name = surfaceName(g?.texture);
   return surfaceFor({
     texture: g?.texture,
-    material: spec.collision?.material,
     tileScale: g?.tileScale,
     offsetX: g?.tileOffsetX,
     offsetY: g?.tileOffsetY,
@@ -197,15 +199,8 @@ export function mountVisual(
   opts: MountOptions,
 ): MountedVisual {
   const g = spec.geometry;
-  const kind = g?.kind ?? "auto";
+  const kind = g?.kind ?? "primitive";
   const owned: THREE.BufferGeometry[] = [];
-
-  // Drawn by nothing - an invisible wall. It exists because absence already
-  // means "the default look", so without an explicit way to say it a body could
-  // not opt out of being drawn at all. A body that wants a light and no fitting
-  // says so by having a light object and no geometry object, which is cheaper
-  // still.
-  if (kind === "none") return { geometry: owned };
 
   const material = surfaceOf(spec);
   const z = opts.defaultZ;
@@ -269,26 +264,15 @@ export function mountVisual(
 // to read as "something is missing here" rather than as a wall.
 const ORPHAN_PLACEHOLDER = 0.3;
 
-// Which geometry object draws each of a body's collision outlines, in the body's
-// authored collision order - `undefined` where NOTHING does, which is a body
-// whose shapes are solid and invisible.
+// What a body draws, in authored order - its geometry objects and nothing else.
 //
-// A geometry object with no shape of its own DRESSES the body's collision
-// outlines rather than being a form in its own right. They pair with the
-// collision objects in authored order, and one dressing covers all of them -
-// which is the two cases that actually occur: a whole wall wearing brick at
-// twice life size (one dressing, several pieces), and a compound body whose
-// pieces are each their own prop (one dressing each).
-//
-// Split out of the constructor so the claim can be checked without a GPU, a
-// canvas or a DOM: building a `BodyVisual` needs all three, and "does a bare
-// collision shape draw?" is a question about this list alone.
-export function outlineDressings(data: LevelBodyData): (GeometryObjectData | undefined)[] {
-  const collisions = data.objects.filter(isCollisionObject);
-  const dressings = data.objects.filter(
-    (o): o is GeometryObjectData => isGeometryObject(o) && o.shape === undefined,
-  );
-  return collisions.map((_, i) => dressings[i] ?? dressings[0]);
+// It is a one-line filter and it is exported all the same, because the claim it
+// makes is the one this file exists to keep: a collision object never appears in
+// this list however bare the body is, so "does a collision shape draw?" can be
+// answered without a GPU, a canvas or a DOM, all three of which building a
+// `BodyVisual` needs.
+export function drawnObjects(data: LevelBodyData): GeometryObjectData[] {
+  return data.objects.filter(isGeometryObject);
 }
 
 export class BodyVisual {
@@ -347,8 +331,7 @@ export class BodyVisual {
       // every default.
       body.getShapes().forEach((shape) => {
         const piece = this.piece(shape.localOffset.x, shape.localOffset.y, shape.localRotation);
-        const spec: DrawSpec = {};
-        this.mount(piece, () => autoGeometry(shape, spec), spec, solidZ, true);
+        this.mount(piece, () => spawnedGeometry(shape), {}, solidZ, true);
       });
     }
 
@@ -363,51 +346,13 @@ export class BodyVisual {
 
   private buildAuthored(data: LevelBodyData, solidZ: number): void {
     const built = this.built!;
-    const collisions = data.objects.filter(isCollisionObject);
-    const shapes = this.body?.getShapes() ?? [];
-    const geometries = data.objects.filter(isGeometryObject);
-    const dressings = outlineDressings(data);
+    // Whether the BODY collides, which is what the placement and depth defaults
+    // turn on. Nothing past this line reads a collision object at all: what a
+    // body is made of and what it looks like are two authored statements, and
+    // this is the file where the second one is the only one consulted.
+    const solid = data.objects.some(isCollisionObject);
 
-    // The body's own outlines, drawn ONLY where a geometry object asks for them.
-    // A collision shape is what the body is made of and nothing else: it used to
-    // draw itself whenever no one said otherwise, which made "what this collides
-    // as" and "what this looks like" the same authored thing and left no way to
-    // say they differ without also saying how. Every level that relied on the old
-    // default is given the geometry object that states it, once, at load
-    // (`withGeometryTwin`), so nothing on disk changes appearance.
-    collisions.forEach((c, i) => {
-      const dressing = dressings[i];
-      if (!dressing) return;
-      const spec: DrawSpec = {
-        geometry: dressing,
-        collision: c,
-        ...(data.color !== undefined ? { color: data.color } : {}),
-      };
-      // An AUTO dressing is appearance only: what it draws is this piece's own
-      // outline, so it has to be drawn at this piece. A MESH (or `none`) one
-      // REPLACES the outline, so it is drawn at its own authored placement -
-      // which is what the offset on a prop is for, and the only reading that
-      // stays right for a body of several pieces.
-      const atPiece = (dressing.kind ?? "auto") === "auto";
-      const z = objectDepth(dressing.z, solidZ);
-      const shape = shapes[i];
-      if (atPiece && shape) {
-        const piece = this.piece(shape.localOffset.x, shape.localOffset.y, shape.localRotation);
-        this.mount(piece, () => autoGeometry(shape, spec), spec, z, true);
-        return;
-      }
-      // Either a prop standing where it was placed, or a body that built no
-      // engine shapes at all (a `killzone` or `force` area, which the 3D scene
-      // still draws) - both fall back to the authored outline in its own frame.
-      const local = localPlacement(built, atPiece ? c : dressing);
-      const piece = this.piece(local.pos.x, local.pos.y, local.rot);
-      const outline = outlineOfData(c.shape);
-      this.mount(piece, () => primitiveGeometry(outline, spec), spec, z, true);
-    });
-
-    // Forms of their own: decoration, signs, standalone props.
-    for (const g of geometries) {
-      if (g.shape === undefined) continue;
+    for (const g of drawnObjects(data)) {
       const local = localPlacement(built, g);
       const piece = this.piece(local.pos.x, local.pos.y, local.rot);
       const spec: DrawSpec = {
@@ -415,23 +360,29 @@ export class BodyVisual {
         ...(data.color !== undefined ? { color: data.color } : {}),
       };
       // A form on a body with collision is an object among objects and is drawn
-      // on the plane; one on a body without is decoration and sits behind it,
-      // which is what a flat fill drawn before every body already was.
-      const defaultZ = objectDepth(g.z, collisions.length > 0 ? solidZ : DECOR_Z);
-      const outline = g.shape
-        ? outlineOfData(g.shape)
-        : outlineOfData({ kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER });
+      // on the body's own plane; one on a body without is decoration and sits
+      // behind it, which is what a flat fill drawn before every body already was.
+      const defaultZ = objectDepth(g.z, solid ? solidZ : DECOR_Z);
+      // A primitive with no form of its own draws the same unit placeholder a
+      // prop with no file does: something is missing HERE, said visibly rather
+      // than by drawing nothing, which is what a body with no geometry object
+      // means and is a different statement.
+      const outline = outlineOfData(
+        g.shape ?? { kind: "rect", w: ORPHAN_PLACEHOLDER, h: ORPHAN_PLACEHOLDER },
+      );
       this.mount(
         piece,
-        () => primitiveGeometry(outline, spec),
+        () => primitiveGeometry(outline, g, solid ? SOLID_DEFAULTS : DECOR_DEFAULTS),
         spec,
         defaultZ,
         // Decoration BEHIND the gameplay plane is backdrop and throws no shadow
         // across the level in front of it - the rule the retired background
         // layer had, kept because the reason is unchanged: a shadow is what
         // makes a shape read as an object in the scene rather than as a painted
-        // distance. Anything on or in front of the plane casts like an object.
-        defaultZ >= 0,
+        // distance. Anything on or in front of the plane casts like an object,
+        // and on a solid body that plane is the body's own - hook-only scenery
+        // sits a quarter-metre back and still casts, as it always has.
+        solid ? defaultZ >= solidZ : defaultZ >= 0,
       );
     }
 

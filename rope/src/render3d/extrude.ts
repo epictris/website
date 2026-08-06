@@ -1,8 +1,7 @@
-// Collision outline -> extruded solid. This is what makes the game look fully
-// 3D before any asset exists: a body with no authored visual is drawn as its own
-// collision geometry given depth, so what the player sees is exactly what they
-// collide with and a level author can ship a level without touching the visual
-// field at all.
+// Authored outline -> extruded solid. This is what makes the game look fully 3D
+// before any asset exists: a geometry object with no prop named on it is drawn
+// as its own outline given depth, so a level is fully 3D the moment it loads and
+// an author who wants a wall to look like a wall need only say how big it is.
 //
 // Three things about it are load-bearing, and each is a sign error away from
 // looking merely "broken" rather than wrong:
@@ -31,10 +30,12 @@ import type { Outline } from "../render/shapePath";
 // 24 is smooth at any zoom the camera reaches and costs nothing.
 const CIRCLE_SEGMENTS = 24;
 
-// Default edge break, metres. Small on purpose: it exists to catch a highlight
-// along an edge so a prop reads as a solid object rather than as a flat-shaded
-// slab, not to round the geometry off. ~2 authoring pixels.
-export const DEFAULT_BEVEL = 0.02;
+// NO EDGE BREAK BY DEFAULT. A bevel exists to catch a highlight along an edge so
+// a solid reads as an object rather than as a flat-shaded slab, and it is worth
+// having on a prop - but a level is boxes meeting boxes, and a chamfer on every
+// one of them softens exactly the corners its silhouette is made of. It is
+// authored per object (`GeometryObjectData.bevel`) where it earns its place.
+export const DEFAULT_BEVEL = 0;
 
 export interface ExtrudeOptions {
   // Total depth through z, INCLUDING the bevel: a 0.2 m slab is 0.2 m thick
@@ -124,6 +125,50 @@ function shapeOfOutline(o: Outline): THREE.Shape {
   return shape;
 }
 
+// A CIRCLE IS A CYLINDER, and gets three's own cylinder rather than its outline
+// extruded. The two are the same solid, and what differs is the shading: an
+// extruded 24-gon has one flat normal per facet, so a barrel lit from the side
+// reads as a faceted prism, while a cylinder's side normals point radially and
+// the highlight travels round it smoothly. It is also fewer triangles for the
+// same silhouette, since a cylinder needs no cap triangulation past its fan.
+//
+// The bevel is deliberately dropped here. It exists to catch a highlight along
+// an EDGE, and a cylinder's only edges are the two rims; chamfering those means
+// a second lathe and buys almost nothing on a shape the level views end-on.
+const CYLINDER_SEGMENTS = 48;
+
+export function cylinderSolid(radius: number, depth: number): THREE.BufferGeometry {
+  const geo = new THREE.CylinderGeometry(radius, radius, depth, CYLINDER_SEGMENTS, 1, false);
+  // UVs IN METRES, the same contract the extruder writes under - a texture has
+  // to tile at world scale whichever primitive it is on, or the same stone
+  // shows a different brick size on a wall and on the pillar beside it.
+  //
+  // Rewritten from three's own 0..1 UVs rather than derived from the positions,
+  // which is what keeps the seam right: the seam column is a DUPLICATED ring of
+  // vertices carrying u = 0 and u = 1, and an angle measured from a position
+  // gives both of them the same answer and wraps the last quad backwards over
+  // the whole texture.
+  const uv = geo.attributes.uv!;
+  const pos = geo.attributes.position!;
+  const nrm = geo.attributes.normal!;
+  const circumference = 2 * Math.PI * radius;
+  for (let i = 0; i < uv.count; i++) {
+    // Pre-rotation the caps face ±y and the walls point radially, so the normal
+    // says which of the two conventions this vertex is under.
+    if (Math.abs(nrm.getY(i)) > 0.5) {
+      // A cap is measured in the plane it is drawn in, exactly as the extruder's
+      // top-face UVs are: after the rotation below that plane is x/y.
+      uv.setXY(i, pos.getX(i), -pos.getZ(i));
+    } else {
+      uv.setXY(i, uv.getX(i) * circumference, pos.getY(i));
+    }
+  }
+  // Three's cylinder stands along y; the gameplay plane's solids run through z,
+  // centred on the plane - which is where the lathe already puts the middle.
+  geo.rotateX(Math.PI / 2);
+  return geo;
+}
+
 // An outline extruded into a solid centred on the gameplay plane, in three's
 // frame. The caller places it; nothing here knows where the body is.
 export function extrudeOutline(o: Outline, opts: ExtrudeOptions): THREE.ExtrudeGeometry {
@@ -134,7 +179,18 @@ export function extrudeOutline(o: Outline, opts: ExtrudeOptions): THREE.ExtrudeG
     bevelEnabled: bevel > 0,
     bevelThickness: bevel,
     bevelSize: bevel,
-    bevelOffset: 0,
+    // A CHAMFER OFF THE OUTLINE, not a swelling around it. Three's bevel runs
+    // from `bevelOffset` at the caps to `bevelOffset + bevelSize` at the middle,
+    // so the default 0 leaves the caps on the outline and pushes the middle
+    // `bevelSize` PAST it: every drawn solid stood 2 cm proud of the shape it was
+    // drawn from on all four sides, and a floor slab that is 2 cm taller than
+    // its collision box is a floor the ball visibly sinks into.
+    //
+    // Offset by -bevelSize instead and the middle lands exactly on the outline
+    // with the caps chamfered in, which is what a broken edge is: the solid is
+    // then contained by the shape it states, and a body drawn from its own
+    // collision outline touches what it collides with.
+    bevelOffset: -bevel,
     bevelSegments: 2,
     curveSegments: CIRCLE_SEGMENTS,
     steps: 1,

@@ -279,7 +279,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          }
         }
       ]
     },
@@ -301,7 +306,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
         }
       ]
     },
@@ -323,7 +333,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 950,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -345,7 +360,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -367,7 +387,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 170.00000000000003
+          }
         }
       ]
     },
@@ -389,7 +414,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 480.00000000000006
+          }
         }
       ]
     },
@@ -411,7 +441,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 880.0000000000001,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -433,7 +468,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
         }
       ]
     },
@@ -456,7 +496,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          }
         }
       ]
     },
@@ -479,7 +524,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 210
+          }
         }
       ]
     },
@@ -502,7 +552,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 430
+          }
         }
       ]
     },
@@ -527,7 +582,13 @@
         },
         {
           "type": "geometry",
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 420,
+            "h": 70
+          },
+          "depth": 100
         }
       ]
     },
@@ -552,7 +613,13 @@
         },
         {
           "type": "geometry",
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 260,
+            "h": 60.00000000000001
+          },
+          "depth": 100
         }
       ]
     },
@@ -578,7 +645,12 @@
           "type": "geometry",
           "z": -100,
           "depth": 300,
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 680.0000000000001,
+            "h": 200
+          }
         }
       ]
     },
@@ -603,7 +675,13 @@
         },
         {
           "type": "geometry",
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 1470
+          },
+          "depth": 100
         }
       ]
     },
@@ -626,7 +704,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 210
+          }
         }
       ]
     },
@@ -649,7 +732,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          }
         }
       ]
     },
@@ -671,7 +759,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
         }
       ]
     },
@@ -694,7 +787,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          }
         }
       ]
     },
@@ -717,7 +815,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          }
         }
       ]
     },
@@ -740,7 +843,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          }
         }
       ]
     },
@@ -763,7 +871,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 100,
+            "h": 10
+          }
         }
       ]
     },
@@ -786,7 +899,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 530.0000000000001
+          }
         }
       ]
     },
@@ -809,7 +927,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 70
+          }
         }
       ]
     },
@@ -831,7 +954,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 290.00000000000006,
+            "h": 180
+          }
         }
       ]
     },
@@ -857,7 +985,12 @@
           "type": "geometry",
           "z": -100,
           "depth": 300,
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 680.0000000000001
+          }
         }
       ]
     },
@@ -878,7 +1011,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
         }
       ]
     },
@@ -899,7 +1036,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
         }
       ]
     },
@@ -920,7 +1061,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
         }
       ]
     },
@@ -941,7 +1086,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 20
+          }
         }
       ]
     },
@@ -963,7 +1112,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          }
         }
       ]
     },
@@ -985,7 +1139,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 560,
+            "h": 10
+          }
         }
       ]
     },
@@ -1006,7 +1165,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 8
+          }
         }
       ]
     },
@@ -1028,7 +1191,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
         }
       ]
     },
@@ -1050,7 +1218,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
         }
       ]
     },
@@ -1072,7 +1245,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
         }
       ]
     },
@@ -1094,7 +1272,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 170.00000000000003,
+            "h": 10
+          }
         }
       ]
     },
@@ -1116,7 +1299,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 240.00000000000003,
+            "h": 930.0000000000001
+          }
         }
       ]
     },
@@ -1138,7 +1326,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 460.00000000000006,
+            "h": 950
+          }
         }
       ]
     },
@@ -1160,7 +1353,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -1182,7 +1380,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -1205,7 +1408,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 20
+          }
         }
       ]
     },
@@ -1228,7 +1436,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 850
+          }
         }
       ]
     },
@@ -1250,7 +1463,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 180
+          }
         }
       ]
     },
@@ -1272,7 +1490,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 20.000000000000018
+          }
         }
       ]
     },
@@ -1294,7 +1517,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10.000000000000142,
+            "h": 20.000000000000018
+          }
         }
       ]
     },
@@ -1317,7 +1545,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 230.00000000000003,
+            "h": 10
+          }
         }
       ]
     },
@@ -1340,7 +1573,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 270,
+            "h": 10
+          }
         }
       ]
     },
@@ -1362,7 +1600,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 79.99999999999972,
+            "h": 180.00000000000006
+          }
         }
       ]
     },
@@ -1385,7 +1628,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 20
+          }
         }
       ]
     },
@@ -1407,7 +1655,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 79.99999999999972,
+            "h": 529.9999999999999
+          }
         }
       ]
     },
@@ -1429,7 +1682,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 80.00000000000007,
+            "h": 529.9999999999999
+          }
         }
       ]
     },
@@ -1450,7 +1708,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1471,7 +1733,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1492,7 +1758,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1513,7 +1783,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1534,7 +1808,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1555,7 +1833,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1576,7 +1858,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1597,7 +1883,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1618,7 +1908,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1639,7 +1933,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1660,7 +1958,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -1682,7 +1984,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
         }
       ]
     },
@@ -1704,7 +2011,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
         }
       ]
     },
@@ -1729,7 +2041,13 @@
         },
         {
           "type": "geometry",
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 180
+          },
+          "depth": 100
         }
       ]
     },
@@ -1756,7 +2074,12 @@
           "y": -14.999999999999947,
           "kind": "mesh",
           "mesh": "yellow_barrel",
-          "scale": 0.01
+          "scale": 0.01,
+          "shape": {
+            "kind": "rect",
+            "w": 57.99999999999999,
+            "h": 87
+          }
         }
       ]
     },
@@ -1779,7 +2102,13 @@
           "thickness": 50
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 20
+          },
+          "depth": 50
         }
       ]
     },
@@ -1806,7 +2135,12 @@
           "y": -15.000000000000036,
           "kind": "mesh",
           "mesh": "yellow_barrel",
-          "scale": 0.01
+          "scale": 0.01,
+          "shape": {
+            "kind": "rect",
+            "w": 57.99999999999999,
+            "h": 87
+          }
         }
       ]
     },
@@ -1828,7 +2162,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 40
+          }
         }
       ]
     },
@@ -1849,7 +2188,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 30.000000000000004
+          }
         }
       ]
     },
@@ -1873,7 +2216,13 @@
           "material": "stone"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 580.0000000000001,
+            "h": 50
+          },
+          "texture": "stone"
         }
       ]
     },
@@ -1898,7 +2247,13 @@
         {
           "type": "geometry",
           "z": -100,
-          "depth": 300
+          "depth": 300,
+          "shape": {
+            "kind": "rect",
+            "w": 2500,
+            "h": 100
+          },
+          "texture": "stone"
         }
       ]
     },
@@ -1922,7 +2277,13 @@
         },
         {
           "type": "geometry",
-          "texture": "rock wall"
+          "texture": "rock wall",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 30.000000000000004
+          },
+          "depth": 100
         }
       ]
     },
@@ -1945,7 +2306,12 @@
         },
         {
           "type": "geometry",
-          "texture": "steel"
+          "texture": "steel",
+          "shape": {
+            "kind": "rect",
+            "w": 350,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -1968,7 +2334,12 @@
         },
         {
           "type": "geometry",
-          "texture": "steel"
+          "texture": "steel",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -2043,7 +2414,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 90,
+            "h": 70
+          }
         }
       ]
     },
@@ -2065,7 +2441,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 70
+          }
         }
       ]
     },
@@ -2088,7 +2469,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 580.0000000000001,
+            "h": 50
+          }
         },
         {
           "type": "anchor",
@@ -2116,7 +2502,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10
+          }
         }
       ]
     },
@@ -2138,7 +2529,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
         }
       ]
     },
@@ -2160,7 +2556,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          }
         }
       ]
     },
@@ -2182,7 +2583,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 10
+          }
         }
       ]
     },
@@ -2204,7 +2610,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2226,7 +2637,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2248,7 +2664,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2270,7 +2691,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2292,7 +2718,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2314,7 +2745,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2336,7 +2772,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2358,7 +2799,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2380,7 +2826,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2402,7 +2853,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2424,7 +2880,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 30.000000000000004
+          }
         }
       ]
     },
@@ -2446,7 +2907,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 1780,
+            "h": 310
+          }
         }
       ]
     },
@@ -2468,7 +2934,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.000000000000004,
+            "h": 20
+          }
         }
       ]
     },
@@ -2490,7 +2961,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          }
         }
       ]
     },
@@ -2512,7 +2988,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
         }
       ]
     },
@@ -2534,7 +3015,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 40
+          }
         }
       ]
     },
@@ -2556,7 +3042,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 10
+          }
         }
       ]
     },
@@ -2579,7 +3070,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 40
+          }
         }
       ]
     },
@@ -2601,7 +3097,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 340.00000000000006,
+            "h": 710
+          }
         }
       ]
     },
@@ -2624,7 +3125,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 10
+          }
         }
       ]
     },
@@ -2646,7 +3152,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -2668,7 +3179,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -2693,9 +3209,13 @@
         },
         {
           "type": "geometry",
-          "y": -3.000000000000025,
           "z": -100,
-          "depth": 300
+          "depth": 300,
+          "shape": {
+            "kind": "rect",
+            "w": 2430,
+            "h": 40
+          }
         }
       ]
     },
@@ -2719,7 +3239,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 284,
+            "h": 40
+          }
         }
       ]
     },
@@ -2740,7 +3265,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -2761,7 +3290,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -2782,7 +3315,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 5
+          }
         }
       ]
     },
@@ -2805,7 +3342,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 330,
+            "h": 50
+          }
         }
       ]
     },
@@ -2828,7 +3370,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 130
+          }
         }
       ]
     },
@@ -2851,7 +3398,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 70
+          }
         }
       ]
     },
@@ -2873,7 +3425,11 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 35
+          }
         }
       ]
     },
@@ -2895,7 +3451,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 350,
+            "h": 890
+          }
         }
       ]
     },
@@ -2917,7 +3478,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 369.99999999999994,
+            "h": 20.000000000000004
+          }
         }
       ]
     },
@@ -2940,7 +3506,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 70
+          }
         }
       ]
     },
@@ -2961,7 +3532,11 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "circle",
+            "r": 35
+          }
         }
       ]
     },
@@ -2984,7 +3559,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 60.00000000000001,
+            "h": 950
+          }
         }
       ]
     },
@@ -3007,7 +3587,12 @@
           "impermeable": true
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 380
+          }
         }
       ]
     },
@@ -3029,7 +3614,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
         }
       ]
     },
@@ -3051,7 +3641,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
         }
       ]
     },
@@ -3073,7 +3668,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 80
+          }
         }
       ]
     },
@@ -3095,7 +3695,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 160,
+            "h": 10
+          }
         }
       ]
     },
@@ -3117,7 +3722,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 190,
+            "h": 10
+          }
         }
       ]
     },
@@ -3139,7 +3749,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 90,
+            "h": 10
+          }
         },
         {
           "type": "anchor",
@@ -3245,7 +3860,90 @@
           "material": "cast iron"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 10
+          },
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "x": -114.99999999999953,
+          "y": -55.00000000000001,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "x": 4.999999999998137,
+          "y": -54.999999999999346,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 80,
+            "h": 10
+          },
+          "x": -160,
+          "y": -89.99999999999997,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 10
+          },
+          "x": -55.000000000001194,
+          "y": -89.99999999999963,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000001,
+            "h": 10
+          },
+          "x": 64.99999999999886,
+          "y": -89.99999999999977,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "x": 124.9999999999983,
+          "y": -54.99999999999936,
+          "texture": "cast iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 70,
+            "h": 10
+          },
+          "x": 164.99999999999923,
+          "y": -89.99999999999964,
+          "texture": "cast iron"
         },
         {
           "type": "anchor",
@@ -3279,7 +3977,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          }
         }
       ]
     },
@@ -3301,7 +4004,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 30.00000000000007,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -3323,7 +4031,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 10
+          }
         }
       ]
     },
@@ -3345,7 +4058,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 210,
+            "h": 10
+          }
         },
         {
           "type": "anchor",
@@ -3374,7 +4092,13 @@
           "material": "cast iron"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "texture": "cast iron"
         }
       ]
     },
@@ -3396,7 +4120,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -3419,7 +4148,13 @@
           "material": "cast iron"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 100
+          },
+          "texture": "cast iron"
         }
       ]
     },
@@ -3441,7 +4176,12 @@
           }
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 10.000000000000009
+          }
         }
       ]
     },
@@ -3464,7 +4204,13 @@
           "material": "cast iron"
         },
         {
-          "type": "geometry"
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 10
+          },
+          "texture": "cast iron"
         }
       ]
     },
@@ -3834,7 +4580,12 @@
           "mesh": "bulkhead-lamp",
           "rotX": 1.5707963267948966,
           "emissive": "#ffb066",
-          "emissiveIntensity": 1.5
+          "emissiveIntensity": 1.5,
+          "shape": {
+            "kind": "rect",
+            "w": 29.999999999999893,
+            "h": 10
+          }
         },
         {
           "type": "light",
@@ -4035,7 +4786,12 @@
           "mesh": "bulkhead-lamp",
           "rotX": 1.5707963267948966,
           "emissive": "#ffb066",
-          "emissiveIntensity": 1.5
+          "emissiveIntensity": 1.5,
+          "shape": {
+            "kind": "rect",
+            "w": 29.999999999999893,
+            "h": 10
+          }
         },
         {
           "type": "light",
@@ -4113,7 +4869,12 @@
           "mesh": "bulkhead-lamp",
           "rotX": 1.5707963267948966,
           "emissive": "#ffb066",
-          "emissiveIntensity": 1.5
+          "emissiveIntensity": 1.5,
+          "shape": {
+            "kind": "rect",
+            "w": 29.999999999999893,
+            "h": 10
+          }
         },
         {
           "type": "light",

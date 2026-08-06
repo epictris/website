@@ -19,6 +19,7 @@ import {
   bodyMembers,
   halfExtents,
   isArrowNote,
+  collidingBodyIds,
   itemDepth,
   NOTE_COLOR,
   toWorld,
@@ -757,13 +758,32 @@ export function drawEditor(
   // Back to front by the same depth the game draws (and a click selects) by, so
   // the panel on top on screen is the panel on top everywhere. `sort` is stable,
   // so decoration at one depth keeps its authored order.
+  // Whether an object's BODY collides, which decides both how deep it is drawn
+  // and whether its fill is drawn here at all. Computed once for the model
+  // rather than per item, since this covers the whole geometry layer.
+  const collidingBodies = collidingBodyIds(model.items);
+  const depth = (i: EdItem) => itemDepth(i, collidingBodies.has(i.bodyId));
   const decor = (
     visibleLayers.has("scene")
       ? model.items.filter((i) => i.object === "geometry")
       : []
-  ).sort((a, b) => itemDepth(a) - itemDepth(b));
+  ).sort((a, b) => depth(a) - depth(b));
   for (const g of decor) {
-    fillDecor(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
+    // FILLED ONLY WHERE NOTHING ELSE FILLS IT, which is the rule the game's 2D
+    // view is drawn under (`collectDecor`): a body that collides has a primitive
+    // per collision shape, stating the same outline in the same place, and this
+    // canvas already fills that outline as the body. Painting it twice darkens
+    // every wall in the editor by its own opacity - and shows the author a level
+    // that is not what plays.
+    //
+    // The dashed teal edge below is drawn either way, so the object is still
+    // visible, still clickable and still says where its 3D form is: one that has
+    // been resized or moved off its collision shape reads as exactly that, an
+    // outline with no fill of its own standing away from the solid.
+    const paintedByBody = collidingBodies.has(g.bodyId) && depth(g) === 0;
+    if (!paintedByBody) {
+      fillDecor(ctx, g.pos, g.rot, outlineOf(g), paint(hexToRgba(g.color, g.opacity)));
+    }
     if (selectedIds.has(g.id)) {
       pathBody(ctx, g);
       ctx.strokeStyle = SELECT;
@@ -902,19 +922,18 @@ export function drawEditor(
   }
 
   // What the 3D renderer will do with a shape, marked on the 2D view - which
-  // cannot otherwise show it at all. Only the two kinds that are NOT what the
-  // shape looks like are marked: `mesh` (a prop stands in for this outline) and
-  // `none` (nothing is drawn here at all, an invisible wall). `auto` is the
-  // default and is exactly the shape as drawn, so a badge on it would be a mark
-  // on almost every body saying nothing.
+  // cannot otherwise show it at all. Only `mesh` is marked, since that is the
+  // one kind whose outline is NOT what the player sees: a prop stands in for it.
+  // A primitive is drawn as exactly the shape on screen, so a badge on it would
+  // be a mark on almost every object saying nothing.
   for (const body of [...(visibleLayers.has("scene") ? geometry : []), ...decor]) {
     const kind = body.visual.kind;
-    if (kind === "auto") continue;
+    if (kind !== "mesh") continue;
     const r = 6 * PX;
     ctx.lineWidth = worldLine * 1.5;
     ctx.strokeStyle = VISUAL_BADGE;
     ctx.beginPath();
-    if (kind === "mesh") {
+    {
       // A cube seen in three-quarter: the mark for "a prop is drawn here".
       ctx.rect(body.pos.x - r, body.pos.y - r, r * 2, r * 2);
       ctx.moveTo(body.pos.x - r, body.pos.y - r);
@@ -924,11 +943,6 @@ export function drawEditor(
       ctx.moveTo(body.pos.x + r, body.pos.y + r);
       ctx.lineTo(body.pos.x + r * 1.6, body.pos.y + r * 0.4);
       ctx.lineTo(body.pos.x + r * 1.6, body.pos.y - r * 1.6);
-    } else {
-      // A struck-through ring: "solid, and drawn by nothing".
-      ctx.arc(body.pos.x, body.pos.y, r, 0, Math.PI * 2);
-      ctx.moveTo(body.pos.x - r * 0.71, body.pos.y + r * 0.71);
-      ctx.lineTo(body.pos.x + r * 0.71, body.pos.y - r * 0.71);
     }
     ctx.stroke();
   }
