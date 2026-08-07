@@ -38,7 +38,7 @@
       "objects": [
         {
           "type": "light",
-          "z": 170.00000000000003,
+          "z": 280,
           "color": "#ffdab8",
           "intensity": 20,
           "range": 1200,
@@ -73,7 +73,7 @@
             "h": 800
           },
           "z": -50,
-          "depth": 2000,
+          "depth": 300,
           "texture": "rock wall"
         }
       ]
@@ -102,7 +102,7 @@
     {
       "kind": "static",
       "x": 770.0000000000002,
-      "y": 360,
+      "y": 380.0000000000002,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -125,7 +125,7 @@
           },
           "matchCollision": true,
           "z": -50,
-          "depth": 1790.0000000000002,
+          "depth": 300,
           "texture": "rock wall"
         }
       ]
@@ -331,7 +331,7 @@
           },
           "matchCollision": true,
           "z": -50,
-          "depth": 2000,
+          "depth": 290.00000000000006,
           "texture": "rock wall"
         }
       ]

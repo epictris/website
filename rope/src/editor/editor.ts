@@ -793,6 +793,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     refreshFields();
   }
 
+  // Where an item's handles stand in z: the depth the thing they are attached to
+  // is DRAWN at, which is the only place a handle may be.
+  //
+  // `itemDepth` answers for a geometry object - including the `DECOR_Z` fallback
+  // a body that collides with nothing draws at - and answers 0 for a LIGHT,
+  // deliberately: it is the pick order's rule, and a light is picked by the burst
+  // on the plane rather than by where it hangs in z. Read as a depth, that 0 put
+  // the whole gizmo on the gameplay plane while the light was lit at `light.z`,
+  // and since a translate drag writes the proxy's z straight onto the field, a
+  // light's z was re-based to the drag's own displacement every time - so an
+  // arrow dragged twice the same way left it exactly where the first drag had
+  // put it, and a press on any other handle set it to zero.
+  const handleZ = (it: EdItem): number =>
+    it.object === "light" ? it.light.z : itemDepth(it, bodyCollides(it.bodyId));
+
   // The item the handles are on, resolved by id every time rather than held:
   // undo and redo replace the model wholesale, so a captured object is a stale
   // one the moment a drag is undone.
@@ -811,14 +826,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         const it = find();
         if (!it) return { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
         return {
-          // `itemDepth` rather than `depthOf`, because the handles have to sit
-          // on the thing they move and that is decided by the BODY: a geometry
-          // object with no authored `offsetZ` is drawn on the plane if its body
-          // collides and at `DECOR_Z` if it does not. Read as a plain 0, the
-          // whole gizmo stood 35 cm in front of every piece of decoration it was
-          // attached to - invisible head on, and the first thing you see when
-          // the view is turned, which is the view it exists for.
-          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), itemDepth(it, bodyCollides(it.bodyId))),
+          // `handleZ` rather than the authored field, because the handles have
+          // to sit on the thing they move and that is decided by the BODY: a
+          // geometry object with no authored `offsetZ` is drawn on the plane if
+          // its body collides and at `DECOR_Z` if it does not. Read as a plain
+          // 0, the whole gizmo stood 35 cm in front of every piece of decoration
+          // it was attached to - invisible head on, and the first thing you see
+          // when the view is turned, which is the view it exists for.
+          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), handleZ(it)),
           quat: itemQuat(it),
         };
       },
@@ -864,7 +879,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // which would stamp that default into the file the first time a
           // backdrop was nudged sideways, an edit nobody asked for that turns a
           // fallback into an authored number.
-          z: itemDepth(it, bodyCollides(it.bodyId)),
+          z: handleZ(it),
           offsetZ: it.visual.offsetZ,
         };
       },
@@ -875,6 +890,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           it.pos = new Vec2(pos.x, threeY(pos.y));
           if (it.object === "geometry" && base) {
             it.visual.offsetZ = base.offsetZ + (pos.z - base.z);
+            // A light's field is written outright rather than as a change, and
+            // may be: `light.z` is always a concrete number in the model, so
+            // `handleZ` starts the proxy exactly there and there is no fallback
+            // for a drag to stamp into the file.
           } else if (it.object === "light") it.light.z = pos.z;
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
