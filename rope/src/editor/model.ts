@@ -271,6 +271,15 @@ export interface EdItem {
   // that goes through the editor untouched comes back with the same ids it went
   // in with - the id is content, not a handle. 0 on everything else.
   anchorId: number;
+  // Geometry objects only: the item id of the COLLISION object in this body
+  // whose outline this one mirrors, 0 for none. While set, the editor keeps the
+  // two outlines - `pos`, `rot` and `shape` - equal in BOTH directions
+  // (`syncMatchedOutlines`), so resizing either resizes both; this is the
+  // standing form of the "match the collision shape" edit the
+  // collision/geometry decoupling priced in. Editor-local like every item id:
+  // the file records only `GeometryObjectData.matchCollision`, and the partner
+  // is re-found at load by the identical outline the link itself guarantees.
+  matchId: number;
 }
 
 // How far toward the camera this item is drawn, in metres - the editor's side of
@@ -741,7 +750,11 @@ function fromLevelData(data: LevelData): EdModel {
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      matchId: 0,
     };
+    // Geometry objects whose file says they mirror a collision sibling; the
+    // partner is resolved once the whole body is in, below.
+    const matched: EdItem[] = [];
     for (const o of b.objects) {
       const w = worldPlacement(b, o);
       if (isCollisionObject(o)) {
@@ -760,7 +773,7 @@ function fromLevelData(data: LevelData): EdModel {
         continue;
       }
       if (isGeometryObject(o)) {
-        bodies.push({
+        const g: EdItem = {
           ...base,
           id: newBodyId(),
           object: "geometry",
@@ -781,7 +794,9 @@ function fromLevelData(data: LevelData): EdModel {
           color: o.color ?? base.color,
           opacity: o.opacity ?? base.opacity,
           visual: edVisual(o),
-        });
+        };
+        bodies.push(g);
+        if (o.matchCollision === true) matched.push(g);
         continue;
       }
       if (isAnchorObject(o)) {
@@ -804,7 +819,23 @@ function fromLevelData(data: LevelData): EdModel {
       }
       bodies.push(lightItem(o, w.pos, w.rot, bodyId));
     }
-    itemOfBody.push(bodies.slice(firstOfBody).find((i) => i.object === "collision") ?? null);
+    // Re-tie each matched geometry object to its collision partner. The link's
+    // own invariant means an editor-written file always holds an EXACT twin, so
+    // the outline is the identity and no index is stored to go stale. A
+    // hand-edited file may have let them drift: with one collision object the
+    // intent is unambiguous, so the geometry snaps back onto it; with several
+    // there is nothing safe to guess and the link is dropped rather than tied
+    // to a piece nobody chose.
+    const made = bodies.slice(firstOfBody);
+    const collisions = made.filter((i) => i.object === "collision");
+    for (const g of matched) {
+      const exact = collisions.find((c) => outlinesEqual(c, g));
+      const target = exact ?? (collisions.length === 1 ? collisions[0]! : undefined);
+      if (!target) continue;
+      g.matchId = target.id;
+      if (!exact) copyMatchedOutline(target, g);
+    }
+    itemOfBody.push(made.find((i) => i.object === "collision") ?? null);
   }
 
   const regions: EdItem[] = (data.cameraRegions ?? []).map((r) => ({
@@ -843,6 +874,7 @@ function fromLevelData(data: LevelData): EdModel {
     light: defaultLight(),
     note: defaultNote(),
     anchorId: 0,
+    matchId: 0,
   }));
 // One light OBJECT as the editor item that edits it. The lights layer is a view
 // over light objects wherever they live rather than a list of its own: a light
@@ -891,6 +923,7 @@ function lightItem(
     },
     note: defaultNote(),
     anchorId: 0,
+    matchId: 0,
   };
 }
 
@@ -917,6 +950,7 @@ function lightItem(
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
+    matchId: 0,
     note: {
       kind: n.kind,
       text: n.text ?? "",
@@ -1148,6 +1182,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         ...look,
         ...localOf(i),
         shape: shapeOf(i),
+        // Written only while the partner is still a collision object in this
+        // body, so a stale link an edit has not yet pruned cannot reach disk.
+        ...(i.matchId !== 0 && run.some((m) => m.id === i.matchId && m.object === "collision")
+          ? { matchCollision: true }
+          : {}),
         ...(ownFill ? { color: i.color, opacity: i.opacity } : {}),
       });
     }
@@ -1749,6 +1788,102 @@ export function syncBodyProps(members: readonly EdItem[]): void {
   }
 }
 
+// --- matched outlines -------------------------------------------------------
+
+// Do two items state the SAME outline - position, rotation and shape? It is the
+// identity a matched pair is resolved by at load, so it takes an epsilon: the
+// editor writes the pair byte-equal, but a hand-edited file is allowed a
+// rounding error without silently losing its link.
+export function outlinesEqual(a: EdItem, b: EdItem, eps = 1e-9): boolean {
+  if (Math.abs(a.pos.x - b.pos.x) > eps || Math.abs(a.pos.y - b.pos.y) > eps) return false;
+  if (Math.abs(a.rot - b.rot) > eps) return false;
+  const s = a.shape;
+  const t = b.shape;
+  if (s.kind === "rect" && t.kind === "rect")
+    return Math.abs(s.w - t.w) <= eps && Math.abs(s.h - t.h) <= eps;
+  if (s.kind === "circle" && t.kind === "circle") return Math.abs(s.r - t.r) <= eps;
+  if (s.kind === "poly" && t.kind === "poly")
+    return (
+      s.verts.length === t.verts.length &&
+      s.verts.every(
+        (v, i) => Math.abs(v.x - t.verts[i]!.x) <= eps && Math.abs(v.y - t.verts[i]!.y) <= eps,
+      )
+    );
+  return false;
+}
+
+// Write one item's outline onto the other - the whole of what a matched pair
+// shares. The shape is cloned, never aliased: both sides' shapes are mutated in
+// place by every resize path, and a shared object would turn "kept equal" into
+// "secretly one shape", which no edit could ever diverge again.
+export function copyMatchedOutline(from: EdItem, to: EdItem): void {
+  to.pos = new Vec2(from.pos.x, from.pos.y);
+  to.rot = from.rot;
+  to.shape = cloneShape(from.shape);
+}
+
+// An item's outline as one comparable string - what `syncMatchedOutlines` uses
+// to tell WHICH side of a pair an edit touched. The bodyId is in it so a
+// membership change reads as a change too.
+function outlineSig(i: EdItem): string {
+  const s = i.shape;
+  const shape =
+    s.kind === "rect"
+      ? `r${s.w},${s.h}`
+      : s.kind === "circle"
+        ? `c${s.r}`
+        : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
+  return `${i.pos.x},${i.pos.y},${i.rot},${i.bodyId}|${shape}`;
+}
+
+// Keep every matched pair's outlines equal, in whichever direction the last
+// edit went. Called from the editor's one dirty funnel (`markDirty`), so every
+// edit path - inspector field, corner handle, gizmo, nudge, vertex drag - flows
+// through it without knowing the link exists.
+//
+// `sigs` is the caller's memory of each linked item's outline as of the last
+// sync: the side that differs from its record is the side that was edited, and
+// the other side follows it. Both differing means they moved together (a body
+// drag) or the model was replaced wholesale (undo, load) - in either case the
+// pair is already consistent, and the collision side leads if it somehow is
+// not, since collision is what the level PLAYS as. A link whose partner is
+// gone, is not a collision object, or has left the body is dropped here, which
+// is what lets Delete and Split not know about it either.
+//
+// The pass repeats until nothing moves (two geometry objects may mirror one
+// collision shape, so a copy can make a second pair stale); it converges
+// because every copy makes two outlines equal and none makes any unequal.
+export function syncMatchedOutlines(model: EdModel, sigs: Map<number, string>): void {
+  const byId = new Map(model.items.map((i) => [i.id, i]));
+  const pairs: Array<[EdItem, EdItem]> = [];
+  for (const g of model.items) {
+    if (g.object !== "geometry" || g.matchId === 0) continue;
+    const c = byId.get(g.matchId);
+    if (!c || c.object !== "collision" || c.bodyId !== g.bodyId) {
+      g.matchId = 0;
+      continue;
+    }
+    pairs.push([g, c]);
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (const [g, c] of pairs) {
+      if (outlineSig(g) === outlineSig(c)) continue;
+      const gEdited = sigs.get(g.id) !== outlineSig(g);
+      const cEdited = sigs.get(c.id) !== outlineSig(c);
+      const lead = gEdited && !cEdited ? g : c;
+      copyMatchedOutline(lead, lead === g ? c : g);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  sigs.clear();
+  for (const [g, c] of pairs) {
+    sigs.set(g.id, outlineSig(g));
+    sigs.set(c.id, outlineSig(c));
+  }
+}
+
 // --- chains -----------------------------------------------------------------
 
 export function cloneChain(c: EdChain): EdChain {
@@ -1840,6 +1975,7 @@ export function emptyModel(): EdModel {
         light: defaultLight(),
         note: defaultNote(),
         anchorId: 0,
+        matchId: 0,
       },
     ],
   };

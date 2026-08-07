@@ -245,6 +245,17 @@ export interface GeometryObjectData extends ObjectPlacement {
   // body that authors no look, which is a different statement with its own
   // spelling (no geometry object).
   shape?: ShapeData;
+  // This primitive MIRRORS a collision object in its own body: the editor keeps
+  // its `shape`, placement and `rot` equal to that piece's, in both directions,
+  // so resizing either resizes both. It is the standing form of the "match the
+  // collision shape" edit the decoupling priced in ("a wall widened after it is
+  // dressed is widened twice") - a LINK, not a fallback: the outline is still
+  // stated here in full, and the game and every loader read it exactly as they
+  // read an unlinked one. The partner is not named - the editor re-finds the
+  // collision object with the identical outline at load, which the link's own
+  // invariant guarantees exists - so there is no index to go stale when a
+  // body's objects are reordered.
+  matchCollision?: boolean;
   // Depth placement, as an OFFSET from the body's own `z` (which is 0 unless
   // the body says otherwise). Positive is toward the camera. Absent = the
   // body's own plane for a body with collision, and a little behind it for
@@ -1556,6 +1567,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
     ...(o.kind !== undefined ? { kind: o.kind } : {}),
     ...(o.mesh !== undefined ? { mesh: o.mesh } : {}),
     ...(o.shape !== undefined ? { shape: scaleShape(o.shape, factor) } : {}),
+    // A link to a sibling, not a length.
+    ...(o.matchCollision !== undefined ? { matchCollision: o.matchCollision } : {}),
     ...(o.z !== undefined ? { z: o.z * factor } : {}),
     // Rotations about the two off-plane axes, and a dimensionless multiplier of
     // a model's own size. None of them is a length.

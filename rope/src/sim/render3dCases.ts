@@ -65,7 +65,13 @@ import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
 import { World } from "../engine/world";
 import { buildLevelBodies, localPlacement, worldPlacement } from "../level/buildBodies";
-import { modelFromDisk, modelToDisk, toLevelData, type EdItem } from "../editor/model";
+import {
+  modelFromDisk,
+  modelToDisk,
+  toLevelData,
+  syncMatchedOutlines,
+  type EdItem,
+} from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
 import { PIXELS_PER_METER, PX } from "../engine/units";
@@ -875,6 +881,156 @@ function editorRoundTrip(): CaseResult[] {
       detail: stayedBare
         ? "one collision object, nothing added"
         : `wrote ${JSON.stringify(reopened.bodies[0]!.objects)}`,
+    },
+  ];
+}
+
+// The MATCHED-OUTLINE link (`GeometryObjectData.matchCollision`): a geometry
+// object the editor keeps outline-equal to a collision sibling, in both
+// directions, so resizing either resizes both - the standing form of the "match
+// the collision shape" edit the collision/geometry decoupling priced in.
+//
+// Everything here is the half no picture can see. The link is editor state: a
+// level renders identically with or without it, so a save that drops the flag,
+// a load that ties it to the wrong piece, or a sync that stops propagating all
+// leave a level that looks right and quietly stops staying in step - which is
+// exactly the double-edit pain the feature exists to remove, back again with a
+// checkbox claiming otherwise.
+function matchedOutline(): CaseResult[] {
+  const level = (objects: SceneObjectData[]): RawLevelData => ({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        color: "#555555",
+        opacity: 0.5,
+        friction: 1,
+        objects,
+      },
+    ],
+  });
+
+  // A pair already in step survives the editor round trip byte-identical, flag
+  // included - the same trip every other field is held to, since the editor
+  // rewrites the file every 750 ms.
+  const paired = level([
+    { type: "collision", shape: { kind: "rect", w: 80, h: 40 }, x: 10, y: -20, rot: 0.25 },
+    {
+      type: "geometry",
+      shape: { kind: "rect", w: 80, h: 40 },
+      x: 10,
+      y: -20,
+      rot: 0.25,
+      matchCollision: true,
+    },
+  ]);
+  const a = flattened(scaleLevelData(paired, 1));
+  const b = flattened(scaleLevelData(modelToDisk(modelFromDisk(paired)), 1));
+
+  // A hand-edited file whose halves have DRIFTED: with one collision object the
+  // intent is unambiguous, so the load snaps the look back onto the shape - the
+  // collision outline is what the level plays as - rather than dropping the
+  // link or, worse, keeping a "matched" pair that is not.
+  const drifted = level([
+    { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
+    { type: "geometry", shape: { kind: "rect", w: 120, h: 40 }, x: 15, matchCollision: true },
+  ]);
+  const snappedBodies = modelToDisk(modelFromDisk(drifted)).bodies[0]!.objects;
+  const snapped =
+    JSON.stringify(snappedBodies) ===
+    JSON.stringify([
+      { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
+      { type: "geometry", shape: { kind: "rect", w: 80, h: 40 }, matchCollision: true },
+    ]);
+
+  // ...but with SEVERAL collision objects and no exact twin there is nothing
+  // safe to guess, so the link is dropped rather than tied to a piece nobody
+  // chose - and the geometry keeps the outline it authored.
+  const ambiguous = level([
+    { type: "collision", shape: { kind: "rect", w: 80, h: 40 } },
+    { type: "collision", shape: { kind: "rect", w: 60, h: 40 }, x: 200 },
+    { type: "geometry", shape: { kind: "rect", w: 50, h: 50 }, x: 90, matchCollision: true },
+  ]);
+  const ambiguousGeo = modelToDisk(modelFromDisk(ambiguous))
+    .bodies[0]!.objects.find(isGeometryObject)!;
+  const dropped =
+    ambiguousGeo.matchCollision === undefined &&
+    ambiguousGeo.shape?.kind === "rect" &&
+    ambiguousGeo.shape.w === 50;
+
+  // The flag means nothing in a body with no collision object at all, and a
+  // meaningless field must not reach disk.
+  const aloneGeo = modelToDisk(
+    modelFromDisk(level([{ type: "geometry", shape: { kind: "rect", w: 80, h: 40 }, matchCollision: true }])),
+  ).bodies[0]!.objects.find(isGeometryObject)!;
+  const droppedAlone = aloneGeo.matchCollision === undefined;
+
+  // The live sync, in BOTH directions - the half the round trips cannot see.
+  // Which side an edit touched is what `syncMatchedOutlines` works out from the
+  // signatures of the last sync, so the seed pass comes first, exactly as the
+  // editor's dirty funnel runs it.
+  const model = modelFromDisk(paired);
+  const sigs = new Map<number, string>();
+  syncMatchedOutlines(model, sigs);
+  const g = model.items.find((i) => i.object === "geometry")!;
+  const c = model.items.find((i) => i.object === "collision")!;
+  if (c.shape.kind === "rect") c.shape.w = 2;
+  syncMatchedOutlines(model, sigs);
+  const followedCollision = g.shape.kind === "rect" && g.shape.w === 2;
+  g.rot = 1.5;
+  g.pos = new Vec2(3, -1);
+  syncMatchedOutlines(model, sigs);
+  const followedGeometry = c.rot === 1.5 && c.pos.x === 3 && c.pos.y === -1;
+  // A link whose partner is gone is dropped, which is what lets Delete not
+  // know the link exists.
+  model.items = model.items.filter((i) => i !== c);
+  syncMatchedOutlines(model, sigs);
+  const pruned = g.matchId === 0;
+
+  return [
+    {
+      name: "editor: a matched pair saves back byte-identical, link included",
+      pass: a === b,
+      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  saved    ${b}`,
+    },
+    {
+      name: "editor: a drifted matched pair snaps onto its collision shape at load",
+      pass: snapped,
+      detail: snapped
+        ? "geometry back on the collision outline, link kept"
+        : `wrote ${JSON.stringify(snappedBodies)}`,
+    },
+    {
+      name: "editor: an ambiguous match is dropped rather than guessed",
+      pass: dropped,
+      detail: dropped
+        ? "link dropped, authored outline kept"
+        : `wrote ${JSON.stringify(ambiguousGeo)}`,
+    },
+    {
+      name: "editor: matchCollision in a body with no collision object is not written",
+      pass: droppedAlone,
+      detail: droppedAlone ? "flag dropped" : `wrote ${JSON.stringify(aloneGeo)}`,
+    },
+    {
+      name: "editor: resizing the collision shape resizes its matched geometry",
+      pass: followedCollision,
+      detail: followedCollision ? "w followed" : `geometry shape ${JSON.stringify(g.shape)}`,
+    },
+    {
+      name: "editor: moving the matched geometry moves its collision shape",
+      pass: followedGeometry,
+      detail: followedGeometry
+        ? "pos and rot followed"
+        : `collision at ${c.pos.x},${c.pos.y} rot ${c.rot}`,
+    },
+    {
+      name: "editor: a match whose partner is deleted is dropped",
+      pass: pruned,
+      detail: pruned ? "matchId cleared" : `matchId still ${g.matchId}`,
     },
   ];
 }
@@ -1954,6 +2110,7 @@ export function runRender3dCases(): CaseResult[] {
     ...surfaceResolution(),
     ...visualRoundTrip(),
     ...editorRoundTrip(),
+    ...matchedOutline(),
     ...pickIndex(),
     ...lightRoundTrip(),
     ...lightRidesBody(),

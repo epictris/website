@@ -79,6 +79,9 @@ import {
   setPolyVerts,
   scaleShape,
   syncBodyProps,
+  syncMatchedOutlines,
+  copyMatchedOutline,
+  outlinesEqual,
   toWorld,
   visualData,
   type EdChain,
@@ -1000,7 +1003,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     gizmo.follow();
   }
 
+  // Each matched item's outline as of the last sync, which is how
+  // `syncMatchedOutlines` tells which side of a pair an edit touched. Held here
+  // rather than on the model because it is edit-session memory, not level
+  // content: an undo restores the items and the next sync re-reads them.
+  const matchedSigs = new Map<number, string>();
+
   function markDirty(): void {
+    // Before the rev moves: the scene is rebuilt from the model, so a matched
+    // partner has to be brought up to date before anything reads it.
+    syncMatchedOutlines(model, matchedSigs);
     dirty = true;
     modelRev++;
     scheduleAutosave();
@@ -2165,6 +2177,67 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
+  // The standing "match the collision shape" link (see `EdItem.matchId`): while
+  // ticked, this geometry object's outline and its collision partner's are kept
+  // equal in both directions, so resizing or moving either does both. Offered
+  // only where a partner exists to link to - decoration in a body with no
+  // collision object has nothing to match.
+  function addMatchField(g: HTMLElement, items: EdItem[]): void {
+    const linkable = items.filter(
+      (b) =>
+        b.layer === "scene" &&
+        b.object === "geometry" &&
+        bodyMembers(model.items, b.bodyId).some((m) => m.object === "collision"),
+    );
+    if (!linkable.length) return;
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = linkable.every((b) => b.matchId !== 0);
+    box.indeterminate = !box.checked && linkable.some((b) => b.matchId !== 0);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of linkable) {
+        if (!box.checked) {
+          b.matchId = 0;
+          continue;
+        }
+        const target = matchTargetFor(b);
+        if (!target) continue;
+        b.matchId = target.id;
+        // Ticking the box is the one edit that SNAPS: the collision shape is
+        // what the level plays as, so the look moves onto it rather than the
+        // gameplay being dragged to wherever the look was left.
+        copyMatchedOutline(target, b);
+      }
+      markDirty();
+      refreshFields();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "match collision";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Keeps this outline equal to the collision shape it dresses, in both directions: resize or move either and the other follows. Ticking it snaps this object onto the collision shape. Untick to author a look that deliberately differs from what the body collides as.";
+    g.appendChild(hint);
+  }
+
+  // Which collision object a fresh link ties to: the one already stating the
+  // same outline when there is one, else the nearest - the piece the author is
+  // most plausibly dressing.
+  function matchTargetFor(b: EdItem): EdItem | null {
+    const cs = bodyMembers(model.items, b.bodyId).filter((m) => m.object === "collision");
+    if (!cs.length) return null;
+    const exact = cs.find((c) => outlinesEqual(c, b));
+    if (exact) return exact;
+    let best = cs[0]!;
+    for (const c of cs) {
+      if (c.pos.sub(b.pos).length() < best.pos.sub(b.pos).length()) best = c;
+    }
+    return best;
+  }
+
   // What the shapes are made of: a material, a thickness through the z axis the
   // 2D view cannot show, and the mass those two work out to. Per SHAPE, not per
   // body - the one geometry property a compound body does not collapse onto its
@@ -2683,6 +2756,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Material and thickness are what a shape WEIGHS, and decoration weighs
     // nothing - its extrusion depth is `visual.depth` instead.
     if (solid && !bodies.some(massless)) addMaterialFields(g, bodies);
+    // The link that keeps a look and the collision shape it dresses one
+    // outline; beside the transform fields, since it is those it takes over.
+    if (!solid) addMatchField(g, bodies);
     // What a thing LOOKS like is a geometry object's business and only its own.
     // A collision shape is drawn by whichever geometry object dresses it, and
     // `toLevelData` writes no look for a collision object at all - so these
@@ -3555,6 +3631,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         visual: { ...b.visual },
       };
     });
+    // A matched pair copied together stays a pair; a geometry object copied
+    // WITHOUT its partner drops the link rather than pointing at the original,
+    // which is in another body and would be pruned as stale anyway.
+    for (const it of items) {
+      if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
+    }
     return { items, idOf };
   }
 
@@ -3654,14 +3736,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // bolted to in the first place.
     const wasIn = new Map<EdItem, number>(affected.map((b) => [b, b.bodyId]));
     const leadOf = new Map<number, number>();
+    // A geometry object MATCHED to a collision sibling follows that sibling out
+    // for the same reason an anchor follows a shape: the pair is one authored
+    // thing (a wall and the look that mirrors it), and splitting them into two
+    // bodies would break the link as a side effect of a gesture about bodies.
+    const follows = (b: EdItem): boolean =>
+      b.object === "geometry" && b.matchId !== 0 && affected.some((o) => o.id === b.matchId);
+    const bodyOf = new Map<number, number>();
     for (const b of affected) {
-      if (b.object === "anchor") continue;
+      if (b.object === "anchor" || follows(b)) continue;
       const id = newBodyId();
       const old = wasIn.get(b)!;
       if (b.object === "collision" && !leadOf.has(old)) leadOf.set(old, id);
+      bodyOf.set(b.id, id);
       b.bodyId = id;
     }
     for (const b of affected) {
+      if (follows(b)) {
+        b.bodyId = bodyOf.get(b.matchId) ?? b.bodyId;
+        continue;
+      }
       if (b.object !== "anchor") continue;
       b.bodyId = leadOf.get(wasIn.get(b)!) ?? b.bodyId;
     }
@@ -3834,6 +3928,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: defaultLight(),
       note: defaultNote(),
       anchorId: 0,
+      matchId: 0,
     };
     if (t === "light") {
       // Placed with a click at a reach worth having, and a drag overrides it -
@@ -3916,6 +4011,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       light: { ...item.light },
       note: { ...item.note },
       visual: { ...item.visual, depth: item.thickness, texture: item.material },
+      // Born MATCHED to the shape it dresses (see `EdItem.matchId`): the two
+      // start out identical, and the link is what keeps them so - resizing
+      // either resizes both, which is what "give this shape a look" almost
+      // always wants. Untick "match collision" on the geometry panel to
+      // diverge them on purpose.
+      matchId: item.id,
     }));
     if (!made.length) return;
     beginAction();
