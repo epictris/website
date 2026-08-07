@@ -124,10 +124,11 @@ import {
   MAX_ORBIT_PITCH,
   threeY,
   threeRotation,
+  unprojectToPlane,
   type CameraOrbit,
   type ViewProjection,
 } from "../render3d/space";
-import { EditorGizmo, GIZMO_MODES, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
+import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
 import { World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import {
@@ -327,9 +328,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Turned at all, the overlay is not drawn: it is a projection of the gameplay
   // plane straight onto the screen, so at any other angle its outlines, handles
   // and marquee would sit somewhere the geometry is not - a level authored
-  // against a picture that is a few degrees out is a level authored wrongly. So
-  // orbiting is a way of LOOKING at a scene, and `Reset view` is the way back to
-  // editing it.
+  // against a picture that is a few degrees out is a level authored wrongly.
+  //
+  // What the overlay drew is not the same set as what a click can MEAN, though,
+  // and those two were run together for as long as the pick was resolved on the
+  // plane by the 2D camera. A ray answers for the models and meets the plane for
+  // everything else at any angle (`canvasWorld`, `raycastItems`), so selecting
+  // and dragging survive the turn and only the drawn chrome - handles, band,
+  // draw previews - drops out with the overlay. See the press handler.
   const orbit: CameraOrbit = { yaw: 0, pitch: 0 };
   const orbited = (): boolean => scene3d !== null && viewMode !== "2d" && !isHeadOn(orbit);
   // Which lens the scene is drawn through (see `ViewProjection`). Perspective is
@@ -364,7 +370,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // plane a form sits, how it is tipped about x and y, and how large a mesh is
   // drawn.
   const gizmo = scene3d ? new EditorGizmo(scene3d.scene, scene3d.camera, canvas) : null;
-  const gizmoBtns: Partial<Record<GizmoMode, HTMLButtonElement>> = {};
   // What the handles are attached to right now, so the target is rebuilt when
   // the selection changes and left alone when it has not.
   let gizmoKey = "";
@@ -570,6 +575,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // both renderers draw by) rather than whichever happened to be authored later.
   // A backdrop 20 m behind the level can no longer swallow a click meant for the
   // wall drawn over it.
+  // Does this body have a collision object in it? The one fact about a BODY that
+  // `itemDepth` needs and an item cannot answer about itself: a geometry object
+  // with no authored `offsetZ` is drawn on the gameplay plane if its body
+  // collides and at `DECOR_Z` if it does not (see `depthOf`).
+  const bodyCollides = (bodyId: number): boolean =>
+    model.items.some((o) => o.bodyId === bodyId && o.object === "collision");
+
   const pickOrder = (): EdItem[] => {
     // What a geometry object's depth means turns on whether its body collides
     // (see `itemDepth`), which is a fact about the model rather than the item.
@@ -774,13 +786,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function itemHandlers(id: number): GizmoHandlers {
     const find = (): EdItem | null => model.items.find((b) => b.id === id) ?? null;
     // The sizes a scale drag is measured against (see `GizmoHandlers.apply`).
-    let base: { shape: EdShape; depth: number; scale: number } | null = null;
+    let base: {
+      shape: EdShape;
+      depth: number;
+      scale: number;
+      z: number;
+      offsetZ: number;
+    } | null = null;
     return {
       pose() {
         const it = find();
         if (!it) return { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
         return {
-          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), depthOf(it)),
+          // `itemDepth` rather than `depthOf`, because the handles have to sit
+          // on the thing they move and that is decided by the BODY: a geometry
+          // object with no authored `offsetZ` is drawn on the plane if its body
+          // collides and at `DECOR_Z` if it does not. Read as a plain 0, the
+          // whole gizmo stood 35 cm in front of every piece of decoration it was
+          // attached to - invisible head on, and the first thing you see when
+          // the view is turned, which is the view it exists for.
+          pos: new THREE.Vector3(it.pos.x, threeY(it.pos.y), itemDepth(it, bodyCollides(it.bodyId))),
           quat: itemQuat(it),
         };
       },
@@ -816,6 +841,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           // extrusion falls back to - so that is what a scale starts from.
           depth: it.visual.depth ?? it.thickness,
           scale: it.visual.scale,
+          // Where the handles started, and what the file said about it. The two
+          // differ for a piece of decoration authoring no `offsetZ`: it is DRAWN
+          // at `DECOR_Z` (see `itemDepth`), which is where the handles have to
+          // be, and the field is 0. A move is therefore written as a CHANGE
+          // against where the handles started rather than as the pose's own z -
+          // which would stamp that default into the file the first time a
+          // backdrop was nudged sideways, an edit nobody asked for that turns a
+          // fallback into an authored number.
+          z: itemDepth(it, bodyCollides(it.bodyId)),
+          offsetZ: it.visual.offsetZ,
         };
       },
       apply(mode, pos, quat, scale) {
@@ -823,8 +858,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (!it) return;
         if (mode === "translate") {
           it.pos = new Vec2(pos.x, threeY(pos.y));
-          if (it.object === "geometry") it.visual.offsetZ = pos.z;
-          else if (it.object === "light") it.light.z = pos.z;
+          if (it.object === "geometry" && base) {
+            it.visual.offsetZ = base.offsetZ + (pos.z - base.z);
+          } else if (it.object === "light") it.light.z = pos.z;
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
@@ -950,11 +986,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // handle drag cannot land a body in different places.
     gizmo.setSnap(snapOn ? gridStep : null, snapOn ? ANGLE_STEP : null);
     gizmo.follow();
-  }
-
-  function setGizmoMode(m: GizmoMode): void {
-    gizmo?.setMode(m);
-    for (const [k, b] of Object.entries(gizmoBtns)) b.classList.toggle("active", k === m);
   }
 
   function markDirty(): void {
@@ -1402,10 +1433,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     viewBtns["2d"] = button("2D", () => setViewMode("2d"));
     viewBtns["3d"] = button("3D", () => setViewMode("3d"));
     viewBtns.overlay = button("3D + overlay", () => setViewMode("overlay"));
-    // Back to the view the level is authored against. A turned view has no
-    // overlay and nothing to click (see `orbit`), so this is the only way out of
-    // one, and it lights up while the view is turned so it reads as the way back
-    // rather than as a button that usually does nothing.
+    // Back to the view the level is authored against. A turned view draws no
+    // overlay and offers none of its handles (see `orbit`), so this is the only
+    // way back to those, and it lights up while the view is turned so it reads
+    // as the way back rather than as a button that usually does nothing.
     resetViewBtn = button("⟲ Reset view", resetOrbit);
     resetViewBtn.title = "Face the gameplay plane again (Ctrl + middle-drag orbits)";
     // The lens. One toggle rather than two buttons, because unlike the view
@@ -1426,24 +1457,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     setViewMode(viewMode);
     refreshOrbitBtn();
     setProjection(projection);
-
-    // What the 3D handles do. One row, because the three are one control: a
-    // gizmo is always in exactly one of these modes and the buttons say which.
-    const gizmoRow = el("div", "ed-row");
-    bar.appendChild(gizmoRow);
-    const GIZMO_LABELS: Record<GizmoMode, [string, string]> = {
-      translate: ["✥ move", "Move the selection along the level's axes (W)"],
-      rotate: ["⟳ rotate", "Turn it about its own axes (E)"],
-      scale: ["⤢ scale", "Size it along its own axes (S)"],
-    };
-    for (const m of GIZMO_MODES) {
-      const [label, tip] = GIZMO_LABELS[m];
-      const b = button(label, () => setGizmoMode(m));
-      b.title = tip;
-      gizmoBtns[m] = b;
-      gizmoRow.append(b);
-    }
-    setGizmoMode("translate");
   }
 
   const title = el("div", "ed-title");
@@ -1710,14 +1723,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   // The cursor a drag borrows and must hand back (pan swaps in a grab hand).
   function applyToolCursor(): void {
-    // A turned view has nothing to click - the overlay is not drawn and a pick
-    // would land on the plane rather than on what is on screen - so the pointer
-    // says so: the canvas is something to move the view with and nothing else.
-    if (orbited()) {
-      canvas.style.cursor = "grab";
-      return;
-    }
-    canvas.style.cursor = tool === "select" ? "default" : "crosshair";
+    // A turned view selects and moves but draws nothing (see the press handler),
+    // so the pointer is the select one whatever the toolbar has armed rather
+    // than a crosshair over a canvas that will not draw.
+    canvas.style.cursor = orbited() || tool === "select" ? "default" : "crosshair";
   }
   function setTool(t: Tool): void {
     if (!LAYER_TOOLS[activeLayer].includes(t)) return;
@@ -4155,14 +4164,33 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return new Vec2(e.clientX - r.left, e.clientY - r.top);
   }
 
+  // Where a canvas position is on the GAMEPLAY PLANE, in world metres.
+  //
+  // Head on the 2D camera's own un-projection is the answer and always has been:
+  // the plane is parallel to the image plane, so the mapping is a scale and an
+  // offset. Orbited it is not, and a screen position means a world point only
+  // through the ray that drew it - which is what `unprojectToPlane` casts,
+  // through the same camera `Scene3D.pick` raycasts geometry with, so the plane
+  // and the models a click is resolved against cannot disagree about where the
+  // pointer is aimed.
+  function canvasWorld(scr: Vec2): Vec2 {
+    if (!orbited() || !scene3d) return screenToWorld(camera, scr.x, scr.y);
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return screenToWorld(camera, scr.x, scr.y);
+    const hit = unprojectToPlane(
+      scene3d.camera,
+      (scr.x / r.width) * 2 - 1,
+      1 - (scr.y / r.height) * 2,
+    );
+    return hit ?? screenToWorld(camera, scr.x, scr.y);
+  }
+
   // Last pointer position, kept in screen space so it un-projects through the
   // current camera (paste targets where the cursor is *now*, after any zoom or
   // pan). Falls back to the view centre before the mouse has moved.
   let lastPointerScreen: Vec2 | null = null;
   const pointerWorld = (): Vec2 =>
-    lastPointerScreen
-      ? screenToWorld(camera, lastPointerScreen.x, lastPointerScreen.y)
-      : camera.position;
+    lastPointerScreen ? canvasWorld(lastPointerScreen) : camera.position;
 
   // Which handle of the selected body (if any) is under the pointer?
   //
@@ -4302,30 +4330,42 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (e.button !== 0) return;
-    // A turned view is for looking: the overlay that says what a click would hit
-    // is not on screen, and the pick would be resolved against the plane rather
-    // than against what is drawn. So the left button only moves the view until
-    // `Reset view` puts it back.
-    if (orbited()) {
-      drag = { mode: "pan", lastScreen: pointerScreen(e) };
-      canvas.style.cursor = "grabbing";
-      return;
-    }
     const scr = pointerScreen(e);
-    const world = screenToWorld(camera, scr.x, scr.y);
+    const world = canvasWorld(scr);
     dragMoved = false;
     dragPushed = false;
 
-    // 1. Handles of the current selection.
-    const h = pickHandle(scr, e.altKey);
-    if (h === "consumed") return; // handled outright; no drag, selection intact
-    if (h) {
-      drag = h;
-      return;
+    // A TURNED VIEW SELECTS AND MOVES, AND DOES NOTHING THAT IS DRAWN ON THE
+    // OVERLAY. What a click MEANS survives the view being turned - a ray answers
+    // for the models and meets the gameplay plane for everything resolved
+    // against it (see `canvasWorld`) - so bodies and objects are picked there
+    // exactly as they are head on, and the gizmo the pick puts on them is in the
+    // scene and works from any angle. That pairing is the whole point of the
+    // orbit: turn the view to see the depth, then drag the blue arrow to author
+    // it, on the thing you just turned the view to look at.
+    //
+    // What does NOT survive is everything whose feedback is the overlay, since
+    // the overlay is the plane projected straight onto the screen and is not
+    // drawn at all here: the resize handles, the marquee band and the draw
+    // tools' previews would each be somewhere the geometry is not. Those press
+    // like empty space, which is a pan.
+    const turned = orbited();
+    if (!turned) {
+      // 1. Handles of the current selection.
+      const h = pickHandle(scr, e.altKey);
+      if (h === "consumed") return; // handled outright; no drag, selection intact
+      if (h) {
+        drag = h;
+        return;
+      }
     }
+    // What this press draws. A turned view draws nothing whatever the toolbar
+    // says: every draw gesture previews on the overlay, and the overlay is not
+    // on screen here, so an armed tool would author geometry blind.
+    const drawTool = turned ? "select" : tool;
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
-    if (tool === "poly") {
+    if (drawTool === "poly") {
       const p = snapVec(world);
       if (polyDraft && polyDraft.length >= 3) {
         const first = worldToScreen(camera, polyDraft[0]!);
@@ -4342,7 +4382,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // bodies, so the gesture is a drag FROM one body TO another. Pressing
     // anywhere else does nothing rather than dropping a chain with one end in
     // mid-air.
-    if (tool === "chain") {
+    if (drawTool === "chain") {
       const from = topmostAt(world, (b) => chainable(b));
       if (from) {
         // The anchor lands on the body's surface, not where the pointer happens
@@ -4352,11 +4392,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
-    if (tool !== "select") {
+    if (drawTool !== "select") {
       beginAction();
       dragPushed = true;
       const start = snapVec(world);
-      const body = newDrawnItem(tool, start);
+      const body = newDrawnItem(drawTool, start);
       model.items.push(body);
       // A body has one kind, one fill, one friction: an object drawn into an
       // existing body takes them rather than bringing the draw tool's defaults
@@ -4379,7 +4419,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     // 3. Player spawn marker (small target — needs pointer within its radius).
-    if (world.distanceTo(model.player.pos) <= Math.max(model.player.radius, 12 / (camera.zoom * PIXELS_PER_METER))) {
+    if (
+      !turned &&
+      world.distanceTo(model.player.pos) <=
+        Math.max(model.player.radius, 12 / (camera.zoom * PIXELS_PER_METER))
+    ) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
     }
@@ -4506,7 +4550,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     // 6. Empty space: rubber-band select. A click that never moves deselects
     // (shift keeps the selection, so a miss doesn't undo the picking so far).
-    drag = { mode: "marquee", start: world, current: world, additive: e.shiftKey };
+    //
+    // A turned view pans instead, and clears on a click that did not travel, the
+    // same way a band that catches nothing does: the band is drawn on the
+    // overlay, and a screen-aligned rectangle is a slanted quadrilateral on the
+    // plane the moment the camera is off axis - so what is dragged out and what
+    // is caught could not be the same shape.
+    drag = turned
+      ? {
+          mode: "panPick",
+          lastScreen: scr,
+          travel: 0,
+          pick: () => {
+            if (!e.shiftKey) setSelection([]);
+          },
+        }
+      : { mode: "marquee", start: world, current: world, additive: e.shiftKey };
   });
 
   // The world distance one screen pixel covers, which is what a screen-sized
@@ -4721,7 +4780,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // could disagree), so this selects the note alone and drops the caret in.
   canvas.addEventListener("dblclick", (e) => {
     if (mode !== "edit" || e.button !== 0 || tool !== "select") return;
-    const world = screenToWorld(camera, pointerScreen(e).x, pointerScreen(e).y);
+    const world = canvasWorld(pointerScreen(e));
     const pickable = pickOrder();
     for (let i = pickable.length - 1; i >= 0; i--) {
       const b = pickable[i]!;
@@ -4740,7 +4799,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const scr = pointerScreen(e);
     lastPointerScreen = scr;
     if (!drag) return;
-    const world = screenToWorld(camera, scr.x, scr.y);
+    const world = canvasWorld(scr);
     dragMoved = true;
 
     // A press on something selected is not a move until the pointer has left the
@@ -5038,6 +5097,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const before = screenToWorld(camera, scr.x, scr.y);
     const factor = Math.exp(-e.deltaY * 0.001);
     camera.zoom = Math.min(20, Math.max(0.2, camera.zoom * factor));
+    // Keep the point under the cursor under the cursor - but only head on, where
+    // the zoom is a scale about the screen. Orbited it is a DOLLY along the view
+    // direction, so the correction would want the ray through the new camera,
+    // which is not built until the frame is drawn; zooming about the centre of
+    // the view is the honest answer there rather than a correction computed from
+    // a camera that is one frame stale.
+    if (orbited()) return;
     const after = screenToWorld(camera, scr.x, scr.y);
     camera.position = camera.position.add(before.sub(after));
   }, { passive: false });
@@ -5133,12 +5199,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     else if (e.code === "KeyT") setTool("text");
     else if (e.code === "KeyA") setTool("arrow");
     else if (e.code === "KeyK") setTool("chain");
-    // The gizmo's three modes. W/E/S rather than the usual W/E/R because R is
-    // the rect tool here and a key that means two things is a key that draws a
-    // wall when you meant to resize one.
-    else if (e.code === "KeyW") setGizmoMode("translate");
-    else if (e.code === "KeyE") setGizmoMode("rotate");
-    else if (e.code === "KeyS") setGizmoMode("scale");
     // The lens (see `ViewProjection`), on the letter it is named by.
     else if (e.code === "KeyO")
       setProjection(projection === "orthographic" ? "perspective" : "orthographic");
@@ -5271,11 +5331,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // the level as it will be played. Selection chrome goes with it, which is
       // the point - this mode is for looking, and "3D + overlay" is for editing.
       //
-      // A TURNED VIEW IS THE SAME STATEMENT. The overlay is the gameplay plane
-      // projected straight onto the screen, so at any other angle every outline,
-      // handle and band it draws would be somewhere the geometry is not - which
-      // is worse than drawing nothing, since it looks exactly like the editor
-      // still being aligned. `Reset view` is the way back.
+      // A TURNED VIEW IS THE SAME STATEMENT about what is DRAWN. The overlay is
+      // the gameplay plane projected straight onto the screen, so at any other
+      // angle every outline, handle and band it draws would be somewhere the
+      // geometry is not - which is worse than drawing nothing, since it looks
+      // exactly like the editor still being aligned. `Reset view` is the way
+      // back. What survives the turn is what is drawn in the SCENE - the
+      // selection highlight and the transform gizmo - and the picking, which is
+      // a ray rather than a projection (see the press handler).
       if (viewMode === "3d" || orbited()) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);

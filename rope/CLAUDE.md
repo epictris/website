@@ -1342,8 +1342,15 @@ The camera swings about the point it is centred on at exactly the dolly distance
 
 **A turned view draws no overlay**, and that is the whole cost of it.
 The overlay is the gameplay plane projected straight onto the screen, so at any other angle its outlines, handles and bands would sit somewhere the geometry is not - which is worse than drawing nothing, because it looks exactly like an editor that is still aligned.
-So the canvas stops picking too and the cursor says so.
-What still edits there is the **transform gizmo** below, which is in the scene rather than on the overlay - which is the point of it: the fields worth authoring from an angle are the ones a turned view is the only way to judge.
+So the resize handles, the rubber band and the draw tools' previews all go with it: those press like empty space, which is a pan.
+
+**What does not go is what a click MEANS.**
+Those two were run together for as long as a pick was resolved on the plane by the 2D camera, and they are different questions: a ray answers for the models (`Scene3D.pick`) and meets the gameplay plane for everything resolved against it (`unprojectToPlane`, `canvasWorld` in `editor.ts`), both at any angle.
+So bodies and objects are **selected in a turned view exactly as they are head on** - the drill-in cycle, Shift, Alt, the outliner - and dragging one carries it along the plane, and the **transform gizmo** the pick puts on it is in the scene and works from any angle.
+That pairing is the point of the orbit: turn the view to see the depth, then drag the blue arrow to author it, on the thing you turned the view to look at.
+`unprojectToPlane` is `projectToView` backwards, and `cli render3d` asserts it as a round trip through three's own projection at a spread of orbits, plus that it is the 2D answer head on and is NOT it turned - an implementation that quietly returned the 2D answer passes the round trip at zero orbit and puts every turned-view click somewhere else.
+The one thing zoom gives up there is zooming about the cursor: the zoom is a dolly along the view direction rather than a scale about the screen, so the correction would want a ray through a camera that is not built until the frame is drawn, and a turned view zooms about its centre instead.
+
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 
 ### Geometry is picked by its model, not by an outline
@@ -1369,7 +1376,8 @@ The one cost is that a geometry POLYGON's vertices are edited in the **2D view**
 
 In the **2D view none of this applies**: there is no scene to ask, the outline is both what is drawn and what is picked, and every handle is back.
 That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
-An **orbited** view still picks nothing at all (above): the ray would answer for geometry, but the collision shapes, lights, regions and notes it shares the canvas with are still resolved against the plane, and half a pick is worse than none.
+An **orbited** view picks by exactly these rules (above): the ray answers for geometry as it does head on, and the collision shapes, lights, regions and notes it shares the canvas with are resolved against the plane through `unprojectToPlane` rather than through the 2D camera, so the two halves of a pick agree about where the pointer is aimed at any angle.
+What it does not offer there is the plane HANDLES, for the reason this section gives about geometry objects and the orbit section gives about everything else: a handle that is not drawn must not be grabbable either.
 
 ### The lens
 
@@ -1383,12 +1391,31 @@ A **▶ Test is always perspective**, whatever the toggle says: the point of a t
 ### The transform gizmo
 
 A single selected object or body carries the standard **red/green/blue handles** in the 3D scene - arrows to move, rings to turn, boxes to size - through three.js's own `TransformControls` (`editor/gizmo.ts`).
-**W / E / S** and the toolbar's `move` / `rotate` / `scale` pick between them.
+
+**All three sets are on screen at once**, and there is no mode to pick between them.
+`TransformControls` is a modal control - one instance draws one mode - so this is three of them sharing one proxy, nested by size: the scale boxes inside, the move arrows through them, the rotation rings around the outside.
+A mode toggle is a thing to remember and to get wrong, and reaching for a ring and turning up a move arrow because the toolbar was left on `move` is an edit that looks like the level and is not it - the same mistake **selected first, moved second** exists to prevent on the plane.
+Nested, the answer to "what will this drag do" is whatever is drawn under the pointer.
+
+The sizes are read off the geometry three actually builds rather than chosen by eye: an axis handle sits at `0.5 x size` with a picker cone reaching `0.6`, and a rotation ring is drawn at `0.5` with a picker tube `0.1` thick, so `HANDLE_SIZE` puts the scale boxes at 0.225, the move arrows at 0.45 with their pickers stopping at 0.54, and the rings at 0.70 with their pickers starting at 0.56.
+The **move arrows set the floor** on all of it - their heads are a `0.04` cone, already only about eight pixels at the size a single-mode gizmo used - which is why the combined gizmo has a wider footprint than one mode's worth of handles.
+
+Two handles are dropped because the three sets would otherwise bury each other.
+The **centre belongs to uniform scale**, that being the one handle a mesh genuinely has (its `scale` is one number, so the centre drag is exact and every single axis is an approximation of it), so the move gizmo's own free-in-the-view-plane centre handle goes - its `XY` plane handle already covers the gameplay plane, which is what that one was wanted for.
+Rotation's free-rotation ball goes for the plainer reason that it is a quarter-radius sphere sitting exactly where the move and scale handles are, and scale's plane handles because two axes at once is what the MOVE gizmo means.
+
+What the nesting cannot separate is the **pickers**, because an axis picker is a cone that is widest AT THE ORIGIN: the scale box's cone lies wholly inside the move arrow's and both cover the centre.
+So a press is arbitrated (`EditorGizmo.winner`) - innermost drawn first, since at the scale box's radius the box is what is on screen and the arrow is only passing through, with the centre handle beating any axis claim because it is otherwise unreachable.
+Both arbitration listeners are on the **window**, and the phase is what makes each work: three's own handlers are on the canvas, so a capturing `pointerdown` runs before them (a losing set is held off with `enabled`, since three re-runs its own hover inside its press handler and would overwrite anything decided earlier) and a bubbling `pointermove` runs after them (two lit handles under one pointer is the gizmo saying it does not know what a press would do).
 
 It is the answer to the question the overlay cannot even ask.
 The 2D canvas is the gameplay plane seen head on, so it has handles for the two axes that lie in it and no way to say "10 cm toward the camera", "tipped 15° about x" or "a bit bigger" about a mesh whose outline is not what is drawn - and those are exactly the fields a level is dressed with (`EdVisual.offsetZ`, `rotX`, `rotY`, `scale`), every one of which was a number typed into the inspector and checked by looking.
 It is also the only editing there is while the view is **orbited**, which is the view those fields are judged in: the gizmo is in the scene, so it is drawn from wherever the camera is.
 The two features are a pair - orbit to see the depth, drag the blue arrow to author it.
+
+**The handles sit at the depth the object is DRAWN at**, which is `itemDepth` and not the authored `offsetZ`: a geometry object authoring no depth is drawn on the gameplay plane if its body collides and at `DECOR_Z` if it does not.
+Read as a plain 0, the whole gizmo stood 35 cm in front of every piece of decoration it was attached to - invisible head on, and the first thing you see when the view is turned, which is the view it exists for.
+A move is then written as a CHANGE against where the handles started rather than as the pose's own z, or nudging a backdrop sideways would stamp that fallback into the file as an authored `off z` nobody asked for.
 
 **The gizmo never touches the model.** It moves a proxy object and the editor reads that proxy and writes the model, which is what lets it survive the scene being rebuilt from scratch on every model revision - that is, on every drag. A handle attached to a visual is attached to an object that is disposed a frame later, and re-attaching per frame is a gesture that cannot survive its own effect.
 

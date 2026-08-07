@@ -202,6 +202,35 @@ export function syncCamera(
   threeCam.updateProjectionMatrix();
 }
 
+// The reusables the un-projection below writes through, so a pick that runs on
+// every pointer move allocates nothing.
+const _ray = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
+const _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+const _hit = new THREE.Vector3();
+
+// `projectToView` backwards, and through the SCENE's camera rather than the 2D
+// one: where the pointer ray meets the gameplay plane, in sim world metres.
+//
+// It is what lets a turned view be clicked in at all. Head on the two are the
+// same answer, so the 2D un-projection stays what every head-on pick uses; the
+// moment the camera is orbited, the plane is no longer parallel to the image
+// plane and a screen position maps to a world point only through the ray that
+// drew it. `x`/`y` are normalised device coordinates, as `Scene3D.pick` takes
+// them, so a click resolves the plane and the models it is drawn against through
+// one camera and one convention.
+//
+// Null where the ray never reaches the plane - behind the camera, or parallel to
+// it. Neither is reachable while the orbit's pitch is clamped short of the poles
+// (see `MAX_ORBIT_PITCH`), but a caller that gets one has no answer to give
+// rather than a wrong one.
+export function unprojectToPlane(cam: ViewCamera, x: number, y: number): Vec2 | null {
+  _ndc.set(x, y);
+  _ray.setFromCamera(_ndc, cam);
+  if (!_ray.ray.intersectPlane(_plane, _hit)) return null;
+  return new Vec2(_hit.x, threeY(_hit.y));
+}
+
 // Where a world point on the gameplay plane lands in VIEW pixels under the
 // derived camera - which is, by the correspondence above, exactly where the 2D
 // renderer draws it. It exists to be ASSERTED against that renderer rather than

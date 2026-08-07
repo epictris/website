@@ -21,7 +21,13 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "../render/viewport";
 import type { Camera } from "../render/camera";
-import { cameraDistance, FOV_Y_DEG, projectToView, syncCamera } from "../render3d/space";
+import {
+  cameraDistance,
+  FOV_Y_DEG,
+  projectToView,
+  syncCamera,
+  unprojectToPlane,
+} from "../render3d/space";
 import { cylinderSolid, extrudeOutline } from "../render3d/extrude";
 import {
   DEFAULT_TEXTURE,
@@ -247,6 +253,73 @@ function orbitView(): CaseResult[] {
     name: "orbit: pitch is clamped short of the pole",
     pass: over.position.z > 0 && Math.abs(over.position.y - focus.y) < dist,
     detail: `z ${over.position.z.toFixed(3)}, rise ${(over.position.y - focus.y).toFixed(3)} of ${dist.toFixed(3)}`,
+  });
+
+  // `unprojectToPlane` is `projectToView` backwards, and it is what lets a
+  // TURNED view be clicked in at all: everything the editor resolves against the
+  // gameplay plane - a collision shape, a light, a camera region, a note, the
+  // point a drag carries a body to - is a screen position turned back into a
+  // world one, and head on that is a scale and an offset. Off axis it is not,
+  // and the only honest answer is the ray that drew the pixel.
+  //
+  // Asserted as a ROUND TRIP through three's own projection at a spread of
+  // orbits, because that is exactly the claim a pick stands on: a click on the
+  // point where a body is drawn has to answer that body's own coordinates.
+  const ndcOf = (p: { x: number; y: number }): [number, number] => [
+    (p.x / VIEW_WIDTH) * 2 - 1,
+    1 - (p.y / VIEW_HEIGHT) * 2,
+  ];
+  let worstTrip = 0;
+  for (const orbit of [
+    { yaw: 0, pitch: 0 },
+    { yaw: 0.45, pitch: 0.2 },
+    { yaw: -1.2, pitch: -0.5 },
+    { yaw: 2.6, pitch: 0.9 },
+  ]) {
+    const c = make();
+    syncCamera(c, cam, FOV_Y_DEG, orbit);
+    c.updateMatrixWorld(true);
+    for (const p of [
+      new Vec2(cam.position.x, cam.position.y),
+      new Vec2(cam.position.x + 4.3, cam.position.y - 2.1),
+      new Vec2(cam.position.x - 6.75, cam.position.y + 3.4),
+    ]) {
+      const ndc = new THREE.Vector3(p.x, -p.y, 0).project(c);
+      const back = unprojectToPlane(
+        c,
+        ndc.x,
+        ndc.y,
+      );
+      worstTrip = Math.max(worstTrip, back ? back.sub(p).length() : Infinity);
+    }
+  }
+  out.push({
+    name: "orbit: a screen point un-projects onto the plane it was drawn from",
+    pass: worstTrip <= 1e-9,
+    detail: `worst round trip ${worstTrip.toExponential(2)} m`,
+  });
+
+  // Head on the two answers are the SAME answer, which is what leaves every
+  // head-on pick on the 2D un-projection it has always used - and turned they
+  // are not, which is what the whole thing is for. Both halves, because an
+  // implementation that quietly returned the 2D answer would pass the round trip
+  // above at zero orbit and put every turned-view click somewhere else.
+  const headOn = make();
+  syncCamera(headOn, cam, FOV_Y_DEG, { yaw: 0, pitch: 0 });
+  headOn.updateMatrixWorld(true);
+  const probe = new Vec2(cam.position.x + 5.5, cam.position.y - 2.75);
+  const px = projectToView(cam, probe);
+  const flat = unprojectToPlane(headOn, ...ndcOf(px));
+  const turnedCam = make();
+  syncCamera(turnedCam, cam, FOV_Y_DEG, { yaw: 0.6, pitch: 0.35 });
+  turnedCam.updateMatrixWorld(true);
+  const turned = unprojectToPlane(turnedCam, ...ndcOf(px));
+  const flatErr = flat ? flat.sub(probe).length() : Infinity;
+  const turnedErr = turned ? turned.sub(probe).length() : 0;
+  out.push({
+    name: "orbit: the plane un-projection is the 2D one head on and is not it turned",
+    pass: flatErr <= 1e-9 && turnedErr > 0.5,
+    detail: `head on off by ${flatErr.toExponential(2)} m, turned by ${turnedErr.toFixed(3)} m`,
   });
   return out;
 }
