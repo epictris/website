@@ -93,6 +93,9 @@ import {
   computeGroupHandles,
   computeHandles,
   drawEditor,
+  hasPlaneHandles,
+  BODY_MEMBER,
+  SELECT,
   CHAIN_DEFAULT_COLOR,
   CHAIN_HIT_PX,
   HANDLE_HIT_PX,
@@ -135,7 +138,7 @@ import {
   type Recording,
   type SerializedFrame,
 } from "../sim/trace";
-import type { EnvironmentData, LevelData } from "../level/levelFormat";
+import type { EnvironmentData, LevelData, SceneObjectData } from "../level/levelFormat";
 import {
   DEFAULT_LIGHT_COLOR,
   DEFAULT_LIGHT_RANGE,
@@ -311,6 +314,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   })();
   if (!scene3d) viewMode = "2d";
+  // How much of the scene the 2D overlay is responsible for. With a scene under
+  // it the overlay drops every fill - and the geometry objects entirely, since
+  // the scene draws those and an outline on the plane describes something else
+  // (see `drawEditor` and `hasPlaneHandles`). One statement of it, because what
+  // the overlay DRAWS and what it offers handles for have to be the same set.
+  const overlayLayers = (): "fill" | "outline" =>
+    scene3d && viewMode !== "2d" ? "outline" : "fill";
   // How far the 3D view is turned from the side-on view the level is authored
   // against. Editor-only, and zero for every other host (see `CameraOrbit`).
   //
@@ -973,11 +983,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // The world it builds is a throwaway: nothing steps it, and it exists only to
   // give the bodies the transforms and shapes the visuals hang off.
+  // Which item wrote each scene object the current 3D scene was built from. It
+  // is what turns a raycast into a selection: a drawn object carries the
+  // authored object it was built from (`pickTagOf`), and this says which item
+  // that was. Rebuilt with the scene, so it can never name an item the scene on
+  // screen was not built from.
+  let itemOfSceneObject = new Map<SceneObjectData, number>();
+  // ...and the way back, which is what a SELECTION needs: the editor knows the
+  // item and has to name the drawn object to paint.
+  let sceneObjectOfItem = new Map<number, SceneObjectData>();
+
   function syncEditorScene(): void {
     if (!scene3d || sceneRev === modelRev) return;
     sceneRev = modelRev;
     const world = new World();
-    const data = toLevelData(model);
+    itemOfSceneObject = new Map();
+    const data = toLevelData(model, itemOfSceneObject);
+    sceneObjectOfItem = new Map();
+    for (const [object, id] of itemOfSceneObject) sceneObjectOfItem.set(id, object);
     const built = buildLevelBodies(world, data, () => {});
     sceneLevel = {
       world,
@@ -990,6 +1013,36 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       visualSource: { data, built },
     };
     scene3d.setLevel(sceneLevel);
+    highlightKey = null; // a fresh scene holds none of the last one's paint
+  }
+
+  // WHAT IS SELECTED, SAID IN THE SCENE. A geometry object has no outline on the
+  // overlay any more (see `drawEditor`'s outline mode) precisely because the
+  // outline described a rectangle rather than the thing drawn, and the same
+  // argument says where the selection has to be shown: on the model.
+  //
+  // The colours are the overlay's own, so the two views say the same thing -
+  // orange is "an edit applies to this", blue is "this is what the selected body
+  // is made of". Only geometry objects carry a pick tag, so naming a collision
+  // object or a light here is simply nothing to paint.
+  let highlightKey: string | null = null;
+  function syncHighlight(): void {
+    if (!scene3d) return;
+    const key = `${sceneRev}|${[...selectedIds].join(",")}|${[...selectedBodyIds].join(",")}`;
+    if (key === highlightKey) return;
+    highlightKey = key;
+    const tags = new Map<unknown, string>();
+    const paint = (id: number, color: string): void => {
+      const object = sceneObjectOfItem.get(id);
+      if (object) tags.set(object, color);
+    };
+    for (const item of model.items) {
+      if (selectedBodyIds.has(item.bodyId)) paint(item.id, BODY_MEMBER);
+    }
+    // Second, so an object picked out of a selected body reads as the selection
+    // rather than as one more of its siblings.
+    for (const id of selectedIds) paint(id, SELECT);
+    scene3d.setHighlight(tags);
   }
 
   // --- mode: edit | test ----------------------------------------------------
@@ -4152,7 +4205,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return null;
     }
     const s = selected();
-    if (!s) return null;
+    // A handle that is not DRAWN must not be grabbable either, or a click in
+    // what looks like empty space starts a resize (see `hasPlaneHandles`).
+    if (!s || !hasPlaneHandles(s, overlayLayers())) return null;
     const h = computeHandles(camera, s);
     if (h.ends) {
       // Head first, so a zero-length arrow (a click that never dragged) still
@@ -4333,7 +4388,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // of two stacked items a click means. A grouped item selects its whole
     // compound body, since a group IS one body; Alt reaches past that to the
     // single piece.
-    const hit = topmostAt(world);
+    //
+    // Taken as the first CANDIDATE rather than through `topmostAt`, because the
+    // candidates are the only list that knows about the 3D pick: they are the
+    // same rule applied down the stack (`pickCandidatesAt`), so the first of them
+    // IS what `topmostAt` answers and the press and the cycle it may turn into
+    // cannot disagree about what was under the pointer.
+    const hit = pickCandidatesAt(world, scr)[0] ?? null;
     if (hit) {
       // CLICK THE BODY, THEN CLICK INTO IT. A click on a body that is not the
       // one being edited selects the BODY - the thing with the transform, the
@@ -4452,10 +4513,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // pick target has to be measured in.
   const worldLine = (): number => 1 / (camera.zoom * PIXELS_PER_METER);
 
+  // Whether a pick asks the SCENE rather than the gameplay plane. With a 3D view
+  // on screen a geometry object is drawn as a solid - an extrusion through z, or
+  // a prop that is not its authored outline at all - so where that solid is on
+  // screen is where it is clickable. In the 2D view there is no scene to ask and
+  // the outline is both what is drawn and what is picked, exactly as before.
+  const picks3d = (): boolean => overlayLayers() === "outline" && sceneLevel !== null;
+
+  // The geometry objects under the pointer in the 3D scene, as item ids, nearest
+  // first collapsed into a set - the ORDER a pick prefers them in is `pickOrder`'s
+  // and is not this function's to have an opinion about. Null when the scene is
+  // not what is on screen, which is what leaves the 2D view untouched.
+  function raycastItems(scr: Vec2): Set<number> | null {
+    if (!picks3d()) return null;
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const ids = new Set<number>();
+    for (const tag of scene3d!.pick((scr.x / r.width) * 2 - 1, 1 - (scr.y / r.height) * 2)) {
+      const id = itemOfSceneObject.get(tag as SceneObjectData);
+      if (id !== undefined) ids.add(id);
+    }
+    return ids;
+  }
+
   // Does a click at `world` land on this item? Everything is its own outline
   // except a LIGHT, which is its icon rather than its reach - see
-  // `lightPickRadius`.
-  function hitsItem(b: EdItem, world: Vec2): boolean {
+  // `lightPickRadius` - and a GEOMETRY OBJECT once there is a scene to ask, which
+  // is the model that was drawn for it rather than the rectangle it was placed
+  // with (see `raycastItems`).
+  function hitsItem(b: EdItem, world: Vec2, ray: ReadonlySet<number> | null = null): boolean {
     // An anchor is never picked as an ITEM. Its canvas presence is the ring its
     // chain draws at it, and that ring is already a drag handle - two things
     // answering one click, one of them an invisible 30 cm box sitting on the wall
@@ -4464,6 +4550,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // outliner.
     if (b.object === "anchor") return false;
     if (b.object === "light") return world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    if (ray && b.object === "geometry") return ray.has(b.id);
     return pointInBody(b, world);
   }
 
@@ -4518,8 +4605,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // `topmostAt` answers, then what it would answer with that taken away, and so
   // on. It is the same rule applied down the stack rather than a second ordering
   // beside it, so the first candidate IS the pick and nothing can disagree.
-  function pickCandidatesAt(world: Vec2): EdItem[] {
-    const left = pickOrder().filter((b) => hitsItem(b, world));
+  function pickCandidatesAt(world: Vec2, scr: Vec2): EdItem[] {
+    const ray = raycastItems(scr);
+    const left = pickOrder().filter((b) => hitsItem(b, world, ray));
     const out: EdItem[] = [];
     for (;;) {
       const best = bestHit(left);
@@ -4582,7 +4670,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the drag can only have panned or moved what was already selected.
   function pickAt(world: Vec2, scr: Vec2): () => void {
     return () => {
-      const cands = pickCandidatesAt(world);
+      const cands = pickCandidatesAt(world, scr);
       if (!cands.length) return;
       const steps = pickSteps(cands);
       const key = cands.map((c) => c.id).join(",");
@@ -5168,6 +5256,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         scene3d.setProjection(projection);
         gizmo?.setCamera(scene3d.camera);
         syncEditorScene();
+        // What is selected, said on the models themselves - the geometry
+        // objects' only selection feedback, since their outline is not drawn
+        // here (see `syncHighlight`). After the rebuild, which retires the
+        // paint along with the meshes that were wearing it.
+        syncHighlight();
         // After the scene is rebuilt and before it is drawn: the handles are on
         // a proxy rather than on a visual precisely so a rebuild cannot take
         // them with it, and this is where they pick the model's pose back up.
@@ -5204,7 +5297,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         chainDraftView(),
         // In 3D the scene below is what shows what a body IS; the overlay drops
         // its fills to outlines so the geometry stays visible through them.
-        scene3d && viewMode !== "2d" ? "outline" : "fill",
+        overlayLayers(),
         selectedBodyIds,
       );
     }

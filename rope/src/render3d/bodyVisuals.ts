@@ -275,6 +275,24 @@ export function drawnObjects(data: LevelBodyData): GeometryObjectData[] {
   return data.objects.filter(isGeometryObject);
 }
 
+// WHAT A PICK LANDS ON. A drawn object's piece group carries the authored object
+// it was built from, so a raycast that hits any mesh under it - the extrusion, a
+// prop's twentieth submesh, the placeholder standing in for one that has not
+// arrived - answers with the one thing an editor can act on.
+//
+// It is the authored `GeometryObjectData` by IDENTITY rather than an id, because
+// the format has no id to carry and inventing one would put a field on disk that
+// exists only for the editor. Whoever built the level data holds the map from
+// those objects back to whatever it calls them (see the editor's
+// `itemOfSceneObject`), and a host that built no map simply gets nothing back.
+export function pickTagOf(obj: THREE.Object3D): unknown {
+  for (let o: THREE.Object3D | null = obj; o; o = o.parent) {
+    const tag = o.userData["pickTag"] as unknown;
+    if (tag !== undefined) return tag;
+  }
+  return undefined;
+}
+
 export class BodyVisual {
   readonly root = new THREE.Group();
   // Which frame the world was last seen holding this body. `Scene3D` stamps it
@@ -354,7 +372,7 @@ export class BodyVisual {
 
     for (const g of drawnObjects(data)) {
       const local = localPlacement(built, g);
-      const piece = this.piece(local.pos.x, local.pos.y, local.rot);
+      const piece = this.piece(local.pos.x, local.pos.y, local.rot, g);
       const spec: DrawSpec = {
         geometry: g,
         ...(data.color !== undefined ? { color: data.color } : {}),
@@ -411,10 +429,14 @@ export class BodyVisual {
   }
 
   // One child group at a placement in the body's frame. Rigid, so written once.
-  private piece(x: number, y: number, rot: number): THREE.Group {
+  // `tag` is what a raycast onto anything inside it answers with (see
+  // `pickTagOf`); a body the sim spawned has no authored object to name and
+  // passes none, which is what keeps a rock or a hook out of an editor pick.
+  private piece(x: number, y: number, rot: number, tag?: unknown): THREE.Group {
     const piece = new THREE.Group();
     piece.position.set(x, threeY(y), 0);
     orientTo(piece, rot);
+    if (tag !== undefined) piece.userData["pickTag"] = tag;
     this.root.add(piece);
     return piece;
   }

@@ -28,7 +28,7 @@ import type { LevelVisualSource } from "../level/buildBodies";
 import type { EnvironmentData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
-import { BodyVisual } from "./bodyVisuals";
+import { BodyVisual, pickTagOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { configureRenderer, Environment } from "./environment";
@@ -121,6 +121,25 @@ export class Scene3D {
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
   private probe: THREE.Mesh | null = null;
+  // Picking and highlighting (editor only; the game never clicks the scene).
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly pointer = new THREE.Vector2();
+  // What each highlighted tag is painted with, and the materials the meshes
+  // under it were wearing before. The set is diffed rather than rebuilt, so a
+  // prop that arrives after the selection was made is picked up on the next
+  // frame with no bookkeeping at the call site.
+  private highlight: ReadonlyMap<unknown, string> = new Map();
+  // The colour a mesh is currently painted, and what it was wearing before. The
+  // colour is kept because it CHANGES without the set changing: picking an object
+  // out of the body that was selected repaints the same meshes from "part of the
+  // selected body" to "the selection", and a diff on membership alone leaves them
+  // saying the first of those.
+  private readonly highlighted = new Map<
+    THREE.Mesh,
+    { color: string; material: THREE.Material | THREE.Material[] }
+  >();
+  // Clones this scene made and must free, keyed by colour and source material.
+  private readonly highlightMaterials = new Map<string, THREE.Material>();
   // Frame counter used to spot bodies that have left the world (see `render`).
   private stamp = 0;
   private viewportRect: { x: number; y: number; w: number; h: number } | null = null;
@@ -357,6 +376,101 @@ export class Scene3D {
     this.projection = projection;
   }
 
+  // WHAT IS UNDER THE POINTER, nearest first, as the pick tags the drawn objects
+  // were built with (see `pickTagOf`). `x`/`y` are normalised device coordinates
+  // - the ray is cast through the camera the LAST frame was drawn with, which is
+  // the camera the thing on screen was drawn by, so the answer is about the
+  // picture the pointer was actually aimed at.
+  //
+  // This is the only honest way to pick a scene that is drawn in 3D. A 2D test
+  // against an object's authored outline answers about the rectangle a prop was
+  // PLACED with rather than about the prop, so a lamp bracket 10 cm across is
+  // clicked by a metre of empty air around it and a pipe running behind a wall
+  // is clicked through the wall. It also holds at any depth and any lens, which
+  // an outline test on the gameplay plane cannot.
+  //
+  // Duplicates are dropped rather than repeated: a prop is many meshes and one
+  // thing, and a caller walking the list wants the next OBJECT down.
+  pick(x: number, y: number): unknown[] {
+    this.pointer.set(x, y);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const out: unknown[] = [];
+    const seen = new Set<unknown>();
+    for (const hit of this.raycaster.intersectObjects(this.scene.children, true)) {
+      const tag = pickTagOf(hit.object);
+      if (tag === undefined || seen.has(tag)) continue;
+      seen.add(tag);
+      out.push(tag);
+    }
+    return out;
+  }
+
+  // Paint the drawn objects named by these tags, each in its own colour. It is
+  // the 3D scene's answer to the overlay's selection halo, and it exists for the
+  // same reason `pick` does: what is selected is a MODEL, and a rectangle drawn
+  // round it on the plane describes something else.
+  //
+  // Applied on the next rendered frame rather than here, so a caller may set it
+  // as often as it likes and a prop that loads later still lights up.
+  setHighlight(tags: ReadonlyMap<unknown, string>): void {
+    this.highlight = tags;
+  }
+
+  private syncHighlight(): void {
+    const want = new Map<THREE.Mesh, string>();
+    if (this.highlight.size) {
+      this.scene.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const color = this.highlight.get(pickTagOf(mesh));
+        if (color !== undefined) want.set(mesh, color);
+      });
+    }
+    for (const [mesh, painted] of this.highlighted) {
+      if (want.get(mesh) === painted.color) continue;
+      mesh.material = painted.material;
+      this.highlighted.delete(mesh);
+    }
+    for (const [mesh, color] of want) {
+      if (this.highlighted.has(mesh)) continue;
+      const material = mesh.material;
+      this.highlighted.set(mesh, { color, material });
+      mesh.material = Array.isArray(material)
+        ? material.map((m) => this.highlightMaterial(m, color))
+        : this.highlightMaterial(material, color);
+    }
+  }
+
+  // The selected look of one material: the surface it already wears, lit from
+  // within. A tint over the albedo would be invisible on a dark prop and a flat
+  // colour would hide the thing being judged, and this reads as selection at any
+  // brightness while leaving the model's own shape and grain to be looked at.
+  //
+  // The emissive MAP is dropped with it: a lamp's own glow pattern is exactly
+  // what the selection colour has to be told apart from.
+  private highlightMaterial(src: THREE.Material, color: string): THREE.Material {
+    const key = `${color}|${src.uuid}`;
+    const existing = this.highlightMaterials.get(key);
+    if (existing) return existing;
+    const clone = src.clone();
+    const std = clone as THREE.MeshStandardMaterial;
+    if (std.isMeshStandardMaterial) {
+      std.emissive = new THREE.Color(color);
+      std.emissiveIntensity = 0.5;
+      std.emissiveMap = null;
+    }
+    this.highlightMaterials.set(key, clone);
+    return clone;
+  }
+
+  private clearHighlight(): void {
+    // The meshes are about to be disposed with their visuals, so only the
+    // clones this scene made are its to free.
+    this.highlighted.clear();
+    for (const m of this.highlightMaterials.values()) m.dispose();
+    this.highlightMaterials.clear();
+  }
+
   // One rendered frame. `alpha` is the interpolation factor the 2D renderer
   // takes, and every transform below is read at it.
   // `orbit` turns the view about what it is looking at, and only the editor ever
@@ -420,6 +534,10 @@ export class Scene3D {
 
     this.chains.sync(level, alpha);
     this.ballVisual?.sync(alpha);
+    // After the visuals are synced and before the frame is drawn: a highlight is
+    // a material swap on meshes the reconciliation above may have only just
+    // created, and it costs a traverse only while something is selected.
+    this.syncHighlight();
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -434,6 +552,7 @@ export class Scene3D {
   }
 
   private clearLevel(): void {
+    this.clearHighlight();
     for (const visual of this.bodies.values()) {
       this.scene.remove(visual.root);
       visual.dispose();

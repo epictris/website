@@ -957,7 +957,15 @@ function lightItem(
 
 // Editor model → metre-space LevelData. Each layer writes its own list, and
 // only the fields that layer gives meaning to.
-export function toLevelData(model: EdModel): LevelData {
+//
+// `itemOf`, when given, is filled with the item each written scene object came
+// from, keyed by the OBJECT ITSELF. That is what lets the editor act on a 3D
+// pick: the scene is built from this data, a drawn object carries the authored
+// object it was built from (`pickTagOf`), and this is the only place that knows
+// which item wrote it. It is an out-parameter rather than a second return value
+// so the save path - which wants the data and nothing else - is unchanged, and
+// nothing about the file depends on whether it was passed.
+export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number>): LevelData {
   const shapeOf = (i: EdItem): ShapeData => {
     if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
     if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
@@ -1056,17 +1064,23 @@ export function toLevelData(model: EdModel): LevelData {
     };
 
     const objects: SceneObjectData[] = [];
+    // Every object written goes through this, so one cannot reach the file
+    // without `itemOf` recording which item wrote it.
+    const emit = (item: EdItem, o: SceneObjectData): void => {
+      objects.push(o);
+      itemOf?.set(o, item.id);
+    };
     for (const i of run) {
       if (i.object === "anchor") {
         // A placement and the id chains name it by, and nothing else - which is
         // all an anchor is.
-        objects.push({ type: "anchor", id: i.anchorId, ...localOf(i) });
+        emit(i, { type: "anchor", id: i.anchorId, ...localOf(i) });
         continue;
       }
       if (i.object === "light") {
         const d = defaultLight();
         const spot = i.light.kind === "spot";
-        objects.push({
+        emit(i, {
           type: "light",
           ...localOf(i),
           // Omit anything left at its default, so a saved light carries only
@@ -1098,7 +1112,7 @@ export function toLevelData(model: EdModel): LevelData {
         continue;
       }
       if (i.object === "collision") {
-        objects.push({
+        emit(i, {
           type: "collision",
           ...localOf(i),
           shape: shapeOf(i),
@@ -1125,7 +1139,7 @@ export function toLevelData(model: EdModel): LevelData {
       // inherit, so its decoration always states one.
       const bodyFill = lead.object === "collision" ? lead : undefined;
       const ownFill = i.color !== bodyFill?.color || i.opacity !== bodyFill?.opacity;
-      objects.push({
+      emit(i, {
         ...look,
         ...localOf(i),
         shape: shapeOf(i),

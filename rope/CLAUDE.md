@@ -1346,6 +1346,31 @@ So the canvas stops picking too and the cursor says so.
 What still edits there is the **transform gizmo** below, which is in the scene rather than on the overlay - which is the point of it: the fields worth authoring from an angle are the ones a turned view is the only way to judge.
 Ctrl is on the orbit rather than on the pan because panning is how you get around a level and is wanted in every view, while orbiting is the rarer act and the one you come back from; with no scene to turn (the 2D view) Ctrl+middle simply pans like any other middle drag.
 
+### Geometry is picked by its model, not by an outline
+
+**A geometry object has no outline on the overlay while a scene is drawn underneath, and is selected by clicking the thing that IS drawn** (`Scene3D.pick`, `raycastItems` in `editor.ts`).
+The overlay's answer to "where is this object" was a rectangle on the gameplay plane, and that is not what a geometry object is: a primitive is a solid extruded through z, and a **mesh is a prop whose silhouette the authored outline never described at all**.
+A lamp bracket 10 cm across placed in a 4 m box was therefore clickable by four metres of empty air around it, and a pipe running behind a wall was clickable through the wall - the box being both the only thing drawn for it and the only thing a click could land on.
+Measured on a 4 m box wearing `bulkhead-lamp`: **722 of 729 sample points inside the box selected the prop before, and 1 after** - the one that is the lamp.
+
+The pick is a **raycast through the camera the last frame was drawn with**, so it is about the picture the pointer was actually aimed at, and it holds at any depth and through either lens where an outline test on the plane cannot.
+Everything else about picking is untouched: the ray only decides whether a geometry object is HIT, and `pickOrder`'s rules (the active layer, then depth, then a collision object winning a tie with the form drawn over it) still decide which of the things under the pointer wins, so **click the body, then click into it, then into what is behind it** cycles exactly as before.
+The chain tool still asks the plane, because an anchor is placed on a body's collision outline.
+
+The chain from a mesh under the pointer back to a row in the outliner is three links, and each is somewhere different: `BodyVisual` stamps every drawn object's group with the authored object it was built from (`pickTagOf`), `toLevelData` records which ITEM wrote each object it writes, and the editor rebuilds that map with the scene so it can never name an item the picture was not built from.
+The middle link is the one that can break silently - `toLevelData` writing one object per item, in item order, is an invariant nothing else in the suite depends on - so `cli render3d`'s `pick:` cases assert it directly.
+The 3D half cannot be checked headlessly at all: building a `BodyVisual` needs a DOM for the generated textures, so the raycast itself is verified by driving the real page (see `reference_editor_cdp_harness`).
+
+Two things follow from taking the outline away, and both are the same statement said again.
+**Selection is shown on the model** (`Scene3D.setHighlight`), in the overlay's own colours - the selection orange, and the blue that means "this is what the selected body is made of" - applied as an emissive over the surface the object already wears, so what is lit up is the shape being judged rather than a box around it.
+And **a geometry object offers no handles on the plane there** (`hasPlaneHandles`), because every one of them - the corner boxes, the rotate knob, the radius grip, the depth arrow - is a point on the outline that is not drawn, so left in they are the box that was just taken away redrawn as squares floating in empty space.
+Its handle set in a 3D view is the **transform gizmo**, which is in the scene and therefore on the thing being edited, and which covers every field a geometry object has.
+The one cost is that a geometry POLYGON's vertices are edited in the **2D view**, which is the view its outline is drawn in.
+
+In the **2D view none of this applies**: there is no scene to ask, the outline is both what is drawn and what is picked, and every handle is back.
+That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
+An **orbited** view still picks nothing at all (above): the ray would answer for geometry, but the collision shapes, lights, regions and notes it shares the canvas with are still resolved against the plane, and half a pick is worse than none.
+
 ### The lens
 
 `⧉ Ortho` (**O**) draws the scene through an **orthographic** camera instead of the perspective one (`ViewProjection` in `render3d/space.ts`).
@@ -1396,7 +1421,8 @@ Snapping is the editor's own: the same 10 cm grid and 15° step the 2D drags use
 The scene is rebuilt in full from the model whenever `modelRev` moves - the model is a couple of hundred shapes, and correctness beats a diff of what an edit touched - through the same `buildLevelBodies` the game loads with, so what is on screen while editing is what will be played rather than a second interpretation of the same file.
 Chains stay on the 2D canvas there, and deliberately: the editor draws a chain **straight** because a span between wrap nodes is straight, and solving them to draw them would be a second simulation running under the editor.
 A geometry object's panel authors what it is drawn as (**kind** - `primitive` or `mesh` - plus mesh, depth, bevel, texture) alongside the placement and size every object has, since a geometry object states its own form and those fields are what say it.
-`mesh` gets a badge on the canvas, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
+`mesh` gets a badge on the canvas in the **2D view**, being the one kind whose outline is not what the player sees; a primitive is drawn as exactly the shape on screen, so a badge on it would be a mark on almost every object saying nothing.
+In a 3D view the prop itself is drawn, so the badge would be a mark pointing at the thing it is standing on, and it is not drawn (see **Geometry is picked by its model**).
 
 `▶ Test Grapple` / `▶ Test Ball` build a real `Level`/`BallLevel` from
 the current model and run it inline (with the real camera, so a camera region is felt exactly as it will play); **Esc** returns to editing.
@@ -1508,7 +1534,8 @@ Two rules make it read as decoration, and they are load-bearing rather than cosm
 
 The editor adds a dashed **teal outline** on top, editor chrome like a handle rather than part of the drawing: an author has to be able to find and click a shape that is dark, huge or nearly transparent, and above all has to be able to tell at a glance which shapes on the canvas are part of the level. It is a saturated colour on purpose - a neutral grey edge vanishes into either the pale grid backdrop or the shape's own fill, whichever it was picked to contrast with.
 
-That edge is drawn for **every** geometry object and the fill for only some, by the same rule the game's 2D view follows: a primitive on a colliding body, on that body's own plane, is already filled by the collision shape it was made from, so filling it again would darken every wall in the editor by its own opacity and show the author a level that is not what plays.
+That edge, and the whole of this pass, belongs to the **2D view**: with a scene drawn underneath there is a model on screen saying where the object is, and a dashed rectangle beside it is the editor stating something the level does not contain (see **Geometry is picked by its model, not by an outline**).
+In the 2D view the edge is drawn for **every** geometry object and the fill for only some, by the same rule the game's 2D view follows: a primitive on a colliding body, on that body's own plane, is already filled by the collision shape it was made from, so filling it again would darken every wall in the editor by its own opacity and show the author a level that is not what plays.
 One that has been resized or moved off its collision shape then reads as exactly that - a dashed outline standing away from the solid, with the fill still where the body is.
 For the same reason a click at that tie takes the **collision** object: the two are one shape on screen, a click means the thing that decides where the player can go, and the form drawn over it is one row away in the tree the pick has already unfolded.
 
@@ -1583,6 +1610,8 @@ A whole-group selection therefore gets its own rotate knob (placed by the group'
 Every group draws a small centre-of-mass diamond so it is identifiable as one body without being selected first, and a selected one adds a dashed hull and spokes to that centre.
 
 A compound body is drawn as **one object**, not as its pieces: the shapes are filled as a union with the nonzero rule (so an overlap contributes one layer of the authored opacity rather than one each) and each piece is stroked only where it lies **outside every sibling**, which is the body's real outline.
+The selection halo is the same walk over the **selected** pieces alone rather than over the whole body, which is what makes Alt+click's whole point visible: one piece picked out shows its own full outline, seam edge included, because that outline is what the piece IS, and every piece selected shows the body's outline with no seams drawn across it.
+Haloing the body whenever any member was selected said the edit applied to all of it, which for a numeric field or a Delete is exactly what it would not.
 Drawn piece by piece it read as a darker patch at every overlap and a crack at every join - a wall with a line down it.
 The clip is applied one sibling at a time on purpose: a single even-odd clip keeps the region inside *two* of them, which is exactly where an interior seam sits.
 `drawCompoundGeometry` (game) and `strokeCompoundOutline` (editor) are the two implementations of that one rule.

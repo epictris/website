@@ -59,7 +59,7 @@ import ballLevelJson from "../../levels/ball.json";
 const BALL_LEVEL = ballLevelJson as unknown;
 import { World } from "../engine/world";
 import { buildLevelBodies, localPlacement, worldPlacement } from "../level/buildBodies";
-import { modelFromDisk, modelToDisk, type EdItem } from "../editor/model";
+import { modelFromDisk, modelToDisk, toLevelData, type EdItem } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
 import { PIXELS_PER_METER, PX } from "../engine/units";
@@ -748,6 +748,111 @@ function editorRoundTrip(): CaseResult[] {
       detail: stayedBare
         ? "one collision object, nothing added"
         : `wrote ${JSON.stringify(reopened.bodies[0]!.objects)}`,
+    },
+  ];
+}
+
+// WHAT A 3D PICK ANSWERS WITH. The editor selects scene geometry by raycasting
+// the scene rather than by testing an outline on the gameplay plane, and the
+// whole chain from a mesh under the pointer back to a row in the outliner is:
+// the drawn object carries the authored object it was built from
+// (`BodyVisual`'s pick tag), and `toLevelData` is the only thing that knows
+// which ITEM wrote that object.
+//
+// That second half is what is asserted here, because it is the half that can
+// break silently. `toLevelData` writes one scene object per item, in item order,
+// and a future edit that skips one, writes two, or reorders them leaves a level
+// that saves, loads and renders exactly as before while every click past the
+// mistake selects the wrong thing - or nothing. Nothing else in the suite can
+// see it, and the 3D half cannot be checked headlessly at all (building a
+// `BodyVisual` needs a DOM for the generated textures).
+function pickIndex(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      // A compound body with two pieces, each dressed, plus a light: the case
+      // where an object's place in its body is the only thing telling two of
+      // them apart.
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        color: "#555555",
+        opacity: 0.5,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 80, h: 80 } },
+          {
+            type: "geometry",
+            x: 10,
+            shape: { kind: "rect", w: 80, h: 80 },
+            kind: "mesh",
+            mesh: "prop-a",
+          },
+          { type: "collision", x: 120, shape: { kind: "rect", w: 40, h: 40 } },
+          {
+            type: "geometry",
+            x: 120,
+            shape: { kind: "rect", w: 40, h: 40 },
+            kind: "mesh",
+            mesh: "prop-b",
+          },
+          { type: "light", x: 60 },
+        ],
+      },
+      // ...and a body that is nothing but a prop, which has no collision object
+      // to be found by instead.
+      {
+        kind: "static",
+        x: 400,
+        y: -200,
+        rot: 0.4,
+        objects: [
+          {
+            type: "geometry",
+            shape: { kind: "rect", w: 200, h: 200 },
+            kind: "mesh",
+            mesh: "prop-c",
+          },
+        ],
+      },
+    ],
+  };
+  const model = modelFromDisk(authored);
+  const itemOf = new Map<SceneObjectData, number>();
+  const data = toLevelData(model, itemOf);
+  const items = new Map(model.items.map((i) => [i.id, i]));
+
+  const written = data.bodies.reduce((n, b) => n + b.objects.length, 0);
+  const missed = data.bodies.flatMap((b) => b.objects).filter((o) => !itemOf.has(o));
+
+  // Every DRAWN object resolves to the geometry item that authored it, told
+  // apart by the prop each one names - a mapping that is off by one still
+  // answers with a geometry item, and only the name says which.
+  const wrong: string[] = [];
+  for (const g of data.bodies.flatMap((b) => drawnObjects(b))) {
+    const id = itemOf.get(g);
+    const item = id === undefined ? undefined : items.get(id);
+    if (item?.object === "geometry" && item.visual.mesh === g.mesh) continue;
+    wrong.push(
+      `${g.mesh ?? "(none)"} -> ${item ? `#${item.id} ${item.object} ${item.visual.mesh ?? "(none)"}` : "nothing"}`,
+    );
+  }
+
+  return [
+    {
+      name: "pick: every scene object written names the item that wrote it",
+      pass: missed.length === 0 && itemOf.size === written,
+      detail:
+        missed.length === 0 && itemOf.size === written
+          ? `${written} objects, ${itemOf.size} indexed`
+          : `${missed.length} of ${written} unindexed (${itemOf.size} indexed)`,
+    },
+    {
+      name: "pick: a drawn object resolves to the geometry item that authored it",
+      pass: wrong.length === 0,
+      detail: wrong.length === 0 ? "3 props, each its own item" : wrong.join("; "),
     },
   ];
 }
@@ -1722,6 +1827,7 @@ export function runRender3dCases(): CaseResult[] {
     ...surfaceResolution(),
     ...visualRoundTrip(),
     ...editorRoundTrip(),
+    ...pickIndex(),
     ...lightRoundTrip(),
     ...lightRidesBody(),
     ...lightAim(),

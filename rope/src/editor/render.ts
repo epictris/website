@@ -41,7 +41,7 @@ import { REGION_EXIT_MARGIN } from "../render/cameraController";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
-const SELECT = "#f4a460";
+export const SELECT = "#f4a460";
 // Marks a shape whose 3D visual is NOT its own outline (see the badge pass): a
 // muted violet, distinct from the selection orange and the hook-proof steel, and
 // from the camera layer's own violet by being fully saturated rather than a fill.
@@ -77,7 +77,7 @@ const GROUP_MARK = "#7fd6a8";
 // selection orange, which everywhere else means "an edit applies to this". Blue
 // says the opposite: these are what the selected body is made of, shown so the
 // body's extent is visible without the pieces being picked.
-const BODY_MEMBER = "#4f9dff";
+export const BODY_MEMBER = "#4f9dff";
 
 export const HANDLE_SIZE_PX = 8; // drawn square side
 export const HANDLE_HIT_PX = 9; // pointer pick radius
@@ -121,6 +121,27 @@ export interface Handles {
 }
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
+// Does this item offer handles on the gameplay plane at all?
+//
+// Every one of them - the corner boxes, the rotate knob, the radius grip, a
+// polygon's vertices, the depth arrow - is a point on an OUTLINE, and once a
+// scene is drawn underneath, a geometry object's outline is not on this canvas
+// (see the decoration pass in `drawEditor`). Left in, they are the box that was
+// just taken away, drawn as four squares floating in empty space with nothing
+// between them: on a mesh they sit metres from the prop and, since the file has
+// one `scale` for a mesh and no width at all, most of them edit nothing visible
+// either.
+//
+// So in a 3D view a geometry object's handle set IS the transform gizmo, which
+// is in the scene and therefore on the thing being edited. The cost is that a
+// geometry POLYGON's vertices are edited in the 2D view, which is the view its
+// outline is drawn in. Everything else - collision shapes, camera regions,
+// notes, lights - keeps its handles in every view, because the overlay goes on
+// drawing those.
+export function hasPlaneHandles(item: EdItem, layers: "fill" | "outline"): boolean {
+  return layers === "fill" || item.object !== "geometry";
+}
+
 export function computeHandles(cam: Camera, body: EdItem): Handles {
   // An arrow is a segment, so it is edited by its endpoints: dragging either one
   // sets the position, length and direction at once, which is what a corner box
@@ -794,12 +815,17 @@ function drawBodyMembers(
   bodyIds: ReadonlySet<number>,
   visibleLayers: ReadonlySet<EdLayer>,
   worldLine: number,
+  // A geometry object's outline is not drawn on this canvas at all while a scene
+  // is under it (see the decoration pass), so neither is this ring round it -
+  // the scene paints the body's objects instead (`Scene3D.setHighlight`).
+  drawGeometry: boolean,
 ): void {
   if (!bodyIds.size) return;
   ctx.strokeStyle = BODY_MEMBER;
   ctx.lineWidth = worldLine * 3;
   for (const i of items) {
     if (!bodyIds.has(i.bodyId) || !visibleLayers.has(i.layer)) continue;
+    if (i.object === "geometry" && !drawGeometry) continue;
     if (i.object === "light" || i.object === "anchor") {
       ctx.beginPath();
       ctx.arc(i.pos.x, i.pos.y, lightPickRadius(worldLine) * 1.6, 0, Math.PI * 2);
@@ -887,7 +913,18 @@ export function drawEditor(
       ? model.items.filter((i) => i.object === "geometry")
       : []
   ).sort((a, b) => depth(a) - depth(b));
-  for (const g of decor) {
+  // A GEOMETRY OBJECT HAS NO OUTLINE HERE ONCE THERE IS A SCENE UNDER IT.
+  //
+  // What this loop draws is a rectangle (or circle, or loop) on the gameplay
+  // plane, and that is not what a geometry object IS: a primitive is a solid
+  // extruded through z and a mesh is a prop whose silhouette the outline never
+  // described at all, so the box round a lamp bracket says the bracket is a
+  // metre wide and the box round a pipe says it is where the pipe is not. In the
+  // 2D view the outline is all there is and it stays; in a 3D view the model is
+  // on screen, it is what a click lands on (see `raycastItems`), and drawing a
+  // second, wrong shape over it is the editor stating something the level does
+  // not contain. Selection is said on the model instead (`Scene3D.setHighlight`).
+  for (const g of layers === "fill" ? decor : []) {
     // FILLED ONLY WHERE NOTHING ELSE FILLS IT, which is the rule the game's 2D
     // view is drawn under (`collectDecor`): a body that collides has a primitive
     // per collision shape, stating the same outline in the same place, and this
@@ -943,8 +980,19 @@ export function drawEditor(
     const union = unionPath(members);
     ctx.fillStyle = paint(hexToRgba(body.color, body.opacity));
     ctx.fill(union);
-    if (members.some((m) => selectedIds.has(m.id))) {
-      strokeCompoundOutline(ctx, members, () => {
+    // THE HALO IS ROUND WHAT IS SELECTED, not round the body it is in. Alt+click
+    // picks one piece of a compound body out precisely so that piece can be
+    // edited on its own, and haloing the whole body says the edit applies to all
+    // of it - which for a numeric field or a delete is exactly what it would not.
+    //
+    // Clipped against the SELECTED pieces rather than against every member, so
+    // the rule holds at both ends: one piece selected shows its own full outline,
+    // seam edge included, because that outline is what the piece IS; the whole
+    // body selected shows the body's outline with no seams drawn across it,
+    // which is the same answer the border below gives.
+    const haloed = members.filter((m) => selectedIds.has(m.id));
+    if (haloed.length) {
+      strokeCompoundOutline(ctx, haloed, () => {
         ctx.strokeStyle = SELECT;
         ctx.lineWidth = worldLine * 5;
         ctx.setLineDash([]);
@@ -1045,7 +1093,12 @@ export function drawEditor(
   // one kind whose outline is NOT what the player sees: a prop stands in for it.
   // A primitive is drawn as exactly the shape on screen, so a badge on it would
   // be a mark on almost every object saying nothing.
-  for (const body of [...(visibleLayers.has("scene") ? geometry : []), ...decor]) {
+  // ...and only where the prop is NOT drawn. In a 3D view the prop itself is on
+  // screen, so a badge saying "a prop is drawn here" is a mark pointing at the
+  // thing it is standing on.
+  const badged =
+    layers === "fill" ? [...(visibleLayers.has("scene") ? geometry : []), ...decor] : [];
+  for (const body of badged) {
     const kind = body.visual.kind;
     if (kind !== "mesh") continue;
     const r = 6 * PX;
@@ -1183,7 +1236,7 @@ export function drawEditor(
   // Over every object it marks - a body's pieces are drawn in several passes and
   // an outline under one of them would be half hidden - and under the handles,
   // which are still the topmost thing on the canvas.
-  drawBodyMembers(ctx, model.items, selectedBodyIds, visibleLayers, worldLine);
+  drawBodyMembers(ctx, model.items, selectedBodyIds, visibleLayers, worldLine, layers === "fill");
 
   // Notes on top of everything they annotate — they are commentary on the
   // scene, and a note hidden behind the geometry it explains would be useless.
@@ -1319,7 +1372,8 @@ export function drawEditor(
     ctx.stroke();
     circleHandle(ctx, gh.rotate);
   }
-  const selected = selection.length === 1 ? selection[0]! : null;
+  const selected =
+    selection.length === 1 && hasPlaneHandles(selection[0]!, layers) ? selection[0]! : null;
   if (selected) {
     const hs = computeHandles(cam, selected);
     if (hs.rotate) {
