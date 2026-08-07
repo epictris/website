@@ -651,8 +651,13 @@ export function visualData(v: EdVisual): GeometryObjectData | undefined {
     ...(v.kind !== d.kind ? { kind: v.kind } : {}),
     ...(v.kind === "mesh" && v.mesh ? { mesh: v.mesh } : {}),
     ...(v.offsetZ !== 0 ? { z: v.offsetZ } : {}),
-    ...(v.rotX !== 0 ? { rotX: v.rotX } : {}),
-    ...(v.rotY !== 0 ? { rotY: v.rotY } : {}),
+    // Out-of-plane tips are a PROP's, like `mesh` above: `mountVisual` builds the
+    // holder that carries them only for a mesh, and a primitive is its own
+    // outline extruded along z, so writing them there records a pose nothing
+    // draws and an author cannot see - which is exactly what the gizmo's x and y
+    // rings used to be before they were dropped for a primitive.
+    ...(v.kind === "mesh" && v.rotX !== 0 ? { rotX: v.rotX } : {}),
+    ...(v.kind === "mesh" && v.rotY !== 0 ? { rotY: v.rotY } : {}),
     ...(v.scale !== d.scale ? { scale: v.scale } : {}),
     ...(v.depth !== null ? { depth: v.depth } : {}),
     ...(v.texture ? { texture: v.texture } : {}),

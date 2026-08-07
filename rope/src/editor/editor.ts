@@ -757,12 +757,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // shape that can never be grabbed again, and negative is a shape inside out.
   const MIN_EXTENT = PX;
 
+  // Does this item tip out of the gameplay plane? Only a MESH does. A primitive
+  // is its own shape extruded along z, so there is no `rotX`/`rotY` anywhere in
+  // the path that draws it, and the rings that wrote those fields were a dial
+  // connected to nothing: the gizmo tilted, the inspector's numbers changed, the
+  // level went on looking exactly as it did.
+  const tips = (i: EdItem): boolean => i.object === "geometry" && i.visual.kind === "mesh";
+
   // The item's orientation as three sees it: the same composition the renderer
   // builds (`mountVisual` turns the piece about z and the holder about x and y),
   // which is why the decomposition below reads Euler order ZXY and gets exactly
   // `rotX`, `rotY` and `-rot` back.
+  //
+  // That holder is built for a MESH alone - `mountVisual` returns before it on a
+  // primitive - so `rotX`/`rotY` are a prop's fields and nothing else's.
   function itemQuat(i: EdItem): THREE.Quaternion {
-    const geo = i.object === "geometry";
+    const geo = tips(i);
     return new THREE.Quaternion().setFromEuler(
       new THREE.Euler(
         geo ? i.visual.rotX : 0,
@@ -819,8 +829,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (mode === "translate") return { x: true, y: true, z: offPlane };
         if (mode === "rotate") {
           // A shape's rotation in the plane is the only one the level records
-          // for it; the two out-of-plane ones exist on a drawn form alone.
-          return { x: it.object === "geometry", y: it.object === "geometry", z: true };
+          // for it; the two out-of-plane ones exist on a PROP alone, since a
+          // primitive is drawn by extruding its own outline along z and nothing
+          // in that path reads `rotX`/`rotY` (see `tips`).
+          return { x: tips(it), y: tips(it), z: true };
         }
         // Scale. An anchor is a point and a light is a reach authored by its own
         // radius handle, so neither has a size this could write.
@@ -864,7 +876,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         } else if (mode === "rotate") {
           const e = new THREE.Euler().setFromQuaternion(quat, "ZXY");
           it.rot = threeRotation(e.z);
-          if (it.object === "geometry") {
+          if (tips(it)) {
             it.visual.rotX = e.x;
             it.visual.rotY = e.y;
           }

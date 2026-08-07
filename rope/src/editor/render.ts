@@ -124,22 +124,30 @@ export interface Handles {
 // Does this item offer handles on the gameplay plane at all?
 //
 // Every one of them - the corner boxes, the rotate knob, the radius grip, a
-// polygon's vertices, the depth arrow - is a point on an OUTLINE, and once a
-// scene is drawn underneath, a geometry object's outline is not on this canvas
-// (see the decoration pass in `drawEditor`). Left in, they are the box that was
-// just taken away, drawn as four squares floating in empty space with nothing
-// between them: on a mesh they sit metres from the prop and, since the file has
-// one `scale` for a mesh and no width at all, most of them edit nothing visible
-// either.
+// polygon's vertices, the depth arrow - is a point on an OUTLINE, so the
+// question is whether the thing drawn on this canvas HAS that outline.
 //
-// So in a 3D view a geometry object's handle set IS the transform gizmo, which
-// is in the scene and therefore on the thing being edited. The cost is that a
-// geometry POLYGON's vertices are edited in the 2D view, which is the view its
-// outline is drawn in. Everything else - collision shapes, camera regions,
-// notes, lights - keeps its handles in every view, because the overlay goes on
-// drawing those.
+// A MESH does not, and once a scene is drawn underneath there is nothing on the
+// canvas standing for it: the handles are the box that was just taken away,
+// drawn as four squares floating in empty space with nothing between them,
+// sitting metres from the prop, and since the file has one `scale` for a mesh
+// and no width at all, most of them edit nothing visible either. So in a 3D view
+// a mesh's handle set IS the transform gizmo, which is in the scene and
+// therefore on the thing being edited.
+//
+// A PRIMITIVE is the opposite case: it is its own shape extruded, so the solid
+// drawn under the overlay is exactly that outline and the handles land on its
+// corners. Suppressing them there cost the cheapest edit a primitive has - drag
+// a corner to resize it - in the view the editor opens in, and offered the
+// gizmo's scale boxes as the only substitute. The handles are projected on the
+// gameplay plane like every other one, so a primitive pushed off the plane by
+// its `off z` has them where its outline is rather than where the perspective
+// draws its face; an orbited view drops the whole overlay in any case.
+//
+// Everything else - collision shapes, camera regions, notes, lights - keeps its
+// handles in every view, because the overlay goes on drawing those.
 export function hasPlaneHandles(item: EdItem, layers: "fill" | "outline"): boolean {
-  return layers === "fill" || item.object !== "geometry";
+  return layers === "fill" || item.object !== "geometry" || item.visual.kind === "primitive";
 }
 
 export function computeHandles(cam: Camera, body: EdItem): Handles {

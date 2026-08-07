@@ -1415,9 +1415,12 @@ The 3D half cannot be checked headlessly at all: building a `BodyVisual` needs a
 
 Two things follow from taking the outline away, and both are the same statement said again.
 **Selection is shown on the model** (`Scene3D.setHighlight`), in the overlay's own colours - the selection orange, and the blue that means "this is what the selected body is made of" - applied as an emissive over the surface the object already wears, so what is lit up is the shape being judged rather than a box around it.
-And **a geometry object offers no handles on the plane there** (`hasPlaneHandles`), because every one of them - the corner boxes, the rotate knob, the radius grip, the depth arrow - is a point on the outline that is not drawn, so left in they are the box that was just taken away redrawn as squares floating in empty space.
-Its handle set in a 3D view is the **transform gizmo**, which is in the scene and therefore on the thing being edited, and which covers every field a geometry object has.
-The one cost is that a geometry POLYGON's vertices are edited in the **2D view**, which is the view its outline is drawn in.
+And **a MESH offers no handles on the plane there** (`hasPlaneHandles`), because every one of them - the corner boxes, the rotate knob, the radius grip, the depth arrow - is a point on an outline that is not drawn and that never described the prop anyway, so left in they are the box that was just taken away redrawn as squares floating in empty space.
+Its handle set in a 3D view is the **transform gizmo**, which is in the scene and therefore on the thing being edited, and which covers every field a mesh has.
+
+A **primitive** is the opposite case and keeps its plane handles in every view, because the rule is "the overlay offers handles for exactly what is drawn" rather than "a geometry object has no outline": a primitive IS its own shape extruded, so the solid under the overlay is that outline and the corner boxes land on its corners.
+Suppressing them cost the cheapest edit a primitive has - drag a corner to resize it - in the view the editor opens in, and offered the gizmo's scale boxes as the only substitute.
+They are projected on the gameplay plane like every other handle, so a primitive pushed off the plane by its `off z` has them where its outline is rather than where the perspective draws its face; an orbited view drops the whole overlay in any case.
 
 In the **2D view none of this applies**: there is no scene to ask, the outline is both what is drawn and what is picked, and every handle is back.
 That is not a fallback but the same rule - the overlay picks and offers handles for exactly what it draws.
@@ -1468,15 +1471,21 @@ A move is then written as a CHANGE against where the handles started rather than
 
 | Target | move | rotate | scale |
 |---|---|---|---|
-| geometry object | x, y, z | x, y, z | w/h + depth, or a mesh's one `scale` |
+| geometry: mesh | x, y, z | x, y, z | its one `scale` |
+| geometry: primitive | x, y, z | z | w/h + depth |
 | collision shape | x, y | z | w/h |
 | light | x, y, z | z (its aim) | - (its reach is the 2D radius handle) |
 | body | x, y | z, as a delta about the centre of mass | - (a body has no size; its objects do) |
 
+A **primitive does not tip**, and that is this table's rule rather than an exception to it.
+`EdVisual.rotX`/`rotY` are carried by the holder object `mountVisual` builds for a **prop**, and it returns before that on a primitive - which is its own outline extruded along z and has nowhere to put an out-of-plane angle.
+So the x and y rings on a primitive were a dial connected to nothing: the gizmo tilted, `rot x°`/`rot y°` changed, and the level went on looking exactly as it did.
+`visualData` stops writing the two fields for a primitive for the same reason `mesh` has always been written only for a mesh - a pose nothing draws is not a pose the file should record.
+
 Two consequences worth knowing before reaching for it.
 A **mesh has one `scale`**, so any axis of the handle drives it, by the mean of the three factors - the uniform centre handle is exact and a single axis is an approximation of "bigger", because the file has one number and cannot record more.
 And **an axis pointing at the camera cannot be dragged**, which head on is z for a move and the ring for a turn: `TransformControls` hides a handle within a few degrees of the view direction, and maps a ring drag onto the screen direction perpendicular to both the axis and the view, which degenerates as the two line up.
-Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which a geometry object gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
+Turning about z head on is therefore the 2D rotate knob's job (or the outer screen-space ring, which a mesh gets since all three of its axes are authorable), and moving through z head on is the **depth handle** below.
 Orbited, both gizmo handles behave normally - which is the pairing: orbit to see the depth, drag the blue arrow to author it.
 
 ### The depth handle
