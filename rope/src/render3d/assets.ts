@@ -272,6 +272,50 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "Amal Kumar",
     license: "CC0",
   },
+  // Stratified dark rock: sharp fractures, deep crevices, layered plates. The
+  // surface a cliff face, a quarry wall or the rock a sewer is cut into is made
+  // of, and the tileable counterpart to the `rock-*` boulders - those are one
+  // pack's props and this is the wall behind them.
+  //
+  // Keyed as a SURFACE for the reason `rock wall` is: `stone` already has a
+  // generated surface every stone body wears by naming its material, and this
+  // is a particular weathered rock rather than what stone is, so a set under
+  // the material's name would re-skin every stone body in every level as a side
+  // effect of dressing one wall. A shape asks for it by name instead.
+  "dark rock": {
+    maps: {
+      base: {
+        file: "/textures/dark-rock-base.webp",
+        sha256: "17c8e322a4ad77197dbed067cac872ea4096ffbe1bd04bf26ff03d530b115abe",
+      },
+      normal: {
+        file: "/textures/dark-rock-normal.webp",
+        sha256: "27625b2f60e4647cc540c47b766dfe56db6fb2802a6fa47aee22ba29ab3a2bee",
+      },
+      // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
+      // B metallic - so these two are the same download read on two channels,
+      // each flattened to grey by `assets:optimize-texture --channel`. The B
+      // channel is a dielectric's zero and is stated below rather than shipped
+      // as a black image.
+      roughness: {
+        file: "/textures/dark-rock-roughness.webp",
+        sha256: "136c1614ba24f4282374516b027ff341929e7c2079445f86963351b3f228623a",
+      },
+      ao: {
+        file: "/textures/dark-rock-ao.webp",
+        sha256: "1757cd680741e9aa39c2495ef3858447bc81fb0ab500b4b6d9c927309a996baf",
+      },
+    },
+    // Poly Haven's own captured size, 2000.9 mm square
+    // (https://api.polyhaven.com/info/dark_rock_02), so a plate of the rock
+    // lands life size with nothing eyeballed.
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/dark_rock_02",
+    author: "Amal Kumar",
+    license: "CC0",
+  },
   // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
   // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
   //
@@ -888,8 +932,30 @@ export interface MeshAsset {
   // Under `public/meshes/`, which is gitignored and populated by
   // `bun run assets:fetch` - the bytes live in a GitHub Release, not in git (see
   // scripts/assetStore.ts for why). The basename is also the asset's name in
-  // that release, so it must be unique across the manifest.
+  // that release, so two entries naming DIFFERENT files may not share one.
+  //
+  // Several entries may name the SAME file, and then each addresses one prop
+  // inside it by `node` - see there.
   file: string;
+  // Which prop inside `file`, by node name, for a file holding more than one.
+  // Absent means the file is one prop and its whole scene is it, which is what
+  // every asset modelled and downloaded on its own is.
+  //
+  // This exists because a model PACK shares its materials, and a texture set is
+  // the overwhelming majority of a prop's bytes: the 24 rocks are ~20 KB of
+  // geometry each and 370 KB of 1k maps they all have in common. One file each
+  // is 9.4 MB, of which 8.7 MB is the same three images written out 24 times -
+  // paid again on every download, and again in VRAM, each time a level scatters
+  // more than one of them. Together they are one 624 KB file, one fetch and one
+  // GPU upload however many of them a level uses. `assets:extract` builds one;
+  // `assets:optimize --keep-nodes` is what stops the optimiser welding a pack's
+  // props into a single nameless object.
+  //
+  // The names are the manifest keys, which is what makes a pack readable: the
+  // node inside `rocks.glb` that key "rock-7" draws is called `rock-7`. A name
+  // that is not in the file loads nothing and draws the placeholder, exactly as
+  // an unknown key does.
+  node?: string;
   // The bytes this revision of the repo was written against. A release asset can
   // be replaced in place, so this is the only thing that says WHICH boulder a
   // given commit meant; the fetch verifies it and fails hard on a mismatch.
@@ -953,6 +1019,37 @@ export interface MeshAsset {
 //
 // Every entry is `assets:optimize`d, then `assets:publish`ed, and `cli assets`
 // holds the whole directory to a byte budget; see "The asset store" in CLAUDE.md.
+// The 24 rocks of one Sketchfab PACK, extracted together into ONE file that
+// they address by node (see `MeshAsset.node` for the argument, and
+// `scripts/extract-mesh.ts` for the command that built it). They are the pack's
+// 24 "standard" Cliffs stones - the ones with a bottom, so they can be seen from
+// underneath and thrown around; the pack's parallel `Static_` set is the same
+// stones with their bottom polygons deleted, and its Cracky/Moss/Snow sets are
+// the same shapes under three other texture sets, none of which is in here.
+//
+// One file means one set of bytes, one provenance and one sha256, stated once
+// here rather than copied into 24 entries where re-publishing the pack would
+// mean editing 24 hashes and any one left stale is a fetch that fails on
+// nothing. The 24 KEYS are still written out one at a time below, because the
+// manifest being a hand-written list of decisions is the point (see
+// `MESH_ASSETS`) and a key nobody typed is a prop nobody chose.
+//
+// Real-world metres, Y up, each centred on its own origin: `assets:extract`
+// bakes the pack's centimetre scale and its Z-up rotation into the vertices, so
+// none of them wears a `scale` or a `rot*`. The numbering runs smallest to
+// largest - rock-1 is a 65 cm stone, rock-24 is 2 m across - so a level author
+// picking one by number is picking by size.
+function rock(node: string): MeshAsset {
+  return {
+    file: "/meshes/rocks.glb",
+    node,
+    sha256: "e2456ed1bc38d7990beec945c2751e1371f6b78495863f5d874f92229555254c",
+    source: "https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090",
+    author: "Maksim Batyrev (@c3posw01)",
+    license: "CC BY 4.0",
+  };
+}
+
 export const MESH_ASSETS: Record<string, MeshAsset> = {
   // A wall-mounted bulkhead lamp. Its material ships an EMISSION MAP, so the
   // glass reads as lit on its own (via `wakeEmission` - the export carries no
@@ -1286,6 +1383,54 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "Anna Denisova (@Den1121)",
     license: "CC BY 4.0",
   },
+  // 0.65 x 0.23 x 0.39 m, 296 tris (Cliffs_SmallStone_1)
+  "rock-1": rock("rock-1"),
+  // 0.67 x 0.43 x 0.47 m, 388 tris (Cliffs_SmallStone_2)
+  "rock-2": rock("rock-2"),
+  // 0.77 x 0.40 x 0.55 m, 538 tris (Cliffs_SmallStone_3)
+  "rock-3": rock("rock-3"),
+  // 0.62 x 0.44 x 0.61 m, 506 tris (Cliffs_SmallStone_4)
+  "rock-4": rock("rock-4"),
+  // 0.85 x 0.32 x 0.62 m, 416 tris (Cliffs_SmallStone_5)
+  "rock-5": rock("rock-5"),
+  // 0.90 x 0.37 x 0.71 m, 610 tris (Cliffs_SmallStone_6)
+  "rock-6": rock("rock-6"),
+  // 1.12 x 0.60 x 0.76 m, 798 tris (Cliffs_MediumStone_1)
+  "rock-7": rock("rock-7"),
+  // 1.37 x 0.37 x 0.84 m, 916 tris (Cliffs_MediumStone_2)
+  "rock-8": rock("rock-8"),
+  // 1.08 x 0.60 x 0.83 m, 782 tris (Cliffs_MediumStone_3)
+  "rock-9": rock("rock-9"),
+  // 0.66 x 0.83 x 0.65 m, 742 tris (Cliffs_MediumStone_4)
+  "rock-10": rock("rock-10"),
+  // 0.99 x 0.66 x 1.03 m, 780 tris (Cliffs_MediumStone_5)
+  "rock-11": rock("rock-11"),
+  // 0.58 x 0.92 x 0.68 m, 950 tris (Cliffs_MediumStone_6)
+  "rock-12": rock("rock-12"),
+  // 1.06 x 0.45 x 1.20 m, 1256 tris (Cliffs_MediumStone_7)
+  "rock-13": rock("rock-13"),
+  // 1.28 x 0.68 x 0.85 m, 892 tris (Cliffs_MediumStone_8)
+  "rock-14": rock("rock-14"),
+  // 1.22 x 0.49 x 0.85 m, 1238 tris (Cliffs_MediumStone_9)
+  "rock-15": rock("rock-15"),
+  // 1.41 x 0.60 x 0.73 m, 1118 tris (Cliffs_MediumStone_10)
+  "rock-16": rock("rock-16"),
+  // 0.88 x 0.75 x 0.90 m, 1016 tris (Cliffs_MediumStone_11)
+  "rock-17": rock("rock-17"),
+  // 0.83 x 1.02 x 0.85 m, 1282 tris (Cliffs_MediumStone_12)
+  "rock-18": rock("rock-18"),
+  // 1.70 x 0.56 x 1.22 m, 1760 tris (Cliffs_LargeStone_1)
+  "rock-19": rock("rock-19"),
+  // 1.72 x 0.47 x 1.97 m, 1560 tris (Cliffs_LargeStone_2)
+  "rock-20": rock("rock-20"),
+  // 1.20 x 0.88 x 1.62 m, 1500 tris (Cliffs_LargeStone_3)
+  "rock-21": rock("rock-21"),
+  // 0.99 x 1.35 x 0.98 m, 1502 tris (Cliffs_LargeStone_4)
+  "rock-22": rock("rock-22"),
+  // 1.29 x 1.08 x 1.25 m, 1860 tris (Cliffs_LargeStone_5)
+  "rock-23": rock("rock-23"),
+  // 2.04 x 0.95 x 1.05 m, 1994 tris (Cliffs_LargeStone_6)
+  "rock-24": rock("rock-24"),
 };
 
 // ---------------------------------------------------------------------------
@@ -1337,6 +1482,11 @@ export const RAW_ASSETS: Record<string, RawAsset> = {
   },
 };
 
+// Keyed by FILE rather than by manifest key, because a file can hold several
+// props (see `MeshAsset.node`): keying it by the manifest key would fetch and
+// decode `rocks.glb` once per rock a level uses, which is exactly the cost
+// packing them together is for. Two keys naming one file share the fetch, the
+// decode and the GPU upload of its material.
 const gltfCache = new Map<string, Promise<THREE.Object3D | null>>();
 
 // The GLTF loader is imported DYNAMICALLY, so it lands in a chunk of its own and
@@ -1395,34 +1545,67 @@ export function wakeEmission(material: THREE.Material | THREE.Material[]): void 
   }
 }
 
-// The prop for a manifest key, as a fresh instance the caller owns. Resolves to
-// null for an unknown key or a load failure, which is the caller's cue to keep
-// its placeholder.
-export function loadMesh(key: string): Promise<THREE.Object3D | null> {
-  const cached = gltfCache.get(key);
-  if (cached) return cached.then((o) => (o ? o.clone(true) : null));
-  const asset = MESH_ASSETS[key];
-  if (!asset) return Promise.resolve(null);
+// One decoded scene per file, shared by every manifest key that names it. What
+// is cached is the file AS EXPORTED - no `scale`, no rotation - because those
+// are per ENTRY and two entries may address different nodes of one file with
+// different ones.
+function loadFile(file: string): Promise<THREE.Object3D | null> {
+  const cached = gltfCache.get(file);
+  if (cached) return cached;
   const p = gltfLoader()
-    .then((loader) => loader.loadAsync(asset.file))
+    .then((loader) => loader.loadAsync(file))
     .then((gltf) => {
-      const root = gltf.scene;
-      const s = asset.scale ?? 1;
-      root.scale.setScalar(s);
-      root.rotation.set(asset.rotX ?? 0, asset.rotY ?? 0, asset.rotZ ?? 0);
-      root.traverse((o) => {
+      gltf.scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         wakeEmission(mesh.material);
       });
-      return root as THREE.Object3D;
+      return gltf.scene as THREE.Object3D;
     })
     .catch((err: unknown) => {
-      console.warn(`[render3d] mesh "${key}" failed to load:`, err);
+      console.warn(`[render3d] mesh file "${file}" failed to load:`, err);
       return null;
     });
-  gltfCache.set(key, track(p, `mesh "${key}"`));
-  return p.then((o) => (o ? o.clone(true) : null));
+  gltfCache.set(file, track(p, `mesh file "${file}"`));
+  return p;
+}
+
+// The prop for a manifest key, as a fresh instance the caller owns. Resolves to
+// null for an unknown key or a load failure, which is the caller's cue to keep
+// its placeholder.
+export function loadMesh(key: string): Promise<THREE.Object3D | null> {
+  const asset = MESH_ASSETS[key];
+  if (!asset) return Promise.resolve(null);
+  return loadFile(asset.file).then((root) => {
+    if (!root) return null;
+    const picked = asset.node === undefined ? root : root.getObjectByName(asset.node);
+    if (!picked) {
+      // A pack whose node was renamed by a re-export is the one way this
+      // happens, and it is indistinguishable on screen from a fetch that failed
+      // - so it says which name it looked for.
+      console.warn(`[render3d] mesh "${key}": no node "${asset.node}" in ${asset.file}`);
+      return null;
+    }
+    const obj = picked.clone(true);
+    if (picked !== root) {
+      // A node lifted out of a file keeps the transform it inherited inside it,
+      // so a prop nested under a wrapper node lands where the file puts it
+      // rather than at the wrapper's origin. (`assets:extract` writes packs flat
+      // and untransformed, so for those this is the identity; it is here so that
+      // `node` addresses a node of ANY file rather than only of one this
+      // project's own pipeline built.)
+      picked.updateWorldMatrix(true, false);
+      picked.matrixWorld.decompose(obj.position, obj.quaternion, obj.scale);
+    }
+    // The entry's own scale and rotation ride a wrapper rather than the prop, so
+    // they compose with whatever transform the node brought with it instead of
+    // overwriting it.
+    const holder = new THREE.Group();
+    holder.scale.setScalar(asset.scale ?? 1);
+    holder.rotation.set(asset.rotX ?? 0, asset.rotY ?? 0, asset.rotZ ?? 0);
+    holder.add(obj);
+    return holder as THREE.Object3D;
+  });
 }

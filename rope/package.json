@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun run scripts/test.ts",
     "replay": "bun run src/tools/cli.ts",
+    "assets:extract": "bun run scripts/extract-mesh.ts",
     "assets:optimize": "bun run scripts/optimize-asset.ts",
     "assets:optimize-texture": "bun run scripts/optimize-texture.ts",
     "assets:publish": "bun run scripts/publish-asset.ts",

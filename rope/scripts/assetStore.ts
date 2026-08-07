@@ -32,7 +32,8 @@ export const ASSET_TAG = process.env.ASSET_TAG ?? "assets";
 // cannot be left out of a check by being in the other manifest.
 export interface StoredAsset {
   // Manifest key, qualified by the map slot for a texture, so a failure names
-  // the thing to go and fix.
+  // the thing to go and fix. A file several keys name (a PACK - see
+  // `MeshAsset.node`) is listed once, under all of them.
   key: string;
   file: string;
   sha256: string;
@@ -40,9 +41,31 @@ export interface StoredAsset {
 
 export function storedAssets(): StoredAsset[] {
   const out: StoredAsset[] = [];
+  // A pack is ONE file addressed by several manifest keys, so it is one thing to
+  // fetch, verify and count against the budget - not one per prop inside it.
+  // Collapsing it here rather than in each consumer is what keeps the download
+  // single, the byte total honest, and the basename-collision check meaningful:
+  // that check exists to catch two DIFFERENT files that would overwrite each
+  // other in the flat release, and a pack listed once per prop would trip it on
+  // every entry.
+  const meshFiles = new Map<string, StoredAsset>();
   for (const [key, asset] of Object.entries(MESH_ASSETS)) {
-    out.push({ key, file: asset.file, sha256: asset.sha256 });
+    const seen = meshFiles.get(asset.file);
+    if (!seen) {
+      meshFiles.set(asset.file, { key, file: asset.file, sha256: asset.sha256 });
+      continue;
+    }
+    // Two keys naming one file must agree about its bytes. They cannot both be
+    // right, and the failure is otherwise silent: the fetch would verify
+    // whichever entry it reached first and the other's sha256 would pin nothing.
+    if (seen.sha256 !== asset.sha256) {
+      throw new Error(
+        `meshes "${seen.key}" and "${key}" both name ${asset.file} but pin different sha256`,
+      );
+    }
+    seen.key = `${seen.key}, ${key}`;
   }
+  out.push(...meshFiles.values());
   // The water renderer's raw maps (flipbook, foam) - one file per entry, like a
   // prop; see `RawAsset` for why they are not texture-set slots.
   for (const [key, asset] of Object.entries(RAW_ASSETS)) {

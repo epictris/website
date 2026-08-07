@@ -21,6 +21,8 @@ sewer walls:
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567
 
 # Model Packs
+rocks and boulders (`rock-1` .. `rock-24`, extracted with `assets:extract`):
+- https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090
 dungeon assets:
 - https://sketchfab.com/3d-models/dungeon-essential-kit-b22fc89609b44d21961f1212286e1867
 medieval assets:
@@ -33,5 +35,7 @@ stone brick wall:
 - https://polyhaven.com/a/stone_wall_05
 rock wall:
 - https://polyhaven.com/a/rock_wall_08
+dark stratified rock:
+- https://polyhaven.com/a/dark_rock_02
 concrete with rebar:
 - https://ambientcg.com/view?id=Concrete042C

@@ -71,11 +71,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
-// `--center` is a bare flag, so it comes out of the argument list before
-// anything positional is read; everything below then sees exactly the arguments
-// it saw before the flag existed.
-const args = argv.filter((a) => a !== "--center");
-const center = args.length !== argv.length;
+// `--center` and `--keep-nodes` are bare flags, so they come out of the argument
+// list before anything positional is read; everything below then sees exactly
+// the arguments it saw before the flags existed.
+const args = argv.filter((a) => a !== "--center" && a !== "--keep-nodes");
+const center = argv.includes("--center");
+const keepNodes = argv.includes("--keep-nodes");
 const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
 // Guarded on the flag being present at all: an absent one is index -1, and
@@ -89,7 +90,7 @@ const [input, output] =
     : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center] [--keep-nodes]",
   );
   process.exit(2);
 }
@@ -134,6 +135,15 @@ const r = spawnSync(
     "webp",
     "--texture-size",
     "1024",
+    // A PACK - one file serving several manifest keys, each addressing a node
+    // inside it by name (`MeshAsset.node`, and `assets:extract` which builds
+    // one). `optimize` joins meshes that share a material by default, which is
+    // the right call for a single prop and destroys a pack outright: 24 rocks
+    // sharing one material come out as ONE object, and every name a manifest
+    // entry pointed at is gone. Joining is the only step that does this - the
+    // flatten it depends on merely hoists nodes and keeps their names - so it is
+    // the only one turned off.
+    ...(keepNodes ? ["--join", "false"] : []),
     ...(simplify === null
       ? ["--simplify", "false"]
       : [
@@ -164,6 +174,10 @@ if (simplify !== null) {
 if (center) {
   console.log(`[assets] centred on its own bounds - record it as \`center: true\` in this`);
   console.log(`[assets] prop's MESH_ASSETS entry, beside its sha256.`);
+}
+if (keepNodes) {
+  console.log(`[assets] node names kept - each prop in here wants its own MESH_ASSETS entry,`);
+  console.log(`[assets] naming this file and its own node (\`node: "<name>"\`).`);
 }
 console.log(`[assets] next: \`bun run assets:publish ${output}\` uploads it and prints its`);
 console.log(`[assets] MESH_ASSETS entry, sha256 included.`);

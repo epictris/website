@@ -2277,6 +2277,14 @@ What that assumes is that the origin is somewhere on the prop at all, and an ass
 `metal-bars` arrived with its geometry 8.9 m from its own origin, which places as a prop that is most of a room away from where it was put - read as the prop having failed to load rather than as a pivot.
 The flag runs `gltf-transform center --pivot center` into a temp file the optimise then reads, and `center: true` goes in that prop's `MESH_ASSETS` entry beside its sha256: a centred prop and a prop modelled about its own centre are the same file, so without the record the raw cannot be re-optimised into the same asset.
 
+**A model PACK is one file and several manifest keys**, and `bun run assets:extract <pack.glb> <out.glb> <Node>=<prop-name> ...` is the step in front of the pipeline that makes one.
+A pack shares its materials, and a texture set is the overwhelming majority of a prop's bytes: the 24 rocks of `pbr-rock-cliffs-pack` are ~20 KB of geometry each and 370 KB of 1k maps they all have in common, so one file each is 9.4 MB of which 8.7 MB is the same three images written out 24 times - paid again on every download, and again in VRAM, each time a level scatters more than one of them.
+Extracted together they are one **624 KB** file, one fetch and one GPU upload however many of them a level uses.
+`MeshAsset.node` is what addresses one: several entries name the same `file` and each names its own node inside it, `loadMesh` caches per FILE rather than per key, and `storedAssets()` lists that file once so the fetch, the budget and the basename-collision check all see one thing rather than 24 of it.
+Extraction is a step of its own because it is the one that takes decisions - which nodes, and what each prop is called - and because a pack is only re-extractable if the node name behind each prop is written down, which the prop's `MESH_ASSETS` entry is where it is written.
+It also bakes each node's WORLD rotation and scale into its vertices (a Sketchfab/FBX export wraps the pack in the centimetres-to-metres scale and the Z-up-to-Y-up rotation) and drops the translation that is the prop's place in the pack's layout, so what comes out is in metres, Y-up, on its own origin, and needs no `scale`/`rot*` in 24 entries that would each have to agree.
+`assets:optimize --keep-nodes` is **not optional** for one: the optimiser joins meshes that share a material by default, which for a pack means every prop welded into a single object with no name left to address.
+
 `bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao|emissive> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
 The `--map` is not bookkeeping, it picks the **encoding**: an albedo and an emission map are pictures and go to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
 1k is the ceiling for the same reason the prop pipeline caps its textures there.
@@ -2319,6 +2327,12 @@ The whole loop:
 just asset assets-src/rock.glb public/meshes/rock.glb        # optimise + upload a prop
 bun run assets:optimize assets-src/gate.glb public/meshes/gate.glb --center   # ...re-origined on its own bounds
 # paste the printed MESH_ASSETS entry into src/render3d/assets.ts
+
+# a PACK: many props out of one download, sharing one copy of their materials
+bun run assets:extract ~/Downloads/pack.glb assets-src/rocks.glb Cliffs_SmallStone_1=rock-1 ...
+bun run assets:optimize assets-src/rocks.glb public/meshes/rocks.glb --keep-nodes
+bun run assets:publish public/meshes/rocks.glb
+# one MESH_ASSETS entry per prop, all naming that file, each with its own `node`
 
 # a surface is the same loop, once per map it has:
 bun run assets:optimize-texture assets-src/stone_col.png public/textures/quarry-stone-base.webp --map base

@@ -15,6 +15,30 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **metal-bars** - "FuzerGamesTV", [source](https://sketchfab.com/3d-models/poppy-playtime-4-prison-door-bars-5dc2f7af7ec144afb2443fe86c74c288), CC BY 4.0
 - **pipe-concrete** - "PT34", [source](https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6), CC BY 4.0
 - **pipe-long** - "Mehdi Shahsavan (@ahmagh2e)", [source](https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b), CC BY 4.0
+- **rock-1** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-10** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-11** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-12** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-13** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-14** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-15** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-16** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-17** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-18** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-19** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-2** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-20** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-21** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-22** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-23** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-24** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-3** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-4** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-5** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-6** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-7** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-8** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
+- **rock-9** - "Maksim Batyrev (@c3posw01)", [source](https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090), CC BY 4.0
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
 - **sewer-doorway** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567), CC BY 4.0
 - **sewer-wall** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
@@ -23,6 +47,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 ## Surface textures
 
 - **brick** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/factory_brick), CC0
+- **dark rock** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/dark_rock_02), CC0
 - **rock wall** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/rock_wall_08), CC0
 - **rusted iron** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Metal053B), CC0
 
