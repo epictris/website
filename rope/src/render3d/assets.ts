@@ -1170,6 +1170,60 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "MightyPinecone",
     license: "CC BY 4.0",
   },
+  // A carry lantern - a metal cage around glass panes, a knob on the lid and a
+  // wide flat carry hoop standing up over it. 3,782 triangles (32 of them the
+  // glass, its own alpha-BLEND material), so no `simplify`; the 2.5 MB raw was
+  // three 1024² PNGs, 265 KB as WebP.
+  //
+  // It IS scaled, and by eye: the export is 0.90 x 2.51 x 0.87 m - a Sketchfab
+  // FBX with a x100 baked into its mesh node, and no captured size stated at
+  // any unit. 0.2 puts the whole thing at 50 cm with the hoop, an 18 cm
+  // footprint and a 34 cm body, which is a real hand lantern's size (the
+  // bulkhead lamp is 25 cm for comparison).
+  //
+  // No rotation: its height is already world y and the hoop's plane faces the
+  // camera. Its origin is INSIDE the upper body (the export runs -0.87 to
+  // +1.65 of its 2.51 about it), so it is placed by a point near where the
+  // hoop meets the lid rather than by its base - about right for hanging one
+  // from a hook, which is what a lantern in a level mostly does.
+  //
+  // NO EMISSION MAP: the materials are albedo/normal/roughness only, so the
+  // flame is authored as a light object in the same body (see "Light and
+  // air"), and there is no `wakeEmission` case to trip over.
+  lantern: {
+    file: "/meshes/lantern.glb",
+    sha256: "251bb6dc9d0cf480b950802237c7826f21fba690d41f2f0fc40d74689e559de7",
+    scale: 0.2, // 0.90 x 2.51 x 0.87 m as exported -> 0.18 x 0.50 x 0.17
+    source: "https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c",
+    author: "Mandrake (@mandrake_3d)",
+    license: "CC BY 4.0",
+  },
+  // A barred iron gate with a hinged door - dungeon bars, the kind that close
+  // off a corridor. Two meshes as exported (the frame of bars and the door
+  // leaf), 3,564 triangles between them, so no `simplify`: like `cage-rusty`
+  // it is all see-through bars whose every edge is silhouette, and the 8.3 MB
+  // raw was texture (2048² PNGs, which the pipeline's 1k WebP ceiling takes to
+  // 570 KB).
+  //
+  // It is modelled lying ALONG ITS OWN Z - head on it draws as a 4 cm sliver
+  // with 2.4 m of gate pointing at the camera - so it wears the same `rotY`
+  // the pipes do, laying it across the level. 2.40 m wide and 1.57 m tall as
+  // exported, a real gate's size, so it wears no `scale`.
+  //
+  // Base-pivoted in y (min y is 0) like `cage-dungeon`, so it is placed by the
+  // point it STANDS on - and off-centre along its width (its span runs -1.69
+  // to +0.70 about the origin, the pivot sitting at the door's hinge side), so
+  // the placement point is near one end rather than the middle. Its materials
+  // are doubleSided as exported, which see-through bars want: the far side of
+  // the gate is back-facing from every angle.
+  "iron-gate": {
+    file: "/meshes/iron-gate.glb",
+    sha256: "03a875919280ec49f84a592b25f1179c8e1f08826e2adc114eb22b57102d02ed",
+    rotY: Math.PI / 2,
+    source: "https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a",
+    author: "Yukitsu-Senpai",
+    license: "CC BY 4.0",
+  },
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
     sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",

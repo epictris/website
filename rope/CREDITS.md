@@ -10,6 +10,8 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **cage** - "AAA (@BitoRaccoon)", [source](https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc), CC BY 4.0
 - **cage-dungeon** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8), CC BY 4.0
 - **cage-rusty** - "Samuel F. Angrick-Johanns (@oneironauticus)", [source](https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0), CC BY 4.0
+- **iron-gate** - "Yukitsu-Senpai", [source](https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a), CC BY 4.0
+- **lantern** - "Mandrake (@mandrake_3d)", [source](https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c), CC BY 4.0
 - **pipe-concrete** - "PT34", [source](https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6), CC BY 4.0
 - **pipe-long** - "Mehdi Shahsavan (@ahmagh2e)", [source](https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b), CC BY 4.0
 - **sewer-arch** - "MightyPinecone", [source](https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd), CC BY 4.0
