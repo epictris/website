@@ -38,37 +38,6 @@
   "bodies": [
     {
       "kind": "static",
-      "x": 1255,
-      "y": 825.0000000000003,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 1570,
-            "h": 170.00000000000003
-          },
-          "thickness": 100
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 1570,
-            "h": 170.00000000000003
-          },
-          "z": -50,
-          "depth": 300,
-          "texture": "rock wall"
-        }
-      ]
-    },
-    {
-      "kind": "static",
       "x": 830.0000000000001,
       "y": 599.9999999999993,
       "rot": 0,
@@ -242,8 +211,8 @@
     },
     {
       "kind": "static",
-      "x": 1090.0000000000002,
-      "y": 400.00000000000017,
+      "x": 1050.0514387378907,
+      "y": 420.41164011302214,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -253,16 +222,16 @@
           "type": "collision",
           "shape": {
             "kind": "rect",
-            "w": 270,
-            "h": 20
+            "w": 190.10287747578064,
+            "h": 20.823280226044094
           }
         },
         {
           "type": "geometry",
           "shape": {
             "kind": "rect",
-            "w": 270,
-            "h": 20
+            "w": 190.10287747578064,
+            "h": 20.823280226044094
           },
           "matchCollision": true,
           "depth": 20,
@@ -271,8 +240,8 @@
         {
           "type": "anchor",
           "id": 1,
-          "x": 40.06123041541976,
-          "y": 9.999999999999964
+          "x": 80.00979167752931,
+          "y": 9.588359886977926
         }
       ]
     },
@@ -435,8 +404,8 @@
     },
     {
       "kind": "rigid",
-      "x": 1130,
-      "y": 475.1181294809674,
+      "x": 1130.354604334602,
+      "y": 477.72083162202597,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -444,8 +413,6 @@
       "objects": [
         {
           "type": "collision",
-          "x": 0.35460433460201557,
-          "y": 2.6027021410585327,
           "shape": {
             "kind": "rect",
             "w": 16.600000000000037,
@@ -455,6 +422,8 @@
         },
         {
           "type": "geometry",
+          "x": -0.35460433460201557,
+          "y": -2.6027021410585327,
           "kind": "mesh",
           "mesh": "lantern",
           "shape": {
@@ -467,16 +436,142 @@
         },
         {
           "type": "light",
-          "y": 10.000000000000053,
-          "z": 0,
+          "x": -0.35460433460201557,
+          "y": -0.06505988980922695,
+          "z": -5,
           "intensity": 30,
-          "castShadow": true
+          "castShadow": true,
+          "shadowNear": 40
         },
         {
           "type": "anchor",
           "id": 2,
-          "x": -0.3181364097809336,
-          "y": -12.422297858941533
+          "x": -0.6727407443829492,
+          "y": -15.025000000000066
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 795,
+      "y": 890,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 310
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 400,
+            "h": 310
+          },
+          "matchCollision": true,
+          "z": -50,
+          "depth": 300,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1020.0000000000001,
+      "y": 900,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 290.00000000000006
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 290.00000000000006
+          },
+          "matchCollision": true,
+          "z": -50,
+          "depth": 300,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1070,
+      "y": 920.0000000000001,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 290.00000000000006
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 50,
+            "h": 290.00000000000006
+          },
+          "matchCollision": true,
+          "z": -50,
+          "depth": 300,
+          "texture": "rock wall"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1285.0000000000002,
+      "y": 940.0000000000002,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 380,
+            "h": 290.00000000000006
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 380,
+            "h": 290.00000000000006
+          },
+          "matchCollision": true,
+          "z": -50,
+          "depth": 300,
+          "texture": "rock wall"
         }
       ]
     }

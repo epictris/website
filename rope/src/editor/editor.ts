@@ -3279,6 +3279,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     sw.textContent = "shadows";
     sw.appendChild(shadowBox);
     g.appendChild(sw);
+    if (lights.every((b) => b.light.castShadow)) {
+      // The shadow camera's near plane: casters closer than this are not in the
+      // map. Author it past a surrounding fitting's radius so a lantern casts
+      // nothing from its own light (see `LightObjectData.shadowNear`); blank is
+      // the renderer's default, sized for a lamp mounted clear of its fitting.
+      num(
+        "shadow near",
+        (b) => (b.light.shadowNear ?? NaN) * M2PX,
+        (b, v) => (b.light.shadowNear = Math.max(0, v * PX)),
+        10,
+        {
+          placeholder: "default",
+          onEmpty: () => {
+            for (const b of lights) b.light.shadowNear = null;
+          },
+        },
+      );
+    }
     const budget = model.items.filter(
       (b) => b.object === "light" && b.light.castShadow,
     ).length;

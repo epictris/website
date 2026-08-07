@@ -174,6 +174,10 @@ export interface EdLight {
   dir: Vec2; // spot aim in the sim's frame (x right, y down); need not be unit
   dirZ: number; // ...and its component toward the camera
   castShadow: boolean;
+  // Shadow camera near plane in metres, or null for the renderer's default.
+  // Authored past a surrounding fitting's radius so a lantern does not shadow
+  // its own light - see `LightObjectData.shadowNear`.
+  shadowNear: number | null;
   flicker: number; // 0 (steady) .. 1 (guttering)
 }
 
@@ -531,6 +535,7 @@ export const defaultLight = (): EdLight => ({
   // scene (see `render3d/lights.ts`), and a corridor of torches all asking is a
   // frame rate that halves without announcing why.
   castShadow: false,
+  shadowNear: null,
   flicker: 0,
 });
 
@@ -919,6 +924,7 @@ function lightItem(
       dir: new Vec2(l.dirX ?? 0, l.dirY ?? 1),
       dirZ: l.dirZ ?? 0,
       castShadow: l.castShadow === true,
+      shadowNear: l.shadowNear ?? null,
       flicker: l.flicker ?? 0,
     },
     note: defaultNote(),
@@ -1146,6 +1152,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
               }
             : {}),
           ...(i.light.castShadow ? { castShadow: true } : {}),
+          // Read only while the light casts, so - like the cone on a point
+          // light - it is written only then: a field on disk the loader ignores
+          // is a field that lies about what it does.
+          ...(i.light.castShadow && i.light.shadowNear !== null
+            ? { shadowNear: i.light.shadowNear }
+            : {}),
           ...(i.light.flicker !== 0 ? { flicker: i.light.flicker } : {}),
         });
         continue;

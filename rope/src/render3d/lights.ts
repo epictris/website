@@ -129,7 +129,13 @@ const LIGHT_SHADOW_MAP_SIZE = 1024;
 // Nearest the light a shadow is computed from. Too small and the depth range is
 // wasted on space nothing occupies (which is what makes shadow acne); a lamp is
 // mounted clear of its own fitting by about this much anyway.
-const LIGHT_SHADOW_NEAR = 0.1;
+//
+// A lamp whose fitting SURROUNDS its light - a lantern with the source inside
+// it - authors `shadowNear` past the fitting's radius instead: the fitting then
+// never enters this light's shadow map (a shadow camera renders nothing nearer
+// than its near plane), so it neither acnes nor dims the room with its own
+// silhouette, while still casting shadows from the sun and every other light.
+export const LIGHT_SHADOW_NEAR = 0.1;
 
 // Flicker shape. Two incommensurate rates summed: one alone is a sine wave and
 // reads as a pulse rather than as a flame, and their ratio being irrational is
@@ -251,11 +257,21 @@ export class LightRig {
     light.castShadow = wantsShadow;
     if (wantsShadow) {
       light.shadow.mapSize.set(LIGHT_SHADOW_MAP_SIZE, LIGHT_SHADOW_MAP_SIZE);
-      light.shadow.camera.near = LIGHT_SHADOW_NEAR;
+      // The authored near plane, for the lantern case (see LIGHT_SHADOW_NEAR).
+      // Capped at half the reach so an over-authored value leaves a working
+      // shadow camera rather than one whose near passes its far, and floored at
+      // the default LAST - a near of 0 is a degenerate perspective camera, and
+      // the cap alone would produce one on a light authored with `range: 0`
+      // (three's "no cutoff").
+      const near = Math.max(
+        Math.min(data.shadowNear ?? LIGHT_SHADOW_NEAR, range / 2),
+        LIGHT_SHADOW_NEAR,
+      );
+      light.shadow.camera.near = near;
       // The light reaches `range` and nothing past it is lit, so nothing past it
       // can be shadowed either: the depth range is spent exactly where it is
       // used, which is most of what keeps a small map from banding.
-      light.shadow.camera.far = Math.max(range, LIGHT_SHADOW_NEAR * 2);
+      light.shadow.camera.far = Math.max(range, near * 2);
       // NO CONSTANT BIAS. `shadow.bias` is an offset in the shadow camera's own
       // DEPTH BUFFER, and a lamp's camera is a perspective one, so that buffer
       // is wildly nonlinear: almost all of it is spent in the first metre and

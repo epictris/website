@@ -471,6 +471,19 @@ export interface LightObjectData extends ObjectPlacement {
   // `render3d/lights.ts`); the rest still light the scene and simply do not
   // occlude, which is what a bounce off a wall does anyway.
   castShadow?: boolean;
+  // Shadow-casting only: how close to the light a caster must be COUNTED FROM -
+  // the shadow camera's near plane, a length like `range`, converted on load
+  // the same way. Geometry nearer than this never enters the shadow map at all.
+  //
+  // It exists for the lamp whose fitting surrounds its own light: a lantern
+  // with a point light inside it renders its OWN mesh into all six faces of the
+  // shadow cube, which reads as acne on the fitting and the whole room dimmed
+  // by the lantern's silhouette. Setting this just past the fitting's radius
+  // takes the fitting out of the map - it casts nothing from ITS OWN light
+  // while still casting from the sun and every other light, which
+  // `castShadow: false` on the mesh could not say. Absent = the default near
+  // plane (`LIGHT_SHADOW_NEAR`), sized for a lamp mounted clear of its fitting.
+  shadowNear?: number;
   // Flicker depth, 0 (steady) .. 1 (guttering), as a fraction of `intensity`.
   // Absent = 0.
   //
@@ -935,6 +948,7 @@ export interface LegacyLightData {
   dirY?: number;
   dirZ?: number;
   castShadow?: boolean;
+  shadowNear?: number;
   flicker?: number;
 }
 
@@ -1224,6 +1238,7 @@ export function normalizeLevelData(raw: RawLevelData): LevelData {
           ...(l.dirY !== undefined ? { dirY: l.dirY } : {}),
           ...(l.dirZ !== undefined ? { dirZ: l.dirZ } : {}),
           ...(l.castShadow !== undefined ? { castShadow: l.castShadow } : {}),
+          ...(l.shadowNear !== undefined ? { shadowNear: l.shadowNear } : {}),
           ...(l.flicker !== undefined ? { flicker: l.flicker } : {}),
         },
       ],
@@ -1558,6 +1573,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.dirY !== undefined ? { dirY: o.dirY } : {}),
       ...(o.dirZ !== undefined ? { dirZ: o.dirZ } : {}),
       ...(o.castShadow !== undefined ? { castShadow: o.castShadow } : {}),
+      // A length, like `range`: the shadow camera's near plane.
+      ...(o.shadowNear !== undefined ? { shadowNear: o.shadowNear * factor } : {}),
       ...(o.flicker !== undefined ? { flicker: o.flicker } : {}),
     };
   }

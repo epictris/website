@@ -44,6 +44,7 @@ import {
 } from "../render3d/assets";
 import {
   DEFAULT_LIGHT_RANGE,
+  LIGHT_SHADOW_NEAR,
   LightRig,
 } from "../render3d/lights";
 import {
@@ -55,6 +56,7 @@ import {
   isGeometryObject,
   normalizeLevelData,
   type GeometryObjectData,
+  type LightObjectData,
   type LevelBodyData,
   type SceneObjectData,
   type RawLevelData,
@@ -1309,6 +1311,9 @@ function lightRoundTrip(): CaseResult[] {
         dirY: 0.8,
         dirZ: -0.3,
         castShadow: true,
+        // 30 rather than 35 because the assertion below compares the scaled
+        // value exactly, and 35 px picks up a last-ulp residue through `* PX`.
+        shadowNear: 30,
         flicker: 0.35,
       },
       // ...and one carrying nothing but a position, which must come back that
@@ -1325,8 +1330,12 @@ function lightRoundTrip(): CaseResult[] {
   // the placement and the object carries the rest.
   const litBody = inMetres.bodies.find((b) => b.objects.some(isLightObject))!;
   const lit = litBody.objects.find(isLightObject)!;
-  // The lengths converted, the candela did not.
-  const scaled = lit.range === 7.5 && lit.z === 0.6 && litBody.x === 2.4;
+  // The lengths converted, the candela did not. `shadowNear` is a length like
+  // `range` - the shadow camera's near plane - and forgetting its line in
+  // `scaleObject` is silent everywhere else: the light still lights, and the
+  // near plane is simply a hundred times too deep.
+  const scaled =
+    lit.range === 7.5 && lit.z === 0.6 && litBody.x === 2.4 && lit.shadowNear === 0.3;
   const unscaled = lit.intensity === 22 && lit.angle === 24 && lit.penumbra === 0.6;
 
   // The environment block rides along, and this is the sharp half of the case.
@@ -1601,6 +1610,56 @@ function lightAim(): CaseResult[] {
         rotated && unit
           ? "a quarter turn takes it to -x; arbitrary lengths normalise"
           : `turned (${turned.x.toFixed(2)}, ${turned.y.toFixed(2)}), unit ${long.length().toFixed(3)}`,
+    },
+  ];
+}
+
+// The authored shadow near plane lands on the shadow camera, and its clamps
+// hold. Asserted on the built light because nothing else can see it: a wrong
+// near plane still lights the level and still shadows it, just with the lantern
+// case broken (the fitting back in its own shadow map) or the camera degenerate
+// (near past far, which three renders as no shadow at all).
+function lightShadowNear(): CaseResult[] {
+  const rig = new LightRig();
+  const scene = new THREE.Group();
+  const built = (data: Partial<Omit<LightObjectData, "type">>) => {
+    const holder = rig.add(scene, { type: "light", castShadow: true, ...data }, { x: 0, y: 0, rot: 0, z: 0 });
+    const light = holder!.holder.children.find(
+      (c) => (c as THREE.Light).isLight,
+    ) as THREE.PointLight;
+    return light.shadow.camera;
+  };
+  // A 30 cm lantern around a 6 m lamp: the fitting is inside the near plane.
+  const lantern = built({ shadowNear: 0.3, range: 6 });
+  const applied = lantern.near === 0.3 && lantern.far === 6;
+  // Absent, the default - the lamp-clear-of-its-fitting case, unchanged.
+  const plain = built({ range: 6 });
+  const defaulted = plain.near === LIGHT_SHADOW_NEAR;
+  // Over-authored: a near past the reach is capped at half of it, so the camera
+  // still has depth to work in rather than a near past its far.
+  const over = built({ shadowNear: 40, range: 6 });
+  const capped = over.near === 3 && over.far === 6;
+  // `range: 0` is three's "no cutoff", so the cap has nothing to cap against
+  // and the floor is what must win - the default, not a degenerate 0.
+  const cutless = built({ shadowNear: 0.5, range: 0 });
+  const floored = cutless.near === LIGHT_SHADOW_NEAR && cutless.far > cutless.near;
+  rig.dispose();
+  return [
+    {
+      name: "lights: an authored shadowNear is the shadow camera's near plane",
+      pass: applied && defaulted,
+      detail:
+        applied && defaulted
+          ? "authored 0.3 lands; absent is the default"
+          : `authored near ${lantern.near}, far ${lantern.far}; default near ${plain.near}`,
+    },
+    {
+      name: "lights: shadowNear is capped at half the reach and floored at the default",
+      pass: capped && floored,
+      detail:
+        capped && floored
+          ? "40 on a 6 m lamp caps at 3; 0.5 on a cutoff-free lamp floors at the default"
+          : `capped near ${over.near}, far ${over.far}; range-0 near ${cutless.near}, far ${cutless.far}`,
     },
   ];
 }
@@ -2115,6 +2174,7 @@ export function runRender3dCases(): CaseResult[] {
     ...lightRoundTrip(),
     ...lightRidesBody(),
     ...lightAim(),
+    ...lightShadowNear(),
     ...bodyFrame(),
     ...emissiveMaps(),
     ...propEmission(),
