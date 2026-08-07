@@ -329,6 +329,24 @@ const ANCHOR_KICK_TOLERANCE = 0.6;
 // over anything legitimate and still catches the bug by a wide margin.
 // `runaway-speed` never saw it: 96 m/s is far under that 1000 m/s ceiling.
 const CHAIN_SOLVE_KICK_TOLERANCE = 4;
+// Ceiling on how much inward speed the chain phase may hand the ball beyond what
+// its own constraint was opening at (`BallLevel.chainCreditOverBound`).
+//
+// This is the sharp form of the same idea `rope-solve-kick` states bluntly. That
+// one is a bar on the SIZE of a one-frame gain, so it has to sit clear of every
+// legitimate one - a chain going taut on a fast swing brakes several m/s in a
+// frame - and `session-360f` slipped under it at 2.1 against a bar of 4. A
+// constraint may only remove the motion opening it, so measured against that
+// entitlement the same frame reads 2.17 m/s of speed the chain was never owed,
+// and a legitimate brake reads zero however large it is.
+//
+// The tolerance is for the phase's other writes, which are real and are not the
+// length solve: the spin rollback, the unwind, and the into-surface refusal that
+// hands gravity's own step back. Measured over the whole ball corpus, exactly one
+// frame reaches over the bound at all - session-1426f f714, at 0.21 m/s - so 0.6
+// clears the top of that by nearly threefold while still catching session-360f's
+// 2.17 by more than three.
+const CHAIN_CREDIT_BOUND_TOLERANCE = 0.6;
 // How much longer than the length it anchored at the ball's chain may get.
 // Nothing pays chain out once it is anchored, so the only source of growth is
 // `Rope.absorbBlockedLength` letting the constraint sit where geometry is
@@ -809,6 +827,18 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       detail:
         `chain solve added ${level.chainSolveSpeedGain.toFixed(1)} m/s in one frame, ` +
         `${kick.toFixed(1)} of it beyond what winding paid for`,
+    });
+  }
+  if (
+    level.chainCreditOverBound !== null &&
+    level.chainCreditOverBound > CHAIN_CREDIT_BOUND_TOLERANCE
+  ) {
+    out.push({
+      frame,
+      kind: "rope-credit-unearned",
+      detail:
+        `chain phase took ${level.chainCreditOverBound.toFixed(2)} m/s more along its own pull ` +
+        `than the constraint was opening at`,
     });
   }
   if (b.chain) {

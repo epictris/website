@@ -330,6 +330,28 @@ and `BallLevel` closes the phase by setting the ball's velocity to
 `velocityBeforeChain + (realised Δposition)/Δt` — the PBD update taken over where
 the frame really ends, both push-outs included, so the ball can never bank speed
 for a move that was undone and there is nothing to refund.
+
+Ordering fixes *where* the credit is measured; it does not say **how much of it is earned**, and that is a separate question with its own answer.
+Δposition over Δt is honest only while the position error being corrected is error the bodies are still MOVING to create, and nothing in the frame guarantees that: the contact solve runs before the chain phase and can cancel the very velocity that put the ball over its length.
+A ball falling onto the floor with its chain already taut arrives over-length by the distance gravity integrated, the contact reverses that velocity and pushes the ball back out, and the chain then corrects the 3.5 cm the push-out left - a real error, correctly corrected - and charges the ball 2.1 m/s for motion the contact had already answered for.
+The chain sold the same centimetres twice, and a ball that landed at 0.9 m/s left the floor at 3.0 and rose 43 cm (`session-360f` f305, reported as the ball bouncing far too high).
+`rope-solve-kick` never saw it: the gain was 2.1 m/s against a 4 m/s bar.
+
+So the credit is **bounded by the constraint's own velocity-level form** (`Rope.creditBound`).
+The rope enforces `length <= constraintLength`, and while it is taut the same statement in velocity is `d(length)/dt <= d(constraintLength)/dt`: the solve may remove exactly the rate at which the path is opening and no more.
+Both sides are measurable where the credit is paid — the left from the velocities the bodies carry in, through the **same path Jacobian** the position correction already uses (`resolveCorrectionDir` × `calculateMechanicalAdvantage`, per path object), the right from what the frame's own `retract` took out — so this is the constraint rather than a clamp bolted on top of it.
+`Rope.clampCredit` then strips whatever inward speed a credit carries past that bound, along the pull direction only; the swing and the push-outs the phase folded in are not the constraint's to refuse.
+The **position** correction is untouched, so the chain still holds its length exactly — what changes is only what the frame is charged for it.
+
+Measuring it over the whole path and not the one body is what makes it survive the cases it must not break.
+A moving anchor opens the path with the ball standing still, so the bound is positive and the ball is still hauled and still paid; a body's own radial speed would read zero there and starve it.
+The **winch** is the one term the Jacobian cannot see - chain wound onto the ball's own rim shortens the free path with nothing moving, and the ball's rotation is kinematic, so it contributes nothing by construction (the same exclusion `calculateTorqueArm` makes) - so `BallLevel` passes its already-measured `chainWinchSpeedBudget` in as an explicit allowance.
+Without it the wind-up would be bounded to nothing, which is `session-322f`'s failure.
+
+The bound is deliberately **not** applied in `settleChainBodies`, and the reason is the shape of the quantity rather than an oversight: that credit is the sum of what a whole coupled set did to a body, and a per-chain bound is not a statement about it.
+In a rig where a link and the weight under it fall together, neither chain between them opens at all — their relative motion is zero — while the weight's upward credit is funded by the hanger chain above, through the link.
+Bounded chain by chain, every body in such a rig is starved and keeps gravity's step: `cli contacts` `chain-order` leans 178 mm instead of 6 and rings instead of settling.
+An honest bound there is a coupled velocity solve over the whole set, which does not exist yet.
 The solve moves **every** body on the chain's path — so it settles the ball's spin partly by hauling the far end,
 and an anchor that is a rigid body keeps whatever it was given.
 That is the fourth piece: the spin is a *kinematic* input with no force behind it
@@ -796,8 +818,9 @@ Invariants checked every frame: NaN, runaway speed, rope-over-length (once
 anchored), player-embedded-in-geometry.
 Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
-more than 4 m/s in **any** single frame) and `chain-clip` (a span's interior deep
-inside static geometry).
+more than 4 m/s in **any** single frame), `rope-credit-unearned` (the chain phase
+took more along its own pull than the constraint was opening at) and `chain-clip`
+(a span's interior deep inside static geometry).
 `rope-solve-kick` exists because `runaway-speed` is a 1000 m/s ceiling and so
 never saw a 96 m/s one-frame launch.
 It is measured against what the frame's own **winding** entitles the solve to:
@@ -809,6 +832,22 @@ A launch has no winding behind it, so subtracting the budget leaves that case
 exactly as visible while taking the mechanic out of the measurement: past the
 subtraction the whole corpus sits under 1 m/s, against a bar of 4. It is the general form of
 `rope-anchor-kick`, which only ever watched the anchoring frame.
+
+`rope-credit-unearned` is the **sharp** form of the same idea, and it exists
+because `rope-solve-kick` is a bar on the SIZE of a one-frame gain and therefore
+has to sit clear of every legitimate one: a chain going taut on a fast swing
+brakes several m/s in a frame, so the bar is 4, and `session-360f` slipped under
+it at 2.1.
+A constraint may only remove the motion **opening** it, so this measures the gain
+against that entitlement rather than against a number - a legitimate brake reads
+zero however large it is, while the same frame reads 2.18 m/s of speed the chain
+was never owed.
+It is taken over the phase's realised velocity change rather than over the credit
+term alone, so it covers the spin rollback, the unwind and the into-surface
+refusal too, and is a statement about the frame rather than a restatement of the
+clamp `Rope.clampCredit` applies to one of those terms.
+Exactly one frame of the whole ball corpus reaches over the bound at all
+(`session-1426f` f714, 0.21 m/s), so the tolerance is 0.6.
 
 `rope-anchor-kick` subtracts **the same budget**, and for the same reason.
 The shot leaves through the loop, so the ball is usually still turning when the

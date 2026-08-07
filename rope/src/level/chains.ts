@@ -253,6 +253,19 @@ export function snapshotChainBodies(
 // all, and next frame's contact would size its Coulomb cone from nothing. So the
 // bound is gravity's own per-frame step, and no more than the body brought in
 // with it.
+//
+// What is deliberately NOT applied here is `Rope.creditBound`, which bounds a
+// solve's credit by the rate its own constraint was opening (see the ball's
+// phase, and `session-360f`). That bound is a statement about ONE rope, and this
+// credit is the sum of what a whole coupled set did to a body: a rig whose link
+// and weight fall together opens neither of the two chains between them at all -
+// their relative motion is zero - while the weight's upward credit is funded by
+// the hanger chain above, through the link. Bounded chain by chain, every body in
+// such a rig is starved of the credit it is owed, keeps gravity's step, and the
+// symmetrical hanging rig `cli contacts` `chain-order` measures leans 178 mm
+// instead of 6 and rings instead of settling. The honest bound for a coupled set
+// is a coupled velocity solve over the whole set, which is what this would need
+// before it could have one.
 export function settleChainBodies(
   chains: readonly SceneChain[],
   before: readonly ChainBodyState[],

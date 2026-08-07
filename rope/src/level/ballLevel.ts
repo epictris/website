@@ -95,6 +95,20 @@ export class BallLevel {
   // put there, which is what makes it the term `roll-unfunded` subtracts before
   // asking whether the rest of the ball's travel is accounted for by its spin.
   chainCreditVelocity = Vec2.ZERO;
+  // How much inward speed the chain phase handed the ball beyond what the
+  // constraint was opening at when the phase began (see `Rope.creditBound`);
+  // null on a frame with no anchored chain. Measured over the phase's REALISED
+  // velocity change rather than over the credit alone, so it covers everything
+  // the phase writes on top of that credit - the spin rollback, the unwind, the
+  // into-surface refusal - and not only the one term that is clamped.
+  //
+  // A chain is a constraint, so what it may take out of the ball is the motion
+  // opening it and nothing else. Anything past that is the phase charging for a
+  // displacement some earlier part of the frame has already answered for, which
+  // is `session-360f`: the contact solve reversed the ball's fall onto the floor,
+  // the chain then billed it 2.1 m/s for the same descent, and the ball left the
+  // ground at three times the speed it landed at.
+  chainCreditOverBound: number | null = null;
   private endWasFixed = false;
 
   // Length below which a stall is float noise rather than a blocked correction.
@@ -414,10 +428,30 @@ export class BallLevel {
       // Discounted the same way the solve discounts its own credit: a length
       // error a wrap node appearing put there is corrected in position but earns
       // no velocity (see Rope.topologyCreditScale).
-      this.chainCreditVelocity = this.ball.globalPosition
-        .sub(positionBeforeChain)
-        .div(delta)
-        .mul(this.ball.chain.topologyCreditScale);
+      //
+      // And bounded the same way: the phase may not hand the ball more inward
+      // speed than the constraint it enforces was opening at when the phase
+      // began (see Rope.creditBound). Taken against `velocityBeforeChain`,
+      // because that is what the ball carried in — by here the contact solve has
+      // already answered for whatever the ball was doing before it, and a chain
+      // charging the ball a second time for the same descent is what flicked a
+      // landing ball off the floor at 3 m/s (`session-360f` f305). The winch
+      // budget rides in as the allowance the path Jacobian cannot see: chain
+      // wound onto the ball's own rim shortens the free path with nothing
+      // moving, and hauling the ball in to pay for it is the mechanic.
+      const chainBound = this.ball.chain.creditBound(
+        delta,
+        new Map([[this.ball as PhysicsBody2D, velocityBeforeChain]]),
+        this.chainWinchSpeedBudget,
+      );
+      this.chainCreditVelocity = this.ball.chain.clampCredit(
+        this.ball,
+        this.ball.globalPosition
+          .sub(positionBeforeChain)
+          .div(delta)
+          .mul(this.ball.chain.topologyCreditScale),
+        chainBound,
+      );
       this.ball.linearVelocity = velocityBeforeChain.add(this.chainCreditVelocity);
       // The PBD velocity update taken over the whole chain phase — the single
       // largest source of one-frame ball velocity there is, and the one every
@@ -501,6 +535,17 @@ export class BallLevel {
         !this.ball.chain.blockedByGeometry
           ? this.chainLeaseHeldFrames + 1
           : 0;
+      // What the phase actually took out of the ball along the chain's pull,
+      // against what the constraint was entitled to take. Measured here, at the
+      // very end, so every term the phase wrote is in it - the credit, the spin
+      // rollback, the unwind and the into-surface refusal - which is what makes
+      // this a statement about the FRAME rather than a restatement of the clamp
+      // one of those terms carries.
+      const pull = this.ball.chain.pullDirection(this.ball);
+      this.chainCreditOverBound =
+        pull === null
+          ? null
+          : this.ball.linearVelocity.sub(velocityBeforeChain).dot(pull) - chainBound;
       const gain = this.ball.linearVelocity.length() - speedBefore;
       this.anchorKickSpeedGain = anchoredThisFrame ? gain : null;
       this.chainSolveSpeedGain = gain;
@@ -512,6 +557,7 @@ export class BallLevel {
       this.chainStallFrames = 0;
       this.chainLeaseHeldFrames = 0;
       this.chainWinchSpeedBudget = 0;
+      this.chainCreditOverBound = null;
     }
     this.endWasFixed = endFixed;
 

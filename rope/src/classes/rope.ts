@@ -151,6 +151,13 @@ export class Rope {
   // is scaled by the share of the length error that bodies actually moving put
   // there, which on an ordinary frame is all of it and this is 1.
   topologyCreditScale = 1;
+  // Metres of rope the frame's own retract commands have taken out of the
+  // constraint since the last credit was paid. A shortening constraint is the
+  // rope genuinely pulling, so it is inward speed the credit may honestly
+  // contain (see `creditBound`); it is spent by the credit that follows it
+  // rather than cleared per frame, because `retract` is called from input
+  // handling, which for both controllers runs before the rope's frame opens.
+  private retractedSinceCredit = 0;
   private frameBegun = false;
   // What `absorbBlockedLength` has had to let out, accumulated — how badly the
   // frame's length correction was blocked. It accumulates rather than
@@ -230,7 +237,9 @@ export class Rope {
 
   retract(amount = PX): void {
     // The rope may never be retracted to a negative length.
+    const before = this.maxRopeLength;
     this.maxRopeLength = Mathf.max(this.maxRopeLength - amount, 0);
+    this.retractedSinceCredit += before - this.maxRopeLength;
   }
 
   extend(): void {
@@ -542,6 +551,12 @@ export class Rope {
       }
     }
 
+    // Taken here and not later: the velocities on the bodies right now are the
+    // ones the pass was handed, and what the solve is allowed to be worth is a
+    // statement about those. A line below this and the correction has already
+    // begun rewriting them.
+    const creditBound = this.creditBound(delta);
+
     const correctionImpulse = this.resolveLengthConstraint();
     if (correctionImpulse !== null) {
       // Friction impulse may push the rope past its max length; re-solve.
@@ -552,12 +567,17 @@ export class Rope {
         if (dynamicBody) {
           // Scaled by `topologyCreditScale`: the share of this frame's length
           // error that a wrap appearing or vanishing put there is corrected in
-          // position but earns no velocity.
+          // position but earns no velocity. Bounded by `creditBound`: the share
+          // the bodies are no longer moving to earn does not either.
           dynamicBody.addVelocity(
-            body.globalPosition
-              .sub(prePositions.get(body)!)
-              .div(delta)
-              .mul(this.topologyCreditScale),
+            this.clampCredit(
+              body,
+              body.globalPosition
+                .sub(prePositions.get(body)!)
+                .div(delta)
+                .mul(this.topologyCreditScale),
+              creditBound,
+            ),
           );
           dynamicBody.addRotation(
             ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale,
@@ -568,7 +588,111 @@ export class Rope {
       }
     }
 
+    // The frame's retract is the frame's to spend. Cleared whether or not a
+    // correction ran, so a rope retracted while slack cannot bank the allowance
+    // and hand it to some later frame's solve.
+    this.retractedSinceCredit = 0;
+
     this.absorbBlockedLength();
+  }
+
+  // How fast the length solve may honestly haul, this frame, in metres per
+  // second — the ceiling on the inward speed any credit it pays may contain.
+  //
+  // The credit is Δposition over Δt, a standard PBD velocity update, and it is
+  // honest only while the position error it corrects is error the bodies are
+  // still MOVING to create. Nothing in the frame guarantees that. A ball falling
+  // onto the floor with its chain already taut arrives over its length by the
+  // distance gravity integrated, the contact solve then reverses the velocity
+  // that put it there and pushes the ball back out, and the solve corrects what
+  // is left — a real position error, correctly corrected — and charges the ball
+  // Δposition over Δt for motion the contact had already answered for. The chain
+  // sold the same centimetres twice and the ball left the floor at 3 m/s having
+  // landed at 0.9 (`session-360f` f305).
+  //
+  // So the credit is bounded by the constraint's own velocity-level form. The
+  // rope's job is `length <= constraintLength`, and while it is taut the same
+  // statement in velocity is `d(length)/dt <= d(constraintLength)/dt`: the solve
+  // may remove exactly the rate at which the path is opening, and no more. Both
+  // sides are measurable here — the left from the velocities the bodies carry
+  // in, through the same path Jacobian the position correction uses, the right
+  // from what the frame's own retract took out — so the bound is the constraint,
+  // not a heuristic clamp on top of it.
+  //
+  // `extraInward` is for a caller holding a term the Jacobian cannot see. The
+  // ball & chain's winch is the one: chain wound onto the ball's own rim
+  // shortens the free path without any body moving, and the ball's rotation is
+  // kinematic, so it contributes nothing here by design (see
+  // `calculateTorqueArm`). `BallLevel` measures that as a length and passes it
+  // in as a speed; without it the wind-up would be bounded to nothing and the
+  // mechanic would stall, which is the failure `session-322f` is about.
+  //
+  // `entering` supplies the velocity a body carried into the phase, for callers
+  // whose books are taken over a whole phase rather than a single pass and whose
+  // bodies have therefore already been paid something. Bodies it does not name
+  // are read live.
+  creditBound(
+    delta: number,
+    entering?: ReadonlyMap<PhysicsBody2D, Vec2>,
+    extraInward = 0,
+  ): number {
+    let openingRate = 0;
+    for (const pathObject of this.generatePathObjects()) {
+      const point = Rope.contactPointOf(pathObject);
+      const velocity = entering?.get(pathObject.body) ?? Rope.velocityAt(pathObject.body, point);
+      // `resolveCorrectionDir` points the way the correction hauls this body,
+      // which is the way that SHORTENS the path — so a body moving along it is
+      // closing the constraint and one moving against it is opening it.
+      openingRate -=
+        pathObject.calculateMechanicalAdvantage() *
+        velocity.dot(pathObject.resolveCorrectionDir());
+    }
+    return Math.max(openingRate + this.retractedSinceCredit / delta + extraInward, 0);
+  }
+
+  // Spend the bound: strip whatever inward speed a credit carries past what the
+  // solve was allowed to be worth. Only the inward component is touched — the
+  // rest is the swing, and the push-outs the phase folded in, and neither is the
+  // constraint's to refuse.
+  clampCredit(body: PhysicsBody2D, credit: Vec2, bound: number): Vec2 {
+    const dir = this.pullDirection(body);
+    if (!dir) return credit;
+    const inward = credit.dot(dir);
+    if (inward <= bound) return credit;
+    return credit.sub(dir.mul(inward - bound));
+  }
+
+  // The direction the length solve hauls `body`, or null for a body the path
+  // does not hold. An attachment in preference to a wrap: a body the rope both
+  // ends on and bends around is hauled from its attachment, and the wrap's
+  // bisector is a weaker statement about the same pull.
+  pullDirection(body: PhysicsBody2D): Vec2 | null {
+    let fallback: Vec2 | null = null;
+    for (const pathObject of this.generatePathObjects()) {
+      if (pathObject.body !== body) continue;
+      const dir = pathObject.resolveCorrectionDir();
+      if (dir.lengthSquared() < 0.0001) continue;
+      if (pathObject instanceof PathWrap) fallback ??= dir.normalized();
+      else return dir.normalized();
+    }
+    return fallback;
+  }
+
+  private static contactPointOf(pathObject: PathObject): Vec2 {
+    if (pathObject instanceof PathStart) return pathObject.next.start;
+    if (pathObject instanceof PathEnd) return pathObject.previous.end;
+    return (pathObject as PathWrap).wrapStartPosition;
+  }
+
+  // Velocity of the point of `body` the rope acts through. Rotation counts —
+  // a mover turning under its own anchor opens the path as surely as one
+  // sliding does — EXCEPT where it is kinematic, which is the same exclusion
+  // `calculateTorqueArm` makes and for the same reason: a spin the controller
+  // overwrites every frame is not motion the rope may be paid against.
+  private static velocityAt(body: PhysicsBody2D, point: Vec2): Vec2 {
+    if (body instanceof Player) return body.velocity;
+    if (body instanceof RigidBody2D && body.kinematicRotation) return body.linearVelocity;
+    return body.velocityAtPoint(point);
   }
 
   // Winch stall: if scene geometry blocked the correction (a pinned player

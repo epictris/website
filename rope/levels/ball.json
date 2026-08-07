@@ -133,6 +133,12 @@
           "z": -50,
           "depth": 300,
           "texture": "rock wall"
+        },
+        {
+          "type": "anchor",
+          "id": 1,
+          "x": -5.015655581765532,
+          "y": 150.00000000000006
         }
       ]
     },
@@ -154,58 +160,6 @@
           "texture": "rock wall",
           "color": "#555555",
           "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 945.0000000000002,
-      "y": 595,
-      "rot": 0,
-      "objects": [
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 290.00000000000006
-          },
-          "z": 75,
-          "depth": 50,
-          "texture": "rock wall",
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 945.0000000000001,
-      "y": 470,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 70
-          }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 70
-          },
-          "matchCollision": true,
-          "z": -50,
-          "depth": 300,
-          "texture": "rock wall"
         }
       ]
     },
@@ -236,12 +190,6 @@
           "matchCollision": true,
           "depth": 20,
           "texture": "rock wall"
-        },
-        {
-          "type": "anchor",
-          "id": 1,
-          "x": 80.00979167752931,
-          "y": 9.588359886977926
         }
       ]
     },
@@ -370,42 +318,9 @@
       ]
     },
     {
-      "kind": "static",
-      "x": 944.0000000000005,
-      "y": 665,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 10,
-            "h": 160
-          }
-        },
-        {
-          "type": "geometry",
-          "x": 0.9999999999996234,
-          "y": 74.99999999999946,
-          "kind": "mesh",
-          "mesh": "iron-gate",
-          "shape": {
-            "kind": "rect",
-            "w": 10,
-            "h": 10
-          },
-          "z": -85.00000000000001,
-          "rotY": 1.5707963267948966
-        }
-      ]
-    },
-    {
       "kind": "rigid",
-      "x": 1130.354604334602,
-      "y": 477.72083162202597,
+      "x": 766.4858123435245,
+      "y": 543.1757870751579,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -446,7 +361,7 @@
         {
           "type": "anchor",
           "id": 2,
-          "x": -0.6727407443829492,
+          "x": -0.6940418710540186,
           "y": -15.025000000000066
         }
       ]
@@ -462,22 +377,24 @@
       "objects": [
         {
           "type": "collision",
+          "x": -125.00000000000009,
           "shape": {
             "kind": "rect",
-            "w": 400,
+            "w": 650,
             "h": 310
           }
         },
         {
           "type": "geometry",
+          "x": -125.00000000000009,
           "shape": {
             "kind": "rect",
-            "w": 400,
+            "w": 650,
             "h": 310
           },
           "matchCollision": true,
           "z": -50,
-          "depth": 300,
+          "depth": 2000,
           "texture": "rock wall"
         }
       ]
