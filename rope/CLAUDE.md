@@ -2166,6 +2166,16 @@ Authoring the multiple rather than the metres is what makes `1` mean the same th
 
 `applyTiling` is the one place both land on a texture (`uv * repeat + offset`), and the y sign is the extruder's negation into three's frame showing through - u shifts back where v shifts forward.
 
+**A side wall's texture has to stand up the way the cap's does**, and which of the wall's two axes is `u` is what says so.
+A wall has one axis along the edge it was extruded from and one through the depth, and a texture's own `u` is horizontal - so handing `u` to the along-edge distance on a **vertical** edge maps the picture's horizontal onto world-vertical and lays every brick on its end.
+That is the left and right returns of every wall, pillar and doorway in a level, which is most of what an author sees of a solid that is not face on.
+`generateSideWallUV` picks by the edge's own direction instead: a horizontal-ish edge gets `u` along the edge and `v` through the depth, a vertical-ish one gets them the other way round.
+Three's own `WorldUVGenerator` branches for exactly this reason and gets the other half wrong - it reads `u` straight off whichever of x and y varies more, so a 45° wall is tiled by its projected extent and its texture is squashed by `1/sqrt(2)` - which is why the distance is still measured **along** the edge here, and a repeat is a metre of surface travelled at any angle.
+
+Both axes are anchored in the body's own frame rather than at whichever corner the quad starts from: the along-edge run stands in for world x or world y, and the depth reads zero on the **gameplay plane** (`metreUVs` takes the offset `extrudeOutline` is about to translate by).
+So a course of bricks crossing from a cap onto a return does not jump, a `tileOffset` means the same thing on both, and re-authoring a wall's `depth` does not slide the texture on its returns.
+`cli render3d` asserts all three - upright, continuous, and measured along a diagonal rather than across it - because none of it is visible to anything else here: the solid is the authored size, wound the right way and lit correctly whichever way its texture is turned.
+
 The resolved size and offset are part of the material cache key, because `repeat` and `offset` live on the *texture* rather than the material: two tilings are two `Texture.clone`s sharing one uploaded image.
 
 `cli render3d` asserts the resolution rule directly (`surfaces: …`) - authored beats generated, a material name still resolves to its own surface, an unknown name falls back, and each side's tile is its own - because it is pure arithmetic over the two manifests, and because getting the precedence backwards is invisible: every level goes on wearing perfectly presentable noise while the downloaded maps sit unused.

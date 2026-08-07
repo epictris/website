@@ -523,6 +523,60 @@ function extrusionGeometry(): CaseResult[] {
     pass: cylOk,
     detail: `radius ${Math.max(cb.max.x, cb.max.y).toFixed(5)}, z ${cb.min.z.toFixed(5)}..${cb.max.z.toFixed(5)}`,
   });
+
+  // A SIDE WALL'S TEXTURE MUST STAND UP THE WAY THE CAP'S DOES. A texture's own
+  // u is horizontal, so a side wall that hands u to the along-edge distance maps
+  // the picture's horizontal onto world-vertical on every vertical edge: the
+  // left and right returns of a wall - which is most of what an author sees of a
+  // pillar or a doorway - draw their brick courses running up the wall instead
+  // of across it. It is invisible to every other check here, the solid being the
+  // right size, wound the right way and lit correctly throughout.
+  const faceUVs = (g: THREE.BufferGeometry, nx: number, ny: number) => {
+    const n = g.getAttribute("normal");
+    const p = g.getAttribute("position");
+    const t = g.getAttribute("uv");
+    const hits: { x: number; y: number; z: number; u: number; v: number }[] = [];
+    for (let i = 0; i < n.count; i++) {
+      if (Math.abs(n.getX(i) - nx) > 1e-3 || Math.abs(n.getY(i) - ny) > 1e-3) continue;
+      hits.push({ x: p.getX(i), y: p.getY(i), z: p.getZ(i), u: t.getX(i), v: t.getY(i) });
+    }
+    return hits;
+  };
+  // The right return of the 2 x 1 x 0.4 rect: v is world y (upright, and the same
+  // number the cap beside it carries), u is the depth.
+  const right = faceUVs(geo, 1, 0);
+  const uprightOk =
+    right.length > 0 && right.every((h) => Math.abs(h.v - h.y) < F32 && Math.abs(h.u - h.z) < F32);
+  out.push({
+    name: "extrude: a vertical side wall's texture stands up like the cap's",
+    pass: uprightOk,
+    detail: `${right.length} vertices on +x; ${right.map((h) => `y=${h.y.toFixed(2)} uv=(${h.u.toFixed(2)},${h.v.toFixed(2)})`).join(" ")}`,
+  });
+  // ...and the top face is the same statement about the other axis: u is world x,
+  // so a texture crossing the top edge does not jump.
+  const top = faceUVs(geo, 0, 1);
+  const topOk =
+    top.length > 0 && top.every((h) => Math.abs(h.u - h.x) < F32 && Math.abs(h.v - h.z) < F32);
+  out.push({
+    name: "extrude: a horizontal side wall's u is world x, continuous with the cap",
+    pass: topOk,
+    detail: `${top.length} vertices on +y; ${top.map((h) => `x=${h.x.toFixed(2)} uv=(${h.u.toFixed(2)},${h.v.toFixed(2)})`).join(" ")}`,
+  });
+  // A DIAGONAL EDGE IS MEASURED ALONG ITSELF, which is the half three's own
+  // generator gets wrong: it reads u off whichever world axis varies more, so a
+  // wall at 45 degrees gets the projected extent rather than the surface it
+  // actually has and its texture is squashed by 1/sqrt(2). The triangle's right
+  // edge runs (1,-1) to (0,1) in three's frame - 2 units of y across sqrt(5) of
+  // surface - so its own axis must span the sqrt(5).
+  const slope = faceUVs(tri, 2 / Math.sqrt(5), 1 / Math.sqrt(5));
+  const spanV = slope.length
+    ? Math.max(...slope.map((h) => h.v)) - Math.min(...slope.map((h) => h.v))
+    : 0;
+  out.push({
+    name: "extrude: a diagonal side wall is tiled by surface travelled, not by extent",
+    pass: Math.abs(spanV - Math.sqrt(5)) < F32,
+    detail: `v spans ${spanV.toFixed(5)} m over an edge of ${Math.sqrt(5).toFixed(5)} m (projected extent is 2)`,
+  });
   return out;
 }
 

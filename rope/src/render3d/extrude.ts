@@ -46,9 +46,17 @@ export interface ExtrudeOptions {
 }
 
 // UVs in metres on every face. Three's own `WorldUVGenerator` is metre-scaled on
-// the caps but picks between x and y per side wall, which makes a texture jump
-// 90 degrees around a corner; this measures along the wall instead.
-const metreUVs: THREE.UVGenerator = {
+// the caps but reads a side wall's u straight off whichever of x and y varies
+// more, which shears a diagonal edge (a 45 degree wall gets 1/sqrt(2) of the
+// repeats it should); this measures ALONG the wall instead, so a repeat is a
+// metre of surface travelled whatever angle the edge runs at.
+//
+// `zOrigin` is where the depth axis reads zero, and it is the offset the caller
+// is about to translate the solid by: `ExtrudeGeometry` builds from z = 0 and
+// the gameplay plane is the MIDDLE of the finished solid, so measuring depth off
+// the raw vertex would anchor a side wall's texture to the solid's back face -
+// and re-authoring a wall's `depth` would then slide the texture on its returns.
+const metreUVs = (zOrigin: number): THREE.UVGenerator => ({
   generateTopUV(_geometry, vertices, indexA, indexB, indexC) {
     return [
       new THREE.Vector2(vertices[indexA * 3]!, vertices[indexA * 3 + 1]!),
@@ -66,10 +74,18 @@ const metreUVs: THREE.UVGenerator = {
     const b = at(indexB);
     const c = at(indexC);
     const d = at(indexD);
-    // The wall runs along a-b in the plane; u is the distance travelled along
-    // that direction and v is the depth, both in metres. Measuring every one of
-    // the four corners against the same axis is what keeps the quad's texture
-    // square instead of sheared.
+    // The wall runs along a-b in the plane, and the other axis it has is the
+    // depth. Which of the two is u is decided by WHICH WAY THE EDGE RUNS, and
+    // that is what keeps a texture upright: a texture's own u is horizontal, so
+    // handing u to the along-edge distance on a VERTICAL edge maps the picture's
+    // horizontal onto world-vertical and lays every brick on its end. It is the
+    // one thing three's generator gets right and the reason it branches at all.
+    //
+    // Both axes are anchored in the body's own frame rather than at the corner
+    // the quad happens to start from, so a side wall's texture is continuous
+    // with the cap's beside it (the caps are world x/y) and a `tileOffset` means
+    // the same thing on both. Along a diagonal edge that anchoring is exact only
+    // in the direction it is measured; the metre scale is the edge's either way.
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     const len = Math.hypot(dx, dy);
@@ -80,15 +96,23 @@ const metreUVs: THREE.UVGenerator = {
       dx /= len;
       dy /= len;
     }
-    const u = (p: { x: number; y: number }) => (p.x - a.x) * dx + (p.y - a.y) * dy;
-    return [
-      new THREE.Vector2(u(a), a.z),
-      new THREE.Vector2(u(b), b.z),
-      new THREE.Vector2(u(c), c.z),
-      new THREE.Vector2(u(d), d.z),
-    ];
+    // Distance travelled along the edge from a, signed so it grows the way the
+    // world axis it stands in for grows.
+    const along = (p: { x: number; y: number }) =>
+      ((p.x - a.x) * dx + (p.y - a.y) * dy) * (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : Math.sign(dy));
+    const uv =
+      Math.abs(dx) >= Math.abs(dy)
+        ? // A horizontal-ish edge (a floor's top face, a wall's underside): the
+          // along-edge run stands in for world x, and the depth is v.
+          (p: { x: number; y: number; z: number }) =>
+            new THREE.Vector2(a.x + along(p), p.z - zOrigin)
+        : // A vertical-ish edge (a wall's left and right returns): the depth is
+          // u and the along-edge run stands in for world y, which is up.
+          (p: { x: number; y: number; z: number }) =>
+            new THREE.Vector2(p.z - zOrigin, a.y + along(p));
+    return [uv(a), uv(b), uv(c), uv(d)];
   },
-};
+});
 
 // The outline as a three.js Shape, in three's frame (y negated) and wound so the
 // front cap faces the camera.
@@ -194,7 +218,9 @@ export function extrudeOutline(o: Outline, opts: ExtrudeOptions): THREE.ExtrudeG
     bevelSegments: 2,
     curveSegments: CIRCLE_SEGMENTS,
     steps: 1,
-    UVGenerator: metreUVs,
+    // The same offset the translate below applies, so the depth axis of a side
+    // wall's UVs reads zero on the gameplay plane.
+    UVGenerator: metreUVs(core / 2),
   });
   // `ExtrudeGeometry` builds from z = -bevel to z = core + bevel; the gameplay
   // plane is the middle of the solid, not its back face.
