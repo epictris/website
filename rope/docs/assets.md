@@ -37,5 +37,11 @@ rock wall:
 - https://polyhaven.com/a/rock_wall_08
 dark stratified rock:
 - https://polyhaven.com/a/dark_rock_02
+pale marble (captured over 20 m from the air, registered at a 2.5 m tile - see `marble cliff` in assets.ts):
+- https://polyhaven.com/a/marble_cliff_05
 concrete with rebar:
 - https://ambientcg.com/view?id=Concrete042C
+plain warm grey rock (`rock-grey`):
+- https://ambientcg.com/view?id=Rock060
+near-black cave rock (`rock-black`):
+- https://ambientcg.com/view?id=Rock035

@@ -316,6 +316,182 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "Amal Kumar",
     license: "CC0",
   },
+  // Pale beige-grey marble: dense veining and striations running through it,
+  // heavily weathered, chipped and shot through with fine fractures. The pale
+  // stone of the three rock surfaces here - `dark rock` is the near-black
+  // stratified plates and `rock wall` the mid-grey blocky one - so it is what a
+  // cut face, a quarry wall or a hewn chamber is made of where the level wants
+  // light stone rather than dark.
+  //
+  // Keyed as a SURFACE for the reason those two are: `stone` already has a
+  // generated surface every stone body wears by naming its material, and this is
+  // a particular weathered marble rather than what stone is, so a set under the
+  // material's name would re-skin every stone body in every level as a side
+  // effect of dressing one cliff. A shape asks for it by name instead.
+  "marble cliff": {
+    maps: {
+      base: {
+        file: "/textures/marble-cliff-base.webp",
+        sha256: "91aa212e6a19c22808f9b47fa71c861515f7f4727e1f25630f3a1c353f789d8c",
+      },
+      normal: {
+        file: "/textures/marble-cliff-normal.webp",
+        sha256: "134407287f0c84b0b4354b9216c2c8cfe0f668b8166462bba460572eb3528489",
+      },
+      // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
+      // B metallic - so these two are the same download read on two channels,
+      // each flattened to grey by `assets:optimize-texture --channel`. The B
+      // channel is a dielectric's zero and is stated below rather than shipped
+      // as a black image.
+      roughness: {
+        file: "/textures/marble-cliff-roughness.webp",
+        sha256: "b9914949526d43247728e8e0dd0092964a4b724a92c7b8efeefa60c2a24c1e44",
+      },
+      ao: {
+        file: "/textures/marble-cliff-ao.webp",
+        sha256: "2ec77e9f92fa93125d81b0aee3eb0f13ae940c63c53bff40d0ac38abe68a6667",
+      },
+    },
+    // 2.5 m, and this is the ONE set where that is not the captured size: Poly
+    // Haven took this one from the air over 20002 mm
+    // (https://api.polyhaven.com/info/marble_cliff_05), which is the field's
+    // documented meaning and is unusable as the number here.
+    //
+    // Two things break at 20. A 4 m wall shows a FIFTH of the picture, so the
+    // hairline fractures that make it read as marble arrive half a metre wide;
+    // and one repeat over 20 m at the pipeline's 1k ceiling is 51 px/m, against
+    // 512 for `dark rock` and 569 for `rock wall` - a tenth of the texel density
+    // of every other surface here, so it is blurred as well as enlarged. The
+    // honest number would therefore make `tileScale: 1` a setting no shape can
+    // use, and put the same 0.125 in every level that wears this.
+    //
+    // The exception is only ever worth taking for a capture whose own scale is
+    // this far outside what the game is built at (nothing else in the manifest
+    // is over 2 m), and the cost is real and belongs here: `tileScale: 1` means
+    // life size for every other set and means an eighth of it for this one, so
+    // replacing this with another marble captured at ITS own size will jump.
+    tile: 2.5,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/marble_cliff_05",
+    author: "Amal Kumar",
+    license: "CC0",
+  },
+  // Plain grey rock, warm rather than blue (#605B57 mean) - a rough face broken
+  // by fine vertical fracture channels, with none of the character the other
+  // three carry: no strata like `dark rock`, no courses like `rock wall`, no
+  // veining like `marble cliff`. That is what it is FOR. Those three are each a
+  // particular rock and read as a feature wherever they are put, so a level
+  // wanting most of its stone to be unremarkable and one wall of it to be the
+  // thing you look at has nothing to make the "most of it" out of but generated
+  // noise. This is that: photographed stone at the same texel density as the
+  // rest, quiet enough to run for metres.
+  //
+  // Keyed as a SURFACE for the reason the others are: `stone` already has a
+  // generated surface every stone body wears by naming its material, and a set
+  // under the material's name would re-skin every stone body in every level.
+  // A shape asks for it by name instead.
+  "rock-grey": {
+    maps: {
+      base: {
+        file: "/textures/rock-grey-base.webp",
+        sha256: "610c0ebadac6a3c32a7e4633a24bde94e0cce3bb5676abcd7797c0b638fbdf49",
+      },
+      // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
+      // this renderer wants. Real relief this time rather than the plate
+      // `rusted iron` is (B mean .95 against .9998, and 482 KB against 23):
+      // ambientCG generated it by photogrammetry, so the fractures are in the
+      // surface and not only in the picture.
+      normal: {
+        file: "/textures/rock-grey-normal.webp",
+        sha256: "9bb2cae517ec7a95f76a8bc3165e3f869ac2ca9a2b19fea8de8ec929f25a1816",
+      },
+      // Both arrive with the number in RED alone (G and B are exactly 0) and
+      // are flattened to grey by `assets:optimize-texture --channel r`. There is
+      // no metallic map in the set and none is wanted - rock is a dielectric -
+      // so the 0 below is stated rather than shipped as a black image.
+      roughness: {
+        file: "/textures/rock-grey-roughness.webp",
+        sha256: "3c89ac1e58732159e88254532900375cb5d76dd4241e680720c7ac617d9e23e5",
+      },
+      ao: {
+        file: "/textures/rock-grey-ao.webp",
+        sha256: "9a3c85930b05886492b907ee9365b1f9802fa7f4d51162549a77aacea88e6d95",
+      },
+    },
+    // ambientCG states no captured size for this one either (its API answers
+    // `dimensionX: 0`), so this is the by-eye number the field's comment allows
+    // for exactly that case. 2 m puts it beside `dark rock` at 2 and `rock wall`
+    // at 1.8 - which is the point of the choice as much as the look is, since
+    // three rock surfaces at the same tile can be swapped for one another on a
+    // wall without its `tileScale` being retuned - and it lands the fracture
+    // channels at roughly a hand's width apart, which is what they read as.
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Rock060",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
+  // Near-black rock, cool where `rock-grey` is warm (#101A1D against #605B57),
+  // shot through with pale quartz veins that are the only thing catching a light
+  // on it. ambientCG tags it cave, and that is what it is for: the rock a level
+  // is cut INTO, read as the dark the lamps do not reach, against which the
+  // other three are the surfaces something was built out of.
+  //
+  // **It is darker than any real material**, and that is the thing to know
+  // before dressing a room in it. Its albedo means 0.062/0.102/0.115 in sRGB,
+  // which is under 0.01 linear - charcoal is nearer 0.04 - so it reflects almost
+  // nothing back and its own relief goes with it: the normal and AO maps are
+  // shading a surface with no light left to shade. A wall of this in a level lit
+  // from inside (`levels/ball.json`, sun off) is not dark stone, it is a hole,
+  // and the lamp that would fix it has to be close enough to be the thing the
+  // player is looking at. `TextureAsset` has no albedo multiplier to lift it
+  // with - `roughness`, `metalness`, `normalScale` and `aoIntensity` are the
+  // four, and the fill tint deliberately does not reach an authored set - so the
+  // answer is authoring: put it where the dark is wanted, and put `rock-grey` or
+  // `marble cliff` where a surface has to be seen.
+  //
+  // Keyed as a SURFACE for the reason the others are: a set under the `stone`
+  // material's name would re-skin every stone body in every level.
+  "rock-black": {
+    maps: {
+      base: {
+        file: "/textures/rock-black-base.webp",
+        sha256: "a7212ba8b820a892af0938bd6d8490cfd171b7e9a9cac3d4ea0bd8b97a50ef17",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
+      // two ambientCG ships. The deepest relief of any set here (B mean .836,
+      // against .95 for `rock-grey` and .9998 for `rusted iron`'s plate) - it is
+      // a photogrammetry scan of a broken face, and the depth is why it is the
+      // largest map in the manifest at 734 KB.
+      normal: {
+        file: "/textures/rock-black-normal.webp",
+        sha256: "225ff4f77bf7f83033e532809a4c7dfec09ded2987d06249575112fcd989345c",
+      },
+      // Red channel alone again (G and B exactly 0), flattened to grey by
+      // `assets:optimize-texture --channel r`. No metallic map and none wanted:
+      // the 0 below is a dielectric's, stated rather than shipped as an image.
+      roughness: {
+        file: "/textures/rock-black-roughness.webp",
+        sha256: "d6b85651a5d353d1ecf73d8b377ecab9264f689ec7ac46783339c8b23fd6c2de",
+      },
+      ao: {
+        file: "/textures/rock-black-ao.webp",
+        sha256: "972a3621caeb63c2bc0d93c9a386821a86f50f4ce403c3e864d7b334aac55cbe",
+      },
+    },
+    // ambientCG states no captured size (`dimensionX: 0`), so this is a by-eye
+    // number as `rock-grey`'s and `rusted iron`'s are - and it is the SAME by-eye
+    // number as `rock-grey`'s on purpose, since the two are meant to meet on one
+    // wall and a seam between rock at 2 m and rock at 1.6 reads as a mistake.
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Rock035",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
   // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
   //
