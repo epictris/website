@@ -2271,6 +2271,12 @@ The error budget is fixed at 1% of the mesh's own extent so the ratio is what bi
 The rule of thumb the sewer set establishes: **check a prop's triangle count against what it is for.** `gltf-transform inspect` prints it. Background parallax geometry wearing a normal map wants thousands, not hundreds of thousands, and an asset advertising Nanite, ZBrush or photogrammetry is one to measure before believing.
 Typically 5-10× off an unoptimised export, looking identical.
 
+`--center` is the same shape of flag about a prop's **origin**, and it is opt-in and recorded for the same reason.
+`mountVisual` does not recentre a prop, which is deliberate: a pivot at a cage's base or two thirds of the way up a doorway is information about the prop, and a level places it by that point.
+What that assumes is that the origin is somewhere on the prop at all, and an asset exported out of a level rather than modelled as a prop carries the world coordinates of wherever it stood in that level instead.
+`metal-bars` arrived with its geometry 8.9 m from its own origin, which places as a prop that is most of a room away from where it was put - read as the prop having failed to load rather than as a pivot.
+The flag runs `gltf-transform center --pivot center` into a temp file the optimise then reads, and `center: true` goes in that prop's `MESH_ASSETS` entry beside its sha256: a centred prop and a prop modelled about its own centre are the same file, so without the record the raw cannot be re-optimised into the same asset.
+
 `bun run assets:optimize-texture <in> <out.webp> --map <base|normal|roughness|metallic|ao|emissive> [--size 1024]` is the same argument for a texture map, through ImageMagick (which this repo already asks for, to turn an SVG snapshot into a PNG - adding a native image dependency to a project whose only binary is its assets would cost more than it saves).
 The `--map` is not bookkeeping, it picks the **encoding**: an albedo and an emission map are pictures and go to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
 1k is the ceiling for the same reason the prop pipeline caps its textures there.
@@ -2311,6 +2317,7 @@ The whole loop:
 
 ```sh
 just asset assets-src/rock.glb public/meshes/rock.glb        # optimise + upload a prop
+bun run assets:optimize assets-src/gate.glb public/meshes/gate.glb --center   # ...re-origined on its own bounds
 # paste the printed MESH_ASSETS entry into src/render3d/assets.ts
 
 # a surface is the same loop, once per map it has:

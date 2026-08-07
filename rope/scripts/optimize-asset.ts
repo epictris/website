@@ -47,26 +47,49 @@
 // that asset's `MESH_ASSETS` entry next to its sha256, which makes it a decision
 // somebody made about a particular prop rather than a default applied to props
 // nobody looked at. The default is still to leave geometry alone.
+//
+// `--center` is the same argument about a prop's ORIGIN. `mountVisual` does not
+// recentre a prop - the file's origin is where the geometry object's position
+// lands - which is deliberate, since a pivot at a cage's base or two thirds up a
+// doorway is information about the prop and a level places it by that point. What
+// that assumes is that the origin is somewhere ON the prop, and an asset exported
+// out of a level rather than modelled as a prop carries the world coordinates of
+// wherever it stood in that level instead: `metal-bars` arrived 8.9 m from its
+// own geometry, which places as a prop that simply is not where it was put.
+// Centring is a pre-pass (`gltf-transform center`, run into a temp file) rather
+// than a flag on `optimize`, which has no such step.
+//
+// It is recorded in the prop's MESH_ASSETS entry for exactly the reason the
+// simplify ratio is: a centred prop and a prop modelled about its own centre are
+// the same file, so without it the raw in `assets-src/` cannot be re-optimised
+// into the same asset, and the next person through the pipeline ships a prop
+// whose origin moved.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
-const simplifyAt = argv.indexOf("--simplify");
+// `--center` is a bare flag, so it comes out of the argument list before
+// anything positional is read; everything below then sees exactly the arguments
+// it saw before the flag existed.
+const args = argv.filter((a) => a !== "--center");
+const center = args.length !== argv.length;
+const simplifyAt = args.indexOf("--simplify");
 // Pulled out of the positionals so the two paths take the same `<in> <out>`.
 // Guarded on the flag being present at all: an absent one is index -1, and
 // skipping `simplifyAt + 1` would then skip index 0 - which silently ate the
 // INPUT path on the default (no-decimation) invocation, leaving `output`
 // undefined and the command printing its own usage.
-const simplify = simplifyAt === -1 ? null : Number(argv[simplifyAt + 1]);
+const simplify = simplifyAt === -1 ? null : Number(args[simplifyAt + 1]);
 const [input, output] =
   simplifyAt === -1
-    ? argv
-    : argv.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
+    ? args
+    : args.filter((_, i) => i !== simplifyAt && i !== simplifyAt + 1);
 if (!input || !output) {
   console.error(
-    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>]",
+    "usage: bun run assets:optimize <input.glb|gltf> <public/meshes/out.glb> [--simplify <ratio>] [--center]",
   );
   process.exit(2);
 }
@@ -80,12 +103,30 @@ if (!existsSync(input)) {
 }
 
 const before = statSync(input).size;
+
+// The centring runs FIRST, into a temp file the optimise then reads, so what is
+// published is one file through both steps rather than an optimised prop that is
+// re-written afterwards by a command with its own opinions about compression.
+const tmp = center ? mkdtempSync(join(tmpdir(), "assets-center-")) : null;
+const optimizeInput = tmp ? join(tmp, "centered.glb") : input;
+if (tmp) {
+  const c = spawnSync(
+    "bunx",
+    ["@gltf-transform/cli", "center", resolve(input), optimizeInput, "--pivot", "center"],
+    { stdio: "inherit" },
+  );
+  if (c.status !== 0) {
+    rmSync(tmp, { recursive: true, force: true });
+    process.exit(c.status ?? 1);
+  }
+}
+
 const r = spawnSync(
   "bunx",
   [
     "@gltf-transform/cli",
     "optimize",
-    resolve(input),
+    resolve(optimizeInput),
     resolve(output),
     "--compress",
     "meshopt",
@@ -110,6 +151,7 @@ const r = spawnSync(
   ],
   { stdio: "inherit" },
 );
+if (tmp) rmSync(tmp, { recursive: true, force: true });
 if (r.status !== 0) process.exit(r.status ?? 1);
 
 const after = statSync(output).size;
@@ -118,6 +160,10 @@ console.log(`[assets] ${mb(before)} -> ${mb(after)} (${(after / before * 100).to
 if (simplify !== null) {
   console.log(`[assets] simplified to ratio ${simplify} - record it as \`simplify: ${simplify}\``);
   console.log(`[assets] in this prop's MESH_ASSETS entry, beside its sha256.`);
+}
+if (center) {
+  console.log(`[assets] centred on its own bounds - record it as \`center: true\` in this`);
+  console.log(`[assets] prop's MESH_ASSETS entry, beside its sha256.`);
 }
 console.log(`[assets] next: \`bun run assets:publish ${output}\` uploads it and prints its`);
 console.log(`[assets] MESH_ASSETS entry, sha256 included.`);

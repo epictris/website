@@ -14,6 +14,8 @@ pallet:
 cages:
 - https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8
 - https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0
+prison bars panel:
+- https://sketchfab.com/3d-models/poppy-playtime-4-prison-door-bars-5dc2f7af7ec144afb2443fe86c74c288
 sewer walls:
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567

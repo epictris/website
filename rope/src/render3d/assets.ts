@@ -905,6 +905,17 @@ export interface MeshAsset {
   // over it silently ships the full-density mesh again. It is also the argument
   // for the decimation, in the one place somebody weighing it up will look.
   simplify?: number;
+  // Whether the pipeline was asked to re-origin this prop on its own bounds
+  // (`assets:optimize --center`), absent if the file's own origin was kept -
+  // which is the default, since a pivot at a cage's base or two thirds of the
+  // way up a doorway is information about the prop and `mountVisual` places it
+  // by that point.
+  //
+  // It is here for the same reason `simplify` is: a centred prop and a prop
+  // modelled about its own centre are the same file, so this is the one fact
+  // about the shipped bytes that cannot be recovered from them, and without it
+  // the raw in `assets-src/` cannot be re-optimised into the same asset.
+  center?: boolean;
   // Uniform scale from the model's own units to metres. A model authored at a
   // real-world size in metres is 1; anything else states its conversion here
   // rather than every level that uses it restating it in `visual.scale`.
@@ -1222,6 +1233,49 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     rotY: Math.PI / 2,
     source: "https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a",
     author: "Yukitsu-Senpai",
+    license: "CC BY 4.0",
+  },
+  // A flat panel of vertical prison bars in a frame - a barred window or gate
+  // set into a wall, where `iron-gate` is a door that swings. 2.00 x 2.50 m and
+  // 11 cm thick as exported, a real gate's size, so it wears no `scale`; nor a
+  // rotation, being a flat panel already standing in the xy plane with its face
+  // to the camera, which is the plane a level is authored in.
+  //
+  // CENTRED, and it is the prop this flag was added for. As downloaded its
+  // geometry sat at x 2.89..4.89, y 6.75..9.25 - the world coordinates of
+  // wherever it stood in the level it was exported from, so its origin was 8.9 m
+  // of empty space away from the bars themselves. `mountVisual` does not
+  // recentre a prop, so placed by that origin it would draw most of a room away
+  // from where it was put, which reads as the prop having failed to load rather
+  // than as a pivot.
+  //
+  // No `simplify`: 1,068 triangles is a background prop's worth already, and a
+  // barred panel is the shape decimation has least to take - every bar is its
+  // own edge against the background, and there is no solid post whose relief a
+  // normal map is carrying (which is what `cage`'s ratio was measured against).
+  // Its 1.22 MB raw was one 1024² PNG albedo, 115 KB as WebP, and its material
+  // is doubleSided as exported - what a see-through panel wants, the far side of
+  // every bar being back-facing.
+  //
+  // NO NORMAL, ROUGHNESS OR METALLIC MAP: albedo alone, so the bars take their
+  // shading from the geometry and read flatter under a lamp than the sewer set
+  // does. A `texture` on the geometry object is the lever if that matters at the
+  // depth one is placed at.
+  "metal-bars": {
+    file: "/meshes/metal-bars.glb",
+    sha256: "c8295b057cb082a3bbc325d3f6f9c52744cf758d4e931cc934b2d2d7ad8687ef",
+    center: true, // exported at its level coordinates, 8.9 m off its own geometry
+    // CC BY, so the credit names the person rather than the page (see
+    // "Provenance, in the manifest" in CLAUDE.md). Noted with the entry because
+    // the file is opaque and this is the one place the question gets asked: the
+    // model is ripped from Poppy Playtime (MOB Games - the mesh is named
+    // `SM_BarsGate_Level5_A`), so the uploader's CC BY is not theirs to grant,
+    // and the store's own rule about what may be redistributed does not really
+    // cover it. Kept deliberately; it is the entry to delete first if the
+    // release is ever audited.
+    source:
+      "https://sketchfab.com/3d-models/poppy-playtime-4-prison-door-bars-5dc2f7af7ec144afb2443fe86c74c288",
+    author: "FuzerGamesTV",
     license: "CC BY 4.0",
   },
   yellow_barrel: {
