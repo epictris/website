@@ -12,6 +12,7 @@ import {
   digest,
   digestBall,
   EnergyMonitor,
+  RollMonitor,
   kineticEnergy,
   serializeInput,
   StuckDetector,
@@ -482,6 +483,7 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
   const stats: FrameStat[] = [];
   const violations: Violation[] = [];
   const energy = new EnergyMonitor();
+  const roll = new RollMonitor();
   const stateFirstFrame = new Map<string, number>();
 
   for (let f = 1; f <= script.frames && !resetFired; f++) {
@@ -496,6 +498,8 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     violations.push(...checkBallInvariants(level));
     const ev = energy.push(level, input);
     if (ev) violations.push(ev);
+    const rv = roll.push(level);
+    if (rv) violations.push(rv);
   }
 
   const assertResults = evaluateAsserts(script, digests, stateFirstFrame, stats);

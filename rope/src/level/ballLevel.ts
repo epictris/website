@@ -87,6 +87,14 @@ export class BallLevel {
   // Speed the frame's own winding entitles the solve to (see the assignment in
   // `physicsProcess`); zero on a frame with no chain.
   chainWinchSpeedBudget = 0;
+  // What the chain phase itself paid the ball this frame, as a velocity: the
+  // PBD credit over the phase's realised displacement, and nothing the frame
+  // wrote on top of it. Zero on a frame with no chain.
+  //
+  // It is the one part of the ball's velocity a *constraint* is entitled to have
+  // put there, which is what makes it the term `roll-unfunded` subtracts before
+  // asking whether the rest of the ball's travel is accounted for by its spin.
+  chainCreditVelocity = Vec2.ZERO;
   private endWasFixed = false;
 
   // Length below which a stall is float noise rather than a blocked correction.
@@ -282,8 +290,25 @@ export class BallLevel {
       }
       const overLengthBeforeSolve =
         this.ball.chain.getCurrentLength() - this.ball.chain.constraintLength;
+      // Winding chain onto the ball's rim is charged to the ball's spin — the
+      // rollback below and the unwind at the end of the phase — only once the
+      // chain is ATTACHED to something. Until it is, the far end is the ball's
+      // own hook: a quarter-kilo weight on the end of a chain the ball is
+      // holding, and pulling it in is the whole of what winding against it can
+      // mean. There is no anchor to protect from the spin's share, and nothing
+      // for the rotation to be refused on behalf of.
+      //
+      // Refusing it anyway is what `session-315f` reported. A deployed, unattached
+      // chain draped over the scenery blocked its own correction, the unwind
+      // walked the frame's rotation back every frame — the aim demanding 4 rad/s
+      // and getting none of it — and the contact solve, which had already run,
+      // had sold that rotation as roll: the ball crossed 40 cm of the platform it
+      // was resting on at 0.46 m/s while its rotation stood still, read from the
+      // game as the platform turning to ice for as long as the chain was out.
+      // Until the hook lands, the ball turns as freely as it does with no chain
+      // deployed at all.
       const spinShare =
-        overLengthBeforeSolve > 0
+        endFixed && overLengthBeforeSolve > 0
           ? Mathf.clamp(spinLength / overLengthBeforeSolve, 0, 1)
           : 0;
       // What winding this frame's chain onto the ball is *worth* as a speed: the
@@ -374,8 +399,12 @@ export class BallLevel {
       // way up with nowhere left to be hauled, where the spin has to give the
       // last radian back instead (session-475f). Never more than the frame's own
       // turn, so a wound-up ball stalls rather than unwinding itself
-      // (session-394f).
-      this.ball.chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta);
+      // (session-394f). And never at all while the chain is unattached: the
+      // rotation is only the spin's to give back where winding it on was
+      // something an anchor could refuse — see `spinShare` above.
+      if (endFixed) {
+        this.ball.chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta);
+      }
       PhaseTrace.mark("unwind", this.world);
       // The unwind just turned the ball, and the ball is not only a circle — it
       // carries its mounting loop out on the rim, so a rotation can swing that
@@ -385,12 +414,11 @@ export class BallLevel {
       // Discounted the same way the solve discounts its own credit: a length
       // error a wrap node appearing put there is corrected in position but earns
       // no velocity (see Rope.topologyCreditScale).
-      this.ball.linearVelocity = velocityBeforeChain.add(
-        this.ball.globalPosition
-          .sub(positionBeforeChain)
-          .div(delta)
-          .mul(this.ball.chain.topologyCreditScale),
-      );
+      this.chainCreditVelocity = this.ball.globalPosition
+        .sub(positionBeforeChain)
+        .div(delta)
+        .mul(this.ball.chain.topologyCreditScale);
+      this.ball.linearVelocity = velocityBeforeChain.add(this.chainCreditVelocity);
       // The PBD velocity update taken over the whole chain phase — the single
       // largest source of one-frame ball velocity there is, and the one every
       // launch has come through.
@@ -480,6 +508,7 @@ export class BallLevel {
       this.anchorKickSpeedGain = null;
       this.chainSolveSpeedGain = null;
       this.chainAnchorLength = null;
+      this.chainCreditVelocity = Vec2.ZERO;
       this.chainStallFrames = 0;
       this.chainLeaseHeldFrames = 0;
       this.chainWinchSpeedBudget = 0;

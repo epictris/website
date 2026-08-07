@@ -188,6 +188,19 @@ export interface ContactConstraint {
   // this contact is SLIDING, which is what decides whether a body resting on
   // static geometry earns the position pin (see `applyStaticGrip`).
   slipping: boolean;
+  // Did it get everything it asked for, against the bound actually applied?
+  //
+  // Not the same question as `slipping`, which is asked of the bare Coulomb
+  // cone. An aiming ball's cone is faded in the direction that would brake it
+  // (`contactBrakeScale`), so a contact can be pinned at its real limit with a
+  // tangent impulse well inside `mu * Pn` - a ball skidding to a halt under the
+  // aim sits at exactly that bound and reports `slipping: false` (`session-477f`
+  // f170, 11.595 against a faded bound of 11.60 and a cone of 15.32).
+  //
+  // Diagnostic only: nothing in the solve reads it. `roll-unfunded` does, because
+  // "the contact reached no-slip" is precisely "it was not held at its bound",
+  // and reading `slipping` for that calls every braking frame a violation.
+  limited: boolean;
 }
 
 // A circle pair has no faces to key on and produces exactly one point, so every
@@ -909,6 +922,7 @@ export class World {
         normalImpulse: 0,
         tangentImpulse: 0,
         slipping: false,
+        limited: false,
       });
     };
     if (sa.shape.kind !== "circle") {
@@ -1146,13 +1160,13 @@ export class World {
     // there. A kinematic spin driving an off-centre shape into a surface is not
     // one, and what it fabricated buys nothing (see `spinFabricatedNormal`).
     const cone = s.friction * Math.max(0, c.normalImpulse - s.spinNormal);
-    const total = clamp(
-      c.tangentImpulse - vt / s.invEffT,
-      -cone * s.brakeNeg,
-      cone * s.brakePos,
-    );
+    const capPos = cone * s.brakePos;
+    const capNeg = cone * s.brakeNeg;
+    const total = clamp(c.tangentImpulse - vt / s.invEffT, -capNeg, capPos);
     const delta = total - c.tangentImpulse;
     c.slipping = cone > 0 && Math.abs(total) >= cone - 1e-12;
+    // Against the bound the clamp above actually used, faded cone included.
+    c.limited = total >= capPos - 1e-12 || total <= -capNeg + 1e-12;
     c.tangentImpulse = total;
     if (delta !== 0) applyPairImpulse(s, s.tangent.mul(delta));
   }

@@ -18,6 +18,12 @@ sewer walls:
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd
 - https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567
 
+# Model Packs
+dungeon assets:
+- https://sketchfab.com/3d-models/dungeon-essential-kit-b22fc89609b44d21961f1212286e1867
+medieval assets:
+- https://sketchfab.com/3d-models/top-down-medieval-kit-7d336dc5d1f44df296b19b2622257124
+
 # Tileable Meshes
 red brick wall:
 - https://polyhaven.com/a/factory_brick

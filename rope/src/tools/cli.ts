@@ -68,6 +68,7 @@ import {
   digest,
   digestBall,
   EnergyMonitor,
+  RollMonitor,
   inputDeserializer,
   kineticEnergy,
   StuckDetector,
@@ -277,6 +278,7 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   const de = inputDeserializer();
   const stuck = new StuckDetector();
   const energy = new EnergyMonitor();
+  const roll = new RollMonitor();
   const violations: Violation[] = [];
 
   for (let i = 0; i < from; i++) level.physicsProcess(de(rec.frames[i]!), 1 / 60);
@@ -301,6 +303,8 @@ function cmdContinue(file: string, o: Record<string, string>): void {
       violations.push(...checkBallInvariants(ball));
       const ev = energy.push(ball, input);
       if (ev) violations.push(ev);
+      const rv = roll.push(ball);
+      if (rv) violations.push(rv);
     } else {
       violations.push(...checkInvariants(level as Level));
       const sv = stuck.push(level as Level, input);

@@ -11,6 +11,7 @@ import {
   digest,
   digestBall,
   EnergyMonitor,
+  RollMonitor,
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
@@ -80,6 +81,7 @@ export function replayRecording(rec: Recording): ReplayResult {
   // work on whatever it touches, so an energy budget there is not an invariant
   // but a description of the level.
   const energy = new EnergyMonitor();
+  const roll = new RollMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
   let bitDivergedAtFrame: number | null = null;
@@ -101,6 +103,8 @@ export function replayRecording(rec: Recording): ReplayResult {
       violations.push(...checkBallInvariants(level));
       const ev = energy.push(level, input);
       if (ev) violations.push(ev);
+      const rv = roll.push(level);
+      if (rv) violations.push(rv);
     } else {
       violations.push(...checkInvariants(level));
       const sv = stuck.push(level, input);

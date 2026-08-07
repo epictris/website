@@ -274,6 +274,28 @@ only for the part the chain could not afford, which leaves a frame the solver di
 settle untouched.
 It pays no more than it spent, either: the correction may walk the rotation back
 towards where the frame *started* and no further.
+And it is charged **only once the chain is attached** — the unwind and the
+spin-share rollback above are both gated on the chain end being fixed.
+Until the hook lands, the far end is the ball's own quarter-kilo hook: there is no
+anchor to protect from the spin's share, pulling that hook in is the whole of what
+winding against it can mean, and nothing about the rotation is something anything
+in the scene could refuse.
+Refusing it anyway is what `session-315f` reported.
+A deployed, unattached chain draped over the scenery blocked its own correction,
+so the unwind walked the frame's rotation back every frame — the aim demanding
+4 rad/s and getting none of it — while the contact solve, which runs *earlier in
+the frame*, had already sold that rotation as roll: a gripping contact drives the
+ball's centre until the contact point is stationary, so the ball's whole
+along-surface velocity was that spin's and it survived the spin being taken back.
+The ball crossed 40 cm of the chain-hung platform it was resting on at 0.46 m/s
+with its rotation standing still — 3.4 radians' worth of rolling out of 0.3 of
+turning — read from the game as the platform turning to ice for as long as the
+chain was out.
+A ball with an unattached chain deployed now turns exactly as freely as one with
+no chain at all, which is what a chain hanging off it should cost.
+`roll-unfunded` (below) is the detector, and the rule it states is the general
+form: a rotation the chain refuses may not have funded traction, wherever the
+refusal comes from.
 The rest of any over-length is not the spin's doing, and charging the spin for it
 spins the ball backwards — at the top of a wind-up that is its own runaway, the
 correction subtracting angular velocity while the next frame's push-out leaves a
@@ -815,6 +837,29 @@ the rim this frame is the winch's to haul in and the unwind's to refuse, and
 handing it to the length instead would pay the ball for its own kinematic spin.
 It only ever lengthens, so an anchor born slack - the ball travelling towards it -
 keeps the length it reached at.
+Ball runs also carry **`roll-unfunded`** (`RollMonitor`): a ball gripping a
+surface may not travel along it faster than its own spin and the chain account
+for.
+A contact that is not held at its friction bound has been solved to **no slip** -
+the contact point is stationary against the surface - so the ball's centre moves
+along that surface at exactly `radius x omega` and nothing else, and the chain
+phase's own PBD credit (`BallLevel.chainCreditVelocity`) is the one other thing
+entitled to have moved it.
+What is left is a body being driven along a surface by nothing at all, which is
+the shape of every friction motor here and of `session-315f` (0.5 m/s, sustained,
+out of a ball whose spin was 0.03 rad/s).
+It fires on 0.15 m/s carried for 30 frames, because the quantity is a **drive**:
+an unfunded push is re-earned every frame for as long as its cause lasts, where a
+landing or a wrap appearing is over in a handful.
+The exemption is `ContactConstraint.limited` and *not* `slipping`, and the
+difference is load-bearing: `slipping` is asked of the bare Coulomb cone, while an
+aiming ball's cone is faded in the braking direction (`contactBrakeScale`), so a
+ball skidding to a halt under the aim sits at exactly its real bound with a
+tangent impulse well inside `mu * Pn` and reports `slipping: false` - 11.595
+against a faded bound of 11.60 and a cone of 15.32 (`session-477f` f170).
+The load-bearing contact is also chosen *before* the bound question is asked
+rather than from among the contacts that pass it, or a ball skidding on its rim is
+measured at whatever grazing touch its mounting loop happens to have.
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
 may not rise beyond a tolerance.

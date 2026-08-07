@@ -18,7 +18,7 @@ import { OnWallState } from "../classes/states/onWallState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import type { Rope } from "../classes/rope";
-import type { World } from "../engine/world";
+import type { ContactConstraint, World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { RawLevelData } from "../level/levelFormat";
@@ -566,6 +566,89 @@ const ENERGY_MIN_SPAN = 30;
 // (rad/s). The aim gain is 15/s, so this is a loop within a milliradian of where
 // the player is pointing.
 const STEERING_SPIN = 0.02;
+
+// Along-surface speed the ball is carrying that neither its own spin nor the
+// chain paid for (m/s), and how long a run of it is a defect rather than a
+// settling transient.
+//
+// 0.15 m/s is well clear of what a gripping contact leaves behind on an ordinary
+// frame (the contact damp alone is 1% of the ball's speed) and far under the
+// 0.46 m/s the ball motored at in `session-315f`. 30 frames because the quantity
+// is a *drive*: an unfunded push is re-earned every frame for as long as its
+// cause lasts, where a landing or a wrap appearing is over in a handful.
+const ROLL_UNFUNDED_SPEED = 0.15;
+const ROLL_UNFUNDED_FRAMES = 30;
+
+// The ball's travel along the surface it is gripping, less what its own rotation
+// and the chain account for.
+//
+// A contact that is not at its Coulomb limit has been solved to NO SLIP: the
+// contact point is stationary against the surface, so the ball's centre moves
+// along that surface at exactly `radius x omega` and nothing else. The chain is
+// the one other thing entitled to move it, and `BallLevel.chainCreditVelocity`
+// is what that phase paid. Whatever is left is a body being driven along a
+// surface by nothing at all - which is the shape of every friction motor this
+// project has had, and of `session-315f`, where the chain's unwind took the
+// frame's rotation back off the ball while the contact solve had already sold it
+// as roll: the ball crossed 40 cm of the platform it rested on, at 0.46 m/s,
+// while its rotation stood still.
+//
+// A contact held at its friction bound is exempt and must be: a sliding ball is
+// meant to travel without turning, and the cone is what bounds it there. The
+// test is `limited` rather than `slipping`, because an aiming ball's cone is
+// faded in the braking direction and a ball skidding to a halt sits at that
+// faded bound while `slipping` still reads false (`session-477f` f170).
+export class RollMonitor {
+  private run = 0;
+
+  push(level: BallLevel): Violation | null {
+    const ball = level.ball;
+    // The contact CARRYING the ball, chosen before the slip question is asked
+    // and not among the contacts that pass it: the ball is two shapes, and
+    // picking the largest non-slipping impulse hands the whole measurement to
+    // the mounting loop's grazing touch whenever the rim underneath it is
+    // sliding — which is a ball skidding to a halt, read off the wrong contact
+    // (`session-477f` f170).
+    let best: ContactConstraint | null = null;
+    for (const c of level.world.frameContacts) {
+      if (c.a !== ball && c.b !== ball) continue;
+      if (c.normalImpulse <= 0) continue;
+      if (best === null || c.normalImpulse > best.normalImpulse) best = c;
+    }
+    if (best === null || best.limited) {
+      this.run = 0;
+      return null;
+    }
+    const other = best.a === ball ? best.b : best.a;
+    const tangent = new Vec2(-best.normal.y, best.normal.x);
+    const r = best.point.sub(ball.globalPosition);
+    // Rolling without slip puts `-(omega x r)` into the centre's along-surface
+    // velocity — the same identity `World.applySteeringGrip` writes its roll
+    // from, read backwards.
+    const spinAtPoint = new Vec2(-ball.angularVelocity * r.y, ball.angularVelocity * r.x);
+    const unfunded =
+      ball.linearVelocity
+        .sub(other.velocityAtPoint(best.point))
+        .sub(level.chainCreditVelocity)
+        .dot(tangent) + spinAtPoint.dot(tangent);
+    if (Math.abs(unfunded) <= ROLL_UNFUNDED_SPEED) {
+      this.run = 0;
+      return null;
+    }
+    this.run++;
+    if (this.run <= ROLL_UNFUNDED_FRAMES) return null;
+    const run = this.run;
+    this.run = 0;
+    return {
+      frame: level.frame,
+      kind: "roll-unfunded",
+      detail:
+        `ball driven along a gripping contact at ${Math.abs(unfunded).toFixed(2)} m/s ` +
+        `for ${run} frames with neither its spin (${ball.angularVelocity.toFixed(2)} rad/s) ` +
+        `nor the chain accounting for it`,
+    };
+  }
+}
 
 // Total mechanical energy of everything that can move: kinetic (linear and
 // angular) plus gravitational potential, with y measured downward so height is
