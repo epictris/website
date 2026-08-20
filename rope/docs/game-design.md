@@ -149,10 +149,14 @@ single shape. This keeps collision, wrap-point, and ledge math to the convex
 case only — no concave decomposition at solve time, no reflex vertices *within*
 a primitive.
 
-To build a concave form (an L-shape, a star, a hull with a notch), compose a
-body out of **multiple convex polygons** (a compound body). The pieces share a
-transform and move as one; each piece is convex and is collided/wrapped
-independently.
+A concave form (an L-shape, a star, a hull with a notch) is therefore a body of
+**multiple convex polygons** — a compound body. The pieces share a transform and
+move as one; each piece is convex and is collided/wrapped independently. What a
+LEVEL authors, though, is the outline the geometry has, notch and all: the
+loader cuts a concave outline into exactly such a set of pieces before anything
+simulates it (see **Authoring a concave outline** below). The rule is a rule
+about the primitive and about the solvers, and it is not softened anywhere; what
+moved is where the pieces come from.
 
 Consequence for vertices: a reflex ("inward") corner only ever exists at a
 **seam between two convex pieces**, never inside a single primitive. Seam
@@ -172,13 +176,11 @@ two grid-snapped pieces may both own, has three quarters of a turn and is as rea
 a corner as any. Proximity would call that last one a seam, and did: the rope ran
 straight through a wall until the hook happened to anchor to it.
 
-The rule is enforced where the shape is *made*, not where it is used. Both
-`polyShape` (the engine) and `setPolyVerts` (the editor) refuse a non-convex
-loop outright — the editor stalls the vertex being dragged at its last convex
-position — so no concave primitive ever reaches a solver that would have to cope
-with one. A polygon drawn from scratch is taken as the **convex hull** of the
-clicked points, which is the same shape for a well-drawn outline and the nearest
-convex shape for a badly-drawn one.
+The rule is enforced where the shape is *made*, not where it is used.
+`polyShape` (the engine) refuses a non-convex loop outright, so no concave
+primitive ever reaches a solver that would have to cope with one, and the cut
+below is what every authored outline goes through on its way to that
+constructor.
 
 Why the rule is load-bearing rather than a simplification: the rope's wrap
 solver decides which side of a body a span passes on from the body's own origin,
@@ -216,6 +218,29 @@ A compound body is also drawn as one object - its shapes filled as a union, and
 outlined only where a piece is not covered by a sibling. This is the same rule as
 the seam rule, stated in pixels: if the rope will not catch on a join, the join
 is not an edge of the body and must not be drawn as one.
+
+### Authoring a concave outline
+
+A level authors the outline its geometry has, concave corners included, and the loader cuts it into the convex pieces above.
+An L-shaped ledge is one polygon with six vertices in the editor and a two-piece compound body in the simulation, and the author never places the second piece.
+That is the whole of the feature: the engine's convex-only rule is untouched, and what changed is that the decomposition is derived rather than drawn.
+
+The cut is `decomposeConvex` (`lib/polygon.ts`), run by `makeShapes` as the object is built.
+Ear clipping to triangles, then Hertel-Mehlhorn: every diagonal the triangulation introduced is dissolved again wherever the two pieces it separates merge into a convex one, so an L is two pieces rather than four triangles with three seams across its faces.
+It has three properties the rest of the system leans on.
+
+- It is a **partition**. The pieces tile the outline exactly, so their areas sum to its area, their masses to its mass, and their combined centre of mass lands on its centroid - which is what lets `makePieces` split one authored object's mass by piece area and get the same body a hand-authored one would have.
+- It adds **no vertices**. Every piece corner is a corner the author placed, so the seam rule is decided over the same points either way: a reflex corner of the outline is covered by more than a half turn of material and neither wraps nor grabs, an outline corner is exposed however many pieces meet at it, and a seam is not a corner of anything.
+- It is **deterministic**, because it runs at load rather than at author time: two machines reading the same file must cut it into the same pieces or they are simulating different geometry. `cli decompose` asserts all three, per outline, plus the piece counts - nothing else would notice an L that had started building as six pieces.
+
+Two things are still refused, and for different reasons.
+An outline that **crosses itself** is not a shape at all: it has no inside, so there is nothing to cut, nothing to weigh and nothing to fill. The editor stalls a vertex drag at the last position the loop was still a shape, and the poly tool falls back to the convex hull of a draft that crossed itself.
+A **camera region** must stay convex, because nothing cuts one up: a region is tested by its face half-planes and grown into a buffer zone by offsetting them, and both of those read a notch as solid.
+
+A **hole** has no authored form either - one loop cannot express one - so a doughnut is still several bodies, or several outlines in one body.
+
+Choosing between one concave outline and several convex pieces in one body is not a real decision any more: they build the same body, and the outline is the one an author can move a corner of afterwards.
+Choosing between one body and several is exactly as real as it was (see above): the rope wraps the corner where two bodies meet and refuses the seam inside one.
 
 ## Chains between bodies
 

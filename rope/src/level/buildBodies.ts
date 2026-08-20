@@ -20,6 +20,7 @@ import {
   WaterArea,
 } from "../engine/body";
 import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
+import { decomposeConvex } from "../lib/polygon";
 import { World } from "../engine/world";
 import {
   DEFAULT_THICKNESS,
@@ -42,16 +43,37 @@ import {
 } from "./levelFormat";
 import type { CollisionObject2D } from "../engine/body";
 
-// An authored shape plus the local-frame offset the loader had to remove from
-// it. Only polygons ever carry one: their vertices are re-centred on the area
-// centroid, because a body's origin is its centre of mass everywhere in this
-// engine (every RigidBody2D lever arm is measured from `globalPosition`). The
-// offset goes back onto the piece's position, so the geometry lands exactly
-// where it was authored while the origin ends up where the physics needs it.
-function makeShape(shape: ShapeData): { shape: Shape; offset: Vec2 } {
-  if (shape.kind === "rect") return { shape: rectShape(shape.w, shape.h), offset: Vec2.ZERO };
-  if (shape.kind === "circle") return { shape: circleShape(shape.r), offset: Vec2.ZERO };
-  return polyShapeCentred(shape.verts.map((v) => new Vec2(v.x, v.y)));
+// An authored shape as the ENGINE primitives it is made of, each with the
+// local-frame offset the loader had to remove from it. Only polygons ever carry
+// one: their vertices are re-centred on the area centroid, because a body's
+// origin is its centre of mass everywhere in this engine (every RigidBody2D
+// lever arm is measured from `globalPosition`). The offset goes back onto the
+// piece's position, so the geometry lands exactly where it was authored while
+// the origin ends up where the physics needs it.
+//
+// A list rather than one shape because an authored polygon may be **concave**,
+// and the engine's polygon is convex without exception (see "Convex-only
+// polygons; compound bodies" in docs/game-design.md). A concave outline is cut
+// here, at load, into the convex pieces that tile it (`decomposeConvex`), and
+// what the solvers see is the compound body an author would otherwise have had
+// to assemble by hand - same seams, same corners, same mass. A convex loop takes
+// the single-piece path it always took, which is what keeps every polygon
+// authored before this bit-identical.
+function makeShapes(shape: ShapeData): { shape: Shape; offset: Vec2 }[] {
+  if (shape.kind === "rect") return [{ shape: rectShape(shape.w, shape.h), offset: Vec2.ZERO }];
+  if (shape.kind === "circle") return [{ shape: circleShape(shape.r), offset: Vec2.ZERO }];
+  const verts = shape.verts.map((v) => new Vec2(v.x, v.y));
+  const pieces = decomposeConvex(verts);
+  // Empty means the loop crosses itself, so there is no inside to build. The
+  // editor cannot author one (`setPolyVerts` refuses the edit), which leaves a
+  // hand-edited file - and a loud failure is what a concave loop already got
+  // here before it was cut up, rather than a level that quietly loses a wall.
+  if (!pieces.length) {
+    throw new Error(
+      `collision polygon is not a simple outline (${verts.length} vertices, it crosses itself)`,
+    );
+  }
+  return pieces.map((p) => polyShapeCentred(p));
 }
 
 function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
@@ -195,9 +217,24 @@ interface Piece {
   impermeable: boolean;
 }
 
-function makePiece(body: LevelBodyData, o: CollisionObjectData): Piece {
-  const made = makeShape(o.shape);
+// One collision object as the pieces it builds: one for every kind but a
+// concave polygon, which builds the several convex pieces it was cut into.
+//
+// The pieces share everything the object authored - its placement, its
+// hook-proofing, its material and thickness - and split its MASS by area, which
+// is the same arithmetic as weighing each piece on its own: the cut is a
+// partition, so the piece areas sum to the outline's area and the pieces' masses
+// to its mass, with the combined centre of mass landing on its centroid.
+function makePieces(body: LevelBodyData, o: CollisionObjectData): Piece[] {
   const world = worldPlacement(body, o);
+  return makeShapes(o.shape).map((made) => makePiece(o, made, world));
+}
+
+function makePiece(
+  o: CollisionObjectData,
+  made: { shape: Shape; offset: Vec2 },
+  world: { pos: Vec2; rot: number },
+): Piece {
   // A re-centred polygon's origin moved; put the geometry back where it was
   // authored by shifting it by the (rotated) offset that was removed.
   return {
@@ -294,7 +331,7 @@ export function buildLevelBodies(
       bodies.push({ data: b, body: null, origin: new Vec2(b.x, b.y), rotation: b.rot });
       continue;
     }
-    const pieces = b.objects.filter(isCollisionObject).map((o) => makePiece(b, o));
+    const pieces = b.objects.filter(isCollisionObject).flatMap((o) => makePieces(b, o));
     const built = buildOne(world, b, pieces, onReset);
     bodies.push({
       data: b,

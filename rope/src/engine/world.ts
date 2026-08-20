@@ -562,10 +562,10 @@ export class World {
       if (!(area instanceof ForceArea) || area.removed || !area.hasShape()) continue;
       if (area.magnitude === 0) continue;
       const dv = area.acceleration.mul(dt);
-      const ashape = area.primaryShape();
+      const ashapes = area.getShapes();
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
-        if (!body.getShapes().some((s) => shapesOverlap(ashape, s))) continue;
+        if (!areaOverlapsBody(ashapes, body)) continue;
         if (body instanceof RigidBody2D) {
           body.linearVelocity = body.linearVelocity.add(dv);
         } else if (body instanceof CharacterBody2D) {
@@ -607,7 +607,7 @@ export class World {
     for (const area of this.areas) {
       if (!(area instanceof WaterArea) || area.removed || !area.hasShape()) continue;
       if (area.drag <= 0) continue;
-      const ashape = area.primaryShape();
+      const ashapes = area.getShapes();
       const flow = area.flowVelocity;
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
@@ -618,8 +618,8 @@ export class World {
         // long thin area vastly bigger than it is drawn. The boxes below only
         // ever say HOW MUCH, and only for a body the exact test has already
         // placed inside.
-        if (!body.getShapes().some((s) => shapesOverlap(ashape, s))) continue;
-        const frac = submergedFraction(body, ashape);
+        if (!areaOverlapsBody(ashapes, body)) continue;
+        const frac = submergedFraction(body, ashapes);
         if (frac <= 0) continue;
         body.submerged = Math.max(body.submerged, frac);
 
@@ -1793,7 +1793,7 @@ export class World {
       const inside: CollisionObject2D[] = [];
       for (const body of this.bodies) {
         if (body.removed || !body.hasShape()) continue;
-        if (body.getShapes().some((s) => shapesOverlap(area.primaryShape(), s))) inside.push(body);
+        if (areaOverlapsBody(area.getShapes(), body)) inside.push(body);
       }
       area.notifyOverlaps(inside);
     }
@@ -1973,21 +1973,38 @@ const WATER_ANGULAR_DRAG = 0.5;
 // be inside it is under. What it buys is the surface: a ball dipping into the
 // channel is dragged by the part of it that is wet and not by all of it, so it
 // slows as it enters instead of stopping the instant it touches.
-function submergedFraction(body: PhysicsBody2D, area: ShapeTransform): number {
-  const ac = area.globalPosition;
-  const ae = shapeExtents(area);
+function submergedFraction(body: PhysicsBody2D, area: readonly ShapeTransform[]): number {
   let best = 0;
-  for (const s of body.getShapes()) {
-    const bc = s.globalPosition;
-    const be = shapeExtents(s);
-    if (be.x <= 0 || be.y <= 0) continue;
-    const ox = Math.min(bc.x + be.x, ac.x + ae.x) - Math.max(bc.x - be.x, ac.x - ae.x);
-    const oy = Math.min(bc.y + be.y, ac.y + ae.y) - Math.max(bc.y - be.y, ac.y - ae.y);
-    if (ox <= 0 || oy <= 0) continue;
-    const f = Math.min(1, ox / (2 * be.x)) * Math.min(1, oy / (2 * be.y));
-    if (f > best) best = f;
+  for (const a of area) {
+    const ac = a.globalPosition;
+    const ae = shapeExtents(a);
+    for (const s of body.getShapes()) {
+      const bc = s.globalPosition;
+      const be = shapeExtents(s);
+      if (be.x <= 0 || be.y <= 0) continue;
+      const ox = Math.min(bc.x + be.x, ac.x + ae.x) - Math.max(bc.x - be.x, ac.x - ae.x);
+      const oy = Math.min(bc.y + be.y, ac.y + ae.y) - Math.max(bc.y - be.y, ac.y - ae.y);
+      if (ox <= 0 || oy <= 0) continue;
+      const f = Math.min(1, ox / (2 * be.x)) * Math.min(1, oy / (2 * be.y));
+      if (f > best) best = f;
+    }
   }
   return best;
+}
+
+// Does any shape of the area touch any shape of the body? Areas iterate their
+// shapes like everything else in this engine, which they did not use to: an area
+// was single-shape by construction while the only way to compound one was to
+// group it, and grouping an area was refused outright. A concave authored
+// outline is cut into convex pieces at load (`makeShapes`), so an area is a
+// several-shape body now whenever its author drew a notch in it, and testing the
+// first piece alone would leave the rest of a cave's water dry. Every existing
+// area has exactly one shape, so this is the same answer they always gave.
+function areaOverlapsBody(area: readonly ShapeTransform[], body: PhysicsBody2D): boolean {
+  for (const a of area) {
+    for (const s of body.getShapes()) if (shapesOverlap(a, s)) return true;
+  }
+  return false;
 }
 
 function shapesOverlap(a: ShapeTransform, b: ShapeTransform): boolean {

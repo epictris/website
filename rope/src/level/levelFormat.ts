@@ -74,12 +74,28 @@ export type BodyKind = "static" | "anchor" | "killzone" | "rigid" | "force" | "w
 // at load, so nothing past that line ever sees it.
 export const LEGACY_IMPERMEABLE = "impermeable";
 
-// A shape as authored on disk. `poly` is a **convex** vertex loop in the
+// A shape as authored on disk. `poly` is a **simple** vertex loop in the
 // object's own local frame, centred on its area centroid (the loader re-centres
 // one that is not, shifting the object's position to compensate, since a body's
 // origin is its centre of mass everywhere in the engine). A rect stays its own
 // kind rather than being written as a four-vertex poly: every recorded replay
 // was simulated through the rect-specific collision routines.
+//
+// Simple and not convex, which is the one place the two halves of the project
+// disagree about what a polygon is, and deliberately: the ENGINE's polygon is
+// convex without exception (a reflex vertex is unwrappable, see "Convex-only
+// polygons; compound bodies" in docs/game-design.md), while a LEVEL authors the
+// outline the geometry actually has - an L-shaped ledge, a notched pillar, a
+// cave mouth. `makeShapes` cuts a concave outline into the convex pieces that
+// tile it as the object is built, so the file keeps the author's shape and the
+// solver still only ever sees convex ones. A loop that crosses itself is not a
+// shape either way and fails the build.
+//
+// The exception is a CAMERA REGION, whose polygon must stay convex: a region is
+// tested by its face half-planes and grown into a buffer zone by offsetting
+// them (`pointInRegion`, `pathOutlineGrown`), neither of which has a concave
+// answer, and a region is not built into pieces that could carry one. The editor
+// holds a camera-layer polygon convex for that reason.
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
@@ -1396,10 +1412,13 @@ export function primitiveOf(c: CollisionObjectData): GeometryObjectData {
   };
 }
 
-// Areas are single-shape everywhere they are used - `World.integrate` tests
-// overlap against `area.primaryShape()`, not `getShapes()` - so a grouped area
-// would silently act through its first piece alone. Grouping was geometry-only,
-// and an area that carried a tag was built as its own body instead.
+// The retired `group` tag was geometry-only: an area that carried one was built
+// as its own body instead, because an area was single-shape everywhere it was
+// used and a grouped one would have acted through its first piece alone.
+// `World.integrate` iterates an area's shapes now (`areaOverlapsBody`, which a
+// decomposed concave area needs), but this is a MIGRATION and reproduces what
+// the old loader did whatever the engine has since learned - every recorded
+// replay names bodies by the build order it produces.
 function legacyGroupable(kind: LegacyBodyData["kind"]): boolean {
   return kind !== "killzone" && kind !== "force";
 }

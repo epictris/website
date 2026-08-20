@@ -199,11 +199,15 @@ export abstract class CollisionObject2D {
   //
   // Legitimate uses are a body asking about ITSELF where it is known to carry
   // one shape - mass and inertia at construction, the avatar's own radius, the
-  // character sweep's moving shape - and areas, which are single-shape by
-  // construction (`World.integrate` tests overlap against this, which is exactly
-  // why grouping an area is refused). Anything asking about *another* body's
+  // character sweep's moving shape. Anything asking about *another* body's
   // geometry wants `getShapes()`, or one of the whole-body queries in
   // `engine/collision.ts` that iterate it for you.
+  //
+  // Areas used to be on that list and are not any more. They were single-shape
+  // by construction only while every authored polygon was convex; an authored
+  // concave outline is cut into convex pieces at load, so a killzone with a
+  // notch in it is a several-shape area and `World.integrate` iterates them
+  // (`areaOverlapsBody`) rather than acting through the first piece alone.
   primaryShape(): CollisionShape2D {
     const s = this.collisionShapes[0];
     if (!s) throw new Error(`No shape found for body ${this.name}`);

@@ -36,6 +36,7 @@ import {
   outlineOfShape,
   pathOutline,
   pathOutlineInto,
+  pathOutlineIntoGrown,
 } from "./shapePath";
 import { hexToRgba, shade } from "./color";
 import { drawDebugOverlay } from "./debugOverlay";
@@ -230,12 +231,26 @@ function drawCompoundGeometry(
     // a real edge of the body rather than an interior seam. One combined
     // even-odd clip would not do: a point inside two siblings crosses three
     // rings and comes out odd, i.e. wrongly kept.
+    //
+    // Each sibling is grown by A LINE WIDTH first. Pieces that overlap hide each
+    // other's seam strokes either way; pieces that merely ABUT - two decomposed
+    // pieces of one concave outline, or two grid-snapped rects sharing a face -
+    // put the shared edge exactly on the boundary, where an ungrown clip keeps
+    // the outer half of each piece's stroke and draws a hairline crack up the
+    // middle of a solid wall.
+    //
+    // A full width rather than the half a stroke actually reaches: at exactly
+    // half, the clip boundary lands on the outermost row of stroke pixels and
+    // antialiasing leaves a fraction of it - the crack goes from solid to faint
+    // rather than away. What the extra width costs is up to a stroke of a REAL
+    // edge, at a point where a sibling is already touching it.
+    const grow = edge.width;
     for (let j = 0; j < shapes.length; j++) {
       if (i === j) continue;
       const outside = new Path2D();
       outside.rect(box.x, box.y, box.w, box.h);
       const s = shapes[j]!;
-      pathOutlineInto(outside, s.globalPosition, s.globalRotation, outlineOfShape(s.shape));
+      pathOutlineIntoGrown(outside, s.globalPosition, s.globalRotation, outlineOfShape(s.shape), grow);
       ctx.clip(outside, "evenodd");
     }
     const own = new Path2D();

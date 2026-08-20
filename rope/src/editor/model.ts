@@ -18,6 +18,11 @@ import {
   polyCentroid,
   polySignedArea2,
 } from "../engine/shapes";
+import {
+  isSimpleLoop,
+  loopContainsPoint,
+  segmentsIntersect,
+} from "../lib/polygon";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import { DECOR_Z } from "../level/decor";
 import { worldPlacement } from "../level/buildBodies";
@@ -121,12 +126,14 @@ export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
 // else instead of only being reachable by grabbing the rope.
 export type EdObject = "collision" | "geometry" | "light" | "anchor";
 
-// `poly` vertices are metres in the item's own local frame, kept **convex** and
-// centred on their area centroid — `setPolyVerts` is the one writer, so no edit
-// path can leave either invariant broken. Convexity is a hard rule of the
-// format (see "Convex-only polygons; compound bodies" in docs/game-design.md);
-// centring is what makes the item's `pos` its centre of mass, which every
-// rigid-body lever arm in the engine assumes.
+// `poly` vertices are metres in the item's own local frame, kept a **simple**
+// outline (one that never crosses itself) and centred on their area centroid —
+// `setPolyVerts` is the one writer, so no edit path can leave either invariant
+// broken. Simple rather than convex: a concave outline is cut into convex pieces
+// by the loader (see "Convex-only polygons; compound bodies" in
+// docs/game-design.md and `polyMustBeConvex` below, which holds a camera region
+// to the older, stricter rule). Centring is what makes the item's `pos` its
+// centre of mass, which every rigid-body lever arm in the engine assumes.
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
@@ -1301,11 +1308,11 @@ export function worldVertices(item: EdItem): Vec2[] {
 }
 
 // Convex hull of a point set (Andrew's monotone chain), returned in the winding
-// the engine expects. Drawing a polygon runs the clicked points through this
-// rather than rejecting an out-of-order or slightly dented outline: a convex
-// polygon *is* its own hull, so a well-drawn shape comes back exactly as
-// clicked, and a badly-drawn one becomes the nearest convex shape instead of an
-// error message. Returns [] if the points are collinear or too few.
+// the engine expects. What the poly tool falls back to when the points clicked
+// out do not describe a shape - a loop that crosses itself has no inside, and
+// the hull is the nearest thing to what was drawn. It is also what a CAMERA
+// REGION takes outright, since a region must stay convex (`polyMustBeConvex`).
+// Returns [] if the points are collinear or too few.
 export function convexHull(points: readonly Vec2[]): Vec2[] {
   if (points.length < 3) return [];
   const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
@@ -1328,15 +1335,32 @@ export function convexHull(points: readonly Vec2[]): Vec2[] {
   return polySignedArea2(hull) >= 0 ? hull : hull.reverse();
 }
 
+// Must this item's polygon stay CONVEX, or may it be any simple outline?
+//
+// A scene polygon may be concave: the loader cuts it into the convex pieces the
+// engine's convex-only primitive needs (`makeShapes` in level/buildBodies.ts),
+// so an author draws the shape the geometry has - an L-shaped ledge, a notched
+// pillar - instead of overlapping several convex ones by hand.
+//
+// A camera region may not, and it is the one exception because nothing cuts it
+// up: a region is tested by its face half-planes and grown into a buffer zone by
+// offsetting them (`pointInRegion`, `pathOutlineGrown`), and both of those read
+// a notch as solid. Refusing the drag is what keeps the zone that is tested the
+// zone that is drawn.
+export function polyMustBeConvex(item: EdItem): boolean {
+  return item.layer === "camera";
+}
+
 // The only writer of a polygon's vertices. It re-centres them on their centroid
 // and shifts `pos` to compensate, so the drawn geometry does not move while the
-// origin lands where the physics needs it — and it refuses a loop that is not
-// convex, leaving the shape as it was rather than saving something the rope
-// solver cannot wrap. Returns whether the edit was accepted.
+// origin lands where the physics needs it — and it refuses a loop that is not a
+// shape at all, leaving the outline as it was rather than saving one that
+// crosses itself (or, for a camera region, one that is not convex). Returns
+// whether the edit was accepted.
 export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
   if (item.shape.kind !== "poly" || verts.length < 3) return false;
   const ordered = polySignedArea2(verts) >= 0 ? [...verts] : [...verts].reverse();
-  if (!isConvexLoop(ordered)) return false;
+  if (polyMustBeConvex(item) ? !isConvexLoop(ordered) : !isSimpleLoop(ordered)) return false;
   const c = polyCentroid(ordered);
   item.shape.verts = ordered.map((v) => v.sub(c));
   item.pos = item.pos.add(c.rotated(item.rot));
@@ -1367,9 +1391,9 @@ export function scaleShape(
     return;
   }
   if (item.shape.kind === "poly" && base.kind === "poly") {
-    // Scaling a convex loop leaves it convex, so `setPolyVerts` refuses nothing
-    // here - it is used for the re-centring, which keeps `pos` the centroid the
-    // rigid-body lever arms assume.
+    // Scaling an outline leaves it exactly as convex or as simple as it was, so
+    // `setPolyVerts` refuses nothing here - it is used for the re-centring,
+    // which keeps `pos` the centroid the rigid-body lever arms assume.
     setPolyVerts(
       item,
       base.verts.map((v) => new Vec2(v.x * fx, v.y * fy)),
@@ -1468,37 +1492,25 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
     return item.pos.distanceTo(new Vec2(cx, cy)) <= item.shape.r;
   }
   if (item.shape.kind === "poly") {
-    // SAT between the band (world axes) and the placed vertex loop.
+    // Directly, rather than by SAT: a separating axis exists only between
+    // CONVEX shapes, and an authored outline may have a notch the band sits in
+    // without touching it. Three questions cover every arrangement of two simple
+    // outlines - a vertex of one inside the other, either way round, or a pair
+    // of edges that cross.
     const verts = worldVertices(item);
-    const axes = [new Vec2(1, 0), new Vec2(0, 1)];
+    const corners = [min, new Vec2(max.x, min.y), max, new Vec2(min.x, max.y)];
+    for (const v of verts) {
+      if (v.x >= min.x && v.x <= max.x && v.y >= min.y && v.y <= max.y) return true;
+    }
+    for (const c of corners) if (loopContainsPoint(verts, c)) return true;
     for (let i = 0; i < verts.length; i++) {
-      const e = verts[(i + 1) % verts.length]!.sub(verts[i]!);
-      if (e.lengthSquared() > 1e-18) axes.push(e.orthogonal().normalized());
-    }
-    const boxCorners = [
-      min,
-      new Vec2(max.x, min.y),
-      max,
-      new Vec2(min.x, max.y),
-    ];
-    for (const axis of axes) {
-      let lo = Infinity;
-      let hi = -Infinity;
-      for (const v of verts) {
-        const p = v.dot(axis);
-        lo = Math.min(lo, p);
-        hi = Math.max(hi, p);
+      const a = verts[i]!;
+      const b = verts[(i + 1) % verts.length]!;
+      for (let j = 0; j < 4; j++) {
+        if (segmentsIntersect(a, b, corners[j]!, corners[(j + 1) % 4]!)) return true;
       }
-      let blo = Infinity;
-      let bhi = -Infinity;
-      for (const c of boxCorners) {
-        const p = c.dot(axis);
-        blo = Math.min(blo, p);
-        bhi = Math.max(bhi, p);
-      }
-      if (lo > bhi || blo > hi) return false;
     }
-    return true;
+    return false;
   }
   // SAT between the rect (world axes) and the item's rotated box: four axes,
   // the two world ones and the item's own.
@@ -1528,7 +1540,7 @@ export function bodyWithinRect(item: EdItem, min: Vec2, max: Vec2): boolean {
       item.pos.y + r <= max.y
     );
   }
-  // A rect or a convex polygon is the hull of its vertices, so every vertex
+  // A rect or a polygon lies within the hull of its vertices, so every vertex
   // inside is exactly "the whole shape is inside" — rotation included.
   return worldVertices(item).every(
     (w) => w.x >= min.x && w.x <= max.x && w.y >= min.y && w.y <= max.y,
@@ -1551,14 +1563,10 @@ export function pointInBody(item: EdItem, world: Vec2): boolean {
   if (item.shape.kind === "rect") {
     return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
   }
-  // Convex polygon: inside every face's half-plane.
-  const verts = item.shape.verts;
-  for (let i = 0; i < verts.length; i++) {
-    const a = verts[i]!;
-    const e = verts[(i + 1) % verts.length]!.sub(a);
-    if (e.y * (l.x - a.x) - e.x * (l.y - a.y) > 0) return false;
-  }
-  return true;
+  // Even-odd, not "inside every face's half-plane": the half-plane answer is the
+  // convex one and fills in a notch, so clicking through the gap in a C-shaped
+  // wall would pick the wall.
+  return loopContainsPoint(item.shape.verts, l);
 }
 
 // --- bodies -----------------------------------------------------------------

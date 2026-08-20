@@ -22,6 +22,7 @@ import {
   collidingBodyIds,
   itemDepth,
   NOTE_COLOR,
+  polyMustBeConvex,
   toWorld,
   type EdChain,
   type EdItem,
@@ -33,11 +34,13 @@ import {
   pathOutline,
   pathOutlineGrown,
   pathOutlineInto,
+  pathOutlineIntoGrown,
   uniformMargin,
   type Margin,
   type Outline,
 } from "../render/shapePath";
 import { REGION_EXIT_MARGIN } from "../render/cameraController";
+import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
@@ -60,6 +63,15 @@ const CAMERA_LOCK = "#e6c07b"; // camera-lock guides: warm, distinct from the re
 const DECOR_EDGE = "#4ec9b0";
 const HANDLE = "#f4a460";
 const HANDLE_FILL = "#1f2430";
+// Where a concave outline is cut into convex pieces: dim and dashed, because a
+// seam is not a surface. It has to read as "this is inside the shape" against
+// the orange handles, which are the things on a polygon that CAN be dragged.
+const SEAM = "#8a93a5";
+// A draft outline that crosses itself. Said while it is being clicked out rather
+// than when it is closed, because closing it is when it stops being fixable by
+// moving the pointer - and a crossed loop is the one draft the poly tool cannot
+// take as drawn (it falls back to the convex hull, which is not what was drawn).
+const DRAFT_CROSSED = "#d4756f";
 
 // Chains. Forged iron rather than a saturated editor colour: a chain is played,
 // not editor furniture, so it is drawn as the thing it will be and only its
@@ -345,6 +357,14 @@ function strokeCompoundOutline(
   const pad = 1;
   for (let i = 0; i < items.length; i++) {
     ctx.save();
+    // The style first, because the clip below is measured in it: each sibling is
+    // grown by a line width so that two pieces which ABUT rather than overlap
+    // lose the whole of their shared edge's stroke instead of half of it each,
+    // which reads as a hairline crack across a solid body. Same rule and same
+    // reason as `drawCompoundGeometry` in render/renderer.ts, where the full
+    // account of the arithmetic is.
+    style(items[i]!);
+    const grow = ctx.lineWidth;
     for (let j = 0; j < items.length; j++) {
       if (i === j) continue;
       const outside = new Path2D();
@@ -354,12 +374,11 @@ function strokeCompoundOutline(
         box.max.x - box.min.x + 2 * pad,
         box.max.y - box.min.y + 2 * pad,
       );
-      pathOutlineInto(outside, items[j]!.pos, items[j]!.rot, outlineOf(items[j]!));
+      pathOutlineIntoGrown(outside, items[j]!.pos, items[j]!.rot, outlineOf(items[j]!), grow);
       ctx.clip(outside, "evenodd");
     }
     const own = new Path2D();
     pathOutlineInto(own, items[i]!.pos, items[i]!.rot, outlineOf(items[i]!));
-    style(items[i]!);
     ctx.stroke(own);
     ctx.restore();
   }
@@ -1278,7 +1297,13 @@ export function drawEditor(
   // obvious which edge is still being aimed and which are committed.
   if (polyDraft && polyDraft.verts.length) {
     const v = polyDraft.verts;
-    ctx.strokeStyle = SELECT;
+    // The draft is drawn in the warning colour exactly when the loop it would
+    // close is not a shape. Concave is not that - a dented outline is a shape
+    // and is what the tool is for - so this fires only on a loop that crosses
+    // itself.
+    const crossed = v.length >= 3 && !isSimpleLoop([...v, polyDraft.cursor]);
+    const draftColor = crossed ? DRAFT_CROSSED : SELECT;
+    ctx.strokeStyle = draftColor;
     ctx.lineWidth = worldLine * 2;
     ctx.beginPath();
     v.forEach((q, i) => (i === 0 ? ctx.moveTo(q.x, q.y) : ctx.lineTo(q.x, q.y)));
@@ -1292,7 +1317,7 @@ export function drawEditor(
     ctx.setLineDash([]);
     // A dot per placed vertex, and a ring on the first one: clicking it is what
     // closes the loop, so it has to be findable.
-    ctx.fillStyle = SELECT;
+    ctx.fillStyle = draftColor;
     for (const q of v) {
       ctx.beginPath();
       ctx.arc(q.x, q.y, worldLine * 3, 0, Math.PI * 2);
@@ -1382,6 +1407,30 @@ export function drawEditor(
   }
   const selected =
     selection.length === 1 && hasPlaneHandles(selection[0]!, layers) ? selection[0]! : null;
+  // The cut, before the handles so a vertex handle is never hidden under it: an
+  // authored concave outline is one object here and several convex pieces in the
+  // simulation, and these dashed lines are where it divides. Worth drawing
+  // because the pieces are what the physics is - the rope wraps their shared
+  // corners and refuses their seams - and because a count in the panel says how
+  // many there are without saying where a cut has landed across a face.
+  if (selected && selected.shape.kind === "poly" && !polyMustBeConvex(selected)) {
+    const seams = decomposeSeams(selected.shape.verts);
+    if (seams.length) {
+      ctx.strokeStyle = SEAM;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      for (const [a, b] of seams) {
+        const p = worldToScreen(cam, toWorld(selected, a));
+        const q = worldToScreen(cam, toWorld(selected, b));
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
   if (selected) {
     const hs = computeHandles(cam, selected);
     if (hs.rotate) {

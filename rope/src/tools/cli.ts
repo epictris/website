@@ -24,6 +24,7 @@
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
+//   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts render3d
 //
@@ -1386,6 +1387,9 @@ switch (cmd) {
   case "corners":
     void cmdCorners();
     break;
+  case "decompose":
+    void cmdDecompose();
+    break;
   case "contacts":
     void cmdContacts();
     break;
@@ -1397,7 +1401,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|contacts|render3d|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|decompose|contacts|render3d|assets> [file] [options]",
     );
 }
 
@@ -1479,6 +1483,23 @@ async function cmdCorners(): Promise<void> {
     if (!r.ok) failed++;
   }
   console.log(`[corners] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Convex-decomposition cases (src/sim/decomposeCases.ts). Pure geometry, so it
+// needs no level and runs instantly - and it is what an authored concave outline
+// becomes before any solver sees it, so a wrong answer here is geometry the
+// whole simulation then agrees about.
+async function cmdDecompose(): Promise<void> {
+  const { runDecomposeCases, checkDecomposeDeterminism } = await import("../sim/decomposeCases");
+  const results = [...runDecomposeCases(), checkDecomposeDeterminism()];
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[decompose] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

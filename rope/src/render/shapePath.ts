@@ -118,6 +118,84 @@ export function pathOutlineInto(
   p.closePath();
 }
 
+// The outline pushed out by `grow` on every side, in world coordinates, appended
+// to the same kind of sink. A true offset - faces pushed out, corners rounded -
+// for EVERY kind, a rect included, which is where this parts company with
+// `pathOutlineGrown` below: that one grows a rect with square corners because
+// square corners are literally what a camera region's containment test does.
+//
+// This is a MASK and not a zone. What it exists to cover is a stroke drawn along
+// an outline, which straddles that outline half in and half out, so the thing to
+// grow by is half a line width and the shape to grow into is whatever the stroke
+// occupies - which has no square corners to match. `drawCompoundGeometry` is the
+// caller: two pieces of a body that ABUT rather than overlap (a decomposed
+// concave outline, or two grid-snapped rects sharing a face) leave their shared
+// edge exactly on each other's boundary, so an unfilled clip erases half of each
+// piece's stroke and leaves the other half drawn - a hairline crack across a
+// solid wall, at the one place the body has no edge at all.
+//
+// Convex outlines only, which is what a mounted piece always is: at a reflex
+// vertex the fillet would sweep the long way round and cross the path.
+export function pathOutlineIntoGrown(
+  p: OutlineSink,
+  center: Vec2,
+  rot: number,
+  o: Outline,
+  grow: number,
+): void {
+  if (grow <= 0) {
+    pathOutlineInto(p, center, rot, o);
+    return;
+  }
+  if (o.kind === "circle") {
+    p.moveTo(center.x + o.radius + grow, center.y);
+    p.arc(center.x, center.y, o.radius + grow, 0, Math.PI * 2);
+    p.closePath();
+    return;
+  }
+  const local =
+    o.kind === "rect"
+      ? [
+          new Vec2(-o.half.x, -o.half.y),
+          new Vec2(o.half.x, -o.half.y),
+          new Vec2(o.half.x, o.half.y),
+          new Vec2(-o.half.x, o.half.y),
+        ]
+      : o.verts;
+  const world = local.map((v) => center.add(v.rotated(rot)));
+  const n = world.length;
+  // Outward face normals, one per edge (a→b), under the polygon winding contract
+  // in shapes.ts - the same normals `pathOutlineGrown` takes.
+  const normals = world.map((a, i) => {
+    const e = world[(i + 1) % n]!.sub(a);
+    const len = e.length();
+    return len < 1e-9 ? Vec2.ZERO : new Vec2(e.y / len, -e.x / len);
+  });
+  let started = false;
+  for (let i = 0; i < n; i++) {
+    const a = world[i]!;
+    const b = world[(i + 1) % n]!;
+    const nrm = normals[i]!;
+    if (nrm.x === 0 && nrm.y === 0) continue;
+    const oa = a.add(nrm.mul(grow));
+    if (!started) {
+      p.moveTo(oa.x, oa.y);
+      started = true;
+    } else {
+      p.lineTo(oa.x, oa.y);
+    }
+    p.lineTo(b.x + nrm.x * grow, b.y + nrm.y * grow);
+    // Corner fillet at `b`, from this face's normal round to the next face's.
+    // The loop turns clockwise on screen, which in y-down space is the direction
+    // of increasing angle — the canvas's default sweep.
+    const next = normals[(i + 1) % n]!;
+    if (next.x !== 0 || next.y !== 0) {
+      p.arc(b.x, b.y, grow, Math.atan2(nrm.y, nrm.x), Math.atan2(next.y, next.x));
+    }
+  }
+  p.closePath();
+}
+
 // How far an outline is grown: one distance on every side, or a distance per
 // side. Sides are the outline's OWN — left/right are ∓x and top/bottom are ∓y in
 // the shape's local frame, so a rotated region's "top" turns with it.

@@ -76,6 +76,7 @@ import {
   pinBodyFrame,
   setArrowEnds,
   shapeMass,
+  polyMustBeConvex,
   setPolyVerts,
   scaleShape,
   syncBodyProps,
@@ -112,6 +113,7 @@ import {
   MATERIAL_NAMES,
   type MaterialName,
 } from "../lib/shapeGeometry";
+import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon";
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
   emissiveMapNames,
@@ -192,7 +194,7 @@ const chainable = (b: EdItem): boolean =>
 // for, and how to put something on it.
 const EMPTY_HINTS: Record<EdLayer, string> = {
   scene:
-    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out a convex outline (Enter or click the first vertex to close, Esc to cancel). Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
+    "No selection. Click a body, or pick +Rect / +Circle and drag on the canvas; +Poly clicks out an outline, concave corners and all (Enter or click the first vertex to close, Esc to cancel) - the physics gets it cut into convex pieces, so a notch is one object rather than three overlapping ones. Those draw a COLLISION shape - what the body is made of, simulated and never drawn. +Geometry draws the other half: an object that is drawn and never simulated, which is what carries a mesh or a texture. A body wants one of each, and they are two decisions. +Chain drags a chain from one body to another. Ctrl+G moves the selected objects into ONE body (Ctrl+Shift+G takes bodies apart again; Alt+click picks one object out of a body). The panel bottom-left lists every body and expands it into the objects it is made of, which is the only way to reach an object with no outline - a light, or the mesh a wall is dressed in. Rubber-band from empty space: drag left→right to catch what the box encloses, right→left for anything it touches. +Light drops a lamp - drag as you place it to set how far it reaches. A light with no visible source is a body of its own (a shaft down a grate, a fill); a lamp you can see is a light merged into the body its fitting is in, so moving the fitting moves the light. Any visible layer can be selected.",
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   notes:
@@ -252,9 +254,12 @@ type Drag =
   // so the grid's rounding cannot accumulate across the drag.
   | { mode: "depth"; body: EdItem; base: number; press: Vec2 }
   | { mode: "rotate"; body: EdItem }
-  // One vertex of a convex polygon follows the pointer. `accepted` is the last
-  // position the loop stayed convex at, so a drag that would dent the shape
-  // stalls there instead of writing a concave polygon the rope cannot wrap.
+  // One vertex of a polygon follows the pointer. `accepted` is the last position
+  // the loop was still a shape at, so a drag that would fold the outline over
+  // itself stalls there instead of writing something with no inside. Denting the
+  // outline inward is not that and is allowed: a concave outline is cut into
+  // convex pieces at load (a camera region is the exception - see
+  // `polyMustBeConvex` - and stalls at the last convex position).
   | { mode: "polyVertex"; body: EdItem; index: number; accepted: Vec2 }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
@@ -1328,7 +1333,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
   });
   const kindWrap = labelWrap("kind", kindSel);
-  toolBtns.poly.title = "Click out a convex outline; Enter or the first vertex closes it, Esc cancels";
+  toolBtns.poly.title =
+    "Click out an outline, concave corners included; Enter or the first vertex closes it, Esc cancels";
   toolRow.append(
     toolBtns.select,
     toolBtns.rect,
@@ -1873,9 +1879,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // May this item be welded into one body? Geometry that is not an area,
   // decoration included - it rides the body rather than adding a piece to it -
-  // and lights. Areas are single-shape everywhere they are used, so a grouped
-  // one would silently act through its first piece alone; camera regions and
-  // notes are never drawn in play and have nothing to ride.
+  // and lights. An area is refused because a body has ONE kind: killzone, water
+  // and force are what a body IS rather than something a piece of it can be, so
+  // there is no body a killzone and a wall could both be pieces of. (An area
+  // with a notch in it is a different matter and perfectly ordinary - it is one
+  // authored outline, cut into pieces at load.) Camera regions and notes are
+  // never drawn in play and have nothing to ride.
   //
   // A LIGHT is groupable, and it is the reason this is worth stating twice: a
   // lamp is a fitting and the light it throws, and welding the two into one body
@@ -2110,9 +2119,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.appendChild(val);
       g.appendChild(row);
       readouts.push({ el: val, get: count });
+
+      // What the outline BUILDS as. The engine's polygon is convex, so a
+      // concave outline is cut into the convex pieces that tile it at load, and
+      // this is where an author sees how many that is: the cut is drawn on the
+      // canvas, but the count is what says whether a fiddly corner has quietly
+      // turned one wall into six. A convex outline reads 1, which is the point -
+      // the number only ever grows when the shape needs it to.
+      const region = items.every((b) => polyMustBeConvex(b));
+      if (!region) {
+        const pieces = (): string => {
+          const counts = items.map((b) =>
+            b.shape.kind === "poly" ? decomposeConvex(b.shape.verts).length : 0,
+          );
+          return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
+        };
+        const prow = el("label", "ed-field");
+        prow.textContent = "pieces";
+        const pval = document.createElement("span");
+        pval.textContent = pieces();
+        prow.appendChild(pval);
+        g.appendChild(prow);
+        readouts.push({ el: pval, get: pieces });
+      }
+
       const hint = el("div", "ed-hint");
-      hint.textContent =
-        "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. The outline always stays convex.";
+      hint.textContent = region
+        ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. A camera region always stays convex."
+        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.";
       g.appendChild(hint);
     }
   }
@@ -4070,27 +4104,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     updateTitle();
   }
 
-  // Turn the clicked points into an item on the active layer. The outline is
-  // taken as their convex hull (see `convexHull`): a convex polygon is its own
-  // hull, so a well-drawn shape lands exactly as clicked, and a dented or
-  // out-of-order one becomes the nearest convex shape instead of being refused
-  // after all the clicking. Fewer than three non-collinear points is not a
-  // shape at all, so that draft is simply dropped.
+  // Turn the clicked points into an item on the active layer.
+  //
+  // The outline is taken AS CLICKED, corners and notches and all, which is the
+  // whole of what makes drawing a C-shaped wall one gesture rather than three
+  // overlapping boxes - the loader cuts a concave outline into convex pieces
+  // (`makeShapes`). The convex hull is what a draft falls back to when the loop
+  // it describes is not a shape: one that crosses itself (a bow tie, or a stray
+  // click landing back over the outline) has no inside, and the hull is the
+  // nearest thing to what was drawn, exactly as it was before concave outlines
+  // were authorable. A camera region has no cut and takes the hull as it always
+  // did. Fewer than three non-collinear points is not a shape at all, so that
+  // draft is simply dropped.
   function commitPolyDraft(): void {
     const pts = polyDraft;
     polyDraft = null;
     if (!pts) return;
-    const hull = convexHull(pts);
-    if (hull.length < 3) {
+    const drawn = pts.length >= 3 && isSimpleLoop(pts) ? normalizeWinding(pts) : convexHull(pts);
+    if (drawn.length < 3) {
       updateTitle();
       return;
     }
-    const item = newDrawnItem("poly", hull[0]!);
+    const item = newDrawnItem("poly", drawn[0]!);
     // `setPolyVerts` re-centres the loop and moves `pos` to the centroid, so the
     // starting position only has to be somewhere sane in the item's own frame.
     item.pos = Vec2.ZERO;
-    item.shape = { kind: "poly", verts: hull.map((h) => h.clone()) };
-    if (!setPolyVerts(item, hull)) {
+    item.shape = { kind: "poly", verts: drawn.map((h) => h.clone()) };
+    // A camera region falls back to the hull here rather than at the draft:
+    // `setPolyVerts` is the one place that knows a region must stay convex.
+    if (!setPolyVerts(item, drawn) && !setPolyVerts(item, convexHull(drawn))) {
       updateTitle();
       return;
     }

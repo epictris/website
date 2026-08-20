@@ -1,0 +1,52 @@
+{
+  "level": "ball-concave-basin",
+  "controller": "ball",
+  "frames": 480,
+  "spawn": {
+    "x": -1.4,
+    "y": -1.6
+  },
+  "data": {
+    "player": { "x": 0, "y": 0, "radius": 8 },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "friction": 1.0,
+        "objects": [
+          {
+            "type": "collision",
+            "shape": {
+              "kind": "poly",
+              "verts": [
+                { "x": -300, "y": -300 },
+                { "x": -200, "y": -300 },
+                { "x": -200, "y": -100 },
+                { "x": 100, "y": 0 },
+                { "x": 200, "y": -100 },
+                { "x": 200, "y": -300 },
+                { "x": 300, "y": -300 },
+                { "x": 300, "y": 100 },
+                { "x": -300, "y": 100 }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "window": { "from": 1, "to": 240 },
+      "minTravelX": 1.5
+    },
+    {
+      "window": { "from": 360, "to": 480 },
+      "maxSpeed": 0.05,
+      "maxEmbed": 0.01,
+      "maxDrift": 0.02
+    }
+  ]
+}

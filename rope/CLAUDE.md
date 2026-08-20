@@ -69,10 +69,20 @@ Three collision shapes exist: **circles**, body-aligned **rects**, and **convex
 polygons** (`engine/shapes.ts`). A polygon is a vertex loop wound so that consecutive
 edge cross-products are positive (clockwise on screen, y being down), which is what makes
 the outward normal of edge a→b its Godot orthogonal — `polyEdgeNormal` is the one place
-that convention is cashed out. Convexity is a hard rule of the format, enforced at
+that convention is cashed out. Convexity is a hard rule of the ENGINE, enforced at
 construction; see **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for
-why the rope solver cannot survive a reflex vertex, and how a concave form is authored
-instead (several convex pieces, one body or several).
+why the rope solver cannot survive a reflex vertex.
+
+A **level** authors a *simple* outline instead, concave corners and all, because a concave
+outline is what an L-shaped ledge or a notched pillar is. `decomposeConvex`
+(`lib/polygon.ts`, ear clipping + Hertel-Mehlhorn) cuts one into the convex pieces that
+tile it as the object is built (`makeShapes`), so the body a solver sees is the compound
+body an author used to have to assemble by hand — same pieces, same seams, same mass, and
+`isExposedCorner` classifies its corners with no idea the cut was derived. The cut is a
+partition, introduces no vertex the author did not place, and is deterministic because it
+runs at load; `cli decompose` is where those are asserted. A loop that crosses itself is
+refused at both ends (the editor stalls the drag, the loader fails the build), and a camera
+region stays convex since nothing cuts one up.
 
 `rect` deliberately stays its own kind rather than being folded into `poly`, even though a
 rect *is* a convex polygon: every collision path has a closed-form slab implementation for
@@ -773,6 +783,7 @@ bun run test                                  # THE suite: typecheck + every che
 bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
+bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
@@ -798,8 +809,8 @@ bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B th
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`corners`, `render3d`, `assets`, `ledges`, every `playtests/*.json`, then the
-bundle corpus, in that order and under one exit code.
+`corners`, `decompose`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
 a stale marker is a lie about coverage, so the fix that closes the gap has to
@@ -1338,22 +1349,34 @@ radius handles to resize, and `+Rect`/`+Circle`/`+Poly` tools to draw new bodies
 **Selected first, moved second.**
 A press on something already selected drags it; a press on anything else pans and selects only if the pointer never really moved (`CLICK_SLOP_PX`).
 The level is what you are looking at most of the time, so dragging it about has to be the cheapest gesture there is - and nudging geometry by accident, while reaching for the view, is the one editing mistake that leaves no trace on screen: it still looks like the level, and the level is different.
-`+Poly` is the one draw tool that is a run of clicks rather than a drag, because a convex
-outline is a vertex list and not a box: each click places a vertex, **Enter** or a click on
+`+Poly` is the one draw tool that is a run of clicks rather than a drag, because an outline
+is a vertex list and not a box: each click places a vertex, **Enter** or a click on
 the first vertex closes the loop, **Esc** drops it, and the title carries the count so the
 gesture always says where it is up to.
-The finished outline is the **convex hull** of the clicked points, so a well-drawn shape
-lands exactly as clicked and a dented or out-of-order one becomes the nearest convex shape
-instead of being refused after all the clicking.
+The outline is taken **as clicked**, concave corners included - a C-shaped wall is one
+gesture rather than three overlapping boxes, and the loader cuts it into the convex pieces
+the engine needs (see **Shapes**).
+The convex hull is only the fallback for a draft that is not a shape at all: a loop that
+crosses itself has no inside, and the draft draws in a warning colour from the click that
+crosses it, so the fallback is visible before it is taken rather than as a shape that
+silently is not the one drawn.
 A selected polygon is then edited vertex by vertex - square handles move a corner, the
 smaller round handles at the edge midpoints insert one and drag it in the same gesture, and
 **Alt+click** on a corner removes it (a triangle is the floor). Every one of those goes
 through `setPolyVerts`, which re-centres the loop on its centroid (so `pos` stays the centre
-of mass, which the rigid-body lever arms assume) and **refuses a non-convex result** - the
-vertex being dragged stalls at its last convex position rather than the shape turning inside
-out. There is no `w`/`h` to type for a polygon, so the inspector shows the vertex count
-instead; it is a live readout, refreshed with the number fields, since a drag can change it
-while the panel is deliberately not rebuilt.
+of mass, which the rigid-body lever arms assume) and **refuses a result that is not a
+shape** - the vertex being dragged stalls at the last position the loop was simple rather
+than folding the outline through itself. Denting a corner *inward* is not that and is the
+point of the tool; a **camera region** is the one polygon still held convex, since nothing
+cuts one up and both its containment test and its buffer zone read a notch as solid.
+There is no `w`/`h` to type for a polygon, so the inspector shows the vertex count instead,
+and beside it the **piece count** the outline builds as - 1 while it is convex, and however
+many the cut produces once it is not, which is the number that says whether a fiddly corner
+has quietly turned one wall into six. Both are live readouts, refreshed with the number
+fields, since a drag can change them while the panel is deliberately not rebuilt.
+The cut itself is drawn on the canvas as dim dashed lines inside the selected outline
+(`decomposeSeams`), because the pieces are what the physics is: the rope wraps the corners
+they share with the outline and refuses their seams.
 Selection is a **set**: a plain click selects one body, **Shift+click** toggles a body in or out, and dragging any member moves the whole group (the grabbed body leads the snap; the rest keep their offsets).
 Dragging from empty space rubber-bands a **rectangle selection**, and the drag *direction* picks between the two CAD selection modes, as in Fusion 360 and AutoCAD: left→right is a **window** (only what the band fully encloses - every rotated corner inside, a circle by its extremes), right→left a **crossing** (anything it touches - a rotated box by SAT, a circle by its nearest point).
 The mode has to be legible while the drag is still live, and the box alone cannot show a direction, so the band draws **solid** for a window and **dashed** for a crossing - the CAD convention, so it reads the same way it does there.
@@ -1702,7 +1725,7 @@ Prose stays a single-selection edit (merging text across a group has no sane mea
 **Ctrl+G** welds the selected geometry into one **compound body** (**Ctrl+Shift+G** splits it again); the pieces keep their placement exactly, and what changes is that they now build as a single engine body carrying all their shapes.
 That is the whole point, and it is not about saving entries - several overlapping bodies already look the same.
 It is that the joins between the pieces stop being corners: the rope refuses to wrap a seam vertex (`isSeamVertex`) and ledge detection refuses to grab one (`isSeamOccluded`), so a span crossing an L's inner corner runs straight instead of snagging where the real surface is smooth.
-See **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for why a concave form has to be authored this way at all.
+See **"Convex-only polygons; compound bodies"** in `docs/game-design.md` for why a concave form is several convex pieces at all - and **Authoring a concave outline** there for the case where those pieces are derived from one authored outline instead of welded by hand, which is the same body by the time anything simulates it.
 
 Both of those ask **`isExposedCorner`** (`engine/shapes.ts`), and it decides by **angle, not proximity**.
 Every shape covering the vertex contributes the arc of directions pointing *into* it - a wedge at one of its own corners, a half-plane along one of its faces, the whole turn if the vertex is inside it - and the vertex is a real corner exactly when the union of those arcs leaves more than a half-turn uncovered.
