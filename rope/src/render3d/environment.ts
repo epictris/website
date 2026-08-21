@@ -59,6 +59,7 @@
 
 import * as THREE from "three";
 import type { EnvironmentData } from "../level/levelFormat";
+import { loadedHdri, loadHdri } from "./assets";
 import { threeY } from "./space";
 import type { Camera } from "../render/camera";
 
@@ -144,6 +145,15 @@ export class Environment {
   private readonly sunColor: THREE.Color;
 
   private envTarget: THREE.WebGLRenderTarget | null = null;
+  // A captured sky can arrive after the scene is already being drawn, and the
+  // scene outlives this object (a level change builds a new `Environment` into
+  // the same one), so a load that lands after `dispose` must be dropped rather
+  // than written over whatever replaced it.
+  private disposed = false;
+  private renderer: THREE.WebGLRenderer | null = null;
+  private envIntensity = ENV_INTENSITY;
+  private rotation = 0;
+  private hdriAsBackground = false;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -209,30 +219,47 @@ export class Environment {
     );
     scene.add(this.fill);
 
-    if (renderer) {
-      // With no sun there is no sun LOBE either: the lobe is what puts a
-      // travelling highlight on a rough surface as it turns, and a level lit by
-      // its own lamps has no business carrying a bright spot in its sky where a
-      // sun it does not have would be.
-      const source = equirectEnvironment(
-        skyFill,
-        groundFill,
-        this.sunColor,
-        this.dir,
-        this.sun !== null,
-      );
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      this.envTarget = pmrem.fromEquirectangular(source);
-      scene.environment = this.envTarget.texture;
-      scene.environmentIntensity = env?.envIntensity ?? ENV_INTENSITY;
-      // The convolution is done and both the source canvas and the generator's
-      // own scratch targets are finished with; only the cube target survives.
-      source.dispose();
-      pmrem.dispose();
-    }
-
     const background = env?.backgroundColor ?? DEFAULT_SKY;
     scene.background = new THREE.Color(background);
+    // Stated rather than left: the scene outlives this object, so a level that
+    // authors no sky rotation must not inherit the last one's.
+    scene.environmentRotation.set(0, 0, 0);
+    scene.backgroundRotation.set(0, 0, 0);
+
+    if (renderer) {
+      this.renderer = renderer;
+      this.envIntensity = env?.envIntensity ?? ENV_INTENSITY;
+      this.rotation = THREE.MathUtils.degToRad(env?.hdriRotation ?? 0);
+      this.hdriAsBackground = env?.hdriBackground === true;
+      // A CAPTURED sky, if the level named one and this build has it. It is
+      // taken synchronously where it is already decoded, because a scene rebuilt
+      // mid-drag that starts on the generated sky and swaps a frame later is the
+      // level's whole lighting flickering once per rebuild.
+      const named = env?.hdri;
+      const ready = named ? loadedHdri(named) : null;
+      if (ready) {
+        this.useEnvMap(ready, false);
+      } else {
+        // The generated sky: what every level had before there were captures,
+        // and what one whose capture has not arrived yet (or does not exist in
+        // this build) is lit by. Same rule as an authored texture, which is
+        // drawn in its generated fallback until its images land.
+        //
+        // With no sun there is no sun LOBE either: the lobe is what puts a
+        // travelling highlight on a rough surface as it turns, and a level lit
+        // by its own lamps has no business carrying a bright spot in its sky
+        // where a sun it does not have would be.
+        this.useEnvMap(
+          equirectEnvironment(skyFill, groundFill, this.sunColor, this.dir, this.sun !== null),
+          true,
+        );
+        if (named) {
+          void loadHdri(named).then((tex) => {
+            if (tex && !this.disposed) this.useEnvMap(tex, false);
+          });
+        }
+      }
+    }
 
     // Absent, zero (and a negative, which means nothing) are all "no fog", so a
     // level that authors none has no `scene.fog` at all rather than a fog of zero
@@ -242,6 +269,39 @@ export class Environment {
       amount > 0
         ? new THREE.FogExp2(new THREE.Color(env?.fogColor ?? background), fogDensity(amount))
         : null;
+  }
+
+  // Convolve one equirectangular sky into the mip chain a rough surface samples,
+  // and hang it on the scene. `PMREMGenerator` is what turns an image into
+  // lighting: without it a `MeshStandardMaterial` has only the mirror level to
+  // sample, so a rough surface reflects a sharp picture of the sky and a diffuse
+  // one reflects nothing at all.
+  //
+  // `ownSource` says whether this object made the source. The generated sky is
+  // built here and finished with the moment it is convolved; a captured one is
+  // shared - one decode serves every scene that names it - so disposing it would
+  // take the sky out from under the next level to ask for it.
+  private useEnvMap(source: THREE.Texture, ownSource: boolean): void {
+    if (!this.renderer) return;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const target = pmrem.fromEquirectangular(source);
+    // The generator's own scratch targets are finished with; only the cube
+    // target survives, and the one this replaces (the fallback, where a capture
+    // has just arrived) goes with it.
+    pmrem.dispose();
+    if (ownSource) source.dispose();
+    this.envTarget?.dispose();
+    this.envTarget = target;
+    this.scene.environment = target.texture;
+    this.scene.environmentIntensity = this.envIntensity;
+    this.scene.environmentRotation.set(0, this.rotation, 0);
+    // Only a CAPTURE is ever drawn behind the level: the generated sky is a
+    // 128x64 gradient built to be convolved, and stretched across the frame it
+    // is a wash of colour with a band in it rather than a picture of anything.
+    if (this.hdriAsBackground && !ownSource) {
+      this.scene.background = source;
+      this.scene.backgroundRotation.set(0, this.rotation, 0);
+    }
   }
 
   // Keep the shadow frustum around what the camera is looking at. A single
@@ -266,6 +326,7 @@ export class Environment {
   }
 
   dispose(): void {
+    this.disposed = true;
     // The scene outlives this object (a level change rebuilds the environment
     // into the same scene), so the fog has to go with the environment that
     // authored it or the next level inherits this one's air.

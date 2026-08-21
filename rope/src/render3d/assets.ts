@@ -1658,6 +1658,111 @@ export const RAW_ASSETS: Record<string, RawAsset> = {
   },
 };
 
+// A captured sky, as an equirectangular high-dynamic-range image: what a level
+// can be lit BY, in place of the sky `environment.ts` generates from its own
+// colours (`EnvironmentData.hdri` names one of these).
+//
+// It is the same store, fetch, budget and provenance rules as every other
+// binary and a namespace of its own, for the reason `RAW_ASSETS` has one: this
+// list is what the editor's `sky hdr` picker enumerates, so an entry here is a
+// thing an author can choose and nothing else belongs in it.
+//
+// The bytes are always Radiance RGBE (`.hdr`) through `assets:optimize-hdri`,
+// never the EXR a library ships - see that script for why, and for the round
+// trip that says the conversion kept the light it was given.
+export interface HdriAsset {
+  // Path under `public/` - `/hdri/...`, gitignored and populated by
+  // `bun run assets:fetch` like every other stored file.
+  file: string;
+  sha256: string;
+  // What the picker shows, since a manifest key is a slug and a sky is a place.
+  label: string;
+  // As on `MeshAsset`, and required for the same reasons.
+  source: string;
+  author: string;
+  license: string;
+}
+
+export const HDRI_ASSETS: Record<string, HdriAsset> = {
+  "golden-gate-hills": {
+    file: "/hdri/golden-gate-hills.hdr",
+    sha256: "d989c2b8483a783341137c05ab40d56ab4d803dd321e3cedff37bef6ca6135da",
+    label: "Golden Gate hills - open sky, afternoon sun",
+    source: "https://polyhaven.com/a/golden_gate_hills (2k EXR, resampled to 1k RGBE)",
+    author: "Greg Zaal, Rico Cilliers (Poly Haven)",
+    license: "CC0",
+  },
+};
+
+// The keys an author may pick from, sorted, so the editor's picker and anything
+// else enumerating skies cannot disagree about what exists.
+export function hdriNames(): string[] {
+  return Object.keys(HDRI_ASSETS).sort();
+}
+
+// One decode per file however many scenes ask for it. The editor rebuilds its
+// whole scene on every model revision - every drag - so an uncached load would
+// re-fetch and re-decode 1.6 MB of sky for the length of a drag.
+const hdriCache = new Map<string, Promise<THREE.DataTexture | null>>();
+// The same, settled, for a caller that must decide SYNCHRONOUSLY whether it has
+// a sky (see `Environment`): a scene rebuilt while the sky is already in memory
+// must be built lit by it, rather than built on the generated fallback and
+// swapped a frame later - which across a drag is the whole level's lighting
+// flickering once per rebuild.
+const hdriReady = new Map<string, THREE.DataTexture>();
+
+export function loadedHdri(key: string): THREE.DataTexture | null {
+  const asset = HDRI_ASSETS[key];
+  return (asset && hdriReady.get(asset.file)) ?? null;
+}
+
+// Dynamically imported for the same reason the GLTF loader is: it is a large
+// module, most levels name no sky at all, and a page that does not load one
+// should not carry the decoder for it.
+let hdrLoaderPromise: Promise<{ loadAsync(url: string): Promise<THREE.DataTexture> }> | null = null;
+
+function hdrLoader(): Promise<{ loadAsync(url: string): Promise<THREE.DataTexture> }> {
+  hdrLoaderPromise ??= import("three/examples/jsm/loaders/HDRLoader.js").then(
+    ({ HDRLoader }) => new HDRLoader() as unknown as { loadAsync(url: string): Promise<THREE.DataTexture> },
+  );
+  return hdrLoaderPromise;
+}
+
+// The sky a level named, or null for one this build does not have - which is not
+// an error and is drawn as the generated sky, exactly as an unknown texture name
+// lands on a generated surface. A level built against a manifest this build does
+// not carry should look ordinary rather than unlit.
+//
+// Tracked (`trackPending`) because a headless grab must WAIT for it: a
+// screenshot taken while the sky is still arriving photographs the fallback, and
+// the whole point of `cli shot --3d` is that the same command produces the same
+// picture twice.
+export function loadHdri(key: string): Promise<THREE.DataTexture | null> {
+  const asset = HDRI_ASSETS[key];
+  if (!asset) return Promise.resolve(null);
+  const cached = hdriCache.get(asset.file);
+  if (cached) return cached;
+  const p = track(
+    hdrLoader()
+      .then((loader) => loader.loadAsync(asset.file))
+      .then((tex) => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        hdriReady.set(asset.file, tex);
+        return tex;
+      })
+      .catch((err: unknown) => {
+        // A missing file is the unfetched-clone case and draws the generated
+        // sky; saying which key and which file is what turns "the lighting looks
+        // wrong" into `bun run assets:fetch`.
+        console.warn(`[render3d] hdri "${key}": ${String(err)} <- ${asset.file}`);
+        return null;
+      }),
+    `hdri "${key}"`,
+  );
+  hdriCache.set(asset.file, p);
+  return p;
+}
+
 // Keyed by FILE rather than by manifest key, because a file can hold several
 // props (see `MeshAsset.node`): keying it by the manifest key would fetch and
 // decode `rocks.glb` once per rock a level uses, which is exactly the cost

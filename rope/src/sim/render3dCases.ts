@@ -76,6 +76,7 @@ import {
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
 import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
+import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 
 export interface CaseResult {
@@ -1394,6 +1395,7 @@ function lightRoundTrip(): CaseResult[] {
     },
     ...planeReach(),
     ...fogBand(),
+    ...skyBand(),
     {
       name: "editor: a level with no environment gains none",
       pass: back.environment === undefined,
@@ -1492,6 +1494,71 @@ function fogBand(): CaseResult[] {
       detail: unscaled
         ? "amount and colour carried verbatim into metres"
         : `became ${JSON.stringify(converted)}`,
+    },
+  ];
+}
+
+// A CAPTURED SKY: that a level can name one, that naming one is not a length,
+// and that naming one this build does not have is not a failure.
+//
+// None of it is visible in a picture, which is why it is asserted here. A level
+// whose `hdri` was dropped on the way to disk goes on rendering perfectly well -
+// lit by the generated sky, which is what it looked like before anyone reached
+// for a capture - and the loss shows up as "the lighting looks flatter than I
+// left it" some days later.
+function skyBand(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 20 },
+    bodies: [{ kind: "static", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 10, h: 10 } }],
+    environment: { hdri: "golden-gate-hills", hdriRotation: 135, hdriBackground: true },
+  };
+  // A sky's NAME is a key, its rotation is an angle and its background flag is a
+  // flag: not one of the three is a length, so the px <-> m conversion must
+  // carry all of them verbatim. A round trip cannot see a value scaled one way
+  // and back, so it is asserted one way, as the fog fraction is.
+  const converted = scaleLevelData(authored, PX).environment!;
+  const unscaled =
+    converted.hdri === "golden-gate-hills" &&
+    converted.hdriRotation === 135 &&
+    converted.hdriBackground === true;
+  // And it survives the editor, which rewrites the whole file every 750 ms while
+  // a level is open - the same trap the environment block as a whole is checked
+  // for above, one level down, since these fields are newer than that case.
+  const back = modelToDisk(modelFromDisk(authored));
+  const kept = JSON.stringify(back.environment) === JSON.stringify(authored.environment);
+  // Every entry is a `.hdr` under `/hdri/` with a label to show. The format is
+  // not a preference: `loadHdri` reads it with three's Radiance loader, so an
+  // EXR or a WebP that found its way into this manifest would fetch, fail to
+  // decode and fall back to the generated sky - which looks exactly like a level
+  // that named nothing.
+  const bad = Object.entries(HDRI_ASSETS).filter(
+    ([, a]) => !a.file.startsWith("/hdri/") || !a.file.endsWith(".hdr") || !a.label.trim(),
+  );
+  // The picker's list and the manifest are the same list. They are two calls in
+  // the editor and one of them is what an author can choose from.
+  const listed =
+    hdriNames().length === Object.keys(HDRI_ASSETS).length &&
+    hdriNames().every((k) => HDRI_ASSETS[k] !== undefined);
+  return [
+    {
+      name: "level format: a captured sky is named, not measured, and does not scale",
+      pass: unscaled,
+      detail: unscaled
+        ? "name, rotation and background flag carried verbatim into metres"
+        : `became ${JSON.stringify(converted)}`,
+    },
+    {
+      name: "editor: a level's captured sky survives a save",
+      pass: kept,
+      detail: kept ? "carried verbatim" : `became ${JSON.stringify(back.environment)}`,
+    },
+    {
+      name: "assets: every sky in the manifest is a labelled .hdr under /hdri/",
+      pass: bad.length === 0 && listed,
+      detail:
+        bad.length === 0 && listed
+          ? `${hdriNames().length} sk(ies): ${hdriNames().join(", ")}`
+          : `${bad.map(([k]) => k).join(", ") || "the picker and the manifest disagree"}`,
     },
   ];
 }

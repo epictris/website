@@ -1507,8 +1507,9 @@ A single selected object or body carries the standard **red/green/blue handles**
 A mode toggle is a thing to remember and to get wrong, and reaching for a ring and turning up a move arrow because the toolbar was left on `move` is an edit that looks like the level and is not it - the same mistake **selected first, moved second** exists to prevent on the plane.
 Nested, the answer to "what will this drag do" is whatever is drawn under the pointer.
 
-The sizes are read off the geometry three actually builds rather than chosen by eye: an axis handle sits at `0.5 x size` with a picker cone reaching `0.6`, and a rotation ring is drawn at `0.5` with a picker tube `0.1` thick, so `HANDLE_SIZE` puts the scale boxes at 0.225, the move arrows at 0.45 with their pickers stopping at 0.54, and the rings at 0.70 with their pickers starting at 0.56.
-The **move arrows set the floor** on all of it - their heads are a `0.04` cone, already only about eight pixels at the size a single-mode gizmo used - which is why the combined gizmo has a wider footprint than one mode's worth of handles.
+The sizes are read off the geometry three actually builds rather than chosen by eye: an axis handle sits at `0.5 x size` with a picker cone reaching `0.6`, and a rotation ring is drawn at `0.5` with a picker tube `0.1` thick, so `HANDLE_SIZE` puts the scale boxes at 0.056, the move arrows at 0.113 with their pickers stopping at 0.135, and the rings at 0.175 with their pickers starting at 0.14.
+The **ratios** between the three are what the nesting rests on, so they are the part that must not be edited one at a time; the overall footprint is a taste call, and it is a quarter of what it first was, which puts the gizmo inside the prop it is transforming rather than around it.
+The move arrows are what that costs - their heads are a `0.04` cone, so at this size they are a couple of pixels of drawn arrow - but what is grabbed is the picker, the full-width cone from the origin out, so they stay pickable at sizes they stop being legible at.
 
 Two handles are dropped because the three sets would otherwise bury each other.
 The **centre belongs to uniform scale**, that being the one handle a mesh genuinely has (its `scale` is one number, so the centre drag is exact and every single axis is an approximation of it), so the move gizmo's own free-in-the-view-plane centre handle goes - its `XY` plane handle already covers the gameplay plane, which is what that one was wanted for.
@@ -2197,6 +2198,25 @@ Image-based lighting contributes **diffuse as well as specular**, so the hemisph
 
 `Scene3D` rebuilds it only when the authored environment actually changes (`envKey`). The lights and the fog are cheap to rebuild and the convolution is not, and the editor reconstructs its scene on every model revision - every drag - none of which changes the sky.
 
+**Or a level names a CAPTURED one instead** (`EnvironmentData.hdri`, a key into `HDRI_ASSETS`), and then that is what it is lit by: a real high-dynamic-range photograph of a real sky, convolved by the same `PMREMGenerator` into the same mip chain.
+What it buys is everything a sky has that a vertical gradient with a lobe in it does not - a horizon with a shape, a bright side and a shaded side, bounce off whatever the ground is made of - and what a surface reflects is the whole of that rather than a smear.
+Measured on the ball arena with the sun and the fill both at zero, so the environment is the only light in the frame: the generated sky is a brown murk and `golden-gate-hills` lights the same walls as sunlit wood with the ball reading as metal, 1,409,900 pixels of a 2,073,600-pixel frame changed.
+It is a per-level choice and not the default because it costs a download; a level that names none is dressed by arithmetic exactly as it always was, and a level naming a sky **this build does not have** is too - the fallback is the generated sky, byte-identical (0 pixels differ), which is the rule an unknown `texture` already follows.
+
+Three things about it are worth knowing before authoring one.
+
+The **sun is unchanged by it**. An environment map is light from every direction at once, so it has no shadow to cast: the hard shadow that says a level is outdoors is still the `DirectionalLight`, and the two agree about where the light comes from only if you point them the same way. `hdriRotation` turns the sky about the vertical axis and the `sun dir` fields turn the light; turning the sky alone visibly relights the scene (at 90° the arena's walls go from sunlit to backlit) while its shadows stay where they were.
+
+A captured sky is usually **brighter than the generated one** - this one's mean linear luminance is 0.72 against the low tenths a level's own colours produce - so `env ×` is the knob that lands it, and a level that switches from generated to captured without touching it is a level that got brighter.
+
+And the **hemisphere fill now says something the sky already says.** `FILL_WITH_ENV` drops it to 0.7 for having an environment at all, which was tuned against the generated one; a capture carries its own sky-above-ground gradient, so the fill is a second, flatter copy of it. Nothing here reduces it automatically - a hidden rule is worse than a knob - but `fill ×` is the first thing to take down if a captured level looks washed out.
+
+**The capture may also be the visible BACKGROUND** (`hdriBackground`), and it is off by default because the two jobs want different resolutions. The reflection is convolved down to a 256-wide mip chain, so 1k is ample and anything more is thrown away before a surface ever reflects it; the background is magnified by the deliberately narrow lens (~34°, so ~100 px of a 1k equirect stretched across 1920) and is visibly soft. It is a level decision, so the flag is authorable and a sharper one is a re-optimise at `--size 2048` or 4096 rather than anything in the renderer. The generated sky is never drawn as a background at all: it is a 128x64 gradient built to be convolved, and stretched across the frame it is a wash of colour with a band in it.
+
+Two mechanics keep it from flickering or leaking. The load is **cached and shared**, and taken SYNCHRONOUSLY when it is already decoded (`loadedHdri`), because a scene rebuilt mid-drag that starts on the generated sky and swaps a frame later is the level's whole lighting flickering once per rebuild. And a load that lands after its `Environment` was disposed is **dropped** rather than written over whatever replaced it - a level change builds a new environment into the same scene, so a slow sky arriving late would otherwise light the level after it.
+
+It is authored in the editor's Environment panel: `sky hdr` picks from the manifest (so a sky added to the store is a sky the panel offers, with nothing in the editor to edit), `hdr °` turns it and `hdr bg` draws it behind the level. Choosing the generated sky drops all three fields rather than writing an empty one, and choosing it on a level that authors no environment block mints none - opening the panel is not authoring.
+
 Tone mapping is ACES, which is what gives the sun range to work in; the vignette is drawn on the **overlay canvas** as one gradient fill rather than as a post-processing pass, because a vignette is a screen-space multiply over the finished frame and the overlay is already exactly that.
 
 The GLTF loader is imported dynamically, so it lands in its own chunk and is fetched only by a page that actually loads a prop.
@@ -2251,10 +2271,10 @@ The resolved size and offset are part of the material cache key, because `repeat
 
 ### The asset store
 
-Two kinds of binary: props (`.glb` under `public/meshes/`) and authored texture maps (`.webp` under `public/textures/`).
-Both directories are **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
+Four kinds of binary: props (`.glb` under `public/meshes/`), authored texture maps (`.webp` under `public/textures/`), the water renderer's raw maps (`public/water/`) and captured skies (`.hdr` under `public/hdri/`).
+Every one of those directories is **gitignored**: the bytes live in a permanent GitHub Release (tag `assets`) on this repo and are fetched at build time (`bun run assets:fetch`, run by the Dockerfile before `bun run build`).
 They are the only binaries this tree has - every other surface is generated in code - which is why they carry a process the rest of the project does not need.
-`storedAssets()` (`scripts/assetStore.ts`) flattens both manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so neither kind can be checked while the other quietly is not.
+`storedAssets()` (`scripts/assetStore.ts`) flattens all four manifests into one list of files, and the fetch, the budget, the sha check, the basename-collision check and the orphan sweep all iterate **that** rather than a manifest, so no kind can be checked while another quietly is not.
 
 **Not git, and specifically not Git LFS**, because an asset has to be **deletable**.
 A binary in git history is permanent, and an LFS object pushed to GitHub goes on consuming the quota after the file is removed - the only supported purge is deleting the repository, which is not an option for a repo with a deploy wired to it.
@@ -2312,6 +2332,14 @@ It also bakes each node's WORLD rotation and scale into its vertices (a Sketchfa
 The `--map` is not bookkeeping, it picks the **encoding**: an albedo and an emission map are pictures and go to lossy WebP at q90, while a normal, roughness, metallic or AO map is **data** - a vector or a number per texel - so it is encoded **lossless** and resized in linear space. A lossy codec's ringing around an edge is not a softer picture there, it is a surface that shades wrongly, seen as shimmering highlights along every crack; an sRGB-aware downscale of a roughness map averages numbers as if they were brightnesses and brightens every one of them.
 1k is the ceiling for the same reason the prop pipeline caps its textures there.
 
+`bun run assets:optimize-hdri <in.exr|in.hdr> <public/hdri/name.hdr> [--size 1024] [--exposure 1]` is the third pipeline, for a captured sky (see **Light and air**), and it is the one that does **not** go through ImageMagick.
+The format choice is the point of it: Poly Haven ships half-float EXR, which for a 2k sky is 24 MB - a quarter of the whole budget for one image nobody looks at directly - while Radiance RGBE carries one shared exponent per pixel instead of three and the same sky at 1k is 1.6 MB, giving up a mantissa of 8 bits per channel where the convolution averages thousands of texels into every sample anyway.
+ImageMagick reads the EXR correctly and its Radiance **writer does not round-trip**: the mean linear luminance of this sky comes back 2.9 million times what went in, and the per-pixel ratios are not consistent with each other, so it is not even a scale factor that could be divided out.
+A sky wrong by a constant is a level lit wrongly and a sky wrong per pixel is a level lit by noise, and neither announces itself as anything but "the lighting looks off" - so the script decodes with three's own `EXRLoader`, resamples by **area averaging in linear light** and encodes RGBE itself.
+Both of those are load-bearing rather than fastidious: a Lanczos or Mitchell kernel rings around a discontinuity and the sun in this sky is 130,000x the mean, so the halo around it is *negative* radiance several times brighter than anything else in the picture; and three's two loaders disagree about row order (`EXRLoader` reports `flipY: false`, `HDRLoader` `flipY: true`), so a conversion that does not reverse them is a level lit by its own ground.
+The script **prints its own round trip** - source, resampled and re-decoded mean and peak luminance - because an encoder nobody checks is one that silently stops being one; this sky converts at +0.10% mean and +0.18% peak.
+`--size` is the equirect's width and the height is half of it; 1k is ample for lighting and too soft for a visible background (see `hdriBackground`).
+
 Both format choices are about what has to be **paid at runtime**, and this is the trap the pipeline was written around: an optimisation that lands in a glTF's `extensionsRequired` is not a smaller read, it is a file the loader **refuses** - and the prop falls back to its placeholder box, which is a silent failure by design.
 So meshopt comes with `setMeshoptDecoder` wired into `gltfLoader()` (~25 KB, ships with three, rides the same dynamic import so a page with no props still fetches neither).
 Textures are **WebP rather than KTX2** for the same reason twice over: KTX2 needs the external `ktx` binary at build time *and* `KTX2Loader` plus its transcoder at runtime, where WebP needs neither - three.js reads it through `EXT_texture_webp` - and is within a few percent on disk.
@@ -2321,7 +2349,7 @@ What KTX2 buys is staying compressed in **VRAM**, which is a decision for when t
 Serving the same maps from the deployed game is the ordinary end-product case and is not the same thing; hosting them next to no product is.
 So anything that ships through this pipeline comes from a CC0 source (Poly Haven, ambientCG) - which costs nothing at this art style's quality bar - and a licensed asset stays off the manifest entirely. If one is ever genuinely needed, the shape of the answer is a private store with a build-time secret, not a quieter public one.
 
-**Provenance, in the manifest.** `MeshAsset` and `TextureAsset` both require `source`, `author` and `license`, and `cli assets` fails without them. It is per ENTRY rather than per file, so a texture set is credited once as a surface however many of its six maps it ships.
+**Provenance, in the manifest.** `MeshAsset`, `TextureAsset`, `HdriAsset` and `RawAsset` all require `source`, `author` and `license`, and `cli assets` fails without them. It is per ENTRY rather than per file, so a texture set is credited once as a surface however many of its six maps it ships.
 The file is opaque and the licence lives on a web page nobody revisits, so a binary with no source is a liability rather than an asset - a year later "can this ship" has no answer but "delete it and remodel".
 `author` is separate from `source` because a licence like **CC-BY obliges you to credit a person**, and a link to the page you found it on is not that.
 
@@ -2341,7 +2369,7 @@ What it does **not** do is light the room: emission is appearance, and what ligh
 
 The cheapest prop is still the one with **no textures at all**: a `.glb` exported bare and given a `visual.texture` wears that surface (`mountVisual` assigns it over the file's own materials), so a boulder can be ~20 KB of geometry wearing the same stone the extruded walls wear - which also makes it look like it belongs to the level rather than like an import. A prop that names no texture keeps the materials it was exported with.
 
-Three directories, and the split matters: `public/meshes/` and `public/textures/` are **build output** - only ever the optimised copy, only ever written by `assets:fetch` or the two `assets:optimize*` scripts - while `assets-src/` holds the **raw downloads** as they arrived.
+The output directories and the split that matters: `public/meshes/`, `public/textures/`, `public/water/` and `public/hdri/` are **build output** - only ever the optimised copy, only ever written by `assets:fetch` or the `assets:optimize*` scripts - while `assets-src/` holds the **raw downloads** as they arrived.
 Both are gitignored. A raw is kept because re-optimising is what you do when the pipeline's settings change, and it is re-downloadable from the `source` its manifest entry records if it is ever lost.
 
 The whole loop:
@@ -2362,6 +2390,11 @@ bun run assets:optimize-texture assets-src/stone_col.png public/textures/quarry-
 bun run assets:optimize-texture assets-src/stone_nrm.png public/textures/quarry-stone-normal.webp --map normal
 bun run assets:publish public/textures/quarry-stone-base.webp
 # paste the printed map lines into ONE TEXTURE_ASSETS entry, with its `tile`
+
+# a captured sky: one file, its own pipeline (NOT ImageMagick - see above)
+bun run assets:optimize-hdri assets-src/golden_gate_hills_2k.exr public/hdri/golden-gate-hills.hdr
+bun run assets:publish public/hdri/golden-gate-hills.hdr
+# paste the printed line into HDRI_ASSETS, with a `label` for the editor's picker
 
 bun run assets:credits                                       # regenerate CREDITS.md
 bun run replay assets                                        # check it

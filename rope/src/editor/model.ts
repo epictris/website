@@ -498,6 +498,12 @@ export const DEFAULT_ENVIRONMENT: Required<EnvironmentData> = {
   groundColor: DEFAULT_GROUND_FILL,
   fillIntensity: DEFAULT_FILL_INTENSITY,
   envIntensity: ENV_INTENSITY,
+  // The generated sky, which is what a level that names no capture is lit by.
+  // Empty rather than absent because this table is what the panel READS, and it
+  // is the value the picker's "(generated)" entry writes back as a deletion.
+  hdri: "",
+  hdriRotation: 0,
+  hdriBackground: false,
   backgroundColor: DEFAULT_SKY,
   // Off, which is what every level that authors nothing gets. The colour still
   // needs a value for the picker to show, and the background is what an absent

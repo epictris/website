@@ -68,20 +68,22 @@ export interface GizmoHandlers {
 // keep them apart is their RADIUS, and these are read off the geometry three
 // actually builds: an axis handle sits at 0.5 x size with a picker cone reaching
 // 0.6, and a rotation ring is drawn at 0.5 with a picker tube 0.1 thick. So the
-// scale boxes land at 0.225 and their pickers stop at 0.27, the move arrows at
-// 0.45 stopping at 0.54, and the rings at 0.70 with their pickers starting at
-// 0.56 - nested in that order, with nothing of one set drawn over another.
+// scale boxes land at 0.056 and their pickers stop at 0.068, the move arrows at
+// 0.113 stopping at 0.135, and the rings at 0.175 with their pickers starting at
+// 0.14 - nested in that order, with nothing of one set drawn over another.
 //
-// The move arrows set the floor on all of it. Their heads are a 0.04 cone, so at
-// the 0.85 the single-mode gizmo used they are already only about eight pixels;
-// shrinking them to buy room for the rings outside makes the commonest handle in
-// the editor a speck. Everything else is sized around that, which is why the
-// whole thing has a wider footprint than one mode's worth of handles - it is
-// three modes' worth.
+// The RATIOS between the three are what that nesting rests on, so they are the
+// part that must not be edited one at a time; the overall footprint is a taste
+// call, and this is a quarter of what it first was, which puts the gizmo inside
+// the prop it is transforming rather than around it - a handle that does not
+// hide the thing being judged. It costs pixels at the small end: the move
+// arrows' heads are a 0.04 cone, so they are a couple of pixels of DRAWN arrow.
+// What is grabbed is the picker, which is the full-width cone from the origin
+// out, so they stay pickable at sizes they stop being legible at.
 const HANDLE_SIZE: Record<GizmoMode, number> = {
-  scale: 0.45,
-  translate: 0.9,
-  rotate: 1.4,
+  scale: 0.1125,
+  translate: 0.225,
+  rotate: 0.35,
 };
 
 // Which set a press belongs to where two of them are under the pointer. Their

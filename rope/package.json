@@ -13,6 +13,7 @@
     "assets:extract": "bun run scripts/extract-mesh.ts",
     "assets:optimize": "bun run scripts/optimize-asset.ts",
     "assets:optimize-texture": "bun run scripts/optimize-texture.ts",
+    "assets:optimize-hdri": "bun run scripts/optimize-hdri.ts",
     "assets:publish": "bun run scripts/publish-asset.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
     "assets:credits": "bun run scripts/credits.ts"

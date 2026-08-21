@@ -821,6 +821,39 @@ export interface EnvironmentData {
   // outside their range goes black - which is what the geometry framing a
   // corridor is supposed to do.
   envIntensity?: number;
+  // A CAPTURED sky to be lit by, in place of the one the renderer generates from
+  // the three colours above: a key into `HDRI_ASSETS` (`render3d/assets.ts`), or
+  // absent for the generated one.
+  //
+  // What it buys is everything a real sky has that a vertical gradient with a
+  // lobe in it does not - a horizon with a shape, a bright side and a shaded
+  // side, bounce off whatever the ground is made of - and what a surface
+  // reflects is the whole of that rather than a smear. It costs a download,
+  // which is why it is a per-level choice and not the default: a level that
+  // names none is dressed by arithmetic, exactly as it always was.
+  //
+  // The sun is UNCHANGED by it and stays authored above. An environment map is
+  // light from every direction at once, so it has no shadow to cast; the sharp
+  // shadow that says a level is outdoors is still the `DirectionalLight`, and
+  // pointing it where the sky's own sun is (`hdriRotation` turns the sky, the
+  // three `sun dir` fields turn the light) is what makes the two agree.
+  //
+  // A name this build has no asset for falls back to the generated sky rather
+  // than to nothing, which is the same rule an unknown `texture` follows.
+  hdri?: string;
+  // Which way round the sky is, in degrees about the vertical axis. A capture
+  // faces wherever the camera was pointing when it was taken, and a level is
+  // built facing wherever it is built facing; this is the one number that puts
+  // the sky's sun on the same side as the level's.
+  hdriRotation?: number;
+  // Draw the sky BEHIND the level as well as reflecting it. Off by default,
+  // because the two are different jobs with different resolution needs: the
+  // reflection is convolved down to a 256-wide mip chain and a 1k capture is
+  // ample, while the background is magnified by the camera's narrow lens and a
+  // 1k one is visibly soft. Turning it on with a bigger capture is a level
+  // decision (see `assets:optimize-hdri --size`), so the flag is here and the
+  // fallback is `backgroundColor` as before.
+  hdriBackground?: boolean;
   // What is behind everything. Absent = the page's own background, so the 3D
   // scene's horizon and the letterbox bars agree and the frame does not read as
   // a window cut into a different game.

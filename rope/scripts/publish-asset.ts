@@ -85,6 +85,18 @@ if (input.includes("water/")) {
   console.log(`    author: "<who made it>",`);
   console.log(`    license: "<e.g. CC0>",`);
   console.log(`  },\n`);
+} else if (input.includes("hdri/")) {
+  console.log(`[assets] HDRI_ASSETS entry (src/render3d/assets.ts):\n`);
+  console.log(`  "${stem}": {`);
+  console.log(`    file: "/hdri/${name}",`);
+  console.log(`    sha256: "${hash}",`);
+  // The one field no other manifest has: the picker in the editor's Environment
+  // panel shows this rather than the key, because a sky is a place.
+  console.log(`    label: "<what the sky is, for the editor's picker>",`);
+  console.log(`    source: "<url the capture came from>",`);
+  console.log(`    author: "<who shot it>",`);
+  console.log(`    license: "<e.g. CC0>",`);
+  console.log(`  },\n`);
 } else if (input.includes("textures/")) {
   const slot = /-(base|normal|roughness|metallic|ao)$/.exec(stem)?.[1] ?? "base";
   console.log(`[assets] TEXTURE_ASSETS map (src/render3d/assets.ts):\n`);

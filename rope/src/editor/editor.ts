@@ -117,6 +117,8 @@ import { decomposeConvex, isSimpleLoop, normalizeWinding } from "../lib/polygon"
 import { deleteLevel, listLevels, loadLevel, saveLevel } from "./api";
 import {
   emissiveMapNames,
+  HDRI_ASSETS,
+  hdriNames,
   MESH_ASSETS,
   surfaceName,
   tileMetres,
@@ -3545,6 +3547,72 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // an ambient term as much as a reflection one: near zero is what stops an
     // interior being lit from every direction by a sky it cannot see.
     numEnv("env ×", "envIntensity", 0.05, nonNeg);
+
+    // What that environment IS: the sky generated from the three colours above,
+    // or a captured one out of `HDRI_ASSETS`. The picker is the manifest, so a
+    // sky added to the store is a sky this panel offers with nothing here to
+    // edit - and a key this build has no asset for is kept as an option of its
+    // own rather than silently rewritten, exactly as the mesh picker does, so
+    // opening a level built against a manifest this build lacks cannot lose what
+    // it named.
+    const sw = el("label", "ed-field");
+    sw.textContent = "sky hdr";
+    const ss = document.createElement("select");
+    ss.className = "ed-select";
+    const skies = new Set(hdriNames());
+    const named = (model.environment?.hdri ?? "") as string;
+    if (named) skies.add(named);
+    for (const key of ["", ...[...skies].sort()]) {
+      const o = document.createElement("option");
+      o.value = key;
+      o.textContent = key ? (HDRI_ASSETS[key]?.label ?? key) : "(generated)";
+      ss.appendChild(o);
+    }
+    ss.value = named;
+    ss.addEventListener("change", () => {
+      // Choosing the generated sky on a level that authors no block must not
+      // mint one: "no environment" is a state a file is entitled to be in, and
+      // opening the panel is not authoring.
+      if (!ss.value && model.environment === undefined) return;
+      beginAction();
+      if (ss.value) env().hdri = ss.value;
+      else {
+        // The two fields that only mean anything against a capture go with it,
+        // rather than sitting in the file describing a sky the level no longer
+        // names.
+        delete env().hdri;
+        delete env().hdriRotation;
+        delete env().hdriBackground;
+      }
+      markDirty();
+      rebuildInspector();
+    });
+    sw.appendChild(ss);
+    g.appendChild(sw);
+
+    if (named) {
+      // Which way round the sky is. A capture faces wherever its camera was
+      // pointing and a level faces wherever it was built; this is what puts the
+      // sky's own sun on the same side as the `sun dir` above, which is what
+      // makes the shadow and the light agree about where the light comes from.
+      numEnv("hdr °", "hdriRotation", 15);
+      const bw = el("label", "ed-field");
+      bw.textContent = "hdr bg";
+      const bb = document.createElement("input");
+      bb.type = "checkbox";
+      bb.checked = model.environment?.hdriBackground === true;
+      bb.title =
+        "Draw the sky behind the level as well as reflecting it. A 1k capture is ample for the reflection and visibly soft as a background - re-optimise it larger before leaning on this.";
+      bb.addEventListener("change", () => {
+        beginAction();
+        if (bb.checked) env().hdriBackground = true;
+        else delete env().hdriBackground;
+        markDirty();
+      });
+      bw.appendChild(bb);
+      g.appendChild(bw);
+    }
+
     colorEnv("background", "backgroundColor");
     // Air, thickening with distance from the camera. The number is how much of
     // it a surface 20 m away takes on (`FOG_REFERENCE_DISTANCE`, about where the
@@ -5697,7 +5765,15 @@ function injectStyles(): void {
     scrollbar-width: thin; scrollbar-color: #3c445c transparent; }
   .ed-group { display: flex; flex-direction: column; gap: 4px; }
   .ed-heading { color: #65bddb; border-bottom: 1px solid #313244; padding-bottom: 2px; margin-bottom: 2px; }
-  .ed-field { display: flex; justify-content: space-between; align-items: center; color: #9aa0ac; }
+  .ed-field { display: flex; justify-content: space-between; align-items: center; color: #9aa0ac;
+    gap: 6px; white-space: nowrap; }
+  /* A picker is bounded by the row it is in, whatever its longest option says.
+     A <select> sizes itself to its widest option and "min-width: auto" refuses
+     to shrink below that, so one long name - a sky called after the place it was
+     captured rather than after a file - stretched the control to 404px inside a
+     179px panel, overlapping the row above it and running off the edge. The
+     option list still opens at full width, which is where the name is read. */
+  .ed-field > select { min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
   .ed-hint { color: #6b7280; line-height: 1.4; }
   /* The outliner: the level's real structure, which the canvas cannot show.
      Bottom-left, under the toolbar, and scrolling on its own - a real level is
