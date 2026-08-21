@@ -1371,11 +1371,33 @@ shape** - the vertex being dragged stalls at the last position the loop was simp
 than folding the outline through itself. Denting a corner *inward* is not that and is the
 point of the tool; a **camera region** is the one polygon still held convex, since nothing
 cuts one up and both its containment test and its buffer zone read a notch as solid.
+
+### Picking corners out of a shape
+
+**Corners are selectable in their own right** (`selectedVerts` in `editor.ts`), which is a second level of selection nested inside the item one: a polygon is the item whose parts are separately editable, so once the shape itself is picked, a click, a rubber band, a Delete, a nudge and a drag can all just as well mean its corners.
+Click a corner to pick it out, **Shift+click** to add or drop one, and a **rubber band from empty space** catches every corner inside it (Shift unions).
+Picked corners draw as **filled** squares against the hollow ones, which is the same distinction the halo makes about a whole object: the selection orange means "an edit applies to this", and a hollow handle at every corner already means "you may drag me".
+**Delete** removes them, the **arrow keys** nudge them, and dragging any one of them moves the whole set - the grabbed corner follows the pointer and the rest ride along at a fixed offset from it, exactly as a group of bodies is dragged.
+**Esc**, or a click on empty space, drops the corner selection and leaves the shape selected; a second one drops the shape.
+
+Three things about it are load-bearing.
+
+The offsets a group drag rides at are a difference of two positions **in the shape's own frame**, because `setPolyVerts` re-centres the loop on its centroid every time it is written: the re-centring subtracts the same point from every vertex, so it leaves every difference alone where an absolute local position would drift by the centroid's own motion.
+
+An **index means nothing once the loop it indexes is not the one on screen**, so the set is cleared by every change of selection, by undo/redo, by an Alt+click removal and by `Reverse` on a path - each of which renumbers or replaces the vertices - and read through `selectedVertIndices`, which drops anything past the current end.
+
+And a Delete that would take the shape under its floor (three for a loop, two for an open run) removes **nothing** rather than as many as it can: "delete these four" answered by deleting two leaves a shape nobody asked for, and the corners that survived are not the ones the author would have kept.
+
+The whole thing is the **camera path's** as well, through the same code: a path's nodes are picked, banded, nudged, dragged and deleted identically, minus the wrap, and a deletion filters its `handles` by the same indices so a node and its tangents can never come apart.
+While a shape is open for vertex editing a band means its corners rather than the level's bodies, which is why clearing is two steps - it is the way back out.
+`vertexEditTarget` is the one statement of when a shape is open at all (a lone poly or path, head on, with its handles actually drawn), so what a band catches, what Delete removes and what an arrow nudges cannot drift apart.
+
 There is no `w`/`h` to type for a polygon, so the inspector shows the vertex count instead,
 and beside it the **piece count** the outline builds as - 1 while it is convex, and however
 many the cut produces once it is not, which is the number that says whether a fiddly corner
 has quietly turned one wall into six. Both are live readouts, refreshed with the number
 fields, since a drag can change them while the panel is deliberately not rebuilt.
+The vertex count carries how many corners are **picked** where any are (`4 (2 selected)`) rather than taking a row of its own, because it is the same question asked twice and a row reading `0 selected` most of the time is a row that stops being read.
 The cut itself is drawn on the canvas as dim dashed lines inside the selected outline
 (`decomposeSeams`), because the pieces are what the physics is: the rope wraps the corners
 they share with the outline and refuses their seams.

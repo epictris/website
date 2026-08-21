@@ -101,6 +101,7 @@ import {
   outlinesEqual,
   toWorld,
   visualData,
+  worldVertices,
   type EdChain,
   type EdBodyFrame,
   type EdItem,
@@ -249,8 +250,11 @@ type Drag =
   // orbit, so the button keeps panning there.
   | { mode: "orbit"; lastScreen: Vec2 }
   // Rubber-band select. `additive` (shift) unions the hits into the existing
-  // selection instead of replacing it.
-  | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean }
+  // selection instead of replacing it. `verts` is the shape whose VERTICES the
+  // band catches instead of bodies: drawn while a polygon is being edited, a
+  // band is asking about that shape's corners, which is the only thing on
+  // screen it could sensibly mean once the shape itself is already picked.
+  | { mode: "marquee"; start: Vec2; current: Vec2; additive: boolean; verts: EdItem | null }
   // The lead body follows the pointer (and the grid); the rest of the
   // selection rides along at a fixed offset from it.
   // `press` and `moved` are what keep a click apart from a drag on something
@@ -279,7 +283,17 @@ type Drag =
   // outline inward is not that and is allowed: a concave outline is cut into
   // convex pieces at load (a camera region is the exception - see
   // `polyMustBeConvex` - and stalls at the last convex position).
-  | { mode: "polyVertex"; body: EdItem; index: number; accepted: Vec2 }
+  // `others` is the rest of the vertex selection, riding along at a fixed offset
+  // from the pressed vertex in the SHAPE's own frame - a difference of two local
+  // positions, which is what survives `setPolyVerts` re-centring the loop on its
+  // centroid, since the re-centring subtracts the same point from both.
+  | {
+      mode: "polyVertex";
+      body: EdItem;
+      index: number;
+      others: Array<{ index: number; offset: Vec2 }>;
+      accepted: Vec2;
+    }
   // One Bézier tangent grip of a camera path. `mirror` keeps the node smooth by
   // writing the opposite handle as the negation of this one; Alt breaks it, so a
   // deliberate cusp is a modifier away rather than unauthorable.
@@ -475,6 +489,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // so a mixed selection would have nothing an inspector panel could say about
   // it and nothing a nudge or a resize could mean.
   const selectedChainIds = new Set<number>();
+  // Which of the selected shape's VERTICES an edit acts on, as indices into its
+  // vert loop. A second level of selection inside the item one, because a
+  // polygon is the item whose parts are separately editable: once the shape is
+  // picked, a Delete, a nudge or a drag can just as well mean its corners.
+  //
+  // Only ever non-empty while exactly one polygon or camera path is selected
+  // (`vertexEditTarget`), and cleared by every change of selection and every
+  // edit that renumbers the loop - an index means nothing once the shape it
+  // indexes is not the one on screen.
+  const selectedVerts = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
@@ -580,6 +604,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function afterHistoryChange(): void {
     drag = null;
     nudging = false;
+    // An undone edit may have been the one that placed a corner, so an index
+    // carried across it names a different vertex or none at all.
+    selectedVerts.clear();
     const live = new Set(model.items.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     const liveChains = new Set(model.chains.map((c) => c.id));
@@ -641,6 +668,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   };
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
+  // The shape whose VERTICES are editable right now: the lone selected item, if
+  // it is one of the two vertex-authored kinds and its handles are on screen at
+  // all. Everything about the vertex selection - what a band catches, what
+  // Delete removes, what an arrow nudges - is asked of this, so there is one
+  // statement of when a shape is open for vertex editing rather than a test
+  // repeated at each of them.
+  function vertexEditTarget(): EdItem | null {
+    const s = selected();
+    if (!s || (s.shape.kind !== "poly" && s.shape.kind !== "path")) return null;
+    if (orbited() || !hasPlaneHandles(s, overlayLayers())) return null;
+    return s;
+  }
+  // The vertices actually selected on that shape, sorted and with anything past
+  // its end dropped: an index outlives the loop it indexes only until the next
+  // edit, and reading one that has gone is how a stale set writes the wrong
+  // vertex.
+  function selectedVertIndices(item: EdItem): number[] {
+    const n = item.shape.kind === "poly" || item.shape.kind === "path" ? item.shape.verts.length : 0;
+    return [...selectedVerts].filter((i) => i < n).sort((a, b) => a - b);
+  }
   function setSelection(ids: readonly number[]): void {
     // Every selection this clears has to be in the test, or the early return is
     // the selection surviving a call that meant to replace it: `setSelection([])`
@@ -653,6 +700,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       selectedBodyIds.size === 0;
     if (unchanged) return;
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
     for (const id of ids) selectedIds.add(id);
@@ -672,6 +720,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function setBodySelection(id: number | null): void {
     if (soleBodyId() === id && !selectedIds.size && !selectedChainIds.size) return;
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
     if (id !== null) selectedBodyIds.add(id);
@@ -689,6 +738,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // object at once.
   function toggleBodySelection(id: number): void {
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     if (!selectedBodyIds.delete(id)) selectedBodyIds.add(id);
     nudging = false;
@@ -716,6 +766,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   function setChainSelection(ids: readonly number[]): void {
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
     for (const id of ids) selectedChainIds.add(id);
@@ -725,6 +776,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function toggleSelection(id: number): void {
     selectedChainIds.clear();
     selectedBodyIds.clear();
+    selectedVerts.clear();
     if (!selectedIds.delete(id)) selectedIds.add(id);
     nudging = false;
     rebuildInspector();
@@ -1295,6 +1347,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     replaceModel(emptyModel());
     resetHistory();
     selectedIds.clear();
+    selectedVerts.clear();
     selectedBodyIds.clear();
     currentName = null;
     dirty = false;
@@ -2166,7 +2219,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // leaving a gap where every other shape has its size fields.
       const count = (): string => {
         const counts = items.map((b) => (b.shape.kind === "poly" ? b.shape.verts.length : 0));
-        return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
+        const total = counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
+        // How many corners are PICKED, where any are. It rides the vertex count
+        // rather than taking a row of its own because it is the same question
+        // asked twice, and because a row that says "0 selected" most of the time
+        // is a row that stops being read.
+        const target = vertexEditTarget();
+        const picked = target ? selectedVertIndices(target).length : 0;
+        return picked ? `${total} (${picked} selected)` : total;
       };
       const row = el("label", "ed-field");
       row.textContent = "vertices";
@@ -2201,8 +2261,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
       const hint = el("div", "ed-hint");
       hint.textContent = region
-        ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. A camera region always stays convex."
-        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.";
+        ? "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. A camera region always stays convex."
+        : "Drag a corner to move it, an edge midpoint to add one, Alt+click a corner to remove it. Click a corner to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them); Delete removes the picked corners and the arrows nudge them, and dragging any one of them moves the lot. Corners may be dented inward - a concave outline is cut into convex pieces (dashed) for the physics.";
       g.appendChild(hint);
     }
   }
@@ -3320,7 +3380,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended.";
+      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended. Drag a node to move it, its round grips to shape the curve through it, an edge midpoint to insert one, Alt+click a node to remove it; click a node to pick it out (Shift adds, a rubber band from empty space catches several, Esc drops them), and Delete removes the picked nodes while the arrows nudge them.";
     g.appendChild(hint);
 
     const num = groupNum(g, paths);
@@ -3405,6 +3465,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const b = button(label, () => {
         beginAction();
         for (const p of paths) apply(p);
+        // Reverse renumbers the nodes, so a picked set would name different ones
+        // after it; the other two are safe and it goes anyway, a whole-path
+        // action being a statement about the path rather than about a corner.
+        selectedVerts.clear();
         markDirty();
         rebuildInspector();
       });
@@ -4001,6 +4065,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     model.items.push(...bodies);
     model.chains.push(...chains);
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
     for (const b of bodies) selectedIds.add(b.id);
@@ -4453,6 +4518,67 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     addAndSelect([item]);
   }
 
+  // Remove the picked vertices from the shape they belong to. Answers whether
+  // it handled the keystroke, so the caller can fall through to deleting the
+  // OBJECT when no vertex is picked.
+  //
+  // The floors are the shape kinds' own - three for a loop, two for an open run
+  // - and a request that would go under one removes NOTHING rather than as many
+  // as it can: "delete these four" answered by deleting two leaves a shape
+  // nobody asked for, and the corners that survived are not the ones the author
+  // would have kept.
+  function deleteSelectedVerts(): boolean {
+    const item = vertexEditTarget();
+    if (!item) return false;
+    if (item.shape.kind !== "poly" && item.shape.kind !== "path") return false;
+    const doomed = new Set(selectedVertIndices(item));
+    if (!doomed.size) return false;
+    const floor = item.shape.kind === "path" ? 2 : 3;
+    if (item.shape.verts.length - doomed.size < floor) return true;
+    beginAction();
+    const rest = item.shape.verts.filter((_, i) => !doomed.has(i));
+    const ok =
+      item.shape.kind === "path"
+        ? setPathVerts(
+            item,
+            rest,
+            item.shape.handles.filter((_, i) => !doomed.has(i)),
+          )
+        : setPolyVerts(item, rest);
+    // A refusal leaves the shape exactly as it was - a removal can turn a simple
+    // outline into one that crosses itself - and the selection stands, so the
+    // corners that were picked are still picked.
+    if (ok) {
+      selectedVerts.clear();
+      markDirty();
+    }
+    rebuildInspector();
+    return true;
+  }
+
+  // Move the picked vertices by one grid cell. Answers whether it handled the
+  // keystroke, exactly as `deleteSelectedVerts` does.
+  function nudgeSelectedVerts(dir: Vec2, fine: boolean): boolean {
+    const item = vertexEditTarget();
+    if (!item) return false;
+    if (item.shape.kind !== "poly" && item.shape.kind !== "path") return false;
+    const picked = new Set(selectedVertIndices(item));
+    if (!picked.size) return false;
+    if (!nudging) {
+      beginAction();
+      nudging = true;
+    }
+    // In the shape's own frame, so a nudge on a turned shape moves its corner
+    // along the world axis the arrow names rather than along the shape's.
+    const d = dir.mul(fine ? NUDGE_FINE : gridStep).rotated(-item.rot);
+    const next = item.shape.verts.map((v, i) => (picked.has(i) ? v.add(d) : v));
+    if (item.shape.kind === "path") setPathVerts(item, next);
+    else setPolyVerts(item, next);
+    markDirty();
+    refreshFields();
+    return true;
+  }
+
   function deleteSelected(): void {
     // A selected BODY means all of it: deleting a body deletes the objects in
     // it. Reading `selectedIds` alone left the body panel's own Delete button
@@ -4471,6 +4597,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     pruneChains();
     pruneAnchors();
     selectedIds.clear();
+    selectedVerts.clear();
     selectedChainIds.clear();
     selectedBodyIds.clear();
     markDirty();
@@ -4577,6 +4704,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       replaceModel(modelFromDisk(data));
       resetHistory();
       selectedIds.clear();
+      selectedVerts.clear();
       // Body ids are per-model, so one carried across a load would highlight a
       // body in the incoming level that has nothing to do with the one picked.
       selectedBodyIds.clear();
@@ -4694,6 +4822,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const pointerWorld = (): Vec2 =>
     lastPointerScreen ? canvasWorld(lastPointerScreen) : camera.position;
 
+  // A press that landed on vertex `index` of `item`: what it does to the vertex
+  // selection, and the drag that follows.
+  //
+  // It is the same rule a press on a BODY follows, one level down. Shift
+  // toggles, and a vertex toggled OFF starts no drag - the gesture was the
+  // toggle. A plain press on a vertex already in the selection keeps the whole
+  // set and drags it, so a group of corners is moved by grabbing any of them; a
+  // plain press on any other vertex means that vertex alone.
+  function grabVertex(item: EdItem, index: number, shift: boolean): Drag | "consumed" | null {
+    if (item.shape.kind !== "poly" && item.shape.kind !== "path") return null;
+    const verts = item.shape.verts;
+    if (shift) {
+      if (selectedVerts.delete(index)) {
+        rebuildInspector();
+        return "consumed";
+      }
+      selectedVerts.add(index);
+    } else if (!selectedVerts.has(index)) {
+      selectedVerts.clear();
+      selectedVerts.add(index);
+    }
+    nudging = false; // a new set of corners starts a new undo step
+    rebuildInspector();
+    // Offsets in the SHAPE's own frame, taken from the pressed vertex. That is a
+    // difference of two local positions, which is what survives `setPolyVerts`
+    // re-centring the loop on its centroid: the re-centring subtracts the same
+    // point from every vertex, so it leaves every difference alone.
+    const lead = verts[index]!;
+    const others = selectedVertIndices(item)
+      .filter((i) => i !== index)
+      .map((i) => ({ index: i, offset: verts[i]!.sub(lead) }));
+    return { mode: "polyVertex", body: item, index, others, accepted: lead };
+  }
+
   // Which handle of the selected body (if any) is under the pointer?
   //
   // `"consumed"` means the press *was* a handle interaction that finished on the
@@ -4701,7 +4863,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // distinguishable from "no handle here": falling through to the body pick
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
-  function pickHandle(scr: Vec2, alt = false): Drag | "consumed" | null {
+  function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
     // A selected chain is edited by its two end handles and nothing else.
     const chains = selectedChains();
     if (chains.length === 1) {
@@ -4764,12 +4926,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           const rest = shape.verts.filter((_, j) => j !== i);
           const restH = shape.handles.filter((_, j) => j !== i);
           if (setPathVerts(s, rest, restH)) {
+            // Every index past the removed one has shifted, so the set names
+            // corners nobody picked; it goes rather than being renumbered,
+            // since a removal is the end of the gesture that made it.
+            selectedVerts.clear();
             markDirty();
             rebuildInspector();
           }
           return "consumed";
         }
-        return { mode: "polyVertex", body: s, index: i, accepted: shape.verts[i]! };
+        return grabVertex(s, i, shift);
       }
       // Tangent grips after the vertices: a handle pulled back onto its own node
       // sits under it, and the node is what the pointer is far more often after.
@@ -4805,7 +4971,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         dragPushed = true;
         if (!setPathVerts(s, verts, handles)) return null;
         markDirty();
-        return { mode: "polyVertex", body: s, index: i + 1, accepted: mid };
+        // The inserted vertex becomes the selection: it is the one the gesture
+        // is about, and every index past it has just shifted, so carrying the
+        // old set over would name different corners than the ones that were
+        // picked.
+        selectedVerts.clear();
+        selectedVerts.add(i + 1);
+        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
       }
     }
     // Vertices before the rotate knob: on a small polygon the knob can overlap a
@@ -4820,12 +4992,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           beginAction();
           const rest = s.shape.verts.filter((_, j) => j !== i);
           if (setPolyVerts(s, rest)) {
+            selectedVerts.clear();
             markDirty();
             rebuildInspector();
           }
           return "consumed";
         }
-        return { mode: "polyVertex", body: s, index: i, accepted: s.shape.verts[i]! };
+        return grabVertex(s, i, shift);
       }
       // An edge midpoint splits that edge: insert a vertex there and drag it
       // straight away, so adding a corner and placing it is one gesture.
@@ -4838,7 +5011,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         dragPushed = true;
         if (!setPolyVerts(s, next)) return null;
         markDirty();
-        return { mode: "polyVertex", body: s, index: i + 1, accepted: mid };
+        // The inserted vertex becomes the selection: it is the one the gesture
+        // is about, and every index past it has just shifted, so carrying the
+        // old set over would name different corners than the ones that were
+        // picked.
+        selectedVerts.clear();
+        selectedVerts.add(i + 1);
+        return { mode: "polyVertex", body: s, index: i + 1, others: [], accepted: mid };
       }
     }
     if (h.depth && scr.distanceTo(h.depth) <= HANDLE_HIT_PX) {
@@ -4911,7 +5090,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const turned = orbited();
     if (!turned) {
       // 1. Handles of the current selection.
-      const h = pickHandle(scr, e.altKey);
+      const h = pickHandle(scr, e.altKey, e.shiftKey);
       if (h === "consumed") return; // handled outright; no drag, selection intact
       if (h) {
         drag = h;
@@ -5131,7 +5310,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             if (!e.shiftKey) setSelection([]);
           },
         }
-      : { mode: "marquee", start: world, current: world, additive: e.shiftKey };
+      : {
+          mode: "marquee",
+          start: world,
+          current: world,
+          additive: e.shiftKey,
+          // While a polygon or a camera path is the selection, a band drawn from
+          // empty space is asking about ITS corners: the shape is already picked,
+          // so its vertices are the only thing left on screen the band could
+          // sensibly mean. To band bodies again, clear the selection first - a
+          // click on empty space does that, dropping the vertex selection before
+          // the item one so there is a way back out in two clicks.
+          verts: vertexEditTarget(),
+        };
   });
 
   // The world distance one screen pixel covers, which is what a screen-sized
@@ -5537,7 +5728,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (b.shape.kind !== "poly" && b.shape.kind !== "path") break;
         const local = snapVec(world).sub(b.pos).rotated(-b.rot);
         const index = drag.index;
-        const next = b.shape.verts.map((v, i) => (i === index ? local : v));
+        // The grabbed vertex follows the pointer (and the grid) and the rest of
+        // the vertex selection rides along at its own fixed offset from it -
+        // the same rule a group of BODIES is dragged by, one level down.
+        const moved = new Map<number, Vec2>([[index, local]]);
+        for (const o of drag.others) moved.set(o.index, local.add(o.offset));
+        const next = b.shape.verts.map((v, i) => moved.get(i) ?? v);
         // A rejected edit leaves the loop exactly as it was, so the vertex stalls
         // at the last convex position instead of the shape turning inside out.
         // A PATH refuses almost nothing - it may cross itself - so the stall is
@@ -5637,7 +5833,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return {
       min: new Vec2(Math.min(start.x, current.x), Math.min(start.y, current.y)),
       max: new Vec2(Math.max(start.x, current.x), Math.max(start.y, current.y)),
-      window: current.x >= start.x,
+      // A vertex band is always drawn as a window, because a vertex is a point
+      // and there is no crossing mode for it to be in: dashing it by the drag
+      // direction would advertise a distinction that catches the same corners
+      // either way.
+      window: drag.verts !== null || current.x >= start.x,
     };
   }
 
@@ -5649,7 +5849,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "move" && !drag.moved) drag.pick?.();
     if (drag.mode === "marquee") {
       const box = marqueeBand();
-      if (box) {
+      const vertTarget = drag.verts;
+      if (box && vertTarget) {
+        // A vertex is a point, so the window/crossing distinction has nothing to
+        // bite on - a point is either in the box or it is not - and both drag
+        // directions catch the same corners. Shift unions, exactly as it does
+        // for bodies.
+        if (!drag.additive) selectedVerts.clear();
+        nudging = false;
+        for (const [i, w] of worldVertices(vertTarget).entries()) {
+          if (w.x >= box.min.x && w.x <= box.max.x && w.y >= box.min.y && w.y <= box.max.y) {
+            selectedVerts.add(i);
+          }
+        }
+        rebuildInspector();
+      } else if (box) {
         const caught = box.window ? bodyWithinRect : bodyIntersectsRect;
         const hits = pickableItems()
           // A light is caught by its SOURCE, not by its reach, for the reason a
@@ -5677,7 +5891,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           withWholeBodies(drag.additive ? [...selectedIds, ...hits] : hits),
         );
       } else if (!drag.additive) {
-        setSelection([]); // a plain click on empty space clears
+        // A plain click on empty space clears - the VERTEX selection first, if
+        // there is one, and the item selection only once there is not. Two
+        // clicks rather than one, which is what leaves a way back to banding
+        // bodies from a shape that is open for vertex editing.
+        if (selectedVerts.size) {
+          selectedVerts.clear();
+          rebuildInspector();
+        } else {
+          setSelection([]);
+        }
       }
     }
     if (drag.mode === "chainDraw") {
@@ -5714,7 +5937,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Escape") {
       if (mode === "test") stopTest();
       else if (polyDraft) cancelPolyDraft();
-      else setSelection([]);
+      // The vertex selection goes first, for the reason a click on empty space
+      // drops it first: it is the innermost thing selected, and dropping it is
+      // how the shape stops being open for vertex editing.
+      else if (selectedVerts.size) {
+        selectedVerts.clear();
+        rebuildInspector();
+      } else setSelection([]);
       return;
     }
     if (mode === "test") {
@@ -5741,7 +5970,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Arrows before the Ctrl block: Ctrl+Arrow is the fine nudge, not a combo.
     const dir = NUDGE_DIRS[e.code];
     if (dir) {
-      nudgeSelection(dir, e.ctrlKey || e.metaKey);
+      // Same rule as Delete: a nudge is about the corners while there are
+      // corners picked, rather than moving the whole shape out from under them.
+      if (!nudgeSelectedVerts(dir, e.ctrlKey || e.metaKey)) {
+        nudgeSelection(dir, e.ctrlKey || e.metaKey);
+      }
       e.preventDefault(); // don't scroll the page
       return;
     }
@@ -5791,7 +6024,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (e.code === "Delete" || e.code === "Backspace") {
-      deleteSelected();
+      // Corners before objects: with vertices picked out of a shape, Delete is
+      // about them, and the shape itself is one Escape away from being what it
+      // means again.
+      if (!deleteSelectedVerts()) deleteSelected();
       e.preventDefault();
     } else if (e.code === "KeyB") {
       // Spot-check a spot: test the ball from wherever the cursor is, without
@@ -5978,6 +6214,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // its fills to outlines so the geometry stays visible through them.
         overlayLayers(),
         selectedBodyIds,
+        selectedVerts,
       );
     }
     requestAnimationFrame(frame);

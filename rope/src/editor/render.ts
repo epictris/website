@@ -530,6 +530,19 @@ function square(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.strokeRect(p.x - s / 2, p.y - s / 2, s, s);
 }
 
+// A vertex that is PICKED, as against merely draggable. Filled in the selection
+// orange rather than outlined in it, which is the same distinction the halo
+// draws around a selected object: the colour means "an edit applies to this",
+// and a hollow handle at every corner already means "you may drag me".
+function filledSquare(ctx: CanvasRenderingContext2D, p: Vec2): void {
+  const s = HANDLE_SIZE_PX;
+  ctx.fillStyle = HANDLE;
+  ctx.strokeStyle = HANDLE;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+  ctx.strokeRect(p.x - s / 2, p.y - s / 2, s, s);
+}
+
 function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.fillStyle = HANDLE_FILL;
   ctx.strokeStyle = HANDLE;
@@ -1173,6 +1186,11 @@ export function drawEditor(
   // objects are outlined rather than haloed: the body is what is selected, and
   // nothing an edit reaches may wear the selection colour.
   selectedBodyIds: ReadonlySet<number> = new Set<number>(),
+  // Which of the selected shape's VERTICES are picked out (see `selectedVerts`
+  // in editor.ts). They are drawn as filled squares against the hollow ones, so
+  // what an edit applies to is legible at the corner itself rather than only in
+  // the panel - the same thing the selection halo says about a whole object.
+  selectedVerts: ReadonlySet<number> = new Set<number>(),
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -1753,7 +1771,12 @@ export function drawEditor(
       ctx.stroke();
       for (const h of hs.pathHandles) tangentHandle(ctx, h.pos);
     }
-    if (hs.verts) for (const v of hs.verts) square(ctx, v);
+    if (hs.verts) {
+      for (let i = 0; i < hs.verts.length; i++) {
+        if (selectedVerts.has(i)) filledSquare(ctx, hs.verts[i]!);
+        else square(ctx, hs.verts[i]!);
+      }
+    }
     if (hs.vertMids) for (const m of hs.vertMids) midHandle(ctx, m);
     // An arrow's endpoints are round, so they read as "drag me somewhere"
     // rather than as the corners of a box.
