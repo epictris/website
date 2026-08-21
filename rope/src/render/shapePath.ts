@@ -282,3 +282,54 @@ export function pathOutlineGrown(
   ctx.closePath();
   ctx.restore();
 }
+
+// The boundary of a camera path's corridor: everything within `grow` of an OPEN
+// polyline, pathed as one closed loop in world coordinates.
+//
+// A corridor is not an outline of anything - there is no inside to a polyline -
+// so it is traversed as the degenerate polygon that runs the verts forward and
+// then back again. That doubling is what makes the rest fall out of the same
+// walk `pathOutlineIntoGrown` does: the reversed leg's edge normals point the
+// other way, so it draws the far side of the corridor, and the turnaround at
+// each end is a fillet of exactly half a turn, which is the round cap.
+//
+// The fillet is skipped where it would sweep the LONG way round (the inside of
+// a bend, where the corridor genuinely overlaps itself); the boundary crosses
+// itself there, as an offset curve always does, rather than looping out into
+// space. Same caveat as `pathOutlineIntoGrown`'s convexity rule, one dimension
+// down.
+export function pathCorridorInto(p: OutlineSink, verts: readonly Vec2[], grow: number): void {
+  if (verts.length < 2 || grow <= 0) return;
+  const loop = [...verts, ...verts.slice(1, -1).reverse()];
+  const n = loop.length;
+  const normals = loop.map((a, i) => {
+    const e = loop[(i + 1) % n]!.sub(a);
+    const len = e.length();
+    return len < 1e-9 ? null : new Vec2(e.y / len, -e.x / len);
+  });
+  let started = false;
+  for (let i = 0; i < n; i++) {
+    const nrm = normals[i];
+    if (!nrm) continue;
+    const a = loop[i]!;
+    const b = loop[(i + 1) % n]!;
+    const oa = a.add(nrm.mul(grow));
+    if (!started) {
+      p.moveTo(oa.x, oa.y);
+      started = true;
+    } else {
+      p.lineTo(oa.x, oa.y);
+    }
+    p.lineTo(b.x + nrm.x * grow, b.y + nrm.y * grow);
+    // The next edge with a direction, so a duplicate vert is stepped over
+    // rather than ending the fillet chain.
+    let next = null;
+    for (let k = 1; k <= n && !next; k++) next = normals[(i + k) % n];
+    if (!next) continue;
+    const from = Math.atan2(nrm.y, nrm.x);
+    const to = Math.atan2(next.y, next.x);
+    const sweep = (to - from + Math.PI * 2) % (Math.PI * 2);
+    if (sweep <= Math.PI + 1e-9) p.arc(b.x, b.y, grow, from, to);
+  }
+  p.closePath();
+}

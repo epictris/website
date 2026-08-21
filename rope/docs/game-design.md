@@ -236,6 +236,7 @@ It has three properties the rest of the system leans on.
 Two things are still refused, and for different reasons.
 An outline that **crosses itself** is not a shape at all: it has no inside, so there is nothing to cut, nothing to weigh and nothing to fill. The editor stalls a vertex drag at the last position the loop was still a shape, and the poly tool falls back to the convex hull of a draft that crossed itself.
 A **camera region** must stay convex, because nothing cuts one up: a region is tested by its face half-planes and grown into a buffer zone by offsetting them, and both of those read a notch as solid.
+A **camera path** is not a degenerate region and is not held to that rule: it is an OPEN polyline tested by distance rather than a closed volume tested by containment, so it has no inside for a notch to be in, and crossing itself is exactly what a switchback is (see the camera section of `docs/level-design.md`).
 
 A **hole** has no authored form either - one loop cannot express one - so a doughnut is still several bodies, or several outlines in one body.
 

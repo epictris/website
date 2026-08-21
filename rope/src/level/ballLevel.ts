@@ -14,6 +14,7 @@ import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
+  type CameraPathData,
   type CameraRegionData,
   type LevelData,
   type RawLevelData,
@@ -28,6 +29,7 @@ import {
   sweepChains,
   type SceneChain,
 } from "./chains";
+import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -40,6 +42,12 @@ export class BallLevel {
   cameraPosition = Vec2.ZERO;
   // Camera-behaviour volumes, in metres (see Level.cameraRegions).
   readonly cameraRegions: CameraRegionData[];
+  // Camera paths, in metres (see CameraPathData). Read by the same controller
+  // and, like the regions, never by the sim.
+  readonly cameraPaths: CameraPathData[];
+  // The two lists as the one rule set the controller governs with, built once
+  // here because a path's polyline index is derived and nothing mutates it.
+  readonly cameraRules: CameraRule[];
   // The authored shapes that are drawn and never simulated (see Level.decor).
   readonly decor: SceneDecor[];
   // Chains strung between authored bodies (see Level.sceneChains).
@@ -125,6 +133,8 @@ export class BallLevel {
   constructor(rawData: RawLevelData) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
+    this.cameraPaths = data.cameraPaths ?? [];
+    this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
     this.ball = new BallPlayer(data.player.radius * BallLevel.BALL_RADIUS_SCALE);
     this.ball.globalPosition = new Vec2(data.player.x, data.player.y);
     this.ball.spawnBody = (b) => this.spawnBody(b);

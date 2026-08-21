@@ -19,6 +19,11 @@ import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
   DEFAULT_FORCE_MAGNITUDE,
+  DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
+  DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
+  DEFAULT_PATH_LOOKAHEAD_X,
+  DEFAULT_PATH_LOOKAHEAD_Y,
+  DEFAULT_PATH_RANGE,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
   DEFAULT_SURFACE_FRICTION,
@@ -77,6 +82,14 @@ import {
   setArrowEnds,
   shapeMass,
   polyMustBeConvex,
+  PATH_PICK_HALF_WIDTH,
+  pathNodes,
+  pathPolyline,
+  reversePathVerts,
+  sharpenPathNodes,
+  smoothPathNodes,
+  setPathVerts,
+  ZERO_HANDLE,
   setPolyVerts,
   scaleShape,
   syncBodyProps,
@@ -163,6 +176,7 @@ type Tool =
   | "rect"
   | "circle"
   | "poly"
+  | "path"
   | "geometry"
   | "text"
   | "arrow"
@@ -180,7 +194,7 @@ type Tool =
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
   scene: ["select", "rect", "circle", "poly", "geometry", "light", "chain"],
-  camera: ["select", "rect", "circle", "poly"],
+  camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow"],
 };
 
@@ -263,6 +277,10 @@ type Drag =
   // convex pieces at load (a camera region is the exception - see
   // `polyMustBeConvex` - and stalls at the last convex position).
   | { mode: "polyVertex"; body: EdItem; index: number; accepted: Vec2 }
+  // One Bézier tangent grip of a camera path. `mirror` keeps the node smooth by
+  // writing the opposite handle as the negation of this one; Alt breaks it, so a
+  // deliberate cusp is a modifier away rather than unauthorable.
+  | { mode: "pathHandle"; body: EdItem; index: number; side: "in" | "out"; mirror: boolean }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
   // A whole compound body turns about its centre of mass - the point its built
@@ -482,7 +500,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Vertices clicked out so far for a polygon in progress, in world metres.
   // Drawing a polygon is a run of clicks rather than one drag, so it needs state
   // that outlives a mouse gesture — unlike every other tool.
-  let polyDraft: Vec2[] | null = null;
+  // A run-of-clicks draft, and which tool is drafting it: `+Poly` closes into an
+  // outline, `+Path` ends open as a camera path. One draft rather than two so
+  // Esc, Enter, the title readout and the preview cannot drift apart per tool.
+  let polyDraft: { kind: "poly" | "path"; verts: Vec2[] } | null = null;
   let dragMoved = false;
   let dragPushed = false; // history snapshot taken for the in-progress drag?
   let nudging = false; // arrow-key run in progress? (coalesces into one undo step)
@@ -1144,6 +1165,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // self-contained replay bundle (embeds the tested geometry, since an
   // in-editor level isn't in the registry). Mirrors main.ts's P export.
   let testController: "grapple" | "ball" = "grapple";
+  // The game's debug overlay (L) inside ▶ Test. Off at the start of every test:
+  // it is an instrument, and a test opens as the picture the player gets.
+  let testShowDebug = false;
   let testData: LevelData | null = null;
   const recFrames: SerializedFrame[] = [];
   const recDigests: Digest[] = [];
@@ -1158,6 +1182,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (spawn) {
       pixelData.player = { ...pixelData.player, x: spawn.x * M2PX, y: spawn.y * M2PX };
     }
+    testShowDebug = false;
     savedCam = { pos: camera.position, zoom: camera.zoom };
     // The test is played in the game's fixed 16:9 frame, so the camera is given
     // the frame's dimensions rather than the editor window's: `viewportScale`,
@@ -1304,6 +1329,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     rect: button("+ Rect", () => setTool("rect")),
     circle: button("+ Circle", () => setTool("circle")),
     poly: button("+ Poly", () => setTool("poly")),
+    path: button("+ Path", () => setTool("path")),
     geometry: button("+ Geometry", () => setTool("geometry")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
@@ -1312,6 +1338,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   };
   toolBtns.geometry.title =
     "Click to drop a geometry object; drag to size it. It is DRAWN and never simulated - nothing collides with it, the rope does not wrap it, no force reaches it. Give it a mesh or a texture on the panel; drop it on a selected body to have it ride that body.";
+  toolBtns.path.title =
+    "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   const kindSel = document.createElement("select");
@@ -1342,6 +1370,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.rect,
     toolBtns.circle,
     toolBtns.poly,
+    toolBtns.path,
     toolBtns.geometry,
     toolBtns.text,
     toolBtns.arrow,
@@ -1768,7 +1797,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         ? ` · ${model.chains.length} chain${model.chains.length === 1 ? "" : "s"}`
         : "");
     const draft = polyDraft
-      ? ` · polygon: ${polyDraft.length} ${polyDraft.length === 1 ? "vertex" : "vertices"}${polyDraft.length >= 3 ? " · Enter to close" : ""}`
+      ? ` · ${polyDraft.kind === "path" ? "path" : "polygon"}: ${polyDraft.verts.length} ` +
+        `${polyDraft.verts.length === 1 ? "vertex" : "vertices"}` +
+        (polyDraft.verts.length >= (polyDraft.kind === "path" ? 2 : 3)
+          ? polyDraft.kind === "path"
+            ? " · Enter to finish"
+            : " · Enter to close"
+          : "")
       : "";
     title.textContent = `${currentName ?? "(unsaved)"}${state} · ${count("scene")} objects${extra}${draft}`;
   }
@@ -1784,7 +1819,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // A locked layer accepts no new geometry either, so its draw tools cannot be
     // armed by the keyboard shortcuts any more than by the (hidden) buttons.
     if (t !== "select" && lockedLayers.has(activeLayer)) return;
-    if (t !== "poly") cancelPolyDraft();
+    if (t !== "poly" && t !== "path") cancelPolyDraft();
     tool = t;
     for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle("active", k === t);
     applyToolCursor();
@@ -3250,6 +3285,136 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
+  // Camera-path panel. `range` and `lookahead` are what an author actually
+  // tunes, so they come first and in that order: how far off the route the
+  // player may be while the camera still narrates it, and how far ahead of them
+  // the screen sits.
+  //
+  // There is deliberately no offset, no lock and no per-side buffer. A path IS
+  // the position rule, so composing it with an offset or a lock reintroduces
+  // exactly the ambiguity regions already cover; and a corridor has no sides to
+  // hang four buffers on.
+  function buildCameraPathGroup(paths: EdItem[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(paths.length === 1 ? `Camera path #${paths[0]!.id}` : `${paths.length} paths selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera. Stray more than `range` from the path and it lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended.";
+    g.appendChild(hint);
+
+    const num = groupNum(g, paths);
+    addTransformFields(g, num, paths);
+
+    // Blank = the format's default, which is what every path authored before a
+    // number was typed into it has.
+    num(
+      "range",
+      (b) => (b.cam.range ?? NaN) * M2PX,
+      (b, v) => (b.cam.range = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: String(Math.round(DEFAULT_PATH_RANGE * M2PX)),
+        onEmpty: () => {
+          for (const b of paths) b.cam.range = null;
+        },
+      },
+    );
+    // Two, because the frame is 16:9: there is far less screen above and below
+    // the player than there is either side of them, so one lead that reads well
+    // along a corridor throws them off the bottom of a shaft. The pair is read
+    // as the semi-axes of an ellipse (see `pathLookahead`), so a horizontal
+    // route leads by `lead x`, a vertical one by `lead y`, and a diagonal by
+    // what fits between.
+    const leadField = (
+      label: string,
+      key: "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",
+      fallback: number,
+    ): void => {
+      num(label, (b) => (b.cam[key] ?? NaN) * M2PX, (b, v) => (b.cam[key] = Math.max(0, v * PX)), 10, {
+        placeholder: String(Math.round(fallback * M2PX)),
+        onEmpty: () => {
+          for (const b of paths) b.cam[key] = null;
+        },
+      });
+    };
+    leadField("lead x", "lookaheadX", DEFAULT_PATH_LOOKAHEAD_X);
+    leadField("lead y", "lookaheadY", DEFAULT_PATH_LOOKAHEAD_Y);
+    // Slack in where the lead is measured FROM, not in the lead itself: a swing
+    // runs the player forward and back along the route several times a second,
+    // and a camera that tracks that exactly sloshes with it. Wider than the
+    // swing's travel along the path and the camera does not move at all.
+    leadField("lead buf x", "lookaheadBufferX", DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
+    leadField("lead buf y", "lookaheadBufferY", DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
+    // How much world is on screen: 2 = twice as much (zoomed out).
+    num(
+      "view ×",
+      (b) => b.cam.viewportScale,
+      (b, v) => (b.cam.viewportScale = Math.min(10, Math.max(0.1, v))),
+      0.1,
+    );
+    num(
+      "blend s",
+      (b) => b.cam.blend ?? NaN,
+      (b, v) => (b.cam.blend = Math.max(0, v)),
+      0.1,
+      {
+        placeholder: String(CAMERA_BLEND_TIME),
+        onEmpty: () => {
+          for (const b of paths) b.cam.blend = null;
+        },
+      },
+    );
+    // Extra hysteresis outside `range` before the path lets go, on top of the
+    // corridor itself. Blank = the controller's jitter margin, which is the same
+    // default a region's buffer falls back to.
+    num(
+      "buffer",
+      (b) => (b.cam.buffer ?? NaN) * M2PX,
+      (b, v) => (b.cam.buffer = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: String(Math.round(REGION_EXIT_MARGIN * M2PX)),
+        onEmpty: () => {
+          for (const b of paths) b.cam.buffer = null;
+        },
+      },
+    );
+    num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
+
+    // Three whole-path actions, because each is miserable to do node by node.
+    const row = el("div", "ed-row");
+    const act = (label: string, title: string, apply: (b: EdItem) => void): void => {
+      const b = button(label, () => {
+        beginAction();
+        for (const p of paths) apply(p);
+        markDirty();
+        rebuildInspector();
+      });
+      b.title = title;
+      row.appendChild(b);
+    };
+    // Direction is meaning, and re-drawing a long path backwards is miserable.
+    act(
+      "Reverse",
+      "Reverse the direction of travel - the way the camera leads along this path",
+      (b) => void reversePathVerts(b),
+    );
+    act(
+      "Smooth",
+      "Round every corner: each node gets the tangent that carries the curve through it (drag a node's round grips to shape one by hand)",
+      (b) => void smoothPathNodes(b),
+    );
+    act("Sharpen", "Drop every tangent - the path is its corners again", (b) =>
+      void sharpenPathNodes(b),
+    );
+    g.appendChild(row);
+
+    addActionsRow(g);
+    inspector.appendChild(g);
+  }
+
   // Lights-layer panel. The two fields that matter most are at the top and in
   // this order on purpose: what KIND of source it is, and how far it REACHES.
   // Falloff is inverse-square, so past a couple of metres a brighter lamp is
@@ -3693,9 +3858,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // the scene layer means one layer now holds two kinds of object: a lamp and
     // its light are ONE body and a perfectly ordinary thing to select together,
     // and they still want two panels.
-    const PANELS = ["collision", "geometry", "light", "anchor", "camera", "notes"] as const;
+    // A camera PATH is its own panel and not a variant of the region one: a
+    // path has no offset, no lock and no per-side buffer, and a panel showing
+    // them greyed out would be saying a path might have them.
+    const PANELS = [
+      "collision",
+      "geometry",
+      "light",
+      "anchor",
+      "camera",
+      "campath",
+      "notes",
+    ] as const;
     const panelOf = (b: EdItem): (typeof PANELS)[number] =>
-      b.layer === "camera" ? "camera" : b.layer === "notes" ? "notes" : b.object;
+      b.layer === "camera"
+        ? b.shape.kind === "path"
+          ? "campath"
+          : "camera"
+        : b.layer === "notes"
+          ? "notes"
+          : b.object;
     const panels = PANELS.filter((k) => sel.some((b) => panelOf(b) === k));
     selectionSpansLayers = panels.length > 1;
     if (selectionSpansLayers) {
@@ -3715,6 +3897,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const k of panels) {
       const items = sel.filter((b) => panelOf(b) === k);
       if (k === "camera") buildCameraGroup(items);
+      else if (k === "campath") buildCameraPathGroup(items);
       else if (k === "light") buildLightsGroup(items);
       else if (k === "anchor") buildAnchorsGroup(items);
       else if (k === "notes") buildNotesGroup(items);
@@ -4095,6 +4278,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return item;
     }
+    if (t === "path") {
+      // A placeholder two-vert run; the caller replaces it with the drafted
+      // points immediately. It exists so the item is a well-formed path at
+      // every instant, never a shape with no direction.
+      return {
+        ...base,
+        shape: {
+          kind: "path",
+          verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],
+          handles: [ZERO_HANDLE(), ZERO_HANDLE()],
+        },
+      };
+    }
     if (t === "poly") {
       // A placeholder triangle; the caller replaces the loop with the drafted
       // hull immediately. It exists so the item is a well-formed convex polygon
@@ -4185,9 +4381,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // did. Fewer than three non-collinear points is not a shape at all, so that
   // draft is simply dropped.
   function commitPolyDraft(): void {
-    const pts = polyDraft;
+    const draft = polyDraft;
     polyDraft = null;
-    if (!pts) return;
+    if (!draft) return;
+    if (draft.kind === "path") {
+      commitPathDraft(draft.verts);
+      return;
+    }
+    const pts = draft.verts;
     const drawn = pts.length >= 3 && isSimpleLoop(pts) ? normalizeWinding(pts) : convexHull(pts);
     if (drawn.length < 3) {
       updateTitle();
@@ -4209,6 +4410,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Same rules the drag-drawn shapes take: a polygon drawn into a selected
     // body wears that body's properties rather than the tool's defaults.
     syncBodyProps(bodyMembers(model.items, item.bodyId));
+  }
+
+  // The clicked points as a camera path: taken exactly as drawn, with no
+  // closing edge, no winding to normalise and no hull to fall back to. A path
+  // that crosses itself is a switchback, which is the case the whole mechanism
+  // is built around - so the only draft that is dropped is one with fewer than
+  // two distinct points, which has no direction.
+  function commitPathDraft(pts: readonly Vec2[]): void {
+    const item = newDrawnItem("path", pts[0] ?? Vec2.ZERO);
+    // `setPathVerts` re-centres on the vert average and moves `pos` with it, so
+    // the starting position only has to be somewhere sane in the item's frame.
+    item.pos = Vec2.ZERO;
+    // Every node a corner to begin with: a drawn path is the polyline that was
+    // clicked, and smoothing a corner is a handle drag away.
+    item.shape = {
+      kind: "path",
+      verts: pts.map((p) => p.clone()),
+      handles: pts.map(() => ZERO_HANDLE()),
+    };
+    if (!setPathVerts(item, pts)) {
+      updateTitle();
+      return;
+    }
+    beginAction();
+    addAndSelect([item]);
   }
 
   function deleteSelected(): void {
@@ -4509,6 +4735,63 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return null;
     }
+    // A camera path takes the same vertex interface, minus the wrap: its ends
+    // do not join, so the last vert has no edge after it to split and two verts
+    // is the floor rather than three.
+    if (h.verts && s.shape.kind === "path") {
+      const shape = s.shape;
+      for (let i = 0; i < h.verts.length; i++) {
+        if (scr.distanceTo(h.verts[i]!) > HANDLE_HIT_PX) continue;
+        if (alt) {
+          if (shape.verts.length <= 2) return null;
+          beginAction();
+          const rest = shape.verts.filter((_, j) => j !== i);
+          const restH = shape.handles.filter((_, j) => j !== i);
+          if (setPathVerts(s, rest, restH)) {
+            markDirty();
+            rebuildInspector();
+          }
+          return "consumed";
+        }
+        return { mode: "polyVertex", body: s, index: i, accepted: shape.verts[i]! };
+      }
+      // Tangent grips after the vertices: a handle pulled back onto its own node
+      // sits under it, and the node is what the pointer is far more often after.
+      for (const g of h.pathHandles ?? []) {
+        if (scr.distanceTo(g.pos) > HANDLE_HIT_PX) continue;
+        beginAction();
+        dragPushed = true;
+        return { mode: "pathHandle", body: s, index: g.vert, side: g.side, mirror: !alt };
+      }
+      for (let i = 0; i < (h.vertMids?.length ?? 0); i++) {
+        if (scr.distanceTo(h.vertMids![i]!) > HANDLE_HIT_PX) continue;
+        // A de Casteljau split at t = 1/2: the two halves are exactly the curve
+        // that was there, so inserting a node on a bowed edge adds a grip and
+        // changes nothing about the shape. Splitting the chord instead would
+        // straighten the edge the moment it was subdivided.
+        const nodes = pathNodes(s);
+        const a = nodes[i]!;
+        const b = nodes[i + 1]!;
+        const c1 = a.p.add(a.out);
+        const c2 = b.p.add(b.in);
+        const m1 = a.p.add(c1).mul(0.5);
+        const m2 = c1.add(c2).mul(0.5);
+        const m3 = c2.add(b.p).mul(0.5);
+        const n1 = m1.add(m2).mul(0.5);
+        const n2 = m2.add(m3).mul(0.5);
+        const mid = n1.add(n2).mul(0.5);
+        const verts = [...shape.verts.slice(0, i + 1), mid, ...shape.verts.slice(i + 1)];
+        const handles = shape.handles.map((x) => ({ ...x }));
+        handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
+        handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
+        handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
+        beginAction();
+        dragPushed = true;
+        if (!setPathVerts(s, verts, handles)) return null;
+        markDirty();
+        return { mode: "polyVertex", body: s, index: i + 1, accepted: mid };
+      }
+    }
     // Vertices before the rotate knob: on a small polygon the knob can overlap a
     // corner, and the corner is what the pointer is far more often after.
     if (h.verts && s.shape.kind === "poly") {
@@ -4625,16 +4908,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const drawTool = turned ? "select" : tool;
     // 1b. Polygon drafting: a run of clicks, not a drag. Clicking the first
     // vertex again (or Enter) closes the loop; Esc drops it.
-    if (drawTool === "poly") {
+    if (drawTool === "poly" || drawTool === "path") {
       const p = snapVec(world);
-      if (polyDraft && polyDraft.length >= 3) {
-        const first = worldToScreen(camera, polyDraft[0]!);
+      // A path is finished by Enter or a double-click, never by clicking back on
+      // its first vertex: an open run may legitimately end where it started (a
+      // loop of a level), and closing on it would make that unauthorable.
+      if (drawTool === "poly" && polyDraft && polyDraft.verts.length >= 3) {
+        const first = worldToScreen(camera, polyDraft.verts[0]!);
         if (scr.distanceTo(first) <= POLY_CLOSE_PX) {
           commitPolyDraft();
           return;
         }
       }
-      polyDraft = [...(polyDraft ?? []), p];
+      if (drawTool === "path" && e.detail >= 2 && polyDraft && polyDraft.verts.length >= 2) {
+        commitPolyDraft();
+        return;
+      }
+      polyDraft = { kind: drawTool, verts: [...(polyDraft?.verts ?? []), p] };
       updateTitle();
       return;
     }
@@ -4878,6 +5168,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // room it lights, and taken as the lamp's own box it would contain every wall
   // in that room and hand each of them the click.
   function pickBounds(b: EdItem): { min: Vec2; max: Vec2 } {
+    // A camera path is a line, so its box is the curve's - grown by the band a
+    // click on it is allowed to land in, or the prefilter would reject presses
+    // that `pointInBody` would have accepted.
+    if (b.shape.kind === "path") {
+      const box = itemBounds(b);
+      const m = new Vec2(PATH_PICK_HALF_WIDTH, PATH_PICK_HALF_WIDTH);
+      return { min: box.min.sub(m), max: box.max.add(m) };
+    }
     if (b.object !== "light") return itemBounds(b);
     const r = new Vec2(lightPickRadius(worldLine()), lightPickRadius(worldLine()));
     return { min: b.pos.sub(r), max: b.pos.add(r) };
@@ -5220,13 +5518,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       case "polyVertex": {
         const b = drag.body;
-        if (b.shape.kind !== "poly") break;
+        if (b.shape.kind !== "poly" && b.shape.kind !== "path") break;
         const local = snapVec(world).sub(b.pos).rotated(-b.rot);
         const index = drag.index;
         const next = b.shape.verts.map((v, i) => (i === index ? local : v));
         // A rejected edit leaves the loop exactly as it was, so the vertex stalls
         // at the last convex position instead of the shape turning inside out.
-        if (setPolyVerts(b, next)) drag.accepted = local;
+        // A PATH refuses almost nothing - it may cross itself - so the stall is
+        // only for the degenerate case of every vert landing on one point.
+        const ok = b.shape.kind === "path" ? setPathVerts(b, next) : setPolyVerts(b, next);
+        if (ok) drag.accepted = local;
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "pathHandle": {
+        const b = drag.body;
+        if (b.shape.kind !== "path") break;
+        const h = b.shape.handles[drag.index];
+        const p = b.shape.verts[drag.index];
+        if (!h || !p) break;
+        // NOT snapped to the grid: a tangent is a direction and a length, not a
+        // placement, and rounding it to 10 cm quantises the curvature into
+        // visible steps.
+        const offset = world.sub(b.pos).rotated(-b.rot).sub(p);
+        const other = drag.side === "in" ? "out" : "in";
+        b.shape.handles[drag.index] = {
+          ...h,
+          [drag.side]: offset,
+          // A smooth node is one whose handles are opposite. Mirrored in length
+          // as well as direction, which is what "smooth" means in every pen
+          // tool; Alt held at the press breaks the pair into a cusp.
+          ...(drag.mirror ? { [other]: offset.neg() } : {}),
+        } as { in: Vec2; out: Vec2 };
         markDirty();
         refreshFields();
         break;
@@ -5379,6 +5703,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     if (mode === "test") {
       if (e.code === "KeyP") downloadTestRecording();
+      // The same toggle the game has, and for the same reason: camera rules are
+      // invisible in play, so a path that leads, releases or re-acquires has no
+      // on-screen cause. A test is where an author tunes `range` and
+      // `lookahead`, so it is where the overlay has to be reachable.
+      if (e.code === "KeyL") testShowDebug = !testShowDebug;
       return;
     }
     if (mode !== "edit") return;
@@ -5508,8 +5837,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         accumulator -= STEP;
         steps++;
       }
-      // Same camera the game runs (eased follow + the level's camera regions),
-      // so a region authored here is tested exactly as it will play.
+      // Same camera the game runs (eased follow + the level's camera rules), so
+      // a region or a path authored here is tested exactly as it will play.
       // Render interpolation factor, as in main.ts: the sim is a fixed 60 Hz,
       // so bodies are drawn between steps rather than snapping to the newest.
       const alpha = Math.min(1, accumulator / STEP);
@@ -5517,7 +5846,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         camera,
         dt,
         testLevel.cameraRenderPosition(alpha),
-        testLevel.cameraRegions,
+        testLevel.cameraRules,
         testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
@@ -5556,7 +5885,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (testLevel instanceof BallLevel) {
         renderBall(ctx, view, testLevel, camera, fps, ballInput?.aimPoint() ?? null, alpha, testIn3d);
       } else {
-        render(ctx, view, testLevel, camera, fps, false, liveInput!.gamepadAim(), alpha, null, testIn3d);
+        render(
+          ctx,
+          view,
+          testLevel,
+          camera,
+          fps,
+          testShowDebug,
+          liveInput!.gamepadAim(),
+          alpha,
+          testCameraCtl.held,
+          testIn3d,
+        );
       }
     } else {
       // The tree tracks the model, and a drag changes the model every frame
@@ -5615,7 +5955,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         selectedIds,
         marqueeBand(),
         visibleLayers,
-        polyDraft ? { verts: polyDraft, cursor: pointerWorld() } : null,
+        polyDraft ? { ...polyDraft, cursor: pointerWorld() } : null,
         selectedChainIds,
         chainDraftView(),
         // In 3D the scene below is what shows what a body IS; the overlay drops

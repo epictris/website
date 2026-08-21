@@ -37,6 +37,7 @@ const steps: Step[] = [
   { name: "corners", cmd: ["bun", "run", CLI, "corners"] },
   { name: "tangents", cmd: ["bun", "run", CLI, "tangents"] },
   { name: "decompose", cmd: ["bun", "run", CLI, "decompose"] },
+  { name: "camera", cmd: ["bun", "run", CLI, "camera"] },
   { name: "render3d", cmd: ["bun", "run", CLI, "render3d"] },
   { name: "assets", cmd: ["bun", "run", CLI, "assets"] },
   { name: "ledges", cmd: ["bun", "run", CLI, "ledges"] },

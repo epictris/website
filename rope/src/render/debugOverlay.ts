@@ -16,9 +16,17 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import { Surface } from "../lib/surface";
 import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
-import type { CameraRegionData } from "../level/levelFormat";
-import { activeCameraRegion, regionBuffer } from "./cameraController";
-import { outlineOfData, pathOutline, pathOutlineGrown } from "./shapePath";
+import {
+  activeCameraRule,
+  pathLookahead,
+  pathRange,
+  type HeldCamera,
+  pathRelease,
+  regionBuffer,
+  type CameraRule,
+} from "./cameraController";
+import { pointAtArcLength, projectOntoPolyline } from "./cameraPath";
+import { outlineOfData, pathCorridorInto, pathOutline, pathOutlineGrown } from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -179,53 +187,182 @@ function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
 
 const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
 
-// Camera regions are invisible in play by design, so a camera that offsets,
-// zooms or pins has no on-screen cause. The overlay draws every region's volume
-// and fills the one currently in force, which is the whole diagnosis.
-function drawCameraRegions(
+// Metres between the direction arrowheads along a camera path. Direction is the
+// design (the lookahead never reverses), so it has to be readable at a glance.
+const PATH_ARROW_SPACING = 1.5;
+const PATH_ARROW_LENGTH = 0.22;
+
+// Camera rules are invisible in play by design, so a camera that offsets, zooms,
+// pins or leads has no on-screen cause. The overlay draws every one of them and
+// marks the one currently in force, which is the whole diagnosis.
+function drawCameraRules(
   ctx: CanvasRenderingContext2D,
   level: Level,
-  held: CameraRegionData | null,
+  held: HeldCamera | null,
 ): void {
-  // The live region when the caller has a camera controller to hand; recomputed
+  // The live rule when the caller has a camera controller to hand; recomputed
   // only for a caller that has none, where a first-order answer beats nothing.
-  const active = held ?? activeCameraRegion(level.cameraRegions, level.cameraPosition);
-  for (const r of level.cameraRegions) {
-    ctx.beginPath();
-    pathOutline(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape));
-    if (r === active) {
-      ctx.fillStyle = "rgba(199,146,234,0.12)";
-      ctx.fill();
+  const active = held?.rule ?? activeCameraRule(level.cameraRules, level.cameraPosition);
+  for (const rule of level.cameraRules) {
+    if (rule.kind === "region") {
+      drawCameraRegion(ctx, rule, rule === active);
+    } else {
+      drawCameraPath(
+        ctx,
+        rule,
+        rule === active,
+        rule === held?.rule ? held : null,
+        level.cameraPosition,
+      );
     }
-    ctx.strokeStyle = CAMERA_REGION;
-    ctx.lineWidth = 1.5 * PX;
-    ctx.setLineDash([6 * PX, 4 * PX]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    // The buffer zone of whichever region holds the camera. Only that one: a
-    // region keeps its grip out to here, so this is the boundary that explains
-    // why the camera has not changed hands, and drawing every region's would
-    // bury it in overlapping outlines that mean nothing until the region is in
-    // force.
-    if (r !== active) continue;
-    const b = regionBuffer(r);
-    ctx.beginPath();
-    pathOutlineGrown(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape), b);
-    ctx.lineWidth = PX;
-    ctx.setLineDash([2 * PX, 5 * PX]);
-    ctx.stroke();
-    ctx.setLineDash([]);
   }
+}
+
+function drawCameraRegion(
+  ctx: CanvasRenderingContext2D,
+  rule: CameraRule & { kind: "region" },
+  active: boolean,
+): void {
+  const r = rule.region;
+  ctx.beginPath();
+  pathOutline(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape));
+  if (active) {
+    ctx.fillStyle = "rgba(199,146,234,0.12)";
+    ctx.fill();
+  }
+  ctx.strokeStyle = CAMERA_REGION;
+  ctx.lineWidth = 1.5 * PX;
+  ctx.setLineDash([6 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // The buffer zone of whichever region holds the camera. Only that one: a
+  // region keeps its grip out to here, so this is the boundary that explains
+  // why the camera has not changed hands, and drawing every region's would
+  // bury it in overlapping outlines that mean nothing until the region is in
+  // force.
+  if (!active) return;
+  ctx.beginPath();
+  pathOutlineGrown(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape), regionBuffer(r));
+  ctx.lineWidth = PX;
+  ctx.setLineDash([2 * PX, 5 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// A path draws as its polyline with direction arrowheads, plus the corridor it
+// governs within. Nothing is FILLED, unlike a region: a corridor that doubles
+// back overlaps itself, so an interior tint says more about the switchback than
+// about which rule is in force.
+function drawCameraPath(
+  ctx: CanvasRenderingContext2D,
+  rule: CameraRule & { kind: "path" },
+  active: boolean,
+  held: HeldCamera | null,
+  // Where the avatar is, for the fallback projection when there is no held one.
+  follow: Vec2,
+): void {
+  const ix = rule.index;
+
+  ctx.beginPath();
+  pathCorridorInto(ctx, ix.verts, pathRange(rule.path));
+  ctx.strokeStyle = CAMERA_REGION;
+  ctx.lineWidth = 1.5 * PX;
+  ctx.setLineDash([6 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // The polyline itself, solid and brighter than its corridor: it is the route,
+  // and the corridor is only how far off it the player may be.
+  ctx.beginPath();
+  ctx.moveTo(ix.verts[0]!.x, ix.verts[0]!.y);
+  for (const v of ix.verts.slice(1)) ctx.lineTo(v.x, v.y);
+  ctx.lineWidth = (active ? 2.5 : 1.5) * PX;
+  ctx.stroke();
+
+  for (let s = PATH_ARROW_SPACING / 2; s < ix.total; s += PATH_ARROW_SPACING) {
+    drawPathArrow(ctx, ix.verts.length ? pointAtArcLength(ix, s) : Vec2.ZERO, pointAtArcLength(ix, Math.min(ix.total, s + 0.05)));
+  }
+
+  if (!active) return;
+
+  // The release boundary, in the sparser dash a region's buffer uses: the path
+  // keeps its grip out to here, so without it a path that refuses to let go
+  // looks like a bug.
+  ctx.beginPath();
+  pathCorridorInto(ctx, ix.verts, pathRelease(rule.path));
+  ctx.lineWidth = PX;
+  ctx.setLineDash([2 * PX, 5 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Where the player projects, and where the camera is therefore aimed. The
+  // projection is the controller's own tracked one where there is one - a
+  // recomputed global answer is a different number at a switchback, which is
+  // exactly what the overlay is opened to see.
+  const s = held?.s ?? projectOntoPolyline(ix, follow).s;
+  // The lead is measured from the COMMITTED point, which sits still inside the
+  // lookahead deadband while a swing runs back and forth under it. Drawing both
+  // is the whole diagnosis of that buffer: the gap between them is the slack
+  // the camera is currently declining to spend.
+  const from = held?.leadS ?? s;
+  const at = pointAtArcLength(ix, from);
+  // The same lead the controller takes, resolved against the direction the
+  // route heads in over it (see `pathLookahead`) - a recomputed straight-line
+  // guess would mark a point the camera is not aimed at.
+  const ahead = pointAtArcLength(ix, from + 0.05).sub(
+    pointAtArcLength(ix, Math.max(0, from - 0.05)),
+  );
+  const lead = pointAtArcLength(ix, from + pathLookahead(rule.path, ahead));
+  ctx.beginPath();
+  ctx.moveTo(at.x, at.y);
+  ctx.lineTo(lead.x, lead.y);
+  ctx.lineWidth = 2 * PX;
+  ctx.stroke();
+  for (const [p, r] of [
+    [at, MARKER_RADIUS],
+    [lead, MARKER_RADIUS * 1.6],
+  ] as const) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = CAMERA_REGION;
+    ctx.fill();
+  }
+  // The avatar's own projection, hollow, wherever the buffer is holding the
+  // committed point away from it. Absent when the two agree, so the mark
+  // appearing IS the buffer doing something.
+  if (Math.abs(s - from) > 1e-6) {
+    const real = pointAtArcLength(ix, s);
+    ctx.beginPath();
+    ctx.arc(real.x, real.y, MARKER_RADIUS, 0, Math.PI * 2);
+    ctx.lineWidth = PX;
+    ctx.stroke();
+  }
+}
+
+// A filled triangle at `at`, aimed along `at -> ahead`.
+function drawPathArrow(ctx: CanvasRenderingContext2D, at: Vec2, ahead: Vec2): void {
+  const dir = ahead.sub(at).normalized();
+  if (dir.x === 0 && dir.y === 0) return;
+  const side = new Vec2(-dir.y, dir.x).mul(PATH_ARROW_LENGTH * 0.4);
+  const tip = at.add(dir.mul(PATH_ARROW_LENGTH / 2));
+  const back = at.sub(dir.mul(PATH_ARROW_LENGTH / 2));
+  ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(back.x + side.x, back.y + side.y);
+  ctx.lineTo(back.x - side.x, back.y - side.y);
+  ctx.closePath();
+  ctx.fillStyle = CAMERA_REGION;
+  ctx.fill();
 }
 
 export function drawDebugOverlay(
   ctx: CanvasRenderingContext2D,
   level: Level,
-  // The region the camera controller currently holds; null = recompute it.
-  heldCameraRegion: CameraRegionData | null = null,
+  // The camera state the controller currently holds; null = recompute the rule.
+  heldCamera: HeldCamera | null = null,
 ): void {
   drawLedgeOverlay(ctx, level);
   drawContactNormals(ctx, level);
   drawPlayerCollider(ctx, level);
-  drawCameraRegions(ctx, level, heldCameraRegion);
+  drawCameraRules(ctx, level, heldCamera);
 }

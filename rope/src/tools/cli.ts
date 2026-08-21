@@ -27,6 +27,7 @@
 //   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts render3d
+//   bun run src/tools/cli.ts camera
 //
 // Exit codes: 0 = pass/healthy, 1 = failure/violation, 2 = usage error.
 // (replay: 2 = diverged-but-healthy, 3 = invariant violated.)
@@ -1399,12 +1400,15 @@ switch (cmd) {
   case "render3d":
     void cmdRender3d();
     break;
+  case "camera":
+    void cmdCamera();
+    break;
   case "assets":
     void cmdAssets();
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|render3d|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -1519,6 +1523,22 @@ async function cmdDecompose(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[decompose] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Camera-path geometry cases (src/sim/cameraCases.ts). Pure geometry - no
+// level, no controller, no canvas - so the projection the camera rides is
+// asserted directly rather than eyeballed through a running game.
+async function cmdCamera(): Promise<void> {
+  const { runCameraCases } = await import("../sim/cameraCases");
+  const results = runCameraCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[camera] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

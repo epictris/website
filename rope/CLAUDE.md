@@ -786,6 +786,7 @@ bun run src/tools/cli.ts corners              # corner-exposure geometry cases (
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
+bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
@@ -810,7 +811,7 @@ bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B th
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`corners`, `tangents`, `decompose`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
@@ -1982,6 +1983,91 @@ A circle has no sides and a polygon's growth is a signed-distance offset with no
 
 `priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
 The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - the buffer belongs to the region currently in force, and the island became that region on entry, so the enclosing region's buffer is no longer what is holding.
+
+### Camera paths
+
+A **camera path** (`CameraPathData`, its own `cameraPaths` list beside `cameraRegions`) is an authored curve the camera rides.
+The avatar is projected onto it and the camera targets a point further ALONG the route, so the screen leads the player toward where the level expects them to go.
+A region frames a *place* and cannot say anything about where the player is going next, which in a traversal level is the more common thing to want; that is the whole of why this exists.
+
+It is deliberately **not** a region with a funny shape.
+A region is a closed volume tested by containment and a path is an open directed polyline tested by distance, so forcing one to impersonate the other would leave every shape helper (`pointInRegion`, `pathOutlineGrown`, the convexity rule) half-lying.
+The two are instead generalised into one **rule set** (`CameraRule`, built once per level by `buildCameraRules`), because `activeCameraRegion`'s priority/buffer logic - highest priority wins, later author order breaks a tie, the incumbent keeps its grip inside a grown margin unless strictly outranked, entering is never buffered - is exactly what a path needs too.
+`activeCameraRule` is that same function with two kinds of containment in it; `cameraRuleTarget` is `cameraRegionTarget` with a path arm.
+Paths are listed **after** regions so a path beats a region at equal priority: the path is the level's primary guide and a region is the local exception, which says so with `priority`.
+
+**Direction is the design**, and the lookahead never flips.
+The path is directed by its vert order and always leads toward increasing arc length, so even when the player backtracks the screen keeps arguing for the authored way.
+Smart direction inference was rejected rather than deferred - the whole point is that the camera argues.
+Clamping at the ends is the correct degenerate behaviour: near the goal the camera comes to rest centred on the path's end rather than staring past it.
+
+#### The lead is an ellipse
+
+`lookaheadX` and `lookaheadY` are how far ahead the camera looks per axis, and they are two numbers because the frame is **16:9**: there is far less screen above and below the avatar than either side of them, so one lead that frames a corridor well throws the player off the bottom of a shaft.
+`pathLookahead` reads the pair through `ellipseReach` - as the semi-axes of an ellipse - and answers the arc length whose displacement lands on it - `lookaheadX` along a horizontal route, `lookaheadY` along a vertical one, and what fits between for anything diagonal.
+It is resolved against the direction the route actually goes over that lead: the local tangent first, then one refinement against the chord to the point it lands on, since on a bend those are different answers and the ellipse is a statement about the DISPLACEMENT.
+One refinement rather than iterating to a tolerance, because the correction is second order in the curvature and a fixed step is deterministic.
+
+#### The lookahead buffer
+
+`lookaheadBufferX` / `lookaheadBufferY` are a **deadband on the arc length the lead is measured from**, and they are the answer to swinging.
+A swing is an oscillation ALONG the route - the projection runs forward and back several times a second - so a lead taken from it exactly sloshes the camera with it, which no amount of `CAMERA_FOLLOW_TAU` fixes because the target itself is rocking.
+`committedLeadS` clamps the committed point into a band of this width around the projection, so it does not move at all while the avatar stays inside: on the first half-swing the band is dragged to one edge, and every swing after that moves it by nothing.
+Absorbed rather than damped, which is the difference from easing harder.
+
+Clamping rather than "hold, then jump to the avatar" is what keeps it CONTINUOUS - the committed point is only ever dragged by the edge of the band, so there is no step in the target for the hand-off machinery to have to blend.
+The price is that on genuine forward travel the lead is short by the band, which is what the buffer MEANS and what an author is choosing when they widen it.
+It is centred on the avatar on acquisition, like the projection itself: entering is history-free, so the band never carries an offset earned somewhere else on the route.
+
+The pair is resolved through `ellipseReach` - the same helper `pathLookahead` uses, and for the same 16:9 reason - against the direction the route runs where the BAND currently sits, which on a bend is not where the avatar is.
+
+`cli camera` asserts the pair that makes the claim: the same swing with the band absorbs it (the committed point's range is exactly 0 and the camera's travel over the last second is 0) and without it does not (the camera keeps moving), plus that a swing WIDER than the band is dragged by exactly its excursion less the band on each side, and that the same swing is absorbed along a horizontal route and not along a vertical one when the two axes differ.
+
+#### Curves
+
+A path's nodes carry cubic **Bézier tangent handles** (`CameraPathVert`'s `inX/inY/outX/outY`, offsets from the node in the path's own frame), and the whole of what they cost is `flattenPath`: everything downstream rides a polyline, and a flattened cubic IS one.
+An edge whose two facing handles are both absent contributes nothing but its endpoint, so a path of corners flattens to exactly its own nodes and every polyline path is bit-identical to what it was before handles existed - which is also why a corner writes four keys and no more.
+Sampling is `PATH_FLATTEN_STEP` (25 cm) of control polygon per point, capped per edge; `cli camera` asserts the worst chordal error against the true cubic, which is what `range` is ultimately measured against.
+
+In the editor a node's two grips are drawn at their own offsets, or as a **stub** a fixed screen distance along the edge when unset - a grip sitting exactly on the vertex it belongs to is unpickable, and a stub makes every corner one drag from smooth.
+Dragging mirrors the opposite handle in direction and length (a smooth node); Alt at the press breaks the pair into a cusp.
+Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gains a grip and changes shape by nothing; splitting the chord would straighten it the moment it was subdivided.
+`Smooth` writes the Catmull-Rom tangent at every node (a third of the chord between its neighbours) and `Sharpen` zeroes them all.
+
+Straying more than `range` from the polyline **releases** the path, and the camera falls back to whatever rule governs where the player actually is - a region if one contains them, the plain follow otherwise.
+Coming back re-acquires it.
+Every one of those transitions is a rule change, so the controller's existing frozen-delta hand-off blends all of them for free; the one addition is that an outgoing path is evaluated at its tracked projection rather than at a fresh global one, since both targets have to be measured at the same instant and on the same branch or the frozen delta is a gap that never existed.
+
+#### The windowed projection
+
+The load-bearing piece, and the reason `render/cameraPath.ts` is more than a distance function.
+A **global** closest-point query is discontinuous wherever the path passes near itself: on a switchback one frame's projection can teleport many metres of arc length, taking the lookahead target with it, and the hand-off blend cannot help because the rule identity has not changed.
+
+So the controller tracks the projection statefully.
+On **acquisition** it is a global `projectOntoPolyline` - entering is unbuffered and history-free, exactly like a region.
+While **held** it is `projectOntoPolylineWindow` around last frame's `s`, with the window sized to what the player could plausibly have moved:
+
+```
+maxStep = |follow - lastFollow| + PATH_TRACK_SLACK_SPEED * dt
+window  = [s - maxStep, s + maxStep]
+```
+
+The `followDelta` term means no legitimate move can outrun the window however fast the avatar is flung; the `dt` term keeps it frame-rate independent.
+The path's **grip** is then measured to that windowed projection rather than to the global closest point, which is what makes `range` mean what the author set it to: a player who drops off an upper branch toward a lower one has the release distance measured against the branch they were actually riding, so the path lets go, the fallback rule takes over with a blend, and the lower branch re-acquires with a fresh global projection and another blend.
+`switchback-window` in `cli camera` is the case, and it is red against a window-ignoring implementation while every other case in the file is green.
+
+The whole thing stays **render-side and wall-clock driven**, so recorded replays and `cli selftest` are bit-identical: nothing here touches the sim.
+A level with no `cameraPaths` reduces to a regions-only rule set and every code path is what it was.
+
+`cli camera` (`src/sim/cameraCases.ts`) is the suite: the pure geometry (projection, arc length, the switchback), the controller (leading, backtracking, release, re-acquire, no snap at a hand-off, the path-beats-region tie-break), and the editor's `modelFromDisk`/`modelToDisk` round trip, which is the half nothing else can see - the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read.
+
+In the **editor** a path is a camera-layer item whose `EdShape` is `{ kind: "path" }` - an open curve carrying its points and one handle pair each, `setPathVerts` its one writer (drops consecutive duplicates, requires two verts, re-centres `pos` on the point AVERAGE, a curve having no area centroid; handles are offsets from their own point, so the re-centring leaves them alone).
+It is drawn with `+ Path`, a run of clicks finished with Enter or a double-click, and edited by exactly the vertex handles a polygon has minus the wrap.
+It is excluded from the pass that fills and strokes closed outlines, because it has none: `outlineOf` can only answer its bounding box, and a box is not the thing.
+Its bounds, its pick band and its rubber-band test all read the FLATTENED curve rather than the node points - a bowed edge leaves the node hull, and a box that does not contain what is on screen is a box the pick rejects before it ever tests the shape.
+There is no convexity or simplicity rule: a path may cross itself, that being what a switchback is.
+Its panel is its own rather than a variant of the region one - a path has no offset, no lock and no per-side buffer, and showing them greyed out would say it might - and it carries a `Reverse` action, direction being meaning.
+
 
 ## 3D rendering
 

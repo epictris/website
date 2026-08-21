@@ -682,6 +682,45 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
 // until a field is authored.
 export const DEFAULT_VIEWPORT_SCALE = 1;
 
+// Metres a player may stray from a camera path before the path lets the camera
+// go. At GRAPPLE_ZOOM = 2 and PIXELS_PER_METER = 100 a 1080p frame shows
+// 9.6 x 5.4 m of world, so this is most of a screen height off the route.
+export const DEFAULT_PATH_RANGE = 4;
+
+// How far ahead of the player the camera looks, PER AXIS - a quarter of the
+// frame in each direction, at the 9.6 x 5.4 m the numbers above are measured on.
+//
+// Two numbers and not one because the frame is 16:9: there is far less screen
+// above and below the player than there is either side of them, so a lead that
+// is right along a corridor throws the player off the bottom of a shaft. The
+// two are read as the semi-axes of an ELLIPSE the lead is taken along (see
+// `pathLookahead`), so a horizontal route leads by the first, a vertical one by
+// the second, and a diagonal by what fits between them.
+export const DEFAULT_PATH_LOOKAHEAD_X = 2.5;
+export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
+
+// Metres of SLACK in where the lookahead is measured from - a deadband on the
+// avatar's arc length along the path, not on the camera.
+//
+// It exists because a swing is an oscillation along the route: the projection
+// runs forward and back several times a second, and a camera that tracks it
+// exactly sloshes with it. Held in a band this wide, the point the lead is
+// taken from does not move at all until the avatar leaves the band, so a swing
+// whose travel along the path is under this is absorbed completely.
+//
+// A tenth of the frame in each direction, which is a swing's worth of
+// back-and-forth without eating much of the lead - and the first number to
+// raise if the camera still sloshes. It costs at most this much of the
+// lookahead on genuine forward travel, which is the trade: the band is what the
+// camera trails by once it is being dragged.
+//
+// Per axis for the same reason the lookahead is (see above): the frame is 16:9,
+// so a band that reads well along a corridor is most of the vertical screen in
+// a shaft. The pair is resolved through the same ellipse, against the direction
+// the route runs where the band currently sits.
+export const DEFAULT_PATH_LOOKAHEAD_BUFFER_X = 1;
+export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
+
 // A camera region: a volume that reshapes the camera while the avatar is inside
 // it. Deliberately NOT a body — it has no collision, nothing wraps it and the
 // sim never sees it, so it lives in its own list rather than gaining a
@@ -744,6 +783,77 @@ export interface CameraRegionData {
   bufferBottom?: number;
   // Overlap tie-break: the containing region with the highest priority wins
   // (later in the list wins a tie). Absent = 0.
+  priority?: number;
+}
+
+// A camera path: an authored polyline the camera rides. The player's position
+// is projected onto it, the camera targets a point FURTHER ALONG it - by
+// `lookaheadX` / `lookaheadY`, read as the semi-axes of an ellipse - and so the
+// screen leads the player toward where they are expected to go.
+//
+// Deliberately NOT a region with a funny shape. A region is a closed volume
+// tested by containment and a path is an open directed polyline tested by
+// distance, so forcing one to impersonate the other would leave every shape
+// helper (`pointInRegion`, `pathOutlineGrown`, the convexity rule) half-lying.
+//
+// DIRECTION IS THE DESIGN. The lookahead is always toward increasing arc
+// length, so even when the player backtracks the screen keeps favouring the way
+// the level wants them to go; reversing a path means reversing `verts`.
+//
+// If the player strays more than `range` from the polyline the path lets go and
+// the camera falls back to whatever rule governs where the player actually is -
+// a camera region if one contains them, the plain follow otherwise - and coming
+// back within range re-acquires it. Every one of those transitions is a rule
+// change, so the controller's frozen-delta hand-off blends them all for free.
+// One node of a camera path: a point the route passes through, plus the cubic
+// Bézier tangent handles that shape the two edges meeting at it.
+//
+// The handles are OFFSETS from (x, y), in the path's local frame, and both are
+// optional. An edge whose two facing handles are both absent is a straight
+// segment, so a path authored as a plain polyline stores nothing extra and
+// flattens to exactly its own verts - which is what every path drawn before
+// handles existed is, and why adding them changed no level on disk.
+//
+// `in` points back toward the previous node and `out` toward the next, the way
+// every pen tool states them, so a smooth node is one whose two handles are
+// opposite: `in = -out`.
+export interface CameraPathVert {
+  x: number;
+  y: number;
+  inX?: number;
+  inY?: number;
+  outX?: number;
+  outY?: number;
+}
+
+export interface CameraPathData {
+  x: number;
+  y: number;
+  rot: number;
+  // Local-frame node list, >= 2 nodes, in order = direction of travel.
+  // Same storage convention as ShapeData's poly: local to (x, y, rot).
+  verts: CameraPathVert[];
+  // Metres (pixels on disk) the player may stray from the polyline before the
+  // path lets the camera go. Absent = DEFAULT_PATH_RANGE.
+  range?: number;
+  // How far ahead of the player the camera looks, per axis (see
+  // DEFAULT_PATH_LOOKAHEAD_X/_Y, which are what each falls back to).
+  lookaheadX?: number;
+  lookaheadY?: number;
+  // Slack in where that lead is measured from, so a swing does not slosh the
+  // camera (see DEFAULT_PATH_LOOKAHEAD_BUFFER_X/_Y). Both 0 = track the
+  // projection exactly.
+  lookaheadBufferX?: number;
+  lookaheadBufferY?: number;
+  // Same semantics as the region fields of the same names.
+  viewportScale?: number;
+  blend?: number;
+  // Extra release hysteresis outside `range`; absent = REGION_EXIT_MARGIN.
+  buffer?: number;
+  // Overlap tie-break against regions and other paths; absent = 0. Paths are
+  // listed after regions in the rule set, so a path beats a region at equal
+  // priority: the path is the level's primary guide and a region is the local
+  // exception, which says so by outranking it.
   priority?: number;
 }
 
@@ -885,6 +995,9 @@ export interface LevelData {
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
   cameraRegions?: CameraRegionData[];
+  // Camera paths (see CameraPathData). Absent = the rule set is regions-only,
+  // which is every level authored before this field.
+  cameraPaths?: CameraPathData[];
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
@@ -1018,6 +1131,7 @@ export interface RawLevelData {
   backgrounds?: LegacyBackgroundData[];
   lights?: LegacyLightData[];
   cameraRegions?: CameraRegionData[];
+  cameraPaths?: CameraPathData[];
   notes?: NoteData[];
   chains?: (ChainData | LegacyChainData)[];
   environment?: EnvironmentData;
@@ -1688,6 +1802,53 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(r.bufferBottom !== undefined ? { bufferBottom: r.bufferBottom * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
   }));
+  // A camera path's placement, verts, range, lookahead and buffer are lengths;
+  // rot, viewportScale, blend (seconds) and priority are not.
+  //
+  // Degenerate paths are dropped here rather than guarded against downstream: a
+  // polyline with fewer than two DISTINCT verts has no direction, so there is
+  // nothing to project onto and nothing to lead the player along. It is named
+  // by its index and its origin, which is what an author looks a path up by in
+  // the file - the level's own name is not known at this point, the format
+  // being loaded from raw data that does not carry one.
+  const paths = data.cameraPaths
+    ?.filter((p, i) => {
+      const distinct = p.verts?.some((v) => v.x !== p.verts[0]!.x || v.y !== p.verts[0]!.y);
+      if ((p.verts?.length ?? 0) >= 2 && distinct) return true;
+      console.warn(
+        `[camera] cameraPaths[${i}] at (${p.x}, ${p.y}) has fewer than 2 distinct verts; dropped.`,
+      );
+      return false;
+    })
+    .map((p) => ({
+      x: p.x * factor,
+      y: p.y * factor,
+      rot: p.rot,
+      // A node's point and both its handles are lengths; nothing else about one
+      // is. Absent handles stay absent, which is what keeps a plain polyline
+      // byte-identical through the conversion.
+      verts: p.verts.map((v) => ({
+        x: v.x * factor,
+        y: v.y * factor,
+        ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
+        ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
+        ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
+        ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+      })),
+      ...(p.range !== undefined ? { range: p.range * factor } : {}),
+      ...(p.lookaheadX !== undefined ? { lookaheadX: p.lookaheadX * factor } : {}),
+      ...(p.lookaheadY !== undefined ? { lookaheadY: p.lookaheadY * factor } : {}),
+      ...(p.lookaheadBufferX !== undefined
+        ? { lookaheadBufferX: p.lookaheadBufferX * factor }
+        : {}),
+      ...(p.lookaheadBufferY !== undefined
+        ? { lookaheadBufferY: p.lookaheadBufferY * factor }
+        : {}),
+      ...(p.viewportScale !== undefined ? { viewportScale: p.viewportScale } : {}),
+      ...(p.blend !== undefined ? { blend: p.blend } : {}),
+      ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
+      ...(p.priority !== undefined ? { priority: p.priority } : {}),
+    }));
   // A note's placement, box and glyph height are lengths; its text is not.
   const notes = data.notes?.map((n) => ({
     kind: n.kind,
@@ -1710,6 +1871,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
   }));
   return {
     ...(regions ? { cameraRegions: regions } : {}),
+    ...(paths ? { cameraPaths: paths } : {}),
     // Nothing in the environment block is a length (see EnvironmentData), so it
     // is copied rather than scaled - but copied, not shared, since everything
     // else here hands the caller a fresh object.

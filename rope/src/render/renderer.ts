@@ -26,7 +26,7 @@ import type { BallLevel } from "../level/ballLevel";
 import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
-import type { CameraRegionData } from "../level/levelFormat";
+import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
@@ -446,8 +446,8 @@ export function render(
   // drawn between its previous and current sim transform. 1 = draw the sim
   // state exactly (what a caller with no fixed-step accumulator wants).
   alpha = 1,
-  // The camera region in force, for the debug overlay (see drawDebugOverlay).
-  heldCameraRegion: CameraRegionData | null = null,
+  // The camera state in force, for the debug overlay (see drawDebugOverlay).
+  heldCamera: HeldCamera | null = null,
   // See `renderBall`: draw only the genuinely-2D layers, leaving the scene to
   // the WebGL canvas underneath. The grapple avatar's rig and its rope STAY on
   // this canvas even in overlay mode - the Player state-machine slice is 2D-only
@@ -536,7 +536,7 @@ export function render(
   if (gamepadAim) drawCrosshair(ctx, gamepadAim);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
-  if (showDebug) drawDebugOverlay(ctx, level, heldCameraRegion);
+  if (showDebug) drawDebugOverlay(ctx, level, heldCamera);
 
   // Debug overlay.
   for (const cmd of Debug.cmds) {

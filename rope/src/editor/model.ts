@@ -24,6 +24,13 @@ import {
   segmentsIntersect,
 } from "../lib/polygon";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import {
+  buildPolylineIndex,
+  flattenPath,
+  pathNodesOf,
+  projectOntoPolyline,
+  type PathNode,
+} from "../render/cameraPath";
 import { DECOR_Z } from "../level/decor";
 import { worldPlacement } from "../level/buildBodies";
 import {
@@ -42,6 +49,7 @@ import {
   NOTE_ARROW_THICKNESS,
   scaleLevelData,
   type BodyKind,
+  type CameraPathData,
   type CameraRegionData,
   type ChainData,
   type EnvironmentData,
@@ -134,10 +142,26 @@ export type EdObject = "collision" | "geometry" | "light" | "anchor";
 // docs/game-design.md and `polyMustBeConvex` below, which holds a camera region
 // to the older, stricter rule). Centring is what makes the item's `pos` its
 // centre of mass, which every rigid-body lever arm in the engine assumes.
+//
+// `path` is an OPEN curve, permitted only on the camera layer: a camera path
+// (see `CameraPathData`). It is not a degenerate polygon - it has no inside, no
+// area and no winding, and its node ORDER is its direction of travel, which is
+// the one thing about it that carries meaning. `setPathNodes` is its writer,
+// and it re-centres on the node average rather than on an area centroid, a
+// curve having no area centroid.
+//
+// `verts` is the points the route passes through and `handles` the cubic Bézier
+// tangents at each, as offsets, ONE PER VERT and kept exactly that long by the
+// writer. Two arrays rather than one array of nodes because every shared helper
+// here - bounds, hit-testing, the transform, the vertex handles - wants the
+// points and nothing else, and `localVertices` is what hands them over.
+// Both handles zero is a corner, which is what every vert of a freshly drawn
+// path is.
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
-  | { kind: "poly"; verts: Vec2[] };
+  | { kind: "poly"; verts: Vec2[] }
+  | { kind: "path"; verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[] };
 
 // Camera-layer properties (see CameraRegionData for the semantics). `lockX/Y`
 // null = that axis follows the avatar; `blend` and `buffer` null = the
@@ -157,6 +181,16 @@ export interface EdCamera {
   bufferTop: number | null;
   bufferBottom: number | null;
   priority: number;
+  // Camera PATH fields (see `CameraPathData`), meaningless on a region and left
+  // null there. null = the format's DEFAULT_PATH_RANGE / _LOOKAHEAD.
+  range: number | null; // metres
+  // Per axis, because the frame is 16:9 (see DEFAULT_PATH_LOOKAHEAD_X/_Y).
+  lookaheadX: number | null; // metres
+  lookaheadY: number | null; // metres
+  // Slack in where that lead is measured from, so a swing does not slosh the
+  // camera (see DEFAULT_PATH_LOOKAHEAD_BUFFER_X/_Y). null = those defaults.
+  lookaheadBufferX: number | null; // metres
+  lookaheadBufferY: number | null; // metres
 }
 
 // Lights-layer properties (see LightData for the semantics).
@@ -329,7 +363,14 @@ export function collidingBodyIds(items: readonly EdItem[]): Set<number> {
 // array of vertices that a shallow `{...shape}` would leave shared — the bug
 // there is silent (an undo that also rewrites the state it was undoing to).
 export function cloneShape(s: EdShape): EdShape {
-  return s.kind === "poly" ? { kind: "poly", verts: [...s.verts] } : { ...s };
+  if (s.kind === "poly") return { kind: "poly", verts: [...s.verts] };
+  // Handles are cloned per entry: the objects are replaced wholesale by the
+  // writer, but an undo snapshot sharing the ARRAY would be rewritten by the
+  // very edit it exists to undo.
+  if (s.kind === "path") {
+    return { kind: "path", verts: [...s.verts], handles: s.handles.map((h) => ({ ...h })) };
+  }
+  return { ...s };
 }
 
 // Is this item an arrow note? Arrows are the one item edited by their endpoints
@@ -531,6 +572,11 @@ export const defaultCamera = (): EdCamera => ({
   bufferTop: null,
   bufferBottom: null,
   priority: 0,
+  range: null,
+  lookaheadX: null,
+  lookaheadY: null,
+  lookaheadBufferX: null,
+  lookaheadBufferY: null,
 });
 
 export const defaultLight = (): EdLight => ({
@@ -888,6 +934,69 @@ function fromLevelData(data: LevelData): EdModel {
       bufferTop: r.bufferTop ?? null,
       bufferBottom: r.bufferBottom ?? null,
       priority: r.priority ?? 0,
+      // A region has no corridor and no lookahead.
+      range: null,
+      lookaheadX: null,
+      lookaheadY: null,
+      lookaheadBufferX: null,
+      lookaheadBufferY: null,
+    },
+    light: defaultLight(),
+    note: defaultNote(),
+    anchorId: 0,
+    matchId: 0,
+  }));
+
+  // Camera paths: the same item type as a region, distinguished by its shape
+  // kind. One item type per layer rather than a union is what keeps a path
+  // dragged, rotated, rubber-banded, duplicated and undone by exactly the code
+  // a region already goes through.
+  const camPaths: EdItem[] = (data.cameraPaths ?? []).map((c) => ({
+    id: newBodyId(),
+    layer: "camera",
+    object: "collision",
+    bodyId: newBodyId(), // its own body: this layer is not drawn in play
+    kind: "static", // unused on this layer; keeps the field total
+    pos: new Vec2(c.x, c.y),
+    rot: c.rot,
+    shape: {
+      kind: "path",
+      verts: c.verts.map((v) => new Vec2(v.x, v.y)),
+      handles: c.verts.map((v) => ({
+        in: new Vec2(v.inX ?? 0, v.inY ?? 0),
+        out: new Vec2(v.outX ?? 0, v.outY ?? 0),
+      })),
+    },
+    color: CAMERA_REGION_COLOR,
+    opacity: CAMERA_REGION_OPACITY,
+    friction: DEFAULT_SURFACE_FRICTION,
+    impermeable: false,
+    // Unused off the geometry layer; keeps the field total.
+    material: DEFAULT_MATERIAL,
+    thickness: DEFAULT_THICKNESS,
+    visual: defaultVisual(),
+    force: 0,
+    flow: 0,
+    drag: 0,
+    cam: {
+      // A path IS the position rule, so it has no offset and no lock to compose
+      // with (see "Explicitly out of scope" in plans/camera-tracking.md).
+      offset: Vec2.ZERO,
+      viewportScale: c.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
+      lockX: null,
+      lockY: null,
+      blend: c.blend ?? null,
+      buffer: c.buffer ?? null,
+      bufferLeft: null,
+      bufferRight: null,
+      bufferTop: null,
+      bufferBottom: null,
+      priority: c.priority ?? 0,
+      range: c.range ?? null,
+      lookaheadX: c.lookaheadX ?? null,
+      lookaheadY: c.lookaheadY ?? null,
+      lookaheadBufferX: c.lookaheadBufferX ?? null,
+      lookaheadBufferY: c.lookaheadBufferY ?? null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -998,7 +1107,7 @@ function lightItem(
 
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
-    items: [...bodies, ...regions, ...notes],
+    items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
     // None recorded on load. A body's frame is derived from its first object
     // until something is edited (`EdModel.bodyFrames`), which is the origin this
@@ -1024,14 +1133,49 @@ function lightItem(
 // so the save path - which wants the data and nothing else - is unchanged, and
 // nothing about the file depends on whether it was passed.
 export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number>): LevelData {
+  // A camera PATH has no ShapeData form at all - an open polyline is not one of
+  // the three shapes - so it never reaches here: the camera layer is split by
+  // shape kind below, and a path is written as a `CameraPathData` instead.
   const shapeOf = (i: EdItem): ShapeData => {
     if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
     if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
     return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
   };
 
+  const cameraPaths: CameraPathData[] = model.items
+    .filter((i) => i.layer === "camera" && i.shape.kind === "path")
+    .map((i) => ({
+      x: i.pos.x,
+      y: i.pos.y,
+      rot: i.rot,
+      // A zero handle is written as nothing at all, so a path of plain corners
+      // saves exactly the four keys it always did.
+      verts: pathNodes(i).map((n) => ({
+        x: n.p.x,
+        y: n.p.y,
+        ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
+        ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
+        ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
+        ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
+      })),
+      // Omit anything left at its default, so a saved path carries only what
+      // was actually authored - the same rule the region block follows, and
+      // what keeps a re-save byte-stable.
+      ...(i.cam.range !== null ? { range: i.cam.range } : {}),
+      ...(i.cam.lookaheadX !== null ? { lookaheadX: i.cam.lookaheadX } : {}),
+      ...(i.cam.lookaheadY !== null ? { lookaheadY: i.cam.lookaheadY } : {}),
+      ...(i.cam.lookaheadBufferX !== null ? { lookaheadBufferX: i.cam.lookaheadBufferX } : {}),
+      ...(i.cam.lookaheadBufferY !== null ? { lookaheadBufferY: i.cam.lookaheadBufferY } : {}),
+      ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE
+        ? { viewportScale: i.cam.viewportScale }
+        : {}),
+      ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
+      ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+      ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
+    }));
+
   const cameraRegions: CameraRegionData[] = model.items
-    .filter((i) => i.layer === "camera")
+    .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
     .map((i) => ({
       x: i.pos.x,
       y: i.pos.y,
@@ -1276,6 +1420,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // An empty list is the same as no list, and the absent field keeps levels
     // authored before camera regions (or notes) byte-identical.
     ...(cameraRegions.length ? { cameraRegions } : {}),
+    ...(cameraPaths.length ? { cameraPaths } : {}),
     // Written back verbatim. It is not derived from anything in the item list,
     // so there is nothing to rebuild - and leaving it out is not "the editor
     // does not support it", it is the editor DELETING a level's lighting the
@@ -1303,7 +1448,11 @@ export function modelToDisk(model: EdModel): LevelData {
 // screen), so an item drawn here and the shape it becomes agree edge for edge.
 export function localVertices(item: EdItem): Vec2[] {
   if (item.shape.kind === "circle") return [];
-  if (item.shape.kind === "poly") return item.shape.verts;
+  // A path's verts are an OPEN run rather than a loop, so anything treating the
+  // result as closed (the even-odd containment test, the seam walk) must ask
+  // the shape kind first; what is shared is the bounds, the handles and the
+  // transform, which read a vertex list either way.
+  if (item.shape.kind === "poly" || item.shape.kind === "path") return item.shape.verts;
   const hw = item.shape.w / 2;
   const hh = item.shape.h / 2;
   return [new Vec2(-hw, hh), new Vec2(-hw, -hh), new Vec2(hw, -hh), new Vec2(hw, hh)];
@@ -1373,6 +1522,104 @@ export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
   return true;
 }
 
+// The only writer of a camera path's vertices, and the mirror of
+// `setPolyVerts` - it drops consecutive duplicates, requires two verts left
+// over, and re-centres `pos` on the vert AVERAGE. A polyline has no area
+// centroid, and the average is what keeps the transform gizmo somewhere
+// sensible on the thing it is transforming.
+//
+// There is deliberately no simplicity or convexity rule: a path may cross
+// itself, that being exactly what a switchback is.
+export function setPathVerts(
+  item: EdItem,
+  verts: readonly Vec2[],
+  handles?: readonly { in: Vec2; out: Vec2 }[],
+): boolean {
+  if (item.shape.kind !== "path") return false;
+  const src = handles ?? item.shape.handles;
+  const kept: Vec2[] = [];
+  const keptH: { in: Vec2; out: Vec2 }[] = [];
+  for (let i = 0; i < verts.length; i++) {
+    const v = verts[i]!;
+    const last = kept[kept.length - 1];
+    if (last && last.distanceTo(v) < 1e-9) continue;
+    kept.push(v);
+    keptH.push(src[i] ? { in: src[i]!.in, out: src[i]!.out } : ZERO_HANDLE());
+  }
+  if (kept.length < 2) return false;
+  // Re-centred on the point AVERAGE. The handles are offsets from their own
+  // point, so they are untouched by it - which is the reason they are stored as
+  // offsets rather than as absolute control points.
+  const c = kept.reduce((a, b) => a.add(b), Vec2.ZERO).div(kept.length);
+  item.shape.verts = kept.map((v) => v.sub(c));
+  item.shape.handles = keptH;
+  item.pos = item.pos.add(c.rotated(item.rot));
+  return true;
+}
+
+export const ZERO_HANDLE = (): { in: Vec2; out: Vec2 } => ({ in: Vec2.ZERO, out: Vec2.ZERO });
+
+// A camera path's nodes in its own local frame, handles included - what the
+// flattener wants. Absent entries read as corners, so a hand-built shape or one
+// mid-edit can never produce a hole.
+export function pathNodes(item: EdItem): PathNode[] {
+  if (item.shape.kind !== "path") return [];
+  const h = item.shape.handles;
+  return item.shape.verts.map((p, i) => ({
+    p,
+    in: h[i]?.in ?? Vec2.ZERO,
+    out: h[i]?.out ?? Vec2.ZERO,
+  }));
+}
+
+// The curve as the polyline everything draws and picks it by, in WORLD metres -
+// the same flattening the camera controller rides, so what an author clicks and
+// what the camera releases at cannot disagree about where the path is.
+export function pathPolyline(item: EdItem): Vec2[] {
+  return flattenPath(pathNodes(item)).map((v) => toWorld(item, v));
+}
+
+// Reverse a path's direction of travel. Direction IS the design - the lookahead
+// never flips - so re-drawing a long path backwards is the alternative, and
+// this is the inspector action that avoids it.
+export function reversePathVerts(item: EdItem): boolean {
+  if (item.shape.kind !== "path") return false;
+  item.shape.verts = [...item.shape.verts].reverse();
+  // Each node's handles swap with the reversal: `in` faces the previous node
+  // and `out` the next, and reversing the order swaps which is which. Reversing
+  // the array alone would turn every smooth node into a mirrored kink.
+  item.shape.handles = [...item.shape.handles].reverse().map((h) => ({ in: h.out, out: h.in }));
+  return true;
+}
+
+// Give every node the tangent that makes the route smooth through it: the
+// Catmull-Rom handle, a third of the way along the chord between the node's two
+// neighbours. That is the standard interpolating spline, and it is what "smooth
+// this path" means - the curve still passes through every authored point, and
+// only the way it arrives at them changes.
+//
+// The end nodes take the one neighbour they have, so a two-node path smooths to
+// exactly the straight line it already was.
+export function smoothPathNodes(item: EdItem): boolean {
+  if (item.shape.kind !== "path") return false;
+  const v = item.shape.verts;
+  item.shape.handles = v.map((p, i) => {
+    const prev = v[i - 1] ?? p;
+    const next = v[i + 1] ?? p;
+    const t = next.sub(prev).div(3);
+    return { in: t.neg(), out: t };
+  });
+  return true;
+}
+
+// ...and the inverse: every node a corner again, which is what a freshly drawn
+// path is and what the whole handle set collapses to on disk.
+export function sharpenPathNodes(item: EdItem): boolean {
+  if (item.shape.kind !== "path") return false;
+  item.shape.handles = item.shape.verts.map(() => ZERO_HANDLE());
+  return true;
+}
+
 // Resize `item` to `base` scaled by (fx, fy) in its own frame. A circle takes
 // the mean of the two, since it has one radius and a squashed circle is not a
 // shape this format has - which is the same answer `radius` handle gives.
@@ -1404,6 +1651,22 @@ export function scaleShape(
       item,
       base.verts.map((v) => new Vec2(v.x * fx, v.y * fy)),
     );
+    return;
+  }
+  if (item.shape.kind === "path" && base.kind === "path") {
+    // A path scales like any other vertex list, and its tangent handles scale
+    // with it - they are offsets in the same frame, so a stretched curve keeps
+    // its shape. What is NOT scaled is `range` or `lookahead`: those are
+    // authored distances in metres, not extents of the shape, and widening the
+    // corridor because the route got longer is not what a resize means.
+    setPathVerts(
+      item,
+      base.verts.map((v) => new Vec2(v.x * fx, v.y * fy)),
+      base.handles.map((h) => ({
+        in: new Vec2(h.in.x * fx, h.in.y * fy),
+        out: new Vec2(h.out.x * fx, h.out.y * fy),
+      })),
+    );
   }
 }
 
@@ -1415,6 +1678,21 @@ const MIN_SHAPE_EXTENT = 0.01;
 export function halfExtents(item: EdItem): Vec2 {
   if (item.shape.kind === "circle") return new Vec2(item.shape.r, item.shape.r);
   if (item.shape.kind === "rect") return new Vec2(item.shape.w / 2, item.shape.h / 2);
+  // A curve's control points, not only its nodes: a cubic never leaves its
+  // control polygon, so this bounds the drawn route rather than the points it
+  // happens to pass through - which is what the rotate knob and the label are
+  // placed against.
+  if (item.shape.kind === "path") {
+    let px = 0;
+    let py = 0;
+    for (const n of pathNodes(item)) {
+      for (const q of [n.p, n.p.add(n.in), n.p.add(n.out)]) {
+        px = Math.max(px, Math.abs(q.x));
+        py = Math.max(py, Math.abs(q.y));
+      }
+    }
+    return new Vec2(px, py);
+  }
   let x = 0;
   let y = 0;
   for (const v of item.shape.verts) {
@@ -1435,8 +1713,11 @@ export function itemBounds(item: EdItem): { min: Vec2; max: Vec2 } {
     return { min: item.pos.sub(r), max: item.pos.add(r) };
   }
   // A rect and a convex polygon are both the hull of their vertices, so the
-  // placed loop's extremes are the box.
-  const verts = worldVertices(item);
+  // placed loop's extremes are the box. A camera path is the hull of its DRAWN
+  // curve and not of its nodes: a bowed edge leaves the node hull, and a box
+  // that does not contain what is on screen is a box the pick rejects before it
+  // ever tests the shape.
+  const verts = item.shape.kind === "path" ? pathPolyline(item) : worldVertices(item);
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -1497,6 +1778,26 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
     const cy = Math.min(Math.max(item.pos.y, min.y), max.y);
     return item.pos.distanceTo(new Vec2(cx, cy)) <= item.shape.r;
   }
+  if (item.shape.kind === "path") {
+    // A polyline is its segments: the band touches if either end of a segment
+    // is in the rect or the segment crosses one of its sides. No containment
+    // question, an open run having no inside for the rect to be in.
+    // The FLATTENED curve, not the node points: a bowed segment may pass
+    // through the band with both its nodes outside it.
+    const verts = pathPolyline(item);
+    const corners = [min, new Vec2(max.x, min.y), max, new Vec2(min.x, max.y)];
+    for (const v of verts) {
+      if (v.x >= min.x && v.x <= max.x && v.y >= min.y && v.y <= max.y) return true;
+    }
+    for (let i = 0; i + 1 < verts.length; i++) {
+      for (let j = 0; j < 4; j++) {
+        if (segmentsIntersect(verts[i]!, verts[i + 1]!, corners[j]!, corners[(j + 1) % 4]!)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   if (item.shape.kind === "poly") {
     // Directly, rather than by SAT: a separating axis exists only between
     // CONVEX shapes, and an authored outline may have a notch the band sits in
@@ -1537,6 +1838,13 @@ export function bodyIntersectsRect(item: EdItem, min: Vec2, max: Vec2): boolean 
 // CAD-style rubber band (dragged left→right); `bodyIntersectsRect` is the
 // crossing half (dragged right→left).
 export function bodyWithinRect(item: EdItem, min: Vec2, max: Vec2): boolean {
+  // The drawn curve, for the reason `bodyIntersectsRect` reads it: a bowed
+  // segment may leave the band with both its nodes inside it.
+  if (item.shape.kind === "path") {
+    return pathPolyline(item).every(
+      (w) => w.x >= min.x && w.x <= max.x && w.y >= min.y && w.y <= max.y,
+    );
+  }
   if (item.shape.kind === "circle") {
     const r = item.shape.r;
     return (
@@ -1553,6 +1861,19 @@ export function bodyWithinRect(item: EdItem, min: Vec2, max: Vec2): boolean {
   );
 }
 
+// A camera path is a line rather than an area, so it is picked by a band around
+// it - the arrow note's band, since both are segments and both are grabbed the
+// same way. `NOTE_ARROW_THICKNESS` is in scene pixels; halved and converted, it
+// is how far from the polyline a click may land.
+export const PATH_PICK_HALF_WIDTH = (NOTE_ARROW_THICKNESS / 2) * PX;
+
+// Distance from a point to an open polyline, through the same projection the
+// camera controller rides it by - one implementation, so what the editor picks
+// and what the camera releases at cannot disagree about where the path is.
+export function distanceToPolyline(verts: readonly Vec2[], p: Vec2): number {
+  return projectOntoPolyline(buildPolylineIndex(verts), p).dist;
+}
+
 // A point in the item's local (unrotated) frame, origin at the item centre.
 export function toLocal(item: EdItem, world: Vec2): Vec2 {
   return world.sub(item.pos).rotated(-item.rot);
@@ -1566,6 +1887,11 @@ export function toWorld(item: EdItem, local: Vec2): Vec2 {
 export function pointInBody(item: EdItem, world: Vec2): boolean {
   if (item.shape.kind === "circle") return world.distanceTo(item.pos) <= item.shape.r;
   const l = toLocal(item, world);
+  // A polyline has no inside, so it is picked by a band around it - the same
+  // band an arrow note is picked by, since both are segments rather than areas.
+  if (item.shape.kind === "path") {
+    return distanceToPolyline(flattenPath(pathNodes(item)), l) <= PATH_PICK_HALF_WIDTH;
+  }
   if (item.shape.kind === "rect") {
     return Math.abs(l.x) <= item.shape.w / 2 && Math.abs(l.y) <= item.shape.h / 2;
   }
@@ -1638,7 +1964,7 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // are always distinguished by `object` versus `kind`.
   if (item.object === "anchor") return `anchor ${item.anchorId}`;
   if (item.layer === "notes") return item.note.kind === "arrow" ? "arrow" : "text";
-  if (item.layer === "camera") return "region";
+  if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
   const form =
     item.shape.kind === "rect"
       ? `${n(item.shape.w)}×${n(item.shape.h)}`
@@ -1651,13 +1977,18 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // A geometry object is named by the SOLID it draws rather than by the outline
   // it is authored through, since that is what the player sees and what tells it
   // apart from the collision shape it may be sitting on top of.
-  const what = item.object === "collision" ? item.shape.kind : PRIMITIVE_NAME[item.shape.kind];
+  const what =
+    item.object === "collision" || item.shape.kind === "path"
+      ? item.shape.kind
+      : PRIMITIVE_NAME[item.shape.kind];
   return `${what} ${form}`;
 }
 
 // What a primitive's outline is drawn as in 3D - the same mapping
 // `primitiveGeometry` makes, said in words for the outliner.
-const PRIMITIVE_NAME: Record<EdShape["kind"], string> = {
+// A camera path is never a geometry object, so it has no solid to be named
+// after and is not in this table.
+const PRIMITIVE_NAME: Record<"rect" | "circle" | "poly", string> = {
   rect: "box",
   circle: "cylinder",
   poly: "prism",
@@ -1667,6 +1998,10 @@ const PRIMITIVE_NAME: Record<EdShape["kind"], string> = {
 export function shapeArea(item: EdItem): number {
   if (item.shape.kind === "circle") return Math.PI * item.shape.r * item.shape.r;
   if (item.shape.kind === "rect") return item.shape.w * item.shape.h;
+  // An open polyline has none. It is never a piece of a body, so nothing weighs
+  // it - answering zero rather than the signed area of a loop that is not there
+  // is what keeps that true if one ever reaches a mass sum.
+  if (item.shape.kind === "path") return 0;
   return Math.abs(polySignedArea2(item.shape.verts)) / 2;
 }
 
@@ -1858,7 +2193,7 @@ function outlineSig(i: EdItem): string {
       ? `r${s.w},${s.h}`
       : s.kind === "circle"
         ? `c${s.r}`
-        : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
+        : `${s.kind === "path" ? "L" : "p"}${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
   return `${i.pos.x},${i.pos.y},${i.rot},${i.bodyId}|${shape}`;
 }
 

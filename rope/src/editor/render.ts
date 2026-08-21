@@ -29,9 +29,18 @@ import {
   type EdLayer,
   type EdModel,
 } from "./model";
-import { DEFAULT_VIEWPORT_SCALE } from "../level/levelFormat";
+import { cubicAt, flattenPath } from "../render/cameraPath";
+import {
+  DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
+  DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
+  DEFAULT_PATH_LOOKAHEAD_X,
+  DEFAULT_PATH_LOOKAHEAD_Y,
+  DEFAULT_PATH_RANGE,
+  DEFAULT_VIEWPORT_SCALE,
+} from "../level/levelFormat";
 import {
   pathOutline,
+  pathCorridorInto,
   pathOutlineGrown,
   pathOutlineInto,
   pathOutlineIntoGrown,
@@ -130,7 +139,24 @@ export interface Handles {
   // what z is in the view this editor authors in. So the gizmo's arrow is what
   // an ORBITED view offers and this is what the head-on one does.
   depth: Vec2 | null;
+  // Screen positions of a camera path's Bézier tangent handles, two per node.
+  // A node whose handle is unset shows a STUB - a fixed screen distance along
+  // the edge's own direction - rather than a grip sitting exactly on the vertex
+  // it belongs to, which would be unpickable. Dragging a stub is what authors
+  // the first real handle, so every corner is one drag from smooth.
+  pathHandles: PathHandlePoint[] | null;
 }
+
+export interface PathHandlePoint {
+  pos: Vec2; // screen
+  vert: number;
+  side: "in" | "out";
+}
+
+// How far from its node an unset handle's grip is drawn, in screen pixels.
+// Clear of `HANDLE_HIT_PX` around the vertex, so reaching for one is never
+// ambiguous with reaching for the other.
+const HANDLE_STUB_PX = 26;
 
 // Screen-space handle points for a body, used for both drawing and hit-testing.
 // Does this item offer handles on the gameplay plane at all?
@@ -175,6 +201,7 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     verts: null,
     vertMids: null,
     depth: null,
+    pathHandles: null,
   };
   // Beside the shape's right edge, on the body's own +x, so it sits clear of the
   // corner boxes and turns with the shape exactly as the rotate knob does.
@@ -218,6 +245,44 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   }
   const h = halfExtents(body);
   const topMid = worldToScreen(cam, toWorld(body, new Vec2(0, -h.y)));
+  if (body.shape.kind === "path") {
+    // The same vertex interface a polygon has, minus the wrap: an open run has
+    // one fewer edge than it has verts, so the last vert gets no midpoint after
+    // it and the endpoints are dragged rather than joined.
+    //
+    // The midpoint of a CURVED edge is the curve's own midpoint (t = 1/2), not
+    // the chord's: inserting there is a de Casteljau split, which leaves the
+    // shape exactly as it was and puts the new grip on the line the author can
+    // see.
+    const shape = body.shape;
+    const world = shape.verts.map((v) => toWorld(body, v));
+    const nodes = shape.verts.map((p, i) => ({
+      p,
+      in: shape.handles[i]?.in ?? Vec2.ZERO,
+      out: shape.handles[i]?.out ?? Vec2.ZERO,
+    }));
+    const mids = nodes
+      .slice(0, -1)
+      .map((a, i) =>
+        worldToScreen(
+          cam,
+          toWorld(
+            body,
+            cubicAt(a.p, a.p.add(a.out), nodes[i + 1]!.p.add(nodes[i + 1]!.in), nodes[i + 1]!.p, 0.5),
+          ),
+        ),
+      );
+    return {
+      ...none,
+      body,
+      rotate: topMid.add(up.mul(ROT_OFFSET_PX)),
+      rotateBase: topMid,
+      verts: world.map((w) => worldToScreen(cam, w)),
+      vertMids: mids,
+      depth: depthHandle(h.x),
+      pathHandles: pathHandlePoints(cam, body, nodes),
+    };
+  }
   if (body.shape.kind === "poly") {
     // Vertices, and the edge midpoints that split an edge into two. A polygon
     // has no width/height to drag, so this is its whole resize interface.
@@ -251,6 +316,37 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
     rotateBase: topMid,
     depth: depthHandle(hw),
   };
+}
+
+// Where a path's tangent grips are drawn, in screen space. A handle that has
+// been authored sits at its own offset; one that has not is a STUB along the
+// edge it belongs to, at a fixed screen distance so it is the same size to grab
+// at any zoom. An end node has only the edge it actually has, so its outward
+// side takes that edge's direction too rather than pointing nowhere.
+function pathHandlePoints(
+  cam: Camera,
+  body: EdItem,
+  nodes: readonly { p: Vec2; in: Vec2; out: Vec2 }[],
+): PathHandlePoint[] {
+  const out: PathHandlePoint[] = [];
+  const perPx = 1 / (cam.zoom * PIXELS_PER_METER);
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!;
+    // The edge direction each side faces, falling back to the other edge at an
+    // end node so a stub always has somewhere to point.
+    const prev = nodes[i - 1];
+    const next = nodes[i + 1];
+    const back = (prev ? prev.p.sub(n.p) : next ? n.p.sub(next.p) : Vec2.LEFT).normalized();
+    const fwd = (next ? next.p.sub(n.p) : prev ? n.p.sub(prev.p) : Vec2.RIGHT).normalized();
+    for (const [side, offset, dir] of [
+      ["in", n.in, back],
+      ["out", n.out, fwd],
+    ] as const) {
+      const local = offset.lengthSquared() > 0 ? offset : dir.mul(HANDLE_STUB_PX * perPx);
+      out.push({ pos: worldToScreen(cam, toWorld(body, n.p.add(local))), vert: i, side });
+    }
+  }
+  return out;
 }
 
 // Screen positions of a chain's two anchor handles, or null if either body it
@@ -289,6 +385,14 @@ export function computeGroupHandles(
 function outlineOf(body: EdItem): Outline {
   if (body.shape.kind === "circle") return { kind: "circle", radius: body.shape.r };
   if (body.shape.kind === "poly") return { kind: "poly", verts: body.shape.verts };
+  // A camera path is an open polyline and has no outline at all - no inside, no
+  // area, nothing to fill. It is drawn by `drawCameraPath` instead, and every
+  // caller here is about a closed shape, so answering its bounding box would be
+  // a rectangle that is not the thing.
+  if (body.shape.kind === "path") {
+    const h = halfExtents(body);
+    return { kind: "rect", half: h };
+  }
   return { kind: "rect", half: new Vec2(body.shape.w / 2, body.shape.h / 2) };
 }
 
@@ -441,6 +545,20 @@ function circleHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
 const MID_HANDLE_RADIUS_PX = 3;
 function midHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
   ctx.fillStyle = HANDLE_FILL;
+  ctx.strokeStyle = HANDLE;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, MID_HANDLE_RADIUS_PX, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+// A camera path's tangent grip: filled in the camera layer's own violet, so a
+// handle reads as belonging to the path rather than to the item's box. Smaller
+// than a vertex square for the same reason a polygon's edge midpoints are - the
+// nodes are the route and the tangents only shape it.
+function tangentHandle(ctx: CanvasRenderingContext2D, p: Vec2): void {
+  ctx.fillStyle = CAMERA_REGION_COLOR;
   ctx.strokeStyle = HANDLE;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -609,6 +727,25 @@ export function lightLabel(l: EdItem): string {
 export function cameraRegionLabel(r: EdItem): string {
   const px = (v: number) => String(Math.round(v * PIXELS_PER_METER));
   const parts: string[] = [];
+  if (r.shape.kind === "path") {
+    // A path's defaults are shown rather than omitted: `range` and `lookahead`
+    // ARE the tuning, so "not authored" and "authored at the default" have to
+    // read the same way while an author is comparing two paths by eye.
+    parts.push(`range ${px(r.cam.range ?? DEFAULT_PATH_RANGE)}`);
+    parts.push(
+      `lead ${px(r.cam.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X)},` +
+        `${px(r.cam.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y)}` +
+        ` ±${px(r.cam.lookaheadBufferX ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_X)},` +
+        `${px(r.cam.lookaheadBufferY ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_Y)}`,
+    );
+    if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
+      parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
+    }
+    if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
+    if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
+    if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
+    return `path · ${parts.join(" · ")}`;
+  }
   if (r.cam.offset.x !== 0 || r.cam.offset.y !== 0) {
     parts.push(`off ${px(r.cam.offset.x)},${px(r.cam.offset.y)}`);
   }
@@ -635,6 +772,112 @@ export function cameraRegionLabel(r: EdItem): string {
 // Where a locked axis pins the camera. Both axes locked is a point, so it draws
 // a target there (and a leader from the region, since the point may be outside
 // it); one axis locked is a line, drawn across the region's span.
+// Metres between the direction arrowheads along an authored path, and how long
+// each is. Direction is the design - the lookahead never reverses - so it has to
+// be readable without selecting the path first.
+const PATH_ARROW_SPACING = 1.5;
+const PATH_ARROW_LENGTH = 0.22;
+
+// A camera path: its corridor, the polyline itself, and the arrowheads that say
+// which way it runs.
+//
+// Nothing is filled. A path that doubles back overlaps its own corridor, so an
+// interior tint says more about the switchback than about the path - and unlike
+// a region there is no volume for a fill to MEAN, which is the same reason
+// `outlineOf` has nothing to answer for one.
+function drawCameraPath(
+  ctx: CanvasRenderingContext2D,
+  item: EdItem,
+  worldLine: number,
+  selected: boolean,
+): void {
+  if (item.shape.kind !== "path") return;
+  const shape = item.shape;
+  // THE FLATTENED CURVE, not the node points: the handles are what shape the
+  // route, and drawing the control polygon instead would draw something the
+  // camera does not ride.
+  const world = flattenPath(
+    shape.verts.map((p, i) => ({
+      p,
+      in: shape.handles[i]?.in ?? Vec2.ZERO,
+      out: shape.handles[i]?.out ?? Vec2.ZERO,
+    })),
+  ).map((v) => toWorld(item, v));
+  // NOT through `paint`. That is the fill switch - it goes fully transparent in
+  // the overlay view, where the 3D scene underneath is what shows the level -
+  // and every mark here is a STROKE or a glyph on one, the same as a camera
+  // region's dashed border. Run through it, the whole path vanished the moment
+  // it was deselected in the view the editor opens in.
+  const stroke = CAMERA_REGION_COLOR;
+
+  // The corridor at `range`: how far off the route the player may be while the
+  // path still narrates it. `pathCorridorInto` owns the geometry, so what is
+  // drawn is exactly the zone the controller tests.
+  ctx.beginPath();
+  pathCorridorInto(ctx, world, item.cam.range ?? DEFAULT_PATH_RANGE);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([6 * PX, 4 * PX]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // ...and the release boundary beyond it, when a buffer is authored. Finer
+  // dots and a thinner line, as a region's buffer is drawn: it is the path's
+  // reach rather than a second corridor.
+  if (item.cam.buffer !== null && item.cam.buffer > 0) {
+    ctx.beginPath();
+    pathCorridorInto(ctx, world, (item.cam.range ?? DEFAULT_PATH_RANGE) + item.cam.buffer);
+    ctx.lineWidth = worldLine;
+    ctx.setLineDash([2 * PX, 5 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // The route itself, solid: the corridor is only how far off it the player may
+  // stray, and this is the line being authored.
+  ctx.beginPath();
+  ctx.moveTo(world[0]!.x, world[0]!.y);
+  for (const w of world.slice(1)) ctx.lineTo(w.x, w.y);
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = worldLine * 2.5;
+  ctx.stroke();
+
+  ctx.fillStyle = stroke;
+  let carried = PATH_ARROW_SPACING / 2;
+  for (let i = 0; i + 1 < world.length; i++) {
+    const a = world[i]!;
+    const b = world[i + 1]!;
+    const len = a.distanceTo(b);
+    if (len < 1e-9) continue;
+    const dir = b.sub(a).div(len);
+    for (let d = carried; d < len; d += PATH_ARROW_SPACING) {
+      drawPathArrow(ctx, a.add(dir.mul(d)), dir);
+    }
+    // Carried across the joint so the spacing is arc length along the whole
+    // path rather than restarting at every vertex - a run of short segments
+    // would otherwise be solid arrowheads.
+    carried = ((carried - len) % PATH_ARROW_SPACING + PATH_ARROW_SPACING) % PATH_ARROW_SPACING;
+  }
+}
+
+// A filled triangle centred at `at`, pointing along the unit vector `dir`.
+function drawPathArrow(ctx: CanvasRenderingContext2D, at: Vec2, dir: Vec2): void {
+  const side = new Vec2(-dir.y, dir.x).mul(PATH_ARROW_LENGTH * 0.4);
+  const tip = at.add(dir.mul(PATH_ARROW_LENGTH / 2));
+  const back = at.sub(dir.mul(PATH_ARROW_LENGTH / 2));
+  ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(back.x + side.x, back.y + side.y);
+  ctx.lineTo(back.x - side.x, back.y - side.y);
+  ctx.closePath();
+  ctx.fill();
+}
+
 function drawLockMarks(ctx: CanvasRenderingContext2D, r: EdItem, worldLine: number): void {
   const { lockX, lockY } = r.cam;
   if (lockX === null && lockY === null) return;
@@ -877,7 +1120,7 @@ export function drawEditor(
   // A polygon being clicked out: the vertices placed so far plus where the
   // pointer is, so the outline is visible while it is being drawn rather than
   // only once it closes.
-  polyDraft: { verts: readonly Vec2[]; cursor: Vec2 } | null = null,
+  polyDraft: { kind: "poly" | "path"; verts: readonly Vec2[]; cursor: Vec2 } | null = null,
   // Chains carry their own selection (see `selectedChainIds` in editor.ts).
   selectedChainIds: ReadonlySet<number> = new Set<number>(),
   // A chain being strung out: where it started and where the pointer is, plus
@@ -988,7 +1231,14 @@ export function drawEditor(
   // Hook-only anchors first: they are background the player passes through, and
   // the game draws them behind solid geometry too. `sort` is stable, so the
   // authored order is preserved within each group.
-  const geometry = model.items.filter((i) => i.object === "collision");
+  // A camera PATH is excluded: this pass fills and strokes a closed outline, and
+  // an open polyline has none - `outlineOf` can only answer its bounding box,
+  // which is a rectangle that is not the thing. It is drawn by `drawCameraPath`
+  // in the camera pass instead. Camera REGIONS and notes stay in, because they
+  // are closed shapes and this is where their fill has always come from.
+  const geometry = model.items.filter(
+    (i) => i.object === "collision" && i.shape.kind !== "path",
+  );
   const ordered = visibleLayers.has("scene")
     ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
     : [];
@@ -1219,6 +1469,10 @@ export function drawEditor(
     ? model.items.filter((i) => i.layer === "camera")
     : [];
   for (const r of regions) {
+    if (r.shape.kind === "path") {
+      drawCameraPath(ctx, r, worldLine, selectedIds.has(r.id));
+      continue;
+    }
     pathBody(ctx, r);
     ctx.fillStyle = paint(hexToRgba(CAMERA_REGION_COLOR, r.opacity));
     ctx.fill();
@@ -1297,11 +1551,13 @@ export function drawEditor(
   // obvious which edge is still being aimed and which are committed.
   if (polyDraft && polyDraft.verts.length) {
     const v = polyDraft.verts;
+    const open = polyDraft.kind === "path";
     // The draft is drawn in the warning colour exactly when the loop it would
     // close is not a shape. Concave is not that - a dented outline is a shape
     // and is what the tool is for - so this fires only on a loop that crosses
-    // itself.
-    const crossed = v.length >= 3 && !isSimpleLoop([...v, polyDraft.cursor]);
+    // itself. A PATH is never warned about: an open run has no loop to close,
+    // and crossing itself is what a switchback is.
+    const crossed = !open && v.length >= 3 && !isSimpleLoop([...v, polyDraft.cursor]);
     const draftColor = crossed ? DRAFT_CROSSED : SELECT;
     ctx.strokeStyle = draftColor;
     ctx.lineWidth = worldLine * 2;
@@ -1312,7 +1568,9 @@ export function drawEditor(
     ctx.beginPath();
     ctx.moveTo(v[v.length - 1]!.x, v[v.length - 1]!.y);
     ctx.lineTo(polyDraft.cursor.x, polyDraft.cursor.y);
-    if (v.length >= 2) ctx.lineTo(v[0]!.x, v[0]!.y);
+    // The run back to the first vertex is the CLOSING edge, which a path does
+    // not have: it ends where the last click was.
+    if (!open && v.length >= 2) ctx.lineTo(v[0]!.x, v[0]!.y);
     ctx.stroke();
     ctx.setLineDash([]);
     // A dot per placed vertex, and a ring on the first one: clicking it is what
@@ -1323,7 +1581,7 @@ export function drawEditor(
       ctx.arc(q.x, q.y, worldLine * 3, 0, Math.PI * 2);
       ctx.fill();
     }
-    if (v.length >= 3) {
+    if (!open && v.length >= 3) {
       ctx.lineWidth = worldLine * 1.5;
       ctx.beginPath();
       ctx.arc(v[0]!.x, v[0]!.y, worldLine * 6, 0, Math.PI * 2);
@@ -1451,6 +1709,22 @@ export function drawEditor(
     // dragged. The midpoints are drawn differently on purpose - a uniform row of
     // handles would read as "these are all vertices" and hide that the shape has
     // four corners rather than eight.
+    // Tangent grips BEFORE the vertex squares, so a handle pulled back onto its
+    // own node sits under the node rather than over it: the vertex is the thing
+    // you reach for more often, and the pick agrees (it tests verts first).
+    if (hs.pathHandles && hs.verts) {
+      ctx.strokeStyle = HANDLE;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const h of hs.pathHandles) {
+        const v = hs.verts[h.vert];
+        if (!v) continue;
+        ctx.moveTo(v.x, v.y);
+        ctx.lineTo(h.pos.x, h.pos.y);
+      }
+      ctx.stroke();
+      for (const h of hs.pathHandles) tangentHandle(ctx, h.pos);
+    }
     if (hs.verts) for (const v of hs.verts) square(ctx, v);
     if (hs.vertMids) for (const m of hs.vertMids) midHandle(ctx, m);
     // An arrow's endpoints are round, so they read as "drag me somewhere"

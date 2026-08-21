@@ -18,6 +18,7 @@ import { Hook } from "../classes/hook";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
+  type CameraPathData,
   type CameraRegionData,
   type LevelData,
   type RawLevelData,
@@ -25,6 +26,7 @@ import {
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import { collectDecor, type SceneDecor } from "./decor";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
+import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import { PX } from "../engine/units";
 
 // Scripted-mover update: sets the body's transform for the given sim time.
@@ -53,6 +55,12 @@ export class Level {
   // Camera-behaviour volumes, in metres. Read by the render-side
   // CameraController; the sim never touches them.
   readonly cameraRegions: CameraRegionData[];
+  // Camera paths, in metres (see CameraPathData). Read by the same controller
+  // and, like the regions, never by the sim.
+  readonly cameraPaths: CameraPathData[];
+  // The two lists as the one rule set the controller governs with, built once
+  // here because a path's polyline index is derived and nothing mutates it.
+  readonly cameraRules: CameraRule[];
   // The authored shapes that are drawn and never simulated, in metres, each
   // resolved against the body it is welded to (see SceneDecor). Read only by
   // the renderer; like the camera regions, the sim never touches them.
@@ -71,6 +79,8 @@ export class Level {
   constructor(rawData: RawLevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
     this.cameraRegions = data.cameraRegions ?? [];
+    this.cameraPaths = data.cameraPaths ?? [];
+    this.cameraRules = buildCameraRules(this.cameraRegions, this.cameraPaths);
     this.player = new Player(data.player.radius);
     this.player.globalPosition = new Vec2(data.player.x, data.player.y);
     this.player.spawnBody = (b) => this.spawnBody(b);
