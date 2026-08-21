@@ -2346,6 +2346,37 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
+  // Pivot mounting, rigid bodies only (see `LevelBodyData.pivot`): bolted to a
+  // frictionless bearing at the centre of mass, so the body spins under torque
+  // but never translates - a windmill fin, a paddle wheel. A checkbox beside
+  // the kind picker rather than a kind of its own, because a pivot body is a
+  // rigid body with one degree of freedom removed rather than a different kind
+  // of thing.
+  function addPivotField(g: HTMLElement, leads: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = leads.every((b) => b.pivot);
+    // A mixed selection says so rather than reporting one body's answer as the
+    // group's, exactly as the hook-proof checkbox does.
+    box.indeterminate = !box.checked && leads.some((b) => b.pivot);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of leads) b.pivot = box.checked;
+      syncEditedBodies(leads);
+      markDirty();
+      // Rebuilt so the box loses its indeterminate state.
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "pivot";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.";
+    g.appendChild(hint);
+  }
+
   // The standing "match the collision shape" link (see `EdItem.matchId`): while
   // ticked, this geometry object's outline and its collision partner's are kept
   // equal in both directions, so resizing or moving either does both. Offered
@@ -3075,6 +3106,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // reciprocal time, so it is authored and stored as the same number.
         num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
       }
+      if (leads.every((b) => b.kind === "rigid")) addPivotField(g, leads);
     }
     // ...and the fill, which only a body written from a collision lead has: a
     // body of pure decoration is painted by its objects' own colours, and a
@@ -4326,6 +4358,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // fresh one runs and drags rather than sitting there as a coloured box.
       flow: DEFAULT_WATER_FLOW * PX,
       drag: DEFAULT_WATER_DRAG,
+      // A fresh body is free; the bearing is opted into on the panel.
+      pivot: false,
       // A fresh region is a no-op until a framing field is authored.
       cam: defaultCamera(),
       light: defaultLight(),

@@ -593,6 +593,16 @@ export interface LevelBodyData {
   // seconds to notice a body is in it.
   flow?: number;
   drag?: number;
+  // Rigid bodies only: mounted on a fixed frictionless bearing at the body's
+  // centre of mass. The body cannot translate at all - gravity, contacts, the
+  // rope and currents move it nothing - but torque spins it freely: a windmill
+  // fin the player lands on or hooks onto to swing around. A flag on `rigid`
+  // rather than a kind of its own for the same reason `impermeable` is a flag:
+  // a pivot body IS a rigid body (mass, inertia, friction, the rope's torque
+  // arm) with one degree of freedom removed, and a kind would restate all of
+  // that to say one thing. Absent = an ordinary free rigid body, which is what
+  // every level authored before the field contains.
+  pivot?: boolean;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -1968,6 +1978,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
+      ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

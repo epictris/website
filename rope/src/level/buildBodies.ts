@@ -402,6 +402,11 @@ function buildOne(
     mountPieces(rb, pieces);
     setCompoundInertia(rb, pieces);
     applyStyle(rb, b);
+    // Bolted to a bearing at its centre of mass (see `LevelBodyData.pivot`):
+    // free to spin, unable to translate. Mass and inertia above are kept as
+    // computed - the inertia is what torque answers to, and the mass is what a
+    // pushing character's impulse is sized against.
+    rb.pivot = b.pivot === true;
     // The authored `friction` is the body's material grip, so it scales what the
     // body brings to a contact as well as what it offers one: an ice block is
     // slippery to stand on *and* slides on the floor it sits on. The contact

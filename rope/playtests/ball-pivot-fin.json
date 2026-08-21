@@ -1,0 +1,66 @@
+{
+  "level": "ball-pivot-fin",
+  "controller": "ball",
+  "frames": 300,
+  "spawn": {
+    "x": -0.8,
+    "y": -1.2
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 100,
+        "rot": 0,
+        "friction": 1.0,
+        "objects": [
+          {
+            "type": "collision",
+            "x": 0,
+            "y": 0,
+            "rot": 0,
+            "shape": { "kind": "rect", "w": 4000, "h": 100 }
+          }
+        ]
+      },
+      {
+        "kind": "rigid",
+        "pivot": true,
+        "x": 0,
+        "y": -50,
+        "rot": 0,
+        "objects": [
+          {
+            "type": "collision",
+            "x": 0,
+            "y": 0,
+            "rot": 0,
+            "shape": { "kind": "rect", "w": 300, "h": 25 }
+          }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "frame": 290,
+      "minX": -2.4,
+      "maxX": -1.1,
+      "minY": 0.3,
+      "maxY": 0.45
+    },
+    {
+      "window": {
+        "from": 240,
+        "to": 300
+      },
+      "maxSpeed": 0.2
+    }
+  ]
+}

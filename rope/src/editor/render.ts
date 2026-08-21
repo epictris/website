@@ -1077,7 +1077,26 @@ function drawGroupMarks(
   const bodies = new Set<number>();
   for (const b of visible) bodies.add(b.bodyId);
   for (const id of bodies) {
-    if (bodyMembers(all, id).length < 2) continue;
+    const allMembers = bodyMembers(all, id);
+    // A pivot body's axle, always: a ring-and-dot at the centre of mass, which
+    // is the bearing the built body spins about. Drawn for a body of one as
+    // well - unlike the compound diamond, being pivot-mounted is invisible on
+    // the canvas without it.
+    const pivotLead = allMembers.find((m) => m.object === "collision");
+    if (pivotLead && pivotLead.kind === "rigid" && pivotLead.pivot) {
+      const axle = bodyCentroid(allMembers);
+      const ar = 6 * worldLine;
+      ctx.strokeStyle = GROUP_MARK;
+      ctx.lineWidth = worldLine * 1.5;
+      ctx.beginPath();
+      ctx.arc(axle.x, axle.y, ar, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(axle.x, axle.y, ar / 3, 0, Math.PI * 2);
+      ctx.fillStyle = GROUP_MARK;
+      ctx.fill();
+    }
+    if (allMembers.length < 2) continue;
     const members = bodyMembers(visible, id);
     const centre = bodyCentroid(bodyMembers(all, id));
     const selected = members.some((m) => selectedIds.has(m.id));

@@ -312,6 +312,9 @@ export interface EdItem {
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
   flow: number;
   drag: number;
+  // Rigid bodies only: bolted to a bearing at the centre of mass - spins, never
+  // translates (see `LevelBodyData.pivot`).
+  pivot: boolean;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -820,6 +823,7 @@ function fromLevelData(data: LevelData): EdModel {
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
+      pivot: b.pivot === true,
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
@@ -932,6 +936,7 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    pivot: false,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
@@ -991,6 +996,7 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    pivot: false,
     cam: {
       // A path IS the position rule, so it has no offset and no lock to compose
       // with (see "Explicitly out of scope" in plans/camera-tracking.md).
@@ -1052,6 +1058,7 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    pivot: false,
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
@@ -1091,6 +1098,7 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    pivot: false,
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
@@ -1400,6 +1408,9 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // Water carries a current and a rate for the same reason, and only
             // where it means something.
             ...(lead.kind === "water" ? { flow: lead.flow, drag: lead.drag } : {}),
+            // A bearing means something only on a rigid body, and only when
+            // set - an absent field is the free body every old level has.
+            ...(lead.kind === "rigid" && lead.pivot ? { pivot: true } : {}),
           }
         : {}),
       objects,
@@ -2165,6 +2176,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
+    m.pivot = lead.pivot;
   }
 }
 
@@ -2351,6 +2363,7 @@ export function emptyModel(): EdModel {
         force: 0,
         flow: 0,
         drag: 0,
+        pivot: false,
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),

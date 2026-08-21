@@ -2634,6 +2634,23 @@ Queries that scan bodies generically (ledge detection, the debug overlay) filter
 Anchors carry no surface friction (nothing rests on them) and are drawn first, behind the
 solid geometry they sit among, in both renderers and the SVG snapshot.
 
+## Pivot bodies
+
+A rigid body may be **pivot-mounted** (`LevelBodyData.pivot`): bolted to a frictionless bearing at its centre of mass, so it spins under torque and never translates - a windmill fin the player lands on or hooks onto to swing around.
+It is a flag on the `rigid` kind rather than a kind of its own, for the reason `impermeable` is a flag: a pivot body IS a rigid body - mass, inertia, Coulomb friction, the rope's torque arm - with one degree of freedom removed, and a kind would restate all of that to say one thing.
+
+Translation is removed at the source rather than fought.
+`RigidBody2D.inverseMass` reads 0 while `pivot` is set, so every impulse path - the contact solver, the character push, a cannonball's explosion - moves it nothing by the same arithmetic that moves a static nothing; `World.integrate` skips gravity and zeroes `linearVelocity`, which is what a direct velocity write (an area current, water's flow lerp) needs, since an inverse mass of 0 does not cover one; and `depenetrateRigid` declines the body outright, an overlap it is in being the contact solver's to resolve in rotation.
+The origin being the centre of mass is what makes gravity torque-free about the bearing, so an unbalanced fin still hangs exactly where it was authored.
+Water's angular drag still applies - a wheel in a river is slowed by it - and the mass stays the pieces' real sum, which is what a pushing character's impulse is sized against.
+
+The rope is the one solver that does not deal in inverse mass - `correctShapePositionAndRotation` splits a correction by `inertia / (inertia + mass·arm²)` - so `getDynamicBodyState` hands it a pivot as `mass: Infinity`, and the one indeterminate limit (`angularFactor`, Inf/Inf) is written out as `1/arm`: the whole correction lands in rotation, and `arm·Δθ` is exactly the length the solve asked the body to remove.
+The velocity credit is a no-op for the same reason the axle never moves.
+The impulse-pairing audit exempts the linear half - the difference is the bearing's reaction, which nothing models - and keeps the angular half in full.
+
+`cli contacts` `pivot-body` and `pivot-chain` are the detectors: the hold under gravity is exact (integrate skips the body, so the assertion is drift `=== 0`, not small), an off-centre impulse spins it by `cross(r, J)/I` while the axle holds, a falling box torques it the way the blow points through the pair solver, a hung weight turns it through the rope's torque arm (which is what reaches the `1/arm` branch), and the authored flag is asserted READ against a free control body - a build dropping it produces a level that looks identical and plays as a fin that falls out of the sky.
+The editor authors it as a `pivot` checkbox on the rigid body's panel and marks the bearing with a ring-and-dot at the centre of mass, drawn for a body of one as well - unlike the compound diamond, being pivot-mounted is otherwise invisible on the canvas.
+
 ## Force areas and surface friction
 
 A **`force`** body is a `ForceArea` (`engine/body.ts`, an `Area2D`): a region that

@@ -412,6 +412,169 @@ function casePivot(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// pivot-body: a rigid body bolted to a bearing at its centre of mass
+// (`RigidBody2D.pivot`) spins under torque and never translates.
+//
+// Four statements, each of which has a failure mode of its own:
+//  - gravity moves it NOTHING (integrate skips it entirely, so the hold is
+//    exact, not merely small);
+//  - an off-centre impulse spins it by exactly cross(r, J) / I, through the
+//    same `applyImpulse` arithmetic every free body uses, while the axle holds;
+//  - a body landing on one arm torques it the way the blow points and is
+//    itself carried - the pair solver working through an infinite-inverse-mass
+//    side - with the axle still exact;
+//  - the authored `pivot: true` flag is READ by the build. Authored state
+//    nothing checks is authored state that quietly stops being read: a build
+//    dropping the flag produces a level that looks identical and plays as a
+//    fin that falls out of the sky.
+// ---------------------------------------------------------------------------
+function casePivotBody(sims: Sim[]): ContactResult {
+  const FIN = rectShape(3, 0.25);
+
+  // Untouched under gravity: the hold is exact.
+  const holdSim = new Sim("pivot-hold");
+  sims.push(holdSim);
+  floor(holdSim);
+  const held = holdSim.addRigid(FIN, new Vec2(0, -3));
+  held.pivot = true;
+  holdSim.step(240);
+  const heldDrift = held.globalPosition.sub(new Vec2(0, -3)).length();
+  const holdOk = heldDrift === 0 && held.globalRotation === 0 && held.inverseMass === 0;
+
+  // Spun by an impulse at the tip, the axle stays put and the spin is the
+  // free-body arithmetic (no contact and no water, so nothing damps it).
+  const spinSim = new Sim("pivot-spin");
+  sims.push(spinSim);
+  floor(spinSim);
+  const fin = spinSim.addRigid(FIN, new Vec2(0, -3));
+  fin.pivot = true;
+  const arm = new Vec2(1.4, 0);
+  const blow = new Vec2(0, -50);
+  fin.applyImpulse(blow, arm);
+  const wantSpin = arm.cross(blow) / fin.inertia;
+  spinSim.step(240);
+  const spinDrift = fin.globalPosition.sub(new Vec2(0, -3)).length();
+  const spinOk =
+    spinDrift === 0 && Math.abs(fin.angularVelocity - wantSpin) < 1e-12 && wantSpin < -0.5;
+
+  // Struck by a falling box on its left arm: the blow points down, the torque
+  // about the bearing is negative, and the axle holds to float noise while the
+  // contact solver does the driving.
+  const strikeSim = new Sim("pivot-strike", 100);
+  sims.push(strikeSim);
+  floor(strikeSim);
+  const wheel = strikeSim.addRigid(FIN, new Vec2(0, -3));
+  wheel.pivot = true;
+  strikeSim.addRigid(rectShape(0.4, 0.4), new Vec2(-1, -4.5));
+  let peakSpin = 0;
+  let axleDrift = 0;
+  strikeSim.step(300, () => {
+    peakSpin = Math.min(peakSpin, wheel.angularVelocity);
+    axleDrift = Math.max(axleDrift, wheel.globalPosition.sub(new Vec2(0, -3)).length());
+  });
+  const strikeOk = peakSpin < -0.5 && axleDrift < 1e-9;
+
+  // The authored flag reaches the built body, and its absence still builds the
+  // free body every old level contains (the control is what stops this passing
+  // by nothing integrating at all).
+  const world = new World();
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 0.08 },
+      bodies: [
+        {
+          kind: "rigid",
+          x: 0,
+          y: 0,
+          rot: 0,
+          pivot: true,
+          objects: [
+            { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 2, h: 0.3 } },
+          ],
+        },
+        {
+          kind: "rigid",
+          x: 0,
+          y: 3,
+          rot: 0,
+          objects: [
+            { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 2, h: 0.3 } },
+          ],
+        },
+      ],
+    },
+    1,
+  );
+  const [authored, control] = buildLevelBodies(world, data, () => {}).bodies.map(
+    (b) => b.body,
+  ) as RigidBody2D[];
+  for (let i = 0; i < 120; i++) world.integrate(DT);
+  const authoredOk =
+    authored!.pivot === true && authored!.globalPosition.length() === 0;
+  const controlOk = control!.pivot === false && control!.globalPosition.y > 3.5;
+
+  const passed = holdOk && spinOk && strikeOk && authoredOk && controlOk;
+  return ok("pivot-body — a bearing-mounted rigid body spins and never translates", passed, [
+    `${holdOk ? "ok  " : "BAD "} untouched 240 frames: drift ${heldDrift.toExponential(1)} m, rot ${held.globalRotation} (want exactly 0)`,
+    `${spinOk ? "ok  " : "BAD "} tip impulse: w=${fin.angularVelocity.toFixed(4)} rad/s (want ${wantSpin.toFixed(4)}), axle drift ${spinDrift.toExponential(1)} m`,
+    `${strikeOk ? "ok  " : "BAD "} struck by falling box: peak w=${peakSpin.toFixed(3)} rad/s (want < -0.5), axle drift ${axleDrift.toExponential(1)} m (want < 1e-9)`,
+    `${authoredOk ? "ok  " : "BAD "} authored pivot: true is read and holds under gravity (pivot=${authored!.pivot}, drift ${authored!.globalPosition.length().toExponential(1)} m)`,
+    `${controlOk ? "ok  " : "BAD "} its absence still falls: control body dropped ${(control!.globalPosition.y - 3).toFixed(2)} m in 2 s`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// pivot-chain: the ROPE's torque path against a pivot body.
+//
+// A weight hung by a scene chain from one arm of a pivot fin can only fall by
+// turning the fin, so the whole of the length solve's correction on the fin
+// lands in rotation - which is the infinite-mass limit written out in
+// `correctShapePositionAndRotation` (`angularFactor = 1/arm`), and this is the
+// case that reaches it: the contact cases above spin a pivot through the
+// contact solver, and nothing else asks the rope to. The fin must turn its arm
+// well toward the weight, the axle must not move AT ALL (the rope writes
+// positions directly, so a wrong linear factor is a fin dragged off its
+// bearing rather than an impulse the inverse mass absorbs), and the rig must
+// stay bounded - a NaN in the split reads here as the weight vanishing.
+// ---------------------------------------------------------------------------
+function casePivotChain(sims: Sim[]): ContactResult {
+  const sim = new Sim("pivot-chain");
+  sims.push(sim);
+  floor(sim);
+  const fin = sim.addRigid(rectShape(3, 0.25), new Vec2(0, -3));
+  fin.pivot = true;
+  const weight = sim.addRigid(rectShape(0.4, 0.4), new Vec2(1.4, -2));
+  const anchorFin = new Vec2(1.4, -2.875);
+  const anchorWeight = new Vec2(1.4, -2.2);
+  const chain = new SceneChain(
+    RopeContact.at(fin, anchorFin),
+    RopeContact.at(weight, anchorWeight),
+    anchorFin.distanceTo(anchorWeight),
+    null,
+  );
+
+  let maxTurn = 0;
+  let axleDrift = 0;
+  let peakSpeed = 0;
+  sim.step(600, () => {
+    stepSceneChains([chain], sim.world, DT);
+    maxTurn = Math.max(maxTurn, Math.abs(wrapAngle(fin.globalRotation)));
+    axleDrift = Math.max(axleDrift, fin.globalPosition.sub(new Vec2(0, -3)).length());
+    peakSpeed = Math.max(peakSpeed, weight.linearVelocity.length());
+  });
+
+  const turnOk = maxTurn > 0.5;
+  const axleOk = axleDrift === 0;
+  const boundedOk = Number.isFinite(peakSpeed) && peakSpeed < 10;
+  const passed = turnOk && axleOk && boundedOk;
+  return ok("pivot-chain — a hung weight turns a pivot fin through the rope's torque arm", passed, [
+    `${turnOk ? "ok  " : "BAD "} fin turned ${maxTurn.toFixed(2)} rad toward the weight (want > 0.5)`,
+    `${axleOk ? "ok  " : "BAD "} axle drift ${axleDrift.toExponential(1)} m (want exactly 0)`,
+    `${boundedOk ? "ok  " : "BAD "} weight stays bounded: peak ${peakSpeed.toFixed(2)} m/s (want < 10)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // impact-transfer: the case this whole exercise exists for.
 //
 // A slab balanced on a narrow fulcrum, struck off-centre by a falling box. The
@@ -2048,6 +2211,8 @@ export function runContactCases(): ContactResult[] {
     caseSteeredHungHold(sims),
     caseTopple(sims),
     casePivot(sims),
+    casePivotBody(sims),
+    casePivotChain(sims),
     caseImpactTransfer(sims),
     caseMomentum(sims),
     caseSpinDrive(sims),

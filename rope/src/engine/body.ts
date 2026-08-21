@@ -568,8 +568,21 @@ export class RigidBody2D extends PhysicsBody2D {
   // Moment of inertia about the centre of mass.
   inertia = 1;
   gravityScale = 1;
+  // Pivot mounting: the body is bolted to the world through a frictionless
+  // bearing at its origin (the centre of mass), so it cannot translate but is
+  // free to spin - a windmill fin, a paddle wheel. Translation is removed at
+  // the source rather than fought: `inverseMass` reads 0, so every impulse
+  // path (contacts, the rope, an explosion) moves it nothing, and
+  // `World.integrate` skips gravity and zeroes `linearVelocity` so an area
+  // current cannot creep it off its axle. Torque is untouched - spinning the
+  // body IS the mechanic - and the origin being the centre of mass is what
+  // makes gravity torque-free about the bearing, so an unbalanced fin still
+  // hangs where it was authored. Default false keeps every other body - and
+  // recorded replays - unchanged.
+  pivot = false;
 
   get inverseMass(): number {
+    if (this.pivot) return 0;
     return this.mass > 0 ? 1 / this.mass : 0;
   }
   get inverseInertia(): number {

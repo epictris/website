@@ -1423,6 +1423,25 @@ export class Rope {
 
   private getDynamicBodyState(body: PhysicsBody2D): DynamicBody | null {
     if (body instanceof RigidBody2D) {
+      // A PIVOT body cannot translate, and the solve is told so in its own
+      // vocabulary: infinite mass. `1 / mass` reads 0, so the linear share of
+      // every correction is zero by the same arithmetic that splits it for a
+      // free body (the one indeterminate limit is guarded where the split is
+      // taken - see `correctShapePositionAndRotation`). The velocity credit is
+      // a no-op for the same reason: the axle never moves, so there is no
+      // Δposition to be paid for, and a stray credit would be velocity on a
+      // body whose position integration ignores it.
+      if (body.pivot) {
+        return {
+          body,
+          inertia: body.inertia,
+          mass: Infinity,
+          addVelocity: () => {},
+          addRotation: (r) => {
+            body.angularVelocity += r;
+          },
+        };
+      }
       return {
         body,
         inertia: body.inertia,
@@ -1494,7 +1513,14 @@ export class Rope {
       if (torqueSquared > 0) {
         const denominator = dynamicBody.inertia + dynamicBody.mass * torqueSquared;
         const linearFactor = dynamicBody.inertia / denominator;
-        const angularFactor = (dynamicBody.mass * torqueArm) / denominator;
+        // The infinite-mass (pivot) limit of mass·arm / (I + mass·arm²) is
+        // 1/arm; taken literally it is Inf/Inf = NaN, so the limit is written
+        // out. The whole correction then lands in rotation, and arm·Δθ = the
+        // correction magnitude, which is exactly the length the solve asked
+        // this body to remove.
+        const angularFactor = Number.isFinite(dynamicBody.mass)
+          ? (dynamicBody.mass * torqueArm) / denominator
+          : 1 / torqueArm;
         this.applyCorrectionMotion(
           dynamicBody.body,
           correctionDir.mul(totalCorrectionMagnitude * linearFactor),

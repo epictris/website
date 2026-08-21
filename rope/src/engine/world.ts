@@ -541,8 +541,18 @@ export class World {
     PhaseTrace.mark("areas", this);
     for (const body of this.bodies) {
       if (body instanceof RigidBody2D && !body.removed) {
-        body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
-        body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
+        if (body.pivot) {
+          // A pivot body turns on a fixed bearing: no gravity, no translation.
+          // The velocity is ZEROED rather than trusted to stay zero, because
+          // the area passes above write `linearVelocity` directly (a current's
+          // dv, water's flow lerp) and inverse mass being 0 does not cover a
+          // direct write - cancelled here, before the position step, none of
+          // it ever moves the axle or leaks into `velocityAtPoint`.
+          body.linearVelocity = Vec2.ZERO;
+        } else {
+          body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
+          body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
+        }
         body.globalRotation += body.angularVelocity * dt;
       }
     }
@@ -693,6 +703,12 @@ export class World {
   ): Vec2[] {
     const pushedOutOf: Vec2[] = [];
     if (body.removed || !body.hasShape()) return pushedOutOf;
+    // A pivot body cannot be translated off its bearing, by this sweep or by
+    // anything else - an overlap it is in is the contact solver's to resolve in
+    // rotation. Reporting no pushes is also the honest answer for the callers
+    // that read them (the chain phase's blocked-length lease): the geometry did
+    // not move this body, so nothing was refused in translation.
+    if (body.pivot) return pushedOutOf;
     for (let pass = 0; pass < iterations; pass++) {
       const [a, b] = this.gatherDepenetration(body, accept);
       if (!a) return pushedOutOf;
@@ -1108,7 +1124,11 @@ export class World {
       const tolP = 1e-9 + 1e-9 * applied.p.length();
       const tolL = 1e-9 + 1e-9 * Math.abs(applied.l);
       const residual = dp.sub(applied.p);
-      if (residual.length() > tolP) {
+      // A pivot body's linear momentum is not a state variable: its inverse
+      // mass is 0, so an applied impulse moves it nothing and the difference is
+      // the bearing's reaction, which nothing models. The ANGULAR half is the
+      // half a pivot answers to and stays audited in full.
+      if (!body.pivot && residual.length() > tolP) {
         // The residual, not the two totals: they agree to several digits by
         // construction and printing both hides the very thing being reported.
         ContactAudit.violations.push(
