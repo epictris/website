@@ -1042,11 +1042,10 @@ export class Rope {
               }
             }
           } else if (entry && exit) {
-            vertexIndex = RopeGeneration.calculateRectangleTangentIndex(
+            vertexIndex = RopeGeneration.calculateTangentVertexIndex(
               bodyShape,
               wrapDir,
               span.span.start,
-              GenerationDirection.Forward,
             );
           }
           if (

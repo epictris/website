@@ -783,6 +783,7 @@ bun run test                                  # THE suite: typecheck + every che
 bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
+bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
@@ -809,7 +810,7 @@ bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B th
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`corners`, `decompose`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`corners`, `tangents`, `decompose`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

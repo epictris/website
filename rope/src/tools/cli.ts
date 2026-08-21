@@ -1390,6 +1390,9 @@ switch (cmd) {
   case "decompose":
     void cmdDecompose();
     break;
+  case "tangents":
+    void cmdTangents();
+    break;
   case "contacts":
     void cmdContacts();
     break;
@@ -1401,7 +1404,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|decompose|contacts|render3d|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|render3d|assets> [file] [options]",
     );
 }
 
@@ -1483,6 +1486,22 @@ async function cmdCorners(): Promise<void> {
     if (!r.ok) failed++;
   }
   console.log(`[corners] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Tangent-vertex cases (src/sim/tangentCases.ts). Pure geometry, so it needs no
+// level and runs instantly - and it is what decides which corner a wrap node is
+// born on, which the `entry && exit` branch of the wrap generator reaches too
+// rarely for a recorded session to stand in for it.
+async function cmdTangents(): Promise<void> {
+  const { runTangentCases } = await import("../sim/tangentCases");
+  const results = runTangentCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok ? "" : ` (${r.detail})`}`);
+    if (!r.ok) failed++;
+  }
+  console.log(`[tangents] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
