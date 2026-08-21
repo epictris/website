@@ -45,3 +45,5 @@ plain warm grey rock (`rock-grey`):
 - https://ambientcg.com/view?id=Rock060
 near-black cave rock (`rock-black`):
 - https://ambientcg.com/view?id=Rock035
+mossy dirt with moss patches, for ground and floors (`mossy ground`):
+- https://ambientcg.com/view?id=Ground047

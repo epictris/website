@@ -19,11 +19,14 @@ import { BallInputSource } from "../input/ballInput";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
   DEFAULT_FORCE_MAGNITUDE,
+  DEFAULT_PATH_FALLOFF_X,
+  DEFAULT_PATH_FALLOFF_Y,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
-  DEFAULT_PATH_RANGE,
+  DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
   DEFAULT_SURFACE_FRICTION,
@@ -1160,6 +1163,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The test run's camera (eased follow + camera regions). Separate from the
   // editor's own camera handling, which is a direct pan/zoom.
   const testCameraCtl = new CameraController();
+  // See the `edge clamp` toggle: an authoring instrument for ▶ Test, not a
+  // level property, so it is remembered here and saved nowhere.
+  let edgeClampOn = true;
 
   // Full-session recording of the current test run — press P to download a
   // self-contained replay bundle (embeds the tested geometry, since an
@@ -1197,6 +1203,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The camera controller owns the zoom from here (base framing × the active
     // region's viewportScale), and re-derives it every frame, so a resize
     // mid-test needs no separate handling.
+    testCameraCtl.edgeClamp = edgeClampOn;
     testCameraCtl.snap();
     if (controller === "ball") {
       testLevel = new BallLevel(pixelData);
@@ -1492,6 +1499,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   testRow.append(button("▶ Test Grapple", () => startTest("grapple")), btnTestBall);
   const snapChk = checkbox("snap 10cm", snapOn, (v) => (snapOn = v));
   testRow.append(snapChk);
+  // The screen-edge guarantee, off-switchable for a test and NOWHERE else. The
+  // game never turns it off - it is the one camera rule a level may not opt out
+  // of - but an author tuning a lock or a lookahead needs to see the framing it
+  // is actually asking for, and that question is unanswerable while the answer
+  // is being silently corrected. Editor state, never written to a file.
+  const edgeChk = checkbox("edge clamp", edgeClampOn, (v) => {
+    edgeClampOn = v;
+    testCameraCtl.edgeClamp = v;
+  });
+  edgeChk.title =
+    "Keep the avatar out of the outer 8% of the frame during ▶ Test. On in the game always; untick to see the raw framing a camera rule is asking for (the overlay draws the clamp in amber on the frames it is holding).";
+  testRow.append(edgeChk);
 
   // View toggle. Only offered when there is a WebGL context to toggle: a machine
   // that cannot draw the scene should not be shown two dead buttons.
@@ -3301,35 +3320,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera. Stray more than `range` from the path and it lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended.";
+      "The route the camera rides, in the direction it was drawn. The player is projected onto it and the camera targets a point further ALONG it, so the screen leads them the way the level wants them to go - even when they backtrack. `lead x`/`lead y` are how far ahead, per axis, because the frame is 16:9; `lead buf x`/`lead buf y` are slack in where that lead is measured FROM, so a swing running back and forth along the route does not slosh the camera. `range x`/`range y` are the corridor, per axis for the same reason - the pair is an ellipse around the route, so the corridor is screen-shaped. Stray past it and the path's grip fades over `falloff x`/`falloff y`, then lets go, handing the camera to whatever region contains them (or to the plain follow); coming back takes it again. Both hand-offs are blended.";
     g.appendChild(hint);
 
     const num = groupNum(g, paths);
     addTransformFields(g, num, paths);
 
+    // Every per-axis pair below is two numbers for the one reason: the frame is
+    // 16:9, so there is far less screen above and below the player than there
+    // is either side of them. Each pair is read as the semi-axes of an ellipse -
+    // the range and falloff around the route (so the corridor is
+    // screen-shaped), the lead and its slack along it (see `pathLookahead`).
     // Blank = the format's default, which is what every path authored before a
     // number was typed into it has.
-    num(
-      "range",
-      (b) => (b.cam.range ?? NaN) * M2PX,
-      (b, v) => (b.cam.range = Math.max(0, v * PX)),
-      10,
-      {
-        placeholder: String(Math.round(DEFAULT_PATH_RANGE * M2PX)),
-        onEmpty: () => {
-          for (const b of paths) b.cam.range = null;
-        },
-      },
-    );
-    // Two, because the frame is 16:9: there is far less screen above and below
-    // the player than there is either side of them, so one lead that reads well
-    // along a corridor throws them off the bottom of a shaft. The pair is read
-    // as the semi-axes of an ellipse (see `pathLookahead`), so a horizontal
-    // route leads by `lead x`, a vertical one by `lead y`, and a diagonal by
-    // what fits between.
-    const leadField = (
+    const axisField = (
       label: string,
-      key: "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",
+      key: "rangeX" | "rangeY" | "falloffX" | "falloffY" | "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",
       fallback: number,
     ): void => {
       num(label, (b) => (b.cam[key] ?? NaN) * M2PX, (b, v) => (b.cam[key] = Math.max(0, v * PX)), 10, {
@@ -3339,14 +3345,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       });
     };
-    leadField("lead x", "lookaheadX", DEFAULT_PATH_LOOKAHEAD_X);
-    leadField("lead y", "lookaheadY", DEFAULT_PATH_LOOKAHEAD_Y);
+    // How far off the route the player may be while the path still narrates it.
+    axisField("range x", "rangeX", DEFAULT_PATH_RANGE_X);
+    axisField("range y", "rangeY", DEFAULT_PATH_RANGE_Y);
+    // How far past the range the path lets go GRADUALLY. Through this band the
+    // camera's target fades from the path's (lookahead and all) to the plain
+    // follow, so by the band's outer edge the release moves the camera by
+    // nothing: leaving the route reads as the camera loosening its grip rather
+    // than swapping what it frames.
+    axisField("falloff x", "falloffX", DEFAULT_PATH_FALLOFF_X);
+    axisField("falloff y", "falloffY", DEFAULT_PATH_FALLOFF_Y);
+    axisField("lead x", "lookaheadX", DEFAULT_PATH_LOOKAHEAD_X);
+    axisField("lead y", "lookaheadY", DEFAULT_PATH_LOOKAHEAD_Y);
     // Slack in where the lead is measured FROM, not in the lead itself: a swing
     // runs the player forward and back along the route several times a second,
     // and a camera that tracks that exactly sloshes with it. Wider than the
     // swing's travel along the path and the camera does not move at all.
-    leadField("lead buf x", "lookaheadBufferX", DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
-    leadField("lead buf y", "lookaheadBufferY", DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
+    axisField("lead buf x", "lookaheadBufferX", DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
+    axisField("lead buf y", "lookaheadBufferY", DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
     // How much world is on screen: 2 = twice as much (zoomed out).
     num(
       "view ×",

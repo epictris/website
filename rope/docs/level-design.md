@@ -74,14 +74,24 @@ Past the band the point is dragged by its edge, which is continuous - nothing ju
 That is the trade to tune: widen it until swinging stops moving the camera, and no further.
 Setting both to 0 tracks the player exactly.
 
-`range` is the corridor: how far off the route the player may be while the camera still narrates it.
-Stray further and the path **lets go**, handing the camera to whatever governs where the player actually is - a region if one contains them, the plain follow otherwise.
-Coming back within range takes the path again.
-Both hand-offs are blended, so falling down a shaft beside the route is a camera that eases into the room you land in rather than one that jumps.
-`buffer` adds hysteresis outside `range` on top of that, exactly as it does on a region.
+`range x` and `range y` are the corridor: how far off the route the player may be while the camera still narrates it.
+Two numbers for the same 16:9 reason the lead is two: the pair is read as an ellipse around the route, resolved along the direction the player actually left in, so the corridor is screen-shaped.
+That matters because a circular corridor wide enough to mean anything horizontally is taller than the screen: half a frame is 4.8 m across and only 2.7 m down, so with one round `range` of 4 a player could sit fully inside the corridor and past the bottom edge of the frame at the same time - which is exactly when the ball used to vanish with the edge clamp off.
+Tune `range x` to the route and pull `range y` down until leaving vertically starts handing the camera over while the player is still on screen.
+
+`falloff x` and `falloff y` are the band **outside** the range that the path lets go over - the same ellipse again, so the band is screen-shaped too - and they are what stops the camera changing its mind the instant you step off the route.
+Through it the path's hold on the camera fades: the target slides smoothly from the path's - the lookahead point, at the path's zoom - to the plain follow, so the lead, the zoom and everything else the path asks for all relax together as the player walks away.
+Leaving the route reads as the camera loosening its grip rather than swapping what it is framing, and by the band's outer edge the path is asking for exactly what the plain follow would - so the moment it lets go, nothing on screen changes at all.
+The fade is eased at both edges, so there is no line in the world where the camera's behaviour audibly changes gear.
+Both falloffs at 0 turn the band off: the path holds at full strength out to the release and the hand-off blend covers the swap.
+
+Past the band's outer edge plus `buffer` (the same jitter hysteresis a region has, grown onto both axes) the path **lets go**, handing the camera to whatever governs where the player actually is - a region if one contains them, the plain follow otherwise.
+Coming back within the range takes the path again - the band is a graceful exit, not a wider entrance, so drifting in from the side does not grab the camera early.
+Both hand-offs are blended on top of all that.
 
 Where a path passes near itself - a switchback, a spiral, a route that doubles back over a lower ledge - the camera tracks the branch the player is actually **on**, not whichever branch happens to be nearest.
-That is what makes `range` mean what an author set it to: the release distance is measured against the branch being ridden.
+That is what makes the range mean what an author set it to: the release distance is measured against the branch being ridden.
+The other direction holds too: a player who genuinely leaves the branch they were riding and lands inside the corridor of a **different** branch of the same path hands the camera to that branch, with a blend - the ridden branch's falloff zone never outranks the corridor under the player's feet.
 
 A curve is flattened into a fine polyline before anything rides it, so the smoothness costs nothing anywhere else - and a path of plain corners is exactly the polyline it always was.
 
@@ -95,6 +105,21 @@ That is the right default: the path is the level's primary guide and a region is
 A region that must win anyway - a room you want framed a particular way even though the route runs through it - says so by raising its `priority` above the path's.
 
 The consequence to author around is the same one regions already have: leaving a higher-priority region drops to whatever contains the player *then*, and if that is the path, the path re-acquires with a fresh projection.
+
+## The screen edge
+
+One rule overrides every region and every path, and it cannot be authored away: **the player may never be in the outer 8% of the frame**.
+If a lock, an offset or a lookahead would put them there, the camera moves to keep them out of it.
+
+It is measured as a fraction of the frame, so it means the same thing at any `view ×`, and it is measured to the player's centre - so it clears the avatar and leaves a little room besides.
+In ordinary play it never fires: the default camera centres the player, and outrunning the follow lag far enough to reach the band takes a sustained ~27 m/s against a hard swing's ~10.
+Where it does fire is a locked region the player has left and a path leading hard in one direction while they move the other way, and it fires as a limit rather than a snap - the camera is simply not allowed past it.
+
+The debug overlay draws the keep-out box in amber on the frames it is holding the camera, so "why has the camera stopped following" has an answer on screen.
+Seeing that box is a sign to re-tune whatever was asking for the framing it is overriding: the constraint is a backstop, not a framing tool.
+
+The toolbar's **`edge clamp`** checkbox turns it off for ▶ Test, and for nothing else - the game always applies it.
+Untick it when you want to see the framing a lock or a lookahead is really asking for rather than the one the backstop allowed; tick it back to see what the player will get.
 
 ## Authoring both
 

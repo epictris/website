@@ -33,13 +33,17 @@
 // "no region" is just the null region, whose target is the plain follow point.
 
 import { Vec2 } from "../engine/vec2";
+import { PIXELS_PER_METER } from "../engine/units";
 import type { CameraPathData, CameraRegionData } from "../level/levelFormat";
 import {
+  DEFAULT_PATH_FALLOFF_X,
+  DEFAULT_PATH_FALLOFF_Y,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
-  DEFAULT_PATH_RANGE,
+  DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_RANGE_Y,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
 import type { Camera } from "./camera";
@@ -75,6 +79,25 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 // is flung; this is the slack on top of it, and the `dt` it is multiplied by is
 // what keeps the window frame-rate independent.
 export const PATH_TRACK_SLACK_SPEED = 5;
+
+// How much of the frame the avatar may never enter, as a fraction of the FULL
+// width and height, on every axis and under every rule.
+//
+// A fraction rather than a distance because the thing being constrained is
+// where the avatar is ON SCREEN: a region that zooms out shows more world, and
+// a margin in metres would shrink to a sliver of the frame exactly where the
+// frame got roomier. Dimensionless also means it means the same thing at both
+// controllers' base zooms without either of them stating it.
+//
+// It is measured to the FOLLOW POINT - the avatar's centre - so it has to be
+// wide enough to clear the avatar's own radius and then leave something worth
+// seeing. At 0.08 that is 77 cm either side and 43 cm above and below, on the
+// 9.6 x 5.4 m a 1080p frame shows at GRAPPLE_ZOOM.
+//
+// This is the one camera rule with no authored override, and deliberately: a
+// level may frame the avatar however it likes, and none of those framings is
+// allowed to be "off the bottom of the screen".
+export const CAMERA_EDGE_MARGIN = 0.08;
 
 // The buffer a region actually holds by: its own, or the jitter default.
 //
@@ -248,33 +271,135 @@ export function committedLeadS(s: number, held: number, buffer: number): number 
   return Math.min(Math.max(held, s - buffer), s + buffer);
 }
 
-export function pathRange(p: CameraPathData): number {
-  return p.range ?? DEFAULT_PATH_RANGE;
+// The range's and falloff's per-axis pairs, floored at zero. Every distance a
+// path measures OFF the route goes through these and `ellipseReach`, so the
+// corridor, the falloff band and the release are all screen-shaped: the frame
+// is 16:9, and a circular corridor wide enough to mean anything horizontally
+// is off the bottom of the screen vertically (see DEFAULT_PATH_RANGE_X/_Y).
+//
+// Unlike the lookahead's ellipse - which is resolved against the direction the
+// ROUTE runs - these are resolved against the direction the player actually
+// left the route in, because that is the displacement the screen has to hold.
+export function pathRangeAxes(p: CameraPathData): { x: number; y: number } {
+  return {
+    x: Math.max(0, p.rangeX ?? DEFAULT_PATH_RANGE_X),
+    y: Math.max(0, p.rangeY ?? DEFAULT_PATH_RANGE_Y),
+  };
 }
 
-// How far from the polyline a path keeps its grip: its range plus its own
-// hysteresis, which falls back to the same jitter default a region's does.
-export function pathRelease(p: CameraPathData): number {
-  return pathRange(p) + (p.buffer ?? REGION_EXIT_MARGIN);
+export function pathFalloffAxes(p: CameraPathData): { x: number; y: number } {
+  return {
+    x: Math.max(0, p.falloffX ?? DEFAULT_PATH_FALLOFF_X),
+    y: Math.max(0, p.falloffY ?? DEFAULT_PATH_FALLOFF_Y),
+  };
 }
 
-// Does `p` fall inside the rule at all? Containment for a region, distance to
-// the polyline for a path - which is the whole difference between the two kinds
-// and the reason a path is not a region with a funny shape.
+// The semi-axes of the falloff band's outer ellipse, and of the release
+// ellipse beyond it. Exported so the overlay and the editor draw exactly the
+// boundaries the functions below test - the same one-source rule
+// `pathOutlineGrown` follows for a region's buffer.
+export function pathBandAxes(p: CameraPathData): { x: number; y: number } {
+  const r = pathRangeAxes(p);
+  const f = pathFalloffAxes(p);
+  return { x: r.x + f.x, y: r.y + f.y };
+}
+
+export function pathReleaseAxes(p: CameraPathData): { x: number; y: number } {
+  const band = pathBandAxes(p);
+  const b = p.buffer ?? REGION_EXIT_MARGIN;
+  return { x: band.x + b, y: band.y + b };
+}
+
+// How far off the route the path's corridor reaches, for a player displaced
+// along `dir`.
+export function pathRange(p: CameraPathData, dir: Vec2): number {
+  const r = pathRangeAxes(p);
+  return ellipseReach(r.x, r.y, dir);
+}
+
+// The outer edge of the falloff band along `dir` - the ellipse with semi-axes
+// (rangeX + falloffX, rangeY + falloffY), where the path's target has faded to
+// exactly the plain follow.
+export function pathBand(p: CameraPathData, dir: Vec2): number {
+  const band = pathBandAxes(p);
+  return ellipseReach(band.x, band.y, dir);
+}
+
+// How far from the polyline a path keeps its grip along `dir`: the band's
+// outer edge grown by the path's jitter hysteresis on both axes - which falls
+// back to the same default a region's does. Growing the SEMI-AXES rather than
+// adding to the resolved reach is what keeps the release boundary an ellipse,
+// so the editor and the overlay can draw exactly the zone tested here.
+export function pathRelease(p: CameraPathData, dir: Vec2): number {
+  const rel = pathReleaseAxes(p);
+  return ellipseReach(rel.x, rel.y, dir);
+}
+
+// How far through the falloff band an avatar displaced by `offset` from their
+// projection is, as the weight of the PLAIN FOLLOW in the path's target: 0
+// anywhere inside the range ellipse (pure path), 1 at the band's outer ellipse
+// and beyond (exactly the null rule's target), smoothstepped between. Both
+// boundaries are resolved along the offset's own direction, so the fade is
+// screen-shaped exactly as the corridor is.
+//
+// Interpolating between the two governing TARGETS is the whole design, and it
+// replaced a positional drift laid on top of a full-strength path target. The
+// drift froze the avatar's screen position through the band, but it left three
+// seams: the camera's behaviour flipped character at `range` (riding the route
+// one frame, tracking the avatar 1:1 the next), the drift capped at `falloff`
+// while the grip held to `range + falloff + buffer` (so the avatar slid again
+// in the gap), and the lookahead never faded - so the release still swapped a
+// full-lead target for the plain follow, a delta the hand-off blend could
+// smooth but never make small. With the weight, the path's target IS the plain
+// follow by the time the grip runs out, so the release delta is exactly zero
+// and the boundary stops existing perceptually.
+//
+// Smoothstep rather than linear so the weight is C1 at both edges of the band:
+// a kink in the target is a step in the camera's velocity, which reads as the
+// camera "catching" at an invisible line.
+//
+// A zero falloff (both axes) means no band at all - the path keeps its full
+// grip out to the release and the hand-off blend covers the swap, which is the
+// pre-band behaviour and what an author turning the band off is asking for.
+//
+// Measured against the avatar's offset from their TRUE projection rather than
+// from the deadbanded point the lead is taken from: this is about where they
+// actually are relative to the route, which is the same quantity the range is
+// measured in.
+export function pathFalloffWeight(p: CameraPathData, offset: Vec2): number {
+  const inner = pathRange(p, offset);
+  const outer = pathBand(p, offset);
+  if (outer - inner < 1e-9) return 0;
+  const t = Math.min(Math.max((offset.length() - inner) / (outer - inner), 0), 1);
+  return smoothstep(t);
+}
+
+// The avatar's displacement from their global projection onto the polyline.
+// Its length is the projection's own `dist`; its direction is what the range
+// and falloff ellipses are resolved along.
+function pathOffset(index: PolylineIndex, p: Vec2): Vec2 {
+  return p.sub(pointAtArcLength(index, projectOntoPolyline(index, p).s));
+}
+
+// Does `p` fall inside the rule at all? Containment for a region, displacement
+// from the polyline against the range ellipse for a path - which is the whole
+// difference between the two kinds and the reason a path is not a region with
+// a funny shape.
 function ruleContains(r: CameraRule, p: Vec2): boolean {
   if (r.kind === "region") return pointInRegion(r.region, p);
-  return projectOntoPolyline(r.index, p).dist <= pathRange(r.path);
+  const off = pathOffset(r.index, p);
+  return off.length() <= pathRange(r.path, off);
 }
 
 // Does the incumbent keep its grip? Its volume grown by `regionBuffer` for a
-// region; `range + buffer` for a path, measured to `pathDist` - the WINDOWED
-// projection the controller is tracking, not the global closest point, so a
-// switchback passing nearby cannot hold a player who has fallen off the branch
-// they were actually on.
-function ruleHolds(r: CameraRule, p: Vec2, pathDist: number | null): boolean {
+// region; the release ellipse for a path, measured to `pathOff` - the
+// displacement from the WINDOWED projection the controller is tracking, not
+// from the global closest point, so a switchback passing nearby cannot hold a
+// player who has fallen off the branch they were actually on.
+function ruleHolds(r: CameraRule, p: Vec2, pathOff: Vec2 | null): boolean {
   if (r.kind === "region") return pointInRegion(r.region, p, regionBuffer(r.region));
-  const dist = pathDist ?? projectOntoPolyline(r.index, p).dist;
-  return dist <= pathRelease(r.path);
+  const off = pathOff ?? pathOffset(r.index, p);
+  return off.length() <= pathRelease(r.path, off);
 }
 
 // The rule governing the camera for an avatar at `p`. Highest `priority` among
@@ -298,10 +423,11 @@ export function activeCameraRule(
   rules: readonly CameraRule[],
   p: Vec2,
   current: CameraRule | null = null,
-  // Distance from `p` to the WINDOWED projection on `current`, when `current`
-  // is a path. The controller is the only thing that has it, so it passes it in
-  // rather than this recomputing a global answer that means something else.
-  currentPathDist: number | null = null,
+  // Displacement from the WINDOWED projection on `current` to `p`, when
+  // `current` is a path. The controller is the only thing that has it, so it
+  // passes it in rather than this recomputing a global answer that means
+  // something else.
+  currentPathOffset: Vec2 | null = null,
 ): CameraRule | null {
   let best: CameraRule | null = null;
   for (const r of rules) {
@@ -311,7 +437,7 @@ export function activeCameraRule(
   if (
     current &&
     rules.includes(current) &&
-    ruleHolds(current, p, currentPathDist) &&
+    ruleHolds(current, p, currentPathOffset) &&
     (!best || rulePriority(best) <= rulePriority(current))
   ) {
     return current;
@@ -336,15 +462,27 @@ export function cameraRuleTarget(
   follow: Vec2,
   baseZoom: number,
   s = 0,
+  // The falloff weight (see `pathFalloffWeight`), resolved by the controller
+  // from the avatar's true projection. Zero for a region and for null.
+  w = 0,
 ): CameraTarget {
   if (!rule) return { pos: follow, zoom: baseZoom };
   if (rule.kind === "path") {
+    // pointAtArcLength clamps, which is the correct degenerate behaviour:
+    // near the end of the path the camera comes to rest centred on that end
+    // rather than staring past it.
+    const pathPos = pointAtArcLength(rule.index, s + pathLeadAlong(rule, s));
+    const pathZoom = baseZoom / Math.max(0.01, rule.path.viewportScale ?? DEFAULT_VIEWPORT_SCALE);
+    // Through the falloff band the target is interpolated toward the NULL
+    // rule's - the plain follow at the base zoom - so lookahead, viewport
+    // scale and everything else the path asks for fade together, and at the
+    // band's outer edge the two targets are identical: the release delta is
+    // zero by construction. The zoom interpolates geometrically like every
+    // zoom blend here, so it reads as even.
+    if (w <= 0) return { pos: pathPos, zoom: pathZoom };
     return {
-      // pointAtArcLength clamps, which is the correct degenerate behaviour:
-      // near the end of the path the camera comes to rest centred on that end
-      // rather than staring past it.
-      pos: pointAtArcLength(rule.index, s + pathLeadAlong(rule, s)),
-      zoom: baseZoom / Math.max(0.01, rule.path.viewportScale ?? DEFAULT_VIEWPORT_SCALE),
+      pos: pathPos.add(follow.sub(pathPos).mul(w)),
+      zoom: lerpZoom(pathZoom, baseZoom, w),
     };
   }
   const region = rule.region;
@@ -385,6 +523,32 @@ function tangentAt(index: PolylineIndex, s: number): Vec2 {
   return pointAtArcLength(index, s + h).sub(pointAtArcLength(index, s - h));
 }
 
+// How far the camera centre may be from the follow point, per axis, before the
+// avatar enters the keep-out band at the edge of the frame.
+//
+// Zero when the margin is wider than half the frame, which pins the camera on
+// the avatar rather than inverting the clamp and shoving it out the far side.
+export function edgeReach(camera: Camera, zoom: number): Vec2 {
+  const scale = Math.max(1e-6, zoom * PIXELS_PER_METER);
+  const keep = Math.max(0, 1 - 2 * CAMERA_EDGE_MARGIN);
+  return new Vec2(
+    ((camera.viewportWidth / 2) * keep) / scale,
+    ((camera.viewportHeight / 2) * keep) / scale,
+  );
+}
+
+// The nearest camera position to `pos` that keeps `follow` out of the frame's
+// edge band. Applied to where the camera ACTUALLY IS rather than to what it is
+// aiming at: a target the avatar can outrun is not a guarantee, and outrunning
+// the ease is exactly what a fast swing or a launch does.
+export function clampToEdge(camera: Camera, zoom: number, follow: Vec2, pos: Vec2): Vec2 {
+  const r = edgeReach(camera, zoom);
+  return new Vec2(
+    Math.min(Math.max(pos.x, follow.x - r.x), follow.x + r.x),
+    Math.min(Math.max(pos.y, follow.y - r.y), follow.y + r.y),
+  );
+}
+
 const smoothstep = (t: number): number => t * t * (3 - 2 * t);
 
 // Geometric interpolation — the right one for a scale factor, so blending 1→4
@@ -400,6 +564,11 @@ export interface HeldCamera {
   // path.
   s: number;
   leadS: number;
+  // The edge constraint, when it is what is holding the camera this frame:
+  // where the camera centre is and how far from the follow point it is allowed
+  // to be. Null whenever the clamp is not binding, so the overlay drawing it at
+  // all means the camera is being held rather than following.
+  edge: { centre: Vec2; reach: Vec2 } | null;
 }
 
 export class CameraController {
@@ -426,6 +595,21 @@ export class CameraController {
   // runs back and forth underneath.
   private pathLeadS = 0;
 
+  // Set on any frame the edge clamp actually moved the camera (see
+  // `clampToEdge`), for the debug overlay and for nothing else.
+  private edge: { centre: Vec2; reach: Vec2 } | null = null;
+
+  // The screen-edge guarantee, which the GAME never turns off: it is the one
+  // camera rule a level may not opt out of (see CAMERA_EDGE_MARGIN).
+  //
+  // The editor's ▶ Test turns it off as an INSTRUMENT, so an author can see the
+  // framing a lock or a lookahead is actually asking for rather than the one
+  // the backstop allowed. That is a question about the rule being tuned, and it
+  // is unanswerable while the answer is being silently corrected - but it is a
+  // question the editor asks, not a property of the level, so it lives here and
+  // is never written to a file.
+  edgeClamp = true;
+
   // Hand-off state: the target gap frozen when the rule last changed - the
   // outgoing position minus the incoming one, and the outgoing zoom over the
   // incoming one - decayed to nothing over `dur`, with `s` the raw progress.
@@ -448,7 +632,7 @@ export class CameraController {
   // are all stateful, so a recomputed answer disagrees with the camera exactly
   // where the overlay is opened to look.
   get held(): HeldCamera {
-    return { rule: this.rule, s: this.pathS, leadS: this.pathLeadS };
+    return { rule: this.rule, s: this.pathS, leadS: this.pathLeadS, edge: this.edge };
   }
 
   // Drop the easing for one frame — the camera arrives at its target instantly.
@@ -493,27 +677,76 @@ export class CameraController {
     }
 
     // Resolved BEFORE the rule decision, because a path's grip is measured to
-    // the windowed projection rather than to the global closest point.
+    // the windowed projection rather than to the global closest point. The
+    // offset is the same displacement as a vector, which is what the range and
+    // falloff ellipses are resolved along.
     const heldPath = this.rule?.kind === "path" ? this.trackPath(this.rule, follow, dt) : null;
+    const heldOffset =
+      this.rule?.kind === "path" && heldPath
+        ? follow.sub(pointAtArcLength(this.rule.index, heldPath.s))
+        : null;
 
-    const next = activeCameraRule(rules, follow, this.rule, heldPath?.dist ?? null);
+    const next = activeCameraRule(rules, follow, this.rule, heldOffset);
 
     // Acquiring a path is unbuffered and history-free, exactly as entering a
     // region is: a path that was not the incumbent is projected onto globally.
-    const s =
+    //
+    // A HELD path may also re-acquire its OWN other branch (`branchJump`). The
+    // windowed projection is authoritative while held and deliberately cannot
+    // walk to another branch (see `trackPath`) - which also means a player who
+    // has genuinely left the ridden branch and landed inside the corridor of a
+    // DIFFERENT branch of the same path would otherwise stay held by the
+    // ridden branch's falloff zone in preference to the branch under their
+    // feet, until the release finally let go somewhere the core range no
+    // longer reaches. session-285f is exactly that: the ball fell off the
+    // upper branch through the lower branch's corridor at 0.05 m while the
+    // grip clung to the upper one at 5.4 m, released at 1.06 m off the lower
+    // branch - 6 cm outside its range - and the path never re-acquired at all.
+    //
+    // So a held path is challenged by its own GLOBAL projection: outside the
+    // ridden corridor (plus the jitter buffer) and inside the core range at
+    // the global answer, it re-acquires there exactly as it would after a
+    // release - a fresh projection, a re-centred lead, and the jump in the
+    // target run through the frozen-delta hand-off below so it blends rather
+    // than snaps. The challenge cannot fire on the ridden branch itself: a
+    // global answer inside the window IS the windowed answer, so the two
+    // distances agree and cannot sit on opposite sides of the range.
+    let proj =
       next?.kind !== "path"
-        ? 0
+        ? null
         : next === this.rule
-          ? heldPath!.s
-          : projectOntoPolyline(next.index, follow).s;
+          ? heldPath!
+          : projectOntoPolyline(next.index, follow);
+    let offset =
+      next?.kind !== "path"
+        ? null
+        : next === this.rule
+          ? heldOffset!
+          : follow.sub(pointAtArcLength(next.index, proj!.s));
+    let branchJump = false;
+    if (
+      next?.kind === "path" &&
+      next === this.rule &&
+      offset!.length() > pathRange(next.path, offset!) + (next.path.buffer ?? REGION_EXIT_MARGIN)
+    ) {
+      const g = projectOntoPolyline(next.index, follow);
+      const goff = follow.sub(pointAtArcLength(next.index, g.s));
+      if (goff.length() <= pathRange(next.path, goff)) {
+        proj = g;
+        offset = goff;
+        branchJump = true;
+      }
+    }
+    const s = proj?.s ?? 0;
 
     // Acquiring a path commits the lead to the projection outright - entering
-    // is history-free, so the band starts centred on the avatar rather than
-    // holding an offset earned somewhere else on the route.
+    // (a branch jump included) is history-free, so the band starts centred on
+    // the avatar rather than holding an offset earned somewhere else on the
+    // route.
     const leadS =
       next?.kind !== "path"
         ? 0
-        : next === this.rule
+        : next === this.rule && !branchJump
           ? committedLeadS(
               s,
               this.pathLeadS,
@@ -524,7 +757,12 @@ export class CameraController {
             )
           : s;
 
-    const target = cameraRuleTarget(next, follow, baseZoom, leadS);
+    // The falloff weight, from the avatar's TRUE displacement off the route -
+    // the windowed one while held, so at a switchback the weight is about the
+    // branch they are actually on, exactly as the grip is.
+    const w = next?.kind !== "path" ? 0 : pathFalloffWeight(next.path, offset!);
+
+    const target = cameraRuleTarget(next, follow, baseZoom, leadS, w);
 
     if (!this.started) {
       this.started = true;
@@ -534,14 +772,14 @@ export class CameraController {
       this.offset = Vec2.ZERO;
       this.zoomRatio = 1;
       this.s = 1;
-      this.pos = target.pos;
       this.zoom = target.zoom;
+      this.pos = this.applyEdge(camera, target.pos, follow);
       camera.position = this.pos;
       camera.zoom = this.zoom;
       return;
     }
 
-    if (next !== this.rule) {
+    if (next !== this.rule || branchJump) {
       // The discrepancy is measured between the two *targets*, not against
       // where the camera is: aiming at the camera's own position would drop its
       // velocity to nothing for an instant, which reads as a hitch. Taken this
@@ -550,10 +788,23 @@ export class CameraController {
       // Any remainder of an interrupted hand-off is folded in, which keeps that
       // case continuous too.
       //
+      // A branch jump comes through here too even though the rule identity is
+      // unchanged: the jump in arc length moves the lookahead target by the
+      // gap between the branches, and freezing that delta is exactly what this
+      // machinery is for.
+      //
       // An outgoing PATH is evaluated at its tracked projection, not at a fresh
       // global one: both targets have to be measured at the same instant and on
       // the same branch, or the frozen delta is a gap that never existed.
-      const prev = cameraRuleTarget(this.rule, follow, baseZoom, this.pathLeadS);
+      const prev = cameraRuleTarget(
+        this.rule,
+        follow,
+        baseZoom,
+        this.pathLeadS,
+        this.rule?.kind === "path" && heldOffset
+          ? pathFalloffWeight(this.rule.path, heldOffset)
+          : 0,
+      );
       const rest = 1 - smoothstep(this.s);
       this.offset = prev.pos.add(this.offset.mul(rest)).sub(target.pos);
       this.zoomRatio = (prev.zoom * this.zoomRatio ** rest) / target.zoom;
@@ -581,7 +832,28 @@ export class CameraController {
     this.pos = this.pos.add(aim.pos.sub(this.pos).mul(t));
     this.zoom = lerpZoom(this.zoom, aim.zoom, t);
 
+    // LAST, and on the camera's own state rather than on the target: the avatar
+    // may never be in the frame's edge band, whatever rule is in force and
+    // however fast it got there. Clamping `this.pos` rather than only what is
+    // handed to the Camera is what keeps the next frame's ease continuous -
+    // the camera really is where the constraint put it, so it carries on from
+    // there instead of being dragged back to an illegal position every frame.
+    this.pos = this.applyEdge(camera, this.pos, follow);
+
     camera.position = this.pos;
     camera.zoom = this.zoom;
+  }
+
+  private applyEdge(camera: Camera, pos: Vec2, follow: Vec2): Vec2 {
+    if (!this.edgeClamp) {
+      this.edge = null;
+      return pos;
+    }
+    const clamped = clampToEdge(camera, this.zoom, follow, pos);
+    this.edge =
+      clamped.x !== pos.x || clamped.y !== pos.y
+        ? { centre: clamped, reach: edgeReach(camera, this.zoom) }
+        : null;
+    return clamped;
   }
 }

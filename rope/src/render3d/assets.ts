@@ -492,6 +492,63 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // Brown dirt broken by patches of moss, and the first set here that is neither
+  // rock nor metal: it is what a level stands ON rather than a face it hangs off,
+  // so it is the surface a floor, a ledge top or a buried slab wants when the
+  // walls around it are already `rock-grey` or `rock-black`.
+  //
+  // Two tones and no feature - earth at an albedo mean of #504224, moss reading
+  // green over it in patches a metre or so across - which is what lets it run for
+  // metres the way `rock-grey` does. Its relief is deep though (normal B mean
+  // .833, sigma .074, which is `rock-black`'s territory): a height-field scan of
+  // dirt is mostly hollows, and the moss sits in them, so the AO map is doing
+  // real work here and is shipped rather than left to the generated surface.
+  //
+  // Keyed as a SURFACE, and here there is not even a material name to collide
+  // with: no `MaterialName` is "dirt", the nearest is `stone` (which is the
+  // fallback), and a set under THAT name would re-skin every stone body in every
+  // level. A shape asks for this one by name (`visual.texture`).
+  "mossy ground": {
+    maps: {
+      base: {
+        file: "/textures/mossy-ground-base.webp",
+        sha256: "af3d4fba2b97e607a37b6911a54d9d9facfdcfc2ef1df7e551fcbddce76beae6",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
+      // ambientCG ships. It arrives as a 16-bit PNG and stays lossless at 2.3 MB
+      // - the largest map in the manifest, `factory-brick`'s aside - because that
+      // relief IS the surface: this is a procedural height field, so the normal
+      // carries detail the albedo's two flat tones do not.
+      normal: {
+        file: "/textures/mossy-ground-normal.webp",
+        sha256: "69ca639aac80766a059fd11d7defefc6dc920f8e448208c6367465b9adfe106d",
+      },
+      // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
+      // are, flattened to grey by `assets:optimize-texture --channel r`. No
+      // metallic map and none wanted: the 0 below is a dielectric's, stated
+      // rather than shipped as an image.
+      roughness: {
+        file: "/textures/mossy-ground-roughness.webp",
+        sha256: "71982d6cbcae79d2c9845ec7863ddb59bd3e729026958ea8264918dcf38ec332",
+      },
+      ao: {
+        file: "/textures/mossy-ground-ao.webp",
+        sha256: "3811325d773f83cf4e2af46a0fcd2967fe7b321913ccbe17e5be5429f7b32444",
+      },
+    },
+    // 3 m, and unlike the other ambientCG sets here that is the CAPTURED size
+    // rather than a by-eye one: this asset states `dimensionX: 300` (centimetres,
+    // https://ambientcg.com/api/v2/full_json?id=Ground047), so the moss patches
+    // land at life size with nothing eyeballed. It is also the coarsest tile in
+    // the manifest, which is the point of a ground: one repeat has to cover a
+    // stretch a player runs along without the pattern reading as a pattern.
+    tile: 3,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Ground047",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
   // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
   //

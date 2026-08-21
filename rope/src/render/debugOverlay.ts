@@ -18,15 +18,16 @@ import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
 import {
   activeCameraRule,
+  pathBandAxes,
   pathLookahead,
-  pathRange,
+  pathRangeAxes,
   type HeldCamera,
-  pathRelease,
+  pathReleaseAxes,
   regionBuffer,
   type CameraRule,
 } from "./cameraController";
 import { pointAtArcLength, projectOntoPolyline } from "./cameraPath";
-import { outlineOfData, pathCorridorInto, pathOutline, pathOutlineGrown } from "./shapePath";
+import { outlineOfData, pathCorridorEllipseInto, pathOutline, pathOutlineGrown } from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -186,6 +187,10 @@ function drawPlayerCollider(ctx: CanvasRenderingContext2D, level: Level): void {
 }
 
 const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
+// The screen-edge clamp. Amber rather than the camera layer's violet: it is not
+// an authored volume, it is the one rule a level cannot opt out of, and it is
+// on screen only while it is overriding whatever the level asked for.
+const EDGE_HOLD = "#ffcc66";
 
 // Metres between the direction arrowheads along a camera path. Direction is the
 // design (the lookahead never reverses), so it has to be readable at a glance.
@@ -263,8 +268,9 @@ function drawCameraPath(
 ): void {
   const ix = rule.index;
 
+  const range = pathRangeAxes(rule.path);
   ctx.beginPath();
-  pathCorridorInto(ctx, ix.verts, pathRange(rule.path));
+  pathCorridorEllipseInto(ctx, ix.verts, range.x, range.y);
   ctx.strokeStyle = CAMERA_REGION;
   ctx.lineWidth = 1.5 * PX;
   ctx.setLineDash([6 * PX, 4 * PX]);
@@ -285,11 +291,23 @@ function drawCameraPath(
 
   if (!active) return;
 
-  // The release boundary, in the sparser dash a region's buffer uses: the path
-  // keeps its grip out to here, so without it a path that refuses to let go
-  // looks like a bug.
+  // The far edge of the falloff band, and then the release boundary in the
+  // sparser dash a region's buffer uses. The two are different statements: the
+  // path's grip on the framing fades to nothing across the first, and only past
+  // the second does the rule itself let go - so a path that seems slow to hand
+  // over has both of its reasons on screen.
+  const band = pathBandAxes(rule.path);
+  if (band.x > range.x || band.y > range.y) {
+    ctx.beginPath();
+    pathCorridorEllipseInto(ctx, ix.verts, band.x, band.y);
+    ctx.lineWidth = PX;
+    ctx.setLineDash([3 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const release = pathReleaseAxes(rule.path);
   ctx.beginPath();
-  pathCorridorInto(ctx, ix.verts, pathRelease(rule.path));
+  pathCorridorEllipseInto(ctx, ix.verts, release.x, release.y);
   ctx.lineWidth = PX;
   ctx.setLineDash([2 * PX, 5 * PX]);
   ctx.stroke();
@@ -365,4 +383,24 @@ export function drawDebugOverlay(
   drawContactNormals(ctx, level);
   drawPlayerCollider(ctx, level);
   drawCameraRules(ctx, level, heldCamera);
+  drawEdgeConstraint(ctx, heldCamera);
+}
+
+// The screen-edge keep-out, drawn ONLY on the frames it is what is holding the
+// camera. A camera that has stopped following has no on-screen cause otherwise,
+// and drawing the box every frame would make it furniture rather than a
+// diagnosis: seeing it at all means the avatar is against the constraint.
+function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
+  const edge = held?.edge;
+  if (!edge) return;
+  ctx.strokeStyle = EDGE_HOLD;
+  ctx.lineWidth = 1.5 * PX;
+  ctx.setLineDash([10 * PX, 6 * PX]);
+  ctx.strokeRect(
+    edge.centre.x - edge.reach.x,
+    edge.centre.y - edge.reach.y,
+    edge.reach.x * 2,
+    edge.reach.y * 2,
+  );
+  ctx.setLineDash([]);
 }

@@ -333,3 +333,33 @@ export function pathCorridorInto(p: OutlineSink, verts: readonly Vec2[], grow: n
   }
   p.closePath();
 }
+
+// The corridor grown by an ELLIPSE rather than a circle: the polyline's
+// Minkowski sum with the ellipse of semi-axes (rx, ry), which is what a
+// path's per-axis range means (see `pathRange` in cameraController.ts).
+//
+// Built by anisotropy rather than by a second fillet walk: in a space with y
+// scaled by rx/ry the ellipse is a circle of radius rx, so the circular
+// corridor of the same-scaled polyline IS this shape, and the canvas transform
+// carries it back. The transform is applied only while the path is
+// CONSTRUCTED - canvas records path points through the CTM at construction -
+// and restored before the caller strokes, so the stroke width stays uniform
+// rather than being squashed with the shape. Needs a real 2D context rather
+// than the abstract sink for exactly that reason.
+export function pathCorridorEllipseInto(
+  ctx: CanvasRenderingContext2D,
+  verts: readonly Vec2[],
+  rx: number,
+  ry: number,
+): void {
+  if (rx <= 0 || ry <= 0) return;
+  const k = ry / rx;
+  ctx.save();
+  ctx.scale(1, k);
+  pathCorridorInto(
+    ctx,
+    verts.map((v) => new Vec2(v.x, v.y / k)),
+    rx,
+  );
+  ctx.restore();
+}

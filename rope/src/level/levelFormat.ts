@@ -683,9 +683,45 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
 export const DEFAULT_VIEWPORT_SCALE = 1;
 
 // Metres a player may stray from a camera path before the path lets the camera
-// go. At GRAPPLE_ZOOM = 2 and PIXELS_PER_METER = 100 a 1080p frame shows
-// 9.6 x 5.4 m of world, so this is most of a screen height off the route.
-export const DEFAULT_PATH_RANGE = 4;
+// go, PER AXIS - the semi-axes of an ellipse around the route, read against the
+// direction the player actually left in (see `pathRange`).
+//
+// Per axis for the same reason the lookahead is: the frame is 16:9. At
+// GRAPPLE_ZOOM = 2 and PIXELS_PER_METER = 100 a 1080p frame shows 9.6 x 5.4 m
+// of world - half a frame is 4.8 m across and only 2.7 m down - so a CIRCULAR
+// corridor wide enough to mean anything horizontally is off the bottom of the
+// screen vertically: with the old single range of 4, a player 3 m below the
+// route was fully inside the corridor, the camera still centred on the route,
+// and the ball 30 cm past the edge of the frame with the falloff not even
+// started. The edge clamp caught it, and the clamp is a backstop rather than
+// the mechanism.
+//
+// The pair is the frame's own 16:9 (2.25 = 4 * 9/16), so the corridor is
+// screen-shaped: with the default falloff below, the worst-case vertical
+// offset the band ever asks for (~2.3 m) fits the 2.7 m half-height, and
+// containment stops depending on the clamp.
+export const DEFAULT_PATH_RANGE_X = 4;
+export const DEFAULT_PATH_RANGE_Y = 2.25;
+
+// Metres OUTSIDE the range over which the path lets go gradually rather than
+// at once - the band the path's target fades toward the plain follow through.
+// Per axis and read through the same ellipse as the range, so the band is
+// screen-shaped too; the outer edge of the band is the ellipse with semi-axes
+// (rangeX + falloffX, rangeY + falloffY).
+//
+// Without it, crossing the range swaps the rule outright: the camera stops
+// aiming down the route and starts aiming at the player, and the hand-off
+// blend can only smooth that over, not make it small. Through this band the
+// camera's target is instead interpolated from the path's (the lookahead
+// point, at the path's zoom) to the plain follow (the player, at the base
+// zoom), so by the band's outer edge the two targets are IDENTICAL and the
+// release moves the camera by nothing - leaving the route reads as the camera
+// loosening rather than changing its mind.
+//
+// Half the default range on each axis: enough transition to be felt, and still
+// inside the screen the range is sized against.
+export const DEFAULT_PATH_FALLOFF_X = 2;
+export const DEFAULT_PATH_FALLOFF_Y = 1.125;
 
 // How far ahead of the player the camera looks, PER AXIS - a quarter of the
 // frame in each direction, at the 9.6 x 5.4 m the numbers above are measured on.
@@ -834,8 +870,22 @@ export interface CameraPathData {
   // Same storage convention as ShapeData's poly: local to (x, y, rot).
   verts: CameraPathVert[];
   // Metres (pixels on disk) the player may stray from the polyline before the
-  // path lets the camera go. Absent = DEFAULT_PATH_RANGE.
+  // path lets the camera go, per axis - the semi-axes of an ellipse around the
+  // route, so the corridor is screen-shaped (see DEFAULT_PATH_RANGE_X/_Y,
+  // which are what each falls back to).
+  rangeX?: number;
+  rangeY?: number;
+  // How far past the range the path lets go GRADUALLY, per axis through the
+  // same ellipse (see DEFAULT_PATH_FALLOFF_X/_Y). Both 0 = it lets go at the
+  // range exactly, which is what it used to do.
+  falloffX?: number;
+  falloffY?: number;
+  // The RETIRED scalar forms: one circular radius each. Folded into both axes
+  // of the fields above by `scaleLevelData` (the one gate every level passes
+  // through) and absent everywhere downstream of it - a level that authored a
+  // circle keeps exactly the circle it authored.
   range?: number;
+  falloff?: number;
   // How far ahead of the player the camera looks, per axis (see
   // DEFAULT_PATH_LOOKAHEAD_X/_Y, which are what each falls back to).
   lookaheadX?: number;
@@ -1835,7 +1885,30 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
         ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
       })),
-      ...(p.range !== undefined ? { range: p.range * factor } : {}),
+      // The retired scalar range/falloff were one circular radius each: folded
+      // into both axes here, at the one gate, so a level that authored a
+      // circle keeps exactly that circle and nothing downstream reads the
+      // scalar fields at all.
+      ...(p.rangeX !== undefined
+        ? { rangeX: p.rangeX * factor }
+        : p.range !== undefined
+          ? { rangeX: p.range * factor }
+          : {}),
+      ...(p.rangeY !== undefined
+        ? { rangeY: p.rangeY * factor }
+        : p.range !== undefined
+          ? { rangeY: p.range * factor }
+          : {}),
+      ...(p.falloffX !== undefined
+        ? { falloffX: p.falloffX * factor }
+        : p.falloff !== undefined
+          ? { falloffX: p.falloff * factor }
+          : {}),
+      ...(p.falloffY !== undefined
+        ? { falloffY: p.falloffY * factor }
+        : p.falloff !== undefined
+          ? { falloffY: p.falloff * factor }
+          : {}),
       ...(p.lookaheadX !== undefined ? { lookaheadX: p.lookaheadX * factor } : {}),
       ...(p.lookaheadY !== undefined ? { lookaheadY: p.lookaheadY * factor } : {}),
       ...(p.lookaheadBufferX !== undefined

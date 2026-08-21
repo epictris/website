@@ -31,16 +31,19 @@ import {
 } from "./model";
 import { cubicAt, flattenPath } from "../render/cameraPath";
 import {
+  DEFAULT_PATH_FALLOFF_X,
+  DEFAULT_PATH_FALLOFF_Y,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
   DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
-  DEFAULT_PATH_RANGE,
+  DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_RANGE_Y,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
 import {
   pathOutline,
-  pathCorridorInto,
+  pathCorridorEllipseInto,
   pathOutlineGrown,
   pathOutlineInto,
   pathOutlineIntoGrown,
@@ -731,7 +734,12 @@ export function cameraRegionLabel(r: EdItem): string {
     // A path's defaults are shown rather than omitted: `range` and `lookahead`
     // ARE the tuning, so "not authored" and "authored at the default" have to
     // read the same way while an author is comparing two paths by eye.
-    parts.push(`range ${px(r.cam.range ?? DEFAULT_PATH_RANGE)}`);
+    parts.push(
+      `range ${px(r.cam.rangeX ?? DEFAULT_PATH_RANGE_X)},${px(r.cam.rangeY ?? DEFAULT_PATH_RANGE_Y)}`,
+    );
+    const fallX = r.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
+    const fallY = r.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
+    if (fallX > 0 || fallY > 0) parts.push(`falloff ${px(fallX)},${px(fallY)}`);
     parts.push(
       `lead ${px(r.cam.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X)},` +
         `${px(r.cam.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y)}` +
@@ -810,23 +818,43 @@ function drawCameraPath(
   // it was deselected in the view the editor opens in.
   const stroke = CAMERA_REGION_COLOR;
 
-  // The corridor at `range`: how far off the route the player may be while the
-  // path still narrates it. `pathCorridorInto` owns the geometry, so what is
-  // drawn is exactly the zone the controller tests.
+  // The corridor at the range: how far off the route the player may be while
+  // the path still narrates it. Per axis - the ellipse with the range's
+  // semi-axes swept along the route, so it is screen-shaped -
+  // `pathCorridorEllipseInto` owns the geometry, so what is drawn is exactly
+  // the zone the controller tests.
+  const rangeX = item.cam.rangeX ?? DEFAULT_PATH_RANGE_X;
+  const rangeY = item.cam.rangeY ?? DEFAULT_PATH_RANGE_Y;
   ctx.beginPath();
-  pathCorridorInto(ctx, world, item.cam.range ?? DEFAULT_PATH_RANGE);
+  pathCorridorEllipseInto(ctx, world, rangeX, rangeY);
   ctx.strokeStyle = stroke;
   ctx.lineWidth = worldLine * 1.5;
   ctx.setLineDash([6 * PX, 4 * PX]);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // ...and the release boundary beyond it, when a buffer is authored. Finer
-  // dots and a thinner line, as a region's buffer is drawn: it is the path's
-  // reach rather than a second corridor.
-  if (item.cam.buffer !== null && item.cam.buffer > 0) {
+  // ...and the far edge of the falloff band beyond it: across the band the
+  // path's grip fades to nothing, which is a different statement from the
+  // corridor and worth seeing while the range and falloff are being tuned
+  // against each other.
+  const falloffX = item.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
+  const falloffY = item.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
+  if (falloffX > 0 || falloffY > 0) {
     ctx.beginPath();
-    pathCorridorInto(ctx, world, (item.cam.range ?? DEFAULT_PATH_RANGE) + item.cam.buffer);
+    pathCorridorEllipseInto(ctx, world, rangeX + falloffX, rangeY + falloffY);
+    ctx.lineWidth = worldLine;
+    ctx.setLineDash([3 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // ...and the release boundary, when a buffer is authored. Finer dots and a
+  // thinner line, as a region's buffer is drawn: it is the path's reach rather
+  // than a second corridor. The buffer grows both semi-axes, which is exactly
+  // how `pathRelease` tests it.
+  if (item.cam.buffer !== null && item.cam.buffer > 0) {
+    const b = item.cam.buffer;
+    ctx.beginPath();
+    pathCorridorEllipseInto(ctx, world, rangeX + falloffX + b, rangeY + falloffY + b);
     ctx.lineWidth = worldLine;
     ctx.setLineDash([2 * PX, 5 * PX]);
     ctx.stroke();

@@ -17,7 +17,13 @@ import { Vec2 } from "../engine/vec2";
 import type { Camera } from "../render/camera";
 import {
   buildCameraRules,
+  CAMERA_EDGE_MARGIN,
   CameraController,
+  edgeReach,
+  pathBand,
+  pathFalloffWeight,
+  pathRange,
+  pathRelease,
   cameraRuleTarget,
   activeCameraRule,
   type CameraRule,
@@ -110,7 +116,16 @@ const RIDE: CameraPathData = {
     { x: 0, y: 0 },
     { x: 10, y: 0 },
   ],
-  range: 1,
+  // Circular on purpose, so the cases about ACQUIRING and RELEASING are not
+  // also cases about the ellipse; `range-and-falloff-are-per-axis` and
+  // `acquisition-is-screen-shaped` are where the pairs are asserted.
+  rangeX: 1,
+  rangeY: 1,
+  // No falloff band either, so those same cases are about the range and its
+  // jitter buffer alone; `falloff-holds-then-releases` is where the band's own
+  // effect on the distances is asserted.
+  falloffX: 0,
+  falloffY: 0,
   // Equal on both axes, so the cases about LEADING are not also cases about the
   // ellipse; `rule-path-lookahead-is-per-axis` is where that is asserted.
   lookaheadX: 2.5,
@@ -136,13 +151,21 @@ const DT = 1 / 60;
 function ride(
   rules: readonly CameraRule[],
   walk: readonly Vec2[],
-): { pos: Vec2; rule: CameraRule | null; s: number; leadS: number }[] {
+  edgeClamp = true,
+): {
+  pos: Vec2;
+  rule: CameraRule | null;
+  s: number;
+  leadS: number;
+  edge: { centre: Vec2; reach: Vec2 } | null;
+}[] {
   const ctl = new CameraController();
+  ctl.edgeClamp = edgeClamp;
   const cam = stubCamera();
   return walk.map((p) => {
     ctl.update(cam, DT, p, rules, BASE_ZOOM);
     const held = ctl.held;
-    return { pos: cam.position, rule: held.rule, s: held.s, leadS: held.leadS };
+    return { pos: cam.position, rule: held.rule, s: held.s, leadS: held.leadS, edge: held.edge };
   });
 }
 
@@ -473,7 +496,10 @@ export function runCameraCases(): CameraResult[] {
               { x: 400, y: 0 },
               { x: 400, y: 250 },
             ],
-            range: 350,
+            rangeX: 350,
+            rangeY: 200,
+            falloffX: 180,
+            falloffY: 90,
             lookaheadX: 220,
             lookaheadY: 120,
             lookaheadBufferX: 80,
@@ -504,7 +530,10 @@ export function runCameraCases(): CameraResult[] {
       if (flat(out) !== flat(want)) bad.push(`verts ${flat(out)} != ${flat(want)}`);
       if (Math.abs(out.rot - want.rot) > 1e-9) bad.push(`rot ${out.rot} != ${want.rot}`);
       for (const k of [
-        "range",
+        "rangeX",
+        "rangeY",
+        "falloffX",
+        "falloffY",
         "lookaheadX",
         "lookaheadY",
         "lookaheadBufferX",
@@ -581,6 +610,378 @@ export function runCameraCases(): CameraResult[] {
       const kept = scaleLevelData(authored, 1).cameraPaths ?? [];
       return kept.length === 1 ? [] : [`kept ${kept.length} of 3 paths, expected 1`];
     }),
+    // --- the screen-edge guarantee ------------------------------------------
+    //
+    // Whatever rule is in force, the avatar may never enter the outer
+    // CAMERA_EDGE_MARGIN of the frame. It is a clamp on where the camera IS
+    // rather than on what it aims at, because a target the avatar can outrun is
+    // not a guarantee.
+
+    runFacts("edge-holds-under-a-huge-lookahead", () => {
+      // A lookahead far wider than the frame aims the camera right off the
+      // avatar. The clamp is what stops that being the avatar off the screen.
+      const path: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0 },
+          { x: 200, y: 0 },
+        ],
+        lookaheadX: 60,
+        lookaheadY: 60,
+      };
+      const rules = buildCameraRules([], [path]);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 200; i++) walk.push(new Vec2(20 + i * 0.05, 0));
+      const out = ride(rules, walk);
+      const r = edgeReach(stubCamera(), BASE_ZOOM);
+      const bad = out.filter(
+        (o, i) => Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9 || Math.abs(walk[i]!.y - o.pos.y) > r.y + 1e-9,
+      );
+      const held = out.filter((o) => o.edge !== null).length;
+      return [
+        ...(bad.length ? [`${bad.length} of ${out.length} frames put the avatar in the edge band`] : []),
+        // ...and the constraint really was doing the work, or the case proves
+        // nothing about the clamp.
+        ...(held === 0 ? ["the clamp never bound, so this asserts nothing"] : []),
+      ];
+    }),
+
+    runFacts("edge-holds-under-a-locked-region", () => {
+      // A region that pins both axes will happily frame a room the avatar has
+      // left. It may not frame one the avatar is off the edge of.
+      const room: CameraRegionData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect", w: 400, h: 400 },
+        lockX: 0,
+        lockY: 0,
+      };
+      const rules = buildCameraRules([room], []);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 300; i++) walk.push(new Vec2(i * 0.2, i * 0.1));
+      const out = ride(rules, walk);
+      const r = edgeReach(stubCamera(), BASE_ZOOM);
+      const bad = out.filter(
+        (o, i) => Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9 || Math.abs(walk[i]!.y - o.pos.y) > r.y + 1e-9,
+      );
+      return bad.length ? [`${bad.length} of ${out.length} frames put the avatar in the edge band`] : [];
+    }),
+
+    runFacts("edge-holds-through-a-teleport", () => {
+      // The ease cannot keep up with a launch, and the guarantee does not
+      // depend on it: one frame that moves the avatar half a level still ends
+      // with it on screen.
+      const rules = buildCameraRules([], []);
+      const out = ride(rules, [new Vec2(0, 0), new Vec2(400, -300), new Vec2(-90, 250)]);
+      const r = edgeReach(stubCamera(), BASE_ZOOM);
+      const walk = [new Vec2(0, 0), new Vec2(400, -300), new Vec2(-90, 250)];
+      const bad = out.filter(
+        (o, i) => Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9 || Math.abs(walk[i]!.y - o.pos.y) > r.y + 1e-9,
+      );
+      return bad.length ? [`${bad.length} frames put the avatar in the edge band`] : [];
+    }),
+
+    run("edge-never-binds-at-ordinary-speed", () => {
+      // The default camera centres the avatar, so the only thing that can put it
+      // near the edge under the plain follow is OUTRUNNING THE EASE - and the
+      // ease settles at a lag of `speed * CAMERA_FOLLOW_TAU`, which at the
+      // reach here needs a sustained 27 m/s before it binds. A hard swing is
+      // around 10. So the clamp is inert in ordinary play, which is what makes
+      // it safe to apply globally rather than as a rule a level opts into.
+      const rules = buildCameraRules([], []);
+      const walk: Vec2[] = [];
+      // A 3 m wander at a two-second period: about 9.4 m/s at its fastest.
+      for (let i = 0; i < 240; i++) {
+        walk.push(new Vec2(Math.sin((i / 120) * Math.PI * 2) * 3, Math.cos((i / 120) * Math.PI * 2) * 2));
+      }
+      const out = ride(rules, walk);
+      const worst = Math.max(...out.map((o, i) => Math.abs(walk[i]!.x - o.pos.x)));
+      const reach = edgeReach(stubCamera(), BASE_ZOOM).x;
+      return [
+        { label: "frames the clamp bound on", got: out.filter((o) => o.edge !== null).length, want: 0 },
+        // ...with room to spare, so the case is not sitting on the threshold.
+        { label: "worst lag as a fraction of the reach", got: worst / reach, want: 0, tol: 0.5 },
+      ];
+    }),
+
+    runFacts("edge-clamp-is-switchable-for-authoring", () => {
+      // The editor's ▶ Test can turn the guarantee off, so an author can see the
+      // framing a rule is actually asking for rather than the one the backstop
+      // allowed. It is an instrument and not a level property: the game never
+      // touches the switch, and nothing writes it to a file.
+      //
+      // Asserted as the two halves it has to be - the same walk held on screen
+      // with it on, and NOT held with it off, or the toggle is connected to
+      // nothing.
+      const room: CameraRegionData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect", w: 400, h: 400 },
+        lockX: 0,
+        lockY: 0,
+      };
+      const rules = buildCameraRules([room], []);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 200; i++) walk.push(new Vec2(i * 0.2, i * 0.1));
+      const r = edgeReach(stubCamera(), BASE_ZOOM);
+      const outside = (o: { pos: Vec2 }, i: number): boolean =>
+        Math.abs(walk[i]!.x - o.pos.x) > r.x + 1e-9 || Math.abs(walk[i]!.y - o.pos.y) > r.y + 1e-9;
+      const on = ride(rules, walk).filter(outside).length;
+      const off = ride(rules, walk, false).filter(outside).length;
+      const bad: string[] = [];
+      if (on !== 0) bad.push(`${on} frames left the frame with the clamp on`);
+      if (off === 0) bad.push("the walk never left the frame with the clamp off, so this asserts nothing");
+      return bad;
+    }),
+
+    run("edge-reach-is-a-fraction-of-the-frame", () => {
+      // It is measured in SCREEN terms, so a region that zooms out has a wider
+      // keep-out in metres and the same one in pixels. A margin in metres would
+      // shrink to a sliver of the frame exactly where the frame got roomier.
+      const cam = stubCamera();
+      const near = edgeReach(cam, BASE_ZOOM);
+      const far = edgeReach(cam, BASE_ZOOM / 3);
+      const halfW = cam.viewportWidth / 2 / (BASE_ZOOM * 100);
+      return [
+        { label: "reach x", got: near.x, want: halfW * (1 - 2 * CAMERA_EDGE_MARGIN) },
+        { label: "zooming out widens it in metres", got: far.x / near.x, want: 3 },
+        // 16:9, so the vertical keep-out is the same fraction of a shorter axis.
+        { label: "y is the frame's own ratio", got: near.y / near.x, want: 1080 / 1920 },
+      ];
+    }),
+
+    // --- the falloff band ---------------------------------------------------
+    //
+    // Crossing `range` used to swap the rule outright: aiming down the route one
+    // frame and at the avatar the next. Through the band the path's target is
+    // interpolated toward the plain follow instead, so by the time the grip runs
+    // out the two targets are identical and the release delta is exactly zero.
+
+    run("falloff-weight-shape", () => {
+      // The weight is 0 anywhere inside the range, 1 at the band's outer edge
+      // and beyond, and C1 at both edges - a kink in the weight is a step in
+      // the camera's velocity, which reads as the camera catching on an
+      // invisible line. A zero falloff means no band: the path keeps its full
+      // grip out to the release, which is the pre-band behaviour.
+      const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2 };
+      const hard: CameraPathData = { ...RIDE };
+      const h = 1e-3;
+      const w = (d: number): number => pathFalloffWeight(path, V(0, d));
+      return [
+        { label: "on the route", got: w(0), want: 0 },
+        { label: "exactly at the range", got: w(1), want: 0 },
+        { label: "mid-band", got: w(2), want: 0.5 },
+        { label: "at the band's outer edge", got: w(3), want: 1 },
+        { label: "far past the band", got: w(10), want: 1 },
+        { label: "flat at the inner edge", got: (w(1 + h) - w(1)) / h, want: 0, tol: 0.01 },
+        { label: "flat at the outer edge", got: (w(3) - w(3 - h)) / h, want: 0, tol: 0.01 },
+        { label: "zero falloff keeps full grip", got: pathFalloffWeight(hard, V(0, 5)), want: 0 },
+      ];
+    }),
+
+    run("falloff-blends-toward-the-plain-follow", () => {
+      // The target through the band, with a viewportScale so the zoom half of
+      // the claim is not vacuous: pure path at the boundary, EXACTLY the null
+      // rule's target - the avatar at the base zoom - at the outer edge, and
+      // the straight interpolation between the two mid-band (geometric for the
+      // zoom, as every zoom blend here is).
+      const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, viewportScale: 2 };
+      const rule = buildCameraRules([], [path])[0]!;
+      const at = (dist: number): { pos: Vec2; zoom: number } =>
+        cameraRuleTarget(rule, new Vec2(5, dist), BASE_ZOOM, 5, pathFalloffWeight(path, V(0, dist)));
+      const boundary = at(1);
+      const mid = at(2);
+      const edge = at(3);
+      return [
+        // At the boundary: the full lead along the route, at the path's zoom.
+        { label: "boundary target x", got: boundary.pos.x, want: 7.5 },
+        { label: "boundary target y", got: boundary.pos.y, want: 0 },
+        { label: "boundary zoom", got: boundary.zoom, want: BASE_ZOOM / 2 },
+        // Mid-band: halfway between the path's target and the avatar.
+        { label: "mid-band target x", got: mid.pos.x, want: 6.25 },
+        { label: "mid-band target y", got: mid.pos.y, want: 1 },
+        { label: "mid-band zoom is the geometric mean", got: mid.zoom, want: Math.sqrt((BASE_ZOOM / 2) * BASE_ZOOM), tol: 1e-9 },
+        // Outer edge: the plain follow, identically - this equality is what
+        // makes the release delta zero.
+        { label: "edge target x", got: edge.pos.x, want: 5 },
+        { label: "edge target y", got: edge.pos.y, want: 3 },
+        { label: "edge zoom is the base zoom", got: edge.zoom, want: BASE_ZOOM },
+      ];
+    }),
+
+    runFacts("falloff-release-is-seamless", () => {
+      // The claim the whole design is for: by the time the path lets go its
+      // target has already become the plain follow, so the release moves the
+      // camera by nothing. Walk out through the band, stand still past the
+      // release, and measure what the camera does after the rule changes -
+      // under the old positional drift it glided ~2.7 m of leftover lookahead
+      // here; under the weight it has nothing left to do.
+      const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, buffer: 0.15 };
+      const rules = buildCameraRules([], [path]);
+      // Slowly (0.6 m/s), so the follow ease's own lag stays small and what is
+      // measured is the release rather than the walk.
+      const walk: Vec2[] = [];
+      for (let d = 0; d <= 3.2; d += 0.01) walk.push(new Vec2(5, d));
+      for (let i = 0; i < 120; i++) walk.push(new Vec2(5, 3.2));
+      const out = ride(rules, walk);
+      const release = out.findIndex((o, i) => i > 0 && out[i - 1]!.rule !== null && o.rule === null);
+      if (release < 0) return ["the path never released"];
+      const travel = out
+        .slice(release)
+        .reduce((a, o, i, arr) => (i ? a + o.pos.distanceTo(arr[i - 1]!.pos) : 0), 0);
+      return travel > 0.3
+        ? [`the camera travelled ${travel.toFixed(2)} m after the release`]
+        : [];
+    }),
+
+    runFacts("falloff-holds-then-releases", () => {
+      // The band extends the path's grip: it holds through `range + falloff`
+      // and its jitter buffer, and lets go past that. Acquisition is unchanged -
+      // the path is taken on the core range alone, so drifting IN through the
+      // band does not grab the camera early.
+      const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, buffer: 0.15 };
+      const rules = buildCameraRules([ROOM], [path]);
+      const bad: string[] = [];
+      const rel = pathRelease(path, V(0, 1));
+      if (Math.abs(rel - 3.15) > 1e-9) bad.push(`release at ${rel}, want 3.15`);
+      // Ride out from the route and check where it lets go.
+      const held = ride(rules, [new Vec2(5, 0), new Vec2(5, 2.5), new Vec2(5, 3.1)]);
+      if (held[1]!.rule !== rules[1]) bad.push("let go inside the falloff band");
+      if (held[2]!.rule !== rules[1]) bad.push("let go inside the jitter buffer");
+      const gone = ride(rules, [new Vec2(5, 0), new Vec2(5, 3.5)]);
+      if (gone[1]!.rule === rules[1]) bad.push("still holding past the release distance");
+      // ...and coming from outside, the band is not a wider acquisition.
+      const inward = ride(rules, [new Vec2(5, 6), new Vec2(5, 2.5)]);
+      if (inward[1]!.rule === rules[1]) bad.push("acquired the path from inside the falloff band");
+      return bad;
+    }),
+
+    run("range-and-falloff-are-per-axis", () => {
+      // The pairs are the semi-axes of ellipses around the route, resolved
+      // along the direction the player actually left in - so the corridor is
+      // screen-shaped. The frame is 16:9: a circular corridor wide enough to
+      // mean anything horizontally is off the bottom of the screen vertically,
+      // which is exactly how the ball used to leave the frame with the edge
+      // clamp off.
+      const path: CameraPathData = { ...RIDE, rangeX: 4, rangeY: 1, falloffX: 2, falloffY: 0.5 };
+      return [
+        { label: "range along the route", got: pathRange(path, V(1, 0)), want: 4 },
+        { label: "range straight off it", got: pathRange(path, V(0, 1)), want: 1 },
+        { label: "band edge along", got: pathBand(path, V(1, 0)), want: 6 },
+        { label: "band edge straight off", got: pathBand(path, V(0, 1)), want: 1.5 },
+        // The same distance off the route is mid-band vertically and not even
+        // out of the corridor horizontally.
+        { label: "weight 1.25 m below", got: pathFalloffWeight(path, V(0, 1.25)), want: 0.5 },
+        { label: "weight 1.25 m along", got: pathFalloffWeight(path, V(1.25, 0)), want: 0 },
+      ];
+    }),
+
+    runFacts("acquisition-is-screen-shaped", () => {
+      // The consequence of the pair, on the rule set: a player 2 m below the
+      // route is outside a 1 m vertical range and does not take the path, while
+      // one 3 m past its END - a horizontal displacement - is inside the 4 m
+      // horizontal range and does. A circular range passing either both or
+      // neither is what this is red against.
+      const path: CameraPathData = { ...RIDE, rangeX: 4, rangeY: 1 };
+      const rules = buildCameraRules([], [path]);
+      const bad: string[] = [];
+      if (activeCameraRule(rules, V(5, 2)) !== null) bad.push("acquired 2 m below a 1 m vertical range");
+      if (activeCameraRule(rules, V(13, 0)) !== rules[0]) bad.push("did not acquire 3 m past the end, inside the horizontal range");
+      return bad;
+    }),
+
+    runFacts("switchback-branch-reacquire", () => {
+      // A held path must re-acquire its OWN other branch when the player has
+      // genuinely left the ridden one and landed inside the other's corridor.
+      // The windowed projection deliberately cannot walk there (that is the
+      // switchback protection), so without the branch challenge the ridden
+      // branch's falloff zone outprioritises the branch under the player's
+      // feet: in session-285f the ball fell through the lower branch's
+      // corridor at 0.05 m while the grip clung to the upper one at 5.4 m,
+      // released 6 cm outside the lower range, and the path never re-acquired.
+      //
+      // The jump must also BLEND - it moves the lookahead target by the arc
+      // gap between the branches, and a reseed that skips the frozen-delta
+      // hand-off snaps the camera by exactly that gap.
+      const path: CameraPathData = {
+        x: 0,
+        y: 0,
+        rot: 0,
+        // The SWITCHBACK: upper branch y = 0 (s 0..10), lower y = 2 (s 12..22,
+        // running back toward x = 0).
+        verts: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 2 },
+          { x: 0, y: 2 },
+        ],
+        rangeX: 0.5,
+        rangeY: 0.5,
+        // Wide enough that the 2 m drop between branches cannot RELEASE the
+        // path: this case is about the challenge, not the release.
+        falloffX: 5,
+        falloffY: 5,
+        lookaheadX: 1,
+        lookaheadY: 1,
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+      };
+      const rules = buildCameraRules([], [path]);
+      const walk: Vec2[] = [];
+      for (let x = 2; x <= 5; x += 0.05) walk.push(V(x, 0)); // ride the upper branch
+      for (let y = 0; y <= 2; y += 0.05) walk.push(V(5, y)); // fall off it
+      for (let i = 0; i < 120; i++) walk.push(V(5, 2)); // rest on the lower one
+      const out = ride(rules, walk);
+      const bad: string[] = [];
+      const last = out[out.length - 1]!;
+      if (last.rule === null) bad.push("the path released instead of re-acquiring");
+      // The lower branch under (5, 2) is s = 12 + (10 - 5) = 17.
+      if (Math.abs(last.s - 17) > 0.1)
+        bad.push(`held s ended at ${last.s.toFixed(2)}, want 17 (the lower branch)`);
+      let worst = 0;
+      for (let i = 1; i < out.length; i++)
+        worst = Math.max(worst, out[i]!.pos.distanceTo(out[i - 1]!.pos));
+      if (worst > 0.15)
+        bad.push(`the camera moved ${worst.toFixed(3)} m in one frame - the branch jump snapped`);
+      return bad;
+    }),
+
+    run("path-scalar-range-folds-to-both-axes", () => {
+      // The retired scalar `range`/`falloff` were one circular radius each.
+      // `scaleLevelData` - the one gate every level passes through - folds each
+      // into both axes, so a level that authored a circle keeps exactly that
+      // circle and nothing downstream reads the scalar fields at all.
+      const raw: RawLevelData = {
+        player: { x: 0, y: 0, radius: 20 },
+        bodies: [],
+        cameraPaths: [
+          {
+            x: 0,
+            y: 0,
+            rot: 0,
+            verts: [
+              { x: 0, y: 0 },
+              { x: 100, y: 0 },
+            ],
+            range: 150,
+            falloff: 50,
+          },
+        ],
+      };
+      const p = scaleLevelData(raw, 0.01).cameraPaths![0]!;
+      return [
+        { label: "rangeX", got: p.rangeX ?? NaN, want: 1.5 },
+        { label: "rangeY", got: p.rangeY ?? NaN, want: 1.5 },
+        { label: "falloffX", got: p.falloffX ?? NaN, want: 0.5 },
+        { label: "falloffY", got: p.falloffY ?? NaN, want: 0.5 },
+        // The scalar forms are consumed by the fold, not carried alongside it.
+        { label: "scalar range is gone", got: p.range === undefined ? 1 : 0, want: 1 },
+        { label: "scalar falloff is gone", got: p.falloff === undefined ? 1 : 0, want: 1 },
+      ];
+    }),
+
     // --- the lookahead buffer -----------------------------------------------
     //
     // A swing is an oscillation ALONG the route, so a lead taken from the

@@ -182,8 +182,15 @@ export interface EdCamera {
   bufferBottom: number | null;
   priority: number;
   // Camera PATH fields (see `CameraPathData`), meaningless on a region and left
-  // null there. null = the format's DEFAULT_PATH_RANGE / _LOOKAHEAD.
-  range: number | null; // metres
+  // null there. null = the format's DEFAULT_PATH_RANGE_X/_Y / _LOOKAHEAD.
+  // Per axis, because the frame is 16:9: the corridor is the ellipse with
+  // these semi-axes around the route, so it is screen-shaped.
+  rangeX: number | null; // metres
+  rangeY: number | null; // metres
+  // How far past the range the path lets go gradually, per axis through the
+  // same ellipse; null = DEFAULT_PATH_FALLOFF_X/_Y.
+  falloffX: number | null; // metres
+  falloffY: number | null; // metres
   // Per axis, because the frame is 16:9 (see DEFAULT_PATH_LOOKAHEAD_X/_Y).
   lookaheadX: number | null; // metres
   lookaheadY: number | null; // metres
@@ -572,7 +579,10 @@ export const defaultCamera = (): EdCamera => ({
   bufferTop: null,
   bufferBottom: null,
   priority: 0,
-  range: null,
+  rangeX: null,
+  rangeY: null,
+  falloffX: null,
+  falloffY: null,
   lookaheadX: null,
   lookaheadY: null,
   lookaheadBufferX: null,
@@ -935,7 +945,10 @@ function fromLevelData(data: LevelData): EdModel {
       bufferBottom: r.bufferBottom ?? null,
       priority: r.priority ?? 0,
       // A region has no corridor and no lookahead.
-      range: null,
+      rangeX: null,
+      rangeY: null,
+      falloffX: null,
+      falloffY: null,
       lookaheadX: null,
       lookaheadY: null,
       lookaheadBufferX: null,
@@ -992,7 +1005,10 @@ function fromLevelData(data: LevelData): EdModel {
       bufferTop: null,
       bufferBottom: null,
       priority: c.priority ?? 0,
-      range: c.range ?? null,
+      rangeX: c.rangeX ?? null,
+      rangeY: c.rangeY ?? null,
+      falloffX: c.falloffX ?? null,
+      falloffY: c.falloffY ?? null,
       lookaheadX: c.lookaheadX ?? null,
       lookaheadY: c.lookaheadY ?? null,
       lookaheadBufferX: c.lookaheadBufferX ?? null,
@@ -1161,7 +1177,10 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       // Omit anything left at its default, so a saved path carries only what
       // was actually authored - the same rule the region block follows, and
       // what keeps a re-save byte-stable.
-      ...(i.cam.range !== null ? { range: i.cam.range } : {}),
+      ...(i.cam.rangeX !== null ? { rangeX: i.cam.rangeX } : {}),
+      ...(i.cam.rangeY !== null ? { rangeY: i.cam.rangeY } : {}),
+      ...(i.cam.falloffX !== null ? { falloffX: i.cam.falloffX } : {}),
+      ...(i.cam.falloffY !== null ? { falloffY: i.cam.falloffY } : {}),
       ...(i.cam.lookaheadX !== null ? { lookaheadX: i.cam.lookaheadX } : {}),
       ...(i.cam.lookaheadY !== null ? { lookaheadY: i.cam.lookaheadY } : {}),
       ...(i.cam.lookaheadBufferX !== null ? { lookaheadBufferX: i.cam.lookaheadBufferX } : {}),

@@ -1984,6 +1984,29 @@ A circle has no sides and a polygon's growth is a signed-distance offset with no
 `priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
 The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - the buffer belongs to the region currently in force, and the island became that region on entry, so the enclosing region's buffer is no longer what is holding.
 
+### The screen-edge guarantee
+
+Whatever rule is in force, the avatar may never enter the outer **`CAMERA_EDGE_MARGIN`** (8%) of the frame, on either axis.
+It is the one camera rule with no authored override, and deliberately: a level may frame the avatar however it likes, and none of those framings is allowed to be "off the bottom of the screen".
+
+It is a clamp on **where the camera IS**, applied last in `update` and to the controller's own `pos` rather than to the target.
+A target the avatar can outrun is not a guarantee, and outrunning the ease is exactly what a launch does; clamping `this.pos` rather than only what is handed to the `Camera` is also what keeps the next frame continuous, since the camera really is where the constraint put it and carries on easing from there.
+
+The margin is a **fraction of the frame** rather than a distance, because what is being constrained is where the avatar is ON SCREEN: a region that zooms out shows more world, and a margin in metres would shrink to a sliver of the frame exactly where the frame got roomier.
+It is measured to the follow POINT, so it has to clear the avatar's own radius and leave something worth seeing - 77 cm either side and 43 cm above and below on the 9.6 x 5.4 m a 1080p frame shows at `GRAPPLE_ZOOM`.
+
+It is **inert in ordinary play**, which is what makes it safe to apply globally.
+The default camera centres the avatar, so the only thing that can put it near the edge under the plain follow is outrunning the ease - which settles at a lag of `speed x CAMERA_FOLLOW_TAU`, needing a sustained ~27 m/s before it binds against a hard swing's ~10.
+What it does bite on is a locked region the avatar has left, and a path whose lookahead aims the camera well off them.
+`cli camera` asserts both of those, plus a one-frame teleport, plus that it never binds at ordinary speed - and each of the three holding cases is red without the clamp.
+
+The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.
+
+`CameraController.edgeClamp` turns it off, and the **editor's `edge clamp` checkbox is the only thing that ever does** - for ▶ Test alone.
+An author tuning a lock or a lookahead has to be able to see the framing that rule is actually ASKING for, and that question is unanswerable while the answer is being silently corrected.
+It is an instrument rather than a level property, so it lives on the controller and is written to no file; the game constructs its controller and never touches the switch.
+`cli camera` asserts both halves of it - the same walk held on screen with it on and not held with it off - since a toggle connected to nothing passes any test that only checks one side.
+
 ### Camera paths
 
 A **camera path** (`CameraPathData`, its own `cameraPaths` list beside `cameraRegions`) is an authored curve the camera rides.
@@ -2034,7 +2057,34 @@ Dragging mirrors the opposite handle in direction and length (a smooth node); Al
 Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gains a grip and changes shape by nothing; splitting the chord would straighten it the moment it was subdivided.
 `Smooth` writes the Catmull-Rom tangent at every node (a third of the chord between its neighbours) and `Sharpen` zeroes them all.
 
-Straying more than `range` from the polyline **releases** the path, and the camera falls back to whatever rule governs where the player actually is - a region if one contains them, the plain follow otherwise.
+#### The corridor is an ellipse too
+
+`rangeX` / `rangeY` are how far off the route the player may be while the path still narrates it, and `falloffX` / `falloffY` grow it into the band below - each pair the semi-axes of an ellipse around the route, so the corridor, the band and the release are all **screen-shaped**.
+The frame is 16:9 - half of it is 4.8 m across and only 2.7 m down at `view × 1` - so with the old single circular `range` of 4 a player could be fully inside the corridor, the camera still centred on the route, and the ball past the bottom edge of the frame with the falloff not even started: the edge clamp was load-bearing for ordinary vertical excursions, and it is meant to be a backstop.
+The defaults are the frame's own ratio (`DEFAULT_PATH_RANGE_Y` = 4 × 9/16 = 2.25), which puts the worst-case vertical offset the band ever asks for (~2.3 m) inside the 2.7 m half-height.
+
+Unlike the lookahead's ellipse - resolved against the direction the ROUTE runs - these are resolved against the direction the player actually left the route in (`pathOffset`, the displacement from their projection), because that is the displacement the screen has to hold.
+`pathRange`, `pathBand` and `pathRelease` answer the reach along that direction; `pathReleaseAxes` grows both semi-axes by `buffer`, so the release boundary stays an ellipse and the editor and overlay draw EXACTLY the zone tested - through `pathCorridorEllipseInto`, which builds the polyline's Minkowski sum with the ellipse by running the circular fillet walk in a y-scaled space and letting the canvas transform carry it back.
+The retired scalar `range` / `falloff` are folded into both axes by `scaleLevelData` at the one gate, so a level that authored a circle keeps exactly that circle; `cli camera` asserts the fold, the per-axis reaches, and - on the rule set - that acquisition is screen-shaped: 2 m below a 1 m vertical range does not take the path while 3 m past its end inside the horizontal range does, which a circular implementation cannot split.
+
+#### The falloff band
+
+The falloff is the band OUTSIDE the range the path lets go over, and it exists because crossing the range used to swap the rule outright - the camera aiming down the route one frame and at the avatar the next, with the hand-off blend able to smooth that over but never make it small.
+
+Through the band `pathFalloffWeight` interpolates the path's target toward the **null rule's** - the plain follow at the base zoom - smoothstepped from 0 at the range ellipse to 1 at the band's outer ellipse (both resolved along the player's own offset direction, above), so lookahead, viewport scale and everything else the path asks for fade together and by the band's outer edge the two targets are **identical**: the release delta is exactly zero and the boundary stops existing perceptually.
+Smoothstep rather than linear so the weight is C1 at both edges - a kink in the target is a step in the camera's velocity, which reads as the camera catching on an invisible line.
+A zero falloff (both axes) means no band at all: the path keeps its full grip out to the release and the hand-off blend covers the swap, which is the pre-band behaviour.
+
+This replaced a positional drift that froze the avatar's screen position across the band, and the drift's three seams are why: the camera's behaviour flipped character at the range (riding the route one frame, tracking the avatar 1:1 the next), the drift capped at the falloff while the grip held all the way to the release (so the avatar slid again in the gap), and the lookahead never faded - so the release still swapped a full-lead target for the plain follow, a ~2.7 m delta the blend could smooth but never make small.
+The trade accepted with the weight: the avatar's screen position is no longer perfectly frozen inside the band - frozen-screen-position was the drift's mechanism, not the goal, and the goal was no jump.
+
+The weight is measured against the avatar's offset from their TRUE projection rather than from the deadbanded point the lead is taken from: this is about where they actually are relative to the route, which is the quantity the range is measured in - and while held it is the WINDOWED projection's offset, so at a switchback the fade is about the branch being ridden, exactly as the grip is.
+The band extends the grip (`pathRelease` is the band's ellipse grown by `buffer` on both axes) but NOT the acquisition, which stays the core range - a graceful exit rather than a wider entrance, the same asymmetry the buffer already has.
+Widening the acquisition to the band looks free (the weight is ~1 out there, so grabbing changes nothing on screen) and is not: a path acquired at zero influence still WINS the rule tie-break, so it would silently override a region the player is standing in with what amounts to the plain follow.
+
+`cli camera` asserts the claim the whole thing is for, and all three cases are red without the weight: the weight's shape (0 inside, 1 outside, flat at both edges), the target interpolation with the null rule's target reached identically at the band's edge, and a controller ride in which the camera travels essentially nothing after the release fires.
+
+Straying past the release ellipse **releases** the path, and the camera falls back to whatever rule governs where the player actually is - a region if one contains them, the plain follow otherwise.
 Coming back re-acquires it.
 Every one of those transitions is a rule change, so the controller's existing frozen-delta hand-off blends all of them for free; the one addition is that an outgoing path is evaluated at its tracked projection rather than at a fresh global one, since both targets have to be measured at the same instant and on the same branch or the frozen delta is a gap that never existed.
 
@@ -2053,8 +2103,15 @@ window  = [s - maxStep, s + maxStep]
 ```
 
 The `followDelta` term means no legitimate move can outrun the window however fast the avatar is flung; the `dt` term keeps it frame-rate independent.
-The path's **grip** is then measured to that windowed projection rather than to the global closest point, which is what makes `range` mean what the author set it to: a player who drops off an upper branch toward a lower one has the release distance measured against the branch they were actually riding, so the path lets go, the fallback rule takes over with a blend, and the lower branch re-acquires with a fresh global projection and another blend.
+The path's **grip** is then measured to that windowed projection rather than to the global closest point, which is what makes the range mean what the author set it to: a player who drops off an upper branch toward a lower one has the release distance measured against the branch they were actually riding, so the path lets go, the fallback rule takes over with a blend, and the lower branch re-acquires with a fresh global projection and another blend.
 `switchback-window` in `cli camera` is the case, and it is red against a window-ignoring implementation while every other case in the file is green.
+
+The window has a failure mode of its own, and the **branch challenge** is its other half.
+The grip is per-PATH while the geometry is per-branch, so a player who genuinely leaves the ridden branch and lands inside the corridor of a DIFFERENT branch of the same path was held by the ridden branch's falloff zone in preference to the branch under their feet - the incumbent and the containing rule are the same object, so "keep the incumbent" won, and the window then guaranteed the projection could never walk there.
+`session-285f` is the shape of it: the ball fell off the upper branch clean through the lower branch's corridor at 0.05 m while the grip clung to the upper one at 5.4 m, the release finally fired at 1.06 m off the lower branch - 6 cm outside its range, so nothing ever re-acquired - and the ball settled inside the drawn falloff band with the camera plain-following, which reads as the camera being in the wrong place.
+So a held path is challenged every frame by its own GLOBAL projection (`branchJump` in the controller): outside the ridden corridor (plus the jitter buffer) and inside the core range at the global answer, it re-acquires there exactly as it would after a release - a fresh projection, a re-centred lead, and the jump run through the frozen-delta hand-off so the arc gap between the branches blends instead of snapping.
+The challenge cannot fire on the ridden branch itself, by construction rather than by threshold: a global answer inside the window IS the windowed answer, so the two distances agree and cannot sit on opposite sides of the range - which is what keeps the switchback protection whole.
+`switchback-branch-reacquire` asserts both halves (the camera ends held on the branch the ball is on, and no single frame moves it more than 15 cm), and each is red alone: the challenge disabled ends held on the wrong branch, and the challenge without the hand-off snaps 0.29 m in one frame.
 
 The whole thing stays **render-side and wall-clock driven**, so recorded replays and `cli selftest` are bit-identical: nothing here touches the sim.
 A level with no `cameraPaths` reduces to a regions-only rule set and every code path is what it was.
