@@ -115,6 +115,13 @@ export interface WindowAssert {
   maxTravelX?: number;
   // Ceiling on kinetic energy anywhere in the window (J) — "it is at rest".
   maxKinetic?: number;
+  // Ceiling on how far the avatar rose above the window's starting height (m) —
+  // "it did not climb". Y is down, so the rise is startY - min(y). The bound a
+  // launch violates and a roll cannot: a ball driven along a floor, into a wall
+  // or under a ceiling stays at its own height to within a bounce, and the
+  // spin-funded wall launch this was written against rose 0.86 m
+  // (`session-773f` f600).
+  maxClimb?: number;
   // Ceiling on how much the chain's enforced length grows over the window (m).
   maxChainGrowth?: number;
   // Floor on the wrap-path node count reached — the chain wound on.
@@ -371,6 +378,10 @@ function evaluateWindow(a: WindowAssert, stats: FrameStat[]): AssertResult {
   if (a.maxKinetic !== undefined) {
     const worst = Math.max(...slice.map((s) => s.kinetic));
     check(worst <= a.maxKinetic, `maxKE=${worst.toExponential(2)}<=${a.maxKinetic}`);
+  }
+  if (a.maxClimb !== undefined) {
+    const rise = first.pos.y - Math.min(...slice.map((s) => s.pos.y));
+    check(rise <= a.maxClimb, `climb=${rise.toFixed(4)}<=${a.maxClimb}`);
   }
   if (a.maxEmbed !== undefined) {
     const worst = Math.max(...slice.map((s) => s.embed));

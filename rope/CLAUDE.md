@@ -486,6 +486,19 @@ chains instead of by the ground - and it measures the ball against the SLAB,
 because the rig is a pendulum and a ball riding a swinging slab is the ball doing
 its job.
 
+### Spin traction on a fresh contact
+
+The steered spin is an infinite reservoir - `kinematicRotation` means no impulse can despin it - and the friction cone is written on the understanding that the normal impulse scaling it is a real load.
+An impact's normal impulse is many frames of load delivered in one, and spent against the spin it mints energy: a ball rolling into a wall at 3.9 m/s had the rim's slip stopped outright out of a 234 N·s arrival impulse and left the floor at 4.4 m/s straight up with its spin untouched, an 86 cm launch off a flat wall (`session-773f` f600, felt as being thrown into the air).
+So the cone in the spin's drive direction is sized from the pair's SUSTAINED load (`World.pairLoad`), never from the whole accumulated normal impulse: the sustained value never sits under the gravity press (full on a floor, nothing on a wall or a ceiling - the impact-frame statement of "a spinning ball cannot climb a wall"), climbs by one frame of weight per carried frame, and follows the pair's real load down instantly.
+A steady load - gravity on a floor, a crate resting on the ball - reaches full funding within a dozen frames and keeps it, so every settled and persistent mechanic is left as it was; an impact decays before the ramp can chase it, and a ball GRINDING on a wall reads zero for ever, because between its own micro-bounces nothing presses it in.
+Contact age is deliberately NOT the test: a pair bouncing gently on a wall stays "in contact" indefinitely while carrying no load at all, and maturity-by-age funded a second launch out of exactly that - a 78 cm wall climb off repeated micro-impacts (`session-422f-wall` f373).
+The linear share of the slip keeps the full cone (`linearNeed`) - a skidding ball is still braked by a wall it hits - and the load is tracked per body PAIR with a few frames' absence grace (`PAIR_LOAD_GRACE`), because a compound body's touching shape changes while its press persists and a held press flickers out of the constraint set for a frame at a time.
+An **anchored chain switches the whole regime off** (`RigidBody2D.constraintTethered`): the wind-up's climb to its anchor starts on a wall the ball has only just met, funded by its own arrival impact, and the chain machinery - the winch budget, the unwind, the lease - is what polices chain-era traction.
+The cap therefore guards exactly the FREE ball, whose wall impact has no chain to answer for it.
+`spin-overdrive` is the invariant: it reads the applied tangential impulse against the same funding arithmetic the cap enforces, so it is zero by construction while the clamp holds and catches any future path that spends spin-funded impulse outside it.
+`ball-roll-wall` is the mechanic test - a ball driven 6 m into a vertical wall rises 26 cm at the old physics and under 5 cm now (`maxClimb`), while still reaching the wall at speed - and `session-773f` (the rolling launch) and `session-422f-wall` (the grinding climb) are the committed regressions.
+
 ### The loop cap
 
 Driving the mounting loop into the ground must **never** hop the ball, however

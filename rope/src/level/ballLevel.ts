@@ -214,6 +214,12 @@ export class BallLevel {
     }
     this.bodies = this.bodies.filter((b) => !b.removed);
 
+    // Whether the contact solver's spin-traction ramp applies this frame: an
+    // anchored chain keeps contact dynamics exactly as they always were (see
+    // `RigidBody2D.constraintTethered`). Read before the solve from last
+    // frame's chain state; the regime does not flip mid-press.
+    this.ball.constraintTethered = this.ball.chainAnchored;
+
     const ballVelocityBeforeContacts = this.ball.linearVelocity;
     this.world.integrate(delta);
 

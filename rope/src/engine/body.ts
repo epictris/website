@@ -468,6 +468,15 @@ export class RigidBody2D extends PhysicsBody2D {
   // fades this with speed while the player aims, so reorienting the spin
   // mid-roll cannot shed momentum but can still drive the ball.
   contactBrakeScale = 1;
+  // True while this body is held by an anchored chain (`BallLevel` maintains
+  // it). Another ball-controller device: with the chain anchored, contact spin
+  // traction is left exactly as it always was - the wind-up's climb to its
+  // anchor starts on a wall the ball has only just met, funded by its arrival
+  // impact, and the chain machinery (winch budget, unwind, the lease) is what
+  // polices that regime. The spin-traction ramp in `World.solveTangent` guards
+  // the FREE ball, whose wall impact has no chain to answer for it
+  // (`session-773f`).
+  constraintTethered = false;
   // Coefficient of restitution (bounciness) for static contacts: the fraction
   // of inward normal velocity reflected back on impact. 0 = fully inelastic
   // (kill inward velocity) and MUST stay the default — recorded replays predate

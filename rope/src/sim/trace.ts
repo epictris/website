@@ -336,6 +336,12 @@ const ANCHOR_KICK_TOLERANCE = 0.6;
 // over anything legitimate and still catches the bug by a wide margin.
 // `runaway-speed` never saw it: 96 m/s is far under that 1000 m/s ceiling.
 const CHAIN_SOLVE_KICK_TOLERANCE = 4;
+// Ceiling on applied tangential impulse beyond the kinematic spin's traction
+// budget (`World.spinDriveOverspend`, N·s). The budget arithmetic is exact -
+// the solver clamps to the same expression - so this is noise slack only: on
+// the ball's 52 kg, 1 N·s is 0.02 m/s. The wall launch it exists for overspent
+// by 193 N·s (`session-773f` f600).
+const SPIN_OVERDRIVE_TOLERANCE = 1;
 // Ceiling on how much inward speed the chain phase may hand the ball beyond what
 // its own constraint was opening at (`BallLevel.chainCreditOverBound`).
 //
@@ -826,6 +832,25 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
   // A launch has no winding behind it - `session-1474f`'s 96 m/s came from a wrap
   // path jumping half a metre with the ball barely turning - so subtracting the
   // budget leaves that case exactly as visible as it was.
+  // Friction fighting the steered spin's slip may spend only what the sustained
+  // load (the ball's own weight into the surface) and the linear slip fund -
+  // never an impact's normal impulse. The spin is kinematic, so the contact
+  // solve cannot despin it: traction beyond that budget converts rim speed into
+  // centre velocity with the spin paying nothing, which is energy from nothing.
+  // A ball rolling into a wall spent 196 N·s of a 234 N·s impact Pn stopping
+  // its rim's slip and left the floor at 4.4 m/s straight up, spin intact
+  // (`session-773f` f600). The solver clamps to the budget; this reads what was
+  // actually applied, so any new path spending outside it reports here.
+  if (level.world.spinDriveOverspend > SPIN_OVERDRIVE_TOLERANCE) {
+    out.push({
+      frame,
+      kind: "spin-overdrive",
+      detail:
+        `contact friction overspent the kinematic spin's traction budget by ` +
+        `${level.world.spinDriveOverspend.toFixed(1)} N·s` +
+        (level.world.spinDriveDetail ? ` (${level.world.spinDriveDetail})` : ""),
+    });
+  }
   const kick = (level.chainSolveSpeedGain ?? 0) - level.chainWinchSpeedBudget;
   if (level.chainSolveSpeedGain !== null && kick > CHAIN_SOLVE_KICK_TOLERANCE) {
     out.push({

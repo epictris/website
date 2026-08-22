@@ -209,6 +209,12 @@ export interface ContactConstraint {
 // can never be produced for the same shape pair.
 const CIRCLE_PAIR_FEATURE = -2;
 
+// Consecutive absent frames a pair's sustained load survives before it is
+// forgotten. A press being held through solver flicker vanishes from the
+// constraint set for a frame or two; a body that actually left is gone longer,
+// and what load it re-earns on return it re-earns through the ramp.
+const PAIR_LOAD_GRACE = 5;
+
 // A constraint with everything the iteration loop needs precomputed. Positions
 // do not change during a velocity solve, so the lever arms, the effective masses
 // and the restitution target are all constant across the iterations.
@@ -236,6 +242,45 @@ interface SolverContact {
   // so may not fund friction with — see `spinFabricatedNormal`. 0 for every
   // contact that is not an off-centre shape on a kinematically spun body.
   readonly spinNormal: number;
+  // Tangential slip a kinematic spin presents at the point (m/s), captured at
+  // build and constant across the iterations (the spin's invI is 0). Nonzero
+  // only when a body on the contact is kinematically spun. Its sign names the
+  // DRIVE direction: the impulse cancelling it is `-sign(spinSlip)` along the
+  // tangent, and that is the half of the cone `solveTangent` bounds.
+  readonly spinSlip: number;
+  // The normal impulse the spinning body's own weight sustains on this contact
+  // per frame - what a resting contact here would carry, full on a floor and
+  // nothing on a wall or ceiling. The spin-traction ramp STARTS here on a
+  // fresh contact and climbs by `rampBite` per carried frame, because the spin
+  // is an infinite reservoir (nothing the solve does can despin it) and an
+  // impact's Pn is many frames of load at once: spent against the spin it is
+  // energy from nothing, a ball rolling into a wall at 3.9 m/s leaving the
+  // floor at 4.4 m/s straight up with its spin untouched (`session-773f`
+  // f600).
+  readonly spinCone: number;
+  // Impulse the linear share of the entering slip justifies in the drive
+  // direction (N·s, >= 0). Added to the spin's cap so real momentum sliding the
+  // same way as the spin drives is still braked in full.
+  readonly linearNeed: number;
+  // One frame of the pair's weight through this contact's effective mass,
+  // direction-blind (N·s): the rate the sustained-load ramp climbs at. Blind on
+  // purpose - what qualifies a load for spin traction is that it PERSISTS, not
+  // where it points: a taut chain pressing the ball into a wall is as real as
+  // gravity pressing it into a floor, and the wound-up ball climbing to its
+  // anchor is carried by exactly that press (`ball-ground-wind-up`). An impact
+  // is gone before the ramp can chase it, whichever way it pointed.
+  readonly rampBite: number;
+  // The BODY PAIR's sustained load entering this frame (`World.pairLoad`,
+  // N·s), frozen at build so the cap and the `spin-overdrive` detector read
+  // the same number regardless of where the iterations left Pn mid-solve. The
+  // pair and not the feature, because a compound body's touching shape changes
+  // while the press persists: the wound-up ball's loop meets the wall once per
+  // revolution, and per-feature continuity would read a steady press as a
+  // stream of impacts.
+  readonly sustained: number;
+  // True when the kinematically spun body on this contact is held by an
+  // anchored chain - that regime keeps legacy traction, so the ramp is off.
+  readonly tethered: boolean;
   readonly key: string;
 }
 
@@ -938,6 +983,28 @@ export class World {
   // rather than re-deriving contacts it would then have to keep in step.
   frameContacts: ContactConstraint[] = [];
 
+  // The frame's worst overspend against the kinematic-spin drive cap (N·s), and
+  // which contact spent it. 0 while the cap in `solveTangent` holds; the
+  // `spin-overdrive` invariant reads it so a future path that spends spin-funded
+  // impulse outside the cap is caught rather than felt (`session-773f`).
+  spinDriveOverspend = 0;
+  spinDriveDetail: string | null = null;
+
+  // Each body pair's SUSTAINED load (N·s), keyed `aId:bId`, with how many
+  // consecutive frames the pair has currently been absent. The load a spin may
+  // buy traction from: it climbs by at most `rampBite` per carried frame and
+  // follows the pair's actual normal impulse down instantly, so a load
+  // qualifies by PERSISTING - gravity on a floor, a crate's weight, any press
+  // renewed frame after frame - while an impact's Pn is many frames of load in
+  // one and decays before the ramp can chase it. Direction-blind on purpose,
+  // and per pair with a short absence grace, because a held press is not a
+  // held constraint SET: a compound body's touching shape rotates and the set
+  // flickers while the press persists. A ball grinding on a wall reads ~0 here
+  // for ever - between its own micro-bounces nothing presses it in - which is
+  // what stopped maturity-by-contact-age treating the grind as a load and
+  // funding a 78 cm wall climb out of it (`session-422f-wall` f373).
+  private pairLoad = new Map<string, { s: number; missing: number }>();
+
   collectContacts(): ContactConstraint[] {
     const out: ContactConstraint[] = [];
     const n = this.bodies.length;
@@ -1075,7 +1142,18 @@ export class World {
   private solveContacts(constraints: ContactConstraint[], dt: number): void {
     const previous = this.contactCache;
     this.contactCache = new Map<string, CachedImpulses>();
-    if (constraints.length === 0) return;
+    this.spinDriveOverspend = 0;
+    this.spinDriveDetail = null;
+    const prevLoads = this.pairLoad;
+    if (constraints.length === 0) {
+      // No contacts at all: every pair is absent, so its grace elapses here.
+      const kept = new Map<string, { s: number; missing: number }>();
+      for (const [key, e] of prevLoads) {
+        if (e.missing < PAIR_LOAD_GRACE) kept.set(key, { s: e.s, missing: e.missing + 1 });
+      }
+      this.pairLoad = kept;
+      return;
+    }
     // Velocities as the solve found them, so the audit can ask whether every
     // change it left is explained by an impulse the pair actually applied.
     const before = ContactAudit.enabled ? this.snapshotVelocities() : null;
@@ -1114,6 +1192,39 @@ export class World {
       const restitution = Math.max(c.a.restitution, bRigid ? bRigid.restitution : 0);
       const bounce = vn < -RESTITUTION_THRESHOLD ? -restitution * vn : 0;
 
+      // The tangential slip a KINEMATIC spin contributes at this point, and the
+      // sustained load that spin is allowed to buy traction from. Constant
+      // across the iterations: a kinematic body's spin has invI = 0, so nothing
+      // the solve applies can change it. The press is the spinning body's OWN
+      // gravity component into the surface - not the pair's relative gravity,
+      // which is zero for two falling bodies and would starve the drive on a
+      // rigid platform (`ball-roll-drive-rigid`).
+      let spinSlip = 0;
+      if (c.a.kinematicRotation) spinSlip += c.a.angularVelocity * rA.cross(tangent);
+      if (bRigid && bRigid.kinematicRotation) spinSlip -= bRigid.angularVelocity * rB.cross(tangent);
+      // The ramp guards the FREE spinning body only: anchored, the chain
+      // machinery owns this regime and contact traction stays exactly legacy.
+      const tethered =
+        (c.a.kinematicRotation && c.a.constraintTethered) ||
+        (bRigid !== null && bRigid.kinematicRotation && bRigid.constraintTethered);
+      // The press is computed for every contact, not only spun ones, so the
+      // sustained-load ramp below is already warm when the player starts
+      // aiming mid-rest.
+      const press =
+        Math.max(0, -GRAVITY.dot(c.normal)) * c.a.gravityScale +
+        (bRigid ? Math.max(0, GRAVITY.dot(c.normal)) * bRigid.gravityScale : 0);
+      // Impulse in the spin's drive direction that the LINEAR half of the slip
+      // justifies on its own, from the entering velocities. Usually zero - a
+      // rolling ball's linear slide wants braking, the opposite direction - but
+      // when a ball slides and spins the same way the real momentum may still be
+      // braked in full.
+      let linearNeed = 0;
+      if (spinSlip !== 0 && invEffT > 1e-9) {
+        const vt0 = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(tangent);
+        const driveSign = spinSlip > 0 ? -1 : 1;
+        linearNeed = Math.max(0, (driveSign * -(vt0 - spinSlip)) / invEffT);
+      }
+
       solved.push({
         c,
         bRigid,
@@ -1130,6 +1241,16 @@ export class World {
         brakePos: brakeScale(c.a, bRigid, tangent),
         brakeNeg: brakeScale(c.a, bRigid, tangent.neg()),
         spinNormal: spinFabricatedNormal(c, bRigid, rA, rB, restitution, invEffN),
+        spinSlip,
+        spinCone: (press * dt) / invEffN,
+        linearNeed,
+        rampBite:
+          (GRAVITY.length() *
+            Math.max(c.a.gravityScale, bRigid ? bRigid.gravityScale : 0) *
+            dt) /
+          invEffN,
+        sustained: prevLoads.get(`${c.a.id}:${c.b.id}`)?.s ?? 0,
+        tethered,
         key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
       });
     }
@@ -1168,8 +1289,47 @@ export class World {
       }
     }
 
+    // The pairs' sustained loads for next frame: ramp-limited on the way up,
+    // the pair's own (largest-contact) normal impulse on the way down, grace
+    // for pairs the set dropped this frame.
+    const loads = new Map<string, { s: number; missing: number }>();
+    for (const s of solved) {
+      const pairKey = `${s.c.a.id}:${s.c.b.id}`;
+      const held = loads.get(pairKey);
+      const ceiling = Math.min(s.c.normalImpulse, s.sustained + s.rampBite);
+      if (!held || ceiling > held.s) loads.set(pairKey, { s: ceiling, missing: 0 });
+    }
+    for (const [key, e] of prevLoads) {
+      if (!loads.has(key) && e.missing < PAIR_LOAD_GRACE) {
+        loads.set(key, { s: e.s, missing: e.missing + 1 });
+      }
+    }
+    this.pairLoad = loads;
+
     for (const s of solved) {
       this.contactCache.set(s.key, { n: s.c.normalImpulse, t: s.c.tangentImpulse });
+      // The rule the drive cap in `solveTangent` enforces, measured on what was
+      // actually APPLIED: tangential impulse in a kinematic spin's drive
+      // direction beyond what the sustained load and the linear slip fund is a
+      // drive with no force behind it. Zero by construction while the cap
+      // holds; recorded so `spin-overdrive` catches any path that spends
+      // outside it again (the shape of `session-773f`'s wall launch).
+      if (s.spinSlip !== 0 && !s.tethered) {
+        const driveSign = s.spinSlip > 0 ? -1 : 1;
+        const applied = Math.max(0, driveSign * s.c.tangentImpulse);
+        const funded =
+          s.friction *
+            Math.max(0, Math.max(s.spinCone, s.sustained) - s.spinNormal) +
+          s.linearNeed;
+        const over = applied - funded;
+        if (over > this.spinDriveOverspend) {
+          this.spinDriveOverspend = over;
+          this.spinDriveDetail =
+            `${s.c.a.name || s.c.a.constructor.name} vs ` +
+            `${s.c.b.name || s.c.b.constructor.name}: spent ${applied.toFixed(1)} N·s against ` +
+            `the spin's slip, funded ${funded.toFixed(1)}`;
+        }
+      }
       // What this contact actually spent, normal and tangent. The phase delta
       // says the contact solve gave the ball 1.2 m/s sideways; this says which
       // contact paid for it, and whether it was at the Coulomb limit.
@@ -1271,11 +1431,43 @@ export class World {
     // there. A kinematic spin driving an off-centre shape into a surface is not
     // one, and what it fabricated buys nothing (see `spinFabricatedNormal`).
     const cone = s.friction * Math.max(0, c.normalImpulse - s.spinNormal);
-    const capPos = cone * s.brakePos;
-    const capNeg = cone * s.brakeNeg;
+    // ...and for an untethered kinematic spin, the cone in the spin's drive
+    // direction is sized from the pair's SUSTAINED load, never from the whole
+    // accumulated normal impulse. The spin is an infinite reservoir - the
+    // solve cannot despin it (invI is 0), so friction fighting its slip
+    // converts rim speed into centre velocity with the spin paying nothing.
+    // Against a carried load that IS the rolling drive; against an impact's Pn
+    // - many frames of load in one - it is energy from nothing: a ball rolling
+    // into a wall at 3.9 m/s had its rim's slip stopped outright out of a 234
+    // N·s impact impulse and left the floor at 4.4 m/s straight up, spin
+    // intact (`session-773f` f600). What separates the two is persistence
+    // (`World.pairLoad`): the sustained load never sits under the gravity
+    // press (full on a floor, nothing on a wall or ceiling - the impact-frame
+    // statement of "a spinning ball cannot climb a wall"), climbs by one frame
+    // of weight per carried frame, and follows the pair's real load down
+    // instantly - so a grind against a wall, where nothing presses between the
+    // ball's own bounces, funds nothing however long it lasts
+    // (`session-422f-wall`). The linear share of the slip is real momentum and
+    // keeps the full cone via `linearNeed`; an anchored chain keeps the whole
+    // regime legacy (see `constraintTethered`).
+    let conePos = cone;
+    let coneNeg = cone;
+    if (s.spinSlip !== 0 && !s.tethered) {
+      const driveCap = Math.min(
+        cone,
+        s.friction *
+          Math.max(0, Math.max(s.spinCone, s.sustained) - s.spinNormal) +
+          s.linearNeed,
+      );
+      if (s.spinSlip > 0) coneNeg = driveCap;
+      else conePos = driveCap;
+    }
+    const capPos = conePos * s.brakePos;
+    const capNeg = coneNeg * s.brakeNeg;
     const total = clamp(c.tangentImpulse - vt / s.invEffT, -capNeg, capPos);
     const delta = total - c.tangentImpulse;
-    c.slipping = cone > 0 && Math.abs(total) >= cone - 1e-12;
+    const sideCone = total >= 0 ? conePos : coneNeg;
+    c.slipping = sideCone > 0 && Math.abs(total) >= sideCone - 1e-12;
     // Against the bound the clamp above actually used, faded cone included.
     c.limited = total >= capPos - 1e-12 || total <= -capNeg + 1e-12;
     c.tangentImpulse = total;
