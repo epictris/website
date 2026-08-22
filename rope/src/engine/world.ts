@@ -551,7 +551,8 @@ export class World {
           body.linearVelocity = Vec2.ZERO;
         } else {
           body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
-          body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
+          if (body.continuous) this.integrateContinuous(body, dt);
+          else body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
         }
         body.globalRotation += body.angularVelocity * dt;
       }
@@ -559,6 +560,96 @@ export class World {
     PhaseTrace.mark("gravity", this);
     this.resolveDynamicCollisions(dt);
     this.notifyAreas();
+  }
+
+  // The continuous position step (see RigidBody2D.continuous): advance the
+  // body along its velocity, stopping at the earliest swept contact any of its
+  // circle shapes makes with static geometry, then slide the remainder of the
+  // step along that surface. Velocity is deliberately untouched - the body ends
+  // the step seated a skin's clearance off the surface, inside the solver's
+  // speculative band, and the contact solve then kills the approach velocity
+  // exactly as it does for a discrete step that stopped short. What changes is
+  // only what cannot happen: no step, however fast, ever carries the body
+  // across a surface, so the per-piece answers everything downstream gives
+  // (contacts, depenetration, the chain's push-out accounting) are always asked
+  // from the outside of the body, where they are correct.
+  //
+  // Statics only, matching the hazard: a static compound's internal seams are
+  // where a tunnelled body gets trapped (session-1085f), and rigid neighbours
+  // are neither large enough to tunnel through nor safe to sweep one-sidedly -
+  // both ends of a rigid pair move, and a swept stop against last frame's pose
+  // would be a contact the pair solver never agreed to.
+  //
+  // The slide is what keeps a grazing step a graze: dropping the remainder
+  // instead would stop a hook skimming a floor dead in its tracks, where today
+  // the solver converts the approach into a slide along the face. Up to three
+  // contacts are taken per step (a wedge is two, three is a dead end), and any
+  // motion still left after that is dropped - dropped motion cannot penetrate.
+  private integrateContinuous(body: RigidBody2D, dt: number): void {
+    let remaining = body.linearVelocity.mul(dt);
+    for (let pass = 0; pass < 3; pass++) {
+      if (remaining.x === 0 && remaining.y === 0) return;
+      let best: { t: number; normal: Vec2 } | null = null;
+      // The primary shape only. A mounted shape (the ball's rim loop) turns
+      // kinematically, so a translation-only sweep would test it at a stale
+      // offset - and its contacts carry their own mechanic (the loop cap),
+      // which a swept stop would pre-empt phase-dependently (`cli contacts`
+      // loop-cap). With the primary stopped a skin off the surface, a mounted
+      // shape can reach past it only by its own small protrusion, which is the
+      // shallow-overlap regime the discrete solve and depenetration already
+      // handle correctly.
+      {
+        const bs = body.primaryShape();
+        if (bs.shape.kind !== "circle") {
+          body.globalPosition = body.globalPosition.add(remaining);
+          return;
+        }
+        const start = bs.globalPosition;
+        const r = bs.shape.radius;
+        const reach = r + remaining.length() + CONTACT_SLOP;
+        for (const target of this.bodies) {
+          if (target === body || target.removed) continue;
+          if (!(target instanceof StaticBody2D)) continue;
+          if (body.exceptions.has(target.id)) continue;
+          if (!target.hasShape()) continue;
+          for (const ts of target.getShapes()) {
+            // The same conservative box reject the contact gather uses, widened
+            // by the step: anything further than the whole motion plus the
+            // radius cannot be swept into.
+            const oe = shapeExtents(ts);
+            if (Math.abs(start.x - ts.globalPosition.x) > oe.x + reach) continue;
+            if (Math.abs(start.y - ts.globalPosition.y) > oe.y + reach) continue;
+            const hit = sweepCircle(start, remaining, r, ts);
+            if (!hit || hit.t > 1) continue;
+            // The same phantom-contact guards as the character sweep
+            // (moveAndCollide): a real contact opposes the motion, and its
+            // normal agrees with the side of the shape the sweep starts on -
+            // without them a shape the body is already touching answers with
+            // its far face and the "contact" points inward.
+            if (hit.normal.dot(remaining) > 1e-9) continue;
+            if (hit.normal.dot(outwardDirection(start, ts)) < -1e-6) continue;
+            if (!best || hit.t < best.t) best = hit;
+          }
+        }
+      }
+      if (!best) {
+        body.globalPosition = body.globalPosition.add(remaining);
+        return;
+      }
+      // Stop exactly at contact - touching, depth zero - and slide what is
+      // left of the step along the face: the tangential remainder is the
+      // motion the discrete step's contact solve would have allowed. NOT
+      // backed off by the skin the character sweep uses: this runs every
+      // frame a body rests on a surface (a resting sweep hits at t=0), and a
+      // skin's worth of outward seat re-applied every frame is a pump - the
+      // ball settling in a basin was held hovering and jittering at 8 cm/s by
+      // it, never quiet enough for stiction to pin. At depth zero the contact
+      // gather still sees the pair well inside its speculative band, and any
+      // float-noise overlap is the depenetration sweep's ordinary work.
+      body.globalPosition = body.globalPosition.add(remaining.mul(best.t));
+      const rem = remaining.mul(1 - best.t);
+      remaining = rem.sub(best.normal.mul(Math.min(0, rem.dot(best.normal))));
+    }
   }
 
   // Constant-acceleration areas (a river current, wind). Runs before gravity

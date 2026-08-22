@@ -70,6 +70,13 @@ export class BallHook extends RigidBody2D {
     // The deploy is a straight line: no gravity until the throw ends (see the
     // file header). `endFlight` restores it.
     this.gravityScale = 0;
+    // A 2 cm circle at up to 12 m/s crosses ten of its own diameters in a step:
+    // the discrete integrate step is how it ended up inside a compound floor,
+    // riding the seam between two convex pieces (session-1085f). The swept
+    // attach check above integrate is a gameplay decision, not a collision
+    // guarantee - it ends when the throw does, and a bounced or dangling hook
+    // still moves through World.integrate.
+    this.continuous = true;
   }
 
   // The throw is over — the hook falls from here on. Idempotent, and safe to

@@ -480,6 +480,17 @@ export class RigidBody2D extends PhysicsBody2D {
   // the wasted impulse is what let a steered ball slide instead of braking.
   // Default false keeps every other body — and recorded replays — unchanged.
   kinematicRotation = false;
+  // When true, World.integrate advances the body's position by a swept motion
+  // against static geometry (earliest time of impact across every circle shape
+  // the body carries) instead of the discrete `pos += v*dt` step, so the body
+  // can never cross a static surface within a step however fast it moves. The
+  // ball and its hook set it: both are small, fast circles, and a discrete step
+  // let the hook cross into a compound floor and travel along the seam between
+  // two of its convex pieces, where every per-piece answer - contacts,
+  // depenetration - points at the seam rather than out of the body
+  // (session-1085f). Default false: loose debris is neither small nor fast
+  // enough to tunnel, and recorded replays predate this field.
+  continuous = false;
   // Static-friction (stiction) coefficient μ_s. A nearly-stationary body on a
   // slope whose along-surface gravity is within μ_s × the normal force is
   // pinned (tangential velocity and spin zeroed) instead of rolling/creeping

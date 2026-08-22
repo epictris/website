@@ -12,6 +12,7 @@ import {
 } from "../engine/body";
 import { bodyOverlapCircle, shapeRadius } from "../engine/collision";
 import { Hook } from "../classes/hook";
+import { BallHook } from "../classes/ballHook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
 import { LedgeHangState } from "../classes/states/ledgeHangState";
 import { OnWallState } from "../classes/states/onWallState";
@@ -314,6 +315,12 @@ export interface Violation {
 
 const RUNAWAY_SPEED = 1e3;
 const EMBED_TOLERANCE = 0.03;
+// The hook is a 2 cm circle, so the player's 3 cm bar would pass a hook buried
+// past its own centre: in session-1085f it rode a compound floor's internal
+// seam at exactly one radius deep (20 mm) for 90 frames and replayed HEALTHY.
+// A seated hook (bounce, probe, dangling rest) sits ON the surface - depth is
+// solver-band noise, well under a centimetre.
+const HOOK_EMBED_TOLERANCE = 0.01;
 
 // Slack above numerical/geometry noise for the anchor-kick check. Legit anchors
 // brake (negative gain); a point-blank shot into a wall the ball is already
@@ -918,6 +925,26 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         detail: `depth=${ov.depth.toFixed(2)} in ${body.name || "static"}`,
       });
       break;
+    }
+  }
+  // The hook, by the same rule: whether flying, bounced or dangling it is a
+  // solid circle the world may not swallow. An attached hook is removed from
+  // the world, so an anchor legitimately ON a surface never reports here.
+  for (const hook of level.world.bodies) {
+    if (!(hook instanceof BallHook) || !hook.hasShape()) continue;
+    const hs = hook.primaryShape().shape;
+    if (hs.kind !== "circle") continue;
+    for (const body of level.world.bodies) {
+      if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
+      const ov = bodyOverlapCircle(body, hook.globalPosition, hs.radius);
+      if (ov && ov.depth > HOOK_EMBED_TOLERANCE) {
+        out.push({
+          frame,
+          kind: "hook-embedded",
+          detail: `depth=${(ov.depth * 1000).toFixed(1)}mm in ${body.name || "static"}`,
+        });
+        break;
+      }
     }
   }
   return out;

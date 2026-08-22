@@ -113,6 +113,12 @@ export class BallPlayer extends RigidBody2D {
     this.contactDamp = 0.99;
     // Small bounce on impact — a cast-iron ball is not perfectly dead.
     this.restitution = 0.15;
+    // A swung ball crosses more than a radius per step: integrate sweeps its
+    // circles against static geometry instead of stepping discretely, so no
+    // frame can carry it across a surface (see RigidBody2D.continuous and
+    // session-1085f, where the hook made that crossing and lodged in the seam
+    // between two convex pieces of a compound floor).
+    this.continuous = true;
   }
 
   get radius(): number {
