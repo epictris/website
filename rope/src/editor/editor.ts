@@ -221,7 +221,7 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
 // off a killzone or a current - so the chain tool passes straight through one.
-const CHAINABLE_KINDS: BodyKind[] = ["static", "anchor", "rigid"];
+const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
 // Decoration is excluded for the plainer reason that it builds no body at all:
 // a chain tied to one would have nothing to constrain, and the loader drops it.
 const chainable = (b: EdItem): boolean =>
@@ -240,7 +240,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
 // they can't drift apart.
-const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "anchor", "force", "water"];
+const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "force", "water"];
 
 // How far the pointer must travel before a press that could mean either becomes
 // a drag rather than a click, in screen pixels. Small enough that a deliberate
@@ -2109,17 +2109,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // Nothing rests on a region or on hook-only scenery, so neither carries a
-  // friction. A force area and a body of water both carry a direction, hence a
+  // friction - and hook-only is a flag rather than a kind, so it is asked of the
+  // body rather than of its kind. A force area and a body of water both carry a direction, hence a
   // rot° even when they are circles (whose rotation is otherwise invisible).
   //
   // Water's own effect on friction is not this: it scales the friction of
   // whatever is INSIDE it (see `WATER_TRACTION_LOSS`), which is a property of
   // the submerged body rather than a number the water authors.
   const frictionless = (b: EdItem) =>
-    b.kind === "killzone" ||
-    b.kind === "force" ||
-    b.kind === "water" ||
-    b.kind === "anchor";
+    b.kind === "killzone" || b.kind === "force" || b.kind === "water" || b.passable;
 
   // May this item be welded into one body? Geometry that is not an area,
   // decoration included - it rides the body rather than adding a piece to it -
@@ -2478,6 +2476,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "The hook is destroyed (grapple) or deflected (ball) on this surface instead of anchoring — drawn with a dashed steel edge. It stays solid: you can stand on it and the rope still wraps its corners. Per shape, so one piece of a compound body can be the only place a hook will catch.";
+    g.appendChild(hint);
+  }
+
+  // Hook-only geometry (see `LevelBodyData.passable`): the hook catches on this
+  // body and everything else - the avatar, the rope, loose debris - passes
+  // straight through it. A background leaf on a sprung stem, a grate, a girder,
+  // a chandelier behind the level.
+  //
+  // A checkbox on the BODY and not a kind, which is where it used to live
+  // (`anchor`), and not per shape either, which is where hook-proof lives. A
+  // kind is what a body IS, so hook-only could only ever be immovable scenery -
+  // and the case levels want it for is a leaf on a stem, which is a rigid body
+  // that still falls and still sags when it is grabbed. Per body rather than
+  // per shape because "is this thing in the way at all" has no half-answer: a
+  // compound leaf's pieces are one leaf.
+  function addPassableField(g: HTMLElement, leads: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = leads.every((b) => b.passable);
+    // A mixed selection says so rather than reporting one body's answer as the
+    // group's, exactly as the hook-proof and pivot checkboxes do.
+    box.indeterminate = !box.checked && leads.some((b) => b.passable);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of leads) b.passable = box.checked;
+      syncEditedBodies(leads);
+      markDirty();
+      // Rebuilt because the answer decides which OTHER fields the panel offers:
+      // hook-only geometry carries no friction (nothing rests on it) and no
+      // hook-proofing (it exists to be caught on).
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "hook-only";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Only the hook can find this body: the player walks and swings straight through it, loose bodies fall through it and the rope never wraps it — drawn with a grate lattice and a dotted edge, behind the solid geometry. A rigid one still falls, still hangs on its spring and is still hauled by a chain; what it stops having is contacts.";
     g.appendChild(hint);
   }
 
@@ -3184,9 +3221,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const num = groupNum(g, bodies, sync);
     addTransformFields(g, num, bodies);
     // Hook-proof, offered for the solid kinds it means something on: an area is
-    // a region the rope passes through, and a hook-only anchor exists to be
-    // caught on, so neither has a hook to repel.
-    if (solid && bodies.every((b) => b.kind === "static" || b.kind === "rigid")) {
+    // a region the rope passes through, and a hook-only body exists to be caught
+    // on, so neither has a hook to repel.
+    if (
+      solid &&
+      bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
+    ) {
       addImpermeableField(g, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
@@ -3341,6 +3381,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // ...and the rate it takes hold at, in 1/s. NOT a length: it is a
         // reciprocal time, so it is authored and stored as the same number.
         num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
+      }
+      // Offered for the kinds that build a BODY: an area is a region the sim
+      // walks through already, so "the hook is the only thing that finds it"
+      // says nothing about one.
+      if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
+        addPassableField(g, leads);
       }
       if (leads.every((b) => b.kind === "rigid")) {
         addPivotField(g, leads);
@@ -4068,8 +4114,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // nothing else, which is the whole of what the format gives it - so the panel
   // is a transform, the chains it holds, and a sentence saying what it is for.
   //
-  // (Not `BodyKind.anchor`, which is hook-only scenery. The two share the word
-  // and nothing else; they are always told apart by `object` versus `kind`.)
+  // (Hook-only scenery used to share the word as a `BodyKind`; it is the
+  // `passable` flag now, so an anchor here is only ever a chain's tie point.)
   function buildAnchorsGroup(anchors: EdItem[]): void {
     const g = el("div", "ed-group");
     g.appendChild(
@@ -4813,6 +4859,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag: DEFAULT_WATER_DRAG,
       // A fresh body is free; the bearing and the spring are both opted into on
       // the panel, and a spring of no frequency is no spring at all.
+      // Hook-only is opt-in: a fresh body is one that collides.
+      passable: false,
       pivot: false,
       springFreqX: 0,
       springFreqY: 0,

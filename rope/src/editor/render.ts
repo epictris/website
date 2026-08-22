@@ -1375,18 +1375,18 @@ export function drawEditor(
     (i) => i.object === "collision" && i.shape.kind !== "path",
   );
   const ordered = visibleLayers.has("scene")
-    ? [...geometry].sort((a, b) => Number(a.kind !== "anchor") - Number(b.kind !== "anchor"))
+    ? [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable))
     : [];
   // Compound bodies draw as one object rather than as their pieces - union fill,
   // and a border only where a piece is not covered by a sibling. Drawn piece by
   // piece instead, the overlaps fill twice (a darker patch) and the joins get a
   // border each (a crack across a solid wall), neither of which is in the level.
-  // Anchors keep the per-shape path: their fill is a grate lattice punched out of
-  // each piece, which has no union form.
+  // Hook-only bodies keep the per-shape path: their fill is a grate lattice
+  // punched out of each piece, which has no union form.
   const drawnAsBody = new Set<number>();
   for (const body of ordered) {
-    if (body.kind === "anchor" || drawnAsBody.has(body.id)) continue;
-    const members = bodyMembers(ordered, body.bodyId).filter((m) => m.kind !== "anchor");
+    if (body.passable || drawnAsBody.has(body.id)) continue;
+    const members = bodyMembers(ordered, body.bodyId).filter((m) => !m.passable);
     if (members.length < 2) continue;
     for (const m of members) drawnAsBody.add(m.id);
     const union = unionPath(members);
@@ -1456,7 +1456,7 @@ export function drawEditor(
         outlineOf(body),
         paint(hexToRgba(body.color, body.opacity)),
       );
-    } else if (body.kind === "anchor") {
+    } else if (body.passable) {
       // Hook-only scenery: the same grate mesh the game punches through it.
       fillAnchor(
         ctx,
@@ -1486,7 +1486,7 @@ export function drawEditor(
       ctx.setLineDash([5 * PX, 3 * PX]);
       ctx.stroke();
       ctx.setLineDash([]);
-    } else if (body.kind === "anchor") {
+    } else if (body.passable) {
       // Hook-only: dotted edge, as in game — nothing about it reads as solid.
       ctx.strokeStyle = body.color;
       ctx.lineWidth = worldLine;

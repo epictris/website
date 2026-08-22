@@ -17,7 +17,10 @@
 import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
 import {
+  CharacterBody2D,
   ForceArea,
+  LAYER_ANCHOR,
+  LAYER_SOLID,
   WaterArea,
   PhysicsBody2D,
   RigidBody2D,
@@ -39,6 +42,7 @@ import {
   scaleLevelData,
   LEGACY_BACKGROUND_COLOR,
   type LegacyBodyData,
+  type LevelBodyData,
   type RawLevelData,
 } from "../level/levelFormat";
 import { SceneChain, stepSceneChains } from "../level/chains";
@@ -2182,6 +2186,197 @@ function caseImpermeableShape(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// passable-body — hook-only geometry is a FLAG on the body, and the hook is the
+// only thing in the sim that may find it.
+//
+// It used to be the `anchor` body KIND, and the kind could say only half of what
+// levels want. A kind is what a body IS, so hook-only could only ever be
+// immovable scenery; the case that motivated the flag is a leaf on a sprung stem
+// - a `rigid` body that falls, sags when the player hangs off it, and still
+// stops nothing. So a static one and a rigid one are both asserted here, and the
+// rigid one is the half a kind could not express at all.
+//
+// The rule is stronger than `VineLink`'s non-solidity and the difference is the
+// interesting part: a vine link blocks nothing but IS blocked by statics, which
+// is how a vine drapes over a ledge, while a passable body is blocked by nothing
+// at all. Decoupled in one direction only, the scenery a background leaf hangs
+// in front of would shove the leaf out of itself - the same one-directional
+// failure `cli vines` `link-contacts` exists for, in the other direction.
+//
+// Every path a body can be stopped by is asked, because each is written
+// separately and a flag honoured by three of the four is a leaf that stops the
+// player in one situation out of four: the character sweep, the character's own
+// depenetration, the contact gather, and the rigid depenetration sweep. The two
+// layers are asked as well - a mask-1 raycast (the player's ground and wall
+// probes, ledge detection) must miss it while the hook's two-layer ray finds it,
+// which is the whole mechanism that makes it attachable and nothing else.
+// ---------------------------------------------------------------------------
+function casePassableBody(): ContactResult {
+  const slab = (x: number, passable: boolean): LevelBodyData => ({
+    kind: "static",
+    x,
+    y: 1,
+    rot: 0,
+    ...(passable ? { passable: true } : {}),
+    objects: [{ type: "collision", shape: { kind: "rect", w: 2, h: 0.4 } }],
+  });
+  // The leaf: hook-only AND dynamic, which is exactly what the retired kind
+  // could not be. Authored over the solid slab so "falls through the floor" is
+  // a statement about the floor it is standing on.
+  const leaf: LevelBodyData = {
+    kind: "rigid",
+    x: 4,
+    y: 0.2,
+    rot: 0,
+    passable: true,
+    objects: [{ type: "collision", shape: { kind: "circle", r: 0.15 } }],
+  };
+  const bodies: LevelBodyData[] = [slab(0, true), slab(4, false), leaf];
+
+  const build = () => {
+    const world = new World();
+    const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies }, 1);
+    const built = buildLevelBodies(world, data, () => {});
+    return { world, built };
+  };
+
+  const { world, built } = build();
+  const hookOnly = built.bodies[0]!.body as PhysicsBody2D;
+  const solid = built.bodies[1]!.body as PhysicsBody2D;
+  const leafBody = built.bodies[2]!.body as RigidBody2D;
+
+  // The rope's scan list is exactly the solid bodies, which is what stops a span
+  // catching on scenery the player walks through.
+  const wrapOk =
+    built.wrapBodies.includes(solid) &&
+    !built.wrapBodies.includes(hookOnly) &&
+    !built.wrapBodies.includes(leafBody);
+  const flagOk = hookOnly.passable && !hookOnly.isSolid && leafBody.passable;
+
+  // 1. The character sweep, and 2. the character's depenetration pass: a walker
+  // driven through the hook-only slab reports nothing, and one standing inside
+  // it is not pushed out. The same walk into the solid slab is the control - a
+  // case that reported "passed through" for both would be asserting nothing.
+  const walker = new CharacterBody2D();
+  walker.setShape(circleShape(0.12));
+  world.add(walker);
+  const sweepThrough = (x: number, y: number, dx: number): CollisionObject2D | null => {
+    walker.globalPosition = new Vec2(x, y);
+    return world.moveAndCollide(walker, new Vec2(dx, 0), true)?.getCollider() ?? null;
+  };
+  const sweepOk = sweepThrough(-2, 1, 4) === null;
+  const sweepControl = sweepThrough(2, 1, 4) === solid;
+  walker.globalPosition = new Vec2(0, 1);
+  const insideOk = world.moveAndCollide(walker, new Vec2(0.01, 0), true) === null;
+  world.remove(walker);
+
+  // 3. The contact gather: no pair anywhere, against a static or a rigid.
+  const crate = new RigidBody2D();
+  crate.setShape(rectShape(0.4, 0.4));
+  crate.mass = 10;
+  crate.inertia = 1;
+  crate.globalPosition = new Vec2(0, 1);
+  world.add(crate);
+  const contacts = world.collectContacts();
+  const touches = (a: PhysicsBody2D, b: PhysicsBody2D): boolean =>
+    contacts.some((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+  const contactOk = !touches(crate, hookOnly) && !touches(leafBody, solid);
+
+  // 4. The rigid depenetration sweep, from both ends: the crate is not pushed
+  // out of the slab it is standing in, and the leaf is not pushed out of the
+  // solid floor it is standing in. The second is the half `isSolid` alone does
+  // not cover, since a vine link IS pushed out of a static.
+  const crateBefore = crate.globalPosition;
+  const cratePushed = world.depenetrateRigid(crate, 2, (o) => o === hookOnly);
+  const leafBefore = leafBody.globalPosition;
+  const leafPushed = world.depenetrateRigid(leafBody, 2);
+  const depenOk =
+    cratePushed.length === 0 &&
+    crate.globalPosition.distanceTo(crateBefore) === 0 &&
+    leafPushed.length === 0 &&
+    leafBody.globalPosition.distanceTo(leafBefore) === 0;
+
+  // 5. The layers. A mask-1 ray is every query the avatar makes; the hook's is
+  // the one that asks for both.
+  // A world of the authored geometry alone: the probes above put a crate and a
+  // walker in `world`, and a ray answering "the crate" would say nothing about
+  // the layers.
+  const rayWorld = build();
+  const rayTarget = rayWorld.built.bodies[0]!.body as PhysicsBody2D;
+  const from = new Vec2(0, -1);
+  const to = new Vec2(0, 3);
+  const playerRay = rayWorld.world.intersectRay(from, to, { collisionMask: LAYER_SOLID });
+  const hookRay = rayWorld.world.intersectRay(from, to, {
+    collisionMask: LAYER_SOLID | LAYER_ANCHOR,
+  });
+  const rayOk = playerRay === null && hookRay?.collider === rayTarget;
+
+  // 6. ...and the point of all of it: both hooks still catch on it. The grapple
+  // hook raycasts, the ball's sweeps, so each is asked its own way.
+  const grapple = new Hook();
+  grapple.globalPosition = new Vec2(0, 0);
+  grapple.velocity = new Vec2(0, 0.2);
+  let grappleAttached = false;
+  grapple.registerAttachmentCallback(() => {
+    grappleAttached = true;
+  });
+  world.add(grapple);
+  for (let f = 0; f < 60 && !grappleAttached; f++) grapple.physicsStep();
+
+  const ballWorld = build().world;
+  const ballHook = new BallHook();
+  ballHook.globalPosition = new Vec2(0, 0);
+  ballHook.linearVelocity = new Vec2(0, BallPlayer.HOOK_SPEED);
+  let ballAttached = false;
+  ballHook.registerAttachmentCallback(() => {
+    ballAttached = true;
+  });
+  ballWorld.add(ballHook);
+  for (let f = 0; f < 30 && !ballAttached; f++) {
+    ballHook.physicsStep(DT);
+    if (ballAttached) break;
+    ballWorld.integrate(DT);
+    ballHook.physicsStep(DT);
+  }
+
+  // 7. A hook-only rigid body is still a rigid body: gravity still acts, and
+  // with nothing to stop it the leaf falls straight through the floor it was
+  // authored on. That it FALLS is the half that says the flag removes contacts
+  // rather than removing the body from the sim.
+  const fallWorld = build().world;
+  const fallLeaf = fallWorld.bodies.find((b) => b.passable && b instanceof RigidBody2D)!;
+  const startY = fallLeaf.globalPosition.y;
+  for (let f = 0; f < 60; f++) fallWorld.integrate(DT);
+  const fell = fallLeaf.globalPosition.y - startY;
+  const fallOk = fell > 1;
+
+  const passed =
+    wrapOk &&
+    flagOk &&
+    sweepOk &&
+    sweepControl &&
+    insideOk &&
+    contactOk &&
+    depenOk &&
+    rayOk &&
+    grappleAttached &&
+    ballAttached &&
+    fallOk;
+  return ok("passable-body — hook-only is a flag, and only the hook may find it", passed, [
+    `${flagOk ? "ok  " : "BAD "} a static and a RIGID body both carry the flag and report \`isSolid\` false`,
+    `${wrapOk ? "ok  " : "BAD "} neither is in the rope's wrap list; the solid slab is`,
+    `${sweepOk && sweepControl ? "ok  " : "BAD "} the character sweep walks through it and still stops at the solid slab`,
+    `${insideOk ? "ok  " : "BAD "} a character standing inside it is not pushed out`,
+    `${contactOk ? "ok  " : "BAD "} no contact pair, crate-vs-slab or leaf-vs-floor`,
+    `${depenOk ? "ok  " : "BAD "} depenetration moves neither: blocked by nothing, statics included`,
+    `${rayOk ? "ok  " : "BAD "} a mask-1 ray misses it, the hook's two-layer ray finds it`,
+    `${grappleAttached ? "ok  " : "BAD "} the grapple hook anchors to it`,
+    `${ballAttached ? "ok  " : "BAD "} the ball's hook anchors to it`,
+    `${fallOk ? "ok  " : "BAD "} the hook-only rigid body still falls (${fell.toFixed(2)} m through the floor)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // hook-seam — where hook-proof geometry meets attachable geometry, an attach
 // beats a bounce, and the anchor lands on the surface.
 //
@@ -2493,6 +2688,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseMaterials());
   results.push(caseImpermeableShape());
   results.push(caseHookSeam());
+  results.push(casePassableBody());
   results.push(caseDecorGroup());
   results.push(caseAreaReach());
   results.push(caseWaterCurrent());

@@ -1057,7 +1057,7 @@ launches, mover misbehavior):
    blind — it only carries the avatar's pos/vel/rope-length, not the chain wrap
    path. `cli render bundle.json --frame N --out f.svg` writes an SVG of the
    whole scene at frame N (bodies, hook-proof surfaces = dashed steel border, hook-only
-   anchors = a grate mesh, areas with
+   (`passable`) bodies = a grate mesh, areas with
    their glyphs — skulls for a killzone, flow arrows for a force area, flow
    streaks for water — chain
    wrap path + wrap-node markers, avatar); convert with `magick f.svg f.png` and
@@ -1451,9 +1451,10 @@ unselected body).
 There is deliberately no body section above a selected object: that is exactly what made a
 collision shape look like it had a `kind: static` and a friction of its own, when the file has
 never had a place to put them.
-The kind picker covers `static`, `rigid`, `killzone`, `anchor`, `force`, `water`; the **hook-proof**
+The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **hook-proof**
 checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
 and it stays on the object panel for that reason (see **Hook-proof surfaces**).
+The **hook-only** checkbox beside it is per BODY and offered on `static` and `rigid` alike: it is what the retired `anchor` kind became, and as a flag it also says the thing a kind could not - a leaf on a sprung stem that falls, sags when it is grabbed and stops nothing (see **Hook-only bodies**).
 Body fields read and write the body's **collision lead** - the object its record is written from -
 and `syncBodyProps` pushes the values to the rest. Going through all the members instead put a
 `mixed` in the opacity field of a body whose decoration is deliberately a different opacity from
@@ -1464,7 +1465,7 @@ writes onto the object - and only where it DIFFERS from the body's, so a wall's 
 takes the colour the wall is painted and states nothing, while a backdrop welded into that
 body carries its own.
 Every body that can be stood on carries a **surface friction** (0 = ice, 1 = rubber; see below).
-Everything that is a piece of stuff rather than a region of space - every kind but the three areas, `anchor` included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
+Everything that is a piece of stuff rather than a region of space - every kind but the three areas, hook-only bodies included - also carries a **material** and a **thickness**, the shape's depth through the z axis the 2D view cannot show, with a live **mass** readout under them (`area × thickness × density`).
 The readout is what makes either number authorable: an author is choosing a weight, and a density and a depth only become one once the shape's own size is in it. See **Mass and materials**; both are per shape, so a selection spanning a compound body edits its pieces individually.
 A
 `force` area carries a signed **force** magnitude aimed by its own `rot°` - so the rotate
@@ -1801,13 +1802,13 @@ Haloing the body whenever any member was selected said the edit applied to all o
 Drawn piece by piece it read as a darker patch at every overlap and a crack at every join - a wall with a line down it.
 The clip is applied one sibling at a time on purpose: a single even-odd clip keeps the region inside *two* of them, which is exactly where an interior seam sits.
 `drawCompoundGeometry` (game) and `strokeCompoundOutline` (editor) are the two implementations of that one rule.
-Hook-only anchors keep the per-shape path, since their fill is a grate lattice punched out of each piece and a lattice has no union form.
+Hook-only bodies keep the per-shape path, since their fill is a grate lattice punched out of each piece and a lattice has no union form.
 The headless SVG snapshot still draws the pieces separately - it is a diagnostic view, and there the decomposition is the thing worth seeing.
 
 ### Chains
 
 **+Chain** (**K**) drags a chain from one body to another: press on the first body, release on the second.
-A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), stepped once a frame after `World.integrate` by both level drivers, so a rigid body on either end hangs, swings and is hauled by it while a static or an `anchor` is infinite mass and simply holds.
+A chain is a real constraint, not decoration - it is a `Rope` with both ends pinned at load (`src/level/chains.ts`), stepped once a frame after `World.integrate` by both level drivers, so a rigid body on either end hangs, swings and is hauled by it while a static is infinite mass and simply holds.
 There is deliberately **no new physics**: `Rope` already models a rope between two `RopeContact`s on arbitrary bodies, and a scene chain is that class with neither end being a hook in flight.
 
 What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
@@ -1894,7 +1895,7 @@ It is deliberately **not** pickable on the canvas (`hitsItem`) and not caught by
 `pruneChains` and `pruneAnchors` are mirrors and both run on delete, since either end may be what was deleted; `splitIntoBodies` sends an anchor out with its body's **first collision object** rather than into a body of its own, which would leave the chain tied to something that builds nothing.
 `EdItem.anchorId` is preserved through a load and a save rather than minted fresh, because the id is content: a level that goes through the editor untouched comes back naming the same anchors.
 
-(Not to be confused with `BodyKind.anchor`, which is hook-only scenery. The two share the word and nothing else, and are always told apart by `object` versus `kind`.)
+(Hook-only scenery used to share the word as a `BodyKind`; it is the `passable` flag now, so an anchor is only ever a chain's tie point.)
 
 Both the editor and the loader push an anchor onto the **nearest point of the body's surface** first (`nearestOnOutline` / `nearestOnCircle`).
 That is what a chain bolted to a body means, and it is load-bearing numerically: an anchor in a body's interior leaves the span starting *inside* that body, the wrap generator resolves that as a self-intersection, and the chain winds around its own anchor - a weight authored hanging at rest reached **31 m/s** that way, against 0 once the anchor is on the rim.
@@ -1930,10 +1931,10 @@ is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor
 into production, rather than a hand-copied TS duplicate.
 
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
-the generated one — adds the `rigid`, `anchor` and `force` kinds, the `cameraRegions` and
+the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays
 auto-generated and is structurally assignable to it. Both level drivers construct geometry
-through the shared `src/level/buildBodies.ts` (statics, killzones, anchors,
+through the shared `src/level/buildBodies.ts` (statics, killzones,
 force areas, and rigid bodies), so the grapple and ball controllers load identical scenes.
 `rigid` bodies get mass/inertia from `ShapeGeometry` and fall under gravity.
 
@@ -2178,7 +2179,7 @@ A machine with no WebGL falls back to the 2D renderer rather than to a blank pag
 
 ### Two canvases, one camera
 
-The WebGL canvas sits **under** the existing 2D one, which clears transparent and keeps everything that is genuinely 2D: the debug overlay, the aim reticle, the area glyphs, the hook-only grate lattice, the FPS counter, the vignette, and in the editor the collision outlines, handles and marquee.
+The WebGL canvas sits **under** the existing 2D one, which clears transparent and keeps everything that is genuinely 2D: the debug overlay, the aim reticle, the area glyphs, the FPS counter, the vignette, and in the editor the collision outlines, handles and marquee.
 `fitCanvas` sizes both from one arithmetic, so a pixel on one is a pixel on the other, and the top canvas keeps the pointer events - the scene below is drawn, never clicked.
 `overlayOnly` on `render`/`renderBall` is what drops the backdrop and the bodies from the 2D pass; it defaults **off**, so `shot.html`, `cli shot` and `cli render` are untouched.
 
@@ -2256,7 +2257,8 @@ Two rules are inherited from elsewhere rather than invented here:
 
 Authored colours are kept, but as a **tint with a brightness floor**: the levels were authored for a flat renderer where a body's colour *is* its appearance and most of them are near-black greys, so multiplying a stone texture by `#000000` leaves a hole where a wall should be. The hue is kept exactly and only the lightness is remapped into `TINT_FLOOR..1`, which preserves the authored ordering while leaving every surface enough albedo to show its grain and respond to the sun.
 
-Areas stay on the 2D overlay in both modes, and so does the hook-only grate: a killzone's skulls and a force area's arrows are flat marks on a region of *space*, and an anchor's lattice is what says the player passes through it (see **Area glyphs**, and "pass-through geometry must read as pass-through" in `docs/game-design.md`). Anchors do extrude, but a quarter of a metre behind the plane, so the lattice lands on the solid it belongs to.
+Areas stay on the 2D overlay in both modes - a killzone's skulls and a force area's arrows are flat marks on a region of *space* (see **Area glyphs**, and "pass-through geometry must read as pass-through" in `docs/game-design.md`).
+Hook-only bodies do **not**: they extrude a quarter of a metre behind the plane, and in 3D that setback is the whole cue, so the grate lattice is drawn in 2D mode only rather than stamped flat over a body the scene has already put behind the level.
 
 ### Bodies and scene objects
 
@@ -2682,39 +2684,35 @@ Nothing here is gated by a test, and the two cases to check by hand after touchi
 A hook **skimming** a face must strike once and then trail (`session-127f` f101 onward: one burst, then a stream growing to 63 particles by f109), a tip **dragged** along one must produce a steady stream (`session-152f` f123 onward, and `session-339f`, whose tangential speed reaches 5.4 m/s), and a tip left **resting** against one must produce nothing at all - the resting case fires one or two events every frame for ever, at gravity's own 0.13 m/s of approach and zero tangential speed, so it is silent because both thresholds reject it rather than because nothing is reported.
 Neither is visible to `bun run test`: sparks reach no digest and no invariant by construction, so a system emitting nothing at all is exactly as green as one that works.
 
-## Hook-only anchor geometry
+## Hook-only bodies
 
-An **`anchor`** body is an `AnchorBody` (`engine/body.ts`) — the mirror image of a
-hook-proof surface (see **Hook-proof surfaces**), and, unlike one, a body kind rather than a
-per-shape flag: what it changes is what the body *is*, not what the hook does with it. The hook attaches to it, but **nothing collides with it**: the avatar, the
-ball, loose debris and the rope/chain all pass straight through. It is what background
-scenery you can swing from is made of — a metal grate, a girder, a chandelier — geometry
-that must not block the level it decorates.
+A **`passable`** body (`CollisionObject2D.passable`) is the mirror image of a hook-proof surface (see **Hook-proof surfaces**): the hook attaches to it, and **nothing collides with it** - the avatar, the ball, loose debris and the rope/chain all pass straight through.
+It is what background scenery you can swing from is made of - a metal grate, a girder, a chandelier, a leaf on a stem - geometry that must not block the level it decorates.
 
-Three mechanisms keep it out of the sim, none of them a per-call-site special case:
+It was the **`anchor` body kind** and an `AnchorBody` class, and it is a flag on the body now for the reason the `impermeable` kind became one, plus one more.
+A kind is what a body IS, so hook-only could only ever be immovable scenery; the thing levels actually want it for is a leaf on a sprung stem, which is a `rigid` body that still falls, still sags when the player hangs off it and still stops nothing.
+A flag composes with `static` and `rigid` alike.
+It stays per BODY and not per shape, which is where hook-proofing lives: hook-proof asks *which surface did the hook reach*, a question about one face, while this asks *is this thing in the way at all*, and a body half in the way is not a thing a level can mean.
 
-- It extends `PhysicsBody2D` **directly** rather than `StaticBody2D`. Every collision path
-  in `World` (`moveAndCollide`, `resolveDynamicCollisions`) is written as an allowlist of
-  `StaticBody2D | RigidBody2D`, so an anchor is excluded by construction.
-- It sits on its own collision layer (`LAYER_ANCHOR`). Every existing raycast asks for
-  `LAYER_SOLID`, so they all miss it; the grapple `Hook` is the one query that asks for
-  both, which is exactly what makes it attachable. `BallHook`'s swept/probe contact names
-  `AnchorBody` explicitly for the same reason.
-- `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list**, so
-  a passing span has nothing to catch on, and `Rope` itself refuses to wrap a body whose
-  `isSolid` is false (the `isPassThrough` gate in `regeneratePath` *and* in both
-  self-intersection resolvers).
-  The second half is not redundant: the wrap list is only the *scan* list, whereas the
-  self-intersection resolvers wrap whatever a rope node is **already attached to**, list or
-  no list.
-  Since the hook's whole purpose is to attach to an anchor, that path is reached on every
-  anchored chain — without the gate the chain bent around the grate it was hooked to, which
-  is precisely the collision anchors exist to avoid.
+Four mechanisms keep it out of the sim, none of them a per-call-site special case:
 
-Queries that scan bodies generically (ledge detection, the debug overlay) filter on
-`PhysicsBody2D.isSolid`, which is false only for anchors — a grate corner is not a ledge.
-Anchors carry no surface friction (nothing rests on them) and are drawn first, behind the
-solid geometry they sit among, in both renderers and the SVG snapshot.
+- `PhysicsBody2D.isSolid` is false while it is set, and every collision path in `World` already filters on that (it is what a `VineLink` is excluded by).
+  `moveAndCollide`'s sweep and its depenetration passes, the contact gather and the depenetration sweep all drop it.
+- It goes **further** than `isSolid` in the one place a vine deliberately does not: a vine link is blocked by statics, which is how a vine drapes over a ledge, while a `passable` body is blocked by nothing at all.
+  `gatherDepenetration` answers with no overlaps for one and `collectContacts` drops its pairs against statics too, which is what stops the scenery a leaf hangs in front of shoving the leaf out of itself.
+- Setting it moves the body onto its own collision layer (`LAYER_ANCHOR`), which the setter does rather than the caller, so the two cannot disagree.
+  Every existing raycast asks for `LAYER_SOLID`, so they all miss it; the grapple `Hook` is the one query that asks for both, which is exactly what makes it attachable.
+  `BallHook`'s swept and probe contacts test no `isSolid` at all, for the same reason.
+- `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list** (the list is exactly the solid bodies), so a passing span has nothing to catch on, and `Rope` itself refuses to wrap a body whose `isSolid` is false (the `isPassThrough` gate in `regeneratePath` *and* in both self-intersection resolvers).
+  The second half is not redundant: the wrap list is only the *scan* list, whereas the self-intersection resolvers wrap whatever a rope node is **already attached to**, list or no list.
+  Since the hook's whole purpose is to attach to one, that path is reached on every anchored chain - without the gate the chain bent around the grate it was hooked to, which is precisely the collision this exists to avoid.
+
+What it does **not** switch off is the body's own motion: a hook-only `rigid` body still falls, still hangs on its spring, is still dragged by an area current and is still hauled by a chain attached to it.
+What it stops having is contacts.
+
+Queries that scan bodies generically (ledge detection, the debug overlay, the embedding invariants) filter on `isSolid` - a grate corner is not a ledge.
+The editor offers no friction on one (nothing rests on it) and no hook-proof checkbox (it exists to be caught on).
+The 2D renderer, the editor and the SVG snapshot draw it first, behind the solid geometry it sits among, punched with a grate lattice and edged with dots; in **3D** the lattice is dropped and the body's setback behind the gameplay plane is what says the player passes through it.
 
 ## Vines
 

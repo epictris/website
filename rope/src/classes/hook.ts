@@ -46,7 +46,7 @@ export class Hook extends CharacterBody2D {
     if (this.velocity.lengthSquared() < 0.0001 * PX * PX) return;
 
     const ray = new Segment(this.globalPosition, this.globalPosition.add(this.velocity));
-    // Solid geometry plus hook-only anchors: the hook is the one query that
+    // Solid geometry plus `passable` scenery: the hook is the one query that
     // sees LAYER_ANCHOR, which is exactly what makes a grate attachable while
     // the avatar (and every other mask-1 query) passes through it.
     const result = this.world.intersectRay(ray.start, ray.end, {

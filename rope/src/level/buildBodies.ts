@@ -12,7 +12,6 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
-  AnchorBody,
   ForceArea,
   PhysicsBody2D,
   RigidBody2D,
@@ -353,7 +352,7 @@ export function buildLevelBodies(
       rotation: built.globalRotation,
     });
     // Wrappable geometry is exactly the solid bodies: areas are not
-    // PhysicsBody2D at all, and an AnchorBody reports `isSolid` false.
+    // PhysicsBody2D at all, and a `passable` body reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
@@ -399,17 +398,6 @@ function buildOne(
     return wa;
   }
 
-  if (b.kind === "anchor") {
-    // Hook-only geometry: in the world so the hook's queries can find it, but
-    // NOT a wrap body - keeping it out of the returned list is what stops the
-    // rope from catching on scenery the player passes straight through.
-    const ab = new AnchorBody();
-    mountPieces(ab, pieces);
-    applyStyle(ab, b);
-    world.add(ab);
-    return ab;
-  }
-
   if (b.kind === "rigid") {
     const rb = new RigidBody2D();
     mountPieces(rb, pieces);
@@ -447,6 +435,11 @@ function buildOne(
     // is frictionless from either end, which is the answer either reading gives.
     rb.contactFriction = RIGID_KINETIC_FRICTION * rb.surfaceFriction;
     rb.staticFriction = RIGID_STATIC_FRICTION * rb.surfaceFriction;
+    // Hook-only (see `LevelBodyData.passable`): it still falls, is still sprung
+    // to its anchor and is still hauled about by a chain attached to it - what
+    // it stops having is contacts, so nothing in the scene is in its way and it
+    // is in nothing else's. A background leaf on a stem is exactly that body.
+    rb.passable = b.passable === true;
     world.add(rb);
     return rb;
   }
@@ -456,6 +449,10 @@ function buildOne(
   const sb = new StaticBody2D();
   mountPieces(sb, pieces);
   applyStyle(sb, b);
+  // ...and hook-only is not a kind any more either: a static that nothing but
+  // the hook can find is what the retired `anchor` kind was, and as a flag it
+  // composes with `rigid` as well (see `LevelBodyData.passable`).
+  sb.passable = b.passable === true;
   world.add(sb);
   return sb;
 }

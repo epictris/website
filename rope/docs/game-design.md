@@ -52,9 +52,11 @@ nothing alike:
 - **Areas** — regions. Nothing rests on them, the rope passes straight through,
   and they act on whatever is inside (a killzone resets the level, a force area
   accelerates you, water drags you toward its current).
-- **Hook-only anchors** — scenery. Nothing collides with them and the rope never
-  wraps them; only the hook catches on them, so they are something to swing
-  from rather than something to land on.
+- **Hook-only bodies** (`LevelBodyData.passable`) — scenery. Nothing collides
+  with them and the rope never wraps them; only the hook catches on them, so they
+  are something to swing from rather than something to land on. A static one is a
+  grate, a girder, a chandelier; a rigid one is a leaf on a sprung stem, which
+  still falls and still sags when it is grabbed.
 
 Pass-through geometry must **never** be mistakable for a solid body. Fill colour
 alone does not carry that distinction: colour is authored per-body, so an author
@@ -88,9 +90,16 @@ Consequences for how the glyphs are drawn:
   case this rule exists for.
 
 Current glyphs: `killzone` → skulls, `force` → flow arrows, `water` → flow
-streaks drifting at the current's own speed, `anchor` → a grate mesh (holes you
+streaks drifting at the current's own speed, `passable` → a grate mesh (holes you
 can see the backdrop through, which is what the body is). A new pass-through type
 must bring its own before it ships.
+
+**Hook-only bodies are the one pass-through type whose mark is 2D-only.** The
+grate lattice is stamped in the 2D renderer, the editor and the SVG snapshot; in
+3D the scene sets the body a quarter of a metre behind the gameplay plane
+instead, and that setback is what says the player goes through it. A flat lattice
+stamped over an object that is visibly behind the level fights the depth cue
+rather than adding to it.
 
 **Water is the one area that is a thing rather than a mark**, and in 3D it is
 drawn as one: a translucent volume with a waterline, deep enough through z that
@@ -102,19 +111,25 @@ SVG snapshot stamp, so a still of the level names it there too.
 
 The mirror-image pair is worth stating outright, because the two are one bit
 apart and confusing them would be lethal to a level: an **impermeable** surface
-is solid but hook-proof (the hook bounces off it), an **`anchor`** body is
+is solid but hook-proof (the hook bounces off it), a **`passable`** body is
 hook-only but not solid (everything else passes through it). They are drawn to
 be unmistakable — the first keeps a full solid fill with a dashed steel edge,
 the second is punched through with holes.
 
-They are not, however, the same *kind* of thing, and that asymmetry is
-deliberate. Hook-proof is a flag on the **shape** (`CollisionShape2D.impermeable`,
-authored per level entry), because it changes only what the hook does with a
-surface: a hook-proof crate still falls and is still hauled about, and a
+Both are flags rather than kinds, and they are flags on different things, which
+is the asymmetry worth stating. Hook-proof is a flag on the **shape**
+(`CollisionShape2D.impermeable`), because it changes only what the hook does with
+a surface: a hook-proof crate still falls and is still hauled about, and a
 compound wall can be attachable on one ledge and hook-proof on every other face.
-An `anchor` is a body kind, because what it changes is what the body *is* — it
-occupies its own collision layer and is outside every collision path in the
-world, which is a statement about a body and cannot be made a piece at a time.
+Hook-only is a flag on the **body** (`CollisionObject2D.passable`), because it
+changes whether the thing is in the way at all — it moves the body onto its own
+collision layer and out of every collision path in the world, and a body half in
+the way is not a thing a level can mean.
+
+`passable` was a body *kind* (`anchor`), and that cost the case it exists for: a
+kind is what a body IS, so hook-only could only ever be immovable scenery, while
+the thing levels want is a leaf on a stem that hangs, sags and springs back. A
+flag composes with `static` and `rigid` alike; a kind excludes every other.
 
 ### Decoration
 
@@ -250,7 +265,7 @@ by the same wrap-point solver the grapple and the ball & chain use. It is a
 constraint and its drawing, and nothing else:
 
 - It **holds** the pair. A rigid body on either end hangs, swings and is hauled
-  by it; a static (or an `anchor`) is infinite mass and simply holds.
+  by it; a static is infinite mass and simply holds.
 - It is **not collision geometry**. Nothing stands on a chain, nothing collides
   with it, and another rope does not wrap it. Those would need the chain to be a
   body per link, which is a different mechanism with its own stacking and contact

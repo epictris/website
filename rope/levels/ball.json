@@ -4079,21 +4079,22 @@
     {
       "kind": "rigid",
       "x": 2750,
-      "y": -570,
+      "y": -575.0000000000001,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
       "friction": 1,
-      "springFreqX": 1,
-      "springFreqY": 1,
+      "passable": true,
+      "springFreqX": 2,
+      "springFreqY": 1.5,
       "springDamping": 0.15,
       "objects": [
         {
           "type": "collision",
           "shape": {
             "kind": "rect",
-            "w": 110.00000000000014,
-            "h": 20.000000000000018
+            "w": 110.00000000000001,
+            "h": 10
           },
           "material": "glass"
         },
@@ -4101,12 +4102,15 @@
           "type": "geometry",
           "shape": {
             "kind": "rect",
-            "w": 110.00000000000014,
-            "h": 20.000000000000018
+            "w": 110.00000000000001,
+            "h": 10
           },
           "matchCollision": true,
-          "depth": 20,
-          "texture": "wood"
+          "depth": 50,
+          "texture": "mossy ground",
+          "tileScale": 320,
+          "tileOffsetX": 12600,
+          "tileOffsetY": 10
         }
       ]
     }

@@ -313,6 +313,11 @@ export interface EdItem {
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
   flow: number;
   drag: number;
+  // Hook-only (see `LevelBodyData.passable`): the hook catches on it and
+  // everything else - the avatar, the rope, loose debris - passes through. Per
+  // BODY, so `syncBodyProps` carries it across a group: a body half in the way
+  // is not a thing a level can mean.
+  passable: boolean;
   // Rigid bodies only: bolted to a bearing at the centre of mass - spins, never
   // translates (see `LevelBodyData.pivot`).
   pivot: boolean;
@@ -864,6 +869,7 @@ function fromLevelData(data: LevelData): EdModel {
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
+      passable: b.passable === true,
       pivot: b.pivot === true,
       springFreqX: b.springFreqX ?? 0,
       springFreqY: b.springFreqY ?? 0,
@@ -980,6 +986,7 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    passable: false,
     pivot: false,
     springFreqX: 0,
     springFreqY: 0,
@@ -1043,6 +1050,7 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    passable: false,
     pivot: false,
     springFreqX: 0,
     springFreqY: 0,
@@ -1108,6 +1116,7 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    passable: false,
     pivot: false,
     springFreqX: 0,
     springFreqY: 0,
@@ -1151,6 +1160,7 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    passable: false,
     pivot: false,
     springFreqX: 0,
     springFreqY: 0,
@@ -1481,6 +1491,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // Water carries a current and a rate for the same reason, and only
             // where it means something.
             ...(lead.kind === "water" ? { flow: lead.flow, drag: lead.drag } : {}),
+            // Hook-only geometry, and only when set: an absent field is the
+            // colliding body every level authored before the flag has. Written
+            // for every kind that builds a body - a static one is the retired
+            // `anchor` kind, a rigid one is the leaf it could not express.
+            ...(lead.passable ? { passable: true } : {}),
             // A bearing means something only on a rigid body, and only when
             // set - an absent field is the free body every old level has.
             ...(lead.kind === "rigid" && lead.pivot ? { pivot: true } : {}),
@@ -2094,9 +2109,8 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
     const reach = item.shape.kind === "circle" ? ` ${n(item.shape.r)}` : "";
     return `${item.light.kind}${reach}`;
   }
-  // NOT `BodyKind.anchor`, which is hook-only scenery and an entirely different
-  // thing that happens to share the word. This is a chain's tie point; the two
-  // are always distinguished by `object` versus `kind`.
+  // A chain's tie point. Hook-only scenery used to share the word as a
+  // `BodyKind`; it is the `passable` flag now, so nothing else answers to it.
   if (item.object === "anchor") return `anchor ${item.anchorId}`;
   if (item.layer === "notes") return item.note.kind === "arrow" ? "arrow" : "text";
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
@@ -2281,6 +2295,7 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
+    m.passable = lead.passable;
     m.pivot = lead.pivot;
     m.springFreqX = lead.springFreqX;
     m.springFreqY = lead.springFreqY;
@@ -2507,6 +2522,7 @@ export function emptyModel(): EdModel {
         force: 0,
         flow: 0,
         drag: 0,
+        passable: false,
         pivot: false,
         springFreqX: 0,
         springFreqY: 0,

@@ -35,7 +35,7 @@
 import * as THREE from "three";
 
 import type { CollisionObject2D, CollisionShape2D } from "../engine/body";
-import { AnchorBody, WaterArea } from "../engine/body";
+import { WaterArea } from "../engine/body";
 import { DEFAULT_THICKNESS } from "../lib/shapeGeometry";
 import { outlineOfData, outlineOfShape, type Outline } from "../render/shapePath";
 import { DECOR_DEPTH, DECOR_Z } from "../level/decor";
@@ -67,8 +67,10 @@ import { orientTo, placeAt, threeY } from "./space";
 const TINT_FLOOR = 0.6;
 
 // How far behind the gameplay plane hook-only scenery sits by default: far
-// enough to read as background, near enough that the 2D grate lattice drawn over
-// it still lands on it.
+// enough to read as background, near enough to still read as part of the level
+// it decorates. In 3D this setback is the WHOLE cue - the 2D grate lattice is
+// drawn only in 2D mode (see `render/renderer.ts`), so nothing else here says
+// the player passes through it.
 const ANCHOR_Z = -0.25;
 
 // Scratch for the conversion below: `tintFor` runs at build time rather than per
@@ -322,11 +324,11 @@ export class BodyVisual {
   ) {
     const data = built?.data ?? null;
     // Hook-only scenery sits BEHIND the level it decorates by default, because
-    // the player passes straight through it - and its glyph lattice still stamps
-    // over it on the 2D overlay, which is what keeps "pass-through geometry
-    // reads as pass-through" true in 3D (see docs/game-design.md). Anything else
-    // sits on the gameplay plane unless the level says otherwise.
-    const solidZ = body instanceof AnchorBody ? ANCHOR_Z : 0;
+    // the player passes straight through it - and in 3D that setback is what
+    // says so, the flat grate lattice being 2D-mode only (see docs/game-design.md
+    // and `render/renderer.ts`). Anything else sits on the gameplay plane unless
+    // the level says otherwise.
+    const solidZ = body?.passable === true ? ANCHOR_Z : 0;
 
     if (data?.kind === "water") {
       // Water has its own renderer (see `water.ts`) rather than the dressing

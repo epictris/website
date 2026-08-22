@@ -149,8 +149,9 @@ export interface RayOptions {
 }
 
 // Does the world resolve collisions against this body? The allowlist every
-// collision path is written as (see AnchorBody, which is outside it by
-// construction rather than by a special case per site).
+// collision path is written as. Pass-through geometry is inside it by class and
+// excluded by `isSolid` / `passable` instead (see `VineLink`,
+// `CollisionObject2D.passable`).
 function isSolidTarget(body: PhysicsBody2D): boolean {
   return body instanceof StaticBody2D || body instanceof RigidBody2D;
 }
@@ -400,10 +401,10 @@ export class World {
     for (const target of this.bodies) {
       if (target === body || target.removed) continue;
       if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
-      // A non-solid body blocks nothing (see `VineLink`). `AnchorBody` is
-      // already outside the allowlist above by class; a vine link is inside it,
-      // is a real body the world integrates, and must still be something the
-      // avatar walks and swings straight through.
+      // A non-solid body blocks nothing (see `VineLink`, and `passable`, which
+      // is the authored form of the same thing): both are real bodies the world
+      // integrates, and both must be something the avatar walks and swings
+      // straight through.
       if (!target.isSolid) continue;
       if (body.exceptions.has(target.id)) continue;
       if (!target.hasShape()) continue;
@@ -705,6 +706,11 @@ export class World {
         for (const target of this.bodies) {
           if (target === body || target.removed) continue;
           if (!(target instanceof StaticBody2D)) continue;
+          // A `passable` static is scenery the hook catches and nothing stops
+          // against, so the swept step flies through it exactly as the discrete
+          // one does. Missing here is the one way a body could still be halted
+          // by geometry no other path admits exists.
+          if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
           if (!target.hasShape()) continue;
           for (const ts of target.getShapes()) {
@@ -962,6 +968,11 @@ export class World {
   ): [{ normal: Vec2; depth: number } | null, { normal: Vec2; depth: number } | null] {
     let a: { normal: Vec2; depth: number } | null = null;
     let b: { normal: Vec2; depth: number } | null = null;
+    // A `passable` body is blocked by nothing, statics included - the one place
+    // it goes further than `isSolid`, which keeps a vine link resting on the
+    // ground it drapes across. Answering with no overlaps is what stops the
+    // scenery a leaf hangs in front of shoving the leaf out of itself.
+    if (body.passable) return [null, null];
     const consider = (ov: { normal: Vec2; depth: number }): void => {
       if (!a || ov.depth > a.depth) {
         b = a;
@@ -1095,6 +1106,10 @@ export class World {
         // constraints through the contact solver.
         if (!b.isSolid) continue;
         if (!a.isSolid && !(b instanceof StaticBody2D)) continue;
+        // ...and a `passable` body keeps not even those: the hook is the only
+        // thing in the sim that may find it, so it neither pushes a static nor
+        // is stopped by one (see `CollisionObject2D.passable`).
+        if (a.passable) continue;
         // A sleeping body has no contacts. It is not moving and nothing that
         // could move it reaches this loop, and the pair loop is the O(n²) half
         // of the frame - which is what a level full of vines pays (see

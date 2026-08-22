@@ -25,7 +25,7 @@ import { PathEnd, PathObject, PathStart, PathWrap } from "../lib/pathObject";
 import { Player } from "./player";
 import { Hook } from "./hook";
 
-// Pass-through geometry (a hook-only `AnchorBody`): the rope may be *pinned* to
+// Pass-through geometry (a `passable` body, a vine link): the rope may be *pinned* to
 // it — that is what the hook is for — but it may never bend around it. Every
 // wrap-generating path filters on this, so the invariant lives with the solver
 // rather than depending on the caller handing it a pre-filtered body list.

@@ -13,7 +13,6 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
-  AnchorBody,
   Area2D,
   CharacterBody2D,
   RigidBody2D,
@@ -124,10 +123,10 @@ function shapeView(s: Shape): ShapeView {
   return { kind: s.kind, verts: shapeVertices(s).length };
 }
 
-// Whether a body is geometry another body can be inside. Areas and hook-only
-// anchors are pass-through, so an overlap with one is not an embedding.
+// Whether a body is geometry another body can be inside. Areas and `passable`
+// bodies are pass-through, so an overlap with one is not an embedding.
 function isSolidGeometry(body: CollisionObject2D): boolean {
-  return !(body instanceof Area2D) && !(body instanceof AnchorBody);
+  return !(body instanceof Area2D) && !body.passable;
 }
 
 // The deepest overlap of `body` with the solid geometry around it, measured the

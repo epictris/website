@@ -6,7 +6,6 @@
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import {
-  AnchorBody,
   ForceArea,
   WaterArea,
   StaticBody2D,
@@ -129,16 +128,16 @@ export function renderFrameSVG(level: Level | BallLevel): string {
   const box: Box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
   const defsEls: string[] = [];
 
-  // Hook-only anchor geometry, drawn behind the solid bodies exactly as the
+  // Hook-only geometry, drawn behind the solid bodies exactly as the
   // canvas renderers draw it, with the same grate holes cut out of it. A
   // snapshot has to show which bodies the chain can anchor to but not touch —
   // without the mesh, a hook resting in mid-air would look like a bug.
   const anchorEls: string[] = [];
   for (const b of level.world.bodies) {
-    if (!(b instanceof AnchorBody) || b.removed || !b.hasShape()) continue;
-    // Every piece an anchor carries: grouping makes `anchor` bodies compound
-    // like any other, and a snapshot that drew only the first piece would show
-    // the hook catching on scenery that is not in the picture.
+    if (!b.passable || b.removed || !b.hasShape()) continue;
+    // Every piece it carries: grouping makes hook-only bodies compound like any
+    // other, and a snapshot that drew only the first piece would show the hook
+    // catching on scenery that is not in the picture.
     b.getShapes().forEach((s, i) => {
       const cx = s.globalPosition.x * M;
       const cy = s.globalPosition.y * M;

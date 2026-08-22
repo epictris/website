@@ -17,7 +17,7 @@
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import type { CollisionObject2D } from "../engine/body";
-import { AnchorBody, VineLink } from "../engine/body";
+import { VineLink } from "../engine/body";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
 import { Hook } from "../classes/hook";
@@ -76,7 +76,7 @@ export interface Scene3DLevel {
 // gauge a vine is drawn at, and a vine is one cord rather than twenty beads.
 // Extruded like scenery it draws as a stack of brown spheres with the cord
 // painted down the middle of them. `drawVines` on the 2D overlay is what draws a
-// vine in both render modes, exactly as the rope and the anchor grates are.
+// vine in both render modes, exactly as the rope is.
 // A host with no vines at all, so `sync` takes one list rather than a branch.
 const NO_VINES: readonly VineCord[] = [];
 
@@ -612,5 +612,5 @@ export class Scene3D {
 // `BodyVisual`). Exported so the 2D overlay and this agree about which bodies
 // they are each responsible for.
 export function isPassThroughScenery(body: CollisionObject2D): boolean {
-  return body instanceof AnchorBody;
+  return body.passable;
 }

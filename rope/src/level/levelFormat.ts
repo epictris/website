@@ -42,9 +42,6 @@
 
 // Body kinds a level can contain:
 // - static:      immovable geometry the rope wraps and bodies collide with.
-// - anchor:      hook-only scenery — the hook attaches to it, but nothing
-//                collides with it and the rope never wraps it (a background
-//                grate, a girder, a chandelier).
 // - killzone:    an Area2D that resets the level when the avatar enters it.
 // - rigid:       a dynamic RigidBody2D (gravity + collisions), authored in place.
 // - force:       an Area2D that accelerates every body inside it along the
@@ -55,6 +52,13 @@
 //                terminal speed; water has a speed it carries things at, and
 //                being slowed to it and being pushed by it are the same act.
 //                See `WaterArea`.
+//
+// Hook-only scenery is not among them, and used to be (`anchor`): a body
+// nothing but the hook can find is now the `passable` flag below, for the reason
+// that retired the `impermeable` kind and one more. A kind is what a body IS, so
+// hook-only could only ever be immovable scenery - and the thing levels want it
+// for is a background leaf on a sprung stem, which is a `rigid` body. A flag
+// composes with every kind; a kind excludes every other.
 //
 // Hook-proof (`impermeable`) is deliberately NOT among them - it is a per-object
 // flag below. It was a kind while it could only ever be static scene geometry,
@@ -67,7 +71,7 @@
 // consulted. It is still written (and defaults to `static`), because a shape may
 // be switched back and forth while a level is authored and silently losing the
 // kind on the way through would be a field that forgets.
-export type BodyKind = "static" | "anchor" | "killzone" | "rigid" | "force" | "water";
+export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water";
 
 // The retired kind, as levels on disk (and the generated `levelData.ts`) still
 // carry it. `normalizeLevelData` folds it into `static` + `impermeable: true`
@@ -593,6 +597,18 @@ export interface LevelBodyData {
   // seconds to notice a body is in it.
   flow?: number;
   drag?: number;
+  // Hook-only: the hook attaches to this body and everything else passes
+  // straight through it. The avatar walks and swings through it, loose debris
+  // falls through it, the rope never wraps it - a background leaf the hook can
+  // catch, a grate, a girder, a chandelier hung behind the level.
+  //
+  // Any kind may carry it, which is the whole reason it is a flag and not the
+  // `anchor` kind it replaces: a static one is that retired kind exactly, and a
+  // `rigid` one is the case the kind could not express - a leaf on a sprung stem
+  // that still falls, still sags when the player hangs off it, and still stops
+  // nothing. Absent = a body that collides, which is every body authored before
+  // the field.
+  passable?: boolean;
   // Rigid bodies only: mounted on a fixed frictionless bearing at the body's
   // centre of mass. The body cannot translate at all - gravity, contacts, the
   // rope and currents move it nothing - but torque spins it freely: a windmill
@@ -673,8 +689,7 @@ export function collides(b: LevelBodyData): boolean {
 // the ball & chain use, authored into the level and solved every frame.
 //
 // It constrains the pair - a rigid body on either end hangs, swings and is
-// hauled by it, while a static (or an `anchor`) is infinite mass and simply
-// holds. A foreground chain's span additionally wraps scene geometry through the
+// hauled by it, while a static is infinite mass and simply holds. A foreground chain's span additionally wraps scene geometry through the
 // ordinary solver, so a chain laid over a corner catches on it.
 //
 // Each end names an ANCHOR OBJECT (`AnchorObjectData`) by id, and that is the
@@ -2082,6 +2097,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
+      ...(b.passable !== undefined ? { passable: b.passable } : {}),
       ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
       // A spring frequency is a rate and a damping ratio is a ratio, so neither
       // is a length and neither scales - the same rule `drag` follows above,

@@ -4,7 +4,6 @@
 import { Vec2 } from "../engine/vec2";
 import type { ShapeTransform } from "../engine/shapes";
 import {
-  AnchorBody,
   AnimatableBody2D,
   Area2D,
   ForceArea,
@@ -134,10 +133,10 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
   // the overlaps fill twice and read as a darker patch, and the joins get a
   // border each and read as cracks across a solid wall. So its pieces are filled
   // as a union and outlined only where they are not covered by a sibling - which
-  // is exactly the body's real outline. Areas and hook-only anchors stay
+  // is exactly the body's real outline. Areas and hook-only scenery stay
   // per-shape: their fill is a glyph lattice punched out of each piece, and a
   // lattice has no union form.
-  if (shapes.length > 1 && !(body instanceof Area2D) && !(body instanceof AnchorBody)) {
+  if (shapes.length > 1 && !(body instanceof Area2D) && !body.passable) {
     drawCompoundGeometry(ctx, body, shapes);
     return;
   }
@@ -289,12 +288,13 @@ function drawGeometryShape(
     return;
   }
 
-  // Hook-only anchor geometry (a background grate, a girder): the hook attaches
-  // to it, but the avatar and the rope pass straight through. Punched with a
-  // grate mesh — the backdrop shows through the holes — and given a dotted edge
-  // rather than a solid one, so nothing about it reads as standable. `render`
-  // draws these first, behind the solid geometry they sit among.
-  if (body instanceof AnchorBody) {
+  // Hook-only geometry (a background grate, a girder, a leaf on a stem): the
+  // hook attaches to it, but the avatar and the rope pass straight through.
+  // Punched with a grate mesh — the backdrop shows through the holes — and given
+  // a dotted edge rather than a solid one, so nothing about it reads as
+  // standable. `render` draws these first, behind the solid geometry they sit
+  // among.
+  if (body.passable) {
     const fill = body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : ANCHOR_FILL;
     fillAnchor(ctx, t.globalPosition, t.globalRotation, outlineOfShape(t.shape), fill);
     pathShape(ctx, t);
@@ -490,15 +490,19 @@ export function render(
   }
 
   // Hook-only scenery is background the player passes through, so it goes down
-  // first and solid geometry draws over it. Its grate lattice is a flat mark and
-  // stays 2D in both modes (see `renderBall`).
-  for (const body of level.world.bodies) {
-    if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
+  // first and solid geometry draws over it. 2D only, like the water it follows:
+  // in 3D the scene draws the body itself, set back behind the gameplay plane,
+  // and a grate lattice stamped over that fights the thing it is describing (see
+  // `renderBall`).
+  if (!overlayOnly) {
+    for (const body of level.world.bodies) {
+      if (body.passable) drawBody(ctx, body, alpha);
+    }
   }
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
       if (body instanceof Player) continue; // drawn between the rig layers below
-      if (body instanceof AnchorBody) continue; // already drawn, behind
+      if (body.passable) continue; // already drawn, behind
       // A vine link's collision circle is its GRAB radius, several times the
       // gauge the vine is drawn at, and a vine is one cord rather than thirty
       // discs - `drawVines` below draws the whole thing from the link centres.
@@ -776,9 +780,10 @@ export function renderBall(
   alpha = 1,
   // Draw ONLY what is genuinely 2D, leaving the scene to the WebGL canvas
   // underneath (see render3d/scene.ts). What stays is everything whose size is
-  // fixed on screen or whose meaning is a flat mark: the area glyphs, the
-  // hook-only grate, the aim reticle, the FPS counter. What goes is the backdrop
-  // and every body, ball and chain, because the 3D scene draws those.
+  // fixed on screen or whose meaning is a flat mark: the area glyphs, the aim
+  // reticle, the FPS counter. What goes is the backdrop and every body, ball and
+  // chain, because the 3D scene draws those - hook-only scenery included, which
+  // the scene sets back behind the gameplay plane instead.
   //
   // Default false, so the 2D path, `shot.html` and `cli shot` are untouched.
   overlayOnly = false,
@@ -809,19 +814,21 @@ export function renderBall(
   }
 
   // Hook-only scenery behind the solid geometry it sits among (see `render`).
-  // Kept in overlay mode: its fill is a grate lattice punched out of the shape,
-  // and that lattice is what says the player passes through it. The 3D scene
-  // extrudes the same body behind the plane, so the mark lands on the solid it
-  // belongs to (see "Pass-through geometry must read as pass-through" in
-  // docs/game-design.md).
-  for (const body of level.world.bodies) {
-    if (body instanceof AnchorBody) drawBody(ctx, body, alpha);
+  // Dropped in overlay mode, which is the same exception water takes: the 3D
+  // scene draws the body a quarter of a metre behind the gameplay plane, and
+  // that setback is what says the player passes through it there, so a grate
+  // lattice stamped flat over the top only fights the depth cue (see
+  // "Pass-through geometry must read as pass-through" in docs/game-design.md).
+  if (!overlayOnly) {
+    for (const body of level.world.bodies) {
+      if (body.passable) drawBody(ctx, body, alpha);
+    }
   }
   if (!overlayOnly) {
     for (const body of level.world.bodies) {
       if (body instanceof BallPlayer) continue; // drawn over the chain below
       if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
-      if (body instanceof AnchorBody) continue; // already drawn, behind
+      if (body.passable) continue; // already drawn, behind
       if (body instanceof VineLink) continue; // one cord, not twenty discs (see `render`)
       drawBody(ctx, body, alpha);
     }

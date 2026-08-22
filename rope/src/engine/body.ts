@@ -100,8 +100,8 @@ let nextId = 1;
 
 // Collision layers. Bit 1 is solid scene geometry — everything the project has
 // ever had, so every existing `collisionMask: 1` query keeps its meaning. Bit 2
-// is hook-only geometry (`AnchorBody`), which those queries therefore miss by
-// construction; only the hook asks for both.
+// is geometry only the hook may find - a `passable` body, a vine link - which
+// those queries therefore miss by construction; only the hook asks for both.
 export const LAYER_SOLID = 1;
 export const LAYER_ANCHOR = 2;
 
@@ -118,6 +118,37 @@ export abstract class CollisionObject2D {
   globalRotation = 0;
   // Bitmask of layers this body occupies (default layer 1, matching the project).
   collisionLayer = LAYER_SOLID;
+  // The hook's mirror image of `CollisionShape2D.impermeable`: the hook reaches
+  // this body and anchors to it, and everything else passes straight through.
+  // The avatar walks and swings through it, loose debris falls through it, the
+  // rope never wraps it - a background leaf on a stem the hook can catch, a
+  // grate, a girder, a chandelier hung behind the level the player swings from.
+  //
+  // A property of the BODY and not of a shape, unlike hook-proofing. Hook-proof
+  // asks "which surface did the hook reach", which is a question about one face;
+  // this asks "is this thing in the way at all", and a body half in the way is
+  // not a thing a level can mean - a compound leaf's pieces are one leaf.
+  //
+  // It was a body KIND (`anchor`), which cost the case this exists for: a kind
+  // is what a body IS, so a passable body could only ever be immovable scenery,
+  // and a leaf that hangs off a sprung stem is a `rigid` body. A flag composes
+  // with every kind instead, exactly as `impermeable` and `pivot` do.
+  //
+  // Setting it moves the body onto `LAYER_ANCHOR`, which is what makes every
+  // mask-1 query (the player's raycasts, ledge detection) miss it while the
+  // hook, which asks for both layers, still finds it. The two always agree
+  // because one writes the other; a caller that set the layer by hand and the
+  // flag not at all is what the pairing removes.
+  get passable(): boolean {
+    return this.isPassable;
+  }
+
+  set passable(value: boolean) {
+    this.isPassable = value;
+    this.collisionLayer = value ? LAYER_ANCHOR : LAYER_SOLID;
+  }
+
+  private isPassable = false;
   // A body can carry more than one collision shape (a compound body). The first
   // is what `primaryShape()` returns for the few call sites that legitimately
   // mean exactly that shape; the rest are offset auxiliaries.
@@ -312,40 +343,17 @@ export abstract class PhysicsBody2D extends CollisionObject2D {
     return false;
   }
 
-  // Does this body block motion? False only for hook-only geometry
-  // (`AnchorBody`), which the hook anchors to but nothing collides with.
-  // Queries that scan bodies generically — ledge detection, the debug overlay —
-  // filter on this rather than naming the class.
+  // Does this body block motion? False for a `passable` body, which the hook
+  // anchors to but nothing collides with, and for a vine link, which is blocked
+  // by statics but blocks nothing itself. Queries that scan bodies generically -
+  // ledge detection, the debug overlay, the rope's wrap list - filter on this
+  // rather than naming a class.
   get isSolid(): boolean {
-    return true;
+    return !this.passable;
   }
 }
 
 export class StaticBody2D extends PhysicsBody2D {}
-
-// Hook-only scene geometry — the mirror image of an impermeable *shape*. The hook
-// anchors to it, but the avatar, the rope/chain and loose debris all pass
-// straight through: a background grate, girder or chandelier the player can
-// swing from without it blocking the level.
-//
-// It deliberately extends PhysicsBody2D *directly* rather than StaticBody2D.
-// Every collision path in `World` (moveAndCollide, resolveDynamicCollisions) is
-// written as an allowlist of `StaticBody2D | RigidBody2D`, so a body outside
-// that pair is excluded by construction instead of by a special case each site
-// would have to remember. Raycasts exclude it by layer (`LAYER_ANCHOR`), and
-// the rope never sees it at all — `buildLevelBodies` keeps it out of the wrap
-// list, so no span can catch on it.
-export class AnchorBody extends PhysicsBody2D {
-  constructor() {
-    super();
-    this.name = "Anchor";
-    this.collisionLayer = LAYER_ANCHOR;
-  }
-
-  override get isSolid(): boolean {
-    return false;
-  }
-}
 
 // Script-driven mover (Godot AnimatableBody2D): transform is set by game logic
 // each frame; collides as static / infinite mass, but exposes the per-frame
@@ -650,15 +658,18 @@ export class RigidBody2D extends PhysicsBody2D {
 // drawn curve: a wrap-point rope is a constraint and nothing can be grabbed
 // halfway along one.
 //
-// It is a `RigidBody2D` and not an `AnchorBody`-style direct `PhysicsBody2D`
-// because it needs gravity integration and mass, and because the entire chain
-// phase (`snapshotChainBodies`, `settleChainBodies`, `creditScale`) is written
-// against `instanceof RigidBody2D`. That puts it INSIDE the
-// `StaticBody2D | RigidBody2D` allowlist every collision path is written as, so
-// unlike `AnchorBody` it cannot be excluded by class and is excluded by the
-// `isSolid` flag instead. The rule the guards in `World` implement, and the only
-// one that makes them coherent: **a non-solid body blocks nothing, and is
-// blocked only by statics.**
+// It is a `RigidBody2D` because it needs gravity integration and mass, and
+// because the entire chain phase (`snapshotChainBodies`, `settleChainBodies`,
+// `creditScale`) is written against `instanceof RigidBody2D`. That puts it
+// INSIDE the `StaticBody2D | RigidBody2D` allowlist every collision path is
+// written as, so it is excluded by the `isSolid` flag instead. The rule the
+// guards in `World` implement, and the only one that makes them coherent: **a
+// non-solid body blocks nothing, and is blocked only by statics.**
+//
+// A `passable` body is the stronger statement of the same shape - blocked by
+// nothing at all, statics included - and a vine deliberately is not one: being
+// blocked by statics is how a vine drapes over a ledge instead of hanging
+// through it.
 //
 // Both halves of that sentence have to be guarded at every site, and the second
 // is the one that is easy to miss. Decoupled in one direction only, the ball

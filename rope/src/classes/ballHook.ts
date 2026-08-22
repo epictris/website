@@ -9,11 +9,10 @@
 //
 // It attaches to the first surface it contacts - during flight or later while
 // dangling at full chain length - via a swept ray for fast motion plus an
-// overlap probe for slow/resting contact. "Surface" includes hook-only
-// `AnchorBody` scenery, which nothing else in the sim collides with.
+// overlap probe for slow/resting contact. "Surface" includes `passable` scenery,
+// which nothing else in the sim collides with.
 
 import {
-  AnchorBody,
   RigidBody2D,
   StaticBody2D,
   type CollisionShape2D,
@@ -225,13 +224,9 @@ export class BallHook extends RigidBody2D {
     for (const body of this.world.bodies) {
       if (body.removed || body === this || body.name === "Player") continue;
       if (this.exceptions.has(body.id)) continue;
-      // AnchorBody is not solid — nothing else in the sim collides with it —
-      // but the hook is what it exists for, so it is named explicitly here.
-      if (
-        !(body instanceof StaticBody2D || body instanceof RigidBody2D || body instanceof AnchorBody)
-      ) {
-        continue;
-      }
+      // No `isSolid` test: a `passable` body is scenery nothing else in the sim
+      // collides with, and the hook is what it exists for.
+      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
       if (!body.hasShape()) continue;
       // The piece the sweep struck answers, not the body: a compound wall may
       // be hook-proof on the face the throw came in at and attachable one piece
@@ -408,15 +403,7 @@ export class BallHook extends RigidBody2D {
       if (c.normalImpulse <= 0) continue;
       const other = c.a === this ? c.b : c.b === this ? c.a : null;
       if (!other || other.removed || this.exceptions.has(other.id)) continue;
-      if (
-        !(
-          other instanceof StaticBody2D ||
-          other instanceof RigidBody2D ||
-          other instanceof AnchorBody
-        )
-      ) {
-        continue;
-      }
+      if (!(other instanceof StaticBody2D || other instanceof RigidBody2D)) continue;
       // The constraint names the piece it formed on, so a compound body anchors
       // on the shape actually struck rather than on whichever is nearest now.
       //
@@ -466,11 +453,7 @@ export class BallHook extends RigidBody2D {
     let proof: { normal: Vec2; depth: number } | null = null;
     for (const body of this.world.intersectCircle(from, probeR)) {
       if (body === this || body.name === "Player") continue;
-      if (
-        !(body instanceof StaticBody2D || body instanceof RigidBody2D || body instanceof AnchorBody)
-      ) {
-        continue;
-      }
+      if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
       // Whichever piece is nearest is the one the tip is resting on, and it is
       // that piece that decides: hook-proof deflects, anything else anchors.
       // Asked of the body instead, one hook-proof face would make a whole
