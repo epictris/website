@@ -33,6 +33,8 @@ import {
   DEFAULT_TEXTURE,
   emissiveMapName,
   emissiveMapNames,
+  isSolidSurface,
+  SOLID_SURFACE,
   surfaceKey,
   surfaceName,
   surfaceTile,
@@ -1227,6 +1229,26 @@ function surfaceResolution(): CaseResult[] {
         "an unknown name falls back rather than vanishing",
         surfaceName("no-such-surface") === DEFAULT_TEXTURE,
         surfaceName("no-such-surface"),
+      ],
+      // The flat fill is IN the namespace rather than beside it, so it has to
+      // survive the same resolution every other key goes through - and it must
+      // not be swallowed by the unknown-name fallback above, which would draw a
+      // wooden wall where the level asked for a block of colour.
+      [
+        "the solid fill resolves to itself rather than to the fallback",
+        surfaceName(SOLID_SURFACE) === SOLID_SURFACE && isSolidSurface(surfaceName(SOLID_SURFACE)),
+        surfaceName(SOLID_SURFACE),
+      ],
+      [
+        "a solid fill has nothing to tile",
+        surfaceTile(SOLID_SURFACE) === 1 && tileMetres(SOLID_SURFACE, 4) === 4,
+        `${surfaceTile(SOLID_SURFACE)} m`,
+      ],
+      [
+        "two colours of flat fill are two materials",
+        surfaceKey({ texture: SOLID_SURFACE, color: "#ff0000" }) !==
+          surfaceKey({ texture: SOLID_SURFACE, color: "#00ff00" }),
+        surfaceKey({ texture: SOLID_SURFACE, color: "#ff0000" }),
       ],
       [
         "an authored set's tile is its own",

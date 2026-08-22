@@ -48,7 +48,7 @@ import {
   type LevelBodyData,
 } from "../level/levelFormat";
 import { DEFAULT_BEVEL, cylinderSolid, extrudeOutline } from "./extrude";
-import { isAuthoredSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
+import { isAuthoredSurface, isSolidSurface, loadMesh, surfaceFor, surfaceName } from "./assets";
 import { buildWater } from "./water";
 import { DEFAULT_LIGHT_Z, LightRig, type MountedLight } from "./lights";
 import { orientTo, placeAt, threeY } from "./space";
@@ -65,6 +65,11 @@ import { orientTo, placeAt, threeY } from "./space";
 // leaving every surface enough albedo to show its own grain and to respond to
 // the sun, which is the whole reason there is a material under the tint.
 const TINT_FLOOR = 0.6;
+
+// What a flat fill falls back to where nothing named a colour at all - a body
+// the sim spawned, which carries no authored fill. White, so it is lit rather
+// than black, and visibly undressed rather than pretending to be a choice.
+const DEFAULT_SOLID_COLOR = "#ffffff";
 
 // How far behind the gameplay plane hook-only scenery sits by default: far
 // enough to read as background, near enough to still read as part of the level
@@ -154,12 +159,24 @@ export function surfaceOf(spec: DrawSpec): THREE.MeshStandardMaterial {
   // about the look is the coupling these two objects exist to keep apart, and a
   // migrated level names the material here explicitly instead.
   const name = surfaceName(g?.texture);
+  const fill = g?.color ?? spec.color;
   return surfaceFor({
     texture: g?.texture,
     tileScale: g?.tileScale,
     offsetX: g?.tileOffsetX,
     offsetY: g?.tileOffsetY,
-    color: isAuthoredSurface(name) ? undefined : tintFor(g?.color ?? spec.color),
+    // Three answers, and each is the same rule read against what the author
+    // actually said. A SOLID fill wears the colour exactly: naming it is saying
+    // "this is that colour", and lifting it to the tint floor would hand back a
+    // paler one than the swatch showed. An AUTHORED set wears none: its albedo
+    // is a photograph of real stuff and the flat renderer's grey is not an
+    // opinion about it. A GENERATED surface is tinted, floored, because noise
+    // has no colour of its own worth defending.
+    color: isSolidSurface(name)
+      ? (fill ?? DEFAULT_SOLID_COLOR)
+      : isAuthoredSurface(name)
+        ? undefined
+        : tintFor(fill),
     // Emission is NOT subject to the authored-surface exception above. The tint
     // stands in for a flat renderer's "colour is appearance" and a photographed
     // brick has its own colour to defend; emission is not an appearance at all,

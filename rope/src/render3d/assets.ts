@@ -86,6 +86,30 @@ export function textureSetName(name: string | undefined): MaterialName {
   return DEFAULT_TEXTURE;
 }
 
+// The one entry in the surface namespace that is not a surface: a FLAT FILL of
+// the geometry object's own `color`, with no pattern, no maps and nothing to
+// tile. It is a key rather than a separate `kind` because it answers the same
+// question every other key does - what does this wear - so a level swaps a wall
+// between brick and a solid block of colour by changing one string, and every
+// path that already resolves a surface keeps working.
+//
+// It is also the one surface the fill colour is worn EXACTLY, rather than as a
+// tint lifted to `TINT_FLOOR` over generated noise (see `surfaceOf`): an author
+// naming this has said what colour the thing is, and a remap that makes it
+// paler is the renderer arguing with them. The whole point of the option is
+// that the RGB picked is the RGB drawn.
+export const SOLID_SURFACE = "color";
+
+export function isSolidSurface(name: string | undefined): boolean {
+  return name === SOLID_SURFACE;
+}
+
+// How rough a flat fill is. Matte and non-metallic: the surface carries no
+// information of its own, so the only thing shaping it on screen is the form it
+// is on, and a shine would read as a material claim this deliberately does not
+// make.
+const SOLID_ROUGHNESS = 0.8;
+
 // ---------------------------------------------------------------------------
 // Authored texture sets
 // ---------------------------------------------------------------------------
@@ -1086,6 +1110,7 @@ async function dressWithImages(
 // canvas, no GPU, no level - which is what lets `cli render3d` assert it (that
 // suite deliberately touches none of those).
 export function surfaceName(name: string | undefined): string {
+  if (name === SOLID_SURFACE) return SOLID_SURFACE;
   if (name !== undefined && name in TEXTURE_ASSETS) return name;
   return textureSetName(name);
 }
@@ -1106,6 +1131,10 @@ export function isAuthoredSurface(name: string): boolean {
 }
 
 export function surfaceTile(name: string): number {
+  // A flat fill has no pattern, so there is nothing for a repeat to be a repeat
+  // OF. It answers 1 so the tiling arithmetic above stays total rather than
+  // being special-cased at each caller; nothing samples a texture with it.
+  if (name === SOLID_SURFACE) return 1;
   const authored = TEXTURE_ASSETS[name];
   if (authored) return authored.tile;
   return TEXTURE_SETS[name as MaterialName].tile;
@@ -1134,6 +1163,11 @@ function buildSurface(
   ox: number,
   oy: number,
 ): THREE.MeshStandardMaterial {
+  // A flat fill: no maps at all. The colour itself is applied by `surfaceFor`
+  // like every other tint, so this is only the absence of a pattern.
+  if (name === SOLID_SURFACE) {
+    return new THREE.MeshStandardMaterial({ roughness: SOLID_ROUGHNESS, metalness: 0 });
+  }
   const set = TEXTURE_SETS[name as MaterialName];
   let maps = mapsCache.get(name);
   if (!maps) {

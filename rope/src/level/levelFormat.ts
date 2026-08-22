@@ -306,6 +306,14 @@ export interface GeometryObjectData extends ObjectPlacement {
   // of `TEXTURE_SETS` (the generated surfaces, keyed by material name) - one
   // namespace, looked up in that order by `render3d/assets.ts`.
   //
+  // The reserved key `"color"` is the one entry that names no surface at all: it
+  // draws a FLAT FILL of this object's own `color` (or the body's), with no
+  // pattern and nothing to tile, and it wears that colour EXACTLY rather than as
+  // a tint over noise. It is what a block of solid colour is authored as - a
+  // backdrop, a UI-ish panel, a shape being blocked out before it is dressed -
+  // and it is spelled as a texture key so that swapping a wall between brick and
+  // flat paint is one string and not a different kind of object.
+  //
   // Absent = the generated surface `DEFAULT_MATERIAL` names. A collision
   // object's `material` is NOT consulted: what a piece is made of is a fact
   // about its mass, and reading it as a statement about the look is the coupling

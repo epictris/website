@@ -145,7 +145,9 @@ import {
   emissiveMapNames,
   HDRI_ASSETS,
   hdriNames,
+  isSolidSurface,
   MESH_ASSETS,
+  SOLID_SURFACE,
   surfaceName,
   tileMetres,
   TEXTURE_ASSETS,
@@ -2954,7 +2956,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // the author has to carry (see `surfaceFor`). A key already on the item
       // that this build has no manifest entry for is kept as an option of its
       // own rather than silently rewritten, exactly as the mesh picker does.
-      const keys = new Set<string>([...Object.keys(TEXTURE_ASSETS), ...MATERIAL_NAMES]);
+      const keys = new Set<string>([
+        SOLID_SURFACE,
+        ...Object.keys(TEXTURE_ASSETS),
+        ...MATERIAL_NAMES,
+      ]);
       for (const b of items) if (b.visual.texture) keys.add(b.visual.texture);
       for (const key of ["", ...keys]) {
         const o = document.createElement("option");
@@ -2965,9 +2971,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // one made with **Add geometry** starts out carrying the material's name
         // here explicitly, which is the same thing said where it can be edited.
         o.textContent = key
-          ? key in TEXTURE_ASSETS
-            ? `${key} (authored)`
-            : key
+          ? key === SOLID_SURFACE
+            ? `${key} (solid fill)`
+            : key in TEXTURE_ASSETS
+              ? `${key} (authored)`
+              : key
           : "(default)";
         ts.appendChild(o);
       }
@@ -2978,73 +2986,87 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         beginAction();
         for (const b of items) b.visual.texture = ts.value;
         markDirty();
-        refreshFields();
+        // A flat fill has no tiling, so the three fields below it appear and go
+        // with the choice rather than sitting there editing numbers nothing
+        // reads.
+        rebuildInspector();
       });
       tw.appendChild(ts);
       g.appendChild(tw);
 
-      // How large this shape wears the texture, as a MULTIPLE of the size the
-      // texture was authored at: 1 is life size, 2 twice as large. Dimensionless
-      // like `scale`, so it is typed as written and never converted - and blank
-      // is 1, which is why the placeholder says so rather than naming a fallback
-      // the author would have to go and look up.
-      num(
-        "tile scale",
-        (v) => v.tileScale ?? 1,
-        (v, x) => (v.tileScale = Math.max(0.01, x)),
-        0.1,
-        {
-          placeholder: items.length > 1 ? "mixed" : "1",
-          onEmpty: () => {
-            for (const b of items) b.visual.tileScale = null;
+      // Everything from here down is about a PATTERN - how large it is worn,
+      // where it starts - and a solid fill has none. The colour it wears is the
+      // object's own `color`, edited in the fill fields below this section, so
+      // the section says where that is rather than restating the swatch.
+      if (items.every((b) => isSolidSurface(b.visual.texture))) {
+        const hint = el("div", "ed-hint");
+        hint.textContent =
+          "A flat fill of this object's `color` below - no pattern, nothing to tile, and the colour is worn exactly as picked rather than as a tint.";
+        g.appendChild(hint);
+      } else {
+        // How large this shape wears the texture, as a MULTIPLE of the size the
+        // texture was authored at: 1 is life size, 2 twice as large. Dimensionless
+        // like `scale`, so it is typed as written and never converted - and blank
+        // is 1, which is why the placeholder says so rather than naming a fallback
+        // the author would have to go and look up.
+        num(
+          "tile scale",
+          (v) => v.tileScale ?? 1,
+          (v, x) => (v.tileScale = Math.max(0.01, x)),
+          0.1,
+          {
+            placeholder: items.length > 1 ? "mixed" : "1",
+            onEmpty: () => {
+              for (const b of items) b.visual.tileScale = null;
+            },
           },
-        },
-      );
-      // What that multiple works out to on the ground. The scale is the right
-      // thing to AUTHOR - it survives swapping the texture for one captured at a
-      // different size, and 1 always means life size - but "×2" says nothing
-      // about whether these bricks will read as bricks, and the metres do. Same
-      // trick the material picker uses for density, re-derived per refresh so it
-      // tracks both this field and the texture picker above it.
-      const tileReadout = () => {
-        const first = items[0]!;
-        const same = items.every(
-          (b) =>
-            b.visual.tileScale === first.visual.tileScale &&
-            b.visual.texture === first.visual.texture,
         );
-        if (!same) return "mixed";
-        const metres = tileMetres(
-          surfaceName(first.visual.texture || first.material),
-          first.visual.tileScale,
-        );
-        return `${metres.toFixed(2)} m per repeat`;
-      };
-      const trow = el("label", "ed-field");
-      trow.textContent = "";
-      const tval = document.createElement("span");
-      tval.textContent = tileReadout();
-      trow.appendChild(tval);
-      g.appendChild(trow);
-      readouts.push({ el: tval, get: tileReadout });
+        // What that multiple works out to on the ground. The scale is the right
+        // thing to AUTHOR - it survives swapping the texture for one captured at a
+        // different size, and 1 always means life size - but "×2" says nothing
+        // about whether these bricks will read as bricks, and the metres do. Same
+        // trick the material picker uses for density, re-derived per refresh so it
+        // tracks both this field and the texture picker above it.
+        const tileReadout = () => {
+          const first = items[0]!;
+          const same = items.every(
+            (b) =>
+              b.visual.tileScale === first.visual.tileScale &&
+              b.visual.texture === first.visual.texture,
+          );
+          if (!same) return "mixed";
+          const metres = tileMetres(
+            surfaceName(first.visual.texture || first.material),
+            first.visual.tileScale,
+          );
+          return `${metres.toFixed(2)} m per repeat`;
+        };
+        const trow = el("label", "ed-field");
+        trow.textContent = "";
+        const tval = document.createElement("span");
+        tval.textContent = tileReadout();
+        trow.appendChild(tval);
+        g.appendChild(trow);
+        readouts.push({ el: tval, get: tileReadout });
 
-      // Where the pattern starts on this shape, so a course of bricks can be
-      // lined up with the edge of the wall rather than with the world origin.
-      // In scene pixels like every other length here, which on this project's
-      // scale is centimetres exactly (100 px to the metre), and it shifts the
-      // texture rather than the geometry: +x right, +y down.
-      num(
-        "tile off x",
-        (v) => v.tileOffset.x * M2PX,
-        (v, x) => (v.tileOffset = new Vec2(x * PX, v.tileOffset.y)),
-        5,
-      );
-      num(
-        "tile off y",
-        (v) => v.tileOffset.y * M2PX,
-        (v, y) => (v.tileOffset = new Vec2(v.tileOffset.x, y * PX)),
-        5,
-      );
+        // Where the pattern starts on this shape, so a course of bricks can be
+        // lined up with the edge of the wall rather than with the world origin.
+        // In scene pixels like every other length here, which on this project's
+        // scale is centimetres exactly (100 px to the metre), and it shifts the
+        // texture rather than the geometry: +x right, +y down.
+        num(
+          "tile off x",
+          (v) => v.tileOffset.x * M2PX,
+          (v, x) => (v.tileOffset = new Vec2(x * PX, v.tileOffset.y)),
+          5,
+        );
+        num(
+          "tile off y",
+          (v) => v.tileOffset.y * M2PX,
+          (v, y) => (v.tileOffset = new Vec2(v.tileOffset.x, y * PX)),
+          5,
+        );
+      }
     }
 
     // Emission: what this shape gives off, as against what it reflects. It is
@@ -3145,7 +3167,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). `tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. A shape that emits reads as BRIGHT and lights nothing - emission is appearance, and three.js has no global illumination. A lamp that lights the room is this plus a light on the lights layer, grouped into the same body with Ctrl+G, which is what makes the fitting and its light one thing that cannot drift apart. `glow map` makes the emission a pattern (lit windows, cracks) rather than the whole face. Per shape, so a body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
+      "How the 3D renderer draws this shape: `auto` extrudes the shape's own primitive through z and wears the texture below, which is what every body gets for free; `mesh` replaces that with a GLB prop, which wears the texture too if one is named and keeps its own materials otherwise; `none` draws nothing at all (an invisible wall). `tile` is how much world one repeat of the texture covers, so the same stone reads the same on a plank and on a cliff. The texture `color` is the one that names no surface: a flat fill of the shape's own `color`, worn exactly as picked, with nothing to tile. A shape that emits reads as BRIGHT and lights nothing - emission is appearance, and three.js has no global illumination. A lamp that lights the room is this plus a light on the lights layer, grouped into the same body with Ctrl+G, which is what makes the fitting and its light one thing that cannot drift apart. `glow map` makes the emission a pattern (lit windows, cracks) rather than the whole face. Per shape, so a body's pieces each carry their own. Render-only — nothing here reaches the simulation.";
     g.appendChild(hint);
   }
 
