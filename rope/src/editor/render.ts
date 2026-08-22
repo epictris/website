@@ -1059,6 +1059,41 @@ function drawNoteText(ctx: CanvasRenderingContext2D, cam: Camera, item: EdItem):
   ctx.restore();
 }
 
+// A zigzag coil centred on `at` and running along `angle`, with a tick at each
+// end: the glyph for a spring mounting. Sized in `worldLine` units like every
+// other body mark, so it stays one thickness on screen at any zoom.
+function drawCoil(
+  ctx: CanvasRenderingContext2D,
+  at: Vec2,
+  angle: number,
+  worldLine: number,
+): void {
+  const half = 7 * worldLine; // reach along the coil's own axis
+  const amp = 3 * worldLine; // how far the zigzag swings across it
+  const zigs = 6;
+  const dir = new Vec2(Math.cos(angle), Math.sin(angle));
+  const perp = new Vec2(-dir.y, dir.x);
+  ctx.beginPath();
+  for (let i = 0; i <= zigs; i++) {
+    const t = -half + (2 * half * i) / zigs;
+    // Flat at both ends and alternating in between: a coil with a lead-in,
+    // rather than a triangle wave that starts mid-swing.
+    const a = i === 0 || i === zigs ? 0 : (i % 2 === 0 ? -amp : amp);
+    const p = at.add(dir.mul(t)).add(perp.mul(a));
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  }
+  ctx.stroke();
+  // The end ticks, across the coil: what it is sprung BETWEEN.
+  ctx.beginPath();
+  for (const end of [-half, half]) {
+    const c = at.add(dir.mul(end));
+    ctx.moveTo(c.x - perp.x * amp, c.y - perp.y * amp);
+    ctx.lineTo(c.x + perp.x * amp, c.y + perp.y * amp);
+  }
+  ctx.stroke();
+}
+
 // Compound-body marks. Every group gets a diamond at its centre of mass - the
 // origin its built body will have, and the point it rotates about - and a
 // selected one adds spokes to each piece plus a dashed hull, which is what says
@@ -1078,12 +1113,12 @@ function drawGroupMarks(
   for (const b of visible) bodies.add(b.bodyId);
   for (const id of bodies) {
     const allMembers = bodyMembers(all, id);
-    // A pivot body's axle, always: a ring-and-dot at the centre of mass, which
-    // is the bearing the built body spins about. Drawn for a body of one as
-    // well - unlike the compound diamond, being pivot-mounted is invisible on
-    // the canvas without it.
-    const pivotLead = allMembers.find((m) => m.object === "collision");
-    if (pivotLead && pivotLead.kind === "rigid" && pivotLead.pivot) {
+    // How the built body is MOUNTED, from the collision object the body's
+    // physics is written from: a pivot's axle or a spring's coil. Drawn for a
+    // body of one as well - unlike the compound diamond, neither mounting is
+    // visible on the canvas without a mark, and the two shapes look identical.
+    const leadCollision = allMembers.find((m) => m.object === "collision");
+    if (leadCollision && leadCollision.kind === "rigid" && leadCollision.pivot) {
       const axle = bodyCentroid(allMembers);
       const ar = 6 * worldLine;
       ctx.strokeStyle = GROUP_MARK;
@@ -1095,6 +1130,24 @@ function drawGroupMarks(
       ctx.arc(axle.x, axle.y, ar / 3, 0, Math.PI * 2);
       ctx.fillStyle = GROUP_MARK;
       ctx.fill();
+    }
+    // A spring body's mounting, always, and for the same reason the axle is
+    // drawn: being spring-mounted is invisible on the geometry itself, so
+    // without a mark a leaf and a crate are the same picture. A coil at the
+    // centre of mass - the anchor the body is sprung about and the point the
+    // spring force acts through - with its axis along whichever axes are
+    // actually sprung, so a body that only bobs vertically LOOKS like one.
+    if (leadCollision && leadCollision.kind === "rigid" && !leadCollision.pivot) {
+      const sx = leadCollision.springFreqX > 0;
+      const sy = leadCollision.springFreqY > 0;
+      if (sx || sy) {
+        const at = bodyCentroid(allMembers);
+        ctx.strokeStyle = GROUP_MARK;
+        ctx.lineWidth = worldLine * 1.5;
+        // Both axes sprung: one diagonal coil rather than two crossed ones,
+        // which at this size reads as a scribble.
+        drawCoil(ctx, at, sx && sy ? Math.PI / 4 : sx ? 0 : Math.PI / 2, worldLine);
+      }
     }
     if (allMembers.length < 2) continue;
     const members = bodyMembers(visible, id);

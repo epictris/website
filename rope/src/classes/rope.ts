@@ -1442,6 +1442,25 @@ export class Rope {
           },
         };
       }
+      // A SPRING body cannot rotate, and the solve is told so in the same
+      // vocabulary the pivot uses for the freedom it lacks: infinite inertia.
+      // `arm²/inertia` reads 0, so the angular share of every correction is
+      // zero by the same arithmetic that splits it for a free body (the
+      // indeterminate limit is written out where the split is taken - see
+      // `correctShapePositionAndRotation`), and the whole correction lands in
+      // translation, which is the axis the spring then recovers along. The
+      // rotation credit is a no-op for the same reason the body never turns.
+      if (body.spring) {
+        return {
+          body,
+          inertia: Infinity,
+          mass: body.mass,
+          addVelocity: (v) => {
+            body.linearVelocity = body.linearVelocity.add(v);
+          },
+          addRotation: () => {},
+        };
+      }
       return {
         body,
         inertia: body.inertia,
@@ -1512,15 +1531,24 @@ export class Rope {
       const torqueSquared = torqueArm * torqueArm;
       if (torqueSquared > 0) {
         const denominator = dynamicBody.inertia + dynamicBody.mass * torqueSquared;
-        const linearFactor = dynamicBody.inertia / denominator;
-        // The infinite-mass (pivot) limit of mass·arm / (I + mass·arm²) is
-        // 1/arm; taken literally it is Inf/Inf = NaN, so the limit is written
-        // out. The whole correction then lands in rotation, and arm·Δθ = the
-        // correction magnitude, which is exactly the length the solve asked
-        // this body to remove.
-        const angularFactor = Number.isFinite(dynamicBody.mass)
-          ? (dynamicBody.mass * torqueArm) / denominator
-          : 1 / torqueArm;
+        // Both indeterminate limits are written out rather than evaluated: each
+        // is Inf/Inf = NaN taken literally.
+        //
+        // Infinite MASS is the pivot: the whole correction lands in rotation,
+        // where mass·arm / (I + mass·arm²) tends to 1/arm, so arm·Δθ is exactly
+        // the length the solve asked this body to remove.
+        //
+        // Infinite INERTIA is the spring body, whose rotation is locked: the
+        // whole correction lands in translation instead, `linearFactor` tending
+        // to 1 and the angular share to 0.
+        const linearFactor = Number.isFinite(dynamicBody.inertia)
+          ? dynamicBody.inertia / denominator
+          : 1;
+        const angularFactor = !Number.isFinite(dynamicBody.inertia)
+          ? 0
+          : Number.isFinite(dynamicBody.mass)
+            ? (dynamicBody.mass * torqueArm) / denominator
+            : 1 / torqueArm;
         this.applyCorrectionMotion(
           dynamicBody.body,
           correctionDir.mul(totalCorrectionMagnitude * linearFactor),

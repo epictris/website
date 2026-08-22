@@ -600,12 +600,40 @@ export class RigidBody2D extends PhysicsBody2D {
   // hangs where it was authored. Default false keeps every other body - and
   // recorded replays - unchanged.
   pivot = false;
+  // Spring mounting: the body is held at its authored position by a two-axis
+  // spring-damper rather than bolted to it (see `LevelBodyData.springFreqX`).
+  // It sags under its own weight, sags further under a load - a hanging
+  // player, a resting rock, rope tension - and springs back with a visible
+  // overshoot when the load leaves: a plant whose leaf the player grabs, the
+  // spring standing in for the stem bending.
+  //
+  // `anchor` is the body's built position (its centre of mass), `omegaX` /
+  // `omegaY` are the per-axis angular frequencies in rad/s (0 = that axis
+  // rigidly pinned to the anchor) and `zeta` is the shared damping ratio.
+  // The force is applied in `World.integrate` alongside gravity, so every
+  // impulse path in the engine loads it with no plumbing of its own.
+  //
+  // Where `pivot` removes ROTATION from a rigid body's freedom, `spring`
+  // removes rotation instead: a leaf on a stem translates on its spring, it
+  // does not spin. The two are therefore mutually exclusive - together they
+  // would describe a body that cannot move at all - and `buildBodies` refuses
+  // the combination. Null for every ordinary body; recorded replays predate
+  // the field.
+  spring: { anchor: Vec2; omegaX: number; omegaY: number; zeta: number } | null = null;
 
   get inverseMass(): number {
     if (this.pivot) return 0;
     return this.mass > 0 ? 1 / this.mass : 0;
   }
   get inverseInertia(): number {
+    // A spring body's rotation is locked at the source, exactly as a pivot's
+    // translation is: every impulse path - contacts, the rope's torque arm, an
+    // explosion - writes angular velocity through this getter, so 0 here is one
+    // statement covering all of them. NOT modelled as `inertia = Infinity`:
+    // `mechanicalEnergy` computes 0.5·inertia·w² and Infinity·0 is NaN. Nor as
+    // `kinematicRotation`, which means "rotation is externally driven this
+    // frame" and belongs to the ball controller.
+    if (this.spring) return 0;
     return this.inertia > 0 ? 1 / this.inertia : 0;
   }
 

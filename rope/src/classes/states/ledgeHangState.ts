@@ -19,6 +19,7 @@ import { GRAB_REACH_MARGIN, LedgeDetection, type LedgeGrabInfo } from "../../lib
 import type { Player } from "../player";
 import { Player as PlayerClass } from "../player";
 import { PlayerState } from "./playerState";
+import { applyHangLoad } from "./ledgeLoad";
 import { AirborneState } from "./airborneState";
 import { LedgeClimbState } from "./ledgeClimbState";
 import { WallJumpingState } from "./wallJumpingState";
@@ -87,6 +88,14 @@ export class LedgeHangState extends PlayerState {
 
   resolveCollision(player: Player, delta: number): PlayerState {
     if (!this.info) return this; // update() already scheduled a transition
+
+    // The player's weight, onto the body it is hanging from (see
+    // `applyHangLoad`). Here rather than in `update` because this is the half of
+    // the frame where the hang actually holds: `update` leaves `info` null on
+    // the frames it has scheduled a release, and a released grab should not be
+    // charged for a weight it is no longer carrying. It covers the CATCH as
+    // well as the settled hang - the hands are on the corner throughout.
+    applyHangLoad(this.body, this.info.vertex, delta);
 
     const radius = player.radius;
     const along = LedgeDetection.hangDirection(this.info);

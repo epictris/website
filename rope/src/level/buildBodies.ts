@@ -145,6 +145,19 @@ export function objectDepth(z: number | undefined, fallback: number): number {
 export const RIGID_KINETIC_FRICTION = 0.6;
 export const RIGID_STATIC_FRICTION = 0.7;
 
+// Spring bodies (see `LevelBodyData.springFreqX`). The damping default is a few
+// visible swings before it settles, which is the whole point of the mechanic -
+// critically damped, the leaf would simply sink and return. The frequency
+// ceiling is shared with the editor's inspector: 8 Hz is already visually rigid
+// and sits well under the ~19 Hz where semi-implicit Euler stops being stable at
+// the fixed 1/60 step, so it is a bound on nonsense rather than on authoring.
+export const DEFAULT_SPRING_DAMPING = 0.15;
+export const MAX_SPRING_FREQ = 8;
+
+function clampFreq(f: number): number {
+  return Number.isFinite(f) ? Math.min(MAX_SPRING_FREQ, Math.max(0, f)) : 0;
+}
+
 // One authored body as built.
 export interface BuiltBody {
   // The authored body (metres), so a consumer that has a `BuiltBody` never has
@@ -407,6 +420,26 @@ function buildOne(
     // computed - the inertia is what torque answers to, and the mass is what a
     // pushing character's impulse is sized against.
     rb.pivot = b.pivot === true;
+    // Held at its authored position by a two-axis spring-damper instead (see
+    // `LevelBodyData.springFreqX`): it sags under load and springs back. The
+    // anchor is taken AFTER `mountPieces`, so it is the body's centre of mass -
+    // the point every impulse and the position step already act through - and
+    // not wherever the first piece happened to be drawn.
+    //
+    // `!rb.pivot` restates the exclusion `normalizeLevelData` already resolved:
+    // a hand-written level that never passed through the loader's normalisation
+    // must not build a body that can neither translate nor rotate. The clamp is
+    // the same belt and braces - 8 Hz is already visually rigid, and the
+    // integrator wants w·dt < 2 - so a typo'd frequency is a stiff spring
+    // rather than an explosion.
+    if (!rb.pivot && (b.springFreqX || b.springFreqY)) {
+      rb.spring = {
+        anchor: rb.globalPosition,
+        omegaX: 2 * Math.PI * clampFreq(b.springFreqX ?? 0),
+        omegaY: 2 * Math.PI * clampFreq(b.springFreqY ?? 0),
+        zeta: Math.min(1, Math.max(0, b.springDamping ?? DEFAULT_SPRING_DAMPING)),
+      };
+    }
     // The authored `friction` is the body's material grip, so it scales what the
     // body brings to a contact as well as what it offers one: an ice block is
     // slippery to stand on *and* slides on the floor it sits on. The contact

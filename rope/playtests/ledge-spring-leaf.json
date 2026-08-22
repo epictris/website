@@ -1,0 +1,21 @@
+{
+  "level": "TEST_SPRING",
+  "frames": 1000,
+  "holds": [
+    { "action": "move_right", "from": 600, "to": 698 },
+    { "action": "move_left", "from": 900, "to": 906 }
+  ],
+  "asserts": [
+    { "reachState": "LedgeHangState", "byFrame": 700 },
+    { "frame": 700, "state": "LedgeHangState" },
+    { "frame": 700, "minY": 1.40, "maxY": 1.47 },
+    { "frame": 730, "state": "LedgeHangState" },
+    { "frame": 730, "minY": 1.90, "maxY": 1.98 },
+    { "frame": 890, "state": "LedgeHangState" },
+    { "frame": 890, "minY": 1.70, "maxY": 1.79 },
+    { "frame": 899, "state": "LedgeHangState" },
+    { "frame": 930, "state": "AirborneState" },
+    { "frame": 999, "state": "GroundedState" },
+    { "frame": 999, "minY": 3.7, "maxY": 3.75 }
+  ]
+}

@@ -603,6 +603,41 @@ export interface LevelBodyData {
   // that to say one thing. Absent = an ordinary free rigid body, which is what
   // every level authored before the field contains.
   pivot?: boolean;
+  // Rigid bodies only: anchor the body to its authored position through a
+  // two-axis spring-damper. It sags under its own weight, sags further under a
+  // load - a hanging player, a resting rock, rope tension - and springs back
+  // with a visible overshoot when the load leaves: a plant whose leaf the
+  // player grabs, the spring standing in for the stem bending.
+  //
+  // The frequencies are in Hz per axis, and a frequency rather than a stiffness
+  // for two reasons. It is a 1/s RATE, so like `drag` it passes through
+  // `scaleLevelData` untouched and there is nothing here that can be
+  // mis-scaled. And the free oscillation is mass-INDEPENDENT (`k = m·w²` is
+  // implied), so a leaf re-authored in a heavier material bounces at the same
+  // rate and droops the same amount under its own weight.
+  //
+  // What is deliberately NOT mass-independent is the response to a load, and it
+  // is the half an author tunes against the inspector's live mass readout:
+  //
+  //   self-weight droop = g / (2π·fy)²   - 24.8 cm at 1 Hz, 11 cm at 1.5, 6.2 cm at 2
+  //   an external load F adds F / (m·(2π·fy)²)   - a 70 kg player is 686 N
+  //
+  // so a heavy stiff plant barely notices the player and a light whippy one
+  // plunges. 0 or absent on an axis means that axis is rigidly PINNED to the
+  // anchor rather than sprung to it, which is the useful degenerate case (a
+  // leaf that only bobs vertically); at least one axis must carry a frequency,
+  // or the author wanted `static`. Clamped to 0..8 Hz at build (8 Hz is already
+  // visually rigid, and semi-implicit Euler wants w·dt < 2).
+  //
+  // `springDamping` is the shared damping ratio, 0..1, where 1 is critically
+  // damped and no overshoot survives; absent = 0.15, a few visible swings.
+  //
+  // A spring body loses ROTATION, the way a pivot body loses translation - a
+  // leaf on a stem translates, it does not spin - so the two are mutually
+  // exclusive; a body authoring both keeps `pivot` and drops these.
+  springFreqX?: number;
+  springFreqY?: number;
+  springDamping?: number;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -1502,10 +1537,30 @@ function finish(
   // added another set beside them.
   const out = bodies.map((b, i) => {
     const extra = added.get(i);
-    return extra ? { ...b, objects: [...b.objects, ...extra] } : b;
+    const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
+    return withoutConflictingSpring(withAnchors);
   });
   const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
   return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
+}
+
+// `pivot` and a spring are mutually exclusive (see `LevelBodyData.springFreqX`):
+// a body that could neither translate nor rotate is not a thing to author. The
+// tie is broken HERE rather than left to the build, so what the editor loads,
+// what the sim builds and what a level file round-trips to all agree on which
+// half survived - and it is broken toward `pivot`, deterministically and
+// documented, because that is the field a level could already contain.
+//
+// Written to return the body UNCHANGED unless it actually holds both, so the
+// overwhelmingly common load - no spring anywhere - allocates nothing and every
+// existing level is the same object it went in as.
+function withoutConflictingSpring(b: LevelBodyData): LevelBodyData {
+  if (b.pivot !== true) return b;
+  if (b.springFreqX === undefined && b.springFreqY === undefined && b.springDamping === undefined) {
+    return b;
+  }
+  const { springFreqX: _x, springFreqY: _y, springDamping: _z, ...rest } = b;
+  return rest;
 }
 
 // Retired chain ends into anchor objects. Each end named a body by index and a
@@ -1979,6 +2034,13 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
       ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
+      // A spring frequency is a rate and a damping ratio is a ratio, so neither
+      // is a length and neither scales - the same rule `drag` follows above,
+      // and the reason `LevelBodyData.springFreqX` is authored as a frequency
+      // rather than as a stiffness.
+      ...(b.springFreqX !== undefined ? { springFreqX: b.springFreqX } : {}),
+      ...(b.springFreqY !== undefined ? { springFreqY: b.springFreqY } : {}),
+      ...(b.springDamping !== undefined ? { springDamping: b.springDamping } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

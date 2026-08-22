@@ -2912,8 +2912,8 @@
     },
     {
       "kind": "static",
-      "x": 1116.6666666666663,
-      "y": 79.73333333333368,
+      "x": 1117.4999999999995,
+      "y": 77.50000000000034,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -2921,8 +2921,6 @@
       "objects": [
         {
           "type": "collision",
-          "x": 0.833333333333286,
-          "y": -2.2333333333333316,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -2955,8 +2953,6 @@
         },
         {
           "type": "geometry",
-          "x": 0.833333333333286,
-          "y": -2.2333333333333316,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3504,8 +3500,8 @@
     },
     {
       "kind": "static",
-      "x": 1051.2033502053907,
-      "y": -81.54124648382124,
+      "x": 1052.1616572366722,
+      "y": -84.09659430923953,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -3513,8 +3509,6 @@
       "objects": [
         {
           "type": "collision",
-          "x": 0.9583070312814357,
-          "y": -2.555347825418297,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -3592,8 +3586,6 @@
         },
         {
           "type": "geometry",
-          "x": 0.9583070312814357,
-          "y": -2.555347825418297,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -4170,6 +4162,40 @@
           "matchCollision": true,
           "depth": 50,
           "texture": "mossy ground"
+        }
+      ]
+    },
+    {
+      "kind": "rigid",
+      "x": 2465,
+      "y": -580.0000000000001,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "springFreqX": 1,
+      "springFreqY": 1,
+      "springDamping": 0.15,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 20.000000000000018
+          },
+          "material": "glass"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 110.00000000000014,
+            "h": 20.000000000000018
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
         }
       ]
     }

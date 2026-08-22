@@ -32,7 +32,7 @@ import {
   type PathNode,
 } from "../render/cameraPath";
 import { DECOR_Z } from "../level/decor";
-import { worldPlacement } from "../level/buildBodies";
+import { DEFAULT_SPRING_DAMPING, worldPlacement } from "../level/buildBodies";
 import {
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
@@ -315,6 +315,14 @@ export interface EdItem {
   // Rigid bodies only: bolted to a bearing at the centre of mass - spins, never
   // translates (see `LevelBodyData.pivot`).
   pivot: boolean;
+  // Rigid bodies only: held at the authored position by a two-axis
+  // spring-damper - sags under load, springs back (see
+  // `LevelBodyData.springFreqX`). Frequencies in Hz, 0 = that axis pinned; a
+  // body with both at 0 has no spring at all, which is how "absent" is spelled
+  // in a model whose fields are always present.
+  springFreqX: number;
+  springFreqY: number;
+  springDamping: number;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -824,6 +832,9 @@ function fromLevelData(data: LevelData): EdModel {
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
       pivot: b.pivot === true,
+      springFreqX: b.springFreqX ?? 0,
+      springFreqY: b.springFreqY ?? 0,
+      springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
@@ -937,6 +948,9 @@ function fromLevelData(data: LevelData): EdModel {
     flow: 0,
     drag: 0,
     pivot: false,
+    springFreqX: 0,
+    springFreqY: 0,
+    springDamping: DEFAULT_SPRING_DAMPING,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
@@ -997,6 +1011,9 @@ function fromLevelData(data: LevelData): EdModel {
     flow: 0,
     drag: 0,
     pivot: false,
+    springFreqX: 0,
+    springFreqY: 0,
+    springDamping: DEFAULT_SPRING_DAMPING,
     cam: {
       // A path IS the position rule, so it has no offset and no lock to compose
       // with (see "Explicitly out of scope" in plans/camera-tracking.md).
@@ -1059,6 +1076,9 @@ function lightItem(
     flow: 0,
     drag: 0,
     pivot: false,
+    springFreqX: 0,
+    springFreqY: 0,
+    springDamping: DEFAULT_SPRING_DAMPING,
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
@@ -1099,6 +1119,9 @@ function lightItem(
     flow: 0,
     drag: 0,
     pivot: false,
+    springFreqX: 0,
+    springFreqY: 0,
+    springDamping: DEFAULT_SPRING_DAMPING,
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
@@ -1411,6 +1434,21 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // A bearing means something only on a rigid body, and only when
             // set - an absent field is the free body every old level has.
             ...(lead.kind === "rigid" && lead.pivot ? { pivot: true } : {}),
+            // A spring means something only on a rigid body that is not on a
+            // bearing, and only when a frequency is actually set - a body with
+            // neither axis sprung is the ordinary free rigid body every old
+            // level has, and writing three zeroes for it would put a mechanic
+            // on disk that nothing applies. The damping rides along with them
+            // rather than being written on its own, for the same reason.
+            ...(lead.kind === "rigid" &&
+            !lead.pivot &&
+            (lead.springFreqX > 0 || lead.springFreqY > 0)
+              ? {
+                  ...(lead.springFreqX > 0 ? { springFreqX: lead.springFreqX } : {}),
+                  ...(lead.springFreqY > 0 ? { springFreqY: lead.springFreqY } : {}),
+                  springDamping: lead.springDamping,
+                }
+              : {}),
           }
         : {}),
       objects,
@@ -2177,6 +2215,9 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.flow = lead.flow;
     m.drag = lead.drag;
     m.pivot = lead.pivot;
+    m.springFreqX = lead.springFreqX;
+    m.springFreqY = lead.springFreqY;
+    m.springDamping = lead.springDamping;
   }
 }
 
@@ -2364,6 +2405,9 @@ export function emptyModel(): EdModel {
         flow: 0,
         drag: 0,
         pivot: false,
+        springFreqX: 0,
+        springFreqY: 0,
+        springDamping: DEFAULT_SPRING_DAMPING,
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),

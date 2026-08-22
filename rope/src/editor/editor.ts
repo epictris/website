@@ -155,7 +155,8 @@ import {
 } from "../render3d/space";
 import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
 import { World } from "../engine/world";
-import { buildLevelBodies } from "../level/buildBodies";
+import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
+import { Player } from "../classes/player";
 import {
   digest,
   digestBall,
@@ -2362,6 +2363,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = leads.every((b) => b.pivot);
+    // Mutually exclusive with a spring (see `addSpringFields`): a body that
+    // could neither translate nor rotate is not a thing to author, so the two
+    // controls lock each other out here rather than letting a file be saved
+    // that the loader has to break the tie in.
+    box.disabled = leads.some((b) => b.springFreqX > 0 || b.springFreqY > 0);
     // A mixed selection says so rather than reporting one body's answer as the
     // group's, exactly as the hook-proof checkbox does.
     box.indeterminate = !box.checked && leads.some((b) => b.pivot);
@@ -2380,6 +2386,102 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.";
+    g.appendChild(hint);
+  }
+
+  // Spring mounting, rigid bodies only (see `LevelBodyData.springFreqX`): held
+  // at the authored position by a two-axis spring-damper, so the body sags
+  // under load and springs back. Beside the pivot checkbox because the two are
+  // the same shape of thing - a rigid body with one degree of freedom traded
+  // away - and mutually exclusive for that reason: a body on a bearing that
+  // also could not rotate could not move at all, so each control disables the
+  // other while it is set rather than letting a file be authored that the
+  // loader would then have to break the tie in.
+  //
+  // The two DROOP readouts are the point of the panel. A frequency is not a
+  // distance and an author is choosing a distance, so the field on its own is
+  // unauthorable; `g/w²` and `F/(m·w²)` turn it into the two numbers that are
+  // actually being picked - how far the leaf hangs on its own, and how far it
+  // goes when the player is on it. The second is the one that needs the mass,
+  // which is why this sits below the material fields rather than above them.
+  function addSpringFields(g: HTMLElement, leads: EdItem[]): void {
+    const sprung = (b: EdItem): boolean => b.springFreqX > 0 || b.springFreqY > 0;
+    const anySprung = leads.some(sprung);
+    const anyPivot = leads.some((b) => b.pivot);
+
+    const freq = (label: string, get: (b: EdItem) => number, set: (b: EdItem, v: number) => void) =>
+      numField(
+        g,
+        label,
+        () => shared(leads, get),
+        (v) => {
+          for (const b of leads) set(b, Math.min(MAX_SPRING_FREQ, Math.max(0, v)));
+          syncEditedBodies(leads);
+          // The pivot checkbox's enabled state depends on these, and the axle
+          // ring is drawn from the item - so a frequency typed in has to rebuild
+          // the panel rather than only revalue it.
+          if (leads.some(sprung) !== anySprung) rebuildInspector();
+        },
+        0.1,
+        leads.length > 1,
+        { disabled: anyPivot },
+      );
+    freq("spring x (Hz)", (b) => b.springFreqX, (b, v) => (b.springFreqX = v));
+    freq("spring y (Hz)", (b) => b.springFreqY, (b, v) => (b.springFreqY = v));
+    numField(
+      g,
+      "damping",
+      () => shared(leads, (b) => b.springDamping),
+      (v) => {
+        for (const b of leads) b.springDamping = Math.min(1, Math.max(0, v));
+        syncEditedBodies(leads);
+      },
+      0.05,
+      leads.length > 1,
+      { disabled: anyPivot || !anySprung },
+    );
+
+    // Live, and re-derived from the items rather than from the values the panel
+    // was built with, for the same reason the mass readout is: typing a
+    // frequency has to move the number the frequency was typed FOR.
+    const droop = (): string => {
+      const f = shared(leads, (b) => b.springFreqY);
+      if (f === null) return "mixed";
+      if (f <= 0) return "pinned";
+      const w = 2 * Math.PI * f;
+      return `${((9.8 / (w * w)) * 100).toFixed(1)} cm`;
+    };
+    const hang = (): string => {
+      const f = shared(leads, (b) => b.springFreqY);
+      if (f === null) return "mixed";
+      if (f <= 0) return "pinned";
+      const w = 2 * Math.PI * f;
+      // Every collision piece of every selected body: the spring pulls on the
+      // body's whole mass, not on the piece whose panel this is.
+      const kg = leads.reduce(
+        (m, lead) =>
+          m +
+          bodyMembers(model.items, lead.bodyId)
+            .filter((x) => x.object === "collision")
+            .reduce((a, x) => a + shapeMass(x), 0),
+        0,
+      );
+      if (kg <= 0) return "—";
+      return `+${(((Player.MASS * 9.8) / (kg * w * w)) * 100).toFixed(1)} cm`;
+    };
+    for (const [label, get] of [["droop", droop], ["+ a hanging player", hang]] as const) {
+      const row = el("label", "ed-field");
+      row.textContent = label;
+      const val = document.createElement("span");
+      val.textContent = get();
+      row.appendChild(val);
+      g.appendChild(row);
+      readouts.push({ el: val, get });
+    }
+
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Held at the authored position by a spring per axis, so the body sags under its own weight and further under a load — a hanging player, a resting rock, a chain — then springs back past its rest height before settling. 0 on an axis pins that axis instead (a leaf that only bobs vertically). Frequency, not stiffness: the droop under its own weight is the same whatever the body is made of, while a heavier body notices a hung player less. A spring body cannot rotate, so it cannot also be pivot-mounted.";
     g.appendChild(hint);
   }
 
@@ -3112,7 +3214,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // reciprocal time, so it is authored and stored as the same number.
         num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
       }
-      if (leads.every((b) => b.kind === "rigid")) addPivotField(g, leads);
+      if (leads.every((b) => b.kind === "rigid")) {
+        addPivotField(g, leads);
+        addSpringFields(g, leads);
+      }
     }
     // ...and the fill, which only a body written from a collision lead has: a
     // body of pure decoration is painted by its objects' own colours, and a
@@ -4364,8 +4469,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // fresh one runs and drags rather than sitting there as a coloured box.
       flow: DEFAULT_WATER_FLOW * PX,
       drag: DEFAULT_WATER_DRAG,
-      // A fresh body is free; the bearing is opted into on the panel.
+      // A fresh body is free; the bearing and the spring are both opted into on
+      // the panel, and a spring of no frequency is no spring at all.
       pivot: false,
+      springFreqX: 0,
+      springFreqY: 0,
+      springDamping: DEFAULT_SPRING_DAMPING,
       // A fresh region is a no-op until a framing field is authored.
       cam: defaultCamera(),
       light: defaultLight(),

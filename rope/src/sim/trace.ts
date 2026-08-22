@@ -692,6 +692,21 @@ export function mechanicalEnergy(world: World): number {
     total += 0.5 * body.mass * body.linearVelocity.lengthSquared();
     total += 0.5 * body.inertia * body.angularVelocity * body.angularVelocity;
     total += body.mass * 9.8 * body.gravityScale * -body.globalPosition.y;
+    // A spring body stores ELASTIC potential (see `RigidBody2D.spring`), and
+    // without it the leaf springing back reads as kinetic plus gravitational
+    // energy appearing out of nowhere - an unforced gain, which is precisely
+    // what `EnergyMonitor` fires on. `k = m·w²` by construction, so the stored
+    // energy is 0.5·m·w²·d² per axis. Damping only ever removes energy, so the
+    // monitor's one-sided bound stays valid with the term in. For every body
+    // that is not spring-mounted `spring` is null and the sum is unchanged.
+    if (body.spring) {
+      const d = body.globalPosition.sub(body.spring.anchor);
+      total +=
+        0.5 *
+        body.mass *
+        (body.spring.omegaX * body.spring.omegaX * d.x * d.x +
+          body.spring.omegaY * body.spring.omegaY * d.y * d.y);
+    }
   }
   return total;
 }

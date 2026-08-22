@@ -595,10 +595,39 @@ export class World {
           // it ever moves the axle or leaks into `velocityAtPoint`.
           body.linearVelocity = Vec2.ZERO;
         } else {
-          body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
+          // A spring body is pulled back toward its anchor by a damped
+          // harmonic oscillator per axis, folded into the same semi-implicit
+          // Euler step gravity takes (see `RigidBody2D.spring`). Applied HERE,
+          // in the gravity phase, rather than as an impulse: `auditImpulses`
+          // snapshots velocities around `solveContacts` only, so a force
+          // applied outside that window needs no pair bookkeeping, exactly
+          // like gravity itself.
+          let accel = GRAVITY.mul(body.gravityScale);
+          if (body.spring) accel = accel.add(springAcceleration(body, body.spring));
+          body.linearVelocity = body.linearVelocity.add(accel.mul(dt));
           if (body.continuous) this.integrateContinuous(body, dt);
           else body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
+          // A locked axis (frequency 0) is pinned to the anchor rather than
+          // sprung to it: the useful degenerate case is a leaf that only bobs
+          // vertically. Snapped after the step and idempotent, so nothing the
+          // frame did - a contact, a current, the rope - can walk it off.
+          if (body.spring) {
+            const s = body.spring;
+            if (s.omegaX === 0) {
+              body.globalPosition = new Vec2(s.anchor.x, body.globalPosition.y);
+              body.linearVelocity = new Vec2(0, body.linearVelocity.y);
+            }
+            if (s.omegaY === 0) {
+              body.globalPosition = new Vec2(body.globalPosition.x, s.anchor.y);
+              body.linearVelocity = new Vec2(body.linearVelocity.x, 0);
+            }
+          }
         }
+        // A spring body does not spin (see `RigidBody2D.inverseInertia`). The
+        // velocity is ZEROED rather than trusted to stay zero, with the same
+        // justification as the pivot's linear zero above: an inverse inertia of
+        // 0 does not cover a direct write, and water's angular drag is one.
+        if (body.spring) body.angularVelocity = 0;
         body.globalRotation += body.angularVelocity * dt;
       }
     }
@@ -1388,7 +1417,14 @@ export class World {
             `it (applied |P|=${applied.p.length().toExponential(3)})`,
         );
       }
-      if (Math.abs(dl - applied.l) > tolL) {
+      // The mirror of the exemption above, for the other locked freedom: a
+      // SPRING body's angular momentum is not a state variable (its inverse
+      // inertia is 0), so an applied torque turns it nothing and the difference
+      // is the stem's reaction, which nothing models. The LINEAR half is the
+      // half a spring body answers to and stays audited in full - which is the
+      // point, since being loadable through ordinary impulses is the whole
+      // reason a spring body is a rigid body.
+      if (!body.spring && Math.abs(dl - applied.l) > tolL) {
         ContactAudit.violations.push(
           `body#${body.buildIndex} ${body.name || body.constructor.name}: ` +
             `${Math.abs(dl - applied.l).toExponential(3)} N·m·s of angular momentum change with ` +
@@ -2101,6 +2137,32 @@ export class World {
       area.notifyOverlaps(inside);
     }
   }
+}
+
+// The spring body's restoring acceleration (see `RigidBody2D.spring`): a damped
+// harmonic oscillator per axis about the anchor,
+//
+//   a = -w^2 * offset - 2*zeta*w * velocity
+//
+// written per axis so each has its own frequency and each damping term uses its
+// own axis's w. Mass does not appear: the stiffness is `k = m*w^2` by
+// construction, so the free oscillation and the SELF-WEIGHT droop `g/w^2` are
+// the same whatever the body is made of, while an external load `F` still adds
+// `F/(m*w^2)` - a heavy stiff plant barely notices the player and a light whippy
+// one plunges, which is the authorable half.
+//
+// Semi-implicit Euler is stable here for `w*dt < 2`, i.e. under ~19 Hz at the
+// fixed 1/60 step; authored frequencies are clamped to 8 Hz well inside that.
+function springAcceleration(
+  body: RigidBody2D,
+  s: { anchor: Vec2; omegaX: number; omegaY: number; zeta: number },
+): Vec2 {
+  const d = body.globalPosition.sub(s.anchor);
+  const v = body.linearVelocity;
+  return new Vec2(
+    -s.omegaX * s.omegaX * d.x - 2 * s.zeta * s.omegaX * v.x,
+    -s.omegaY * s.omegaY * d.y - 2 * s.zeta * s.omegaY * v.y,
+  );
 }
 
 function clamp(v: number, lo: number, hi: number): number {

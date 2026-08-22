@@ -18,6 +18,7 @@ import { SurfaceType } from "../../lib/types";
 import type { Player } from "../player";
 import { Player as PlayerClass } from "../player";
 import { PlayerState } from "./playerState";
+import { applyHangLoad } from "./ledgeLoad";
 import { AirborneState } from "./airborneState";
 import { GroundedState } from "./groundedState";
 import { WallJumpingState } from "./wallJumpingState";
@@ -83,6 +84,12 @@ export class LedgeClimbState extends PlayerState {
   resolveCollision(player: Player, delta: number): PlayerState {
     const info = LedgeDetection.grabInfo(this.body, this.shapeIndex, this.vertexIndex);
     if (!info) return this; // update() already scheduled the release
+
+    // The player is still hanging off the corner for the climb's duration, so
+    // it still weighs what it weighs (see `applyHangLoad`). Without this a leaf
+    // that sagged under the hang would spring back the instant the climb starts
+    // and drop the player mid-pull.
+    applyHangLoad(this.body, info.vertex, delta);
 
     const shape = player.primaryShape().shape;
     const radius = shape.kind === "circle" ? shape.radius : 0;

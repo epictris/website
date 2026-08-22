@@ -26,6 +26,7 @@
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts contacts
+//   bun run src/tools/cli.ts spring
 //   bun run src/tools/cli.ts render3d
 //   bun run src/tools/cli.ts camera
 //
@@ -1397,6 +1398,9 @@ switch (cmd) {
   case "contacts":
     void cmdContacts();
     break;
+  case "spring":
+    void cmdSpring();
+    break;
   case "render3d":
     void cmdRender3d();
     break;
@@ -1408,7 +1412,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|spring|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -1475,6 +1479,26 @@ async function cmdContacts(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[contacts] ${results.length - failed}/${results.length} cases green${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Spring-body cases (src/sim/springCases.ts). Pure physics like `contacts`, and
+// separate from it because what a spring body does has a CLOSED FORM - the droop
+// is g/w², a load adds F/(m·w²), the period is 1/f - so these are assertions
+// about arithmetic an author reasons about rather than about a solver settling.
+async function cmdSpring(): Promise<void> {
+  // Dynamic for the same reason as `cli contacts`: the case file reaches into
+  // engine internals an old revision does not have, and `cli compare` runs this
+  // very file inside a worktree of one.
+  const { runSpringCases } = await import("../sim/springCases");
+  const results = runSpringCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[spring] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
