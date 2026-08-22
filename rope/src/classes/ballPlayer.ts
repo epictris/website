@@ -40,7 +40,7 @@ export class BallPlayer extends RigidBody2D {
   // ball fades with speed while aiming: full grip at rest, decaying smoothly
   // as the ball speeds up so it slides once genuinely fast (down a ramp)
   // while still gripping firmly through low/medium speeds.
-  static readonly ROLL_FRICTION = 1.8;
+  static readonly ROLL_FRICTION = 3.8;
   // Static-friction coefficient μ_s → breakaway angle atan(μ_s). 0.58 ≈ 30°:
   // the ball holds on shallow/moderate slopes and only slides once steeper.
   static readonly STATIC_FRICTION = 0.58;
@@ -63,7 +63,7 @@ export class BallPlayer extends RigidBody2D {
   // corner where grip suddenly vanishes (the old linear ramp cliffed to the
   // floor by ~60 px/s, leaving almost no friction at medium speed).
   static readonly AIM_BRAKE_DECAY_SPEED = 1.1; // m/s — brake ≈ 0.6 at 0.6, 0.5 at 0.8
-  static readonly AIM_BRAKE_MIN = 0.05; // braking fraction remaining at high speed
+  static readonly AIM_BRAKE_MIN = 0.15; // braking fraction remaining at high speed
 
   chain: Rope | null = null;
   hookInFlight: BallHook | null = null;

@@ -118,7 +118,7 @@ const DEPENETRATION_PASSES = 3;
 // while the aim actively sweeps the ball (high ω) it rolls, and it only grips
 // once the aim settles (ω → 0).
 const STICK_SPEED = 0.3;
-const STICK_SPIN = 0.5;
+const STICK_SPIN = 1.5;
 // Consecutive frames without a gripping contact before the stick anchor is
 // dropped. The grip flickers frame to frame on the spin gate, and releasing the
 // anchor on a single miss re-seeds it wherever the body has drifted to.

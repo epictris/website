@@ -4085,8 +4085,8 @@
       "opacity": 0.5,
       "friction": 1,
       "passable": true,
-      "springFreqX": 1,
-      "springFreqY": 0.9,
+      "springFreqX": 1.5,
+      "springFreqY": 1.25,
       "springDamping": 0.15,
       "objects": [
         {
