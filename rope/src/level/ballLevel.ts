@@ -30,6 +30,7 @@ import {
   type SceneChain,
 } from "./chains";
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
+import type { SparkEvent } from "./sparkEvents";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -59,6 +60,11 @@ export class BallLevel {
   // renderer, which draws bodies and knows nothing about the file they came from.
   readonly visualSource: LevelVisualSource;
   onReset: (() => void) | null = null;
+  // Render-only: this frame's hook-on-hook-proof-steel contacts, for the spark
+  // system to turn into particles (see `level/sparkEvents.ts`). Cleared at the
+  // top of every `physicsProcess`, so it holds one frame's worth and never
+  // accumulates through a headless replay. The sim writes it and never reads it.
+  sparkEvents: SparkEvent[] = [];
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -151,6 +157,15 @@ export class BallLevel {
   }
 
   private spawnBody(body: PhysicsBody2D): void {
+    // Every hook enters the world through here, so this is the one place the
+    // spark plumbing has to be. It lives at the level rather than in
+    // `BallPlayer`, because the sim-to-visual boundary is the level's to hold
+    // and the controller has no business knowing there is a renderer.
+    if (body instanceof BallHook) {
+      body.registerBounceCallback((point, normal, vel) =>
+        this.sparkEvents.push({ point, normal, vel }),
+      );
+    }
     this.world.add(body);
     this.bodies.push(body);
   }
@@ -164,6 +179,7 @@ export class BallLevel {
 
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
+    this.sparkEvents.length = 0;
     Debug.clear();
     PhysTrace.frame = this.frame;
     PhaseTrace.begin(this.frame, this.world);
@@ -207,6 +223,8 @@ export class BallLevel {
     // launch the player cannot aim (session-1594f).
     this.ball.applyLoopCap(this.world.frameContacts, ballVelocityBeforeContacts);
     PhaseTrace.mark("loop-cap", this.world);
+
+    this.collectContactSparks();
 
     // Scene chains solve straight after integration, before the ball's own chain
     // phase opens: whatever they move is then part of the state that phase
@@ -572,5 +590,44 @@ export class BallLevel {
     this.endWasFixed = endFixed;
 
     this.cameraPosition = this.ball.globalPosition;
+  }
+
+  // The touches the SOLVER reports: a hook it is holding against a hook-proof
+  // face, which `bounce()` may never see again once the contact does the
+  // holding. The
+  // constraint list is the honest answer to "what did this body touch this
+  // frame" (see `attachToBlockingContact`, which reads it for the same reason),
+  // so ask it rather than re-deriving a second contact test that would then have
+  // to be kept in step with the solver's.
+  //
+  // Reports the contact and judges nothing: whether a touch is a hit, a drag or
+  // a hook sitting still is a question about the velocity's components, and
+  // every spark threshold lives on the render side (`render/sparks.ts`) so
+  // tuning has one home.
+  private collectContactSparks(): void {
+    for (const c of this.world.frameContacts) {
+      // `normalImpulse > 0` is the same "it really pushed back" filter
+      // `attachToBlockingContact` uses: a speculative contact that asked for
+      // nothing is a hook coasting millimetres clear, and a hook that never
+      // touched the wall shakes no sparks off it.
+      if (c.normalImpulse <= 0) continue;
+      // Either side may be the hook. Hook-proof is a per-SHAPE flag, so the
+      // surface may be a rigid body (see "Hook-proof surfaces"), and which body
+      // leads a constraint is an id ordering - reading `a` alone would answer
+      // for half the pairs (the same mistake `applyStaticGrip` was fixed for).
+      const hookIsA = c.a instanceof BallHook;
+      const hook = hookIsA ? c.a : c.b instanceof BallHook ? c.b : null;
+      if (!hook) continue;
+      const other = hookIsA ? c.b : c.a;
+      const s = other.getShapes()[hookIsA ? c.shapeB : c.shapeA];
+      if (!s?.impermeable) continue;
+      // `c.normal` points out of `b` toward `a`, so it is out of the SURFACE
+      // only when the hook is `a`.
+      const normal = hookIsA ? c.normal : c.normal.neg();
+      // Relative to the surface, since sparks are struck by the two rubbing
+      // together: a hook riding a moving platform is not sliding on it.
+      const vel = hook.linearVelocity.sub(other.velocityAtPoint(c.point));
+      this.sparkEvents.push({ point: c.point, normal, vel });
+    }
   }
 }

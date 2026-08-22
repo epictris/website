@@ -38,6 +38,7 @@ export class BallHook extends RigidBody2D {
 
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
   private chainOutCallbacks: Array<() => void> = [];
+  private bounceCallbacks: Array<(point: Vec2, normal: Vec2, vel: Vec2) => void> = [];
   // While the chain is still paying out, its owner budgets the flight: the
   // wrapped path's last fixed point, how much straight span is left before the
   // path reaches the chain's absolute length (`allowance`), and how much an
@@ -87,6 +88,20 @@ export class BallHook extends RigidBody2D {
   // owner converts it into the dangling tip (BallPlayer.deployTip).
   registerChainOutCallback(onChainOut: () => void): void {
     this.chainOutCallbacks.push(onChainOut);
+  }
+
+  // Fired on every deflection off a hook-proof surface, with the contact point,
+  // the surface normal and the PRE-reflection velocity. Purely an observation:
+  // `bounce` computes all three for itself and the callback reads them, so
+  // nothing here can steer the sim (see `level/sparkEvents.ts`).
+  //
+  // `bounce()` is the single funnel for every impermeable contact the hook has
+  // - the flight sweep's hook-proof branch and `probeContact`'s deflection both
+  // end there - so one callback covers all of them, including the repeated
+  // small probe bounces a dangling tip makes while pressed against a wall. Those
+  // are the caller's problem to threshold on, not this one's to filter.
+  registerBounceCallback(onBounce: (point: Vec2, normal: Vec2, vel: Vec2) => void): void {
+    this.bounceCallbacks.push(onBounce);
   }
 
   private attach(body: PhysicsBody2D, point: Vec2): void {
@@ -492,6 +507,9 @@ export class BallHook extends RigidBody2D {
     const speed = this.linearVelocity.length();
     const vn = this.linearVelocity.dot(normal);
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
+      // Before the reflection: the velocity the hook arrived with is what the
+      // hit looked like (see registerBounceCallback).
+      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity);
       const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
       const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
       this.linearVelocity = reflected.mul(glance);

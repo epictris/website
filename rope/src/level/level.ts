@@ -15,6 +15,7 @@ import { World } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
+import type { SparkEvent } from "./sparkEvents";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
@@ -75,6 +76,14 @@ export class Level {
   // renderer, which draws bodies and knows nothing about the file they came from.
   readonly visualSource: LevelVisualSource;
   onReset: (() => void) | null = null;
+  // Render-only: this frame's hook-on-hook-proof-steel contacts, for the spark
+  // system (see `level/sparkEvents.ts` and BallLevel's field of the same name).
+  // Cleared at the top of every `physicsProcess`; the sim never reads it.
+  //
+  // The grapple hook is DESTROYED by a hook-proof surface rather than deflected
+  // by it, so this level only ever produces the impact burst - there is no hook
+  // left to slide.
+  sparkEvents: SparkEvent[] = [];
 
   constructor(rawData: RawLevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
@@ -99,6 +108,13 @@ export class Level {
   }
 
   private spawnBody(body: PhysicsBody2D): void {
+    // Every hook enters the world through here (see BallLevel.spawnBody, which
+    // does the same for the ball's).
+    if (body instanceof Hook) {
+      body.onDestroyed((point, normal, vel) =>
+        this.sparkEvents.push({ point, normal, vel }),
+      );
+    }
     this.world.add(body);
     this.bodies.push(body);
   }
@@ -129,6 +145,7 @@ export class Level {
 
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
+    this.sparkEvents.length = 0;
     Debug.clear();
     PhysTrace.frame = this.frame;
     PhaseTrace.begin(this.frame, this.world);

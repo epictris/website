@@ -2600,6 +2600,70 @@ A migration a caller can forget is one that is missing wherever the next caller 
 `cli contacts` `impermeable-shape` is the detector, and it asserts both hooks against one compound body: the hook-proof piece turns each away, its sibling anchors each, a hook-proof **rigid** body deflects the ball's hook, and the retired kind still loads hook-proof.
 Both hooks, because they reach a surface by different means - a raycast that destroys, a sweep/probe that deflects - and a fix applied to one of them alone is exactly the class of bug the shape-versus-body rule exists to stop.
 
+## Sparks
+
+A steel hook striking hook-proof steel throws sparks: a **burst** where it hits, sized by how hard, and a **stream** while it slides along the face, sized by how fast.
+A hook resting against one throws nothing, which is the behaviour the whole feature is judged on.
+
+**Sparks never touch the sim.** That is the rule the shape of this follows.
+The simulation is deterministic and replayed bit-for-bit, so what crosses the boundary is a per-frame list of **events** (`level/sparkEvents.ts`) - plain contact facts the sim already had in hand, written by the level and never read back by it - and everything else lives in `render/sparks.ts`: the pool, the randomness, the thresholds, the particle physics and the drawing.
+No sim constant, body state or digest field changes, and the whole committed bundle corpus replays byte-for-byte with the feature in, which is the test that the boundary held.
+
+`BallLevel.sparkEvents` and `Level.sparkEvents` are **cleared at the top of every `physicsProcess`** rather than when a renderer drains them.
+Headless replay (`cli replay`, `cli bundles`, playtests) steps a level with nothing attached, and an append-only list would grow for the length of a bundle; a frame's events live exactly one frame, and a tool that never looks loses nothing.
+
+Three sources feed it, and each is the one funnel for its case:
+
+- `BallHook.bounce` fires `registerBounceCallback` with the contact point, the surface normal and the **pre-reflection** velocity, behind the same `vn < 0 && speed > BOUNCE_MIN_SPEED` guard the reflection itself sits behind.
+  Every impermeable contact the ball's hook has ends there - the flight sweep's hook-proof branch and `probeContact`'s deflection both - so one callback covers all of them.
+  That includes the repeated bounces a dangling tip makes while pressed against a wall, which the probe deflects on **every frame**, and those are not a nuisance to be filtered: a tip dragged along hook-proof steel is reported almost entirely through this path, with a normal component of 0.03 m/s and a tangential one running to 3.6, so it is where the SLIDE comes from as much as the bounce.
+  The solver's own contacts, below, catch it on a handful of frames and no more.
+- The **solver's own contacts**, scanned in `BallLevel.collectSlideSparks` after `integrate`.
+  A hook the solver is holding against a face may never re-enter `bounce()`, since the contact does the holding, and `World.frameContacts` is exactly the "what did this body touch this frame" question (`attachToBlockingContact` reads it for the same reason).
+  `normalImpulse > 0` is the same "it really pushed back" filter, so a hook coasting millimetres clear sheds nothing.
+  Either side of the pair may be the hook and hook-proof is a per-SHAPE flag, so the surface may be a rigid body: reading `a` alone would answer for half the pairs, and the velocity is taken **relative to the surface** so a hook riding a moving platform is not sliding on it.
+- `Hook.onDestroyed` for the grapple hook, which is destroyed rather than deflected by a hook-proof surface, so it gets the burst and never the stream.
+  Its `velocity` is a per-frame displacement and is divided by the step on the way out, since every threshold downstream is in m/s.
+
+**Every threshold is on the render side**, so tuning has one home: the sim reports contacts and pre-judges nothing.
+`SparkSystem` splits the event velocity at the surface - the normal component sizes the burst, the tangential one the stream - and `SLIDE_MIN_SPEED` is the constant that implements "not while it is stationary".
+
+**A burst is for an ARRIVAL**, and only the burst is: the stream runs on every frame the hook is moving along a face.
+Once a hook is down and sliding, further normal components are the WALL's shape rather than a new strike, and a faceted hook-proof polygon supplies them constantly - crossing the seam between two facets turns the normal under the hook, so a velocity that was 0.14 m/s into the old facet is 2.78 m/s into the new one with the hook having neither gained speed nor left the surface.
+`session-127f` f102-f103 is that exactly: the velocity vector is identical across the seam and only the normal moves, by 15.5 degrees, and it fired a second burst in the middle of a slide.
+`CONTACT_GAP_FRAMES` (2) is the rule - a touch is an arrival when nothing reported contact for that many steps - which bridges the single-frame gaps a speculative contact leaves while staying well under the flight time of any skip worth seeing as two strikes.
+Across the whole corpus it removes exactly one burst, the one above; all 30 of `session-2504f`'s stay.
+Whether the hook is arriving is itself collision information - it was not touching anything, and now it is - so it lives on the render side with every other threshold.
+The counter is per SYSTEM rather than per hook, which is exact while at most one hook is in contact at a time (the ball's chain has a single tip, and the grapple hook is destroyed by the surface that would spark).
+
+**Every event is asked BOTH questions, and each answers on its own threshold.**
+A head-on hit is all burst, a drag all stream, and a glancing skip is legitimately both; nothing in `render/sparks.ts` knows or cares which part of the sim reported the touch.
+That is the design rather than a simplification, and `SparkEvent` therefore carries **no field naming the kind of touch** - only the point, the normal and the velocity.
+It carried one first, and the drag case is what that cost: reading a bounce as "an impact, therefore a burst" threw away the tangential half of the only events a dragged tip produces, so the tip ground along the steel in silence (`session-152f`, f123-152, tangential speed climbing 0.44 to 3.64 m/s with not one spark).
+A field whose only correct use is "do not branch on me" is a field somebody eventually branches on.
+The pool is a fixed 256 with struct-of-arrays `Float32Array`s and swap-remove, so there is no per-frame allocation and the cap doubles as the ceiling that absorbs a probe bounce and a solver contact reporting the same touch as two events.
+The colour ramp is baked into a lookup for the same reason: 256 formatted `rgba(...)` strings a frame would otherwise be the only thing the draw allocates.
+
+The PRNG is a **seeded** mulberry32 reset by `reset()`, and `advance` takes its `dt` as a parameter, because `shot.html` and `cli shot` replay a bundle and screenshot frames.
+The live game passes its render dt and the shot path passes the fixed `STEP`, so two grabs of the same frame are the same picture (asserted: `cli shot --diff` of two runs reports **0 pixels**) and only the live path is nondeterministic, which is the path nobody diffs.
+
+Drawing goes through the renderer rather than around it (`render`/`renderBall` take an optional `SparkSystem`) and is deliberately **not** gated on `overlayOnly`: a spark is an emissive, flat, screen-thin mark over the scene, which is exactly what the 2D canvas keeps in 3D mode alongside the reticle and the anchor grates.
+One system therefore serves both render modes.
+`main.ts` ingests **inside** the fixed-step catch-up loop rather than after it, so a stall drops no caught-up frame's events, advances once per rendered frame on the render clock, and resets with the level.
+The editor's **▶ Test** runs the same three calls in its own loop and resets at every start, so a level is judged with the sparks it will play with - the point of ▶ Test being that what is felt there is what the player gets - and a test never opens carrying the last one's embers.
+`sim/svgFrame.ts` is left alone, being a diagnostic projection rather than a look.
+
+Worth knowing before judging a screenshot: the sparks are drawn with `globalCompositeOperation = "lighter"`, which is what makes a shower read as a bright core on the dark 3D scene the ball level plays in, and which is nearly invisible against the **light training-grid backdrop** the 2D path draws.
+A 2D grab is evidence that they are in the right place; the 3D one is evidence of the look.
+
+The burst is deliberately the quieter of the two, and its three knobs are not interchangeable.
+`IMPACT_SPARKS_PER_MPS` and `IMPACT_BURST_CAP` move **together** (a cap alone would decide every hit above a certain speed and the burst would stop growing with the throw); the speed fractions set how hard the sparks are thrown and, since a streak is drawn from the velocity, how long each drawn streak is; and `IMPACT_TTL_SCALE` sets how far they get before they wink out.
+Reach is speed times lifetime, so all speed reads as a puff and all lifetime as sparks hanging in the air - they are tuned by eye as a pair.
+
+Nothing here is gated by a test, and the two cases to check by hand after touching a threshold are the ones that pin it from both sides.
+A hook **skimming** a face must strike once and then trail (`session-127f` f101 onward: one burst, then a stream growing to 63 particles by f109), a tip **dragged** along one must produce a steady stream (`session-152f` f123 onward, and `session-339f`, whose tangential speed reaches 5.4 m/s), and a tip left **resting** against one must produce nothing at all - the resting case fires one or two events every frame for ever, at gravity's own 0.13 m/s of approach and zero tangential speed, so it is silent because both thresholds reject it rather than because nothing is reported.
+Neither is visible to `bun run test`: sparks reach no digest and no invariant by construction, so a system emitting nothing at all is exactly as green as one that works.
+
 ## Hook-only anchor geometry
 
 An **`anchor`** body is an `AnchorBody` (`engine/body.ts`) — the mirror image of a

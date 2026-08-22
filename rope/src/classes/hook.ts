@@ -14,8 +14,12 @@ import {
 import { circleShape } from "../engine/shapes";
 import { Segment } from "../lib/segment";
 
+// The fixed timestep the hook's per-frame `velocity` is expressed at, used only
+// to restate it as m/s for the destruction event.
+const STEP = 1 / 60;
+
 export class Hook extends CharacterBody2D {
-  private destroyedCbs: Array<() => void> = [];
+  private destroyedCbs: Array<(point: Vec2, normal: Vec2, vel: Vec2) => void> = [];
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
 
   constructor() {
@@ -24,7 +28,11 @@ export class Hook extends CharacterBody2D {
     if (!this.hasShape()) this.setShape(circleShape(PX));
   }
 
-  onDestroyed(cb: () => void): void {
+  // Fired when a hook-proof surface destroys the hook, with the contact point,
+  // the surface normal and the hook's velocity in m/s. `Rope` ignores the
+  // arguments (it only wants to know the hook is gone); `Level` reads them for
+  // the impact sparks (see `level/sparkEvents.ts`).
+  onDestroyed(cb: (point: Vec2, normal: Vec2, vel: Vec2) => void): void {
     this.destroyedCbs.push(cb);
   }
 
@@ -52,7 +60,11 @@ export class Hook extends CharacterBody2D {
       // an attachable ledge and hook-proof faces, and the hook is answered by
       // whichever it actually flew into.
       if (result.shape.impermeable) {
-        for (const cb of this.destroyedCbs) cb();
+        // `velocity` is the hook's per-frame displacement (it flies by adding
+        // it to its own position), so it is divided by the step to be the m/s
+        // the spark system's thresholds are written in.
+        const vel = this.velocity.mul(1 / STEP);
+        for (const cb of this.destroyedCbs) cb(result.position, result.normal, vel);
         this.world.remove(this);
         return;
       }

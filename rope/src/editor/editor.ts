@@ -12,6 +12,7 @@ import {
   REGION_EXIT_MARGIN,
 } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
+import { SparkSystem } from "../render/sparks";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { LiveInputSource } from "../input/liveInput";
@@ -1209,6 +1210,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // so the render path does not have to re-narrow a union it has already
   // narrowed for the 2D one.
   let testLevel3d: Scene3DLevel | null = null;
+  // The hook's sparks while a test runs (see render/sparks.ts). One system for
+  // the editor's life, cleared at every ▶ Test, so a test never opens carrying
+  // the embers of the last one.
+  const testSparks = new SparkSystem();
   let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
@@ -1277,6 +1282,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (scene3d && viewMode !== "2d") scene3d.setLevel(testLevel);
     accumulator = 0;
     lastNow = -1;
+    testSparks.reset();
     mode = "test";
     root.style.display = "none";
     testBanner.style.display = "block";
@@ -6116,6 +6122,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       while (accumulator >= STEP && steps < MAX_STEPS) {
         const fi: FrameInput = src.sample();
         testLevel.physicsProcess(fi, STEP);
+        // Drained inside the catch-up loop, as `main.ts` does: a frame that
+        // runs several steps must not drop the caught-up steps' events.
+        testSparks.ingest(testLevel.sparkEvents);
         recFrames.push(serializeInput(fi));
         recDigests.push(
           testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
@@ -6128,6 +6137,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Render interpolation factor, as in main.ts: the sim is a fixed 60 Hz,
       // so bodies are drawn between steps rather than snapping to the newest.
       const alpha = Math.min(1, accumulator / STEP);
+      // Once per rendered frame, on the render clock (see main.ts).
+      testSparks.advance(dt);
       testCameraCtl.update(
         camera,
         dt,
@@ -6169,7 +6180,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         scene3d!.render(testLevel3d!, camera, alpha);
       }
       if (testLevel instanceof BallLevel) {
-        renderBall(ctx, view, testLevel, camera, fps, ballInput?.aimPoint() ?? null, alpha, testIn3d);
+        renderBall(
+          ctx,
+          view,
+          testLevel,
+          camera,
+          fps,
+          ballInput?.aimPoint() ?? null,
+          alpha,
+          testIn3d,
+          [],
+          testSparks,
+        );
       } else {
         render(
           ctx,
@@ -6182,6 +6204,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           alpha,
           testCameraCtl.held,
           testIn3d,
+          [],
+          testSparks,
         );
       }
     } else {

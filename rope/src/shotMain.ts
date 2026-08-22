@@ -23,6 +23,7 @@
 // `shot.html` is deliberately absent from the build's rollup inputs, so this
 // costs the shipped app nothing.
 import { render, renderBall } from "./render/renderer";
+import { SparkSystem } from "./render/sparks";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
@@ -120,9 +121,19 @@ if (scene3d) {
 }
 
 // Replay to the first frame wanted, then draw each in turn.
+//
+// The sparks are advanced at the FIXED step rather than on a wall clock, and
+// their PRNG is seeded (see render/sparks.ts), so two grabs of the same frame
+// draw the same shower - which is what keeps `--diff` and the filmstrip's
+// changed-pixel counts meaningful with sparks on screen.
+const sparks = new SparkSystem();
 let simFrame = 0;
 const advanceTo = (target: number): void => {
-  for (; simFrame < target; simFrame++) level.physicsProcess(de(rec.frames[simFrame]!), 1 / 60);
+  for (; simFrame < target; simFrame++) {
+    level.physicsProcess(de(rec.frames[simFrame]!), 1 / 60);
+    sparks.ingest(level.sparkEvents);
+    sparks.advance(1 / 60);
+  }
 };
 
 if (frames.length === 1) {
@@ -166,9 +177,9 @@ function drawFrame(frame: number): void {
     }
   }
   if (isBall) {
-    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null);
+    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, [], sparks);
   } else {
-    render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null);
+    render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null, [], sparks);
   }
 }
 

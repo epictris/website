@@ -11,6 +11,7 @@ import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
+import { SparkSystem } from "./render/sparks";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import {
   digest,
@@ -105,8 +106,16 @@ function makeLevel(): Level | BallLevel {
 }
 
 let level = makeLevel();
+
+// The hook's sparks (see render/sparks.ts). One system for the session: it is
+// fed the sim's per-frame events, advanced on the render clock, and cleared
+// with the level.
+const sparks = new SparkSystem();
+
 function reset(): void {
   level = makeLevel();
+  // A restart must not carry the dead level's embers.
+  sparks.reset();
   level.onReset = reset;
   // A reset builds a new level, so it builds a new scene: every extrusion in it
   // belongs to bodies that no longer exist.
@@ -204,6 +213,9 @@ function frame(now: number): void {
   while (accumulator >= STEP && steps < MAX_STEPS_PER_FRAME) {
     const frameInput: FrameInput = input.sample();
     level.physicsProcess(frameInput, STEP);
+    // Drained inside the catch-up loop rather than after it: a frame that runs
+    // several steps would otherwise silently drop every caught-up step's events.
+    sparks.ingest(level.sparkEvents);
     recFrames.push(serializeInput(frameInput));
     recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
     recWorldDigests.push(
@@ -218,6 +230,10 @@ function frame(now: number): void {
   // because a frame that hit MAX_STEPS_PER_FRAME leaves the accumulator over a
   // full step, and drawing past the current state would be extrapolation.
   const alpha = Math.min(1, accumulator / STEP);
+
+  // Once per rendered frame, on the render clock: the sparks are outside the
+  // fixed step entirely, like the camera ease.
+  sparks.advance(dt);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
   // Driven by the render dt, so it is frame-rate independent and outside the
@@ -247,6 +263,7 @@ function frame(now: number): void {
       alpha,
       scene3d !== null,
       wantsHud ? perf.hudLines() : [],
+      sparks,
     );
   } else {
     render(
@@ -261,6 +278,7 @@ function frame(now: number): void {
       cameraCtl.held,
       scene3d !== null,
       wantsHud ? perf.hudLines() : [],
+      sparks,
     );
   }
   // After the frame is drawn, so the draw-call and triangle counts are this

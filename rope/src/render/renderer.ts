@@ -16,6 +16,7 @@ import {
 } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PIXELS_PER_METER, PX } from "../engine/units";
+import type { SparkSystem } from "./sparks";
 import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -457,6 +458,11 @@ export function render(
   // Extra instrument lines under the FPS counter (`?hud=1`, see PerfProbe).
   // Empty everywhere else, so the counter is exactly what it was.
   hudLines: string[] = [],
+  // The hook's sparks, drawn in world space over everything else (see
+  // `render/sparks.ts`). Deliberately NOT gated on `overlayOnly`: a spark is an
+  // emissive, screen-thin flat mark over the scene, which is exactly what this
+  // canvas keeps in 3D. Absent everywhere that has no spark system to hand.
+  sparks: SparkSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -530,6 +536,8 @@ export function render(
   drawPlayerRigBack(ctx);
   drawBody(ctx, level.player, alpha);
   drawPlayerRigFront(ctx);
+
+  sparks?.draw(ctx);
 
   // Gamepad crosshair — only while the right stick owns aim (with the mouse,
   // the OS cursor shows aim already).
@@ -760,6 +768,8 @@ export function renderBall(
   overlayOnly = false,
   // See `render`: the `?hud=1` instrument lines.
   hudLines: string[] = [],
+  // See `render`: the hook's sparks, drawn in both render modes.
+  sparks: SparkSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -855,6 +865,8 @@ export function renderBall(
     ctx.arc(loop.x, loop.y, BallPlayer.LOOP_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
   }
+
+  sparks?.draw(ctx);
 
   if (aimWorld) drawAimReticle(ctx, aimWorld);
 
