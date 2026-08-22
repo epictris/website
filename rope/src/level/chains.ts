@@ -44,16 +44,30 @@ import {
 // are already the ends of every span, and `Rope.regeneratePath` never wraps a
 // span around the bodies that span starts and finishes on, so an empty scene is
 // exactly "hangs between its two bodies and touches nothing else".
-const NOTHING: PhysicsBody2D[] = [];
+export const NOTHING: PhysicsBody2D[] = [];
 
 export class SceneChain {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
   readonly color: string | null;
+  // What this chain's spans may bend around. `NOTHING` for a scenery chain, and
+  // that is what makes a per-chain solve an order cheaper than the ball's (no
+  // wrap path to regenerate). A vine's load-bearing span passes the level's
+  // static bodies instead, because tension routed past a corner has to go
+  // round it (see `level/vines.ts`); it is an optional list rather than a
+  // sibling class so `sweepChains` reads `rope.overLength` and works unchanged.
+  readonly wrapBodies: PhysicsBody2D[];
 
-  constructor(a: RopeContact, b: RopeContact, length: number, color: string | null) {
+  constructor(
+    a: RopeContact,
+    b: RopeContact,
+    length: number,
+    color: string | null,
+    wrapBodies: PhysicsBody2D[] = NOTHING,
+  ) {
     this.rope = new Rope(a, b, null, length);
     this.color = color;
+    this.wrapBodies = wrapBodies;
   }
 
   // Open this chain's frame. Once per frame, however many solve passes follow.
@@ -66,7 +80,7 @@ export class SceneChain {
   // controller runs its chain in, and for the same reason (solve before
   // integration ends every fast frame over-length by |v|·dt).
   solve(delta: number): void {
-    this.rope.solvePass(NOTHING, delta);
+    this.rope.solvePass(this.wrapBodies, delta);
   }
 }
 
@@ -74,7 +88,7 @@ export class SceneChain {
 // sweep loop below is written against, and it is what "the chain does not
 // stretch" means: 5 mm is half a pixel at PIXELS_PER_METER, i.e. under what the
 // renderer can show.
-const CHAIN_TOLERANCE = 0.005;
+export const CHAIN_TOLERANCE = 0.005;
 
 // Sweeps the tolerance may spend getting there. A ceiling, not a target - a rig
 // that converges leaves the loop on the sweep it converges on, which for the
@@ -153,15 +167,21 @@ const MAX_CHAIN_SWEEPS = 64;
 // `beginFrame` stays outside the loop: it releases the blocked-length lease, and
 // a lease released once per PASS would be handed back a sweep's worth faster
 // than the geometry that bought it can re-earn it.
+//
+// `extra` is a rope that is NOT scenery but shares a body with the set - the
+// player's grapple rope while it is holding a vine link (see `level/vines.ts`),
+// which is the same situation `BallLevel` passes the ball's chain in for. It is
+// forwarded straight to `sweepChains`, which is where the reason lives.
 export function stepSceneChains(
   chains: readonly SceneChain[],
   world: World,
   delta: number,
+  extra: CoupledRope | null = null,
 ): void {
   if (chains.length === 0) return;
   const before = snapshotChainBodies(chains, null);
   for (const chain of chains) chain.beginFrame(delta);
-  sweepChains(chains, null, delta);
+  sweepChains(chains, extra, delta);
   settleChainBodies(chains, before, world, delta);
 }
 
@@ -329,6 +349,34 @@ export function settleChainBodies(
   }
 }
 
+// A rope swept alongside the scene set because it shares a body with it: the
+// ball's chain, or the player's grapple rope while it is holding a vine link.
+export interface CoupledRope {
+  readonly rope: Rope;
+  // What that rope may wrap - the caller's scene, not the chain set's.
+  readonly bodies: PhysicsBody2D[];
+  // Must the SET reach its own tolerance before the sweep may leave, or is the
+  // coupling's residual the whole test?
+  //
+  // False is the ball's, and it is measured: the arena's three chains want ~200
+  // sweeps for 5 mm and get 64, so the set is over tolerance on 1616 frames of
+  // 1618, and a loop waiting for it spends the whole cap on the one solve in the
+  // set that regenerates a wrap path. That doubled the arena's physics frame for
+  // sweeps that had stopped changing the answer after the first (session-1618f,
+  // below).
+  //
+  // True is a vine's, and it is measured too, in the opposite direction. A vine
+  // is thirty pair chains in SERIES, which is the one topology a single
+  // Gauss-Seidel sweep cannot hold: gated on the coupling alone the set got
+  // exactly one sweep per frame from the moment the hook grabbed, every pair
+  // ended the frame over its length, the blocked-length lease absorbed the
+  // difference, and the vine came apart - link 7 of 30 on the FLOOR four seconds
+  // after the grab while the grabbed link hung where it was caught. The set here
+  // converges (~12 sweeps at rest, against the arena's never), so requiring it
+  // costs the sweeps it actually needs rather than the cap.
+  readonly settleSet: boolean;
+}
+
 // The sweep itself, over a set whose frames are already open, plus optionally
 // one more rope that is NOT scenery: the ball's chain, when it is anchored to a
 // body a scene chain also holds.
@@ -355,7 +403,7 @@ export function settleChainBodies(
 // hauls must not depend on what is holding the far end.
 export function sweepChains(
   chains: readonly SceneChain[],
-  extra: { rope: Rope; bodies: PhysicsBody2D[] } | null,
+  extra: CoupledRope | null,
   delta: number,
 ): void {
   for (let sweep = 0; sweep < MAX_CHAIN_SWEEPS; sweep++) {
@@ -380,12 +428,37 @@ export function sweepChains(
       // 15.3 against a 16.7 ms budget the renderer also draws inside) for sweeps
       // that had stopped changing the answer after the first (session-1618f).
       const disturbed = extra.rope.overLength;
+      // ...and, where the caller says so, the set's own residual as well (see
+      // `CoupledRope.settleSet`). Measured before the extra's solve for the same
+      // reason `disturbed` is: it is what this sweep left behind.
+      let worstSet = 0;
+      if (extra.settleSet) {
+        for (const chain of chains) worstSet = Math.max(worstSet, chain.rope.overLength);
+      }
       // Solved last, so the frame ends on the rope whose books the caller takes:
       // `BallLevel` credits the ball for the position the chain phase leaves it
       // at, and a scene chain solving after it would move the anchor out from
       // under that measurement.
-      extra.rope.solvePass(extra.bodies, delta);
-      if (disturbed <= CHAIN_TOLERANCE) break;
+      // A coupled solve the caller is paying for on every sweep is what
+      // `settleSet: false` means, and it is solved unconditionally there so the
+      // frame ends on the rope whose books that caller takes.
+      //
+      // Where the SET is what the loop is waiting for, that would be paying for
+      // the dearest solve in the sweep on every one of the sweeps the set needs:
+      // a player's rope regenerates its wrap path over the whole level, and a
+      // vine wants a dozen sweeps at rest and more under load - 8.2 ms a frame,
+      // which is session-1618f's cost arriving by the other door. So it is
+      // solved only on the sweeps it is actually over its length on, and the
+      // loop leaves only once BOTH are inside the tolerance, measured after this
+      // sweep - so nothing has moved since either was last satisfied.
+      //
+      // What the loop may therefore LEAVE, and the reason `unwindOverLength`
+      // has to be told about it, is a coupled rope up to `CHAIN_TOLERANCE` long
+      // on the frames it skips (see `BallLevel`, session-337f).
+      if (!extra.settleSet || disturbed > CHAIN_TOLERANCE) {
+        extra.rope.solvePass(extra.bodies, delta);
+      }
+      if (disturbed <= CHAIN_TOLERANCE && worstSet <= CHAIN_TOLERANCE) break;
       continue;
     }
     // Measured after the sweep, so a set that is already satisfied still pays
@@ -404,7 +477,7 @@ export function sweepChains(
 // generator resolves that as a self-intersection, winding the chain around its
 // own anchor (see `nearestOnOutline`). It is applied at load rather than trusted
 // from the file so a hand-edited level cannot author the degenerate case.
-function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
+export function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
   const shapes = obj.getShapes();
   const s = shapes[nearestShapeIndex(shapes, world)];
   return s ? nearestSurfacePoint(s, world) : world;
@@ -416,10 +489,20 @@ function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
 // has nothing to constrain) is dropped rather than fed to a solver that has no
 // meaning for it.
 export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChain[] {
-  // Every anchor in the level, by id. A chain names its two ends and nothing
-  // else - which body an end is on is a question about where its anchor lives,
-  // and this is where that is answered once for the whole list rather than by
-  // scanning the bodies per chain.
+  const anchors = collectAnchorSites(built);
+  const chains: SceneChain[] = [];
+  for (const c of data.chains ?? []) {
+    const chain = buildOne(c, anchors);
+    if (chain) chains.push(chain);
+  }
+  return chains;
+}
+
+// Every anchor in the level, by id. A chain names its two ends and nothing else
+// - which body an end is on is a question about where its anchor lives, and this
+// is where that is answered once for the whole list rather than by scanning the
+// bodies per chain. A vine names ONE end the same way, and reads the same map.
+export function collectAnchorSites(built: BuiltBodies): Map<number, AnchorSite> {
   const anchors = new Map<number, AnchorSite>();
   for (const b of built.bodies) {
     for (const o of b.data.objects) {
@@ -430,16 +513,11 @@ export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChai
       if (!anchors.has(o.id)) anchors.set(o.id, { built: b, anchor: o });
     }
   }
-  const chains: SceneChain[] = [];
-  for (const c of data.chains ?? []) {
-    const chain = buildOne(c, anchors);
-    if (chain) chains.push(chain);
-  }
-  return chains;
+  return anchors;
 }
 
 // An anchor and the body it is on, which is the pair every chain end resolves to.
-interface AnchorSite {
+export interface AnchorSite {
   readonly built: BuiltBodies["bodies"][number];
   readonly anchor: AnchorObjectData;
 }

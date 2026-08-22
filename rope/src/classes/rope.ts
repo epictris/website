@@ -437,12 +437,29 @@ export class Rope {
   // the angle — one full Newton step can swing the contact clean past its
   // tangent point, which is where the rate flips sign — and undamped that
   // oscillates between two equally bad angles and returns to where it started.
-  unwindOverLength(body: PhysicsBody2D, rotationAtFrameStart: number, delta: number): void {
+  //
+  // `forgive` is length this rope is ALLOWED to end the frame over by, and it is
+  // subtracted before any of the above happens. The unwind's premise is that
+  // over-length left at the end of the phase is over-length the solve could not
+  // pay, so the spin has to give it back - and that premise fails for a solve
+  // the phase deliberately skipped. A coupled sweep leaves the rope inside
+  // `CHAIN_TOLERANCE` rather than at zero (see `sweepChains`), which is the
+  // solver's own convergence budget and not the player's to fund: billed to the
+  // spin it cancelled the ball's entire frame of rotation on 107 of the 312
+  // frames of `session-337f` that were holding a vine, and read in the game as
+  // a force resisting the turn. Zero for every caller that solves its rope to
+  // convergence, which is every one but a held vine.
+  unwindOverLength(
+    body: PhysicsBody2D,
+    rotationAtFrameStart: number,
+    delta: number,
+    forgive = 0,
+  ): void {
     const startRotation = body.globalRotation;
     const lowRotation = Mathf.min(startRotation, rotationAtFrameStart);
     const highRotation = Mathf.max(startRotation, rotationAtFrameStart);
     let bestRotation = startRotation;
-    let bestExcess = this.calculateRopePathLength() - this.constraintLength;
+    let bestExcess = this.calculateRopePathLength() - this.constraintLength - forgive;
 
     for (let i = 0; i < Rope.UNWIND_ITERATIONS && bestExcess > 0; i++) {
       body.globalRotation = bestRotation;
@@ -454,7 +471,7 @@ export class Rope {
         const candidate = Mathf.clamp(bestRotation + step, lowRotation, highRotation);
         if (candidate === bestRotation) break;
         body.globalRotation = candidate;
-        const excess = this.calculateRopePathLength() - this.constraintLength;
+        const excess = this.calculateRopePathLength() - this.constraintLength - forgive;
         if (excess < bestExcess) {
           bestRotation = candidate;
           bestExcess = excess;

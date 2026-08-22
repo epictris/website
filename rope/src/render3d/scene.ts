@@ -17,13 +17,14 @@
 import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import type { CollisionObject2D } from "../engine/body";
-import { AnchorBody } from "../engine/body";
+import { AnchorBody, VineLink } from "../engine/body";
 import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
 import { Hook } from "../classes/hook";
 import { Player } from "../classes/player";
 import type { World } from "../engine/world";
 import type { SceneChain } from "../level/chains";
+import type { VineCord } from "../level/vines";
 import type { LevelVisualSource } from "../level/buildBodies";
 import type { EnvironmentData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
@@ -31,6 +32,7 @@ import type { ViewTransform } from "../render/viewport";
 import { BodyVisual, pickTagOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
+import { VineLayer } from "./vineVisual";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
 import {
@@ -52,6 +54,11 @@ import { updateWater } from "./water";
 export interface Scene3DLevel {
   readonly world: World;
   readonly sceneChains: readonly SceneChain[];
+  // The vines to draw, as cords rather than as `Vine`s: the editor draws them
+  // too and has no links to read, so what it hands over is the rest pose (see
+  // `VineCord`). Absent = a level with no vines, which is every level and every
+  // host that predates them.
+  readonly vines?: readonly VineCord[];
   readonly visualSource: LevelVisualSource;
   // The ball & chain avatar, when this level has one. Its sphere, its mounting
   // loop and its chain are drawn by their own modules; a grapple level has none
@@ -60,15 +67,26 @@ export interface Scene3DLevel {
 }
 
 // Bodies the 3D scene deliberately does not extrude, because something else
-// draws them: the grapple avatar and its hook (still 2D), and the ball and its
-// hook (drawn by `ballVisual`/`chainVisual` as a cast-iron sphere and a manacle,
-// not as an extruded disc).
+// draws them: the grapple avatar and its hook (still 2D), the ball and its hook
+// (drawn by `ballVisual`/`chainVisual` as a cast-iron sphere and a manacle, not
+// as an extruded disc), and a vine's links.
+//
+// A vine link is the one of these that is not an avatar, and it is here for the
+// plainest reason of all: a link's circle is its GRAB radius, several times the
+// gauge a vine is drawn at, and a vine is one cord rather than twenty beads.
+// Extruded like scenery it draws as a stack of brown spheres with the cord
+// painted down the middle of them. `drawVines` on the 2D overlay is what draws a
+// vine in both render modes, exactly as the rope and the anchor grates are.
+// A host with no vines at all, so `sync` takes one list rather than a branch.
+const NO_VINES: readonly VineCord[] = [];
+
 function drawnElsewhere(body: CollisionObject2D): boolean {
   return (
     body instanceof Player ||
     body instanceof Hook ||
     body instanceof BallPlayer ||
-    body instanceof BallHook
+    body instanceof BallHook ||
+    body instanceof VineLink
   );
 }
 
@@ -120,6 +138,7 @@ export class Scene3D {
   private readonly standing: BodyVisual[] = [];
   private ballVisual: BallVisual | null = null;
   private chains: ChainLayer;
+  private vines: VineLayer;
   private probe: THREE.Mesh | null = null;
   // Picking and highlighting (editor only; the game never clicks the scene).
   private readonly raycaster = new THREE.Raycaster();
@@ -172,6 +191,7 @@ export class Scene3D {
     this.env = new Environment(this.scene, undefined, this.renderer);
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
+    this.vines = new VineLayer(this.scene);
   }
 
   // Build the scene for a level. Called once per level instance (a reset builds
@@ -533,6 +553,7 @@ export class Scene3D {
     for (const visual of this.bodies.values()) visual.sync(alpha);
 
     this.chains.sync(level, alpha);
+    this.vines.sync(level.vines ?? NO_VINES, alpha);
     this.ballVisual?.sync(alpha);
     // After the visuals are synced and before the frame is drawn: a highlight is
     // a material swap on meshes the reconciliation above may have only just
@@ -569,6 +590,7 @@ export class Scene3D {
       this.ballVisual = null;
     }
     this.chains.clear();
+    this.vines.clear();
     // Every visual has handed its lights back on the way through, so this is the
     // backstop rather than the mechanism: a rig holding a light whose parent has
     // gone is a slot of the budget spent on nothing.
@@ -578,6 +600,7 @@ export class Scene3D {
   dispose(): void {
     this.clearLevel();
     this.chains.dispose();
+    this.vines.dispose();
     this.lights.dispose();
     this.env.dispose();
     this.renderer.dispose();

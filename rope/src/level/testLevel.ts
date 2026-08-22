@@ -119,3 +119,101 @@ const SPRING_DATA: RawLevelData = {
 };
 
 export const TEST_SPRING: LevelSpec = { data: SPRING_DATA };
+
+// Vines to swing on (see `level/vines.ts`): a chasm with two hanging from
+// branches over it, and a third long enough to pool on the far ledge.
+//
+// The layout is the mechanic. A vine is only interesting where the alternative
+// is falling, so the two swing vines hang over an 8 m gap at heights a player
+// running off the left lip can reach with the hook - and they are placed a swing
+// apart rather than side by side, because chaining one to the next is the thing
+// a vine offers that a static anchor does not.
+//
+// The third is there for the two behaviours that need no player at all: it hangs
+// 7 m from a branch 5.6 m above the right ledge, so 1.4 m of it lies in a heap on
+// that ledge. That is the drape and the pool in one, and it is what `dropDistance`
+// exists for - authored straight through the ledge, its tail would otherwise
+// spawn past the slab's midline and hang below the world.
+const VINE_DATA: RawLevelData = {
+  player: { x: -300, y: 20, radius: 8 },
+  bodies: [
+    // The left approach, ending at x = 0 - the lip the run leaves from.
+    {
+      kind: "static",
+      x: -500,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The far side, to land on. Deliberately 2.5 m LOWER than the lip: a swing
+    // ends where the arc puts you, and a landing you have to reach on the way
+    // down is what the two vines are for. Level with the lip it is unreachable -
+    // a player hanging on a 4 m vine is 4 m below its branch however far the
+    // swing carries them.
+    {
+      kind: "static",
+      x: 1300,
+      y: 330,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The pit floor, far enough down that a missed swing is a fall rather than
+    // a stumble.
+    {
+      kind: "static",
+      x: 400,
+      y: 700,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // First branch, 4.3 m above the lip.
+    {
+      kind: "static",
+      x: 250,
+      y: -350,
+      rot: 0,
+      color: "#4a3b2a",
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 220, h: 40 } },
+        { type: "anchor", id: 1, x: 0, y: 20 },
+      ],
+    },
+    // Second branch, a swing further on and a metre lower.
+    {
+      kind: "static",
+      x: 620,
+      y: -250,
+      rot: 0,
+      color: "#4a3b2a",
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 220, h: 40 } },
+        { type: "anchor", id: 2, x: 0, y: 20 },
+      ],
+    },
+    // The branch the third vine pools from, over the far ledge.
+    {
+      kind: "static",
+      x: 1100,
+      y: -500,
+      rot: 0,
+      color: "#4a3b2a",
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 220, h: 40 } },
+        { type: "anchor", id: 3, x: 0, y: 20 },
+      ],
+    },
+  ],
+  // 25 cm rather than the 15 cm default, because the cost of a vine is its LINK
+  // COUNT and a level pays for all of them at once: these three at the default
+  // are 111 links and 8.0 ms a frame of a 16.7 ms budget, for scenery. At 25 cm
+  // they are 66 links and 2.4 ms, and what it costs is a slightly coarser drape -
+  // the grab radius grows with the spacing, so grabbing anywhere along one is
+  // unaffected (see `DEFAULT_VINE_SPACING`).
+  vines: [
+    { anchor: 1, length: 500, spacing: 25 },
+    { anchor: 2, length: 450, spacing: 25 },
+    { anchor: 3, length: 850, spacing: 25 },
+  ],
+};
+
+export const TEST_VINES: LevelSpec = { data: VINE_DATA };

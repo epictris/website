@@ -4,7 +4,7 @@
 import { Vec2 } from "../engine/vec2";
 import { LEVEL_2 } from "./levelData";
 import { addSlidingPlatform, addWindmill } from "./movers";
-import { TEST_MOVERS, TEST_SPRING, TEST_WINDMILL } from "./testLevel";
+import { TEST_MOVERS, TEST_SPRING, TEST_VINES, TEST_WINDMILL } from "./testLevel";
 import type { LevelSpec } from "./level";
 import type { RawLevelData } from "./levelFormat";
 // The hand-authored ball arena, bundled straight from the editor's on-disk
@@ -34,6 +34,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   TEST_WINDMILL,
   // A spring body to hang off, dive from and hook into (see `TEST_SPRING`).
   TEST_SPRING,
+  // Hanging vines over a chasm, to swing across and to see drape and pool
+  // (see `TEST_VINES`).
+  TEST_VINES,
   // Ball & chain controller in its own authored arena (no movers — the ball
   // level driver has no mover support yet).
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },

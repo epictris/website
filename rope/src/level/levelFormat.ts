@@ -722,6 +722,38 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
   return typeof c.a === "object";
 }
 
+// A vine: a chain of small pass-through links hanging from ONE anchor, free at
+// the bottom, that the player passes through and the hook grabs anywhere along
+// (see `level/vines.ts`).
+//
+// It names its anchor exactly as `ChainData` names its two, and for the same
+// reason - which body it hangs from is a question about where the anchor lives,
+// and the body holding that anchor already answers it. There is no second end
+// and no world point: the free end is wherever the simulation leaves it.
+export interface VineData {
+  // Anchor id. A vine naming an anchor that is not in the level, or one on a
+  // body that builds nothing, is dropped at load - the same tolerance a chain
+  // end gets.
+  anchor: number;
+  // Metres of vine below the anchor. The arc length of the whole thing, and
+  // exactly what it measures: the link spacing is fitted to it rather than the
+  // other way round (see `buildVines`).
+  length: number;
+  // Target metres between links. Absent = `DEFAULT_VINE_SPACING`. A target and
+  // not a divisor - the built spacing is `length` divided by the whole number of
+  // links that target implies, so the vine is exactly as long as it says.
+  spacing?: number;
+  // Kilograms per METRE of vine, so the same vine weighs the same whatever
+  // spacing it is built at. Absent = `DEFAULT_VINE_DENSITY` (25), and anything
+  // below `MIN_VINE_DENSITY` is built at that floor.
+  //
+  // Not a length, so `scaleLevelData` leaves it alone: it is already written per
+  // metre, while everything beside it here is written in the file's pixels.
+  density?: number;
+  // Optional appearance. Absent = the renderer's own vine colours.
+  color?: string;
+}
+
 // Default framing of a camera region: no offset, unchanged viewport, no lock.
 // A region with all of these is a no-op, so a freshly drawn one changes nothing
 // until a field is authored.
@@ -1099,6 +1131,9 @@ export interface LevelData {
   // Chains strung between pairs of bodies (see ChainData). Absent = a level with
   // no chains, which is every level authored before this field.
   chains?: ChainData[];
+  // Vines hanging from single anchors (see VineData). Absent = a level with no
+  // vines, which is every level authored before this field.
+  vines?: VineData[];
   // Light and air for the 3D renderer (see EnvironmentData). Render-only, and
   // absent means the defaults, so the 2D renderer and every existing level are
   // untouched by it.
@@ -1229,6 +1264,7 @@ export interface RawLevelData {
   cameraPaths?: CameraPathData[];
   notes?: NoteData[];
   chains?: (ChainData | LegacyChainData)[];
+  vines?: VineData[];
   environment?: EnvironmentData;
 }
 
@@ -2007,6 +2043,18 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(c.length !== undefined ? { length: c.length * factor } : {}),
     ...(c.color !== undefined ? { color: c.color } : {}),
   }));
+  // A vine's LENGTH and its link SPACING are both lengths; its anchor id and its
+  // colour are not. The anchor point itself is an object on its body and scales
+  // through `scaleObject` with every other placement, exactly as a chain end does.
+  const vines = data.vines?.map((v) => ({
+    anchor: v.anchor,
+    length: v.length * factor,
+    ...(v.spacing !== undefined ? { spacing: v.spacing * factor } : {}),
+    // Kilograms per metre already, so it crosses the conversion unchanged - the
+    // one number on a vine that is not in the file's pixels.
+    ...(v.density !== undefined ? { density: v.density } : {}),
+    ...(v.color !== undefined ? { color: v.color } : {}),
+  }));
   return {
     ...(regions ? { cameraRegions: regions } : {}),
     ...(paths ? { cameraPaths: paths } : {}),
@@ -2016,6 +2064,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(data.environment ? { environment: { ...data.environment } } : {}),
     ...(notes ? { notes } : {}),
     ...(chains ? { chains } : {}),
+    ...(vines ? { vines } : {}),
     player: {
       x: data.player.x * factor,
       y: data.player.y * factor,

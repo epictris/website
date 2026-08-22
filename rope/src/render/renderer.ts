@@ -10,6 +10,7 @@ import {
   ForceArea,
   RigidBody2D,
   StaticBody2D,
+  VineLink,
   WaterArea,
   type CollisionObject2D,
   type CollisionShape2D,
@@ -31,6 +32,7 @@ import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
+import { drawVines } from "./vines";
 import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "./areaFill";
 import {
   outlineHalfExtents,
@@ -497,6 +499,10 @@ export function render(
     for (const body of level.world.bodies) {
       if (body instanceof Player) continue; // drawn between the rig layers below
       if (body instanceof AnchorBody) continue; // already drawn, behind
+      // A vine link's collision circle is its GRAB radius, several times the
+      // gauge the vine is drawn at, and a vine is one cord rather than thirty
+      // discs - `drawVines` below draws the whole thing from the link centres.
+      if (body instanceof VineLink) continue;
       drawBody(ctx, body, alpha);
     }
   }
@@ -507,6 +513,16 @@ export function render(
     if (overlayOnly && area instanceof WaterArea) continue;
     drawBody(ctx, area, alpha);
   }
+
+  // Vines over the geometry and under the player: a vine is a thing the player
+  // grabs, so unlike a scene chain it may not be hidden behind the wall it hangs
+  // in front of - and unlike the player it is scenery, so it passes behind them.
+  //
+  // 2D only. In 3D the scene draws the vine itself (`render3d/vineVisual.ts`),
+  // where it has depth and takes the level's light; a flat cord over the top of
+  // that would be the same vine drawn twice, and the flat one would be the one
+  // in front.
+  if (!overlayOnly) drawVines(ctx, level.vines, alpha);
 
   // Rope spans, drawn exactly as simulated and BEHIND the player so the body
   // covers the origin at its centre. The first span used to be redrawn from
@@ -806,8 +822,12 @@ export function renderBall(
       if (body instanceof BallPlayer) continue; // drawn over the chain below
       if (body instanceof BallHook) continue; // the manacle is drawn at the chain tip
       if (body instanceof AnchorBody) continue; // already drawn, behind
+      if (body instanceof VineLink) continue; // one cord, not twenty discs (see `render`)
       drawBody(ctx, body, alpha);
     }
+    // ...and the vine as that cord, over the geometry and under the ball. 2D
+    // only, for the reason `render` gives: in 3D the scene draws it.
+    drawVines(ctx, level.vines, alpha);
   }
   // Areas stay 2D in both modes: a killzone's skulls and a force area's flow
   // arrows are flat marks on a region of space, and a region of space has no

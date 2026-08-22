@@ -4,7 +4,7 @@
 // recorded replays bit-for-bit.
 
 import { Vec2 } from "../engine/vec2";
-import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
+import { RigidBody2D, VineLink, type PhysicsBody2D } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
@@ -22,7 +22,16 @@ import {
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
+  buildVines,
+  stepVines,
+  updateVineLoads,
+  vineChainSet,
+  vineWrapBodies,
+  type Vine,
+} from "./vines";
+import {
   buildSceneChains,
+  CHAIN_TOLERANCE,
   settleChainBodies,
   snapshotChainBodies,
   stepSceneChains,
@@ -53,6 +62,32 @@ export class BallLevel {
   readonly decor: SceneDecor[];
   // Chains strung between authored bodies (see Level.sceneChains).
   readonly sceneChains: SceneChain[];
+  // Vines hanging from authored anchors (see `level/vines.ts`). The ball level
+  // builds them for the same reason the grapple level does, and it is not a
+  // nicety: `BALL` is the DEFAULT level, so a bare `/` and the editor's
+  // ▶ Test Ball are what a vine authored in the editor is most likely to be
+  // looked at in - and left out here it did not exist there at all. Its links
+  // are in the world and in `bodies`; its pair chains are in `chainSet`.
+  // The BALL passes through a vine, and its HOOK grabs one: a link is non-solid
+  // so nothing collides with it, and `BallHook`'s attach paths take it like any
+  // other rigid body, so the chain anchors to a vine exactly as it anchors to a
+  // wall. Both halves are wanted - a vine is a thing to catch a chain on, not a
+  // thing to bump into.
+  readonly vines: Vine[];
+  // Scratch for the set the chain phase sweeps: the authored chains plus every
+  // AWAKE vine's pair chains and its load rope. Handed back as `sceneChains`
+  // itself when there is nothing to add, which is what keeps every recorded ball
+  // replay bit-for-bit (see `vineChainSet`).
+  private readonly solveSet: SceneChain[] = [];
+  // This frame's set, settled once at the top of the frame so both halves of the
+  // chain phase solve the same one.
+  private frameChains: readonly SceneChain[] = [];
+  // What a vine's load rope may bend around: the level's static geometry.
+  private readonly vineWraps: PhysicsBody2D[];
+  // This frame's load rope, if the chain is holding a vine link. Derived once a
+  // frame (see `updateVineLoads`) and read by both halves of the chain phase, so
+  // the set they solve is the same set.
+  private vineLoad: SceneChain | null = null;
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -150,10 +185,20 @@ export class BallLevel {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built);
+    this.vines = buildVines(this.world, data, built);
+    for (const vine of this.vines) this.bodies.push(...vine.links);
+    this.vineWraps = vineWrapBodies(built);
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
     this.cameraPosition = this.ball.globalPosition;
+  }
+
+  // The chain set as it stands this frame: the authored chains, every vine's
+  // pair chains, and the one load rope if a vine is being held. The same array
+  // when nothing is held, so the common case allocates nothing.
+  private solveChains(): readonly SceneChain[] {
+    return this.frameChains;
   }
 
   private spawnBody(body: PhysicsBody2D): void {
@@ -232,11 +277,17 @@ export class BallLevel {
 
     this.collectContactSparks();
 
+    // A vine is damped and its load rope settled before anything solves against
+    // either, so both halves of the chain phase below see the same set.
+    this.vineLoad = updateVineLoads(this.vines, this.ball.chain, this.vineWraps);
+    stepVines(this.vines);
+    this.frameChains = vineChainSet(this.sceneChains, this.vines, this.vineLoad, this.solveSet);
+
     // Scene chains solve straight after integration, before the ball's own chain
     // phase opens: whatever they move is then part of the state that phase
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
-    stepSceneChains(this.sceneChains, this.world, delta);
+    stepSceneChains(this.solveChains(), this.world, delta);
     PhaseTrace.mark("scene-chains", this.world);
 
     // Push the ball clear of the scenery before anything measures against it,
@@ -306,8 +357,9 @@ export class BallLevel {
       // close against the geometry, and for the same reason (see
       // `settleChainBodies`). The ball is excluded because the books below are
       // its own, taken over this phase with both of its push-outs in them.
+      const solveChains = this.solveChains();
       const sceneBefore =
-        this.sceneChains.length > 0 ? snapshotChainBodies(this.sceneChains, this.ball) : [];
+        solveChains.length > 0 ? snapshotChainBodies(solveChains, this.ball) : [];
       this.ball.chain.beginFrame(delta);
       this.ball.chain.syncWraps(this.bodies);
       const spinLength =
@@ -405,8 +457,21 @@ export class BallLevel {
       //
       // Skipped when the level has no chains, so every level and playtest that
       // predates scene chains replays bit-for-bit.
-      if (this.sceneChains.length > 0) {
-        sweepChains(this.sceneChains, { rope: this.ball.chain, bodies: this.bodies }, delta);
+      if (solveChains.length > 0) {
+        sweepChains(
+          solveChains,
+          {
+            rope: this.ball.chain,
+            bodies: this.bodies,
+            // The coupling's own residual is the whole gate here - see
+            // `CoupledRope.settleSet`, which carries the measurement - EXCEPT
+            // while the chain is holding a vine, which is a series of pair
+            // chains one sweep cannot hold. False whenever no vine is held, so a
+            // level without them sweeps exactly as it always did.
+            settleSet: this.vineLoad !== null,
+          },
+          delta,
+        );
       }
       PhaseTrace.mark("rope-solve", this.world);
       for (const [body, before] of haulAtSolve) {
@@ -427,7 +492,7 @@ export class BallLevel {
       // run afterwards would undo part of the move while the credit for it
       // stayed, which is the whole failure this exists to prevent.
       if (sceneBefore.length > 0) {
-        settleChainBodies(this.sceneChains, sceneBefore, this.world, delta);
+        settleChainBodies(solveChains, sceneBefore, this.world, delta);
       }
       // Position for the scene's chain-held bodies, and the velocity they are
       // owed for it - the ball's own share of this phase is `chain-velocity`.
@@ -451,7 +516,18 @@ export class BallLevel {
       // rotation is only the spin's to give back where winding it on was
       // something an anchor could refuse — see `spinShare` above.
       if (endFixed) {
-        this.ball.chain.unwindOverLength(this.ball, ballRotationAtFrameStart, delta);
+        // Forgiving the sweep's own tolerance while a vine is held: that is the
+        // one case where the coupled sweep leaves the chain inside
+        // `CHAIN_TOLERANCE` instead of solving it to convergence, and the spin
+        // may not be billed for a solve the phase chose to skip (session-337f,
+        // and see `Rope.unwindOverLength`). Zero on every other frame, so
+        // nothing without a vine in it changes at all.
+        this.ball.chain.unwindOverLength(
+          this.ball,
+          ballRotationAtFrameStart,
+          delta,
+          this.vineLoad !== null ? CHAIN_TOLERANCE : 0,
+        );
       }
       PhaseTrace.mark("unwind", this.world);
       // The unwind just turned the ball, and the ball is not only a circle — it

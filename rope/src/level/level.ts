@@ -27,6 +27,14 @@ import {
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import { collectDecor, type SceneDecor } from "./decor";
 import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
+import {
+  buildVines,
+  stepVines,
+  updateVineLoads,
+  vineChainSet,
+  vineWrapBodies,
+  type Vine,
+} from "./vines";
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import { PX } from "../engine/units";
 
@@ -67,8 +75,21 @@ export class Level {
   // the renderer; like the camera regions, the sim never touches them.
   readonly decor: SceneDecor[];
   // Chains strung between authored bodies, solved every frame after the world
-  // integrates (see SceneChain).
+  // integrates (see SceneChain). AUTHORED chains only - a vine's pair chains are
+  // `SceneChain`s too and are swept with these, but they are the vine's and are
+  // drawn as one, so they are not in this list (see `chainSet`).
   readonly sceneChains: SceneChain[];
+  // Vines hanging from authored anchors (see `level/vines.ts`). Their links are
+  // in the world and in `bodies`; their pair chains are in `chainSet`.
+  readonly vines: Vine[];
+  // Scratch for the set the chain phase sweeps: the authored chains plus every
+  // AWAKE vine's pair chains and its load rope, as ONE system. They share bodies
+  // wherever a vine hangs off something a chain also holds, and a set solved in
+  // two passes is two constraints spending every frame undoing each other (see
+  // `sweepChains`). Rebuilt in place once a frame (see `vineChainSet`).
+  private readonly solveSet: SceneChain[] = [];
+  // What a vine's load rope may bend around: the level's static geometry.
+  private readonly vineWraps: PhysicsBody2D[];
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -99,6 +120,13 @@ export class Level {
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
     this.sceneChains = buildSceneChains(data, built);
+    this.vines = buildVines(this.world, data, built);
+    // The links go in the rope's candidate list like every other body. They are
+    // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
+    // so what this buys is that the list is what the world holds, rather than a
+    // second, quieter definition of the scene.
+    for (const vine of this.vines) this.bodies.push(...vine.links);
+    this.vineWraps = vineWrapBodies(built);
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
@@ -186,11 +214,35 @@ export class Level {
     // Godot integrates dynamic bodies after _physics_process.
     this.world.integrate(delta);
 
+    // A vine's load rope is derived from the state of the world rather than
+    // driven by grab and release events, so it is settled here, immediately
+    // before the sweep that has to solve it.
+    const lra = updateVineLoads(this.vines, this.player.rope, this.vineWraps);
+    stepVines(this.vines);
+    const chains = vineChainSet(this.sceneChains, this.vines, lra, this.solveSet);
     // Scene chains solve last, after integration has moved the bodies they hold
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
     // recorded replay bit-identical.
-    stepSceneChains(this.sceneChains, this.world, delta);
+    //
+    // The player's rope is coupled into that sweep exactly while it is holding a
+    // vine, because that is exactly when the two share a body: solved in
+    // separate phases each one's correction is the other's residual, and the
+    // winch spends its correction moving an anchor the pair chains put straight
+    // back (`session-521f`, in the ball's words). Its own `physicsStep` above is
+    // left where it is - that is what moves the player - and this is the sweep
+    // having the last word on where the frame leaves the pair.
+    stepSceneChains(
+      chains,
+      this.world,
+      delta,
+      lra && this.player.rope
+        ? // The set here is a vine - pair chains in series, which one sweep
+          // cannot hold - so it has to reach its own tolerance too (see
+          // `CoupledRope.settleSet`).
+          { rope: this.player.rope, bodies: this.bodies, settleSet: true }
+        : null,
+    );
     PhaseTrace.mark("scene-chains", this.world);
 
     this.cameraPosition = this.player.globalPosition;

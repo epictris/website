@@ -13,6 +13,7 @@ import {
   arrowEnds,
   CAMERA_REGION_COLOR,
   chainEnds,
+  vineRest,
   ED_LAYERS,
   bodyBounds,
   bodyCentroid,
@@ -25,6 +26,7 @@ import {
   polyMustBeConvex,
   toWorld,
   type EdChain,
+  type EdVine,
   type EdItem,
   type EdLayer,
   type EdModel,
@@ -91,6 +93,9 @@ const DRAFT_CROSSED = "#d4756f";
 // the inspector's colour well - the same steel the game's links are drawn in.
 export const CHAIN_DEFAULT_COLOR = "#8a94a6";
 export const CHAIN_HIT_PX = 7; // pointer pick band, half-width in screen px
+// What an unauthored vine shows in the editor - the renderer's own vine green,
+// so the canvas and the game agree about what a vine looks like.
+export const VINE_DEFAULT_COLOR = "#5c7a48";
 const CHAIN_ANCHOR_R_PX = 3.5;
 // Compound bodies. A dashed hull and spokes to the centre of mass - the point
 // the built body's origin sits at and the point it rotates about, so it has to
@@ -362,6 +367,13 @@ export function computeChainHandles(
   const ends = chainEnds(model, chain);
   if (!ends) return null;
   return { a: worldToScreen(cam, ends.a), b: worldToScreen(cam, ends.b) };
+}
+
+// Screen position of a vine's one draggable handle: the free end of its rest
+// pose, which is the length. The anchor end is the anchor item's own handle.
+export function computeVineHandle(cam: Camera, model: EdModel, vine: EdVine): Vec2 | null {
+  const ends = vineRest(model, vine);
+  return ends ? worldToScreen(cam, ends.tip) : null;
 }
 
 // The rotate knob for a whole compound body: above the group's bounding box, on
@@ -1240,6 +1252,11 @@ export function drawEditor(
   // whether it is currently over a body it could land on - so the gesture says
   // in advance whether releasing will make a chain or drop it.
   chainDraft: { from: Vec2; to: Vec2; valid: boolean } | null = null,
+  // Vines carry their own selection too, and their own draft: a vine is pulled
+  // out DOWNWARD from the body it is anchored to rather than across to a second
+  // one, so the draft is an anchor and a length rather than two points.
+  selectedVineIds: ReadonlySet<number> = new Set<number>(),
+  vineDraft: { from: Vec2; length: number; valid: boolean } | null = null,
   // How much of the scene this canvas is responsible for drawing.
   //
   // "fill" is the editor as it has always been: every item filled and stroked,
@@ -1568,6 +1585,57 @@ export function drawEditor(
     }
   }
 
+  // Vines, drawn at their straight-down REST POSE for the same reason a chain is
+  // drawn straight: where a vine actually hangs is the solver's answer, and a
+  // guess at it would be a drawing of something the level does not contain.
+  // Solid rather than dashed - unlike a chain, a vine IS a run of bodies the
+  // hook can catch, so it is not a thing that is only there to look at.
+  //
+  // The CORD is drawn here only with the fills, because with a scene underneath
+  // the scene draws the vine itself (`render3d/vineVisual.ts`) and this would be
+  // the same cord painted flat over the top of it. What the overlay keeps in
+  // both is the anchor mark and the selection, which are editor chrome.
+  if (visibleLayers.has("scene")) {
+    for (const v of model.vines) {
+      const ends = vineRest(model, v);
+      if (!ends) continue;
+      if (selectedVineIds.has(v.id)) {
+        ctx.strokeStyle = SELECT;
+        ctx.lineWidth = worldLine * 6;
+        ctx.beginPath();
+        ctx.moveTo(ends.top.x, ends.top.y);
+        ctx.lineTo(ends.tip.x, ends.tip.y);
+        ctx.stroke();
+      }
+      const color = v.color ?? VINE_DEFAULT_COLOR;
+      if (layers === "fill") {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = worldLine * 3;
+        ctx.beginPath();
+        ctx.moveTo(ends.top.x, ends.top.y);
+        ctx.lineTo(ends.tip.x, ends.tip.y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(ends.top.x, ends.top.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // The vine being pulled out, if any. Dashed until it has a length worth
+  // building, so the gesture says in advance whether releasing makes a vine.
+  if (vineDraft) {
+    ctx.strokeStyle = vineDraft.valid ? VINE_DEFAULT_COLOR : SELECT;
+    ctx.lineWidth = worldLine * 3;
+    if (!vineDraft.valid) ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.beginPath();
+    ctx.moveTo(vineDraft.from.x, vineDraft.from.y);
+    ctx.lineTo(vineDraft.from.x, vineDraft.from.y + vineDraft.length);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // The chain being strung out, if any: dashed while it has nowhere to land,
   // solid the moment it is over a body it can attach to.
   if (chainDraft) {
@@ -1760,6 +1828,12 @@ export function drawEditor(
     if (!hs) continue;
     circleHandle(ctx, hs.a);
     circleHandle(ctx, hs.b);
+  }
+  // A selected vine is edited by its free end, which is its length.
+  for (const v of model.vines) {
+    if (!selectedVineIds.has(v.id)) continue;
+    const h = computeVineHandle(cam, model, v);
+    if (h) circleHandle(ctx, h);
   }
   // A whole compound body turns as one, so it gets a rotate knob where a lone
   // shape does - placed by the group's extent, with the centre of mass it turns

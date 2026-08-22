@@ -194,7 +194,8 @@ the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill),
 and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
-**Spring bodies**).
+**Spring bodies**); `TEST_VINES` hangs three vines over a chasm to swing across
+(see **Vines**).
 `LEVEL_2` is the grapple arena (the Godot-extracted scene).
 
 `BALL` is the **default level** (`DEFAULT_LEVEL`), so a bare `/` runs the
@@ -802,6 +803,7 @@ bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corn
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
+bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
@@ -827,7 +829,7 @@ bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B th
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`spring`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`spring`, `vines`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
@@ -2713,6 +2715,405 @@ Queries that scan bodies generically (ledge detection, the debug overlay) filter
 `PhysicsBody2D.isSolid`, which is false only for anchors — a grate corner is not a ledge.
 Anchors carry no surface friction (nothing rests on them) and are drawn first, behind the
 solid geometry they sit among, in both renderers and the SVG snapshot.
+
+## Vines
+
+A **vine** hangs from one anchor, free at the bottom: the player passes straight
+through it, the hook grabs it **anywhere along its length**, and it drapes over
+whatever it lands on and pools on the floor under it.
+
+It is **a chain of small pass-through rigid links joined by `SceneChain` pair
+constraints, plus one wrap-point `Rope` from the vine's anchor to the grabbed
+link for exactly as long as the hook holds it** (`level/vines.ts`).
+The links carry the drape and the grab surface; that one extra rope carries the
+load, and everything else about a vine is a consequence of that split.
+
+Both halves are forced. A wrap-point rope is a **constraint and not a surface**,
+so there is nothing for the hook's ray to hit halfway along one, and a taut one
+hangs dead straight where a vine has to drape - so the links have to be real
+bodies. And a plain chain of distance constraints is exactly what `Rope` exists
+as a rejection of: a Gauss-Seidel pass leaves an order-dependent residual that
+reads as elastic (73 mm on a 1.03 m chain, measured in `chains.ts`), and both the
+residual and the cost of converging it scale with **tension** - so a vine the
+player hangs 70 kg off would reintroduce that failure in the most visible place
+there is.
+
+The resolution is that stretch is a **load** problem rather than a chain problem.
+An idle vine carries only its own weight, and in that regime the pair chains
+converge in a dozen cheap sweeps. Load appears only at the moment the hook grabs,
+and that is when the load rope appears with it - the long-range-attachment idea
+from the PBD literature, built out of the house rope, which makes it strictly
+better than the textbook version: a straight LRA is wrong the moment the vine
+bends round a corner, and this one **routes itself** around the level's statics
+and keeps its length exact along the routed path.
+
+### A non-solid body blocks nothing, and is blocked only by statics
+
+`VineLink` is a `RigidBody2D` - it needs gravity and mass, and the whole chain
+phase (`snapshotChainBodies`, `settleChainBodies`, `creditScale`) is written
+against that class. That puts it INSIDE the `StaticBody2D | RigidBody2D`
+allowlist every collision path is written as, so unlike `AnchorBody` it cannot be
+excluded by class. It is excluded by `isSolid` instead, at every site that
+resolves an overlap (`moveAndCollide`'s sweep and its depenetration pass,
+`collectContacts`, `gatherDepenetration`), and the rule above is the one sentence
+that makes those coherent.
+
+Both halves of the rule have to be guarded at every one of those sites, and the
+second half - *blocked only by statics* - is the one that is easy to miss,
+because missing it leaves the pair decoupled in one direction only. The ball then
+passes through the vine with a bit-identical track while the recovery sweep in
+`World.integrate` pushes the LINK out of the ball: the vine whipped 1.16 m out of
+the way of a ball falling through it, which is what "the ball collides with the
+vine" looks like from the outside even though nothing ever touched the ball. It
+also kept the vine permanently awake, so the sleeping above never engaged
+anywhere near the player. `cli vines` asserts both directions on bare bodies
+(`link-contacts`) and on a level (`ball-vine`, which also asserts that the ball
+gets close enough to the vine for the question to mean anything - a ball has no
+drive of its own, and a "roll at the vine" that never deploys the chain travels
+13 cm and passes 1.1 m clear).
+
+So link-vs-static contacts exist - that is the whole of how a vine drapes and
+pools, with no vine-specific code at all - and link-vs-link, link-vs-ball and
+link-vs-any-rigid do not. A vine never stacks, never pushes anything and never
+fights its own pair constraints through the contact solver, which is the
+"stacking and contact problems" `docs/game-design.md` cites against body-per-link
+chains, **removed by construction rather than solved**.
+
+The visible cost of that is the pool: with no self-collision the surplus links
+lie at the same spot rather than heaping, so a pooling vine reads as a vine
+reaching the floor rather than as a coil on it.
+
+Every guard is a behavioural no-op until a non-solid `RigidBody2D` exists, and it
+was verified as one rather than argued: every playtest in the corpus replays
+bit-identical across the engine change.
+
+### The load rope
+
+`updateVineLoads` is called once a frame from `Level.physicsProcess` and derives
+the rope from the state of the world rather than from grab and release events:
+*if the player's rope ends on a link of this vine there is a load rope from the
+vine's anchor to that link, and otherwise there is none*. Release, the hook being
+destroyed and re-firing at a different link all fall out of that one statement,
+and `cli vines` `release-refire` asserts it frame by frame.
+
+Two things about it are load-bearing.
+
+**Its rest length is the arc the vine actually has**, measured when it is built,
+not `spacing x links`. The sweep's tolerance is per chain and a vine is a SERIES
+of them, so a settled vine hangs up to `links x CHAIN_TOLERANCE` longer than its
+authored length - 55 mm on a 3 m vine, and invisible, since nothing on screen
+says how long the vine should be. A load rope born at the nominal figure is born
+SHORT and yanks the grabbed link up on the frame the player grabs it, which is
+`rope-anchor-kick` in the ball's words and is answered the way the ball answers
+it (`BallPlayer`'s attach callback re-takes the birth length).
+
+**It is swept WITH the scene chains, and the set has to converge.** The player's
+rope pins to a link, so the two share a body, and solved in separate phases each
+one's correction is the other's residual - `session-521f`, at a far worse mass
+ratio than the ball ever saw. `stepSceneChains` therefore takes the player's rope
+as its `extra`, exactly as `BallLevel` passes the ball's chain.
+
+What is new is `CoupledRope.settleSet`. The ball gates that loop on the
+COUPLING's residual alone, because the arena's chains never converge and waiting
+for them spends the whole sweep cap on a wrap-enabled solve (`session-1618f`). A
+vine is the opposite case and the gate starves it: thirty pair chains in series
+got exactly one sweep per frame from the moment the hook grabbed, every pair
+ended over its length, the blocked-length lease absorbed the difference, and the
+vine came apart - link 7 of 30 on the floor four seconds after the grab while the
+grabbed link hung where it was caught. So the caller says which residual ends the
+sweep, and each answer carries its measurement.
+
+### The numbers, and which of them an author sets
+
+**Spacing is a cost decision.** Everything a vine costs scales with its link
+count: a vine is `length / spacing` bodies, that many pair chains, and that many
+cheap solves per sweep of the chain phase. One 3 m vine, wall clock per physics
+frame, at rest and with the player swinging on the middle of it:
+
+| spacing | links | at rest | swinging |
+|---------|-------|---------|----------|
+| 0.10 m  | 30    | 1.60 ms | 4.66 ms  |
+| 0.15 m  | 20    | 0.84 ms | 3.56 ms  |
+| 0.20 m  | 15    | 0.44 ms | 2.67 ms  |
+
+15 cm is the default. A level pays for all of its vines at once, so the budget is
+the TOTAL link count: `TEST_VINES`'s three vines are 111 links and 8.0 ms at the
+default and 66 links and 2.4 ms at the 25 cm they are authored with. Coarser
+spacing costs grab-anywhere nothing (the grab radius grows with it) and coarsens
+the drape.
+
+A link also costs more on a DENSE level, because `settleChainBodies` pushes every
+chain-held body out of the statics around it and that scan is over the level's
+geometry. Two 3 m vines in the ball arena are 40 links and **3.9 ms** a frame at
+the 15 cm default against 1.7 ms for the same two vines in an empty scene - and
+1.9 ms at 25 cm, which is the lever.
+
+### A settled vine costs nothing
+
+This is the "no sleeping" simplification `docs/game-design.md` lists, taken for
+the one body kind that finally needed it. A vine is `length / spacing` bodies and
+that many constraints, all swept every frame whether or not anything is happening
+to them, and nearly all of that is spent on vines hanging perfectly still. Two
+3 m vines in the ball arena, measured:
+
+| state | ms a physics frame |
+|---|---|
+| awake | 3.91 |
+| **asleep** | **0.19** |
+| the same arena with no vines at all | 0.21 |
+
+Asleep is therefore free, exactly. A sleeping link is skipped by
+`World.integrate` (no gravity, no step), by the contact gather (the O(n²) half of
+the frame) and by `depenetrateRigid`, and its vine is left out of the chain sweep
+entirely - which is where the cost is. What it is NOT skipped by is the hook's
+raycast: a sleeping vine is still a thing you can catch, and being caught is what
+wakes it.
+
+**The test is net DISPLACEMENT over a window, and both halves of that were
+arrived at the hard way.**
+
+Not velocity, because a settled vine's links carry a permanent velocity churn:
+the chain solve corrects the top links every frame and credits them the velocity
+it moved them by, so the second link of a vine hanging still reads 0.27 m/s for
+ever. A speed test never sleeps a vine at all - measured, 3.83 ms a frame,
+unchanged by it.
+
+And net over half a second rather than per frame, because that churn is a limit
+cycle: the same links oscillate 2-7 mm every frame about a point they do not
+leave. Per frame they look like a vine moving at 0.4 m/s; over the window they
+have gone nowhere, which is what settled means and what a player sees.
+
+A vine wakes on the frame the hook takes it (`updateVineLoads` runs before
+`stepVines`, so being held is already known), and on its anchor moving - a vine
+hangs FROM something, and a sleeping one would stay behind in mid-air if that
+something swings or sags. `cli vines` `sleep` asserts the cycle end to end,
+including that a sleeping vine does not move by a micron over 300 frames.
+
+**A link is damped, and nothing else here is.** A pair chain is a PBD POSITION
+constraint and a link hanging in free air touches nothing, so `contactDamp` never
+reaches it: a vine has no dissipation at all, and once excited it rings for ever.
+Worse, the ringing is FED - the sweep's tolerance lets the vine lengthen by a
+fraction of a millimetre a frame, and that potential energy has nowhere to go but
+into motion. Measured on the ball arena's own vines, left completely alone: the
+tip was still moving at 0.33 m/s after 900 frames and 0.65 m/s after 3000, with
+total energy flat. `LINK_DAMPING` is 0.98 a frame - `contactDamp`'s own historical
+figure, and honest for a vine, which is heavily damped by air and by itself - and
+it takes that tip to 0.04 m/s and the vine's positional jitter to 1.9 mm over
+600 frames. It is applied BEFORE the chain phase, because `settleChainBodies`
+rewrites a link's velocity as what it had at the top of the phase plus what the
+phase moved it by.
+
+**Link mass is a solver number.** A PBD correction splits by inverse mass, so
+what the player's rope does to a grabbed link is set by the ratio between 70 kg
+and that link. The worst the load rope stretched under a player swinging on the
+middle of a 3 m vine:
+
+| per link | ratio | stretch | swinging cost |
+|----------|-------|---------|---------------|
+| 0.4 kg   | 175   | 194 mm  | 11.4 ms       |
+| 1.0 kg   | 70    | 32 mm   | 12.0 ms       |
+| 2.0 kg   | 35    | 3.4 mm  | 8.2 ms        |
+| 3.5 kg   | 20    | 0.0 mm  | 4.7 ms        |
+
+Stretch and cost improve together, because they are the same convergence.
+`DEFAULT_VINE_DENSITY` is 25 kg/m, so a link weighs that times the spacing and a
+vine weighs the same whatever spacing it is authored at; a 3 m vine is 75 kg.
+Nobody sees kilograms, and the bound at the other end is that a vine must not
+visibly load the spring body or rigid platform it is anchored to.
+
+**Weight is authorable per vine** (`VineData.density`, kg/m, `kg/m` in the vine
+panel with the resulting whole and per-link weight beside it). Per METRE and not
+per vine, so it stays put when the end handle is dragged; and it is the one
+number on a vine that `scaleLevelData` must NOT scale, since it is already
+written per metre while everything beside it is in the file's pixels - scaled, a
+25 would have become 2500.
+
+What an author is choosing is not how the vine falls. Gravity is
+mass-independent, so a 6 kg vine and a 180 kg one hang in exactly the same place
+and swing at exactly the same rate, which `cli vines` `weight` asserts to the
+micron. What weight buys is how the vine ANSWERS: the table above, again, as
+densities on a 3 m vine at the default spacing -
+
+| density | per link | stretch | swinging cost |
+|---------|----------|---------|---------------|
+| 2 kg/m  | 0.30 kg  | 622 mm  | 8.3 ms        |
+| 8 kg/m  | 1.20 kg  | 23 mm   | 8.1 ms        |
+| 25 kg/m | 3.75 kg  | 0 mm    | 3.6 ms        |
+| 60 kg/m | 9.00 kg  | 0 mm    | 2.0 ms        |
+
+- and what it leans on the body it hangs from. A light vine is a legitimate
+choice with a visible cost, so it is warned about rather than refused: the panel
+says so below `LIGHT_LINK_MASS` (1.5 kg in ONE link, a per-link number because
+the mass split that decides it is per link), and `MIN_VINE_DENSITY` (1 kg/m) is
+only the floor where the solve stops converging at all. A file may say anything;
+under the floor it is built at the floor.
+
+Two radii, and they are different numbers: the **grab** radius is the collision
+circle at 0.6 x the spacing, so consecutive links overlap and the hook's ray
+cannot slip between them, and the **visual gauge** is 3 cm.
+
+### Where a vine spawns
+
+A vine hangs straight down from its anchor and **stops at the first thing it
+meets** (`dropDistance`). That is not cosmetic. A vine longer than its drop is the
+ordinary case - it is how one pools on a floor - and spawned straight through the
+floor, the links past the slab's MIDLINE are depenetrated out of its far face
+(`circleOverlap` answers the shortest exit), so they end up below the world with
+nothing under them; the pair chain above then reads its own resting neighbour as
+geometry refusing the correction, never releases its lease, and pays out rope to
+the falling link at 0.33 m/s for ever. That is `session-537f`'s runaway reached
+from the level file rather than from the solver.
+
+A vine anchored on the **top** of a body has nowhere to hang at all, and every
+link piles at the anchor rather than threading down through the body it is bolted
+to - visibly the wrong way up, rather than quietly through the floor.
+
+### The ball level
+
+`BallLevel` builds and steps vines too, and that is not symmetry for its own
+sake: `BALL` is the **default level**, so a bare `/` and the editor's ▶ Test Ball
+are where a vine authored in the editor is most likely to be looked at, and left
+out of that driver a vine did not exist there at all - not drawn, not simulated,
+not grabbable.
+
+The **ball goes through a vine and its CHAIN catches on one**, and those are two
+different questions with two different answers. The body passes through because a
+link is non-solid like anything else; the chain catches because `BallHook`'s
+three attach paths take a link like any other rigid body, and a vine is a thing
+to hook rather than a thing to bump into. So the load rope is the ball's too:
+`updateVineLoads` runs there against `ball.chain` exactly as it runs in `Level`
+against the player's rope, and the coupled sweep takes `settleSet` while a vine
+is held for the same reason.
+
+`cli vines` `ball-vine` asserts both halves, each in the form that cannot be
+satisfied by a near-miss: 240 frames of the ball falling THROUGH a vine are
+bit-identical to the same fall with no vine in the level, the vine over those
+frames is bit-identical to the same vine with the ball 15 m away, the thrown
+chain catches a link and gets its load rope, and hanging on it for 20 s gains
+0.08 J of mechanical energy against a 5 J bar.
+
+#### The spin may not be billed for the sweep's tolerance
+
+Aim steering is kinematic - `BallPlayer.resolveInput` writes the frame's angular
+velocity straight from the aim error - so a ball that will not turn is never a
+torque problem. Something later in the frame is taking the rotation back, and the
+only thing that does is `unwindOverLength`.
+
+Its premise is that over-length still standing at the end of the chain phase is
+over-length the solve **could not** pay, so the spin has to give the radian back.
+That premise fails for a solve the phase deliberately skipped, and holding a vine
+it does: the coupled sweep leaves the ball's chain inside `CHAIN_TOLERANCE`
+rather than at zero (see `sweepChains`), and 5 mm of the solver's own convergence
+budget is worth an entire frame's turn.
+
+`session-337f` is what that feels like. The chain ended 4.7-5.3 mm over on all
+312 frames that were holding a vine, the unwind took the whole frame's rotation
+back on 107 of them, the ball's rotation stood at exactly -0.17794 rad while the
+aim error wound up to 13.8 rad/s, and the game read as a force resisting the
+mouse. So the unwind takes a `forgive` argument, and `BallLevel` passes
+`CHAIN_TOLERANCE` while a vine is held and zero otherwise - no other frame in the
+game changes, because no other caller leaves its rope unsolved. Worst lag between
+the loop and the aim it is steered to, over a hand-speed sweep (one full turn
+every 4 s): **109 degrees and 133 pinned frames before, 19 degrees and none
+after**, and on `session-337f`'s own input 48 degrees and 35 down to 11 and none
+(`cli vines` `ball-steer`).
+
+Two things this deliberately does NOT do. It does not exempt the grabbed link
+from the spin rollback (`session-265f`) - the rollback is what stops a kinematic
+spin being exported to the body the chain is anchored to, and a vine link would
+be dragged by it. And it does not touch the same lag on a STATIC anchor, which is
+far worse (178 degrees, 205 pinned frames on that sweep): winding a taut chain
+onto the rim against something that cannot move is the mechanic working as
+designed, and whether it should be that stiff is a game-feel question rather than
+a bug.
+
+**A ball bundle recorded before a level gained a vine is stale.** `session-2504f`
+replays `BALL`, and once two vines were authored into `levels/ball.json` its
+recorded throws caught one on 1202 of its 2504 frames and winched it about -
+`energy-gained` then fires on the work that does, against a 17 J tolerance sized
+for the ball on a scene a 3 m vine adds ~940 J to. The control is what says this
+is the level having changed rather than the physics: the same bundle against the
+same level with the vines removed is clean, and a ball left hanging on a vine
+gains nothing. Re-record the bundle, or keep the vines clear of where it throws.
+
+### Drawing
+
+A vine is drawn from its LINK POSITIONS - the anchor and the link centres,
+against the render transforms. `chainMetrics.ts` is deliberately not used: that
+walk exists to place links along a wrap path because a scene chain has no
+per-link bodies, and a vine has real ones, which are the honest source. Both
+renderers take that path through `VineCord.path`, so neither can have its own
+idea of where a vine is. The load rope is not drawn at all - it is a constraint
+rather than a thing, and the links already say where the vine is.
+
+**In 2D** it is a smoothed cord at the visual gauge (`render/vines.ts`); **in 3D
+it is real geometry** - one `InstancedMesh` of capsules along the same path
+(`render3d/vineVisual.ts`), built on `ChainLayer`'s argument and laid the same
+way. Capsules rather than cylinders because the cord bends at every link and the
+hemispherical caps fill the notch two cylinders would leave on the outside of a
+bend, at any angle and with no mitre to compute.
+
+Drawn in the scene rather than painted flat over it, and that is the whole point
+of the 3D half existing: **the 2D overlay is dropped in every 3D-only view the
+editor has and in every orbited one**, being a projection of the gameplay plane,
+so a vine drawn only there vanishes exactly where an author goes to judge how a
+level reads. A vine is the level, not chrome. It also gets what a flat cord never
+could - it passes behind the geometry in front of it, and the level's own lights
+fall on it.
+
+`drawnElsewhere` in `render3d/scene.ts` is the other half: a link must not ALSO
+extrude like scenery, which draws a vine as a stack of brown spheres with the
+cord painted down the middle of them. That one was found by running the editor's
+▶ Test and is invisible to everything else here.
+
+The editor draws vines in its 3D scene too, and it is the reason `Scene3DLevel`
+takes `VineCord`s rather than `Vine`s: the editor's scene is built by
+`buildLevelBodies`, which spawns no links, so what it hands over is the
+straight-down REST POSE. That is exact rather than guessed - a vine hangs there
+until something moves it - which is what separates it from a chain, whose sag
+would be a drawing of something the level does not contain and which therefore
+still stays on the editor's 2D canvas.
+
+### Authoring
+
+`VineData` names an ANCHOR OBJECT by id and carries a length, exactly as
+`ChainData` names its two - which body it hangs from is a question about where
+the anchor lives. `+ Vine` in the editor is the chain tool's press followed by a
+drag DOWN that pulls the length out; the panel carries the length, the spacing
+(blank = the default), a live link count and the colour, and the vine is listed
+under `Vines (N)` beside the chains. `TEST_VINES` is the worked level - two vines
+over a chasm to swing across and one long enough to pool on the far ledge.
+
+### What checks it
+
+`cli vines` (`sim/vineCases.ts`), and it is the whole of the coverage, because a
+vine reaches no avatar digest and no invariant: it violates nothing when it comes
+apart, and a build that quietly stopped making links renders as a level with no
+vine in it and passes everything else.
+
+The cases that matter most are the ones nothing else could make: the engine
+guards on bare bodies, in BOTH directions (`link-contacts`); that 300 frames of
+walking, jumping and landing are **bit-identical** with and without a vine in the
+way (`pass-through`), which is the only form of "the player passes through it" a
+nearly-no-op cannot satisfy; that the anchor-to-grab arc holds in MILLIMETRES
+under a swinging player (`grab-hang`); that a winch hauls as far up a vine as up
+a static in the same place (`winch`, `ball-winch-hung-anchor`'s methodology);
+that the ball still turns to its aim while it hangs on one (`ball-steer`); and
+that exactly zero or one load rope exists on every frame of a
+fire/grab/release/regrab cycle.
+
+Two of them are worth reading for HOW they are written rather than what they
+assert. `ball-vine` measures the closest the ball ever gets to a link, because
+the version before it steered a ball at a vine and never reached it - a ball has
+no drive of its own, so the roll travelled 13 cm and passed 1.1 m clear, and the
+case passed on an encounter that never happened. `ball-steer` measures the lag
+between the loop and the aim in DEGREES over a hand-speed sweep, because the
+failure it is written against (the unwind billing the spin for the sweep's
+tolerance) leaves every other number in the game looking correct. `playtests/vine-swing.json` is the mechanic end to
+end - two chained swings across an 8 m chasm - and
+`playtests/regressions/vine-swing-320f.json.gz` is the same run as a bundle,
+which replays bit-exact over all 66 links and is what says the determinism stays
+true.
 
 ## Pivot bodies
 

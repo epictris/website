@@ -644,6 +644,73 @@ export class RigidBody2D extends PhysicsBody2D {
   }
 }
 
+// One link of a hanging vine (see `level/vines.ts`). A real dynamic body - it
+// falls, it is held by the chain constraints between it and its neighbours, and
+// the hook's ray hits it, which is the whole reason it is a body rather than a
+// drawn curve: a wrap-point rope is a constraint and nothing can be grabbed
+// halfway along one.
+//
+// It is a `RigidBody2D` and not an `AnchorBody`-style direct `PhysicsBody2D`
+// because it needs gravity integration and mass, and because the entire chain
+// phase (`snapshotChainBodies`, `settleChainBodies`, `creditScale`) is written
+// against `instanceof RigidBody2D`. That puts it INSIDE the
+// `StaticBody2D | RigidBody2D` allowlist every collision path is written as, so
+// unlike `AnchorBody` it cannot be excluded by class and is excluded by the
+// `isSolid` flag instead. The rule the guards in `World` implement, and the only
+// one that makes them coherent: **a non-solid body blocks nothing, and is
+// blocked only by statics.**
+//
+// Both halves of that sentence have to be guarded at every site, and the second
+// is the one that is easy to miss. Decoupled in one direction only, the ball
+// sails through the vine untouched and the recovery sweep then pushes the VINE
+// out of the ball - so a vine the ball passes through whips a metre out of its
+// way as it goes, which is what "the ball collides with the vine" looks like
+// from the outside even though the ball's own track is bit-identical
+// (`cli vines` `link-contacts`, `ball-vine`).
+//
+// So the player walks and swings straight through a vine, a vine never pushes
+// the ball or is pushed by it, never stacks on another vine or fights its own
+// pair constraints through the contact solver - the stacking-and-contact problem `docs/game-design.md`
+// cites against body-per-link chains, removed by construction rather than
+// solved - while link-vs-static contacts are kept, which is how a vine drapes
+// over a ledge and piles on the floor.
+//
+// `LAYER_ANCHOR` is what the hook sees and what every mask-1 query (the
+// player's raycasts, ledge detection) therefore misses.
+export class VineLink extends RigidBody2D {
+  // A settled vine costs nothing.
+  //
+  // This is the "no sleeping" simplification `docs/game-design.md` lists, taken
+  // for the one body kind that finally needed it. A vine is `length / spacing`
+  // bodies and that many constraints, all swept every frame whether or not
+  // anything is happening to them: two 3 m vines in the ball arena are 40 links
+  // and 3.9 ms a physics frame, against 0.15 ms for the same arena with none.
+  // Nearly all of that is spent on vines hanging perfectly still.
+  //
+  // Asleep, a link is skipped by `World.integrate` (no gravity, no contacts, no
+  // depenetration) and its vine is left out of the chain sweep entirely, which
+  // is where the cost is. What it is NOT skipped by is the hook's raycast: a
+  // sleeping vine is still a thing you can catch, and waking it is what being
+  // caught means (see `stepVines`).
+  //
+  // It is a flag on the body rather than a general engine feature because the
+  // engine has no sleeping and this is not the change that should introduce one:
+  // every other body here is either scenery that never moves or an avatar that
+  // always does. Default false, and nothing but a vine ever sets it, so no other
+  // body and no recorded replay can see it.
+  asleep = false;
+
+  constructor() {
+    super();
+    this.name = "VineLink";
+    this.collisionLayer = LAYER_ANCHOR;
+  }
+
+  override get isSolid(): boolean {
+    return false;
+  }
+}
+
 export class Area2D extends CollisionObject2D {
   private bodyEnteredCbs: Array<(body: CollisionObject2D) => void> = [];
   private inside = new Set<number>();

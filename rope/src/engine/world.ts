@@ -17,6 +17,7 @@ import {
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
+  VineLink,
   WaterArea,
   WATER_GRIP_RELEASE,
 } from "./body";
@@ -370,6 +371,13 @@ export class World {
     if (j >= 0) this.areas.splice(j, 1);
   }
 
+  // Is this body asleep? Only a vine link can be (see `VineLink.asleep`), and it
+  // is asked here rather than at each site so the three places that skip one
+  // cannot drift apart.
+  private static isAsleep(body: CollisionObject2D): boolean {
+    return body instanceof VineLink && body.asleep;
+  }
+
   private matchesMask(body: PhysicsBody2D, mask: number | undefined): boolean {
     return mask === undefined || (body.collisionLayer & mask) !== 0;
   }
@@ -392,6 +400,11 @@ export class World {
     for (const target of this.bodies) {
       if (target === body || target.removed) continue;
       if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
+      // A non-solid body blocks nothing (see `VineLink`). `AnchorBody` is
+      // already outside the allowlist above by class; a vine link is inside it,
+      // is a real body the world integrates, and must still be something the
+      // avatar walks and swings straight through.
+      if (!target.isSolid) continue;
       if (body.exceptions.has(target.id)) continue;
       if (!target.hasShape()) continue;
       // Every shape the target carries. A compound body (a concave form built
@@ -449,6 +462,10 @@ export class World {
         for (const target of this.bodies) {
           if (target === body || target.removed) continue;
           if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
+          // Nothing is ever pushed out of a non-solid body — the same rule the
+          // forward sweep above applies, and it has to hold here too or the
+          // avatar would be depenetrated out of a vine it is standing in.
+          if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
           if (!target.hasShape()) continue;
           for (const ts of target.getShapes()) {
@@ -586,6 +603,10 @@ export class World {
     PhaseTrace.mark("areas", this);
     for (const body of this.bodies) {
       if (body instanceof RigidBody2D && !body.removed) {
+        // A sleeping body does not integrate: no gravity, no step, nothing to
+        // undo. It is settled where it was left and the only thing that can
+        // change that is being woken (see `VineLink.asleep`).
+        if (World.isAsleep(body)) continue;
         if (body.pivot) {
           // A pivot body turns on a fixed bearing: no gravity, no translation.
           // The velocity is ZEROED rather than trusted to stay zero, because
@@ -868,6 +889,9 @@ export class World {
   ): Vec2[] {
     const pushedOutOf: Vec2[] = [];
     if (body.removed || !body.hasShape()) return pushedOutOf;
+    // A sleeping body was pushed clear before it went to sleep and nothing has
+    // moved since (see `VineLink.asleep`).
+    if (World.isAsleep(body)) return pushedOutOf;
     // A pivot body cannot be translated off its bearing, by this sweep or by
     // anything else - an overlap it is in is the contact solver's to resolve in
     // rotation. Reporting no pushes is also the honest answer for the callers
@@ -952,6 +976,17 @@ export class World {
         if (other === body || other.removed || !other.hasShape()) continue;
         if (body.exceptions.has(other.id)) continue;
         if (!isSolidTarget(other)) continue;
+        // No body is ever depenetrated out of a vine link (see `VineLink`): a
+        // non-solid body blocks nothing, and being pushed out of one is exactly
+        // being blocked by it.
+        if (!other.isSolid) continue;
+        // And the other half of the same rule: a non-solid body is blocked only
+        // by STATICS, so a vine link is pushed out of the scenery it drapes over
+        // and out of nothing else. Without this the pair is decoupled in one
+        // direction only - the ball sails through the vine, and the recovery
+        // sweep then shoves the vine out of the ball, so a vine the ball is
+        // supposed to pass through whips a metre out of its way as it goes.
+        if (!body.isSolid && !(other instanceof StaticBody2D)) continue;
         if (accept && !accept(other)) continue;
         for (const oshape of other.getShapes()) {
           // The same conservative box reject the contact gather uses, and here
@@ -1050,6 +1085,21 @@ export class World {
         const b = iLeads ? bj : bi;
         // Neither side can move: two statics touching is not a contact.
         if (!(a instanceof RigidBody2D)) continue;
+        // A non-solid body blocks nothing and is blocked only by statics (see
+        // `VineLink`). The obstacle side going non-solid drops the pair
+        // outright; the moving side going non-solid keeps only its contacts
+        // against static geometry. Concretely, for a vine: link-vs-static
+        // exists - that is how a vine drapes over a ledge and pools on a floor -
+        // and link-vs-link, link-vs-ball, link-vs-any-rigid do not, so a vine
+        // never pushes anything, never stacks, and never fights its own pair
+        // constraints through the contact solver.
+        if (!b.isSolid) continue;
+        if (!a.isSolid && !(b instanceof StaticBody2D)) continue;
+        // A sleeping body has no contacts. It is not moving and nothing that
+        // could move it reaches this loop, and the pair loop is the O(n²) half
+        // of the frame - which is what a level full of vines pays (see
+        // `VineLink.asleep`).
+        if (World.isAsleep(a)) continue;
         const as = a.getShapes();
         const bs = b.getShapes();
         for (let si = 0; si < as.length; si++) {

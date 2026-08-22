@@ -256,6 +256,16 @@ constraint and its drawing, and nothing else:
   body per link, which is a different mechanism with its own stacking and contact
   problems - and none of the scenarios above requires it.
 
+A **vine** is that other mechanism, and it exists because one scenario does
+require it: the hook has to be able to grab the thing anywhere along its length,
+and a constraint is not a surface. It is a body per link, and the stacking and
+contact problems above are removed rather than solved - a link blocks nothing and
+is blocked only by statics, so a vine never stacks, never pushes and never fights
+its own constraints through the contact solver. What it costs instead is the
+LINKS: a vine is `length / spacing` bodies and that many constraints, all of them
+swept every frame, which is why the spacing is a cost decision an author makes
+(see **Vines** in `CLAUDE.md`).
+
 A chain is **scenery**, and that is all it is. It is drawn behind the level's
 geometry, faded, and solved against nothing but its own two bodies: it hangs,
 swings and hauls those two, and passes straight through the level, the avatar and

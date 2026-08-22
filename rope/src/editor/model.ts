@@ -52,6 +52,7 @@ import {
   type CameraPathData,
   type CameraRegionData,
   type ChainData,
+  type VineData,
   type EnvironmentData,
   type LevelData,
   type RawLevelData,
@@ -412,6 +413,12 @@ export function arrowEnds(item: EdItem): { tail: Vec2; head: Vec2 } {
 // click that never dragged still leaves something grabbable.
 export const MIN_ARROW_LENGTH = 0.1;
 
+// A vine shorter than this is not a vine: `buildVines` fits at least one link to
+// whatever length it is given, so a 1 cm vine is one link and nothing to grab.
+// It is also what a click that never dragged leaves behind, so the gesture
+// always produces something visible rather than a vine of nothing.
+export const MIN_VINE_LENGTH = 0.3;
+
 // Re-derive an arrow's stored box from a pair of endpoints. The box centre is
 // the midpoint and `rot` is the direction, so an endpoint drag and an
 // arrow drawn from scratch produce exactly the same item.
@@ -443,6 +450,31 @@ export interface EdChain {
   // a chain dragged out between two bodies stays taut as they are moved.
   length: number | null;
   // Hex link colour; null = the renderer's own forged-iron pair.
+  color: string | null;
+}
+
+// A vine hanging from ONE anchor item (see `VineData`). Held beside the chains
+// and not among the items for the same reason a chain is: it has no shape and no
+// placement of its own - its one point belongs to a body - and a length, which
+// is not a size anything can be resized by.
+//
+// It is a chain with one end and a length, and it is authored that way: the same
+// press on a body that starts a chain, and a drag that pulls the length out
+// instead of reaching for a second body.
+export interface EdVine {
+  id: number;
+  // The item id of the anchor it hangs from.
+  anchor: number;
+  // Metres of vine below the anchor. Always positive - a vine of no length is
+  // refused at the gesture, the way a chain tied to one body is.
+  length: number;
+  // Metres between links; null = the builder's default.
+  spacing: number | null;
+  // Kilograms per metre of cord; null = the builder's default. Weight is about
+  // how the vine answers a hooked player and what it leans on the body it hangs
+  // from, not about how it falls (see `DEFAULT_VINE_DENSITY`).
+  density: number | null;
+  // Hex cord colour; null = the renderer's own vine colours.
   color: string | null;
 }
 
@@ -505,6 +537,7 @@ export interface EdModel {
   player: { pos: Vec2; radius: number };
   items: EdItem[];
   chains: EdChain[];
+  vines: EdVine[];
   // THE FRAME EACH BODY'S OBJECTS ARE PLACED IN, by body id.
   //
   // It is STORED rather than read off a member, and that is the whole point. It
@@ -1152,10 +1185,27 @@ function lightItem(
     });
   }
 
+  // A vine names ONE anchor, and is dropped the same way a chain is when the
+  // anchor it names is not in the file.
+  const vines: EdVine[] = [];
+  for (const v of data.vines ?? []) {
+    const a = itemOfAnchor.get(v.anchor);
+    if (!a) continue;
+    vines.push({
+      id: newBodyId(),
+      anchor: a.id,
+      length: v.length,
+      spacing: v.spacing ?? null,
+      density: v.density ?? null,
+      color: v.color ?? null,
+    });
+  }
+
   return {
     player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
     items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
+    vines,
     // None recorded on load. A body's frame is derived from its first object
     // until something is edited (`EdModel.bodyFrames`), which is the origin this
     // has always re-measured every body against on the way back out - so a level
@@ -1482,6 +1532,22 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     });
   }
 
+  const vines: VineData[] = [];
+  for (const v of model.vines) {
+    const a = model.items.find((i) => i.id === v.anchor);
+    // A vine whose anchor has been deleted has nothing to hang from, and one of
+    // no length has nothing to be - both are dropped rather than written for the
+    // loader to drop again.
+    if (a?.object !== "anchor" || !(v.length > 0)) continue;
+    vines.push({
+      anchor: a.anchorId,
+      length: v.length,
+      ...(v.spacing !== null ? { spacing: v.spacing } : {}),
+      ...(v.density !== null ? { density: v.density } : {}),
+      ...(v.color !== null ? { color: v.color } : {}),
+    });
+  }
+
   return {
     player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
     bodies,
@@ -1496,6 +1562,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     ...(model.environment ? { environment: { ...model.environment } } : {}),
     ...(notes.length ? { notes } : {}),
     ...(chains.length ? { chains } : {}),
+    ...(vines.length ? { vines } : {}),
   };
 }
 
@@ -2372,12 +2439,48 @@ export function distanceToChain(model: EdModel, c: EdChain, world: Vec2): number
   return world.distanceTo(ends.a.add(d.mul(t)));
 }
 
+// --- vines ------------------------------------------------------------------
+
+export function cloneVine(v: EdVine): EdVine {
+  return { ...v };
+}
+
+// Where a vine hangs from, or null if its anchor has gone.
+export function vineAnchorWorld(model: EdModel, v: EdVine): Vec2 | null {
+  const item = model.items.find((i) => i.id === v.anchor);
+  return item?.object === "anchor" ? item.pos : null;
+}
+
+// The two ends of the vine as the EDITOR draws it: straight down from the anchor
+// by its authored length.
+//
+// That is the rest pose and nothing more. Where a vine actually hangs is a
+// runtime answer - it drapes over whatever is under it, and the player drags it
+// about - and drawing a guess at that would be a drawing of something the level
+// does not contain, which is the same rule the editor draws a chain straight by.
+export function vineRest(model: EdModel, v: EdVine): { top: Vec2; tip: Vec2 } | null {
+  const top = vineAnchorWorld(model, v);
+  return top ? { top, tip: top.add(new Vec2(0, v.length)) } : null;
+}
+
+// Distance from a world point to that rest pose, for picking.
+export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
+  const ends = vineRest(model, v);
+  if (!ends) return Infinity;
+  const d = ends.tip.sub(ends.top);
+  const len2 = d.lengthSquared();
+  if (len2 < 1e-12) return world.distanceTo(ends.top);
+  const t = Math.min(1, Math.max(0, world.sub(ends.top).dot(d) / len2));
+  return world.distanceTo(ends.top.add(d.mul(t)));
+}
+
 // A blank level: a single wide floor under a spawn point so it is immediately
 // testable.
 export function emptyModel(): EdModel {
   return {
     player: { pos: new Vec2(0, -1), radius: 0.08 },
     chains: [],
+    vines: [],
     // Nothing stored: a fresh level's one body holds one object, whose placement
     // IS the frame (see `EdModel.bodyFrames`).
     bodyFrames: new Map(),

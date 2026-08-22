@@ -39,7 +39,12 @@ import {
   chainAnchor,
   chainEnds,
   chainEndWorld,
+  vineAnchorWorld,
+  vineRest,
+  distanceToVine,
+  MIN_VINE_LENGTH,
   cloneChain,
+  cloneVine,
   cloneShape,
   convexHull,
   bodyWithinRect,
@@ -104,6 +109,7 @@ import {
   visualData,
   worldVertices,
   type EdChain,
+  type EdVine,
   type EdBodyFrame,
   type EdItem,
   type EdShape,
@@ -112,6 +118,7 @@ import {
 } from "./model";
 import {
   computeChainHandles,
+  computeVineHandle,
   computeGroupHandles,
   computeHandles,
   drawEditor,
@@ -119,6 +126,7 @@ import {
   BODY_MEMBER,
   SELECT,
   CHAIN_DEFAULT_COLOR,
+  VINE_DEFAULT_COLOR,
   CHAIN_HIT_PX,
   HANDLE_HIT_PX,
   lightPickRadius,
@@ -156,6 +164,12 @@ import {
 import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from "./gizmo";
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
+import {
+  DEFAULT_VINE_DENSITY,
+  DEFAULT_VINE_SPACING,
+  LIGHT_LINK_MASS,
+  MIN_VINE_DENSITY,
+} from "../level/vines";
 import { Player } from "../classes/player";
 import {
   digest,
@@ -187,6 +201,7 @@ type Tool =
   | "text"
   | "arrow"
   | "chain"
+  | "vine"
   | "light";
 
 // Which tools each layer offers. A shape tool has no meaning on the notes layer
@@ -199,7 +214,7 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "poly", "geometry", "light", "chain"],
+  scene: ["select", "rect", "circle", "poly", "geometry", "light", "chain", "vine"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow"],
 };
@@ -315,6 +330,12 @@ type Drag =
   // on whatever body it is dropped on, so moving a chain end and moving it to a
   // different body are one gesture.
   | { mode: "chainEnd"; chain: EdChain; end: "a" | "b"; cursor: Vec2 }
+  // Pulling a new vine out of a body: the anchor is fixed in `from`'s local
+  // frame and the drag sets the LENGTH rather than reaching for a second body,
+  // which is the whole of the difference between a vine and a chain.
+  | { mode: "vineDraw"; from: EdItem; local: Vec2; length: number }
+  // Dragging a placed vine's free end, which is the same edit by hand.
+  | { mode: "vineLength"; vine: EdVine }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -491,6 +512,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // so a mixed selection would have nothing an inspector panel could say about
   // it and nothing a nudge or a resize could mean.
   const selectedChainIds = new Set<number>();
+  // ...and vines carry theirs, for the same reason and with the same rules: a
+  // vine has one anchor, a length and a colour, which is nothing an item panel
+  // or a chain panel could speak for.
+  const selectedVineIds = new Set<number>();
   // Which of the selected shape's VERTICES an edit acts on, as indices into its
   // vert loop. A second level of selection inside the item one, because a
   // polygon is the item whose parts are separately editable: once the shape is
@@ -558,6 +583,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       visual: { ...b.visual },
     })),
     chains: m.chains.map(cloneChain),
+    vines: m.vines.map(cloneVine),
     // A frame is never mutated in place - `translateItems` and friends replace
     // the entry - so copying the map is enough to detach the snapshot.
     bodyFrames: new Map(m.bodyFrames),
@@ -613,6 +639,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     const liveChains = new Set(model.chains.map((c) => c.id));
     for (const id of selectedChainIds) if (!liveChains.has(id)) selectedChainIds.delete(id);
+    const liveVines = new Set(model.vines.map((v) => v.id));
+    for (const id of selectedVineIds) if (!liveVines.has(id)) selectedVineIds.delete(id);
     // Undoing a merge retires the body it made, so a selection still naming it
     // would leave the panel showing a body with nothing in it.
     const liveBodies = new Set(model.items.map((b) => b.bodyId));
@@ -670,6 +698,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   };
   const selected = () => (selectedIds.size === 1 ? selectedBodies()[0] ?? null : null);
   const selectedChains = () => model.chains.filter((c) => selectedChainIds.has(c.id));
+  const selectedVines = () => model.vines.filter((v) => selectedVineIds.has(v.id));
   // The shape whose VERTICES are editable right now: the lone selected item, if
   // it is one of the two vertex-authored kinds and its handles are on screen at
   // all. Everything about the vertex selection - what a band catches, what
@@ -699,11 +728,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       ids.length === selectedIds.size &&
       ids.every((id) => selectedIds.has(id)) &&
       selectedChainIds.size === 0 &&
+      selectedVineIds.size === 0 &&
       selectedBodyIds.size === 0;
     if (unchanged) return;
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     for (const id of ids) selectedIds.add(id);
     nudging = false;
@@ -720,10 +751,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Select a BODY. Its objects are deliberately left unselected: what the
   // inspector then shows is the body's own properties and nothing else.
   function setBodySelection(id: number | null): void {
-    if (soleBodyId() === id && !selectedIds.size && !selectedChainIds.size) return;
+    if (
+      soleBodyId() === id &&
+      !selectedIds.size &&
+      !selectedChainIds.size &&
+      !selectedVineIds.size
+    ) {
+      return;
+    }
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     if (id !== null) selectedBodyIds.add(id);
     nudging = false;
@@ -742,6 +781,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     if (!selectedBodyIds.delete(id)) selectedBodyIds.add(id);
     nudging = false;
     revealBody(id);
@@ -770,13 +810,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     for (const id of ids) selectedChainIds.add(id);
     nudging = false;
     rebuildInspector();
   }
+  function setVineSelection(ids: readonly number[]): void {
+    selectedIds.clear();
+    selectedVerts.clear();
+    selectedChainIds.clear();
+    selectedVineIds.clear();
+    selectedBodyIds.clear();
+    for (const id of ids) selectedVineIds.add(id);
+    nudging = false;
+    rebuildInspector();
+  }
   function toggleSelection(id: number): void {
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     selectedVerts.clear();
     if (!selectedIds.delete(id)) selectedIds.add(id);
@@ -1085,7 +1137,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // group of things has several - and a chain has no transform at all.
   function gizmoSpec(): { kind: "item" | "body"; id: number } | null {
     if (mode === "test" || !scene3d || viewMode === "2d") return null;
-    if (selectedChainIds.size) return null;
+    if (selectedChainIds.size || selectedVineIds.size) return null;
     if (selectedBodyIds.size === 1) return { kind: "body", id: [...selectedBodyIds][0]! };
     if (selectedIds.size === 1) return { kind: "item", id: [...selectedIds][0]! };
     return null;
@@ -1163,6 +1215,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const built = buildLevelBodies(world, data, () => {});
     sceneLevel = {
       world,
+      // Vines DO reach the 3D scene, where chains do not, and the difference is
+      // that a vine's rest pose is exact rather than guessed: it hangs straight
+      // down from its anchor by its authored length until something moves it,
+      // and that is a fact about the level rather than a simulation of one. It
+      // has to be drawn there, too - the overlay is dropped in the 3D-only and
+      // orbited views, and a vine is the level rather than chrome.
+      vines: model.vines.flatMap((v) => {
+        const ends = vineRest(model, v);
+        if (!ends) return [];
+        const points = [ends.top, ends.tip];
+        return [{ color: v.color, path: (_alpha: number, out: Vec2[]) => {
+          out.length = 0;
+          out.push(...points);
+        } }];
+      }),
       // Chains stay on the 2D canvas while editing: the editor draws a chain
       // STRAIGHT on purpose (a span between wrap nodes is straight, and a
       // guessed sag would be a drawing of something the level does not contain),
@@ -1401,6 +1468,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
     chain: button("+ Chain", () => setTool("chain")),
+    vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
   };
   toolBtns.geometry.title =
@@ -1408,6 +1476,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.path.title =
     "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
+  toolBtns.vine.title =
+    "Press on a body and drag DOWN to hang a vine from it. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
@@ -1442,6 +1512,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.text,
     toolBtns.arrow,
     toolBtns.chain,
+    toolBtns.vine,
     toolBtns.light,
     kindWrap,
   );
@@ -1691,9 +1762,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       row.classList.toggle("sel", on);
       if (on && !first) first = row;
     }
+    for (const [row, id] of vineRows) {
+      const on = selectedVineIds.has(id);
+      row.classList.toggle("sel", on);
+      if (on && !first) first = row;
+    }
     const bodyKey = [...selectedBodyIds].sort((a, b) => a - b).join(",");
     const chainKey = [...selectedChainIds].sort((a, b) => a - b).join(",");
-    const key = `${bodyKey}|${chainKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
+    const vineKey = [...selectedVineIds].sort((a, b) => a - b).join(",");
+    const key = `${bodyKey}|${chainKey}|${vineKey}|${[...selectedIds].sort((a, b) => a - b).join(",")}`;
     if (key === outlinerSelKey) return;
     outlinerSelKey = key;
     first?.scrollIntoView({ block: "nearest" });
@@ -1708,11 +1785,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // could say about it.
   const bodyRows: Array<[HTMLElement, number]> = [];
   const chainRows: Array<[HTMLElement, number]> = [];
+  const vineRows: Array<[HTMLElement, number]> = [];
 
   function buildOutliner(): void {
     outlinerRows.length = 0;
     bodyRows.length = 0;
     chainRows.length = 0;
+    vineRows.length = 0;
     outlinerBody.innerHTML = "";
     const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
     outlinerTitle.textContent = `Bodies (${runs.length})`;
@@ -1787,7 +1866,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // above; the chain itself belonged to neither, so before this it was the one
     // thing in a level with no row at all and could only be found by clicking the
     // rope on the canvas.
-    if (!model.chains.length) return;
+    const indexOfBodyRun = new Map<number, number>();
+    runs.forEach((members, i) => indexOfBodyRun.set(members[0]!.bodyId, i));
+    if (model.chains.length) buildChainRows(runs);
+    if (model.vines.length) buildVineRows(indexOfBodyRun);
+  }
+
+  // CHAINS, after the bodies and not inside any of them - which is exactly what
+  // a chain is. Its two anchors are objects and appear under their own bodies
+  // above; the chain itself belonged to neither, so before this it was the one
+  // thing in a level with no row at all and could only be found by clicking the
+  // rope on the canvas.
+  function buildChainRows(runs: EdItem[][]): void {
     const head = el("div", "ed-out-row head");
     head.append(el("span", "ed-out-twist"), el("span", "ed-out-label"));
     head.lastElementChild!.textContent = `Chains (${model.chains.length})`;
@@ -1821,6 +1911,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       });
       outlinerBody.appendChild(row);
       chainRows.push([row, c.id]);
+    }
+  }
+
+  // ...and VINES, after them, for the same reason: a vine's one anchor is an
+  // object under its own body, and the vine itself belongs to no body at all.
+  // Named by the body it hangs from and how long it is, which is the whole of
+  // what a vine is.
+  function buildVineRows(indexOfBody: Map<number, number>): void {
+    const head = el("div", "ed-out-row head");
+    head.append(el("span", "ed-out-twist"), el("span", "ed-out-label"));
+    head.lastElementChild!.textContent = `Vines (${model.vines.length})`;
+    outlinerBody.appendChild(head);
+    for (const v of model.vines) {
+      const row = el("div", "ed-out-row obj chain");
+      const anchor = model.items.find((i) => i.id === v.anchor);
+      const at = anchor ? indexOfBody.get(anchor.bodyId) : undefined;
+      const label = el("span", "ed-out-label");
+      label.textContent = `from ${at === undefined ? "?" : at}`;
+      row.append(el("span", "ed-out-twist"), label);
+      const len = el("span", "ed-out-count");
+      len.textContent = `${Math.round(v.length * M2PX)}`;
+      row.append(len);
+      row.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setVineSelection([v.id]);
+      });
+      outlinerBody.appendChild(row);
+      vineRows.push([row, v.id]);
     }
   }
 
@@ -1874,6 +1993,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (bodies > 1 ? ` · ${bodies} bodies` : "") +
       (model.chains.length
         ? ` · ${model.chains.length} chain${model.chains.length === 1 ? "" : "s"}`
+        : "") +
+      (model.vines.length
+        ? ` · ${model.vines.length} vine${model.vines.length === 1 ? "" : "s"}`
         : "");
     const draft = polyDraft
       ? ` · ${polyDraft.kind === "path" ? "path" : "polygon"}: ${polyDraft.verts.length} ` +
@@ -1954,6 +2076,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (input.value.trim() === "" && opts.onEmpty) {
         opts.onEmpty();
         markDirty();
+        // Clearing a field is an edit like any other, so the readouts derived
+        // from it are as stale as they are after a value is typed - a vine's
+        // weight is the default's the moment its density is cleared, and its
+        // link count the default spacing's. Without this the panel went on
+        // reporting the number that had just been deleted.
+        refreshFields();
         return;
       }
       const v = parseFloat(input.value);
@@ -3386,6 +3514,171 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
+  // Vine panel. A vine has no placement of its own either - its one point is on
+  // a body - so the panel is how long it is, how finely it is made, and its
+  // colour.
+  function buildVineGroup(vines: EdVine[]): void {
+    const g = el("div", "ed-group");
+    g.appendChild(
+      heading(vines.length === 1 ? `Vine #${vines[0]!.id}` : `${vines.length} vines selected`),
+    );
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls.";
+    g.appendChild(hint);
+
+    numField(
+      g,
+      "length",
+      () => {
+        const first = vines[0]!.length;
+        return vines.every((v) => v.length === first) ? first * M2PX : null;
+      },
+      (v) => {
+        for (const vine of vines) vine.length = Math.max(MIN_VINE_LENGTH, v * PX);
+      },
+      10,
+      vines.length > 1,
+    );
+
+    // Spacing is a COST decision as much as a look (see `DEFAULT_VINE_SPACING`),
+    // so it is authorable and blank means the builder's own default rather than
+    // a number this panel would have to keep in step with it.
+    numField(
+      g,
+      "spacing",
+      () => {
+        const first = vines[0]!.spacing;
+        return vines.every((v) => v.spacing === first) ? (first ?? NaN) * M2PX : null;
+      },
+      (v) => {
+        for (const vine of vines) vine.spacing = Math.max(PX, v * PX);
+      },
+      1,
+      vines.length > 1,
+      {
+        placeholder: "default",
+        onEmpty: () => {
+          for (const vine of vines) vine.spacing = null;
+        },
+      },
+    );
+
+    // How many links that works out to, which is the number the cost is in.
+    const links = (): string => {
+      const v = vines[0]!;
+      if (vines.length > 1) return "-";
+      const spacing = v.spacing ?? DEFAULT_VINE_SPACING;
+      return `${Math.max(1, Math.ceil(v.length / spacing))}`;
+    };
+    const lrow = el("label", "ed-field");
+    lrow.textContent = "links";
+    const lval = document.createElement("span");
+    lval.textContent = links();
+    lrow.appendChild(lval);
+    g.appendChild(lrow);
+    readouts.push({ el: lval, get: links });
+
+    // Weight, in kilograms per metre of cord rather than per vine, so it stays
+    // put when the end handle is dragged. Blank is the builder's default, the
+    // same as spacing.
+    //
+    // It is NOT scaled by `M2PX` on the way in or out: every other number in
+    // this panel is a length the file keeps in pixels, and this one is already
+    // per metre (see `VineData.density`).
+    numField(
+      g,
+      "density",
+      () => {
+        const first = vines[0]!.density;
+        return vines.every((v) => v.density === first) ? (first ?? NaN) : null;
+      },
+      (v) => {
+        for (const vine of vines) vine.density = Math.max(MIN_VINE_DENSITY, v);
+      },
+      1,
+      vines.length > 1,
+      {
+        placeholder: `${DEFAULT_VINE_DENSITY}`,
+        onEmpty: () => {
+          for (const vine of vines) vine.density = null;
+        },
+      },
+    );
+
+    // What that weighs, whole and per link - the second is the number that
+    // matters, because what a hooked player does to a vine is set by the ratio
+    // between the player and ONE link (see `DEFAULT_VINE_DENSITY`).
+    const linkMass = (v: EdVine): number => {
+      const count = Math.max(1, Math.ceil(v.length / (v.spacing ?? DEFAULT_VINE_SPACING)));
+      return ((v.density ?? DEFAULT_VINE_DENSITY) * v.length) / count;
+    };
+    // Two rows rather than one, because the panel is 230 px wide and a row is
+    // `white-space: nowrap`: "9.0 kg (0.45 per link)" beside its label ran off
+    // the edge of the inspector.
+    const readout = (label: string, get: () => string): void => {
+      const row = el("label", "ed-field");
+      row.textContent = label;
+      const val = document.createElement("span");
+      val.textContent = get();
+      row.appendChild(val);
+      g.appendChild(row);
+      readouts.push({ el: val, get });
+    };
+    readout("weight", () =>
+      vines.length > 1
+        ? "-"
+        : `${((vines[0]!.density ?? DEFAULT_VINE_DENSITY) * vines[0]!.length).toFixed(1)} kg`,
+    );
+    // The per-link number is the one that decides how the vine answers a hooked
+    // player, so it is shown rather than left to be divided out.
+    readout("per link", () =>
+      vines.length > 1 ? "-" : `${linkMass(vines[0]!).toFixed(2)} kg`,
+    );
+
+    // Below the convergence knee the panel says so, because nothing else will:
+    // a light vine looks right until a player hangs on it, and then the load
+    // rope loses the mass split and the thing reads as a bungee. Measured on a
+    // 3 m vine with a player swinging on the middle of it - 3.75 kg a link is
+    // 0 mm of stretch, 1.2 kg is 23 mm, 0.3 kg is 622 mm and costs four times
+    // as much to solve (see `DEFAULT_VINE_DENSITY`).
+    const light = (): string =>
+      vines.length === 1 && linkMass(vines[0]!) < LIGHT_LINK_MASS
+        ? "Light: a link this size stretches under a hooked player."
+        : "";
+    const warn = el("div", "ed-hint ed-warn");
+    warn.textContent = light();
+    g.appendChild(warn);
+    readouts.push({ el: warn, get: light });
+
+    const cw = el("label", "ed-field");
+    cw.textContent = "color";
+    const ci = document.createElement("input");
+    ci.type = "color";
+    ci.className = "ed-color";
+    ci.value = vines[0]!.color ?? VINE_DEFAULT_COLOR;
+    ci.addEventListener("focus", () => beginAction());
+    ci.addEventListener("input", () => {
+      for (const v of vines) v.color = ci.value;
+      markDirty();
+    });
+    cw.appendChild(ci);
+    g.appendChild(cw);
+
+    const row = el("div", "ed-row");
+    row.append(
+      button("Reset color", () => {
+        beginAction();
+        for (const v of vines) v.color = null;
+        markDirty();
+        rebuildInspector();
+      }),
+      button("Delete", () => deleteSelected()),
+    );
+    g.appendChild(row);
+    inspector.appendChild(g);
+  }
+
   // Camera-layer panel. Same shape as the body panel — group-wide edits, blank
   // for a value the group disagrees on — over the region's framing properties.
   function buildCameraGroup(regions: EdItem[]): void {
@@ -4048,6 +4341,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
 
+    // ...and so do vines.
+    const vines = selectedVines();
+    if (vines.length) {
+      buildVineGroup(vines);
+      return;
+    }
+
     // ...and so does a BODY. What it shows is the body's own properties: its
     // transform, what it is, how it is painted, what it rubs like. There is no
     // shape here, no material and no look, because a body has none of those -
@@ -4202,14 +4502,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return out;
   }
 
+  // The vines whose anchor is among the copied items, re-pointed at the copies.
+  // A vine whose anchor was not copied is left behind rather than pointed at the
+  // original, which would give one anchor two vines nobody authored.
+  function cloneVinesWithin(
+    vines: readonly EdVine[],
+    idOf: ReadonlyMap<number, number>,
+  ): EdVine[] {
+    const out: EdVine[] = [];
+    for (const v of vines) {
+      const anchor = idOf.get(v.anchor);
+      if (anchor === undefined) continue;
+      out.push({ ...cloneVine(v), id: newBodyId(), anchor });
+    }
+    return out;
+  }
+
   // Add freshly created bodies to the model and leave them selected, so the
   // group can immediately be dragged or pasted again.
-  function addAndSelect(bodies: EdItem[], chains: EdChain[] = []): void {
+  function addAndSelect(bodies: EdItem[], chains: EdChain[] = [], vines: EdVine[] = []): void {
     model.items.push(...bodies);
     model.chains.push(...chains);
+    model.vines.push(...vines);
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     for (const b of bodies) selectedIds.add(b.id);
     markDirty();
@@ -4390,11 +4708,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     markDirty();
   }
 
+  // Hang a vine from a body. The anchor is a real anchor object like a chain's,
+  // so the vine rides its body through every move, rotate and resize with no
+  // second copy of the point to keep in step.
+  function addVine(from: EdItem, local: Vec2, length: number): void {
+    if (!chainable(from)) return;
+    if (length < MIN_VINE_LENGTH) return;
+    beginAction();
+    const a = newAnchorOn(from, toWorld(from, local));
+    model.items.push(a);
+    const vine: EdVine = {
+      id: newBodyId(),
+      anchor: a.id,
+      length,
+      spacing: null,
+      density: null,
+      color: null,
+    };
+    model.vines.push(vine);
+    setVineSelection([vine.id]);
+    markDirty();
+  }
+
   // Drop chains that no longer have two anchors to hold. Called after any item
   // deletion, so a chain can never outlive what it was tied to.
   function pruneChains(): void {
     const live = new Set(model.items.filter((i) => i.object === "anchor").map((i) => i.id));
     model.chains = model.chains.filter((c) => live.has(c.a) && live.has(c.b));
+    model.vines = model.vines.filter((v) => live.has(v.anchor));
   }
 
   // The shape an anchor slides along: the first collision object in its body,
@@ -4412,6 +4753,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       used.add(c.a);
       used.add(c.b);
     }
+    for (const v of model.vines) used.add(v.anchor);
     model.items = model.items.filter((i) => i.object !== "anchor" || used.has(i.id));
   }
 
@@ -4733,10 +5075,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // it. Reading `selectedIds` alone left the body panel's own Delete button
     // doing nothing at all.
     const doomed = new Set(operandItems().map((b) => b.id));
-    if (!doomed.size && !selectedChainIds.size) return;
+    if (!doomed.size && !selectedChainIds.size && !selectedVineIds.size) return;
     beginAction();
     model.items = model.items.filter((b) => !doomed.has(b.id));
     model.chains = model.chains.filter((c) => !selectedChainIds.has(c.id));
+    model.vines = model.vines.filter((v) => !selectedVineIds.has(v.id));
     // A chain whose anchor has just gone has nothing left to hold, and an anchor
     // whose chain has just gone has nothing left to be - the two prunes are each
     // other's mirror and both are needed, since either end may be what was
@@ -4748,6 +5091,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
+    selectedVineIds.clear();
     selectedBodyIds.clear();
     markDirty();
     rebuildInspector();
@@ -4779,7 +5123,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!sel.length) return;
     beginAction();
     const copy = cloneBodies(sel, new Vec2(gridStep * 2, gridStep * 2));
-    addAndSelect(copy.items, cloneChainsWithin(model.chains, copy.idOf));
+    addAndSelect(
+      copy.items,
+      cloneChainsWithin(model.chains, copy.idOf),
+      cloneVinesWithin(model.vines, copy.idOf),
+    );
   }
 
   // --- clipboard ------------------------------------------------------------
@@ -4789,6 +5137,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Chains whose two ends are both inside `clipboard`, so a copied assembly
   // (two bodies and the chain between them) pastes as the assembly.
   let clipboardChains: EdChain[] = [];
+  // ...and vines whose anchor is inside it, so copying a wall with a vine on it
+  // pastes the vine too.
+  let clipboardVines: EdVine[] = [];
 
   function copySelection(): void {
     const sel = operandItems();
@@ -4808,6 +5159,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     clipboardChains = model.chains
       .filter((c) => copied.has(c.a) && copied.has(c.b))
       .map(cloneChain);
+    clipboardVines = model.vines.filter((v) => copied.has(v.anchor)).map(cloneVine);
   }
   function pasteClipboard(): void {
     if (!clipboard.length) return;
@@ -4824,7 +5176,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
     beginAction();
     const copy = cloneBodies(clipboard, delta);
-    addAndSelect(copy.items, cloneChainsWithin(clipboardChains, copy.idOf));
+    addAndSelect(
+      copy.items,
+      cloneChainsWithin(clipboardChains, copy.idOf),
+      cloneVinesWithin(clipboardVines, copy.idOf),
+    );
   }
 
   // --- disk -----------------------------------------------------------------
@@ -5013,6 +5369,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
   function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
+    // A selected vine is edited by its one free end, which is its length.
+    const vines = selectedVines();
+    if (vines.length === 1) {
+      const h = computeVineHandle(camera, model, vines[0]!);
+      if (h && scr.distanceTo(h) <= HANDLE_HIT_PX) return { mode: "vineLength", vine: vines[0]! };
+      return null;
+    }
     // A selected chain is edited by its two end handles and nothing else.
     const chains = selectedChains();
     if (chains.length === 1) {
@@ -5285,6 +5648,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       }
       return;
     }
+    // 1d. Vine tool: the same press on a body that starts a chain, and then a
+    // drag that pulls a LENGTH out instead of reaching for a second body. A
+    // vine has one end, so there is nowhere else for the gesture to go.
+    if (drawTool === "vine") {
+      const from = topmostAt(world, (b) => chainable(b));
+      if (from) {
+        drag = { mode: "vineDraw", from, local: nearestSurfaceLocal(from, world), length: 0 };
+      }
+      return;
+    }
     // 2. Draw tool: create a new item on the active layer and drag out its size.
     if (drawTool !== "select") {
       beginAction();
@@ -5439,6 +5812,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const chain = topmostChainAt(world);
     if (chain) {
       setChainSelection([chain.id]);
+      drag = null;
+      return;
+    }
+    // ...and a vine, for the same reason and after the same bodies: a vine hangs
+    // over the geometry it is bolted to.
+    const vine = topmostVineAt(world);
+    if (vine) {
+      setVineSelection([vine.id]);
       drag = null;
       return;
     }
@@ -5688,6 +6069,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return best;
   }
 
+  // The vine nearest a world point, within the same band a chain is picked by,
+  // measured against its drawn rest pose.
+  function topmostVineAt(world: Vec2): EdVine | null {
+    if (!visibleLayers.has("scene") || lockedLayers.has("scene")) return null;
+    const band = CHAIN_HIT_PX / (camera.zoom * PIXELS_PER_METER);
+    let best: EdVine | null = null;
+    let bestD = band;
+    for (const v of model.vines) {
+      const d = distanceToVine(model, v, world);
+      if (d <= bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    return best;
+  }
+
   // Double-clicking a text note opens its prose for editing — the gesture every
   // other canvas editor uses for "edit this thing's content". The text itself
   // still lives in the inspector's textarea (one editor for it, not two that
@@ -5735,7 +6133,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       drag.mode !== "panPick" &&
       drag.mode !== "orbit" &&
       drag.mode !== "marquee" &&
-      drag.mode !== "chainDraw"
+      drag.mode !== "chainDraw" &&
+      drag.mode !== "vineDraw"
     ) {
       beginAction();
       dragPushed = true;
@@ -5940,6 +6339,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       case "chainDraw":
         drag.cursor = world;
         break;
+      case "vineDraw":
+        // Downward only: a vine hangs, so what the drag measures is how far
+        // BELOW the anchor the pointer has got. Dragging up is a vine of no
+        // length, which the draft draws as refused.
+        drag.length = Math.max(0, world.y - toWorld(drag.from, drag.local).y);
+        break;
+      case "vineLength": {
+        const top = vineAnchorWorld(model, drag.vine);
+        if (top) drag.vine.length = Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
+        break;
+      }
       case "chainEnd": {
         drag.cursor = world;
         const c = drag.chain;
@@ -6051,6 +6461,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           setSelection([]);
         }
       }
+    }
+    if (drag.mode === "vineDraw") {
+      // A vine that was never dragged out is not a vine, so the gesture is
+      // abandoned rather than dropping a one-link stub on the wall.
+      addVine(drag.from, drag.local, snap(drag.length));
     }
     if (drag.mode === "chainDraw") {
       // A chain lands only on a body: released over empty space the gesture is
@@ -6211,6 +6626,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       to.id !== drag.from.id &&
       !(drag.from.bodyId !== null && to.bodyId === drag.from.bodyId);
     return { from, to: drag.cursor, valid };
+  }
+
+  // The vine being pulled out, as the renderer wants it: where it is anchored,
+  // how far down the pointer has got, and whether releasing here would build
+  // anything.
+  function vineDraftView(): { from: Vec2; length: number; valid: boolean } | null {
+    if (!drag || drag.mode !== "vineDraw") return null;
+    return {
+      from: toWorld(drag.from, drag.local),
+      length: drag.length,
+      valid: drag.length >= MIN_VINE_LENGTH,
+    };
   }
 
   // --- loop -----------------------------------------------------------------
@@ -6377,6 +6804,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         polyDraft ? { ...polyDraft, cursor: pointerWorld() } : null,
         selectedChainIds,
         chainDraftView(),
+        selectedVineIds,
+        vineDraftView(),
         // In 3D the scene below is what shows what a body IS; the overlay drops
         // its fills to outlines so the geometry stays visible through them.
         overlayLayers(),
@@ -6535,6 +6964,10 @@ function injectStyles(): void {
      option list still opens at full width, which is where the name is read. */
   .ed-field > select { min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
   .ed-hint { color: #6b7280; line-height: 1.4; }
+  /* A hint about a value the author can still legitimately want. Amber rather
+     than red: nothing here is invalid, it is a number with a consequence. */
+  .ed-warn { color: #d0a215; }
+  .ed-warn:empty { display: none; }
   /* The outliner: the level's real structure, which the canvas cannot show.
      Bottom-left, under the toolbar, and scrolling on its own - a real level is
      a couple of hundred bodies and the list is meant to be scanned rather than
