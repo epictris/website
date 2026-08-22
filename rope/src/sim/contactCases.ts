@@ -27,7 +27,7 @@ import {
 import { circleOverlap } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
-import { ContactAudit, World } from "../engine/world";
+import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -43,6 +43,7 @@ import {
 } from "../level/levelFormat";
 import { SceneChain, stepSceneChains } from "../level/chains";
 import { RopeContact } from "../lib/ropeContact";
+import { emptyFrameInput } from "../input/frameInput";
 
 const DT = 1 / 60;
 const DEG = Math.PI / 180;
@@ -1324,6 +1325,273 @@ function caseHookBlockedAttaches(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// chain-out — the flight ends where the chain runs out, not a phase later.
+//
+// The hook's step used to be swept uncapped, with the length check a phase
+// behind (checkChainReach, after World.integrate): a hook whose chain snapped
+// taut a fraction into the frame still flew the whole step first, interacted
+// with whatever stood in the uncappable remainder at full throw speed, and was
+// only then pulled back and stripped. `session-339f` is the failure: 0.27 mm
+// of payout left at the top of the frame, a hook-proof wall 86 mm along it —
+// the hook crossed the step, bounced off a wall the chain forbids it from
+// reaching, and the jerk then preserved the bounce's tangential remainder as a
+// 4.4 m/s sideways whip. Read from the game: a hook that should stop dead at
+// full stretch instead rebounds hard, near-perpendicular off the wall.
+//
+// The property: a surface past the chain's reach might as well not exist. The
+// hook converts to the dangling tip at the exact sub-frame point the wrapped
+// path reaches CHAIN_MAX_LENGTH, with only the jerk's tangential remainder —
+// which for a straight throw is nothing. And the cap must change nothing
+// inside the reach: an attachable surface short of full stretch still anchors,
+// and a hook-proof one still bounces.
+//
+// Driven through the real deploy wiring (resolveInput → shoot), in BallLevel's
+// frame order, because the bug WAS an ordering: hook flight, then integrate,
+// then the length check.
+// ---------------------------------------------------------------------------
+function caseChainOut(): ContactResult {
+  const REACH = BallPlayer.CHAIN_MAX_LENGTH; // rim to hook centre, straight up
+
+  // Throw straight up at a ceiling slab whose underside sits `faceGap` beyond
+  // (positive) or short of (negative) the chain's full stretch.
+  const throwUp = (
+    faceGap: number,
+    impermeable: boolean,
+  ): { maxSpan: number; jerkSpeed: number; attached: boolean; hookGone: boolean } => {
+    const world = new World();
+    const floor = new StaticBody2D();
+    floor.globalPosition = new Vec2(0, 0.5);
+    floor.setShape(rectShape(4, 1));
+    world.add(floor);
+
+    const ball = new BallPlayer(0.12);
+    ball.globalPosition = new Vec2(0, -0.12);
+    ball.spawnBody = (b) => world.add(b);
+    world.add(ball);
+
+    const rim = ball.globalPosition.add(new Vec2(0, -0.12));
+    const faceY = rim.y - REACH - faceGap;
+    const ceiling = new StaticBody2D();
+    ceiling.globalPosition = new Vec2(0, faceY - 0.5);
+    ceiling.setShape(rectShape(4, 1));
+    ceiling.primaryShape().impermeable = impermeable;
+    world.add(ceiling);
+
+    let maxSpan = 0;
+    let jerkSpeed = Number.NaN;
+    for (let f = 0; f < 40; f++) {
+      const input = emptyFrameInput();
+      // Aim point at the ball's centre means "not aiming": rotation stays 0
+      // and the loop faces straight up.
+      input.mouseWorldPosition = ball.globalPosition;
+      input.fire = { held: true, pressed: f === 0, released: false };
+      ball.resolveInput(input);
+      ball.sceneBodies = world.bodies;
+      const hook = world.bodies.find((b): b is BallHook => b instanceof BallHook);
+      const inFlight = hook !== undefined && !ball.chainAnchored;
+      hook?.physicsStep(DT);
+      // The deploy ending inside physicsStep is the jerk landing: what is left
+      // is the throw's tangential remainder, read before integrate can add
+      // gravity's own step to it.
+      if (hook && inFlight && ball.chainAnchored && Number.isNaN(jerkSpeed)) {
+        jerkSpeed = hook.linearVelocity.length();
+      }
+      world.integrate(DT);
+      ball.checkChainReach(world.bodies);
+      if (hook && !hook.removed) {
+        const span = ball.globalPosition.add(new Vec2(0, -0.12)).distanceTo(hook.globalPosition);
+        if (span > maxSpan) maxSpan = span;
+      }
+      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
+    }
+    const attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
+    const hookGone = !world.bodies.some((b) => b instanceof BallHook);
+    return { maxSpan, jerkSpeed, attached, hookGone };
+  };
+
+  // A hook-proof wall 50 mm past full stretch: the chain runs out first, so
+  // the wall is never reached and the jerk leaves (next to) nothing.
+  const past = throwUp(0.05, true);
+  const stopped = !past.attached && past.maxSpan < REACH + 0.005;
+  const dead = past.jerkSpeed < 0.1;
+  // The same wall short of full stretch: the cap must not eat a real bounce —
+  // the hook reaches the face (span well past the bounce seat) and deflects.
+  // The bounce seats the hook's centre one 20 mm radius off the face.
+  const proofNear = throwUp(-0.1, true);
+  const bounced = !proofNear.attached && proofNear.maxSpan > REACH - 0.1 - 0.03;
+  // An attachable ceiling short of full stretch still anchors, and the attach
+  // consumes the hook body.
+  const near = throwUp(-0.1, false);
+  const anchors = near.attached && near.hookGone;
+  // An attachable ceiling INSIDE the snap-tolerance band past full stretch
+  // still anchors too — that forgiveness (`ATTACH_SNAP_TOLERANCE`, anchor at
+  // the as-reached length) is standing behaviour the chain-out cap must not
+  // eat, and only the attach gets it: the same distance in hook-proof is the
+  // `stopped` case above.
+  const tolBand = throwUp(0.05, false);
+  const forgiving = tolBand.attached && tolBand.hookGone;
+
+  const passed = stopped && dead && bounced && anchors && forgiving;
+  return ok("chain-out — the flight ends where the chain runs out, not a phase later", passed, [
+    `${stopped ? "ok  " : "BAD "} wall 50mm past full stretch: max span ${(past.maxSpan * 1000).toFixed(1)}mm` +
+      ` (want <=${(REACH * 1000 + 5).toFixed(0)}mm, never reaches the wall)`,
+    `${dead ? "ok  " : "BAD "} jerk leaves ${Number.isNaN(past.jerkSpeed) ? "no conversion" : `${past.jerkSpeed.toFixed(3)} m/s`}` +
+      ` on the chain-out frame (want <0.1)`,
+    `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (span ${(proofNear.maxSpan * 1000).toFixed(1)}mm)`,
+    `${anchors ? "ok  " : "BAD "} attachable ceiling inside reach still anchors${near.attached ? "" : " — TURNED AWAY"}`,
+    `${forgiving ? "ok  " : "BAD "} attachable ceiling in the snap-tolerance band still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// chain-out-vs-solver — the chain ends the throw, never World.integrate.
+//
+// `chain-out` above asserts the race the hook's own sweep can see. This one is
+// about the race it cannot: the solver's speculative band is PERPENDICULAR
+// reach (separation along the contact normal, out to CONTACT_SLOP), so a
+// hook-proof face just past the chain-out point can be beyond every sweep the
+// hook makes and still inside what World.integrate acts on. Left that way the
+// solver ends the throw its own way — approach velocity killed against the
+// face — which on a face oblique to the chain converts the throw\'s radial
+// speed into tangential, and the chain-out jerk then faithfully preserves it.
+// `session-2504f` is the felt version: a graze bounce first ate the in-flight
+// conversion, integrate carried the hook across the chain\'s end, and the
+// solver handed a 12 m/s radial throw back as a 6 m/s near-perpendicular whip
+// off a wall 6 cm past everything the chain permits.
+//
+// The property: on the frame the deploy ends, the hook carries only what the
+// flight itself earned — nothing for a hook-proof face the chain kept it off.
+// Asserted over a fan of face placements past the chain-out point rather than
+// one hand-placed near-miss (the band is a centimetre wide and moves with the
+// contact arithmetic), and again with a grazing slat before chain-out, which
+// is the `session-2504f` shape: the bounce must not eat the conversion.
+//
+// The thrower FALLS while the hook flies — that is what puts the chain-out at
+// a fraction of a frame rather than on a frame boundary, which is where the
+// race lives.
+// ---------------------------------------------------------------------------
+function caseChainOutVsSolver(): ContactResult {
+  // Throw straight up from a free-falling ball. `faceQ` places a hook-proof
+  // slab whose face (normal 30 deg off the chain, pointing back at the hook)
+  // passes through that point; `slat` adds the grazing pre-chain-out slat.
+  const N30 = new Vec2(0.5, Math.sqrt(3) / 2);
+  const throwFall = (
+    faceQ: Vec2 | null,
+    slatAt: Vec2 | null,
+  ): { convSpeed: number; attached: boolean; convPos: Vec2 | null; minFaceGap: number; maxVx: number } => {
+    const world = new World();
+    const ball = new BallPlayer(0.12);
+    ball.globalPosition = new Vec2(0, 0);
+    ball.spawnBody = (b) => world.add(b);
+    world.add(ball);
+    if (faceQ) {
+      const wall = new StaticBody2D();
+      // Rect +y face normal is (-sin rot, cos rot): rot -30 deg gives the
+      // (0.5, 0.866) face the fan is about, through `faceQ`.
+      wall.globalRotation = -Math.PI / 6;
+      wall.globalPosition = faceQ.sub(N30.mul(0.2));
+      wall.setShape(rectShape(3, 0.4));
+      wall.primaryShape().impermeable = true;
+      world.add(wall);
+    }
+    if (slatAt) {
+      // A thin slat converging on the throw line at ~3 deg, its face passing
+      // 15 mm left of the line at `slatAt` — the rising hook\'s rim grazes it
+      // by 5 mm, which is the session-2504f bounce.
+      const slat = new StaticBody2D();
+      slat.globalRotation = 0.05;
+      const n = new Vec2(Math.cos(0.05), Math.sin(0.05));
+      slat.globalPosition = slatAt.sub(n.mul(0.02));
+      slat.setShape(rectShape(0.04, 0.8));
+      slat.primaryShape().impermeable = true;
+      world.add(slat);
+    }
+
+    let convSpeed = Number.NaN;
+    let convPos: Vec2 | null = null;
+    let minFaceGap = Infinity;
+    let maxVx = 0;
+    for (let f = 0; f < 30; f++) {
+      const input = emptyFrameInput();
+      input.mouseWorldPosition = ball.globalPosition;
+      input.fire = { held: true, pressed: f === 0, released: false };
+      ball.resolveInput(input);
+      ball.sceneBodies = world.bodies;
+      const hook = world.bodies.find((b): b is BallHook => b instanceof BallHook);
+      const inFlight = hook !== undefined && !ball.chainAnchored;
+      hook?.physicsStep(DT);
+      if (hook && inFlight && ball.chainAnchored && Number.isNaN(convSpeed)) {
+        convSpeed = hook.linearVelocity.length();
+        convPos = hook.globalPosition;
+      }
+      world.integrate(DT);
+      ball.checkChainReach(world.bodies);
+      // The backstop path (how the pre-fix code converts): read the speed the
+      // deploy actually ended with, wherever it ended.
+      if (hook && inFlight && ball.chainAnchored && Number.isNaN(convSpeed)) {
+        convSpeed = hook.linearVelocity.length();
+        convPos = hook.globalPosition;
+      }
+      if (hook && !hook.removed) {
+        if (Math.abs(hook.linearVelocity.x) > maxVx && !ball.chainAnchored) {
+          maxVx = Math.abs(hook.linearVelocity.x);
+        }
+        if (faceQ) {
+          const gap = hook.globalPosition.sub(faceQ).dot(N30) - 0.02;
+          if (gap < minFaceGap) minFaceGap = gap;
+        }
+      }
+      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
+    }
+    const attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
+    return { convSpeed, attached, convPos, minFaceGap, maxVx };
+  };
+
+  // Where the deploy ends with nothing in the way: the fan is placed past it.
+  const base = throwFall(null, null);
+  const baseDead = !base.attached && base.convSpeed < 0.1 && base.convPos !== null;
+  const P = base.convPos ?? new Vec2(0, -2);
+
+  // Along-path gaps past the chain-out point. The hook's 20 mm radius reaches
+  // an oblique 30 deg plane 23.1 mm (r / cos 30) before the plane crosses the
+  // path, so anything under that is a face the chain genuinely lets the hook
+  // touch — a legit bounce, not this case. The fan starts just past it.
+  const GAPS = [0.026, 0.029, 0.032, 0.035, 0.038];
+  let worst = 0;
+  let contested = 0;
+  let anyAttached = false;
+  for (const g of GAPS) {
+    const r = throwFall(new Vec2(P.x, P.y - g), null);
+    if (r.attached) anyAttached = true;
+    if (r.convSpeed > worst) worst = r.convSpeed;
+    if (r.minFaceGap <= CONTACT_SLOP + 0.002) contested++;
+  }
+  const fanDead = !anyAttached && worst < 1.0;
+  // A fan the hook never gets near is a fan that tests nothing.
+  const enough = contested >= 2;
+
+  // The session-2504f shape: graze bounce before chain-out, hook-proof face
+  // past it. The bounce may keep its small deflection (the slat genuinely
+  // touched the hook) and nothing more.
+  // The graze drifts the hook toward the face (the deflection is rightward,
+  // the face normal has a rightward component), which brings the contact
+  // ~10 mm closer along the path than the open-throw fan sees — so this face
+  // sits further out, past even the drifted flight's reach.
+  const slatRun = throwFall(new Vec2(P.x, P.y - 0.05), new Vec2(-0.015, P.y + 0.35));
+  const grazed = slatRun.maxVx > 0.3;
+  const slatDead = !slatRun.attached && slatRun.convSpeed < 1.2;
+
+  const passed = baseDead && fanDead && enough && grazed && slatDead;
+  return ok("chain-out-vs-solver — the chain ends the throw, never World.integrate", passed, [
+    `${baseDead ? "ok  " : "BAD "} open throw ends dead at chain-out (${base.convSpeed.toFixed(3)} m/s)`,
+    `${fanDead ? "ok  " : "BAD "} worst conversion over the fan ${worst.toFixed(2)} m/s (want <1.0${anyAttached ? ", AND ONE ANCHORED TO HOOK-PROOF" : ""})`,
+    `${enough ? "ok  " : "BAD "} ${contested} of ${GAPS.length} fan faces inside the solver\'s band (want >=2)`,
+    `${grazed ? "ok  " : "BAD "} the slat genuinely grazed the hook (peak |vx| ${slatRun.maxVx.toFixed(2)} m/s in flight)`,
+    `${slatDead ? "ok  " : "BAD "} graze-then-chain-out keeps only the graze (${slatRun.convSpeed.toFixed(2)} m/s, want <1.2)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // area-reach — an area acts on what it actually contains, and on nothing else.
 //
 // Every area query in the world goes through one predicate (`shapesOverlap`),
@@ -2231,6 +2499,8 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());
+  results.push(caseChainOut());
+  results.push(caseChainOutVsSolver());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));
   return results;

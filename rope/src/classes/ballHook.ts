@@ -37,6 +37,16 @@ export class BallHook extends RigidBody2D {
   private static readonly BOUNCE_MIN_SPEED = 1e-6;
 
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
+  private chainOutCallbacks: Array<() => void> = [];
+  // While the chain is still paying out, its owner budgets the flight: the
+  // wrapped path's last fixed point, how much straight span is left before the
+  // path reaches the chain's absolute length (`allowance`), and how much an
+  // ATTACH may still reach past that (`attachAllowance`, the owner's snap
+  // tolerance folded in). Null once nothing constrains the flight any more
+  // (chain gone, or the hook already converted to the dangling tip). See the
+  // chain-out cap in `physicsStep`.
+  deployLimit: (() => { prev: Vec2; allowance: number; attachAllowance: number } | null) | null =
+    null;
   private armed = true;
   // Still in the straight-line throw, as opposed to the dangling chain tip a
   // hook becomes once the deploy ends. Only the throw gets the blocking-contact
@@ -70,6 +80,13 @@ export class BallHook extends RigidBody2D {
 
   registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
     this.attachmentCallbacks.push(onAttach);
+  }
+
+  // Fired when the flight ends by running out of chain: the hook has been
+  // seated at the exact point the wrapped path reaches its length, and the
+  // owner converts it into the dangling tip (BallPlayer.deployTip).
+  registerChainOutCallback(onChainOut: () => void): void {
+    this.chainOutCallbacks.push(onChainOut);
   }
 
   private attach(body: PhysicsBody2D, point: Vec2): void {
@@ -132,7 +149,53 @@ export class BallHook extends RigidBody2D {
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const step = this.linearVelocity.mul(dt);
     const speed = step.length();
-    const motion = speed > 0 ? step.mul(1 + CONTACT_SLOP / speed) : step;
+
+    // Chain-out cap: the flight may not outrun the chain. Uncapped, the hook
+    // flies its whole step and the length check runs a phase later
+    // (BallPlayer.checkChainReach, after World.integrate), which lets the hook
+    // interact with the world from positions the chain could never have let it
+    // reach, at a speed the jerk would already have taken. In `session-339f`
+    // the chain had 0.27 mm of payout left at the top of the frame — taut 0.1%
+    // of the way into the step — and a hook-proof wall stood 86 mm along it:
+    // the hook crossed the whole step, bounced off that wall at the full
+    // 12 m/s, and only then was pulled back and stripped, which turned a throw
+    // the chain should have stopped 86 mm short into a 4.4 m/s sideways whip
+    // off a wall it never touched in sub-frame time.
+    //
+    // Where the chain runs out is a closed-form quadratic against the last
+    // fixed point of the wrapped path, and the two outcomes a surface can have
+    // are cut at DIFFERENT lengths, because they are different promises:
+    //
+    // - An ATTACH may land out to `attachAllowance` — the owner's snap
+    //   tolerance past the chain's length — and anchors at the length it
+    //   actually reached, which is the standing forgiveness rule
+    //   (`ATTACH_SNAP_TOLERANCE`): a throw whose target sits a hand's breadth
+    //   past full stretch still sticks, rather than stopping dead just short
+    //   of the ceiling it was aimed at. A falling thrower widens the span
+    //   mid-flight, so cutting attaches at the bare length broke exactly that
+    //   throw (`playtests/ball-hang-at-rest.json`).
+    // - A BOUNCE is "nothing happened, keep going", and the flight it
+    //   continues is one the chain must genuinely permit — so a hook-proof
+    //   surface past the chain-out point might as well not exist. That is the
+    //   session-339f rule.
+    //
+    // Nothing within reach: the hook is seated at the exact chain-out point
+    // and handed to its owner to become the dangling tip, radial jerk and
+    // all, before integration can move it anywhere the chain forbids.
+    //
+    // A tolerance-capped motion is deliberately NOT extended by the solver's
+    // `CONTACT_SLOP` reach (below): a hook the chain stops short of a surface
+    // is not racing the solver for it — it ends this frame all but stationary
+    // at the chain's end, and the dangling tip's `probeContact` owns whatever
+    // contact its swing brings after that.
+    const limit = this.deployLimit?.() ?? null;
+    const chainOutT = limit ? BallHook.chainOutTime(from, step, limit.prev, limit.allowance) : Infinity;
+    const attachOutT = limit
+      ? BallHook.chainOutTime(from, step, limit.prev, limit.attachAllowance)
+      : Infinity;
+    const slopScale = speed > 0 ? 1 + CONTACT_SLOP / speed : 1;
+    const motionScale = Math.min(slopScale, attachOutT);
+    const motion = step.mul(motionScale);
 
     type Hit = { t: number; normal: Vec2; collider: PhysicsBody2D; shape: CollisionShape2D };
     let anchor: Hit | null = null;
@@ -180,11 +243,94 @@ export class BallHook extends RigidBody2D {
       this.attach(anchor.collider, point);
       return;
     }
-    if (proof) {
+    // A bounce only inside the chain's true reach (see the cap above): a
+    // hook-proof surface past the chain-out point is never touched. A proof
+    // piece standing between the chain-out point and an attachable surface in
+    // the tolerance band blocks that attach without bouncing — the chain ends
+    // the flight first.
+    if (proof && proof.t * motionScale <= chainOutT) {
       this.bounce(proof.normal, from.add(motion.mul(proof.t)));
+      // A bounce does not end the deploy, and the chain does not stretch for
+      // it: the deflected remainder of the frame is flown by World.integrate
+      // at the bounced velocity, so the chain-out question has to be asked
+      // AGAIN here, of that velocity, before integrate is allowed to fly it.
+      // Returning without asking is how `session-2504f` ended: a graze bounce
+      // ate the conversion this branch's sibling below would have made
+      // (chain-out was 0.999 of the very same step), integrate carried the
+      // hook across the chain's end, and the solver's speculative band then
+      // deflected it off a piece 6 cm past everything the chain permits —
+      // 12 m/s of radial throw handed back as a 6 m/s tangential whip.
+      // Extended reach, because a hook that just hit one hook-proof piece is
+      // flying at geometry the sweep has not asked about again.
+      this.convertAtChainOut(dt, true);
       return;
     }
+    // Nothing on the reachable part of the step: if the chain runs out on it,
+    // the flight ends here, at the exact point the path reaches the chain's
+    // length. The reach extends past the step only when a hook-proof piece
+    // is actually ahead (a `proof` hit past the chain's reach): that is the
+    // one case the next frame's integrate can end the throw the solver's way
+    // instead. With nothing ahead, waiting the fraction of a frame is free —
+    // and it is what keeps the snap-tolerance attach alive, since the band
+    // sweep that catches an anchor just past full stretch runs on that next
+    // frame.
+    if (this.convertAtChainOut(dt, proof !== null)) return;
     this.probeContact();
+  }
+
+  // End the deploy at the exact point the wrapped path reaches the chain's
+  // length, if the step ahead crosses it: seat the hook there and hand it to
+  // the owner (BallPlayer.deployTip), which measures the path and strips the
+  // radial velocity from the seated position — the jerk happens where and
+  // when the chain actually snapped taut, before World.integrate can move
+  // the hook anywhere the chain forbids.
+  //
+  // With `threatAhead`, the reach extends `CONTACT_SLOP` past the end of the
+  // step, for exactly the reason the attach sweep's does: that is how far
+  // World.integrate reaches. A chain-out a fraction beyond the step leaves
+  // the hook flying one more frame, and in that frame the solver's
+  // speculative band ends the throw its own way — approach velocity killed
+  // against whatever face is within a centimetre, which on an oblique face
+  // converts the throw's radial speed into a tangential whip the jerk then
+  // faithfully preserves (`session-2504f`). The chain must win every race the
+  // solver would otherwise decide, and the extra reach costs no accuracy: the
+  // seat point is on the chain-out sphere either way.
+  //
+  // It is NOT extended without a threat, and that is load-bearing the other
+  // way: converting a fraction of a frame early ends a throw whose next-frame
+  // band sweep would have anchored it just past full stretch — the
+  // snap-tolerance attach — so the extra reach is spent only where the
+  // alternative is the solver, never where it is an attach.
+  private convertAtChainOut(dt: number, threatAhead: boolean): boolean {
+    const limit = this.deployLimit?.() ?? null;
+    if (!limit) return false;
+    const from = this.globalPosition;
+    const step = this.linearVelocity.mul(dt);
+    const t = BallHook.chainOutTime(from, step, limit.prev, limit.allowance);
+    const speed = step.length();
+    const reach = threatAhead && speed > 0 ? 1 + CONTACT_SLOP / speed : 1;
+    if (t > reach) return false;
+    this.globalPosition = from.add(step.mul(t));
+    this.endFlight();
+    for (const cb of this.chainOutCallbacks) cb();
+    return true;
+  }
+
+  // Where along `step` the chain runs out: the smallest t >= 0 at which the
+  // final span |from + step·t − prev| reaches `allowance` (what is left of the
+  // chain's length once the wrapped path up to `prev` is paid for). 0 when the
+  // span is already at or past it; > 1 (no cap) when the whole step stays
+  // inside. Closed form, so the cut is exact and deterministic:
+  //   |d + s·t|² = a²  with d = from − prev, s = step
+  // has one positive root while |d| < a (the constant term is negative).
+  private static chainOutTime(from: Vec2, step: Vec2, prev: Vec2, allowance: number): number {
+    const d = from.sub(prev);
+    const c = d.dot(d) - allowance * allowance;
+    if (c >= 0) return 0;
+    const a = step.dot(step);
+    if (a === 0) return Infinity;
+    const b = d.dot(step);
+    return (-b + Math.sqrt(b * b - a * c)) / a;
   }
 
   // The backstop, and the only *exact* half of the attach test: if the solver

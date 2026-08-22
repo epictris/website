@@ -261,6 +261,12 @@ export class BallPlayer extends RigidBody2D {
   // flying hook into the dangling chain tip: reaching the absolute max length
   // (a missed throw), or the deploying chain snagging on scene geometry — it
   // wraps the corner and the deploy stops there.
+  //
+  // The max-length trigger is normally the hook's own chain-out cap now (see
+  // BallHook.physicsStep), which ends the flight at the sub-frame point the
+  // chain snaps taut. This check remains the backstop for the paths the cap
+  // does not budget exactly: the payout after a bounce reseats the hook, and
+  // wrap-length changes during the integrate that follows the cap's measure.
   checkChainReach(bodies: PhysicsBody2D[]): void {
     if (!this.hookInFlight || !this.chain) return;
     const len = this.chain.getCurrentLength();
@@ -373,6 +379,27 @@ export class BallPlayer extends RigidBody2D {
       // past CHAIN_MAX_LENGTH is bounded by ATTACH_SNAP_TOLERANCE above.
       this.chain.maxRopeLength = len;
     });
+
+    // The flight may not outrun the chain (see the chain-out cap in
+    // BallHook.physicsStep): each frame the hook budgets its step against what
+    // is left of CHAIN_MAX_LENGTH beyond the wrapped path's last fixed point,
+    // and running out mid-step converts it into the dangling tip there and
+    // then — at the sub-frame point the chain snapped taut, before it can
+    // reach (and bounce off, session-339f) anything the chain forbids. An
+    // attach alone may still land `ATTACH_SNAP_TOLERANCE` further, which is
+    // the attach callback's standing forgiveness rule handed to the sweep.
+    // The budget exists only while this hook is the deploying one: once it is
+    // the tip, the rope solver owns its length.
+    hook.deployLimit = () => {
+      const chain = this.chain;
+      if (!chain || this.hookInFlight !== hook) return null;
+      const lastWrap = chain.wraps[chain.wraps.length - 1];
+      const prev = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
+      const base = chain.getCurrentLength() - prev.distanceTo(hook.globalPosition);
+      const allowance = BallPlayer.CHAIN_MAX_LENGTH - base;
+      return { prev, allowance, attachAllowance: allowance + BallPlayer.ATTACH_SNAP_TOLERANCE };
+    };
+    hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
   }
 
   // (settleAnchorOvershoot removed: anchoring at the as-reached length leaves the
