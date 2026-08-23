@@ -2433,9 +2433,10 @@ export function chainEndWorld(model: EdModel, end: number): Vec2 | null {
   return item?.object === "anchor" ? item.pos : null;
 }
 
-// The anchor item a chain end names, or null.
-export function chainAnchor(model: EdModel, end: number): EdItem | null {
-  const item = model.items.find((i) => i.id === end);
+// The anchor item an id names, or null. A chain end and a vine's one anchor are
+// the same thing, so they are looked up the same way.
+export function anchorItem(model: EdModel, id: number): EdItem | null {
+  const item = model.items.find((i) => i.id === id);
   return item?.object === "anchor" ? item : null;
 }
 
@@ -2469,8 +2470,7 @@ export function cloneVine(v: EdVine): EdVine {
 
 // Where a vine hangs from, or null if its anchor has gone.
 export function vineAnchorWorld(model: EdModel, v: EdVine): Vec2 | null {
-  const item = model.items.find((i) => i.id === v.anchor);
-  return item?.object === "anchor" ? item.pos : null;
+  return anchorItem(model, v.anchor)?.pos ?? null;
 }
 
 // The two ends of the vine as the EDITOR draws it: straight down from the anchor

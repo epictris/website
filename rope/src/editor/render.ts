@@ -369,11 +369,19 @@ export function computeChainHandles(
   return { a: worldToScreen(cam, ends.a), b: worldToScreen(cam, ends.b) };
 }
 
-// Screen position of a vine's one draggable handle: the free end of its rest
-// pose, which is the length. The anchor end is the anchor item's own handle.
-export function computeVineHandle(cam: Camera, model: EdModel, vine: EdVine): Vec2 | null {
+// Screen positions of a vine's two draggable handles: the anchor it hangs from,
+// which is WHERE the vine is, and the free end of its rest pose, which is how
+// long it is. Both, and not the tip alone, for the reason a chain has one at
+// each end: the anchor is an object with no canvas presence of its own, so the
+// handle its cord draws at it is the only thing there is to take hold of.
+export function computeVineHandles(
+  cam: Camera,
+  model: EdModel,
+  vine: EdVine,
+): { top: Vec2; tip: Vec2 } | null {
   const ends = vineRest(model, vine);
-  return ends ? worldToScreen(cam, ends.tip) : null;
+  if (!ends) return null;
+  return { top: worldToScreen(cam, ends.top), tip: worldToScreen(cam, ends.tip) };
 }
 
 // The rotate knob for a whole compound body: above the group's bounding box, on
@@ -1829,11 +1837,14 @@ export function drawEditor(
     circleHandle(ctx, hs.a);
     circleHandle(ctx, hs.b);
   }
-  // A selected vine is edited by its free end, which is its length.
+  // A selected vine is edited by its anchor, which is where it hangs from, and
+  // by its free end, which is its length.
   for (const v of model.vines) {
     if (!selectedVineIds.has(v.id)) continue;
-    const h = computeVineHandle(cam, model, v);
-    if (h) circleHandle(ctx, h);
+    const hs = computeVineHandles(cam, model, v);
+    if (!hs) continue;
+    circleHandle(ctx, hs.top);
+    circleHandle(ctx, hs.tip);
   }
   // A whole compound body turns as one, so it gets a rotate knob where a lone
   // shape does - placed by the group's extent, with the centre of mass it turns

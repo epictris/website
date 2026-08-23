@@ -22,6 +22,7 @@
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
+//   bun run src/tools/cli.ts restamp   [dir] [--write]
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
@@ -47,7 +48,7 @@ import {
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Level } from "../level/level";
@@ -1210,6 +1211,93 @@ function cmdBundles(dirs: string[]): void {
   process.exit(failed === 0 ? 0 : 1);
 }
 
+// Re-stamp the corpus: replay every bundle with current physics and write the
+// digests it produces back into the file, as the new baseline.
+//
+// This is the "accept the new behaviour" half of the corpus, and it is a
+// DELIBERATE act, which is why nothing is written without `--write`. A bundle's
+// digests are what makes it a regression test: replaying it re-runs the recorded
+// inputs and asks whether the world still answers them the same way. After an
+// intentional physics change every one of them diverges - correctly, since the
+// world does answer differently now - and a corpus where everything diverges
+// says nothing about the NEXT change. Re-stamping is how it starts speaking
+// again. It is not a way to make a red run green: the inputs are untouched, so
+// what a bundle is a repro OF is exactly what it was.
+//
+// A bundle whose replay breaks an invariant is SKIPPED rather than stamped. Its
+// digests would be a baseline that says a rope may grow past its anchor length -
+// which is not a description of intended behaviour but a bug written down as the
+// expected answer.
+function cmdRestamp(dirs: string[], write: boolean): void {
+  const found: { dir: string; file: string }[] = [];
+  for (const dir of dirs) {
+    let files: string[];
+    try {
+      files = readdirSync(dir).filter(isBundleFile).sort();
+    } catch {
+      if (dirs.length === 1) fail(`cannot read bundle dir: ${dir}`);
+      continue;
+    }
+    for (const f of files) found.push({ dir, file: f });
+  }
+  if (found.length === 0) fail(`no bundles in ${dirs.join(", ")}`);
+  const git = treeIdentity();
+  // A dirty tree is stamped as dirty, which is the point: the stamp says what
+  // produced these numbers, and "some uncommitted working tree" is not a
+  // revision anyone can go back to. It is a warning rather than a refusal -
+  // re-stamping a local scratch bundle mid-change is a perfectly ordinary thing
+  // to do.
+  if (git.endsWith("(dirty)")) {
+    console.log(`[restamp] WARNING: working tree is dirty - stamping as ${git}`);
+  }
+  let stamped = 0;
+  let skipped = 0;
+  let unchanged = 0;
+  for (const { dir, file } of found) {
+    const path = join(dir, file);
+    const rec = loadRecording(path);
+    const r = replayRecording(rec);
+    const div =
+      r.divergedAtFrame !== null
+        ? `diverged @f${r.divergedAtFrame}, maxDrift=${(r.maxDrift * 100).toFixed(1)}px`
+        : "bit-exact already";
+    if (r.violations.length > 0) {
+      skipped++;
+      console.log(`SKIP  ${file} — ${r.violations.length} violation(s) (${div})`);
+      printViolations(r.violations, 3);
+      continue;
+    }
+    if (r.divergedAtFrame === null && r.bitDivergedAtFrame === null && rec.git === git) {
+      unchanged++;
+      console.log(`SAME  ${file} — ${div}`);
+      continue;
+    }
+    stamped++;
+    console.log(`${write ? "STAMP" : "would"} ${file} — ${div} → ${r.framesRun} frames @${git}`);
+    if (!write) continue;
+    const next: Recording = {
+      ...rec,
+      digests: r.digests,
+      // Only where the bundle already carried them: a recording made before
+      // world digests existed is replayed against the avatar alone, and giving
+      // it a full-world baseline here would be inventing a comparison its own
+      // recording never made (see `Recording.worldDigests`).
+      ...(rec.worldDigests ? { worldDigests: r.worldDigests } : {}),
+      git,
+    };
+    const text = JSON.stringify(next);
+    writeFileSync(path, file.endsWith(".gz") ? gzipSync(text) : text);
+  }
+  console.log(
+    `[restamp] ${found.length} bundles: ${stamped} ${write ? "stamped" : "to stamp"}, ` +
+      `${unchanged} already current, ${skipped} skipped for violations`,
+  );
+  if (!write) console.log("nothing written - re-run with --write to accept these as the baseline");
+  // A skip is a red bundle left red, and the corpus runner will say so on its
+  // next run; it is not this command failing.
+  process.exit(0);
+}
+
 // Determinism + replay round-trip self-test: run a scripted session, replay its
 // captured inputs+digests, and confirm bit-for-bit reproduction.
 function cmdSelftest(): void {
@@ -1381,6 +1469,12 @@ switch (cmd) {
     // has) and the local scratch dir (which it does not).
     cmdBundles(arg ? [arg, ...rest.filter((r) => !r.startsWith("--"))] : BUNDLE_DIRS);
     break;
+  case "restamp":
+    cmdRestamp(
+      arg && !arg.startsWith("--") ? [arg, ...rest.filter((r) => !r.startsWith("--"))] : BUNDLE_DIRS,
+      [arg, ...rest].includes("--write"),
+    );
+    break;
   case "selftest":
     cmdSelftest();
     break;
@@ -1416,7 +1510,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|selftest|ledges|corners|tangents|decompose|contacts|spring|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|vines|render3d|camera|assets> [file] [options]",
     );
 }
 

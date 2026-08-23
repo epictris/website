@@ -36,7 +36,7 @@ import {
 import {
   arrowEnds,
   bodyIntersectsRect,
-  chainAnchor,
+  anchorItem,
   chainEnds,
   chainEndWorld,
   vineAnchorWorld,
@@ -118,7 +118,7 @@ import {
 } from "./model";
 import {
   computeChainHandles,
-  computeVineHandle,
+  computeVineHandles,
   computeGroupHandles,
   computeHandles,
   drawEditor,
@@ -339,6 +339,12 @@ type Drag =
   | { mode: "vineDraw"; from: EdItem; local: Vec2; length: number }
   // Dragging a placed vine's free end, which is the same edit by hand.
   | { mode: "vineLength"; vine: EdVine }
+  // Moving a placed vine: its anchor follows the pointer and lands on whatever
+  // body it is dropped on, so sliding a vine along the branch it hangs from and
+  // moving it to a different branch are one gesture. The same drag a chain end
+  // is re-anchored by, and for the same reason - the anchor IS the vine's
+  // placement, so this moves an object rather than re-pointing the vine at one.
+  | { mode: "vineAnchor"; vine: EdVine }
   | { mode: "draw"; body: EdItem; start: Vec2 };
 
 // Arrow-key nudge directions (world axes, +y down).
@@ -1892,7 +1898,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const indexOfBody = new Map<number, number>();
     runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
     const endLabel = (end: number): string => {
-      const anchor = chainAnchor(model, end);
+      const anchor = anchorItem(model, end);
       if (!anchor) return "?";
       const i = indexOfBody.get(anchor.bodyId);
       return i === undefined ? "?" : `${i}`;
@@ -3593,7 +3599,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend: 0 is a rope, 1 a pole that holds itself straight and springs back to hanging.";
+      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend: 0 is a rope, 1 a pole that holds itself straight and springs back to hanging.";
     g.appendChild(hint);
 
     numField(
@@ -5479,11 +5485,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
   function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
-    // A selected vine is edited by its one free end, which is its length.
+    // A selected vine is edited by its two handles and nothing else: the anchor
+    // it hangs from, which is where it is, and its free end, which is how long
+    // it is. The tip is tested first, so the two cannot fight over a press on a
+    // vine drawn short enough for them to overlap.
     const vines = selectedVines();
     if (vines.length === 1) {
-      const h = computeVineHandle(camera, model, vines[0]!);
-      if (h && scr.distanceTo(h) <= HANDLE_HIT_PX) return { mode: "vineLength", vine: vines[0]! };
+      const hs = computeVineHandles(camera, model, vines[0]!);
+      if (hs) {
+        if (scr.distanceTo(hs.tip) <= HANDLE_HIT_PX) {
+          return { mode: "vineLength", vine: vines[0]! };
+        }
+        if (scr.distanceTo(hs.top) <= HANDLE_HIT_PX) {
+          return { mode: "vineAnchor", vine: vines[0]! };
+        }
+      }
       return null;
     }
     // A selected chain is edited by its two end handles and nothing else.
@@ -6460,15 +6476,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (top) drag.vine.length = Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
         break;
       }
+      case "vineAnchor": {
+        // The anchor IS where the vine hangs from, so the drag moves that
+        // object - the same act as re-anchoring a chain end, minus the second
+        // end there is nothing to collide with. Over nothing a vine could hang
+        // from, it stays on the body it has, so a drag can never leave a vine
+        // hanging from thin air.
+        const anchor = anchorItem(model, drag.vine.anchor);
+        if (!anchor) break;
+        const host = topmostAt(world, (b) => chainable(b)) ?? anchorHost(anchor);
+        if (!host) break;
+        anchor.bodyId = host.bodyId;
+        anchor.rot = host.rot;
+        anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
+        markDirty();
+        refreshFields();
+        break;
+      }
       case "chainEnd": {
         drag.cursor = world;
         const c = drag.chain;
         // The end IS an anchor object, so the drag MOVES that object rather than
         // re-pointing the chain at something else. Re-anchoring onto another body
         // is the same act: the anchor changes which body it is in.
-        const anchor = chainAnchor(model, c[drag.end]);
+        const anchor = anchorItem(model, c[drag.end]);
         if (!anchor) break;
-        const other = chainAnchor(model, drag.end === "a" ? c.b : c.a);
+        const other = anchorItem(model, drag.end === "a" ? c.b : c.a);
         // Land on whatever body is under the pointer, so sliding an end along its
         // own body and moving it onto a different one are one gesture. Over the
         // body the OTHER end already holds, or over nothing at all, it stays on
