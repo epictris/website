@@ -289,6 +289,18 @@ export class BallLevel {
     // phase opens: whatever they move is then part of the state that phase
     // measures itself against, rather than a body shifting under its books. A
     // level with no chains does nothing here, so recorded replays are unchanged.
+    //
+    // NOT skipped on the frames the coupled sweep below re-solves the same set
+    // - which looks like the same system swept twice per frame, and an attempt
+    // to drop this pass on those frames measured exactly why it stays: the
+    // ball phase's books (its velocity baseline, its credit entitlement) are
+    // taken at the top of that phase, so scene chains left to move shared
+    // bodies INSIDE it are bodies shifting under its measurements - 1.15 m/s
+    // of `rope-credit-unearned` on session-291f, against a corpus that
+    // otherwise peaks at 0.21. What made the second sweep cheap instead is
+    // `SceneChain.solve`'s identity skip: this pass leaves the set converged,
+    // so the coupled sweep's re-solves of it skip until the rope actually
+    // disturbs something.
     stepSceneChains(this.solveChains(), this.world, delta);
     PhaseTrace.mark("scene-chains", this.world);
 

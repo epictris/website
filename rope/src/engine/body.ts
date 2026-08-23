@@ -3,7 +3,7 @@
 
 import { Vec2 } from "./vec2";
 import { wrapAngle } from "./mathf";
-import { isExposedCorner, shapeVertices } from "./shapes";
+import { isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
@@ -49,6 +49,40 @@ export class CollisionShape2D implements ShapeTransform {
     // what every single-shape body (and every recorded replay) has.
     public localRotation = 0,
   ) {}
+
+  // Where this shape lives in its owner's shape list, stamped by
+  // `setShape`/`addShape`. The broadphase's candidate sort key alongside the
+  // owner's `worldIndex` (see there).
+  mountIndex = 0;
+  // This shape's leaf in the world's broadphase tree, -1 while it has none.
+  // Owned entirely by `World.syncBroadphase`.
+  broadphaseProxy = -1;
+
+  // Half-extents of this shape's world-axis-aligned box, cached against the
+  // rotation (and shape object) they were computed at. A pure function of both,
+  // so the cache cannot change any answer - what it removes is the per-vertex
+  // rotate the old per-query `shapeExtents` calls burned, which the profiler
+  // had at 6% of the frame.
+  private extentsCache: Vec2 | null = null;
+  private extentsCacheRot = 0;
+  private extentsCacheShape: Shape | null = null;
+
+  extents(): Vec2 {
+    const rot = this.globalRotation;
+    if (
+      this.extentsCache !== null &&
+      this.extentsCacheRot === rot &&
+      this.extentsCacheShape === this.shape
+    ) {
+      return this.extentsCache;
+    }
+    const e = shapeExtents(this);
+    this.extentsCache = e;
+    this.extentsCacheRot = rot;
+    this.extentsCacheShape = this.shape;
+    return e;
+  }
+
   get globalPosition(): Vec2 {
     return this.owner.globalPosition.add(
       this.localOffset.rotated(this.owner.globalRotation),
@@ -113,9 +147,46 @@ export abstract class CollisionObject2D {
   // the build index is per world and therefore the same in both, which is what
   // makes it the name a full-world digest can be compared by. -1 until added.
   buildIndex = -1;
+  // Position in its world's `bodies` array, maintained by `World.add`/`remove`.
+  // The broadphase sorts its candidates by this so they are visited in exactly
+  // the order the full `for (const body of this.bodies)` scans used to visit
+  // them - which is what keeps every tie-break, and therefore every recorded
+  // replay, bit-identical. -1 until added; areas never get one.
+  worldIndex = -1;
+  // Set when the transform (or shape set) has changed since the broadphase
+  // last saw this body; cleared by `World.syncBroadphase`.
+  broadphaseDirty = false;
+  // Bumped on every transform write. "Has anything moved this body since I
+  // last looked" is then one integer comparison, which is what lets a
+  // converged constraint prove its next solve would be the identity and skip
+  // it (see `SceneChain.solve`). Never reset, never compared across bodies.
+  transformVersion = 0;
   name = "";
-  globalPosition: Vec2 = Vec2.ZERO;
-  globalRotation = 0;
+  private position_ = Vec2.ZERO;
+  private rotation_ = 0;
+
+  // The transform writes are the broadphase's only change signal: every path
+  // that moves a body - integration, depenetration, the editor - lands here,
+  // and marking on write is what lets a settled body cost the tree nothing.
+  get globalPosition(): Vec2 {
+    return this.position_;
+  }
+
+  set globalPosition(value: Vec2) {
+    this.position_ = value;
+    this.transformVersion++;
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
+  }
+
+  get globalRotation(): number {
+    return this.rotation_;
+  }
+
+  set globalRotation(value: number) {
+    this.rotation_ = value;
+    this.transformVersion++;
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
+  }
   // Bitmask of layers this body occupies (default layer 1, matching the project).
   collisionLayer = LAYER_SOLID;
   // The hook's mirror image of `CollisionShape2D.impermeable`: the hook reaches
@@ -153,6 +224,10 @@ export abstract class CollisionObject2D {
   // is what `primaryShape()` returns for the few call sites that legitimately
   // mean exactly that shape; the rest are offset auxiliaries.
   collisionShapes: CollisionShape2D[] = [];
+  // The shapes the broadphase currently holds leaves for - a snapshot taken by
+  // `World.syncBroadphase` so a later `setShape` (which replaces the array
+  // outright) still lets it find and drop the stale leaves.
+  proxiedShapes: readonly CollisionShape2D[] = [];
   // Bodies excused from colliding with this one (Godot AddCollisionExceptionWith).
   readonly exceptions = new Set<number>();
   world: World | null = null;
@@ -201,6 +276,7 @@ export abstract class CollisionObject2D {
   setShape(shape: Shape): CollisionShape2D {
     const s = new CollisionShape2D(this, shape);
     this.collisionShapes = [s];
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
     return s;
   }
 
@@ -214,8 +290,10 @@ export abstract class CollisionObject2D {
   // frame; both ride the body's transform.
   addShape(shape: Shape, localOffset: Vec2, localRotation = 0): CollisionShape2D {
     const s = new CollisionShape2D(this, shape, localOffset, localRotation);
+    s.mountIndex = this.collisionShapes.length;
     this.collisionShapes.push(s);
     this.invalidateExposure();
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
     return s;
   }
 

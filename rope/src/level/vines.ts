@@ -49,8 +49,8 @@
 import { Vec2 } from "../engine/vec2";
 import { StaticBody2D, VineLink, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
-import { bodyContainsPoint, bodySweepCircle } from "../engine/collision";
-import type { World } from "../engine/world";
+import { bodyContainsPoint, bodyOverlapCircle, bodySweepCircle } from "../engine/collision";
+import { GRAVITY, type World } from "../engine/world";
 import type { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
 import { ShapeGeometry } from "../lib/shapeGeometry";
@@ -58,6 +58,7 @@ import {
   collectAnchorSites,
   snapToSurface,
   SceneChain,
+  stepSceneChains,
   type AnchorSite,
   type SceneConstraint,
 } from "./chains";
@@ -85,6 +86,42 @@ import type { LevelData, VineData } from "./levelFormat";
 // consecutive links still overlap) and coarsens the drape slightly, which is the
 // only thing it does cost.
 export const DEFAULT_VINE_SPACING = 0.15;
+
+// ...and the ceiling that default rises to on a long HANGING vine. Cost
+// scales with the link count and convergence sweeps scale with it again (a
+// Gauss-Seidel correction travels one link per sweep), so a long vine at a
+// fixed spacing is quadratically dearer than a short one. Above
+// `DEFAULT_VINE_LINK_BUDGET` links the default spacing widens instead, up to
+// this ceiling - the 0.20 m row of the table above, the measured cheap end -
+// so a short vine is exactly what it always was and a long one caps near the
+// budget. An authored `spacing` is untouched: the author said what it costs.
+//
+// HANGING vines only. A span keeps the flat default, and both halves of that
+// were measured rather than assumed: a taut 4 m span at 0.20 m spacing
+// concentrates the same transverse gravity into fewer, heavier links and
+// rings at 1.6 m/s for ever, and a SLACK span coarsened the same way put
+// `session-2504f`'s unforced energy spans over the invariant's tolerance
+// (24.7 J against 17) where the flat spacing replays bit-identical.
+export const MAX_DEFAULT_VINE_SPACING = 0.2;
+export const DEFAULT_VINE_LINK_BUDGET = 20;
+
+// The default target spacing for a HANGING vine of this length (metres): the
+// flat default up to `DEFAULT_VINE_LINK_BUDGET` links, then wider, capped.
+export function defaultVineSpacing(length: number): number {
+  return Math.min(
+    MAX_DEFAULT_VINE_SPACING,
+    Math.max(DEFAULT_VINE_SPACING, length / DEFAULT_VINE_LINK_BUDGET),
+  );
+}
+
+// The one statement of which rule a vine takes, shared with the editor's link
+// readout so the panel cannot disagree with the build: `gap` is the distance
+// between a span's anchors, null for a hanging vine, and `length` is the
+// clamped arc the vine is built at (a span's is never under its gap).
+export function vineTargetSpacing(length: number, gap: number | null): number {
+  if (gap !== null) return DEFAULT_VINE_SPACING;
+  return defaultVineSpacing(length);
+}
 
 // The link's collision radius as a fraction of the built spacing. It is the GRAB
 // radius and not the visual gauge, and the two are different numbers on purpose:
@@ -380,6 +417,10 @@ export interface Vine extends VineCord {
   // vines in the ball arena are 3.9 ms a physics frame awake, which is a quarter
   // of the frame for scenery that is not doing anything.
   asleep: boolean;
+  // Whether this vine's settle may run at build time (spawned in its own rest
+  // pose, clear of scenery and areas - see `settleVinesAtBuild`). Set once by
+  // `buildOne` and read only by the build.
+  readonly settleAtBuild: boolean;
   stillFrames: number;
   // Where each link was when the drift window opened. A vine is still when none
   // of them has left that mark by more than `SLEEP_DRIFT`.
@@ -403,7 +444,53 @@ export function buildVines(world: World, data: LevelData, built: BuiltBodies): V
     const vine = buildOne(world, v, anchors, statics);
     if (vine) vines.push(vine);
   }
+  settleVinesAtBuild(world, vines);
   return vines;
+}
+
+// Frames of build-time settling before a vine is left to finish live. Ample:
+// a free-hanging vine sleeps in ~30 frames and a catenary span in under 300.
+const SETTLE_AT_BUILD_CAP = 300;
+
+// Run the eligible vines' settle AT BUILD, to the same fixed point the
+// level's first live frames used to carry them to - the vine arrives already
+// asleep, in its genuinely settled pose, with the arc the settle gives it
+// (the pair chains' tolerance of give per segment, which is what the load
+// rope's birth length is measured over - a vine frozen at its spawn arc
+// instead reads ~5 mm over on every held frame).
+//
+// It is the REAL per-frame step, not an approximation: gravity's own
+// semi-implicit Euler step on the links, then `stepVines` (damping and the
+// sleep bookkeeping), then `stepSceneChains` over the vine's own constraints -
+// exactly the slice of `physicsProcess` these links would get. That is exact
+// because eligibility (see `buildOne`) requires every link clear of scenery
+// and areas: nothing else in the frame - contacts, currents, water - could
+// have touched them. A vine that spawns against geometry, in water, or
+// clipped by the floor settles live exactly as it always did.
+function settleVinesAtBuild(world: World, vines: Vine[]): void {
+  const candidates = vines.filter((v) => v.settleAtBuild);
+  if (candidates.length === 0) return;
+  const dt = 1 / 60;
+  const chains: SceneConstraint[] = [];
+  for (let frame = 0; frame < SETTLE_AT_BUILD_CAP; frame++) {
+    const awake = candidates.filter((v) => !v.asleep);
+    if (awake.length === 0) break;
+    for (const vine of awake) {
+      for (const link of vine.links) {
+        link.linearVelocity = link.linearVelocity.add(GRAVITY.mul(link.gravityScale * dt));
+        link.globalPosition = link.globalPosition.add(link.linearVelocity.mul(dt));
+        link.globalRotation += link.angularVelocity * dt;
+      }
+    }
+    stepVines(awake);
+    chains.length = 0;
+    for (const vine of awake) {
+      if (vine.asleep) continue;
+      for (const c of vine.chains) chains.push(c);
+      for (const b of vine.bends) chains.push(b);
+    }
+    stepSceneChains(chains, world, dt);
+  }
 }
 
 // How far the vine can hang straight down from its anchor before it meets
@@ -501,7 +588,9 @@ function buildOne(
   // links is N segments (anchor to the first link, then the pairs), and a
   // spanning one is N + 1, the extra being the last link to the second anchor -
   // so a span of the minimum two segments still has a link to grab.
-  const target = v.spacing ?? DEFAULT_VINE_SPACING;
+  const target =
+    v.spacing ??
+    vineTargetSpacing(length, anchor2Point ? anchorPoint.distanceTo(anchor2Point) : null);
   const segments = Math.max(anchor2Contact ? 2 : 1, Math.ceil(length / target));
   const spacing = length / segments;
   const count = anchor2Contact ? segments - 1 : segments;
@@ -523,14 +612,22 @@ function buildOne(
   // through geometry settles by the ordinary contact solve, its total length
   // being held from both ends.
   let spawnAt: (i: number) => Vec2;
+  // Whether the spawn pose is the vine's own REST pose: a hanging vine's is
+  // when nothing clips the drop (a clipped one piles at the clip and drapes
+  // from there), a span's is the catenary it spawns on - unless it is stiff,
+  // in which case the rest pose is the bends' force balance with the chains
+  // and NOT the catenary (see `buildVineBends`).
+  let spawnIsRest: boolean;
   if (anchor2Point) {
     const arcs: number[] = [];
     for (let i = 0; i < count; i++) arcs.push(spacing * (i + 1));
     const rest = catenaryPoints(anchorPoint, anchor2Point, length, arcs);
     spawnAt = (i) => rest[i]!;
+    spawnIsRest = stiffness === 0;
   } else {
     const reach = dropDistance(anchorPoint, length, spacing, radius, obj as PhysicsBody2D, statics);
     spawnAt = (i) => anchorPoint.add(new Vec2(0, Math.min(spacing * (i + 1), reach)));
+    spawnIsRest = reach >= length;
   }
 
   const links: VineLink[] = [];
@@ -587,6 +684,20 @@ function buildOne(
   // unused there (see `buildVineBends`).
   const restDir = new Vec2(0, 1);
 
+  // Whether this vine's settle may run AT BUILD instead of over the level's
+  // first visible frames (see `settleVinesAtBuild`): its spawn pose is its own
+  // rest pose, and every link is clear of the scenery AND of every area - a
+  // link the contact solve would push, or one a current or water would keep
+  // stirring, is not going to rest where it spawned, and such a vine settles
+  // live exactly as it always did.
+  const settleAtBuild =
+    spawnIsRest &&
+    links.every(
+      (link) =>
+        statics.every((body) => bodyOverlapCircle(body, link.globalPosition, radius) === null) &&
+        world.areas.every((area) => bodyOverlapCircle(area, link.globalPosition, radius) === null),
+    );
+
   return {
     anchorContact,
     anchor2Contact,
@@ -599,6 +710,7 @@ function buildOne(
     lra: null,
     lra2: null,
     lraLink: null,
+    settleAtBuild,
     asleep: false,
     stillFrames: 0,
     sleepMark: links.map((l) => l.globalPosition),

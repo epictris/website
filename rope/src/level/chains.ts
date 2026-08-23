@@ -97,6 +97,22 @@ export class SceneChain implements SceneConstraint {
   // sibling class so `sweepChains` reads `rope.overLength` and works unchanged.
   readonly wrapBodies: PhysicsBody2D[];
 
+  // Every body whose transform is an input to this chain's solve: the two end
+  // bodies, then anything a span may wrap. Fixed at construction - the rope's
+  // ends never re-anchor, and the wrap list is the one it was built with.
+  private readonly watchBodies: readonly CollisionObject2D[];
+  // `watchBodies`' transform versions as of the last real solve.
+  private readonly solvedAtVersion: number[];
+  // Whether that solve moved nothing: no watched body's version changed across
+  // it. Together with unchanged versions since, it proves the next solve would
+  // be the identity - same inputs, and the last run of them was a fixed point -
+  // so `solve` may skip the pass outright with every observable (positions,
+  // `residual`) exactly as a real pass would leave it. The Gauss-Seidel sweep
+  // keeps re-solving a whole component until its WORST constraint converges,
+  // and this is what stops the converged chains in it paying a full rope solve
+  // per sweep for the privilege of doing nothing.
+  private lastSolveWasIdentity = false;
+
   constructor(
     a: RopeContact,
     b: RopeContact,
@@ -107,6 +123,8 @@ export class SceneChain implements SceneConstraint {
     this.rope = new Rope(a, b, null, length);
     this.color = color;
     this.wrapBodies = wrapBodies;
+    this.watchBodies = [a.obj, b.obj, ...wrapBodies];
+    this.solvedAtVersion = this.watchBodies.map(() => -1);
   }
 
   // Open this chain's frame. Once per frame, however many solve passes follow.
@@ -119,7 +137,29 @@ export class SceneChain implements SceneConstraint {
   // controller runs its chain in, and for the same reason (solve before
   // integration ends every fast frame over-length by |v|·dt).
   solve(delta: number): void {
+    const watch = this.watchBodies;
+    const versions = this.solvedAtVersion;
+    if (this.lastSolveWasIdentity) {
+      let unchanged = true;
+      for (let i = 0; i < watch.length; i++) {
+        if (watch[i]!.transformVersion !== versions[i]) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged) return;
+    }
+    for (let i = 0; i < watch.length; i++) versions[i] = watch[i]!.transformVersion;
     this.rope.solvePass(this.wrapBodies, delta);
+    let identity = true;
+    for (let i = 0; i < watch.length; i++) {
+      const v = watch[i]!.transformVersion;
+      if (v !== versions[i]) {
+        identity = false;
+        versions[i] = v;
+      }
+    }
+    this.lastSolveWasIdentity = identity;
   }
 
   // How far over its length it ended the pass. Zero while slack: the constraint
@@ -188,6 +228,18 @@ export const CHAIN_TOLERANCE = 0.005;
 // there than any cap this side of sane, and a rig that will not converge is
 // bounded rather than silently expensive.
 const MAX_CHAIN_SWEEPS = 64;
+
+// The cap when a player rope is coupled into the set. Lower than
+// `MAX_CHAIN_SWEEPS`, and only modestly, because the number was MEASURED
+// rather than wished for: a held vine's load rope holds its 1 mm contract
+// (`cli vines` grab-hang) at 48 sweeps and visibly stretches below it -
+// 2.9 mm at 32, 5.3 mm at 24, 35 mm at 16 - so a Gauss-Seidel sweep over a
+// vine under player load genuinely spends ~40 sweeps, and an aggressive cap
+// is not a free lunch but the stretch coming back. What made the held-vine
+// frame cheap is `SceneChain.solve`'s identity skip instead: a converged
+// chain inside a still-converging component skips its solve outright, so a
+// deep sweep pays only for the constraints the rope is actually disturbing.
+const MAX_COUPLED_SWEEPS = 48;
 
 // One frame of every scene chain, as ONE system rather than as a list of
 // independent ropes.
@@ -601,7 +653,8 @@ function sweepOneSet(
   extra: CoupledRope | null,
   delta: number,
 ): void {
-  for (let sweep = 0; sweep < MAX_CHAIN_SWEEPS; sweep++) {
+  const cap = extra ? MAX_COUPLED_SWEEPS : MAX_CHAIN_SWEEPS;
+  for (let sweep = 0; sweep < cap; sweep++) {
     if (sweep % 2 === 0) {
       for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
     } else {

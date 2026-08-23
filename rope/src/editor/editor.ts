@@ -170,6 +170,7 @@ import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../le
 import {
   DEFAULT_VINE_DENSITY,
   DEFAULT_VINE_SPACING,
+  vineTargetSpacing,
   DEFAULT_VINE_STIFFNESS,
   LIGHT_LINK_MASS,
   MIN_VINE_DENSITY,
@@ -3650,14 +3651,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
 
+    // The builder's own (length, gap) for a vine, so the readouts below use
+    // exactly the spacing rule `buildVines` will (see `vineTargetSpacing`): a
+    // span's arc is clamped to its gap, and a near-taut span keeps the flat
+    // spacing where a slack one widens with length.
+    const vineSpacingArgs = (v: EdVine): [number, number | null] => {
+      const a = vineAnchorWorld(model, v);
+      const b = vineAnchor2World(model, v);
+      const gap = a && b ? a.distanceTo(b) : null;
+      return [gap === null ? v.length : Math.max(v.length, gap), gap];
+    };
+
     // How many links that works out to, which is the number the cost is in.
     // The same fit `buildVines` makes: segments between constraint points, of
     // which a span spends one on its second anchor.
     const links = (): string => {
       const v = vines[0]!;
       if (vines.length > 1) return "-";
-      const spacing = v.spacing ?? DEFAULT_VINE_SPACING;
-      const segments = Math.max(v.anchor2 !== null ? 2 : 1, Math.ceil(v.length / spacing));
+      const spacing = v.spacing ?? vineTargetSpacing(...vineSpacingArgs(v));
+      const length = vineSpacingArgs(v)[0];
+      const segments = Math.max(v.anchor2 !== null ? 2 : 1, Math.ceil(length / spacing));
       return `${v.anchor2 !== null ? segments - 1 : segments}`;
     };
     const lrow = el("label", "ed-field");
@@ -3720,8 +3733,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // matters, because what a hooked player does to a vine is set by the ratio
     // between the player and ONE link (see `DEFAULT_VINE_DENSITY`).
     const linkMass = (v: EdVine): number => {
-      const count = Math.max(1, Math.ceil(v.length / (v.spacing ?? DEFAULT_VINE_SPACING)));
-      return ((v.density ?? DEFAULT_VINE_DENSITY) * v.length) / count;
+      const [length, gap] = vineSpacingArgs(v);
+      const count = Math.max(1, Math.ceil(length / (v.spacing ?? vineTargetSpacing(length, gap))));
+      return ((v.density ?? DEFAULT_VINE_DENSITY) * length) / count;
     };
     // Two rows rather than one, because the panel is 230 px wide and a row is
     // `white-space: nowrap`: "9.0 kg (0.45 per link)" beside its label ran off

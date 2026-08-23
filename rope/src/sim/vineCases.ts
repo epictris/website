@@ -440,7 +440,19 @@ function caseDrape(): VineResult {
   const floorTop = 1 - 0.2;
   const resting = pool.vine.links.filter((l) => l.globalPosition.y > floorTop - 0.2).length;
   const deepest = Math.max(...pool.vine.links.map((l) => l.globalPosition.y));
-  check(`pool: ${resting} of ${pool.vine.links.length} links are down on the floor`, resting >= 5);
+  // "Links pool" is a statement about ARC, not a count - the links have no
+  // self-collision, so the length past the drop lies at the floor however
+  // coarse the links are (the default spacing widens on a long vine) - so the
+  // bar is the surplus arc's own worth of links, derived from the geometry
+  // rather than pinned to one spacing's number.
+  const restingY = floorTop - pool.vine.spacing * 0.6;
+  const surplus = 6 - (restingY - pool.vine.anchorContact.globalPosition.y);
+  const expectedResting = Math.ceil(surplus / pool.vine.spacing);
+  check(
+    `pool: ${resting} of ${pool.vine.links.length} links are down on the floor ` +
+      `(the ${surplus.toFixed(2)} m of surplus is >= ${expectedResting} links)`,
+    resting >= expectedResting,
+  );
   check(`pool: nothing is below the floor (deepest link ${deepest.toFixed(3)} m)`, deepest <= floorTop);
   check(`pool: worst embed ${(p.embed * 1000).toFixed(2)} mm <= 5 mm`, p.embed <= 0.005);
   check(`pool: worst link speed ${p.speed.toFixed(4)} m/s <= 0.05`, p.speed <= 0.05);
@@ -1105,8 +1117,12 @@ function caseSleep(): VineResult {
   // vine after the long settle this case needs.
   const rig = new Rig(hall({ vineLength: 300, floorY: 100, playerX: -100, playerY: -320 }));
   const vine = rig.vine;
+  // A free-hanging vine spawns in its rest pose, clear of the scenery, so its
+  // settle runs AT BUILD (see `settleVinesAtBuild`) and it arrives already
+  // asleep - the frames it used to spend visibly settling into the pose it
+  // was spawned in were the whole of a vine level's load spike.
+  check(`asleep on arrival: the settle ran at build`, vine.asleep);
   rig.step(30);
-  check(`still awake while it is settling (frame 30)`, !vine.asleep);
 
   let sleptAt = -1;
   rig.step(600, {}, (f) => {

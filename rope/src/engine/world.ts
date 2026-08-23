@@ -29,8 +29,21 @@ import {
   sweepCircle,
 } from "./collision";
 import { shapeContacts } from "./manifold";
+import { AABBTree } from "./aabbTree";
 import { PhaseTrace } from "./phaseTrace";
 import { PhysTrace } from "./physTrace";
+
+// Broadphase candidate order: the owner's position in `World.bodies`, then the
+// shape's mount order within the owner. This is exactly the order the full
+// `for (const body of this.bodies) … for (const s of body.getShapes())` scans
+// the broadphase replaced used to visit shapes in, and sorting candidates into
+// it is what keeps every strict-inequality tie-break downstream - deepest
+// overlap, earliest sweep hit, first ray hit at equal t - choosing the same
+// winner the full scan chose, which is what keeps recorded replays
+// bit-identical.
+function candidateOrder(a: CollisionShape2D, b: CollisionShape2D): number {
+  return a.owner.worldIndex - b.owner.worldIndex || a.mountIndex - b.mountIndex;
+}
 
 // Trace helper: one record per moveAndCollide hit.
 function traceContact(
@@ -330,6 +343,75 @@ export class World {
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
 
+  // Broadphase: one fat-box leaf per collision shape of every body in
+  // `bodies` (areas are not proxied - nothing queries them spatially). The
+  // tree answers CANDIDATES only; every query below keeps its original exact
+  // per-shape tests, so the accepted set is bit-identical to the full scans
+  // this replaces (see `aabbTree.ts`).
+  private readonly broadphase = new AABBTree<CollisionShape2D>();
+  // Bodies whose transform or shape set changed since the tree last saw them.
+  // Membership is guarded by `broadphaseDirty` so a body integrating every
+  // frame is pushed once, not once per write.
+  private readonly broadphaseDirtyList: PhysicsBody2D[] = [];
+
+  // Called by the transform setters on `CollisionObject2D` - the one funnel
+  // every path that moves a body goes through.
+  markBroadphaseDirty(obj: CollisionObject2D): void {
+    if (!(obj instanceof PhysicsBody2D)) return;
+    obj.broadphaseDirty = true;
+    this.broadphaseDirtyList.push(obj);
+  }
+
+  // Bring the tree up to date with every dirty body. Runs at the top of every
+  // spatial query, so between queries the tree may be stale and it never
+  // matters.
+  private syncBroadphase(): void {
+    const list = this.broadphaseDirtyList;
+    if (list.length === 0) return;
+    for (const b of list) {
+      b.broadphaseDirty = false;
+      if (b.removed || b.world !== this) continue;
+      this.syncBody(b);
+    }
+    list.length = 0;
+  }
+
+  private syncBody(body: PhysicsBody2D): void {
+    const shapes = body.collisionShapes;
+    const prev = body.proxiedShapes;
+    const setChanged = prev.length !== shapes.length || prev.some((s, i) => s !== shapes[i]);
+    if (setChanged) {
+      // `setShape` replaces the array outright, so leaves for shapes no longer
+      // carried have to be found through the snapshot and dropped.
+      for (const s of prev) {
+        if (s.broadphaseProxy >= 0 && !shapes.includes(s)) {
+          this.broadphase.remove(s.broadphaseProxy);
+          s.broadphaseProxy = -1;
+        }
+      }
+    }
+    for (const s of shapes) {
+      const c = s.globalPosition;
+      const e = s.extents();
+      if (s.broadphaseProxy < 0) {
+        s.broadphaseProxy = this.broadphase.insert(s, c.x - e.x, c.y - e.y, c.x + e.x, c.y + e.y);
+      } else {
+        this.broadphase.move(s.broadphaseProxy, c.x - e.x, c.y - e.y, c.x + e.x, c.y + e.y);
+      }
+    }
+    if (setChanged) body.proxiedShapes = shapes.slice();
+  }
+
+  // Broadphase candidates for a world-axis box, in canonical order (see
+  // `candidateOrder`).
+  private queryShapes(minX: number, minY: number, maxX: number, maxY: number): CollisionShape2D[] {
+    this.syncBroadphase();
+    const out: CollisionShape2D[] = [];
+    this.broadphase.query(minX, minY, maxX, maxY, out);
+    out.sort(candidateOrder);
+    return out;
+  }
+
   // Last frame's accumulated impulses, by contact. Looked up only - never
   // iterated - so it cannot put a map's ordering anywhere near the solve.
   private contactCache = new Map<string, CachedImpulses>();
@@ -339,14 +421,26 @@ export class World {
   private nextBuildIndex = 0;
 
   add(body: CollisionObject2D): void {
+    if (body.world !== this && body.world !== null) {
+      // Leaves this body may hold live in ANOTHER world's tree, where this
+      // world's proxy ids mean nothing. Forget them; the old world is being
+      // torn down or rebuilt, or it will re-sync the body if it still holds it.
+      for (const s of body.proxiedShapes) s.broadphaseProxy = -1;
+      body.proxiedShapes = [];
+    }
     body.world = this;
     body.removed = false;
     if (body instanceof Area2D) {
       if (!this.areas.includes(body)) this.areas.push(body);
       else return;
     } else if (body instanceof PhysicsBody2D) {
-      if (!this.bodies.includes(body)) this.bodies.push(body);
-      else return;
+      if (!this.bodies.includes(body)) {
+        this.bodies.push(body);
+        body.worldIndex = this.bodies.length - 1;
+        if (!body.broadphaseDirty) this.markBroadphaseDirty(body);
+      } else {
+        return;
+      }
     } else {
       return;
     }
@@ -367,7 +461,20 @@ export class World {
   remove(body: CollisionObject2D): void {
     body.removed = true;
     const i = this.bodies.indexOf(body as PhysicsBody2D);
-    if (i >= 0) this.bodies.splice(i, 1);
+    if (i >= 0) {
+      for (const s of body.proxiedShapes) {
+        if (s.broadphaseProxy >= 0) {
+          this.broadphase.remove(s.broadphaseProxy);
+          s.broadphaseProxy = -1;
+        }
+      }
+      body.proxiedShapes = [];
+      body.worldIndex = -1;
+      this.bodies.splice(i, 1);
+      // Everything behind the gap slides down one place; the candidate order
+      // (`worldIndex`) has to follow or it stops matching iteration order.
+      for (let k = i; k < this.bodies.length; k++) this.bodies[k]!.worldIndex = k;
+    }
     const j = this.areas.indexOf(body as Area2D);
     if (j >= 0) this.areas.splice(j, 1);
   }
@@ -398,7 +505,19 @@ export class World {
     let overlapHit: { normal: Vec2; depth: number; collider: PhysicsBody2D } | null = null;
     let sweepHit: { t: number; normal: Vec2; collider: PhysicsBody2D } | null = null;
 
-    for (const target of this.bodies) {
+    // Broadphase: everything the swept circle could reach, visited in the
+    // order the full body scan used to visit it (see `candidateOrder`). The
+    // per-shape tests below are unchanged, so the hits are identical.
+    const end = start.add(motion);
+    const sweepPad = r + SKIN + 1e-3;
+    const sweepCands = this.queryShapes(
+      Math.min(start.x, end.x) - sweepPad,
+      Math.min(start.y, end.y) - sweepPad,
+      Math.max(start.x, end.x) + sweepPad,
+      Math.max(start.y, end.y) + sweepPad,
+    );
+    for (const ts of sweepCands) {
+      const target = ts.owner;
       if (target === body || target.removed) continue;
       if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
       // A non-solid body blocks nothing (see `VineLink`, and `passable`, which
@@ -407,11 +526,11 @@ export class World {
       // straight through.
       if (!target.isSolid) continue;
       if (body.exceptions.has(target.id)) continue;
-      if (!target.hasShape()) continue;
-      // Every shape the target carries. A compound body (a concave form built
-      // from convex pieces) blocks with all of them; a single-shape body is the
-      // one-iteration case this has always been.
-      for (const ts of target.getShapes()) {
+      // Every shape the target carries arrives as its own candidate. A
+      // compound body (a concave form built from convex pieces) blocks with
+      // all of them; a single-shape body is the one-iteration case this has
+      // always been.
+      {
         const ov = circleOverlap(start, r, ts);
         if (ov && ov.depth > SKIN) {
           if (!overlapHit || ov.depth > overlapHit.depth) {
@@ -460,7 +579,16 @@ export class World {
         // second face must join the solve before the first pushout runs.
         let a: { normal: Vec2; depth: number } | null = null;
         let b: { normal: Vec2; depth: number } | null = null;
-        for (const target of this.bodies) {
+        // Re-queried every pass: `finalPos` moves with each pushout.
+        const reach = r + 1e-3;
+        const recoverCands = this.queryShapes(
+          finalPos.x - reach,
+          finalPos.y - reach,
+          finalPos.x + reach,
+          finalPos.y + reach,
+        );
+        for (const ts of recoverCands) {
+          const target = ts.owner;
           if (target === body || target.removed) continue;
           if (!(target instanceof StaticBody2D || target instanceof RigidBody2D)) continue;
           // Nothing is ever pushed out of a non-solid body — the same rule the
@@ -468,8 +596,7 @@ export class World {
           // avatar would be depenetrated out of a vine it is standing in.
           if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
-          if (!target.hasShape()) continue;
-          for (const ts of target.getShapes()) {
+          {
             const ov = circleOverlap(finalPos, r, ts);
             if (!ov) continue;
             if (!a || ov.depth > a.depth) {
@@ -561,11 +688,19 @@ export class World {
     const excludeIds = new Set((opts.exclude ?? []).map((b) => b.id));
     let best: RayResult | null = null;
     let bestT = Infinity;
-    for (const body of this.bodies) {
+    // Broadphase: walk the tree with the segment itself rather than its
+    // bounding box - a long diagonal hook shot's box covers half the level,
+    // the segment crosses almost none of it.
+    this.syncBroadphase();
+    const cands: CollisionShape2D[] = [];
+    this.broadphase.querySegment(from.x, from.y, to.x, to.y, cands);
+    cands.sort(candidateOrder);
+    for (const s of cands) {
+      const body = s.owner;
+      if (!(body instanceof PhysicsBody2D)) continue;
       if (body.removed || excludeIds.has(body.id)) continue;
       if (!this.matchesMask(body, opts.collisionMask)) continue;
-      if (!body.hasShape()) continue;
-      for (const s of body.getShapes()) {
+      {
         const hit = rayVsShape(from, to, s, opts.hitFromInside ?? false);
         if (hit && hit.t < bestT) {
           bestT = hit.t;
@@ -585,10 +720,22 @@ export class World {
       shape: circleShape(radius),
     };
     const out: PhysicsBody2D[] = [];
-    for (const body of this.bodies) {
-      if (body.removed || !body.hasShape()) continue;
-      // Overlap test: does the probe circle intersect the body's shape?
-      if (body.getShapes().some((s) => shapesOverlap(probe, s))) {
+    const cands = this.queryShapes(
+      center.x - radius - 1e-3,
+      center.y - radius - 1e-3,
+      center.x + radius + 1e-3,
+      center.y + radius + 1e-3,
+    );
+    const seen = new Set<number>();
+    for (const s of cands) {
+      const body = s.owner;
+      if (!(body instanceof PhysicsBody2D)) continue;
+      if (body.removed || seen.has(body.id)) continue;
+      // Overlap test: does the probe circle intersect this shape? A body is
+      // reported once, on its first overlapping shape in candidate order -
+      // the same body order the full scan reported.
+      if (shapesOverlap(probe, s)) {
+        seen.add(body.id);
         out.push(body);
         if (out.length >= maxResults) break;
       }
@@ -703,7 +850,14 @@ export class World {
         const start = bs.globalPosition;
         const r = bs.shape.radius;
         const reach = r + remaining.length() + CONTACT_SLOP;
-        for (const target of this.bodies) {
+        const cands = this.queryShapes(
+          start.x - reach,
+          start.y - reach,
+          start.x + reach,
+          start.y + reach,
+        );
+        for (const ts of cands) {
+          const target = ts.owner;
           if (target === body || target.removed) continue;
           if (!(target instanceof StaticBody2D)) continue;
           // A `passable` static is scenery the hook catches and nothing stops
@@ -712,12 +866,11 @@ export class World {
           // by geometry no other path admits exists.
           if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
-          if (!target.hasShape()) continue;
-          for (const ts of target.getShapes()) {
+          {
             // The same conservative box reject the contact gather uses, widened
             // by the step: anything further than the whole motion plus the
             // radius cannot be swept into.
-            const oe = shapeExtents(ts);
+            const oe = ts.extents();
             if (Math.abs(start.x - ts.globalPosition.x) > oe.x + reach) continue;
             if (Math.abs(start.y - ts.globalPosition.y) > oe.y + reach) continue;
             const hit = sweepCircle(start, remaining, r, ts);
@@ -982,9 +1135,16 @@ export class World {
       }
     };
     for (const bshape of body.getShapes()) {
-      const be = shapeExtents(bshape);
-      for (const other of this.bodies) {
-        if (other === body || other.removed || !other.hasShape()) continue;
+      const be = bshape.extents();
+      const bc = bshape.globalPosition;
+      // Broadphase: this shape's own tight box is the query - an overlap needs
+      // the tight boxes to meet, so no margin is required for the candidate
+      // set to be complete (the tree's fat boxes only widen it).
+      const cands = this.queryShapes(bc.x - be.x, bc.y - be.y, bc.x + be.x, bc.y + be.y);
+      for (const oshape of cands) {
+        const other = oshape.owner;
+        if (!(other instanceof PhysicsBody2D)) continue;
+        if (other === body || other.removed) continue;
         if (body.exceptions.has(other.id)) continue;
         if (!isSolidTarget(other)) continue;
         // No body is ever depenetrated out of a vine link (see `VineLink`): a
@@ -999,22 +1159,18 @@ export class World {
         // supposed to pass through whips a metre out of its way as it goes.
         if (!body.isSolid && !(other instanceof StaticBody2D)) continue;
         if (accept && !accept(other)) continue;
-        for (const oshape of other.getShapes()) {
-          // The same conservative box reject the contact gather uses, and here
-          // it is the one that pays: this runs per rigid body per depenetration
-          // pass and twice more in the ball's chain phase, so the scene's whole
-          // narrowphase was being walked five or six times a frame to find the
-          // one surface a body is actually resting on. It was 0.88 ms of a
-          // 2.3 ms frame.
-          //
-          // Nothing here is speculative - an overlap has positive depth by
-          // definition - so shapes whose boxes are strictly apart cannot
-          // contribute, and no margin is needed to keep the answer identical.
-          const oe = shapeExtents(oshape);
-          if (Math.abs(bshape.globalPosition.x - oshape.globalPosition.x) > be.x + oe.x) continue;
-          if (Math.abs(bshape.globalPosition.y - oshape.globalPosition.y) > be.y + oe.y) continue;
+        {
+          // The same conservative box reject as before the broadphase - kept
+          // because the tree answers on FAT boxes, and this exact test on the
+          // tight ones is what keeps the accepted set identical to the full
+          // scan's. Nothing here is speculative - an overlap has positive
+          // depth by definition - so shapes whose boxes are strictly apart
+          // cannot contribute.
+          const oe = oshape.extents();
+          if (Math.abs(bc.x - oshape.globalPosition.x) > be.x + oe.x) continue;
+          if (Math.abs(bc.y - oshape.globalPosition.y) > be.y + oe.y) continue;
           if (bshape.shape.kind === "circle") {
-            const ov = circleOverlap(bshape.globalPosition, bshape.shape.radius, oshape);
+            const ov = circleOverlap(bc, bshape.shape.radius, oshape);
             if (ov) consider(ov);
           } else {
             // A vertex shape contributes its manifold points, same as the
@@ -1082,20 +1238,78 @@ export class World {
 
   collectContacts(): ContactConstraint[] {
     const out: ContactConstraint[] = [];
-    const n = this.bodies.length;
-    for (let i = 0; i < n; i++) {
-      const bi = this.bodies[i]!;
-      if (bi.removed || !bi.hasShape() || !isSolidTarget(bi)) continue;
-      for (let j = i + 1; j < n; j++) {
-        const bj = this.bodies[j]!;
-        if (bj.removed || !bj.hasShape() || !isSolidTarget(bj)) continue;
-        if (bi.exceptions.has(bj.id)) continue;
+    // Broadphase pair discovery. Every pair that can produce a constraint has
+    // a rigid side that survives every rigid-side filter below (role `a` is
+    // by definition rigid, awake, not passable and a solid target), so
+    // querying the tree from exactly those bodies finds every such pair.
+    // Both-rigid pairs are found twice and deduped on the canonical
+    // (lower, higher) world-index key; the keys are then SORTED, which
+    // re-establishes the exact (i, j) lexicographic order the O(n²) loop
+    // emitted constraints in - the solve order is part of the replay contract.
+    this.syncBroadphase();
+    const pairKeys = new Set<number>();
+    for (const a of this.bodies) {
+      if (!(a instanceof RigidBody2D)) continue;
+      if (a.removed || !a.hasShape() || !isSolidTarget(a)) continue;
+      if (a.passable) continue;
+      if (World.isAsleep(a)) continue;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const s of a.getShapes()) {
+        const c = s.globalPosition;
+        const e = s.extents();
+        minX = Math.min(minX, c.x - e.x);
+        minY = Math.min(minY, c.y - e.y);
+        maxX = Math.max(maxX, c.x + e.x);
+        maxY = Math.max(maxY, c.y + e.y);
+      }
+      // The narrowphase gathers speculative contacts down to -CONTACT_SLOP
+      // depth, so the query box carries the same slop the box test below does.
+      const cands: CollisionShape2D[] = [];
+      this.broadphase.query(
+        minX - CONTACT_SLOP,
+        minY - CONTACT_SLOP,
+        maxX + CONTACT_SLOP,
+        maxY + CONTACT_SLOP,
+        cands,
+      );
+      for (const s of cands) {
+        const t = s.owner;
+        if (t === a || !(t instanceof PhysicsBody2D) || t.removed) continue;
+        const lo = Math.min(a.worldIndex, t.worldIndex);
+        const hi = Math.max(a.worldIndex, t.worldIndex);
+        pairKeys.add(lo * 0x100000 + hi);
+      }
+    }
+    const orderedKeys = Array.from(pairKeys).sort((x, y) => x - y);
+    for (const key of orderedKeys) {
+      const bi = this.bodies[Math.floor(key / 0x100000)]!;
+      const bj = this.bodies[key % 0x100000]!;
+      this.collectPairContacts(bi, bj, out);
+    }
+    return out;
+  }
+
+  // One (i, j) body pair of the contact gather, `bi` earlier in `bodies` than
+  // `bj` - the filters and shape loops of the old O(n²) loop, verbatim.
+  private collectPairContacts(
+    bi: PhysicsBody2D,
+    bj: PhysicsBody2D,
+    out: ContactConstraint[],
+  ): void {
+    {
+      {
+        if (bi.removed || !bi.hasShape() || !isSolidTarget(bi)) return;
+        if (bj.removed || !bj.hasShape() || !isSolidTarget(bj)) return;
+        if (bi.exceptions.has(bj.id)) return;
         const iLeads =
           bi instanceof RigidBody2D && (!(bj instanceof RigidBody2D) || bi.id < bj.id);
         const a = iLeads ? bi : bj;
         const b = iLeads ? bj : bi;
         // Neither side can move: two statics touching is not a contact.
-        if (!(a instanceof RigidBody2D)) continue;
+        if (!(a instanceof RigidBody2D)) return;
         // A non-solid body blocks nothing and is blocked only by statics (see
         // `VineLink`). The obstacle side going non-solid drops the pair
         // outright; the moving side going non-solid keeps only its contacts
@@ -1104,22 +1318,22 @@ export class World {
         // and link-vs-link, link-vs-ball, link-vs-any-rigid do not, so a vine
         // never pushes anything, never stacks, and never fights its own pair
         // constraints through the contact solver.
-        if (!b.isSolid) continue;
-        if (!a.isSolid && !(b instanceof StaticBody2D)) continue;
+        if (!b.isSolid) return;
+        if (!a.isSolid && !(b instanceof StaticBody2D)) return;
         // ...and a `passable` body keeps not even those: the hook is the only
         // thing in the sim that may find it, so it neither pushes a static nor
         // is stopped by one (see `CollisionObject2D.passable`).
-        if (a.passable) continue;
+        if (a.passable) return;
         // A sleeping body has no contacts. It is not moving and nothing that
         // could move it reaches this loop, and the pair loop is the O(n²) half
         // of the frame - which is what a level full of vines pays (see
         // `VineLink.asleep`).
-        if (World.isAsleep(a)) continue;
+        if (World.isAsleep(a)) return;
         const as = a.getShapes();
         const bs = b.getShapes();
         for (let si = 0; si < as.length; si++) {
           const sa = as[si]!;
-          const ea = shapeExtents(sa);
+          const ea = sa.extents();
           for (let sj = 0; sj < bs.length; sj++) {
             const sb = bs[sj]!;
             // The pair loop is O(n²) with no broadphase, and at this scene scale
@@ -1140,7 +1354,7 @@ export class World {
             //
             // On session-1618f it takes 99.9% of the narrowphase calls out and
             // `World.integrate` from 1.475 ms a frame to 0.087.
-            const eb = shapeExtents(sb);
+            const eb = sb.extents();
             const dx = sa.globalPosition.x - sb.globalPosition.x;
             if (Math.abs(dx) > ea.x + eb.x + CONTACT_SLOP) continue;
             const dy = sa.globalPosition.y - sb.globalPosition.y;
@@ -1150,7 +1364,6 @@ export class World {
         }
       }
     }
-    return out;
   }
 
   // The constraints for one (shape, shape) pair, with normals normalised to the
