@@ -522,19 +522,26 @@ export class Rope {
     this.topologyCreditScale =
       lengthError > 0 ? 1 - Mathf.clamp(this.topologyJump / lengthError, 0, 1) : 1;
 
-    // Every body this solve may move, for the velocity books below: the scene it
-    // was handed, plus any body on the rope's OWN path that the scene left out.
+    // Every body this solve may move, for the velocity books below: the bodies
+    // on the rope's OWN path, whatever scene it was handed. The path is the
+    // exact list on both sides.
     //
-    // The two lists are the same for a rope handed the whole world, which is
-    // every caller that predates scene chains. They are not the same for a rope
-    // handed a restricted scene - a background chain wraps nothing, so it is
-    // handed none of it - and the difference is not cosmetic: the solve corrects
-    // the position of whatever hangs on the chain either way, and a body whose
-    // position is corrected but never credited keeps every frame's gravity. A
-    // wrecking ball hanging from a background chain therefore sat perfectly still
-    // while its velocity climbed 0.16 m/s a frame, to 119 m/s by the twelfth
-    // second, waiting to be released by the first frame that gave it any slack.
-    const moved: PhysicsBody2D[] = bodies.slice();
+    // It is not too narrow, and that direction is the load-bearing one: the
+    // solve corrects the position of whatever hangs on the chain, and a body
+    // whose position is corrected but never credited keeps every frame's
+    // gravity. A wrecking ball hanging from a background chain - on the chain's
+    // path but absent from its restricted scene, so a scene-only list missed it
+    // - sat perfectly still while its velocity climbed 0.16 m/s a frame, to
+    // 119 m/s by the twelfth second, waiting to be released by the first frame
+    // that gave it any slack.
+    //
+    // It is not too wide either: `resolveLengthConstraint` moves path bodies
+    // and nothing else, so a scene body off the path measures a zero credit
+    // every time. Measuring those zeros was not free - a rope handed the whole
+    // level as its scene took pre-positions of all 174 bodies and asked
+    // `pullDirection` about each of them, on every pass of the coupled sweep
+    // (session-230f, 20 ms physics frames while hanging from a vine).
+    const moved: PhysicsBody2D[] = [];
     for (const node of this.path()) {
       const obj = node.contact.obj;
       if (obj instanceof PhysicsBody2D && !moved.includes(obj)) moved.push(obj);
@@ -579,6 +586,13 @@ export class Rope {
       // Friction impulse may push the rope past its max length; re-solve.
       this.resolveLengthConstraint();
 
+      // One path regeneration for the whole credit loop. The credits below are
+      // velocity-level only, so nothing in the loop can move the path, and the
+      // per-body `pullDirection` calls this replaces each regenerated the
+      // identical path objects from scratch - the other half of session-230f's
+      // 20 ms frames.
+      const pullDirs = this.pullDirections();
+
       for (const body of moved) {
         const dynamicBody = this.getDynamicBodyState(body);
         if (dynamicBody) {
@@ -587,8 +601,8 @@ export class Rope {
           // position but earns no velocity. Bounded by `creditBound`: the share
           // the bodies are no longer moving to earn does not either.
           dynamicBody.addVelocity(
-            this.clampCredit(
-              body,
+            Rope.clampCreditAlong(
+              pullDirs.get(body) ?? null,
               body.globalPosition
                 .sub(prePositions.get(body)!)
                 .div(delta)
@@ -672,7 +686,10 @@ export class Rope {
   // rest is the swing, and the push-outs the phase folded in, and neither is the
   // constraint's to refuse.
   clampCredit(body: PhysicsBody2D, credit: Vec2, bound: number): Vec2 {
-    const dir = this.pullDirection(body);
+    return Rope.clampCreditAlong(this.pullDirection(body), credit, bound);
+  }
+
+  private static clampCreditAlong(dir: Vec2 | null, credit: Vec2, bound: number): Vec2 {
     if (!dir) return credit;
     const inward = credit.dot(dir);
     if (inward <= bound) return credit;
@@ -693,6 +710,31 @@ export class Rope {
       else return dir.normalized();
     }
     return fallback;
+  }
+
+  // `pullDirection` for every path body at once, from ONE regeneration. Body by
+  // body it answers exactly what `pullDirection` answers - attachment beats
+  // wrap, first valid of each kind wins - it just walks the path once instead
+  // of once per body, which is what a solve pass crediting the whole path
+  // needs (see the credit loop in `solvePass`).
+  private pullDirections(): Map<PhysicsBody2D, Vec2> {
+    const dirs = new Map<PhysicsBody2D, Vec2>();
+    const fallbacks = new Map<PhysicsBody2D, Vec2>();
+    for (const pathObject of this.generatePathObjects()) {
+      const body = pathObject.body;
+      if (dirs.has(body)) continue;
+      const dir = pathObject.resolveCorrectionDir();
+      if (dir.lengthSquared() < 0.0001) continue;
+      if (pathObject instanceof PathWrap) {
+        if (!fallbacks.has(body)) fallbacks.set(body, dir.normalized());
+      } else {
+        dirs.set(body, dir.normalized());
+      }
+    }
+    for (const [body, dir] of fallbacks) {
+      if (!dirs.has(body)) dirs.set(body, dir);
+    }
+    return dirs;
   }
 
   private static contactPointOf(pathObject: PathObject): Vec2 {
