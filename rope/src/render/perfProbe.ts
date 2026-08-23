@@ -22,6 +22,16 @@ export interface PerfSnapshot {
   // hitches; a mean hides exactly the frames worth knowing about.
   frameMsP50: number;
   frameMsP99: number;
+  // Where the frame went: the fixed-step physics (all steps this frame), the
+  // WebGL scene, the 2D overlay. What the three do not add up to is the loop's
+  // own overhead - digests, sparks, camera. Zero until the caller passes
+  // phases.
+  simMsP50: number;
+  simMsP99: number;
+  draw3dMsP50: number;
+  draw3dMsP99: number;
+  draw2dMsP50: number;
+  draw2dMsP99: number;
   // three's own counters for the last frame, or 0 on the 2D path - which has no
   // draw calls to speak of, and where the FPS half is the whole answer.
   drawCalls: number;
@@ -44,33 +54,66 @@ export class PerfProbe {
     fps: 0,
     frameMsP50: 0,
     frameMsP99: 0,
+    simMsP50: 0,
+    simMsP99: 0,
+    draw3dMsP50: 0,
+    draw3dMsP99: 0,
+    draw2dMsP50: 0,
+    draw2dMsP99: 0,
     drawCalls: 0,
     triangles: 0,
     programs: 0,
   };
 
   private readonly samples = new Float64Array(MAX_SAMPLES);
+  private readonly simSamples = new Float64Array(MAX_SAMPLES);
+  private readonly draw3dSamples = new Float64Array(MAX_SAMPLES);
+  private readonly draw2dSamples = new Float64Array(MAX_SAMPLES);
   private count = 0;
   private windowMs = 0;
 
   // One rendered frame. `stats` is what the 3D renderer drew, or null on the 2D
-  // path.
-  sample(dtSeconds: number, stats: { calls: number; triangles: number; programs: number } | null): void {
+  // path. `phases` is where the frame's ms went, from the caller's own clocks.
+  sample(
+    dtSeconds: number,
+    stats: { calls: number; triangles: number; programs: number } | null,
+    phases?: { simMs: number; draw3dMs: number; draw2dMs: number },
+  ): void {
     const ms = dtSeconds * 1000;
     if (ms > 0) {
       if (this.count === MAX_SAMPLES) {
         this.samples.copyWithin(0, 1);
+        this.simSamples.copyWithin(0, 1);
+        this.draw3dSamples.copyWithin(0, 1);
+        this.draw2dSamples.copyWithin(0, 1);
         this.count--;
       }
-      this.samples[this.count++] = ms;
+      this.samples[this.count] = ms;
+      this.simSamples[this.count] = phases?.simMs ?? 0;
+      this.draw3dSamples[this.count] = phases?.draw3dMs ?? 0;
+      this.draw2dSamples[this.count] = phases?.draw2dMs ?? 0;
+      this.count++;
       this.windowMs += ms;
     }
     if (this.windowMs < WINDOW_MS || this.count === 0) return;
 
-    const sorted = this.samples.subarray(0, this.count).sort();
+    const p = (sorted: Float64Array, q: number): number =>
+      sorted[Math.min(this.count - 1, Math.floor(this.count * q))]!;
+    // `slice`, not `subarray`: each phase array must be sorted on a copy, or
+    // the sort would shuffle samples out from under the shared frame index.
+    const sorted = this.samples.slice(0, this.count).sort();
+    const sortedSim = this.simSamples.slice(0, this.count).sort();
+    const sorted3d = this.draw3dSamples.slice(0, this.count).sort();
+    const sorted2d = this.draw2dSamples.slice(0, this.count).sort();
     this.snapshot.fps = (this.count * 1000) / this.windowMs;
-    this.snapshot.frameMsP50 = sorted[Math.floor(this.count * 0.5)]!;
-    this.snapshot.frameMsP99 = sorted[Math.min(this.count - 1, Math.floor(this.count * 0.99))]!;
+    this.snapshot.frameMsP50 = p(sorted, 0.5);
+    this.snapshot.frameMsP99 = p(sorted, 0.99);
+    this.snapshot.simMsP50 = p(sortedSim, 0.5);
+    this.snapshot.simMsP99 = p(sortedSim, 0.99);
+    this.snapshot.draw3dMsP50 = p(sorted3d, 0.5);
+    this.snapshot.draw3dMsP99 = p(sorted3d, 0.99);
+    this.snapshot.draw2dMsP50 = p(sorted2d, 0.5);
+    this.snapshot.draw2dMsP99 = p(sorted2d, 0.99);
     this.snapshot.drawCalls = stats?.calls ?? 0;
     this.snapshot.triangles = stats?.triangles ?? 0;
     this.snapshot.programs = stats?.programs ?? 0;
@@ -83,6 +126,11 @@ export class PerfProbe {
   hudLines(): string[] {
     const s = this.snapshot;
     const lines = [`${s.frameMsP50.toFixed(1)}/${s.frameMsP99.toFixed(1)} ms p50/p99`];
+    if (s.simMsP50 > 0 || s.draw3dMsP50 > 0 || s.draw2dMsP50 > 0) {
+      lines.push(
+        `sim ${s.simMsP50.toFixed(1)}/${s.simMsP99.toFixed(1)} · 3d ${s.draw3dMsP50.toFixed(1)}/${s.draw3dMsP99.toFixed(1)} · 2d ${s.draw2dMsP50.toFixed(1)}/${s.draw2dMsP99.toFixed(1)}`,
+      );
+    }
     if (s.programs > 0) {
       lines.push(`${s.drawCalls} calls · ${(s.triangles / 1000).toFixed(0)}k tris · ${s.programs} programs`);
     }

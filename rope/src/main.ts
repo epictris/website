@@ -26,9 +26,20 @@ import {
 } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
+import { inputDeserializer } from "./sim/trace";
+import { levelFromRecording } from "./sim/replay";
 
 const STEP = 1 / 60;
-const MAX_STEPS_PER_FRAME = 5; // avoid spiral-of-death after a long stall
+// One real-time step plus at most one step of catch-up per rendered frame, and
+// any deeper debt is shed (see the loop). Five used to be the spiral-of-death
+// guard, and five IS the spiral on a machine that cannot afford one: a sim step
+// over the render budget put the accumulator permanently behind, every frame
+// ran the full five steps, and a vine hang that renders at 75 fps when caught
+// up was pinned at 13 fps in 76 ms frames - a 5x amplification of being maybe
+// 2x over budget (measured, session-198f at 4x CPU). Shedding the debt trades
+// that for sim time running slightly slower than the wall while overloaded,
+// which degrades gracefully and recovers instantly.
+const MAX_STEPS_PER_FRAME = 2;
 
 // Two canvases stacked on the play frame (see index.html): the WebGL scene
 // underneath, and the 2D one on top carrying everything that is genuinely 2D.
@@ -100,6 +111,17 @@ function resize(): void {
 
 resize();
 window.addEventListener("resize", resize);
+
+// Replay mode (`?replay=NAME.json`, fetched from the dev server's public dir):
+// feed a recorded session's input stream through the real frame loop instead of
+// live input. Same fixed step, same renderer, same digests - it exists so a
+// recorded perf complaint can be reproduced on the live page exactly, with
+// `?hud=1`/`window.__perf` reading where the frames go. After the last recorded
+// frame the final input repeats for ever, holding the end pose steady for a
+// settled reading.
+let replayFrames: FrameInput[] | null = null;
+let replayIndex = 0;
+const replayName = params.get("replay");
 
 function makeLevel(): Level | BallLevel {
   return isBall ? new BallLevel(levelSpec.data) : new Level(levelSpec.data, levelSpec.init);
@@ -186,6 +208,24 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyL") showDebug = !showDebug;
 });
 
+if (replayName) {
+  void (async () => {
+    const res = await fetch(`/${replayName}`);
+    const rec = (await res.json()) as Recording;
+    const deserialize = inputDeserializer();
+    const frames = rec.frames.map(deserialize);
+    // A self-contained recording (level-editor export) carries its own
+    // geometry; play it on that, not on the registry level the URL named.
+    level = levelFromRecording(rec);
+    level.onReset = reset;
+    sparks.reset();
+    buildScene();
+    cameraCtl.snap();
+    replayFrames = frames;
+    replayIndex = 0;
+  })();
+}
+
 let last = -1;
 let accumulator = 0;
 let fps = 0;
@@ -210,9 +250,14 @@ function frame(now: number): void {
   if (dt > 0) fps += ((1 / dt) - fps) * 0.1;
 
   let steps = 0;
+  let simMs = 0;
   while (accumulator >= STEP && steps < MAX_STEPS_PER_FRAME) {
-    const frameInput: FrameInput = input.sample();
+    const frameInput: FrameInput = replayFrames
+      ? replayFrames[Math.min(replayIndex++, replayFrames.length - 1)]!
+      : input.sample();
+    const simT0 = performance.now();
     level.physicsProcess(frameInput, STEP);
+    simMs += performance.now() - simT0;
     // Drained inside the catch-up loop rather than after it: a frame that runs
     // several steps would otherwise silently drop every caught-up step's events.
     sparks.ingest(level.sparkEvents);
@@ -224,11 +269,16 @@ function frame(now: number): void {
     accumulator -= STEP;
     steps++;
   }
+  // Debt beyond what the capped loop repaid is dropped, keeping only the
+  // sub-step remainder for interpolation. Banking it is what turned overload
+  // into a death spiral (see MAX_STEPS_PER_FRAME); dropping it means a machine
+  // that cannot run 60 sim steps a second plays slightly slowed down instead of
+  // at a slideshow frame rate. Recorded bundles are untouched - they capture
+  // executed steps, and shedding executes none.
+  if (accumulator >= STEP) accumulator %= STEP;
   // Render interpolation: how far past the last completed physics step this
   // frame lands. The sim runs at a fixed 60 Hz; drawing its raw state on a
-  // faster display repeats and skips frames, which reads as jitter. Clamped
-  // because a frame that hit MAX_STEPS_PER_FRAME leaves the accumulator over a
-  // full step, and drawing past the current state would be extrapolation.
+  // faster display repeats and skips frames, which reads as jitter.
   const alpha = Math.min(1, accumulator / STEP);
 
   // Once per rendered frame, on the render clock: the sparks are outside the
@@ -250,8 +300,11 @@ function frame(now: number): void {
   // The 3D scene first, then the 2D canvas over it. Both read the same
   // interpolated state at the same `alpha` and the same camera, so they are one
   // picture rather than two that agree most of the time.
+  const draw3dT0 = performance.now();
   scene3d?.render(level, camera, alpha);
+  const draw3dMs = performance.now() - draw3dT0;
 
+  const draw2dT0 = performance.now();
   if (level instanceof BallLevel) {
     renderBall(
       ctx,
@@ -281,9 +334,10 @@ function frame(now: number): void {
       sparks,
     );
   }
+  const draw2dMs = performance.now() - draw2dT0;
   // After the frame is drawn, so the draw-call and triangle counts are this
   // frame's rather than the last one's.
-  perf.sample(dt, scene3d?.renderStats() ?? null);
+  perf.sample(dt, scene3d?.renderStats() ?? null, { simMs, draw3dMs, draw2dMs });
 
   if (probeRect) drawProbeOutline(ctx, view, camera, probeRect);
 

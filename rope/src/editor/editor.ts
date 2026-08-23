@@ -368,7 +368,11 @@ const NUDGE_DIRS: Record<string, Vec2 | undefined> = {
 };
 
 const STEP = 1 / 60;
-const MAX_STEPS = 5;
+// One step plus one of catch-up, deeper debt shed - same policy and same
+// measurement as `MAX_STEPS_PER_FRAME` in main.ts: five banked catch-up steps
+// were the 13 fps death spiral on a machine whose sim step is over the render
+// budget.
+const MAX_STEPS = 2;
 
 const M2PX = PIXELS_PER_METER;
 
@@ -6974,6 +6978,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         accumulator -= STEP;
         steps++;
       }
+      // Debt beyond the capped catch-up is shed, as in main.ts - overload plays
+      // slightly slow rather than collapsing the frame rate.
+      if (accumulator >= STEP) accumulator %= STEP;
       // Same camera the game runs (eased follow + the level's camera rules), so
       // a region or a path authored here is tested exactly as it will play.
       // Render interpolation factor, as in main.ts: the sim is a fixed 60 Hz,

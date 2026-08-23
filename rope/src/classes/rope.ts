@@ -5,7 +5,13 @@
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
-import { CollisionObject2D, CollisionShape2D, PhysicsBody2D, RigidBody2D } from "../engine/body";
+import {
+  CollisionObject2D,
+  CollisionShape2D,
+  currentTransformEpoch,
+  PhysicsBody2D,
+  RigidBody2D,
+} from "../engine/body";
 import { isExposedCorner } from "../engine/shapes";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
@@ -191,9 +197,40 @@ export class Rope {
   private blockedLastFrame = false;
   frictionCoefficient = 0.4;
 
-  start: RopeAttachment;
-  end: RopeAttachment;
-  wraps: RopeWrap[];
+  // `start`/`end`/`wraps` invalidate the memoized path geometry on ASSIGNMENT
+  // (see `markPathChanged` below), so no caller - this file or another - can
+  // leave a stale span cache behind. In-place element writes bypass the setter;
+  // the one site that does that (`uncrossAdjacentNodes`) marks by hand.
+  private start_!: RopeAttachment;
+  private end_!: RopeAttachment;
+  private wraps_!: RopeWrap[];
+
+  get start(): RopeAttachment {
+    return this.start_;
+  }
+
+  set start(value: RopeAttachment) {
+    this.start_ = value;
+    this.markPathChanged();
+  }
+
+  get end(): RopeAttachment {
+    return this.end_;
+  }
+
+  set end(value: RopeAttachment) {
+    this.end_ = value;
+    this.markPathChanged();
+  }
+
+  get wraps(): RopeWrap[] {
+    return this.wraps_;
+  }
+
+  set wraps(value: RopeWrap[]) {
+    this.wraps_ = value;
+    this.markPathChanged();
+  }
 
   private frameStartDistanceLookup = new Map<RopeNode, number>();
   // Angle of rope wound onto the body the rope starts on, radians, *unwrapped*
@@ -252,6 +289,25 @@ export class Rope {
 
   path(): RopeNode[] {
     return [this.start, ...this.wraps, this.end];
+  }
+
+  // Memoized span list and path objects. One solve pass asks for the same
+  // geometry many times at the same state - the length measure, the Jacobian
+  // build, the credit directions - and each ask regenerated it from scratch,
+  // allocation and all (~40% of a coupled sweep's pass cost, session-198f).
+  // Valid while (a) no body anywhere has moved, one integer against the global
+  // transform epoch, and (b) this rope's own node list is unchanged - every
+  // site that touches `wraps`/`start`/`end` calls `markPathChanged`. The cached
+  // arrays and their objects are immutable after construction (`selfWrap` is
+  // set during the build), so handing the same instances back is safe.
+  private spanCache: RopePath[] | null = null;
+  private spanCacheEpoch = -1;
+  private pathObjectCache: PathObject[] | null = null;
+  private pathObjectCacheEpoch = -1;
+
+  private markPathChanged(): void {
+    this.spanCache = null;
+    this.pathObjectCache = null;
   }
 
   // Wires hook attachment callbacks; called on construction and after snapshot restore.
@@ -570,6 +626,7 @@ export class Rope {
           .mul(10 * PX);
         this.wraps.pop();
         this.end = new RopeAttachment(lastWrap.contact);
+        this.markPathChanged();
         this.maxRopeLength = this.calculateRopePathLength();
         endObj.world?.remove(endObj);
       }
@@ -807,6 +864,8 @@ export class Rope {
   }
 
   private regenerateSpans(): RopePath[] {
+    const epoch = currentTransformEpoch();
+    if (this.spanCache && this.spanCacheEpoch === epoch) return this.spanCache;
     const p = this.path();
     const spans: RopePath[] = [];
     for (let i = 0; i < p.length - 1; i++) {
@@ -818,6 +877,8 @@ export class Rope {
         ),
       );
     }
+    this.spanCache = spans;
+    this.spanCacheEpoch = epoch;
     return spans;
   }
 
@@ -1018,11 +1079,48 @@ export class Rope {
     // pieces are arranged.
     const surfaces = wrappableSurfaces(bodies);
 
+    // The broadphase answers "which shapes might this span cross" so the exact
+    // scan below runs over a handful of candidates instead of every surface in
+    // the scene - a rope handed the whole level paid surfaces × spans exact
+    // segment tests per regeneration, ~90 regenerations a frame under the
+    // coupled sweep (session-198f). The tree is a filter, never an authority:
+    // candidates are mapped back into `surfaces` and restored to ITS order, so
+    // the scan downstream - including the distance sort, whose ties keep scan
+    // order - sees exactly the list it always saw, minus shapes the span
+    // provably cannot touch. Falls back to the full list for a rope whose ends
+    // are not in a world (nothing is, that early in a build), and for a scene
+    // already smaller than the query itself - a vine's pair chain is handed a
+    // handful of surfaces, and a tree walk plus a sort per span costs more than
+    // exact-testing all five.
+    const world =
+      surfaces.length > 8
+        ? (this.start.contact.obj.world ?? this.end.contact.obj.world)
+        : null;
+    const surfaceIndex = new Map<CollisionShape2D, number>();
+    if (world) for (let i = 0; i < surfaces.length; i++) surfaceIndex.set(surfaces[i]!.shape, i);
+
     for (const span of this.regenerateSpans()) {
       if (span.from instanceof RopeWrap) newNodes.push(span.from);
       if (this.shouldIgnorePathCollisions(span)) continue;
 
-      const colliders = surfaces.filter(({ shape }) => {
+      let scan = surfaces;
+      if (world) {
+        const cands = world.segmentCandidates(
+          span.span.start.x,
+          span.span.start.y,
+          span.span.end.x,
+          span.span.end.y,
+        );
+        const pool: WrapCandidate[] = [];
+        for (const shape of cands) {
+          const i = surfaceIndex.get(shape);
+          if (i !== undefined) pool.push(surfaces[i]!);
+        }
+        pool.sort((a, b) => surfaceIndex.get(a.shape)! - surfaceIndex.get(b.shape)!);
+        scan = pool;
+      }
+
+      const colliders = scan.filter(({ shape }) => {
         // The span's own endpoints are excluded by SHAPE, not by body. A span
         // ending on a shape always reports overlap against it, and wrapping the
         // thing you are tied to is the self-intersection resolvers' job, not
@@ -1258,6 +1356,7 @@ export class Rope {
         const tmp = this.wraps[i + 1]!;
         this.wraps[i + 1] = this.wraps[i + 2]!;
         this.wraps[i + 2] = tmp;
+        this.markPathChanged();
       }
     }
   }
@@ -1295,6 +1394,8 @@ export class Rope {
   }
 
   private generatePathObjects(): PathObject[] {
+    const epoch = currentTransformEpoch();
+    if (this.pathObjectCache && this.pathObjectCacheEpoch === epoch) return this.pathObjectCache;
     const spans = this.regenerateSpans();
     const start = new PathStart(this.start.contact.obj as PhysicsBody2D, spans[0]!.span);
     const end = new PathEnd(this.end.contact.obj as PhysicsBody2D, spans[spans.length - 1]!.span);
@@ -1341,7 +1442,10 @@ export class Rope {
       end.selfWrap = pathWraps[pathWraps.length - 1]!;
       pathWraps.pop();
     }
-    return [start, ...pathWraps, end];
+    const out: PathObject[] = [start, ...pathWraps, end];
+    this.pathObjectCache = out;
+    this.pathObjectCacheEpoch = epoch;
+    return out;
   }
 
   // Length of one span of the path. A span between two nodes riding the same

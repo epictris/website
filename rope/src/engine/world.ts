@@ -412,6 +412,17 @@ export class World {
     return out;
   }
 
+  // Broadphase candidates crossed by a world segment, in canonical order. The
+  // tree answers over fat boxes, so this is a superset of the shapes the
+  // segment truly meets - callers keep their exact tests, as everywhere else.
+  segmentCandidates(ax: number, ay: number, bx: number, by: number): CollisionShape2D[] {
+    this.syncBroadphase();
+    const out: CollisionShape2D[] = [];
+    this.broadphase.querySegment(ax, ay, bx, by, out);
+    out.sort(candidateOrder);
+    return out;
+  }
+
   // Last frame's accumulated impulses, by contact. Looked up only - never
   // iterated - so it cannot put a map's ordering anywhere near the solve.
   private contactCache = new Map<string, CachedImpulses>();

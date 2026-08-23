@@ -739,6 +739,17 @@ function buildOne(
 // long-range attachment is wrong the moment the vine bends, and routing it is
 // the one thing the house rope does that a textbook LRA does not.
 //
+// PER-LINK textbook LRAs (anchor-to-every-link inequality at arc rest, the
+// standard convergence aid) were tried and measured out. They never disagree
+// with the pair chains geometrically, but they bought nothing the sweep could
+// cash: the coupled cap's knee is set by the player rope and the load rope
+// converging AGAINST EACH OTHER, not by error walking the pair chains, so the
+// 1 mm load-rope contract still needed the full 48 sweeps with LRAs in
+// (26.6 mm at cap 16 vs 35 without; 1.2-2.7 mm at 32-40, non-monotone), frame
+// cost rose ~6% on the vine-hang sessions, and an over-taut span - zero slack
+// anywhere by construction - sat on every LRA's rest length and rang at
+// 0.27 m/s for ever.
+//
 // Statics only, and not every wrappable body: a static cannot move, so the wrap
 // path it produces is a fact about the level rather than a thing the load rope
 // could haul about, and the intermediate vine links are pass-through and are

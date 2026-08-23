@@ -139,6 +139,16 @@ let nextId = 1;
 export const LAYER_SOLID = 1;
 export const LAYER_ANCHOR = 2;
 
+// Monotonic count of transform writes across ALL bodies in the process - the
+// per-body `transformVersion`s summed, effectively. One integer comparison
+// answers "has ANY body moved since I last looked", which is what lets derived
+// geometry (a rope's span list) be memoized without watching each body it
+// touches. Never reset.
+let transformEpoch = 0;
+export function currentTransformEpoch(): number {
+  return transformEpoch;
+}
+
 export abstract class CollisionObject2D {
   readonly id: number = nextId++;
   // Position in the order its world was built, stamped by `World.add`. `id` is a
@@ -175,6 +185,7 @@ export abstract class CollisionObject2D {
   set globalPosition(value: Vec2) {
     this.position_ = value;
     this.transformVersion++;
+    transformEpoch++;
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
   }
 
@@ -185,6 +196,7 @@ export abstract class CollisionObject2D {
   set globalRotation(value: number) {
     this.rotation_ = value;
     this.transformVersion++;
+    transformEpoch++;
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
   }
   // Bitmask of layers this body occupies (default layer 1, matching the project).
