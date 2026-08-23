@@ -222,9 +222,9 @@ export class Level {
     // A vine's load rope is derived from the state of the world rather than
     // driven by grab and release events, so it is settled here, immediately
     // before the sweep that has to solve it.
-    const lra = updateVineLoads(this.vines, this.player.rope, this.vineWraps);
+    const held = updateVineLoads(this.vines, this.player.rope, this.vineWraps);
     stepVines(this.vines);
-    const chains = vineChainSet(this.sceneChains, this.vines, lra, this.solveSet);
+    const chains = vineChainSet(this.sceneChains, this.vines, held, this.solveSet);
     // Scene chains solve last, after integration has moved the bodies they hold
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
@@ -241,7 +241,7 @@ export class Level {
       chains,
       this.world,
       delta,
-      lra && this.player.rope
+      held && this.player.rope
         ? // The set here is a vine - pair chains in series, which one sweep
           // cannot hold - so it has to reach its own tolerance too (see
           // `CoupledRope.settleSet`).

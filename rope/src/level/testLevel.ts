@@ -121,7 +121,10 @@ const SPRING_DATA: RawLevelData = {
 export const TEST_SPRING: LevelSpec = { data: SPRING_DATA };
 
 // Vines to swing on (see `level/vines.ts`): a chasm with two hanging from
-// branches over it, and a third long enough to pool on the far ledge.
+// branches over it, a third long enough to pool on the far ledge, and a fourth
+// SPANNING between the second and third branches - attached at both ends, with
+// a metre of slack, so it drapes in a catenary the player can grab anywhere
+// along.
 //
 // The layout is the mechanic. A vine is only interesting where the alternative
 // is falling, so the two swing vines hang over an 8 m gap at heights a player
@@ -213,6 +216,10 @@ const VINE_DATA: RawLevelData = {
     { anchor: 1, length: 500, spacing: 25 },
     { anchor: 2, length: 450, spacing: 25 },
     { anchor: 3, length: 850, spacing: 25 },
+    // The span: the same two branches the second and third vines hang from,
+    // ~5.4 m apart, with 6.5 m of vine between them - a metre of slack, worn
+    // as the sag.
+    { anchor: 2, anchor2: 3, length: 650, spacing: 25 },
   ],
 };
 

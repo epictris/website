@@ -44,10 +44,12 @@ import { mechanicalEnergy } from "./trace";
 import { CHAIN_TOLERANCE } from "../level/chains";
 import {
   DEFAULT_VINE_DENSITY,
+  DEFAULT_VINE_SPACING,
   LIGHT_LINK_MASS,
   MIN_VINE_DENSITY,
   type Vine,
 } from "../level/vines";
+import { catenaryPoints } from "../level/catenary";
 import {
   button,
   emptyFrameInput,
@@ -854,6 +856,76 @@ function caseFormat(): VineResult {
   const zero = new Rig({ ...authored, vines: [{ anchor: 7, length: 0 }] });
   check(`and so does one of no length`, zero.level.vines.length === 0);
 
+  // A SPANNING vine's second anchor id survives both trips - it is an id, not a
+  // length, so it crosses the conversion untouched exactly as `anchor` does.
+  const spanAuthored: RawLevelData = {
+    ...authored,
+    bodies: [
+      ...authored.bodies,
+      {
+        kind: "static",
+        x: 300,
+        y: -300,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 40 } },
+          { type: "anchor", id: 9, x: 0, y: 20 },
+        ],
+      },
+    ],
+    vines: [{ anchor: 7, anchor2: 9, length: 400 }],
+  };
+  const spanM = scaleLevelData(spanAuthored, PX).vines?.[0];
+  check(
+    `px -> m: a span keeps anchor2 ${spanM?.anchor2} with its length ${spanM?.length} m scaled`,
+    spanM?.anchor2 === 9 && spanM?.length === 4,
+  );
+  check(
+    `m -> px: the span round trip is exact`,
+    JSON.stringify(scaleLevelData(scaleLevelData(spanAuthored, PX), P).vines) ===
+      JSON.stringify(spanAuthored.vines),
+  );
+  const spanSaved = modelToDisk(modelFromDisk(spanAuthored)).vines?.[0];
+  const savedAnchor2 = modelToDisk(modelFromDisk(spanAuthored))
+    .bodies[1]?.objects.find((o) => o.type === "anchor");
+  check(
+    `editor: a span saves back naming its second anchor (${spanSaved?.anchor2})`,
+    spanSaved?.anchor2 !== undefined &&
+      savedAnchor2?.type === "anchor" &&
+      spanSaved.anchor2 === savedAnchor2.id,
+  );
+  // ...and a hanging vine gains no anchor2 field for having been opened.
+  check(`editor: a hanging vine stays without anchor2`, bare?.anchor2 === undefined);
+  // A dead second anchor FALLS BACK to hanging rather than dropping the vine:
+  // one anchor is still a complete vine, unlike a chain end.
+  const deadEnd = new Rig({ ...spanAuthored, vines: [{ anchor: 7, anchor2: 99, length: 400 }] });
+  check(
+    `a span naming a missing second anchor builds as a hanging vine`,
+    deadEnd.level.vines.length === 1 && deadEnd.vine.anchor2Contact === null,
+  );
+  const selfTied = new Rig({ ...spanAuthored, vines: [{ anchor: 7, anchor2: 7, length: 400 }] });
+  check(
+    `...and so does one naming its own anchor twice`,
+    selfTied.level.vines.length === 1 && selfTied.vine.anchor2Contact === null,
+  );
+  // A span takes stiffness like any vine - pinned at both ends rather than
+  // clamped, so the bends are the joints alone (see `buildVineBends`) - and a
+  // span that never asked builds none at all, the same zero-cost statement the
+  // hanging vine makes.
+  const stiffSpan = new Rig({
+    ...spanAuthored,
+    vines: [{ anchor: 7, anchor2: 9, length: 400, stiffness: 1 }],
+  });
+  check(
+    `a span authoring stiffness keeps it (${stiffSpan.vine.stiffness}) and builds bends (${stiffSpan.vine.bends.length})`,
+    stiffSpan.vine.stiffness === 1 && stiffSpan.vine.bends.length > 0,
+  );
+  const limpSpan = new Rig(spanAuthored);
+  check(
+    `...and one that does not builds none (${limpSpan.vine.bends.length})`,
+    limpSpan.vine.bends.length === 0,
+  );
+
   return ok("format — a vine survives the metre conversion and the editor's own round trip", passed, details);
 }
 
@@ -1479,6 +1551,312 @@ function caseStiffness(): VineResult {
   return ok("stiffness — a stiff vine refuses to bend and is clamped where it hangs", passed, details);
 }
 
+// ---------------------------------------------------------------------------
+// span: a vine attached at BOTH ends rests in the catenary its length implies.
+//
+// The claims nothing else can make: the second anchor really holds (the last
+// link does not fall), the settled sag is the analytic catenary's - the same
+// arithmetic the links were spawned by, asserted against the SOLVER's fixed
+// point, so the spawn pose and the physics cannot quietly disagree - the arc
+// stays the authored length within the sweep's own series tolerance, a span
+// spawned at rest IS at rest (no settle pop), an over-taut one pulls straight
+// rather than coming apart, and a span still sleeps.
+// ---------------------------------------------------------------------------
+function spanScene(length: number, opts: { spacing?: number } = {}): RawLevelData {
+  const data = hall({ vineLength: length, spacing: opts.spacing, extra: [
+    {
+      kind: "static",
+      x: 400,
+      y: -500,
+      rot: 0,
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 200, h: 40 } },
+        { type: "anchor", id: 2, x: 0, y: 20 },
+      ],
+    },
+  ] });
+  data.vines![0]!.anchor2 = 2;
+  return data;
+}
+
+function caseSpan(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // 5 m of vine across a 4 m gap between anchors at one height.
+  const rig = new Rig(spanScene(500));
+  const vine = rig.vine;
+  const a = vine.anchorContact.globalPosition;
+  const b = vine.anchor2Contact!.globalPosition;
+
+  // The build: N + 1 segments for N links, the extra being the second anchor's
+  // chain, so the arc from anchor to anchor is exactly the authored length.
+  const segments = Math.ceil(5 / DEFAULT_VINE_SPACING);
+  check(
+    `${vine.links.length} links and ${vine.chains.length} chains (${segments} segments)`,
+    vine.links.length === segments - 1 && vine.chains.length === segments,
+  );
+
+  // Spawned AT REST: the catenary spawn is the solver's own fixed point over
+  // empty ground, so nothing visibly falls or pops on the first frames.
+  const spawn = vine.links.map((l) => l.globalPosition);
+  rig.step(240);
+  let spawnDrift = 0;
+  vine.links.forEach((l, i) => {
+    spawnDrift = Math.max(spawnDrift, l.globalPosition.distanceTo(spawn[i]!));
+  });
+  check(
+    `spawned at rest: worst settle movement ${(spawnDrift * 1000).toFixed(1)} mm <= 100 mm`,
+    spawnDrift <= 0.1,
+  );
+
+  // Settled, and holding at both ends.
+  let worstSpeed = 0;
+  let worstOver = 0;
+  rig.step(120, {}, () => {
+    for (const l of vine.links) worstSpeed = Math.max(worstSpeed, l.linearVelocity.length());
+    for (const c of vine.chains) worstOver = Math.max(worstOver, c.residual);
+  });
+  check(`settled: worst link speed ${worstSpeed.toFixed(4)} m/s <= 0.05`, worstSpeed <= 0.05);
+  check(
+    `every chain within the sweep's tolerance (worst ${(worstOver * 1000).toFixed(2)} mm)`,
+    worstOver <= CHAIN_TOLERANCE,
+  );
+  const last = vine.links[vine.links.length - 1]!.globalPosition;
+  check(
+    `the second anchor holds its end (last link ${last.distanceTo(b).toFixed(3)} m from it)`,
+    last.distanceTo(b) <= vine.spacing + CHAIN_TOLERANCE,
+  );
+
+  // The sag is the catenary's. Asserted against the analytic curve rather than
+  // a number, so the claim is "the physics rests where the math says", not
+  // "where it rested the day this was written". The solver's series tolerance
+  // only ever LENGTHENS the vine, so the measured sag may sit a little deeper
+  // and never shallower.
+  const predicted = catenaryPoints(a, b, 5, [2.5])[0]!;
+  const deepest = Math.max(...vine.links.map((l) => l.globalPosition.y));
+  check(
+    `sag ${((deepest - a.y)).toFixed(3)} m against the catenary's ${(predicted.y - a.y).toFixed(3)}`,
+    deepest - predicted.y >= -0.03 && deepest - predicted.y <= 0.25,
+  );
+
+  // The arc from anchor to anchor is the authored length, within the series
+  // bound - `segments * CHAIN_TOLERANCE` of give, the same statement `rest`
+  // makes about a hanging vine's droop.
+  let arc = 0;
+  let prev = a;
+  for (const l of vine.links) {
+    arc += l.globalPosition.distanceTo(prev);
+    prev = l.globalPosition;
+  }
+  arc += b.distanceTo(prev);
+  check(
+    `arc ${arc.toFixed(4)} m against 5 m authored (bound ${(segments * CHAIN_TOLERANCE * 1000).toFixed(0)} mm of give)`,
+    arc >= 5 - 0.001 && arc - 5 <= segments * CHAIN_TOLERANCE,
+  );
+
+  // A span is scenery too: left alone it sleeps.
+  let asleep = -1;
+  const sleeper = new Rig(spanScene(500));
+  sleeper.step(600, {}, (f) => {
+    if (asleep < 0 && sleeper.vine.asleep) asleep = f;
+  });
+  check(`left alone it is asleep by frame ${asleep} of 600`, asleep >= 0);
+
+  // An OVER-TAUT span - authored shorter than the gap between its anchors - is
+  // built TAUT at the separation itself, because the authored figure is a
+  // constraint set that cannot be satisfied and never converges (see
+  // `buildVines`). Taut still sags a little: each chain rests up to
+  // `CHAIN_TOLERANCE` over its length, and that series of give hangs as
+  // `sqrt(3 * gap * give / 8)` of sag - the tolerance's own arithmetic, so the
+  // bound is that rather than a number that goes stale when the spacing does.
+  const taut = new Rig(spanScene(300));
+  taut.step(240);
+  const ta = taut.vine.anchorContact.globalPosition;
+  const tb = taut.vine.anchor2Contact!.globalPosition;
+  const gap = ta.distanceTo(tb);
+  const dir = tb.sub(ta).normalized();
+  const give = (taut.vine.links.length + 1) * CHAIN_TOLERANCE;
+  const sagBound = Math.sqrt((3 * gap * give) / 8) * 1.2;
+  let worstOff = 0;
+  let tautSpeed = 0;
+  taut.step(60, {}, () => {
+    for (const l of taut.vine.links) {
+      const r = l.globalPosition.sub(ta);
+      worstOff = Math.max(worstOff, Math.abs(r.cross(dir)));
+      tautSpeed = Math.max(tautSpeed, l.linearVelocity.length());
+    }
+  });
+  check(
+    `over-taut: 3 m across a ${gap.toFixed(1)} m gap is built taut at the gap ` +
+      `(${(taut.vine.spacing * (taut.vine.links.length + 1)).toFixed(2)} m of vine)`,
+    Math.abs(taut.vine.spacing * (taut.vine.links.length + 1) - gap) <= 0.001,
+  );
+  check(
+    `over-taut: sags only the tolerance's worth ` +
+      `(${(worstOff * 1000).toFixed(0)} mm <= ${(sagBound * 1000).toFixed(0)} mm)`,
+    worstOff <= sagBound,
+  );
+  check(`over-taut: and is still (worst speed ${tautSpeed.toFixed(4)} m/s <= 0.05)`, tautSpeed <= 0.05);
+
+  return ok("span — a two-anchor vine rests in its catenary, holds its length, and sleeps", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// span-stiffness: stiffness on a span presses the drape toward straight.
+//
+// A span's ends are PINNED rather than clamped (`buildVineBends`), and its
+// chains are rope inequalities - slack joints are satisfied - so what stiffness
+// does to a span is absorb the slack: the bends press the links toward the
+// chord and nothing resists the compression. 0 rests in the catenary, 1 reads
+// as a taut wire, and the slider is monotone between them. Asserted alongside:
+// a stiff span still settles and still SLEEPS, because the bends and the
+// chains reach a force balance rather than arguing for ever - which is exactly
+// what the over-taut clamp exists because hard constraints cannot do.
+// ---------------------------------------------------------------------------
+function caseSpanStiffness(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const sagOf = (stiffness: number | undefined): { sag: number; asleep: number; speed: number } => {
+    const scene = spanScene(500);
+    if (stiffness !== undefined) scene.vines![0]!.stiffness = stiffness;
+    const rig = new Rig(scene);
+    let asleep = -1;
+    rig.step(600, {}, (f) => {
+      if (asleep < 0 && rig.vine.asleep) asleep = f;
+    });
+    let speed = 0;
+    for (const l of rig.vine.links) speed = Math.max(speed, l.linearVelocity.length());
+    const a = rig.vine.anchorContact.globalPosition;
+    const deepest = Math.max(...rig.vine.links.map((l) => l.globalPosition.y));
+    return { sag: deepest - a.y, asleep, speed };
+  };
+
+  const rope = sagOf(undefined);
+  const cord = sagOf(0.25);
+  const branch = sagOf(0.5);
+  const pole = sagOf(1);
+  check(
+    `the slider is monotone: sag ${rope.sag.toFixed(2)} m (rope) >= ${cord.sag.toFixed(2)} (0.25) ` +
+      `>= ${branch.sag.toFixed(2)} (0.5) >= ${pole.sag.toFixed(2)} (1)`,
+    rope.sag >= cord.sag - 0.01 && cord.sag >= branch.sag - 0.01 && branch.sag >= pole.sag - 0.01,
+  );
+  check(`a rope span keeps its catenary (sag ${rope.sag.toFixed(2)} m >= 1.2)`, rope.sag >= 1.2);
+  check(`a pole span reads as a taut wire (sag ${pole.sag.toFixed(2)} m <= 0.2)`, pole.sag <= 0.2);
+  check(
+    `every setting settles (worst speeds ${cord.speed.toFixed(4)}, ${branch.speed.toFixed(4)}, ${pole.speed.toFixed(4)} <= 0.05)`,
+    cord.speed <= 0.05 && branch.speed <= 0.05 && pole.speed <= 0.05,
+  );
+  check(
+    `...and sleeps (asleep at frames ${cord.asleep}, ${branch.asleep}, ${pole.asleep})`,
+    cord.asleep >= 0 && branch.asleep >= 0 && pole.asleep >= 0,
+  );
+
+  return ok("span-stiffness — stiffness presses a span's drape toward straight, and it still sleeps", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// span-grab: a held span gets TWO load ropes, and both hold their arc.
+//
+// The second one is the point of the case: a span's tension runs to both
+// anchors, and held by one alone the run to the other end is just pair chains
+// under a player - `links * CHAIN_TOLERANCE` of give paid out exactly where the
+// span is supposed to hold. Both ropes are asserted the way `grab-hang` asserts
+// the one.
+// ---------------------------------------------------------------------------
+function caseSpanGrab(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  // The player starts under the span's midpoint, so the fired hook has the
+  // whole sag right above it.
+  const scene = spanScene(500);
+  scene.player = { x: 200, y: -250, radius: 12 };
+  const rig = new Rig(scene);
+  rig.step(30);
+  const vine = rig.vine;
+  const mid = Math.floor(vine.links.length / 2);
+  const aim = vine.links[mid]!.globalPosition;
+  const index = grab(rig, aim);
+  if (index < 0) {
+    return ok("span-grab — a held span holds its arc to BOTH anchors, in millimetres", false, [
+      "BAD  the hook never caught the span at all",
+    ]);
+  }
+
+  const arcFrom2 = (i: number): number => {
+    let arc = vine.anchor2Contact!.globalPosition.distanceTo(
+      vine.links[vine.links.length - 1]!.globalPosition,
+    );
+    for (let k = vine.links.length - 1; k > i; k--) {
+      arc += vine.links[k]!.globalPosition.distanceTo(vine.links[k - 1]!.globalPosition);
+    }
+    return arc;
+  };
+
+  const arcAtGrab = rig.arcTo(index);
+  const arc2AtGrab = arcFrom2(index);
+  let missing = 0;
+  let worstOver = 0;
+  let worstOver2 = 0;
+  let worstArc = 0;
+  let worstArc2 = 0;
+  rig.step(400, { fire: true, aim }, () => {
+    const { lra, lra2 } = vine;
+    if (!lra || !lra2) {
+      missing++;
+      return;
+    }
+    worstOver = Math.max(worstOver, lra.rope.getCurrentLength() - lra.rope.maxRopeLength);
+    worstOver2 = Math.max(worstOver2, lra2.rope.getCurrentLength() - lra2.rope.maxRopeLength);
+    worstArc = Math.max(worstArc, rig.arcTo(index));
+    worstArc2 = Math.max(worstArc2, arcFrom2(index));
+  });
+
+  const hanging = rig.heldIndex() === index;
+  const claims: Array<[string, boolean]> = [
+    [`grabbed link ${index} of ${vine.links.length}, and still holds it`, index === mid && hanging],
+    [`BOTH load ropes exist on every held frame (${missing} missing)`, missing === 0],
+    [
+      `first load rope worst over its length ${(worstOver * 1000).toFixed(3)} mm <= 1 mm`,
+      worstOver <= 0.001,
+    ],
+    [
+      `second load rope worst over its length ${(worstOver2 * 1000).toFixed(3)} mm <= 1 mm`,
+      worstOver2 <= 0.001,
+    ],
+    [
+      `anchor-to-grab arc excess ${((worstArc - arcAtGrab) * 1000).toFixed(2)} mm, ` +
+        `bound ${((index + 1) * CHAIN_TOLERANCE * 1000).toFixed(0)} mm`,
+      worstArc - arcAtGrab <= (index + 1) * CHAIN_TOLERANCE,
+    ],
+    [
+      `far-anchor-to-grab arc excess ${((worstArc2 - arc2AtGrab) * 1000).toFixed(2)} mm, ` +
+        `bound ${((vine.links.length - index + 1) * CHAIN_TOLERANCE * 1000).toFixed(0)} mm`,
+      worstArc2 - arc2AtGrab <= (vine.links.length - index + 1) * CHAIN_TOLERANCE,
+    ],
+  ];
+  for (const [claim, got] of claims) {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  }
+  // Release: both go together, exactly as the one does.
+  rig.step(40);
+  const cleared = vine.lra === null && vine.lra2 === null;
+  if (!cleared) passed = false;
+  details.push(`${cleared ? "ok  " : "BAD "} releasing leaves neither load rope behind`);
+
+  return ok("span-grab — a held span holds its arc to BOTH anchors, in millimetres", passed, details);
+}
+
 export function runVineCases(): VineResult[] {
   return [
     caseFormat(),
@@ -1487,6 +1865,9 @@ export function runVineCases(): VineResult[] {
     caseLinkContacts(),
     caseRest(),
     caseDrape(),
+    caseSpan(),
+    caseSpanStiffness(),
+    caseSpanGrab(),
     casePassThrough(),
     caseGrabHang(),
     caseWinch(),

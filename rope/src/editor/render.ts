@@ -13,7 +13,7 @@ import {
   arrowEnds,
   CAMERA_REGION_COLOR,
   chainEnds,
-  vineRest,
+  vineRestPath,
   ED_LAYERS,
   bodyBounds,
   bodyCentroid,
@@ -370,18 +370,22 @@ export function computeChainHandles(
 }
 
 // Screen positions of a vine's two draggable handles: the anchor it hangs from,
-// which is WHERE the vine is, and the free end of its rest pose, which is how
-// long it is. Both, and not the tip alone, for the reason a chain has one at
-// each end: the anchor is an object with no canvas presence of its own, so the
-// handle its cord draws at it is the only thing there is to take hold of.
+// which is WHERE the vine is, and the other end - the free end of a hanging
+// vine's rest pose, which is how long it is, or the second anchor of a span.
+// Both, and not the tip alone, for the reason a chain has one at each end: the
+// anchor is an object with no canvas presence of its own, so the handle its
+// cord draws at it is the only thing there is to take hold of.
 export function computeVineHandles(
   cam: Camera,
   model: EdModel,
   vine: EdVine,
 ): { top: Vec2; tip: Vec2 } | null {
-  const ends = vineRest(model, vine);
-  if (!ends) return null;
-  return { top: worldToScreen(cam, ends.top), tip: worldToScreen(cam, ends.tip) };
+  const path = vineRestPath(model, vine);
+  if (!path) return null;
+  return {
+    top: worldToScreen(cam, path[0]!),
+    tip: worldToScreen(cam, path[path.length - 1]!),
+  };
 }
 
 // The rotate knob for a whole compound body: above the group's bounding box, on
@@ -1260,11 +1264,16 @@ export function drawEditor(
   // whether it is currently over a body it could land on - so the gesture says
   // in advance whether releasing will make a chain or drop it.
   chainDraft: { from: Vec2; to: Vec2; valid: boolean } | null = null,
-  // Vines carry their own selection too, and their own draft: a vine is pulled
-  // out DOWNWARD from the body it is anchored to rather than across to a second
-  // one, so the draft is an anchor and a length rather than two points.
+  // Vines carry their own selection too, and their own draft. "hang" is a vine
+  // being pulled out DOWNWARD from the body it is anchored to - an anchor and a
+  // length rather than two points; "attach" is a tip being Shift-dragged toward
+  // a second anchor, which reads like a chain draft: where it started, where
+  // the pointer is, and whether releasing there would attach.
   selectedVineIds: ReadonlySet<number> = new Set<number>(),
-  vineDraft: { from: Vec2; length: number; valid: boolean } | null = null,
+  vineDraft:
+    | { kind: "hang"; from: Vec2; length: number; valid: boolean }
+    | { kind: "attach"; from: Vec2; to: Vec2; valid: boolean }
+    | null = null,
   // How much of the scene this canvas is responsible for drawing.
   //
   // "fill" is the editor as it has always been: every item filled and stroked,
@@ -1604,42 +1613,57 @@ export function drawEditor(
   // the same cord painted flat over the top of it. What the overlay keeps in
   // both is the anchor mark and the selection, which are editor chrome.
   if (visibleLayers.has("scene")) {
+    const tracePath = (path: readonly Vec2[]): void => {
+      ctx.beginPath();
+      ctx.moveTo(path[0]!.x, path[0]!.y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i]!.x, path[i]!.y);
+      ctx.stroke();
+    };
     for (const v of model.vines) {
-      const ends = vineRest(model, v);
-      if (!ends) continue;
+      // Straight down for a hanging vine, the resting catenary for a span (see
+      // `vineRestPath`).
+      const path = vineRestPath(model, v);
+      if (!path) continue;
       if (selectedVineIds.has(v.id)) {
         ctx.strokeStyle = SELECT;
         ctx.lineWidth = worldLine * 6;
-        ctx.beginPath();
-        ctx.moveTo(ends.top.x, ends.top.y);
-        ctx.lineTo(ends.tip.x, ends.tip.y);
-        ctx.stroke();
+        tracePath(path);
       }
       const color = v.color ?? VINE_DEFAULT_COLOR;
       if (layers === "fill") {
         ctx.strokeStyle = color;
         ctx.lineWidth = worldLine * 3;
-        ctx.beginPath();
-        ctx.moveTo(ends.top.x, ends.top.y);
-        ctx.lineTo(ends.tip.x, ends.tip.y);
-        ctx.stroke();
+        tracePath(path);
       }
+      // An anchor mark at each bolted end: one for a hanging vine, both for a
+      // span.
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(ends.top.x, ends.top.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
+      ctx.arc(path[0]!.x, path[0]!.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
       ctx.fill();
+      if (v.anchor2 !== null) {
+        const end = path[path.length - 1]!;
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
-  // The vine being pulled out, if any. Dashed until it has a length worth
-  // building, so the gesture says in advance whether releasing makes a vine.
+  // The vine being pulled out - or the tip being carried toward a second
+  // anchor. Dashed until releasing would build (or attach) something, so the
+  // gesture says in advance what letting go will do.
   if (vineDraft) {
     ctx.strokeStyle = vineDraft.valid ? VINE_DEFAULT_COLOR : SELECT;
     ctx.lineWidth = worldLine * 3;
     if (!vineDraft.valid) ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.beginPath();
     ctx.moveTo(vineDraft.from.x, vineDraft.from.y);
-    ctx.lineTo(vineDraft.from.x, vineDraft.from.y + vineDraft.length);
+    if (vineDraft.kind === "hang") {
+      ctx.lineTo(vineDraft.from.x, vineDraft.from.y + vineDraft.length);
+    } else {
+      ctx.lineTo(vineDraft.to.x, vineDraft.to.y);
+    }
     ctx.stroke();
     ctx.setLineDash([]);
   }

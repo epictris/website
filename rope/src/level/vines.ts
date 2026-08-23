@@ -63,6 +63,7 @@ import {
 } from "./chains";
 import { VinePair } from "./vinePair";
 import { buildVineBends, type VineBend } from "./vineBend";
+import { catenaryPoints } from "./catenary";
 import { RIGID_KINETIC_FRICTION, worldPlacement, type BuiltBodies } from "./buildBodies";
 import type { LevelData, VineData } from "./levelFormat";
 
@@ -236,9 +237,14 @@ export function stepVines(vines: readonly Vine[]): void {
     // ...and so is one whose anchor has moved. A vine hangs FROM something, and
     // that something may be a rigid body that swings or a spring one that sags;
     // a sleeping vine would stay behind in mid-air. A static never moves, so
-    // this costs the common case one comparison.
+    // this costs the common case one comparison. A spanning vine asks the same
+    // question of BOTH its anchors, either end's body being as free to move.
     const anchor = vine.anchorContact.globalPosition;
-    const anchorMoved = anchor.x !== vine.anchorAt.x || anchor.y !== vine.anchorAt.y;
+    let anchorMoved = anchor.x !== vine.anchorAt.x || anchor.y !== vine.anchorAt.y;
+    if (!anchorMoved && vine.anchor2Contact) {
+      const anchor2 = vine.anchor2Contact.globalPosition;
+      anchorMoved = anchor2.x !== vine.anchor2At.x || anchor2.y !== vine.anchor2At.y;
+    }
     if (anchorMoved) {
       wakeVine(vine);
       if (vine.asleep) continue;
@@ -268,6 +274,7 @@ export function stepVines(vines: readonly Vine[]): void {
     // motion it was put to sleep for not having.
     vine.asleep = true;
     vine.anchorAt = anchor;
+    if (vine.anchor2Contact) vine.anchor2At = vine.anchor2Contact.globalPosition;
     for (const link of vine.links) {
       link.linearVelocity = Vec2.ZERO;
       link.angularVelocity = 0;
@@ -277,7 +284,8 @@ export function stepVines(vines: readonly Vine[]): void {
 }
 
 // The chain set to sweep this frame: the level's authored chains, every AWAKE
-// vine's pair chains, and the one load rope if a vine is being held.
+// vine's pair chains, and the held vine's load ropes - one for a hanging vine,
+// two for a spanning one (see `updateVineLoads`).
 //
 // Rebuilt into the caller's own array rather than returned fresh, because it is
 // per frame and a sleeping level must cost nothing at all - and handed back as
@@ -286,10 +294,10 @@ export function stepVines(vines: readonly Vine[]): void {
 export function vineChainSet(
   authored: SceneChain[],
   vines: readonly Vine[],
-  load: SceneChain | null,
+  held: Vine | null,
   into: SceneConstraint[],
 ): readonly SceneConstraint[] {
-  let extra = load ? 1 : 0;
+  let extra = held?.lra ? (held.lra2 ? 2 : 1) : 0;
   for (const vine of vines) if (!vine.asleep) extra += vine.chains.length + vine.bends.length;
   if (extra === 0) return authored;
   into.length = 0;
@@ -299,10 +307,11 @@ export function vineChainSet(
     for (const chain of vine.chains) into.push(chain);
     // After that vine's own pair chains, so a sweep in file order reaches a
     // joint with the spacing either side of it already solved - and before the
-    // load rope, which is the one thing in the set that has the last word.
+    // load ropes, which are the one thing in the set that has the last word.
     for (const bend of vine.bends) into.push(bend);
   }
-  if (load) into.push(load);
+  if (held?.lra) into.push(held.lra);
+  if (held?.lra2) into.push(held.lra2);
   return into;
 }
 
@@ -314,6 +323,7 @@ function restartWindow(vine: Vine): void {
 function wakeVine(vine: Vine): void {
   restartWindow(vine);
   vine.anchorAt = vine.anchorContact.globalPosition;
+  if (vine.anchor2Contact) vine.anchor2At = vine.anchor2Contact.globalPosition;
   if (!vine.asleep) return;
   vine.asleep = false;
   for (const link of vine.links) link.asleep = false;
@@ -323,6 +333,11 @@ export interface Vine extends VineCord {
   // Where the vine is bolted, on the anchor body's own surface. Both the first
   // pair chain and the load rope start here.
   readonly anchorContact: RopeContact;
+  // The second bolt, for a vine spanning between two anchors - null for the
+  // ordinary hanging vine, which is what every vine was before spans existed.
+  // The last chain ends here, and a grab gets a SECOND load rope from it (see
+  // `updateVineLoads`), because a span's tension runs to both ends.
+  readonly anchor2Contact: RopeContact | null;
   // Top to bottom. Index `i` hangs `spacing * (i + 1)` of vine below the anchor,
   // which is what makes the load rope's rest length a multiply rather than a
   // walk.
@@ -354,6 +369,11 @@ export interface Vine extends VineCord {
   // `Rope` carries state a rebuild would throw away every frame: its wrap path
   // and its blocked-length lease.
   lra: SceneChain | null;
+  // The second load rope of a held SPANNING vine, from `anchor2Contact` to the
+  // same grabbed link - null for a hanging vine, whose arc below the grab
+  // carries nothing but itself. Without it the player's weight on a span is
+  // held by one end alone and the whole run to the other anchor pays out.
+  lra2: SceneChain | null;
   lraLink: VineLink | null;
   // Settled, and costing nothing: out of the chain sweep entirely, and skipped
   // by `World.integrate` and the contact gather (see `VineLink.asleep`). Two 3 m
@@ -365,8 +385,10 @@ export interface Vine extends VineCord {
   // of them has left that mark by more than `SLEEP_DRIFT`.
   sleepMark: Vec2[];
   // Where the anchor was when the vine last looked, so a vine hanging from
-  // something that moves comes with it.
+  // something that moves comes with it. `anchor2At` is the same mark for the
+  // second anchor, and simply never read on a hanging vine.
   anchorAt: Vec2;
+  anchor2At: Vec2;
 }
 
 // Build every vine in `data` (metres) against the bodies `buildLevelBodies`
@@ -450,13 +472,39 @@ function buildOne(
   const anchorPoint = snapToSurface(obj, worldPlacement(site.built.data, site.anchor).pos);
   const anchorContact = RopeContact.at(obj, anchorPoint);
 
+  // The optional second anchor, making the vine a span. Missing - not in the
+  // level, on a body that built nothing, or the same anchor as the first - it
+  // falls back to HANGING rather than dropping the vine: one anchor is still a
+  // complete vine, unlike a chain end (see `VineData.anchor2`).
+  const site2 = v.anchor2 !== undefined && v.anchor2 !== v.anchor ? anchors.get(v.anchor2) : undefined;
+  const obj2 = site2?.built.body ?? null;
+  const anchor2Point =
+    site2 && obj2 ? snapToSurface(obj2, worldPlacement(site2.built.data, site2.anchor).pos) : null;
+  const anchor2Contact = obj2 && anchor2Point ? RopeContact.at(obj2, anchor2Point) : null;
+
+  // A span authored SHORTER than the gap between its anchors is built taut, at
+  // the separation itself. Built at the authored figure its chains are
+  // unsatisfiable - their total reach is less than the distance they have to
+  // cover - and an unsatisfiable set never converges: every sweep argues with
+  // gravity over links that cannot be where every constraint wants them, the
+  // vine jitters at ~0.7 m/s for ever, and it can never sleep. Taut is what a
+  // too-short cord bolted at both ends IS, and the honest number for it is the
+  // gap.
+  const length = anchor2Point ? Math.max(v.length, anchorPoint.distanceTo(anchor2Point)) : v.length;
+
   // The authored spacing is a TARGET and the authored length is exact: fit a
   // whole number of links to the length and divide it back out. Authoring it the
   // other way round makes a 1 m vine at 0.3 m spacing either 0.9 m or 1.2 m long,
   // and which one it is is a rounding rule nobody should have to know.
+  //
+  // The count is of SEGMENTS between constraint points: a hanging vine of N
+  // links is N segments (anchor to the first link, then the pairs), and a
+  // spanning one is N + 1, the extra being the last link to the second anchor -
+  // so a span of the minimum two segments still has a link to grab.
   const target = v.spacing ?? DEFAULT_VINE_SPACING;
-  const count = Math.max(1, Math.ceil(v.length / target));
-  const spacing = v.length / count;
+  const segments = Math.max(anchor2Contact ? 2 : 1, Math.ceil(length / target));
+  const spacing = length / segments;
+  const count = anchor2Contact ? segments - 1 : segments;
   const radius = spacing * LINK_GRAB_RADIUS;
   // Kilograms per metre, so a link weighs that times the spacing it was built
   // at: the same authored vine weighs the same whatever spacing it is made from
@@ -465,14 +513,25 @@ function buildOne(
   // Clamped rather than trusted: a hand-edited file may say anything, and a
   // negative compliance is a solver that pushes the vine further from straight
   // the harder it is bent.
-  const stiffness = Math.min(
-    1,
-    Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS),
-  );
+  const stiffness = Math.min(1, Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS));
 
-  // The vine hangs straight down at rest, and lies on the first thing it meets
-  // rather than through it (see `dropDistance`).
-  const reach = dropDistance(anchorPoint, v.length, spacing, radius, obj as PhysicsBody2D, statics);
+  // Where the links spawn. A hanging vine goes straight down and lies on the
+  // first thing it meets rather than through it (see `dropDistance`); a
+  // spanning one spawns ON its resting catenary, which is the pose the solver
+  // would settle it into over empty ground - so a span at rest is at rest on
+  // frame one, with nothing for the first frames to correct. A span authored
+  // through geometry settles by the ordinary contact solve, its total length
+  // being held from both ends.
+  let spawnAt: (i: number) => Vec2;
+  if (anchor2Point) {
+    const arcs: number[] = [];
+    for (let i = 0; i < count; i++) arcs.push(spacing * (i + 1));
+    const rest = catenaryPoints(anchorPoint, anchor2Point, length, arcs);
+    spawnAt = (i) => rest[i]!;
+  } else {
+    const reach = dropDistance(anchorPoint, length, spacing, radius, obj as PhysicsBody2D, statics);
+    spawnAt = (i) => anchorPoint.add(new Vec2(0, Math.min(spacing * (i + 1), reach)));
+  }
 
   const links: VineLink[] = [];
   for (let i = 0; i < count; i++) {
@@ -485,11 +544,11 @@ function buildOne(
     // against the surface it rests on, which for a vine pooling on a floor is a
     // vine welded to the spot it first touched rather than one that settles.
     link.contactFriction = RIGID_KINETIC_FRICTION;
-    // Straight down from the anchor, at rest. A spawn pose that intersects
-    // geometry needs no special handling - the first frames' contact solve and
-    // the chain phase's own depenetration settle it, which is the answer the
-    // game already gives any authored overlap.
-    link.globalPosition = anchorPoint.add(new Vec2(0, Math.min(spacing * (i + 1), reach)));
+    // At rest (see `spawnAt`). A spawn pose that intersects geometry needs no
+    // special handling - the first frames' contact solve and the chain phase's
+    // own depenetration settle it, which is the answer the game already gives
+    // any authored overlap.
+    link.globalPosition = spawnAt(i);
     world.add(link);
     links.push(link);
   }
@@ -510,37 +569,52 @@ function buildOne(
       ),
     );
   }
+  // ...and, spanning, the last link to the second anchor. A `SceneChain` like
+  // the first for the same reason the first is one: an end snapped to a body's
+  // surface is not the degenerate centre-to-centre joint a `VinePair` is the
+  // cheap answer to (see `level/vinePair.ts`).
+  if (anchor2Contact) {
+    chains.push(
+      new SceneChain(anchor2Contact, new RopeContact(links[links.length - 1]!, Vec2.ZERO), spacing, color),
+    );
+  }
 
-  // The vine's rest direction: straight down, that being the only pose a vine
-  // has - it has no authored direction, and its links are spawned down the same
-  // axis. It is what the stiffness CLAMPS the vine to, and it is handed over as
-  // a world vector for `buildVineBends` to put in the anchor body's own frame
-  // (see there).
+  // The vine's rest direction: straight down, that being the only pose a
+  // hanging vine has - it has no authored direction, and its links are spawned
+  // down the same axis. It is what the stiffness CLAMPS a hanging vine to,
+  // handed over as a world vector for `buildVineBends` to put in the anchor
+  // body's own frame. A span builds no clamp - its ends are pinned - so this is
+  // unused there (see `buildVineBends`).
   const restDir = new Vec2(0, 1);
 
   return {
     anchorContact,
+    anchor2Contact,
     links,
     chains,
-    bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing),
+    bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing, anchor2Contact),
     stiffness,
     spacing,
     color,
     lra: null,
+    lra2: null,
     lraLink: null,
     asleep: false,
     stillFrames: 0,
     sleepMark: links.map((l) => l.globalPosition),
     anchorAt: anchorPoint,
-    // The anchor and then every link centre, against the RENDER transforms: a
-    // link is a body, so this is where the vine actually is rather than a curve
-    // fitted to it. `renderPosition` and not `globalPosition` for the reason the
-    // rope's nodes are taken that way - the drawn vine has to stay welded to the
-    // drawn bodies between the 60 Hz steps.
+    anchor2At: anchor2Point ?? anchorPoint,
+    // The anchor, every link centre, and the second anchor if there is one,
+    // against the RENDER transforms: a link is a body, so this is where the
+    // vine actually is rather than a curve fitted to it. `renderPosition` and
+    // not `globalPosition` for the reason the rope's nodes are taken that way -
+    // the drawn vine has to stay welded to the drawn bodies between the 60 Hz
+    // steps.
     path(alpha: number, out: Vec2[]): void {
       out.length = 0;
       out.push(anchorContact.renderGlobalPosition(alpha));
       for (const link of links) out.push(link.renderPosition(alpha));
+      if (anchor2Contact) out.push(anchor2Contact.renderGlobalPosition(alpha));
     },
   };
 }
@@ -603,17 +677,38 @@ function arcTo(vine: Vine, index: number): number {
   return arc;
 }
 
+// ...and the same walk from the OTHER end, for a spanning vine's second load
+// rope: the summed distances from the second anchor down to link `index`.
+function arcFrom2(vine: Vine, index: number): number {
+  let arc = 0;
+  let prev = vine.anchor2Contact!.globalPosition;
+  for (let i = vine.links.length - 1; i >= index; i--) {
+    const p = vine.links[i]!.globalPosition;
+    arc += p.distanceTo(prev);
+    prev = p;
+  }
+  return arc;
+}
+
+// Returns the one vine being held this frame (there is one player rope, so
+// there is at most one), for the caller to sweep that vine's load ropes
+// alongside the scene chains - ONE for a hanging vine, and for a spanning one
+// TWO, because a span's tension runs to both anchors: held by one end alone,
+// the whole run to the other anchor is just pair chains carrying a player, and
+// it pays out exactly the way an unheld hanging arc is meant to and a span is
+// not.
 export function updateVineLoads(
   vines: readonly Vine[],
   rope: Rope | null,
   wrapBodies: PhysicsBody2D[],
-): SceneChain | null {
+): Vine | null {
   const held = rope ? rope.end.contact.obj : null;
-  let active: SceneChain | null = null;
+  let active: Vine | null = null;
   for (const vine of vines) {
     const index = held instanceof VineLink ? vine.links.indexOf(held) : -1;
     if (index < 0) {
       vine.lra = null;
+      vine.lra2 = null;
       vine.lraLink = null;
       continue;
     }
@@ -626,9 +721,18 @@ export function updateVineLoads(
         vine.color,
         wrapBodies,
       );
+      vine.lra2 = vine.anchor2Contact
+        ? new SceneChain(
+            vine.anchor2Contact,
+            new RopeContact(link, Vec2.ZERO),
+            arcFrom2(vine, index),
+            vine.color,
+            wrapBodies,
+          )
+        : null;
       vine.lraLink = link;
     }
-    active = vine.lra;
+    active = vine;
   }
   return active;
 }

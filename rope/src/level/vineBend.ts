@@ -297,16 +297,31 @@ export class VineBend implements SceneConstraint {
 // was hung, which is what "clamped" means. The rest direction it encodes is the
 // one the vine was BUILT at, which is straight down: a vine has no authored
 // direction, so straight down is the only rest pose there is (see `buildOne`).
+//
+// A SPANNING vine (`anchor2` set) gets no ghost clamp at either end: a vine
+// lashed at both ends is PINNED there, not cantilevered, so its ends are
+// hinges and the stiffness lives entirely in the joints. What it gets instead
+// is the mirror of the anchor-side triples at the second anchor, so the far
+// end is exactly as smooth as the near one. The triples cannot all be
+// satisfied - a span with slack can never be straight - and they do not have
+// to be: XPBD bends are springs, and the equilibrium is the force balance
+// between them and the inextensible chains, which is the elastica a stiff rod
+// with excess length bows into between two pins. `stiffness` on a span
+// therefore reads as how hard the drape is pressed toward that bow: 0 the
+// catenary, 1 a flattened arc that resists kinking where it is grabbed.
 export function buildVineBends(
   anchor: RopeContact,
   // The vine's rest direction as it was built, a world unit vector - straight
   // down, that being the only pose a vine has (see `buildOne`). Turned into the
   // anchor body's own frame here, so a stiff vine on a platform that tips over
-  // goes with it and keeps pointing the way it was hung.
+  // goes with it and keeps pointing the way it was hung. Unused for a span,
+  // which builds no clamp.
   restDir: Vec2,
   links: readonly VineLink[],
   stiffness: number,
   spacing: number,
+  // The second anchor of a spanning vine; null for the hanging one.
+  anchor2: RopeContact | null = null,
 ): VineBend[] {
   if (!(stiffness > 0) || links.length === 0) return [];
   const at = (i: number): BendEnd => new BendEnd(links[i]!, null);
@@ -319,20 +334,35 @@ export function buildVineBends(
       anchor.globalPosition.sub(restDir.mul(spacing * k)),
     );
 
+  const n = links.length;
   const bends: VineBend[] = [];
-  for (let k = 1; k <= links.length; k *= 2) {
+  for (let k = 1; k <= n; k *= 2) {
     const compliance = bendCompliance(stiffness, spacing * k);
     // The clamp at this scale: ghost - anchor - the link k spacings down.
-    if (k - 1 < links.length) {
+    // Hanging vines only; a span's ends are pinned (see above).
+    if (!anchor2 && k - 1 < n) {
       bends.push(new VineBend(fixed(ghost(k)), fixed(anchor), at(k - 1), compliance));
     }
     // The joint AT that link, whose upper neighbour is the anchor itself.
-    if (2 * k - 1 < links.length) {
+    if (2 * k - 1 < n) {
       bends.push(new VineBend(fixed(anchor), at(k - 1), at(2 * k - 1), compliance));
     }
     // ...and every joint below it that has a neighbour k links either side.
-    for (let i = k; i + k < links.length; i++) {
+    for (let i = k; i + k < n; i++) {
       bends.push(new VineBend(at(i - k), at(i), at(i + k), compliance));
+    }
+    // A span's far end, mirrored: the joint whose outer neighbour is the
+    // second anchor itself. In the vine's positions - anchor at 0, link i at
+    // i + 1, the second anchor at n + 1 - this is the triple centred at
+    // n + 1 - k, and its other neighbour is a link, the first anchor, or (for
+    // a scale too coarse to fit) nothing.
+    if (anchor2) {
+      const upper = n + 1 - 2 * k;
+      if (upper > 0) {
+        bends.push(new VineBend(at(upper - 1), at(n - k), fixed(anchor2), compliance));
+      } else if (upper === 0) {
+        bends.push(new VineBend(fixed(anchor), at(n - k), fixed(anchor2), compliance));
+      }
     }
   }
   return bends;

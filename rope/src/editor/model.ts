@@ -32,6 +32,7 @@ import {
   type PathNode,
 } from "../render/cameraPath";
 import { DECOR_Z } from "../level/decor";
+import { catenaryPolyline } from "../level/catenary";
 import { DEFAULT_SPRING_DAMPING, worldPlacement } from "../level/buildBodies";
 import {
   DEFAULT_MATERIAL,
@@ -470,7 +471,14 @@ export interface EdVine {
   id: number;
   // The item id of the anchor it hangs from.
   anchor: number;
-  // Metres of vine below the anchor. Always positive - a vine of no length is
+  // The item id of an optional SECOND anchor, making the vine a span attached
+  // at both ends (see `VineData.anchor2`). Null = the ordinary hanging vine.
+  // Authored by dragging the tip handle onto a body with Shift held, and
+  // detached the same way over empty space.
+  anchor2: number | null;
+  // Metres of vine below the anchor - or along the whole span, for a vine with
+  // a second anchor: length and anchor separation are deliberately decoupled,
+  // which is what lets a span sag. Always positive - a vine of no length is
   // refused at the gesture, the way a chain tied to one body is.
   length: number;
   // Metres between links; null = the builder's default.
@@ -1206,9 +1214,13 @@ function lightItem(
   for (const v of data.vines ?? []) {
     const a = itemOfAnchor.get(v.anchor);
     if (!a) continue;
+    // A dead second anchor falls back to hanging rather than dropping the vine
+    // - one anchor is still a complete vine (see `VineData.anchor2`).
+    const a2 = v.anchor2 !== undefined ? itemOfAnchor.get(v.anchor2) : undefined;
     vines.push({
       id: newBodyId(),
       anchor: a.id,
+      anchor2: a2 && a2 !== a ? a2.id : null,
       length: v.length,
       spacing: v.spacing ?? null,
       density: v.density ?? null,
@@ -1560,8 +1572,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // no length has nothing to be - both are dropped rather than written for the
     // loader to drop again.
     if (a?.object !== "anchor" || !(v.length > 0)) continue;
+    // A span whose second anchor has been deleted is written back as the
+    // hanging vine it has already become on screen.
+    const a2 = v.anchor2 !== null ? model.items.find((i) => i.id === v.anchor2) : undefined;
     vines.push({
       anchor: a.anchorId,
+      ...(a2?.object === "anchor" ? { anchor2: a2.anchorId } : {}),
       length: v.length,
       ...(v.spacing !== null ? { spacing: v.spacing } : {}),
       ...(v.density !== null ? { density: v.density } : {}),
@@ -2473,27 +2489,47 @@ export function vineAnchorWorld(model: EdModel, v: EdVine): Vec2 | null {
   return anchorItem(model, v.anchor)?.pos ?? null;
 }
 
-// The two ends of the vine as the EDITOR draws it: straight down from the anchor
-// by its authored length.
+// Where a spanning vine's second anchor sits, or null if the vine has none (or
+// the anchor item has gone, which is the same thing on screen).
+export function vineAnchor2World(model: EdModel, v: EdVine): Vec2 | null {
+  return v.anchor2 !== null ? (anchorItem(model, v.anchor2)?.pos ?? null) : null;
+}
+
+// Segments the editor samples a span's catenary at. A drawing resolution and
+// nothing more - the builder fits its own links to the length.
+const VINE_REST_SEGMENTS = 24;
+
+// The vine's rest pose as the EDITOR draws it: straight down from the anchor by
+// its authored length, or - with a second anchor - the catenary that length
+// rests in between the two.
 //
 // That is the rest pose and nothing more. Where a vine actually hangs is a
 // runtime answer - it drapes over whatever is under it, and the player drags it
 // about - and drawing a guess at that would be a drawing of something the level
 // does not contain, which is the same rule the editor draws a chain straight by.
-export function vineRest(model: EdModel, v: EdVine): { top: Vec2; tip: Vec2 } | null {
+// The catenary is not a guess: it is where a span authored over empty ground
+// rests, and it is the pose `buildVines` spawns the links in.
+export function vineRestPath(model: EdModel, v: EdVine): Vec2[] | null {
   const top = vineAnchorWorld(model, v);
-  return top ? { top, tip: top.add(new Vec2(0, v.length)) } : null;
+  if (!top) return null;
+  const end = vineAnchor2World(model, v);
+  if (!end) return [top, top.add(new Vec2(0, v.length))];
+  return catenaryPolyline(top, end, v.length, VINE_REST_SEGMENTS);
 }
 
 // Distance from a world point to that rest pose, for picking.
 export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
-  const ends = vineRest(model, v);
-  if (!ends) return Infinity;
-  const d = ends.tip.sub(ends.top);
-  const len2 = d.lengthSquared();
-  if (len2 < 1e-12) return world.distanceTo(ends.top);
-  const t = Math.min(1, Math.max(0, world.sub(ends.top).dot(d) / len2));
-  return world.distanceTo(ends.top.add(d.mul(t)));
+  const path = vineRestPath(model, v);
+  if (!path) return Infinity;
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!;
+    const d = path[i]!.sub(a);
+    const len2 = d.lengthSquared();
+    const t = len2 < 1e-12 ? 0 : Math.min(1, Math.max(0, world.sub(a).dot(d) / len2));
+    best = Math.min(best, world.distanceTo(a.add(d.mul(t))));
+  }
+  return best;
 }
 
 // A blank level: a single wide floor under a spawn point so it is immediately

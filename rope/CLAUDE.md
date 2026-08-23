@@ -2716,7 +2716,8 @@ The 2D renderer, the editor and the SVG snapshot draw it first, behind the solid
 
 ## Vines
 
-A **vine** hangs from one anchor, free at the bottom: the player passes straight
+A **vine** hangs from one anchor, free at the bottom - or **spans between two**
+(see **Spanning vines** below): the player passes straight
 through it, the hook grabs it **anywhere along its length**, and it drapes over
 whatever it lands on and pools on the floor under it.
 
@@ -3058,6 +3059,32 @@ A vine anchored on the **top** of a body has nowhere to hang at all, and every
 link piles at the anchor rather than threading down through the body it is bolted
 to - visibly the wrong way up, rather than quietly through the floor.
 
+### Spanning vines
+
+A vine may name a **second anchor** (`VineData.anchor2`) and become a span attached at both ends.
+The length stays the whole authored arc, deliberately decoupled from the distance between the anchors: a span longer than the gap **sags into the catenary** that length implies (`level/catenary.ts`), which is both where the editor draws it at rest and the pose `buildVines` spawns the links in.
+The spawn pose matters the way `dropDistance` matters for a hanging vine - the catenary is the solver's own fixed point over empty ground, so a span at rest is at rest on frame one, with nothing for the first frames to correct (`cli vines` `span` bounds the settle movement in millimetres).
+The catenary solve is closed-form once its parameter is bisected, sampled BY ARC LENGTH so the links land at their exact spacings; the taut and near-vertical regimes are their own branches (the chord, and the fold).
+
+A span authored **shorter than the gap is built taut at the separation itself**.
+The authored figure is a constraint set that cannot be satisfied - the chains' total reach is less than the distance they must cover - and an unsatisfiable set never converges: the vine jitters at ~0.7 m/s for ever and can never sleep.
+Taut still sags a little, and the amount is the sweep's own arithmetic: each chain rests up to `CHAIN_TOLERANCE` over its length, and that series of give hangs as `sqrt(3 * gap * give / 8)` - which is how the `span` case bounds it.
+
+A grabbed span gets **two load ropes**, one from each anchor to the grabbed link (`Vine.lra` and `Vine.lra2`), because a span's tension runs to both ends: held by one alone, the run to the other anchor is just pair chains carrying a player - `links * CHAIN_TOLERANCE` of give paid out exactly where the span is supposed to hold.
+Both are born at the measured arc to their own side (`arcTo` / `arcFrom2`), for the `rope-anchor-kick` reason the one always was, and both go into the coupled sweep together.
+`updateVineLoads` therefore returns the held VINE rather than a load rope, and `vineChainSet` pushes whichever load ropes it carries; `BallLevel.heldVine` is the same value under its ball-side name.
+
+**Stiffness on a span means pinned ends, and slack pressed toward straight.**
+A vine lashed at both ends is hinged there, not cantilevered, so a span builds NO ghost clamps - the anchor-side clamp encodes the straight-down rest pose a span is not in - and instead gets the anchor-side joint triples mirrored at the second anchor, so the far end is exactly as smooth as the near one (`buildVineBends`).
+The triples cannot all be satisfied (a span with slack can never be straight) and do not have to be: XPBD bends are springs, and the equilibrium is a force balance with the chains.
+Because the chains are rope INEQUALITIES - a compressed joint is satisfied - that balance absorbs the slack rather than bowing it: measured on 5 m over a 4 m gap, sag 1.38 m at 0 (the catenary), 1.35 at 0.25, 0.21 at 0.5, 0.09 at 1 - a taut wire - monotone, settling and sleeping at every setting (`cli vines` `span-stiffness`).
+
+Two deliberate exclusions.
+**A dead second anchor falls back to hanging** rather than dropping the vine - one anchor is still a complete vine, unlike a chain end - and so does a span naming its own anchor twice.
+And the spawn does no geometry scan: a span authored through scenery settles by the ordinary contact solve, its total length held from both ends, so the free-tip runaway `dropDistance` exists for has no purchase.
+
+Sleep watches **both** anchors, so a span whose far end rides a swinging body wakes exactly as a hanging vine on one does.
+
 ### The ball level
 
 `BallLevel` builds and steps vines too, and that is not symmetry for its own
@@ -3172,8 +3199,12 @@ the anchor lives. `+ Vine` in the editor is the chain tool's press followed by a
 drag DOWN that pulls the length out; the panel carries the length, the spacing
 (blank = the default), a live link count, the density, the stiffness (blank = 0,
 a rope, with what it reads as beside it) and the colour, and the vine is listed
-under `Vines (N)` beside the chains. `TEST_VINES` is the worked level - two vines
-over a chasm to swing across and one long enough to pool on the far ledge.
+under `Vines (N)` beside the chains.
+A **span** is authored from a hanging vine: **Shift-drag its end handle onto a body** to attach a second anchor there (the panel gains a live `slack` readout), drag that end handle to re-anchor it as a chain end is re-anchored, and **Shift-drop it over empty space** to detach back to a hanging vine of the same length.
+The editor draws a span at its resting catenary, on the canvas and in the 3D scene both, through the same `catenaryPolyline` the builder spawns from.
+`TEST_VINES` is the worked level - two vines
+over a chasm to swing across, one long enough to pool on the far ledge, and a
+span with a metre of slack between the second and third branches.
 
 ### What checks it
 
@@ -3192,6 +3223,7 @@ a static in the same place (`winch`, `ball-winch-hung-anchor`'s methodology);
 that the ball still turns to its aim while it hangs on one (`ball-steer`); and
 that exactly zero or one load rope exists on every frame of a
 fire/grab/release/regrab cycle.
+The span cases are `span` - the settled sag against the ANALYTIC catenary, the arc against the authored length, the taut clamp, the spawn-at-rest bound, and that a span sleeps - `span-stiffness` - the slider monotone from catenary to taut wire, settling and sleeping at every setting - and `span-grab`, which holds BOTH load ropes' arcs in millimetres through 400 held frames; `format` carries the `anchor2` round trips and the fallback-to-hanging tolerances.
 
 Two of them are worth reading for HOW they are written rather than what they
 assert. `ball-vine` measures the closest the ball ever gets to a link, because

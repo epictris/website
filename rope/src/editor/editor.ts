@@ -40,7 +40,8 @@ import {
   chainEnds,
   chainEndWorld,
   vineAnchorWorld,
-  vineRest,
+  vineAnchor2World,
+  vineRestPath,
   distanceToVine,
   MIN_VINE_LENGTH,
   cloneChain,
@@ -337,8 +338,18 @@ type Drag =
   // frame and the drag sets the LENGTH rather than reaching for a second body,
   // which is the whole of the difference between a vine and a chain.
   | { mode: "vineDraw"; from: EdItem; local: Vec2; length: number }
-  // Dragging a placed vine's free end, which is the same edit by hand.
-  | { mode: "vineLength"; vine: EdVine }
+  // Dragging a placed vine's free end, which is the same edit by hand - or,
+  // with SHIFT held over a body, carrying that end toward a second anchor:
+  // releasing there attaches the vine at both ends and makes it a span.
+  // `startLength` is the length the drag began at, restored while the attach
+  // gesture is live (the vertical length tracking means nothing sideways) and
+  // kept as the span's slack when it lands.
+  | { mode: "vineLength"; vine: EdVine; startLength: number; cursor: Vec2; attach: EdItem | null }
+  // Dragging a SPAN's second-anchor end: the same act as re-anchoring a chain
+  // end - the anchor object moves, and over nothing it stays on the body it
+  // has. Releasing with SHIFT over empty space DETACHES it instead, back to a
+  // hanging vine of the same length.
+  | { mode: "vineEnd"; vine: EdVine; cursor: Vec2; detach: boolean }
   // Moving a placed vine: its anchor follows the pointer and lands on whatever
   // body it is dropped on, so sliding a vine along the branch it hangs from and
   // moving it to a different branch are one gesture. The same drag a chain end
@@ -1225,15 +1236,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     sceneLevel = {
       world,
       // Vines DO reach the 3D scene, where chains do not, and the difference is
-      // that a vine's rest pose is exact rather than guessed: it hangs straight
-      // down from its anchor by its authored length until something moves it,
-      // and that is a fact about the level rather than a simulation of one. It
+      // that a vine's rest pose is exact rather than guessed: straight down
+      // from its anchor by its authored length, or the resting catenary of a
+      // span, until something moves it - a fact about the level rather than a
+      // simulation of one (see `vineRestPath`). It
       // has to be drawn there, too - the overlay is dropped in the 3D-only and
       // orbited views, and a vine is the level rather than chrome.
       vines: model.vines.flatMap((v) => {
-        const ends = vineRest(model, v);
-        if (!ends) return [];
-        const points = [ends.top, ends.tip];
+        const points = vineRestPath(model, v);
+        if (!points) return [];
         return [{ color: v.color, path: (_alpha: number, out: Vec2[]) => {
           out.length = 0;
           out.push(...points);
@@ -1486,7 +1497,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.vine.title =
-    "Press on a body and drag DOWN to hang a vine from it. The player passes through a vine and the hook grabs it anywhere along its length.";
+    "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
@@ -3599,7 +3610,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend: 0 is a rope, 1 a pole that holds itself straight and springs back to hanging.";
+      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire.";
     g.appendChild(hint);
 
     numField(
@@ -3640,11 +3651,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
 
     // How many links that works out to, which is the number the cost is in.
+    // The same fit `buildVines` makes: segments between constraint points, of
+    // which a span spends one on its second anchor.
     const links = (): string => {
       const v = vines[0]!;
       if (vines.length > 1) return "-";
       const spacing = v.spacing ?? DEFAULT_VINE_SPACING;
-      return `${Math.max(1, Math.ceil(v.length / spacing))}`;
+      const segments = Math.max(v.anchor2 !== null ? 2 : 1, Math.ceil(v.length / spacing));
+      return `${v.anchor2 !== null ? segments - 1 : segments}`;
     };
     const lrow = el("label", "ed-field");
     lrow.textContent = "links";
@@ -3653,6 +3667,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lrow.appendChild(lval);
     g.appendChild(lrow);
     readouts.push({ el: lval, get: links });
+
+    // A span's slack: how much longer the vine is than the straight gap between
+    // its anchors, which is what its sag is made of. "taut" at or under zero.
+    const slack = (): string => {
+      const v = vines[0]!;
+      if (vines.length > 1 || v.anchor2 === null) return "-";
+      const a = vineAnchorWorld(model, v);
+      const b = vineAnchor2World(model, v);
+      if (!a || !b) return "-";
+      const s = v.length - a.distanceTo(b);
+      return s > 0 ? `${(s * M2PX).toFixed(0)}` : "taut";
+    };
+    if (vines.length === 1 && vines[0]!.anchor2 !== null) {
+      const srow = el("label", "ed-field");
+      srow.textContent = "slack";
+      const sval = document.createElement("span");
+      sval.textContent = slack();
+      srow.appendChild(sval);
+      g.appendChild(srow);
+      readouts.push({ el: sval, get: slack });
+    }
 
     // Weight, in kilograms per metre of cord rather than per vine, so it stays
     // put when the end handle is dragged. Blank is the builder's default, the
@@ -4833,6 +4868,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const vine: EdVine = {
       id: newBodyId(),
       anchor: a.id,
+      anchor2: null,
       length,
       spacing: null,
       density: null,
@@ -4844,12 +4880,49 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     markDirty();
   }
 
+  // Attach a hanging vine's free end to `host`, making it a span: a new anchor
+  // object on the host's surface, exactly as the vine's first anchor was made.
+  // The length the vine already had becomes the span's slack; one shorter than
+  // the gap it now crosses is topped up to a slight sag rather than left
+  // over-taut.
+  function attachVineEnd(vine: EdVine, host: EdItem, world: Vec2): void {
+    if (!chainable(host) || vine.anchor2 !== null) return;
+    const top = vineAnchorWorld(model, vine);
+    if (!top) return;
+    const a = newAnchorOn(host, world);
+    model.items.push(a);
+    vine.anchor2 = a.id;
+    vine.length = Math.max(vine.length, a.pos.distanceTo(top) * 1.05);
+    markDirty();
+    refreshFields();
+    rebuildInspector();
+  }
+
+  // ...and the inverse: back to a hanging vine of the same length. The anchor
+  // object goes with it unless something else still ties to it.
+  function detachVineEnd(vine: EdVine): void {
+    if (vine.anchor2 === null) return;
+    const id = vine.anchor2;
+    vine.anchor2 = null;
+    const used =
+      model.chains.some((c) => c.a === id || c.b === id) ||
+      model.vines.some((v) => v.anchor === id || v.anchor2 === id);
+    if (!used) model.items = model.items.filter((i) => i.id !== id);
+    markDirty();
+    refreshFields();
+    rebuildInspector();
+  }
+
   // Drop chains that no longer have two anchors to hold. Called after any item
-  // deletion, so a chain can never outlive what it was tied to.
+  // deletion, so a chain can never outlive what it was tied to. A vine outlives
+  // its SECOND anchor - it falls back to hanging - and not its first.
   function pruneChains(): void {
     const live = new Set(model.items.filter((i) => i.object === "anchor").map((i) => i.id));
     model.chains = model.chains.filter((c) => live.has(c.a) && live.has(c.b));
     model.vines = model.vines.filter((v) => live.has(v.anchor));
+    for (const v of model.vines) {
+      if (v.anchor2 !== null && !live.has(v.anchor2)) v.anchor2 = null;
+    }
   }
 
   // The shape an anchor slides along: the first collision object in its body,
@@ -5491,13 +5564,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // vine drawn short enough for them to overlap.
     const vines = selectedVines();
     if (vines.length === 1) {
-      const hs = computeVineHandles(camera, model, vines[0]!);
+      const vine = vines[0]!;
+      const hs = computeVineHandles(camera, model, vine);
       if (hs) {
         if (scr.distanceTo(hs.tip) <= HANDLE_HIT_PX) {
-          return { mode: "vineLength", vine: vines[0]! };
+          // A span's tip IS its second anchor, so the drag moves that; a
+          // hanging vine's tip is its length (and, Shift-dragged onto a body,
+          // the gesture that attaches a second anchor).
+          return vine.anchor2 !== null
+            ? { mode: "vineEnd", vine, cursor: canvasWorld(scr), detach: false }
+            : {
+                mode: "vineLength",
+                vine,
+                startLength: vine.length,
+                cursor: canvasWorld(scr),
+                attach: null,
+              };
         }
         if (scr.distanceTo(hs.top) <= HANDLE_HIT_PX) {
-          return { mode: "vineAnchor", vine: vines[0]! };
+          return { mode: "vineAnchor", vine };
         }
       }
       return null;
@@ -6473,7 +6558,35 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         break;
       case "vineLength": {
         const top = vineAnchorWorld(model, drag.vine);
-        if (top) drag.vine.length = Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
+        if (!top) break;
+        drag.cursor = world;
+        // Shift over a body arms the ATTACH gesture (see the drag's own doc):
+        // the draft line follows the pointer and the length is held at what the
+        // drag started with, since dragging sideways toward an anchor is not a
+        // statement about length.
+        drag.attach = e.shiftKey ? (topmostAt(world, (b) => chainable(b)) ?? null) : null;
+        drag.vine.length = drag.attach
+          ? drag.startLength
+          : Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "vineEnd": {
+        drag.cursor = world;
+        // Shift over empty space arms the DETACH, resolved at release; over a
+        // body the drag moves the second anchor exactly as a chain end moves.
+        const over = topmostAt(world, (b) => chainable(b));
+        drag.detach = e.shiftKey && !over;
+        const anchor = drag.vine.anchor2 !== null ? anchorItem(model, drag.vine.anchor2) : null;
+        if (!anchor) break;
+        const host = over ?? anchorHost(anchor);
+        if (!host) break;
+        anchor.bodyId = host.bodyId;
+        anchor.rot = host.rot;
+        anchor.pos = toWorld(host, nearestSurfaceLocal(host, world));
+        markDirty();
+        refreshFields();
         break;
       }
       case "vineAnchor": {
@@ -6609,6 +6722,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // A vine that was never dragged out is not a vine, so the gesture is
       // abandoned rather than dropping a one-link stub on the wall.
       addVine(drag.from, drag.local, snap(drag.length));
+    }
+    // The two Shift gestures on a vine's end, resolved at release: a hanging
+    // vine's tip carried onto a body attaches there and becomes a span, and a
+    // span's end dropped over empty space detaches back to hanging.
+    if (drag.mode === "vineLength" && drag.attach) {
+      attachVineEnd(drag.vine, drag.attach, drag.cursor);
+    }
+    if (drag.mode === "vineEnd" && drag.detach) {
+      detachVineEnd(drag.vine);
     }
     if (drag.mode === "chainDraw") {
       // A chain lands only on a body: released over empty space the gesture is
@@ -6771,16 +6893,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return { from, to: drag.cursor, valid };
   }
 
-  // The vine being pulled out, as the renderer wants it: where it is anchored,
-  // how far down the pointer has got, and whether releasing here would build
-  // anything.
-  function vineDraftView(): { from: Vec2; length: number; valid: boolean } | null {
-    if (!drag || drag.mode !== "vineDraw") return null;
-    return {
-      from: toWorld(drag.from, drag.local),
-      length: drag.length,
-      valid: drag.length >= MIN_VINE_LENGTH,
-    };
+  // The vine being pulled out - or a tip being Shift-carried toward a second
+  // anchor - as the renderer wants it: where it starts, where the gesture has
+  // got, and whether releasing here would build (or attach) anything.
+  function vineDraftView():
+    | { kind: "hang"; from: Vec2; length: number; valid: boolean }
+    | { kind: "attach"; from: Vec2; to: Vec2; valid: boolean }
+    | null {
+    if (drag?.mode === "vineDraw") {
+      return {
+        kind: "hang",
+        from: toWorld(drag.from, drag.local),
+        length: drag.length,
+        valid: drag.length >= MIN_VINE_LENGTH,
+      };
+    }
+    if (drag?.mode === "vineLength" && drag.attach) {
+      const top = vineAnchorWorld(model, drag.vine);
+      return top ? { kind: "attach", from: top, to: drag.cursor, valid: true } : null;
+    }
+    return null;
   }
 
   // --- loop -----------------------------------------------------------------

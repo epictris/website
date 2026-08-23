@@ -745,22 +745,37 @@ export function isLegacyChain(c: ChainData | LegacyChainData): c is LegacyChainD
   return typeof c.a === "object";
 }
 
-// A vine: a chain of small pass-through links hanging from ONE anchor, free at
-// the bottom, that the player passes through and the hook grabs anywhere along
-// (see `level/vines.ts`).
+// A vine: a chain of small pass-through links hanging from ONE anchor - free at
+// the bottom - or spanning between TWO, that the player passes through and the
+// hook grabs anywhere along (see `level/vines.ts`).
 //
-// It names its anchor exactly as `ChainData` names its two, and for the same
-// reason - which body it hangs from is a question about where the anchor lives,
-// and the body holding that anchor already answers it. There is no second end
-// and no world point: the free end is wherever the simulation leaves it.
+// It names its anchors exactly as `ChainData` names its two, and for the same
+// reason - which body an end hangs from is a question about where the anchor
+// lives, and the body holding that anchor already answers it. There is no world
+// point anywhere: a hanging vine's free end is wherever the simulation leaves
+// it, and a spanning vine's rest pose is the catenary its length and its two
+// anchors imply (`level/catenary.ts`).
 export interface VineData {
   // Anchor id. A vine naming an anchor that is not in the level, or one on a
   // body that builds nothing, is dropped at load - the same tolerance a chain
   // end gets.
   anchor: number;
-  // Metres of vine below the anchor. The arc length of the whole thing, and
-  // exactly what it measures: the link spacing is fitted to it rather than the
-  // other way round (see `buildVines`).
+  // Optional SECOND anchor id, making the vine a span attached at both ends
+  // rather than a hanging one. The length below is still the whole arc, so a
+  // span longer than the distance between its anchors sags into a catenary -
+  // length and separation are deliberately decoupled. One authored SHORTER
+  // than that distance is built taut at the separation itself: shorter is a
+  // constraint set that cannot be satisfied at all, which never converges and
+  // never sleeps (see `buildVines`).
+  //
+  // A vine naming a second anchor the level does not have falls back to
+  // hanging rather than being dropped: unlike a chain end, one anchor is still
+  // a complete vine, and losing slack beats losing the whole thing.
+  anchor2?: number;
+  // Metres of vine below the anchor - or, with `anchor2`, along the whole
+  // span. The arc length of the whole thing, and exactly what it measures: the
+  // link spacing is fitted to it rather than the other way round (see
+  // `buildVines`).
   length: number;
   // Target metres between links. Absent = `DEFAULT_VINE_SPACING`. A target and
   // not a divisor - the built spacing is `length` divided by the whole number of
@@ -784,6 +799,14 @@ export interface VineData {
   // number nobody can picture. Out-of-range values are clamped at load.
   //
   // Not a length, so `scaleLevelData` leaves it alone.
+  //
+  // On a vine with `anchor2` the ends are PINNED rather than clamped - a vine
+  // lashed at both ends is hinged there, so there is no anchor clamp and the
+  // stiffness lives in the joints. What it reads as is how hard the drape is
+  // pressed toward straight: 0 rests in the catenary, 1 bows into the
+  // flattened arc a stiff rod with excess length takes between two pins, and
+  // either way the span resists kinking where it is grabbed (see
+  // `level/vineBend.ts`).
   stiffness?: number;
   // Optional appearance. Absent = the renderer's own vine colours.
   color?: string;
@@ -2083,6 +2106,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
   // through `scaleObject` with every other placement, exactly as a chain end does.
   const vines = data.vines?.map((v) => ({
     anchor: v.anchor,
+    ...(v.anchor2 !== undefined ? { anchor2: v.anchor2 } : {}),
     length: v.length * factor,
     ...(v.spacing !== undefined ? { spacing: v.spacing * factor } : {}),
     // Kilograms per metre already, so it crosses the conversion unchanged - the
