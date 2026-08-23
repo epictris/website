@@ -47,3 +47,5 @@ near-black cave rock (`rock-black`):
 - https://ambientcg.com/view?id=Rock035
 mossy dirt with moss patches, for ground and floors (`mossy ground`):
 - https://ambientcg.com/view?id=Ground047
+moss cushions, for ledges and damp faces (`moss`):
+- https://ambientcg.com/view?id=Moss002

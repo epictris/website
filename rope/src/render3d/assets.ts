@@ -573,6 +573,76 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // Living cushion moss, and the only GREEN surface in the manifest: dense
+  // rounded lobes packed edge to edge, with no dirt showing between them. That
+  // is what separates it from `mossy ground`, which is earth WITH moss in
+  // patches - this is the moss itself, so it is what a ledge top, a damp wall
+  // face or the shaded side of a boulder wears where the ground set would read
+  // as a path running up the wall.
+  //
+  // It is also the most saturated thing here by a distance (albedo mean
+  // #4A6519, against #504224 for `mossy ground` and grey or brown for every rock
+  // set), which is worth knowing before dressing a room in it: under a warm lamp
+  // it goes yellow-green and under the fill it goes almost black, where the rock
+  // sets shift barely at all. Put it where something is meant to be alive.
+  //
+  // Keyed as a SURFACE, and like `mossy ground` there is not even a material
+  // name to collide with - no `MaterialName` is "moss", the nearest is `stone`
+  // (which is the fallback, since none of the generated sets is green and a
+  // grey stone that turns to moss reads better than a brown dirt that does). A
+  // shape asks for this one by name (`visual.texture`).
+  moss: {
+    maps: {
+      base: {
+        file: "/textures/moss-base.webp",
+        sha256: "dd3ad549240ab7cf2c87be40a61e673976f8d69e5ddb26ec714e709c78428923",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
+      // two ambientCG ships. The DEEPEST relief in the manifest - B mean .723,
+      // against .836 for `rock-black` and .833 for `mossy ground` - which is
+      // what a height field of packed cushions is: every lobe is a dome and the
+      // map is nothing but their sides. It stays lossless at 2.4 MB for that
+      // reason: the albedo is close to one flat green, so the relief is the
+      // only thing distinguishing one clump from the next, and ringing along a
+      // lobe edge would be the whole surface shimmering.
+      normal: {
+        file: "/textures/moss-normal.webp",
+        sha256: "3933eb2097951a1353f0487ac1ac5dbf32c1b5e4106d1c026af808b7d21edf42",
+      },
+      // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
+      // are, flattened to grey by `assets:optimize-texture --channel r`. No
+      // metallic map and none wanted: the 0 below is a dielectric's, stated
+      // rather than shipped as an image.
+      roughness: {
+        file: "/textures/moss-roughness.webp",
+        sha256: "19728aafeb25852e6e2872aea251d53c86975468b9fb2cc6ae9465574df73ccb",
+      },
+      // Shipped rather than left to the generated surface, and it is doing more
+      // work here than in any other set: at a mean of .474 it is the darkest AO
+      // in the manifest, because the gaps between cushions are deep and narrow
+      // and almost no light reaches down them. Without it the lobes flatten into
+      // one green sheet.
+      ao: {
+        file: "/textures/moss-ao.webp",
+        sha256: "bb8890317a9b4c7c986f319ddddd45b90915284f0973be37191202ad4208206d",
+      },
+    },
+    // ambientCG states no captured size (`dimensionX: 0`,
+    // https://ambientcg.com/api/v2/full_json?id=Moss002), so this is a by-eye
+    // number as `rock-grey`'s and `rock-black`'s are. 1 m puts the cushions at
+    // roughly 15 cm across, which is what a Leucobryum mound actually is, and it
+    // is deliberately the FINEST tile here bar `rusted iron`: moss is not a
+    // material a wall is built out of at brick's scale, and one repeat over 2 m
+    // would read as hedge rather than as moss. Nothing in the set is a feature -
+    // no seam, no vein, no course - so the repeat itself stays invisible even
+    // eight times across a ledge.
+    tile: 1,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Moss002",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
   // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
   //
