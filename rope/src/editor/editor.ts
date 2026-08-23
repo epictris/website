@@ -4630,6 +4630,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.matchId !== 0) it.matchId = idOf.get(it.matchId) ?? 0;
     }
+    // A copied anchor is a NEW anchor and needs an on-disk id of its own:
+    // `anchorId` is what chains and vines name their ends by in the file, so a
+    // copy carrying the original's id loads with both ends resolving to
+    // whichever body the loader finds first.
+    let nextAnchorId = newAnchorId();
+    for (const it of items) {
+      if (it.object === "anchor") it.anchorId = nextAnchorId++;
+    }
     return { items, idOf };
   }
 
@@ -4661,7 +4669,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const v of vines) {
       const anchor = idOf.get(v.anchor);
       if (anchor === undefined) continue;
-      out.push({ ...cloneVine(v), id: newBodyId(), anchor });
+      // A span's second anchor is re-pointed the same way. One whose second
+      // anchor was NOT copied falls back to hanging rather than staying bolted
+      // to the original's anchor, which nobody authored.
+      const anchor2 = v.anchor2 !== null ? (idOf.get(v.anchor2) ?? null) : null;
+      out.push({ ...cloneVine(v), id: newBodyId(), anchor, anchor2 });
     }
     return out;
   }
@@ -4940,7 +4952,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       used.add(c.a);
       used.add(c.b);
     }
-    for (const v of model.vines) used.add(v.anchor);
+    for (const v of model.vines) {
+      used.add(v.anchor);
+      // A span's second anchor is just as used as its first - without this,
+      // any deletion pruned every draped vine's far end.
+      if (v.anchor2 !== null) used.add(v.anchor2);
+    }
     model.items = model.items.filter((i) => i.object !== "anchor" || used.has(i.id));
   }
 
