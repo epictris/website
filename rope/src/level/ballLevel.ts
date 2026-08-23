@@ -37,6 +37,7 @@ import {
   stepSceneChains,
   sweepChains,
   type SceneChain,
+  type SceneConstraint,
 } from "./chains";
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
@@ -78,10 +79,10 @@ export class BallLevel {
   // AWAKE vine's pair chains and its load rope. Handed back as `sceneChains`
   // itself when there is nothing to add, which is what keeps every recorded ball
   // replay bit-for-bit (see `vineChainSet`).
-  private readonly solveSet: SceneChain[] = [];
+  private readonly solveSet: SceneConstraint[] = [];
   // This frame's set, settled once at the top of the frame so both halves of the
   // chain phase solve the same one.
-  private frameChains: readonly SceneChain[] = [];
+  private frameChains: readonly SceneConstraint[] = [];
   // What a vine's load rope may bend around: the level's static geometry.
   private readonly vineWraps: PhysicsBody2D[];
   // This frame's load rope, if the chain is holding a vine link. Derived once a
@@ -197,7 +198,7 @@ export class BallLevel {
   // The chain set as it stands this frame: the authored chains, every vine's
   // pair chains, and the one load rope if a vine is being held. The same array
   // when nothing is held, so the common case allocates nothing.
-  private solveChains(): readonly SceneChain[] {
+  private solveChains(): readonly SceneConstraint[] {
     return this.frameChains;
   }
 
@@ -430,13 +431,38 @@ export class BallLevel {
       // the ball, and the unwind pays for it in rotation instead. A frame with
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
+      //
+      // Off everything the SCENE's own constraints do not hold, though, and that
+      // exclusion is the whole of what makes this coherent with the coupled
+      // sweep. The premise above is that the far end keeps whatever it was
+      // given, which is true of a free body and false of one a scene chain
+      // holds: there the sweep has already decided how the correction is shared
+      // between the ball and the anchor, converged the set to `CHAIN_TOLERANCE`,
+      // and closed its own books over the displacement it left (see
+      // `settleChainBodies`). Rolling such a body back does not un-export the
+      // spin - it re-breaks a constraint the sweep had just satisfied, and the
+      // over-length that reappears is charged to the ball's rotation a second
+      // time by the unwind below.
+      //
+      // On a vine that is every frame and the whole of the aim. A vine link is
+      // ~0.05 kg against the ball's 52, so a PBD length correction lands almost
+      // entirely on the LINK; the rollback then put 14 mm of it back, the unwind
+      // saw 14 mm the frame's own turn was worth 10 of, and walked back 100% of
+      // the player's aim rotation - for 59 frames at a time, with the cursor
+      // 90 degrees off the loop and the ball simply not turning (`session-1260f`).
+      // The lease absorbed the difference meanwhile, so the chain grew 26 mm of
+      // surplus while it happened.
       const haulAtSolve = new Map<
         RigidBody2D,
         { position: Vec2; velocity: Vec2; rotation: number; spin: number }
       >();
       if (spinShare > 0) {
         for (const body of this.bodies) {
-          if (body instanceof RigidBody2D && body !== this.ball) {
+          if (
+            body instanceof RigidBody2D &&
+            body !== this.ball &&
+            !solveChains.some((c) => c.holds(body))
+          ) {
             haulAtSolve.set(body, {
               position: body.globalPosition,
               velocity: body.linearVelocity,

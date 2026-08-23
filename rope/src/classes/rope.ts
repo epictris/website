@@ -125,7 +125,7 @@ export class Rope {
   // next solve's length error, and the solve converts length error to velocity
   // (Δposition over Δt), so that is a kick. 0.5 m/s gives back 8 mm a frame —
   // faster than any block accrues, slow enough to read as the rope reeling in.
-  private static readonly SLACK_RELEASE_RATE = 0.5;
+  static readonly SLACK_RELEASE_RATE = 0.5;
 
   maxRopeLength = 10;
   maxIterations = 10;

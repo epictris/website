@@ -773,6 +773,18 @@ export interface VineData {
   // Not a length, so `scaleLevelData` leaves it alone: it is already written per
   // metre, while everything beside it here is written in the file's pixels.
   density?: number;
+  // How hard the vine is to BEND, 0..1. Absent or 0 = a rope, which is what
+  // every vine was before this existed and what one still is unless it says
+  // otherwise; 1 = a pole, which holds itself straight against a hooked player
+  // and springs back to hanging when let go (see `level/vineBend.ts`).
+  //
+  // A fraction rather than a stiffness in newton-metres, for the reason the
+  // environment block's own fractions are: what an author is choosing is where
+  // this vine sits between the two ends they can see, and a bending modulus is a
+  // number nobody can picture. Out-of-range values are clamped at load.
+  //
+  // Not a length, so `scaleLevelData` leaves it alone.
+  stiffness?: number;
   // Optional appearance. Absent = the renderer's own vine colours.
   color?: string;
 }
@@ -2076,6 +2088,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // Kilograms per metre already, so it crosses the conversion unchanged - the
     // one number on a vine that is not in the file's pixels.
     ...(v.density !== undefined ? { density: v.density } : {}),
+    // A fraction, like the density a per-metre one: neither is in the file's
+    // pixels, so both cross the conversion unchanged.
+    ...(v.stiffness !== undefined ? { stiffness: v.stiffness } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
   return {

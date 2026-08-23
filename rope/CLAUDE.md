@@ -2950,6 +2950,98 @@ Two radii, and they are different numbers: the **grab** radius is the collision
 circle at 0.6 x the spacing, so consecutive links overlap and the hook's ray
 cannot slip between them, and the **visual gauge** is 3 cm.
 
+### Stiffness
+
+**A vine is a rope by default and can be authored anywhere between a rope and a
+pole** (`VineData.stiffness`, 0..1, `level/vineBend.ts`). What it changes is how
+much force it takes to BEND the vine; what it deliberately does not change is
+where the vine hangs, since its rest pose is straight down either way.
+
+It is a **three-point curvature constraint with a compliance**, solved by XPBD in
+the same sweep as the pair chains. Each part of that is forced:
+
+- *Three points*, because a spacing says nothing about shape - any curl or
+  zigzag satisfies every pair chain there is - so what the pair chains leave free
+  is exactly the curvature at a link, and the curvature at a link is a statement
+  about it and its two neighbours. The measure is the middle point's distance
+  from the chord midpoint of the outer two, which is zero exactly when the three
+  are straight and evenly spaced; as an angle it would want an arctangent per
+  joint per pass for a number the solver turns straight back into a
+  displacement.
+- *A compliance*, because the obvious PBD spelling of "half stiff" - apply half
+  of each correction - makes the stiffness a function of the pass count, and
+  this sweep's pass count is neither fixed nor knowable: it runs to a residual
+  (see `sweepChains`), so a vine would be stiffer on a frame that had a hard rig
+  elsewhere in the level. XPBD converges to the same physical rigidity whatever
+  the pass count, so `stiffness` means a bending rigidity rather than a solver
+  setting.
+- *In the same sweep*, because the two disagree by construction: a bend that
+  straightens the vine drags two links off their spacing, and the pair solve that
+  restores the spacing bends the vine back. That is the statement `sweepChains`
+  already makes about two chains sharing a body, one order out - so a bend is a
+  `SceneConstraint`, which is what that phase now solves instead of chains
+  specifically.
+
+**The constraint is written at every scale, not only between neighbours.** A
+stiff serial chain is the one shape a Gauss-Seidel sweep is worst at: news
+travels one link per pass, and stiffness is what every pass is arguing about. On
+a 3 m vine with a player swinging onto its tip, at the stiffest setting there is:
+
+| bends | sweeps | lean off vertical | worst kink | cost |
+|---|---|---|---|---|
+| neighbours only | 64 | 28 deg | 15 deg | 6.1 ms |
+| neighbours only | 512 | 25 deg | 7 deg | 11.8 ms |
+| **every scale** | **64** | **1.7 deg** | **2.8 deg** | **3.7 ms** |
+
+Eight times the solver buys three degrees; the same constraint written between
+links 2, 4, 8 and 16 apart buys a pole. It is a multigrid V-cycle spelled as
+extra constraints - about 3x the constraints (59 against 20) and LESS wall clock,
+because a sweep that converges is one the loop leaves early. Every scale carries
+the FULL rigidity rather than a share: split, a single kinked joint - which is
+exactly what the hook pulling on ONE link makes - is `log2(links)` times softer
+than a smooth bend, and a stiff vine that kinks where it is grabbed is the
+artifact the feature exists to prevent.
+
+**It is CLAMPED at the anchor rather than hinged.** Without that, the joints hold
+the vine straight and the straight thing swings freely about its bolt - a
+pendulum, which is not what a pole bolted to a ceiling does. The clamp is the
+same three-point constraint with a GHOST point standing in for the link that
+would be above the anchor if the vine carried on through it, and the ghost is a
+point on the ANCHOR BODY, so it turns with it: turn a ceiling a quarter turn and
+a stiff vine comes with it and holds itself out horizontally under its own 50 kg,
+where a rope hangs down as it always did (`cli vines` `stiffness`). The rest
+direction it encodes is the one the vine was built at, which is straight down - a
+vine has no authored direction.
+
+**The two ends of the slider are read and the middle is measured.** EI is a real
+beam quantity - a cantilever of length L under an end load P deflects P.L^3/(3.EI)
+- so 1000 is where a 70 kg player on a 3 m vine deflects it by 6.3 m (a rope
+whatever it is called) and 1000000 is where the same load deflects it 6.3 mm
+(under what the renderer can draw). The map between them is GEOMETRIC, because a
+linear one would spend nine tenths of the slider between "sapling" and "pole",
+which are the two an author cannot tell apart. Worst lean off vertical and
+straightness (chord over arc) with a player swinging onto the tip of a 3 m vine:
+
+| stiffness | EI | worst lean | straightness | reads as |
+|---|---|---|---|---|
+| 0 | - | 45 deg | 0.917 | a rope |
+| 0.25 | 32 | 39 deg | 0.965 | a heavy cord |
+| 0.5 | 1000 | 25 deg | 0.996 | a springy branch |
+| 0.75 | 31623 | 9.5 deg | 0.999 | a sapling |
+| 1 | 1000000 | 1.7 deg | 1.000 | a pole |
+
+**Zero builds nothing.** A vine that does not ask for stiffness has no bend
+constraints at all, so it costs exactly what a vine always cost and replays
+bit-for-bit - asserted that way in `cli vines` `stiffness`, over 200 frames with
+the player hanging off it. Out-of-range values are clamped at load: a negative
+compliance is a joint that bends further the harder it is pushed.
+
+The one simplification is that **the anchor end is immovable**: a cantilever
+exerts a moment on what it is bolted to, and this one does not. That would want a
+torque arm on the anchor body and a share of the phase's velocity credit, so that
+scenery could lean on the thing it hangs from - against the existing statement
+that a vine must not visibly load its anchor.
+
 ### Where a vine spawns
 
 A vine hangs straight down from its anchor and **stops at the first thing it
@@ -3078,7 +3170,8 @@ still stays on the editor's 2D canvas.
 `ChainData` names its two - which body it hangs from is a question about where
 the anchor lives. `+ Vine` in the editor is the chain tool's press followed by a
 drag DOWN that pulls the length out; the panel carries the length, the spacing
-(blank = the default), a live link count and the colour, and the vine is listed
+(blank = the default), a live link count, the density, the stiffness (blank = 0,
+a rope, with what it reads as beside it) and the colour, and the vine is listed
 under `Vines (N)` beside the chains. `TEST_VINES` is the worked level - two vines
 over a chasm to swing across and one long enough to pool on the far ledge.
 

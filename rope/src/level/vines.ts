@@ -4,11 +4,19 @@
 // against.
 //
 // The load-bearing decision, stated once: a vine is **a chain of small
-// pass-through rigid links joined by `SceneChain` pair constraints, plus one
-// wrap-point `Rope` from the vine's anchor to the grabbed link for exactly as
-// long as the hook holds it**. The links carry the drape and the grab surface;
-// that one extra rope carries the load. Everything else here is a consequence of
-// that split.
+// pass-through rigid links joined by distance constraints, plus one wrap-point
+// `Rope` from the vine's anchor to the grabbed link for exactly as long as the
+// hook holds it**. The links carry the drape and the grab surface; that one
+// extra rope carries the load. Everything else here is a consequence of that
+// split.
+//
+// The pair constraints are `VinePair`s (`level/vinePair.ts`) and not `Rope`s.
+// They were `SceneChain`s, which bought the whole chain phase for free and cost
+// two orders of magnitude for it: a joint between two link CENTRES with an empty
+// wrap-candidate list is degenerate in `Rope`'s terms, and solving it in closed
+// form reaches the same fixed point - every number in `cli vines` to the last
+// digit - at 0.14 us against 1.6. The anchor chain stays a `SceneChain`, its
+// start being snapped to the anchor body's surface and so not degenerate.
 //
 // Why the split. A uniform particle chain is the standard game rope and it is
 // the thing `Rope` exists as a rejection of: a Gauss-Seidel pass over coupled
@@ -46,7 +54,15 @@ import type { World } from "../engine/world";
 import type { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
 import { ShapeGeometry } from "../lib/shapeGeometry";
-import { collectAnchorSites, snapToSurface, SceneChain, type AnchorSite } from "./chains";
+import {
+  collectAnchorSites,
+  snapToSurface,
+  SceneChain,
+  type AnchorSite,
+  type SceneConstraint,
+} from "./chains";
+import { VinePair } from "./vinePair";
+import { buildVineBends, type VineBend } from "./vineBend";
 import { RIGID_KINETIC_FRICTION, worldPlacement, type BuiltBodies } from "./buildBodies";
 import type { LevelData, VineData } from "./levelFormat";
 
@@ -125,6 +141,13 @@ export const LIGHT_LINK_MASS = 1.5;
 // and the pair chains spend the sweep arguing over a link neither can move. A
 // file may say anything; this is what gets built.
 export const MIN_VINE_DENSITY = 1;
+
+// What a vine hangs at when it does not say: a rope, which is what every vine
+// was before stiffness existed. A vine that does not ask for stiffness builds
+// no bend constraints at all, so it is not merely soft - it is bit-for-bit the
+// vine it always was, and every replay of one still replays (see
+// `level/vineBend.ts`).
+export const DEFAULT_VINE_STIFFNESS = 0;
 
 // What a renderer needs of a vine: where the cord runs this frame, and what
 // colour it is. It is an interface rather than the `Vine` itself because the
@@ -264,14 +287,21 @@ export function vineChainSet(
   authored: SceneChain[],
   vines: readonly Vine[],
   load: SceneChain | null,
-  into: SceneChain[],
-): readonly SceneChain[] {
+  into: SceneConstraint[],
+): readonly SceneConstraint[] {
   let extra = load ? 1 : 0;
-  for (const vine of vines) if (!vine.asleep) extra += vine.chains.length;
+  for (const vine of vines) if (!vine.asleep) extra += vine.chains.length + vine.bends.length;
   if (extra === 0) return authored;
   into.length = 0;
   for (const chain of authored) into.push(chain);
-  for (const vine of vines) if (!vine.asleep) for (const chain of vine.chains) into.push(chain);
+  for (const vine of vines) {
+    if (vine.asleep) continue;
+    for (const chain of vine.chains) into.push(chain);
+    // After that vine's own pair chains, so a sweep in file order reaches a
+    // joint with the spacing either side of it already solved - and before the
+    // load rope, which is the one thing in the set that has the last word.
+    for (const bend of vine.bends) into.push(bend);
+  }
   if (load) into.push(load);
   return into;
 }
@@ -297,11 +327,24 @@ export interface Vine extends VineCord {
   // which is what makes the load rope's rest length a multiply rather than a
   // walk.
   readonly links: VineLink[];
+  // The curvature constraints that make the vine hard to bend, one per joint
+  // plus the clamp at the anchor - empty for a vine of no stiffness, which is
+  // what makes such a vine cost exactly what it always did (see
+  // `level/vineBend.ts`). They are swept alongside the pair chains rather than
+  // after them, because the two disagree by construction.
+  readonly bends: VineBend[];
+  // 0 = a rope, 1 = a pole. As built, so already clamped to that range.
+  readonly stiffness: number;
   // Anchor-to-first-link, then each adjacent pair. These go into the level's
   // `sceneChains`, which is what buys the whole existing chain phase - the
   // residual-gated alternating sweep, static depenetration with the funded
   // velocity clamp, the credit scaling and the blocked-length lease - for free.
-  readonly chains: SceneChain[];
+  //
+  // The anchor one is a `SceneChain` and the pairs are `VinePair`s: a pair is
+  // degenerate in `Rope`'s terms and costs two orders more as one, while the
+  // anchor's start is snapped to the anchor body's surface and so is not (see
+  // `level/vinePair.ts`).
+  readonly chains: SceneConstraint[];
   // Metres between adjacent links, as built.
   readonly spacing: number;
   // Authored fill; null = the renderer's own vine colours.
@@ -419,6 +462,13 @@ function buildOne(
   // at: the same authored vine weighs the same whatever spacing it is made from
   // (see `DEFAULT_VINE_DENSITY`).
   const density = Math.max(MIN_VINE_DENSITY, v.density ?? DEFAULT_VINE_DENSITY);
+  // Clamped rather than trusted: a hand-edited file may say anything, and a
+  // negative compliance is a solver that pushes the vine further from straight
+  // the harder it is bent.
+  const stiffness = Math.min(
+    1,
+    Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS),
+  );
 
   // The vine hangs straight down at rest, and lies on the first thing it meets
   // rather than through it (see `dropDistance`).
@@ -445,7 +495,7 @@ function buildOne(
   }
 
   const color = v.color ?? null;
-  const chains: SceneChain[] = [];
+  const chains: SceneConstraint[] = [];
   // Anchor to the first link, then every adjacent pair. Link ends sit at the
   // link's CENTRE (`Vec2.ZERO`) rather than on its rim: a link is a 6 cm circle
   // whose whole job is to be somewhere, and a rim contact would give the pair
@@ -453,19 +503,27 @@ function buildOne(
   chains.push(new SceneChain(anchorContact, new RopeContact(links[0]!, Vec2.ZERO), spacing, color));
   for (let i = 1; i < links.length; i++) {
     chains.push(
-      new SceneChain(
+      new VinePair(
         new RopeContact(links[i - 1]!, Vec2.ZERO),
         new RopeContact(links[i]!, Vec2.ZERO),
         spacing,
-        color,
       ),
     );
   }
+
+  // The vine's rest direction: straight down, that being the only pose a vine
+  // has - it has no authored direction, and its links are spawned down the same
+  // axis. It is what the stiffness CLAMPS the vine to, and it is handed over as
+  // a world vector for `buildVineBends` to put in the anchor body's own frame
+  // (see there).
+  const restDir = new Vec2(0, 1);
 
   return {
     anchorContact,
     links,
     chains,
+    bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing),
+    stiffness,
     spacing,
     color,
     lra: null,

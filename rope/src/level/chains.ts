@@ -46,7 +46,46 @@ import {
 // exactly "hangs between its two bodies and touches nothing else".
 export const NOTHING: PhysicsBody2D[] = [];
 
-export class SceneChain {
+// What the chain phase actually needs of a thing it solves: open a frame, take
+// a pass, say how far it still is from being satisfied, and name the bodies it
+// moves so the phase can depenetrate them and pay them the velocity it moved
+// them by.
+//
+// It is an interface rather than "the phase solves chains" because a vine's
+// STIFFNESS is not a chain (see `level/vineBend.ts`) and cannot be made into
+// one: it is a three-point curvature constraint with a compliance, and there is
+// no length for `Rope` to hold. But it has to be swept in the SAME loop as the
+// pair chains it argues with - a bend correction that straightens the vine
+// pulls two links off their spacing, and a pair solve that fixes the spacing
+// bends the vine back - which is the same statement this loop already makes
+// about two chains sharing a body, one order further out.
+//
+// Everything else in the phase - the alternating sweep, the residual gate, the
+// static depenetration with its funded velocity clamp, the credit scaling - is
+// written against this interface and so is unchanged by what implements it.
+export interface SceneConstraint {
+  // Once a frame, however many passes follow.
+  beginFrame(delta: number): void;
+  // One pass.
+  solve(delta: number): void;
+  // Metres of error left after the last pass - what `CHAIN_TOLERANCE` bounds.
+  // Zero for a constraint that is satisfied, whatever satisfying it means for
+  // that kind (a rope is satisfied slack; a compliant bend is satisfied bent).
+  readonly residual: number;
+  // Every DYNAMIC body this constraint is attached to as it currently stands.
+  eachBody(fn: (body: RigidBody2D) => void): void;
+  // Whether it is one of them, for the credit scaling below.
+  holds(body: RigidBody2D): boolean;
+  // The share of this frame's displacement a body it holds may be paid velocity
+  // for (see `Rope.topologyCreditScale`). 1 for a constraint whose corrections
+  // are all honest motion.
+  readonly creditScale: number;
+  // End of the phase, with whether any body of this constraint had to be pushed
+  // out of the scenery.
+  settle(blocked: boolean): void;
+}
+
+export class SceneChain implements SceneConstraint {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
   readonly color: string | null;
@@ -81,6 +120,36 @@ export class SceneChain {
   // integration ends every fast frame over-length by |v|·dt).
   solve(delta: number): void {
     this.rope.solvePass(this.wrapBodies, delta);
+  }
+
+  // How far over its length it ended the pass. Zero while slack: the constraint
+  // is an inequality, and a slack rope is satisfied.
+  get residual(): number {
+    return this.rope.overLength;
+  }
+
+  get creditScale(): number {
+    return this.rope.topologyCreditScale;
+  }
+
+  eachBody(fn: (body: RigidBody2D) => void): void {
+    for (const node of this.rope.path()) {
+      const body = node.contact.obj;
+      if (body instanceof RigidBody2D) fn(body);
+    }
+  }
+
+  holds(body: RigidBody2D): boolean {
+    return this.rope.path().some((n) => n.contact.obj === body);
+  }
+
+  // Whatever the sweep could not reach is the chain being held over its length
+  // by the geometry one of its bodies rests against - the winch stall - and
+  // re-basing lets the constraint settle there instead of winding up against
+  // the block.
+  settle(blocked: boolean): void {
+    this.rope.absorbBlockedLength();
+    this.rope.noteBlockedByGeometry(blocked);
   }
 }
 
@@ -173,7 +242,7 @@ const MAX_CHAIN_SWEEPS = 64;
 // which is the same situation `BallLevel` passes the ball's chain in for. It is
 // forwarded straight to `sweepChains`, which is where the reason lives.
 export function stepSceneChains(
-  chains: readonly SceneChain[],
+  chains: readonly SceneConstraint[],
   world: World,
   delta: number,
   extra: CoupledRope | null = null,
@@ -190,12 +259,10 @@ const isStatic = (body: PhysicsBody2D): boolean => body instanceof StaticBody2D;
 // The share of this frame's chain-phase displacement that `body` may be paid
 // velocity for: the lowest `topologyCreditScale` among the chains that hold it,
 // and 1 for a body no chain in the set touches.
-function creditScale(chains: readonly SceneChain[], body: RigidBody2D): number {
+function creditScale(chains: readonly SceneConstraint[], body: RigidBody2D): number {
   let scale = 1;
   for (const chain of chains) {
-    if (chain.rope.path().some((n) => n.contact.obj === body)) {
-      scale = Math.min(scale, chain.rope.topologyCreditScale);
-    }
+    if (chain.holds(body)) scale = Math.min(scale, chain.creditScale);
   }
   return scale;
 }
@@ -215,15 +282,15 @@ export interface ChainBodyState {
 // Every dynamic body on the given chains' paths, snapshotted. `exclude` is for a
 // caller that keeps its own books for one body — `BallLevel` does, for the ball.
 export function snapshotChainBodies(
-  chains: readonly SceneChain[],
+  chains: readonly SceneConstraint[],
   exclude: RigidBody2D | null,
 ): ChainBodyState[] {
   const states: ChainBodyState[] = [];
+  const seen = new Set<RigidBody2D>();
   for (const chain of chains) {
-    for (const node of chain.rope.path()) {
-      const body = node.contact.obj;
-      if (!(body instanceof RigidBody2D) || body === exclude) continue;
-      if (states.some((s) => s.body === body)) continue;
+    chain.eachBody((body) => {
+      if (body === exclude || seen.has(body)) return;
+      seen.add(body);
       states.push({
         body,
         position: body.globalPosition,
@@ -231,7 +298,7 @@ export function snapshotChainBodies(
         velocity: body.linearVelocity,
         spin: body.angularVelocity,
       });
-    }
+    });
   }
   return states;
 }
@@ -287,7 +354,7 @@ export function snapshotChainBodies(
 // is a coupled velocity solve over the whole set, which is what this would need
 // before it could have one.
 export function settleChainBodies(
-  chains: readonly SceneChain[],
+  chains: readonly SceneConstraint[],
   before: readonly ChainBodyState[],
   world: World,
   delta: number,
@@ -335,17 +402,17 @@ export function settleChainBodies(
       }
     }
   }
-  // Whatever the sweep could not reach is the chain being held over its length
-  // by the geometry one of its bodies is resting against - the winch stall, and
-  // re-basing lets the constraint settle there instead of winding up against the
-  // block. Per chain and not per scene: a lease released into a live block
-  // spends every frame hauling a body into a surface that is already saying no,
-  // and one blocked chain is no reason to hold another one's.
+  // ...and then each constraint is told whether the geometry was in its way,
+  // which is what a chain uses to re-base a length it could not reach (see
+  // `SceneChain.settle`). Per constraint and not per scene: a lease released
+  // into a live block spends every frame hauling a body into a surface that is
+  // already saying no, and one blocked chain is no reason to hold another's.
   for (const chain of chains) {
-    chain.rope.absorbBlockedLength();
-    chain.rope.noteBlockedByGeometry(
-      chain.rope.path().some((n) => n.contact.obj instanceof RigidBody2D && blockedBodies.has(n.contact.obj)),
-    );
+    let blocked = false;
+    chain.eachBody((body) => {
+      if (blockedBodies.has(body)) blocked = true;
+    });
+    chain.settle(blocked);
   }
 }
 
@@ -377,6 +444,95 @@ export interface CoupledRope {
   readonly settleSet: boolean;
 }
 
+// Which constraints of the set can actually argue with which: the connected
+// components of "shares a dynamic body with", by union-find over the bodies.
+// Null when the set is one component, which is every level whose chains all hang
+// off each other - so those make exactly the calls they always did.
+//
+// The reason this exists is that the sweep's exit condition is a property of the
+// SET while the work is per CONSTRAINT, and a set of independent rigs is
+// therefore priced at its hardest member. A vine under a player's weight wants
+// twenty-something sweeps and up to the cap on the frame the load arrives;
+// everything else awake in the level was paying that bill. On `session-608f`,
+// with the player hanging off the rightmost of three vines that hang within a
+// metre of each other, 72 pair chains were re-solved ~24 times a frame - 8.8 ms
+// of a 15.9 ms physics frame - and 44 of them were the two vines nobody was
+// touching, already converged, being swept because a third vine was not.
+//
+// What makes splitting sound is that a component is CLOSED under the solve: a
+// constraint moves only the bodies it holds, so a sweep of one component cannot
+// disturb another, and a component swept to its own tolerance stays there
+// however long the others then run. Sweeping them in sequence is the same solve
+// as sweeping them interleaved, minus the sweeps that were never going to change
+// an answer.
+//
+// Split, each vine takes the sweeps it needs - the held one still 14 to the cap,
+// the other two 8 and 14 - and that bundle's swinging window reads:
+//
+//              mean     p50     p95     max
+//   together   15.9    14.3    25.3    48.3
+//   split      13.6    12.8    19.5    28.9
+//
+// The tail is where it shows, because the tail is exactly the frames the held
+// vine spent the cap and everything else awake spent it with them.
+function chainComponents(chains: readonly SceneConstraint[]): Int32Array | null {
+  const parent = new Int32Array(chains.length);
+  for (let i = 0; i < chains.length; i++) parent[i] = i;
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]!]!;
+      i = parent[i]!;
+    }
+    return i;
+  };
+  // The first constraint to name a body owns it; every later one that names it
+  // joins that set. A constraint holding no dynamic body at all (both ends
+  // static) is its own component, which is what it is.
+  const owner = new Map<RigidBody2D, number>();
+  for (let i = 0; i < chains.length; i++) {
+    chains[i]!.eachBody((b) => {
+      const j = owner.get(b);
+      if (j === undefined) owner.set(b, i);
+      else {
+        const a = find(i);
+        const c = find(j);
+        if (a !== c) parent[c] = a;
+      }
+    });
+  }
+  let roots = 0;
+  for (let i = 0; i < chains.length; i++) if (find(i) === i) roots++;
+  if (roots <= 1) return null;
+  const out = new Int32Array(chains.length);
+  for (let i = 0; i < chains.length; i++) out[i] = find(i);
+  return out;
+}
+
+// The components `extra` reaches, by its own path bodies rather than by its two
+// ends: a rope wrapping a corner picks up bodies mid-path, and one of them being
+// a link of the vine the hook holds is the whole reason this coupling exists.
+// They are swept as ONE set with the rope, since the rope is what joins them.
+function coupledRoots(
+  chains: readonly SceneConstraint[],
+  comp: Int32Array,
+  extra: CoupledRope,
+): Set<number> {
+  const seeds = new Set<RigidBody2D>();
+  for (const node of extra.rope.path()) {
+    const body = node.contact.obj;
+    if (body instanceof RigidBody2D) seeds.add(body);
+  }
+  const roots = new Set<number>();
+  for (let i = 0; i < chains.length; i++) {
+    let touches = false;
+    chains[i]!.eachBody((b) => {
+      if (seeds.has(b)) touches = true;
+    });
+    if (touches) roots.add(comp[i]!);
+  }
+  return roots;
+}
+
 // The sweep itself, over a set whose frames are already open, plus optionally
 // one more rope that is NOT scenery: the ball's chain, when it is anchored to a
 // body a scene chain also holds.
@@ -401,8 +557,47 @@ export interface CoupledRope {
 // travel to 137 cm (`playtests/ball-winch-hung-anchor.json`), against 136 cm for
 // the same rig anchored to a static, which is the statement - how far a winch
 // hauls must not depend on what is holding the far end.
+//
+// A set that falls into independent components is swept one component at a time,
+// each to its own residual (see `chainComponents`), with `extra` swept alongside
+// whichever components it reaches. Only a rig that will not converge pays the
+// cap, and only that rig.
 export function sweepChains(
-  chains: readonly SceneChain[],
+  chains: readonly SceneConstraint[],
+  extra: CoupledRope | null,
+  delta: number,
+): void {
+  const comp = chainComponents(chains);
+  if (comp) {
+    const coupled = extra ? coupledRoots(chains, comp, extra) : null;
+    const withExtra: SceneConstraint[] = [];
+    // Keyed by root, in first-constraint order, and each group keeps the set's
+    // own order - which the vine builder chose (pair chains before the bends
+    // that argue with them, load rope last) and which a Gauss-Seidel sweep is
+    // not free to change.
+    const groups = new Map<number, SceneConstraint[]>();
+    for (let i = 0; i < chains.length; i++) {
+      if (coupled?.has(comp[i]!)) {
+        withExtra.push(chains[i]!);
+        continue;
+      }
+      const root = comp[i]!;
+      const group = groups.get(root);
+      if (group) group.push(chains[i]!);
+      else groups.set(root, [chains[i]!]);
+    }
+    for (const group of groups.values()) sweepOneSet(group, null, delta);
+    // Still swept when nothing is coupled to it: the rope is the caller's and
+    // has to be solved whatever the scenery is doing.
+    if (extra) sweepOneSet(withExtra, extra, delta);
+    return;
+  }
+  sweepOneSet(chains, extra, delta);
+}
+
+// One set, swept as one system - the loop this file is written about.
+function sweepOneSet(
+  chains: readonly SceneConstraint[],
   extra: CoupledRope | null,
   delta: number,
 ): void {
@@ -433,7 +628,7 @@ export function sweepChains(
       // reason `disturbed` is: it is what this sweep left behind.
       let worstSet = 0;
       if (extra.settleSet) {
-        for (const chain of chains) worstSet = Math.max(worstSet, chain.rope.overLength);
+        for (const chain of chains) worstSet = Math.max(worstSet, chain.residual);
       }
       // Solved last, so the frame ends on the rope whose books the caller takes:
       // `BallLevel` credits the ball for the position the chain phase leaves it
@@ -465,7 +660,7 @@ export function sweepChains(
     // one solve - the sweep is what discovers that, and gravity has moved the
     // bodies since the last one.
     let worst = 0;
-    for (const chain of chains) worst = Math.max(worst, chain.rope.overLength);
+    for (const chain of chains) worst = Math.max(worst, chain.residual);
     if (worst <= CHAIN_TOLERANCE) break;
   }
 }

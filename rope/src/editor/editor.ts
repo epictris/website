@@ -169,6 +169,7 @@ import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../le
 import {
   DEFAULT_VINE_DENSITY,
   DEFAULT_VINE_SPACING,
+  DEFAULT_VINE_STIFFNESS,
   LIGHT_LINK_MASS,
   MIN_VINE_DENSITY,
 } from "../level/vines";
@@ -3592,7 +3593,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls.";
+      "Hangs from one anchor, free at the bottom. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the end handle to set how long it is. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend: 0 is a rope, 1 a pole that holds itself straight and springs back to hanging.";
     g.appendChild(hint);
 
     numField(
@@ -3718,6 +3719,44 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     warn.textContent = light();
     g.appendChild(warn);
     readouts.push({ el: warn, get: light });
+
+    // How hard it is to BEND, 0..1 - the one thing on this panel that is not a
+    // length, a weight or a colour (see `level/vineBend.ts`). Blank is the
+    // builder's default, and blank is a real third state rather than a spelling
+    // of zero: a vine that never asked for stiffness builds no bend constraints
+    // at all, so it costs what a vine always cost and replays as one.
+    numField(
+      g,
+      "stiffness",
+      () => {
+        const first = vines[0]!.stiffness;
+        return vines.every((v) => v.stiffness === first) ? (first ?? NaN) : null;
+      },
+      (v) => {
+        for (const vine of vines) vine.stiffness = Math.min(1, Math.max(0, v));
+      },
+      0.05,
+      vines.length > 1,
+      {
+        placeholder: `${DEFAULT_VINE_STIFFNESS}`,
+        onEmpty: () => {
+          for (const vine of vines) vine.stiffness = null;
+        },
+      },
+    );
+
+    // What that number reads as in the game, because 0.75 says nothing on its
+    // own and the thing it stands for is a bending rigidity nobody can picture.
+    // The bands are the measured ones (see `BEND_EI_POLE`).
+    readout("bends like", () => {
+      if (vines.length > 1) return "-";
+      const s = vines[0]!.stiffness ?? DEFAULT_VINE_STIFFNESS;
+      if (s < 0.2) return "a rope";
+      if (s < 0.4) return "a heavy cord";
+      if (s < 0.65) return "a springy branch";
+      if (s < 0.85) return "a sapling";
+      return "a pole";
+    });
 
     const cw = el("label", "ed-field");
     cw.textContent = "color";
@@ -4791,6 +4830,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       length,
       spacing: null,
       density: null,
+      stiffness: null,
       color: null,
     };
     model.vines.push(vine);

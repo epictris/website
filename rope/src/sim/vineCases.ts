@@ -82,6 +82,7 @@ function hall(opts: {
   vineLength?: number;
   spacing?: number;
   density?: number;
+  stiffness?: number;
   floorY?: number;
   playerX?: number;
   playerY?: number;
@@ -121,6 +122,7 @@ function hall(opts: {
               length: opts.vineLength,
               ...(opts.spacing === undefined ? {} : { spacing: opts.spacing }),
               ...(opts.density === undefined ? {} : { density: opts.density }),
+              ...(opts.stiffness === undefined ? {} : { stiffness: opts.stiffness }),
             },
           ],
         }),
@@ -338,7 +340,7 @@ function caseRest(): VineResult {
   let worstSpeed = 0;
   let worstLean = 0;
   rig.step(120, {}, () => {
-    for (const c of vine.chains) worstOver = Math.max(worstOver, c.rope.overLength);
+    for (const c of vine.chains) worstOver = Math.max(worstOver, c.residual);
     for (const l of vine.links) {
       worstSpeed = Math.max(worstSpeed, l.linearVelocity.length());
       worstLean = Math.max(worstLean, Math.abs(l.globalPosition.x));
@@ -758,7 +760,9 @@ function caseFormat(): VineResult {
         ],
       },
     ],
-    vines: [{ anchor: 7, length: 250, spacing: 12, density: 8, color: "#446622" }],
+    vines: [
+      { anchor: 7, length: 250, spacing: 12, density: 8, stiffness: 0.4, color: "#446622" },
+    ],
   };
 
   // px -> m: the two LENGTHS scale and nothing else does. The density is the
@@ -771,6 +775,9 @@ function caseFormat(): VineResult {
     mv?.length === 2.5 && mv?.spacing === 0.12 && mv.anchor === 7 && mv.color === "#446622",
   );
   check(`px -> m: density ${mv?.density} kg/m crosses unchanged`, mv?.density === 8);
+  // A fraction, like the density a per-metre figure: neither is in the file's
+  // pixels, and a scaled stiffness would make a pole out of a cord.
+  check(`px -> m: stiffness ${mv?.stiffness} crosses unchanged`, mv?.stiffness === 0.4);
 
   // ...and back, which is the trip that catches a field the scaler copies in one
   // direction only.
@@ -786,11 +793,12 @@ function caseFormat(): VineResult {
   const anchorObj = saved.bodies[0]?.objects.find((o) => o.type === "anchor");
   check(
     `editor: saved back as anchor ${sv?.anchor}, length ${sv?.length}, spacing ${sv?.spacing}, ` +
-      `density ${sv?.density}, colour ${sv?.color}`,
+      `density ${sv?.density}, stiffness ${sv?.stiffness}, colour ${sv?.color}`,
     sv !== undefined &&
       sv.length === 250 &&
       sv.spacing === 12 &&
       sv.density === 8 &&
+      sv.stiffness === 0.4 &&
       sv.color === "#446622" &&
       anchorObj?.type === "anchor" &&
       sv.anchor === anchorObj.id,
@@ -803,8 +811,11 @@ function caseFormat(): VineResult {
     modelFromDisk({ ...authored, vines: [{ anchor: 7, length: 250 }] }),
   ).vines?.[0];
   check(
-    `editor: an unauthored spacing, density and colour stay absent`,
-    bare?.spacing === undefined && bare?.density === undefined && bare?.color === undefined,
+    `editor: an unauthored spacing, density, stiffness and colour stay absent`,
+    bare?.spacing === undefined &&
+      bare?.density === undefined &&
+      bare?.stiffness === undefined &&
+      bare?.color === undefined,
   );
 
   // A vine hung off the TOP of a body has nowhere to go, and every link piles at
@@ -1299,10 +1310,180 @@ function caseWeight(): VineResult {
   return ok("weight — an authored density changes what the vine holds, not how it hangs", passed, details);
 }
 
+// ---------------------------------------------------------------------------
+// stiffness: what an authored stiffness does, and what it must not do.
+//
+// `VineData.stiffness` is a fraction between a rope and a pole (see
+// `level/vineBend.ts`), and nothing else in this suite can see it. A stiff vine
+// hangs in exactly the same place as a limp one - straight down, because that
+// is its rest pose either way - so the whole difference is what happens when
+// something tries to BEND it, and the two things it has to be are:
+//
+//   - unbendable in proportion to what it says, under the biggest load in the
+//     game (a 70 kg player hanging off it), and
+//   - CLAMPED at its anchor rather than hinged there: a pole bolted to a
+//     ceiling holds itself out along the way it was hung and comes back to it
+//     when let go, where a rigid rod on a pivot would swing off like a
+//     pendulum and stay wherever it stopped.
+//
+// ...and the thing it must not do is cost a vine that never asked for it
+// anything at all, which is asserted the only way that means anything: the same
+// vine, with and without the field, bit for bit.
+// ---------------------------------------------------------------------------
+
+// The vine's shape, as the two numbers this case is written in: how far the
+// anchor-to-tip chord leans off vertical in degrees, and how straight the cord
+// is (chord over arc, 1 being a perfectly straight rod).
+function vineLean(vine: Vine): number {
+  const a = vine.anchorContact.globalPosition;
+  const tip = vine.links[vine.links.length - 1]!.globalPosition;
+  const d = tip.sub(a);
+  return (Math.atan2(d.x, d.y) * 180) / Math.PI;
+}
+
+function vineStraightness(vine: Vine): number {
+  const a = vine.anchorContact.globalPosition;
+  let arc = 0;
+  let prev = a;
+  for (const link of vine.links) {
+    arc += link.globalPosition.distanceTo(prev);
+    prev = link.globalPosition;
+  }
+  return arc > 0 ? a.distanceTo(prev) / arc : 1;
+}
+
+function caseStiffness(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // A vine that does not ask for stiffness is the vine it always was. Bit for
+  // bit against the same level with the field absent, over a run that hangs the
+  // player off it - anything less is satisfied by a nearly-no-op.
+  const trace = (stiffness: number | undefined): string[] => {
+    const rig = new Rig(hall({ vineLength: 300, ...(stiffness === undefined ? {} : { stiffness }) }));
+    rig.step(30);
+    const aim = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
+    grab(rig, aim, 20);
+    const out: string[] = [];
+    rig.step(200, { fire: true, aim }, () => {
+      for (const link of rig.vine.links) {
+        out.push(`${link.globalPosition.x},${link.globalPosition.y}`);
+      }
+    });
+    return out;
+  };
+  const absent = trace(undefined);
+  const zero = trace(0);
+  check(
+    `stiffness 0 is bit-identical to a vine with no stiffness at all ` +
+      `(${absent.length} samples)`,
+    absent.length > 0 && absent.join("|") === zero.join("|"),
+  );
+  const limp = new Rig(hall({ vineLength: 300, stiffness: 0 }));
+  check(`...and builds no bend constraints (${limp.vine.bends.length})`, limp.vine.bends.length === 0);
+
+  // The player hooks the TIP and hangs on it, which is the biggest bending load
+  // the game has: 70 kg on the end of a 3 m lever.
+  const hang = (stiffness: number): { lean: number; straight: number; end: number } => {
+    const rig = new Rig(hall({ vineLength: 300, stiffness }));
+    rig.step(30);
+    const aim = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
+    grab(rig, aim, 20);
+    let lean = 0;
+    let straight = 1;
+    rig.step(400, { fire: true, aim }, () => {
+      lean = Math.max(lean, Math.abs(vineLean(rig.vine)));
+      straight = Math.min(straight, vineStraightness(rig.vine));
+    });
+    return { lean, straight, end: Math.abs(vineLean(rig.vine)) };
+  };
+  const rope = hang(0);
+  const pole = hang(1);
+  const branch = hang(0.5);
+  check(
+    `a rope is bent right over by a hooked player: ${rope.lean.toFixed(0)} deg off vertical, ` +
+      `${rope.straight.toFixed(3)} straight (bar 30 deg)`,
+    rope.lean > 30,
+  );
+  check(
+    `a pole is not: ${pole.lean.toFixed(1)} deg, ${pole.straight.toFixed(3)} straight (bars 5 deg, 0.99)`,
+    pole.lean < 5 && pole.straight > 0.99,
+  );
+  check(
+    `and half way between is half way between: ${branch.lean.toFixed(0)} deg, ` +
+      `${branch.straight.toFixed(3)} straight`,
+    branch.lean < rope.lean && branch.lean > pole.lean && branch.straight > rope.straight,
+  );
+  // The clamp, from the other side: the player is still hanging on it 400
+  // frames later, and the pole is still where it was hung.
+  check(
+    `the pole is still vertical with the player hanging on it (${pole.end.toFixed(1)} deg, ` +
+      `against the rope's ${rope.end.toFixed(0)})`,
+    pole.end < 5 && rope.end > pole.end,
+  );
+
+  // The clamp is in the ANCHOR BODY's frame, not the world's. Turn the ceiling
+  // a quarter turn and a pole goes with it - it holds itself straight out,
+  // horizontal, under its own 50 kg - where a rope hangs down as it always did.
+  // Nothing else in the game can tell a clamp from a hinge: a hinged rod hangs
+  // vertically too.
+  const turned = (stiffness: number): number => {
+    const rig = new Rig(hall({ vineLength: 200, stiffness, floorY: 900 }));
+    rig.step(60);
+    rig.vine.anchorContact.obj.globalRotation = -Math.PI / 2;
+    rig.step(300);
+    return Math.abs(vineLean(rig.vine));
+  };
+  const turnedPole = turned(1);
+  const turnedRope = turned(0);
+  check(
+    `a pole on a ceiling turned a quarter turn comes with it: ${turnedPole.toFixed(0)} deg ` +
+      `off world-down (bar 80)`,
+    turnedPole > 80,
+  );
+  check(
+    `...while a rope hangs where gravity says: ${turnedRope.toFixed(0)} deg (bar 5)`,
+    turnedRope < 5,
+  );
+
+  // A file may say anything. Out of range is clamped rather than fed to a
+  // solver: a negative compliance is a joint that bends FURTHER the harder it
+  // is pushed, and there is no such vine.
+  const over = new Rig(hall({ vineLength: 300, stiffness: 5 }));
+  const under = new Rig(hall({ vineLength: 300, stiffness: -2 }));
+  const full = new Rig(hall({ vineLength: 300, stiffness: 1 }));
+  check(
+    `stiffness 5 builds as 1 (${over.vine.stiffness}) and -2 as 0 (${under.vine.stiffness})`,
+    over.vine.stiffness === 1 && under.vine.stiffness === 0,
+  );
+  check(
+    `...so the over-stiff vine is the pole (${over.vine.bends.length} bends against ` +
+      `${full.vine.bends.length}) and the negative one is the rope (${under.vine.bends.length})`,
+    over.vine.bends.length === full.vine.bends.length && under.vine.bends.length === 0,
+  );
+
+  // And a stiff vine still SLEEPS. It is scenery, and scenery that is not doing
+  // anything must cost nothing - a vine whose bends kept it twitching would
+  // never drop out of the sweep, which is where a vine's whole cost is.
+  const settling = new Rig(hall({ vineLength: 300, stiffness: 1 }));
+  let asleep = -1;
+  settling.step(600, {}, (f) => {
+    if (asleep < 0 && settling.vine.asleep) asleep = f;
+  });
+  check(`a pole left alone is asleep by frame ${asleep} of 600`, asleep >= 0);
+
+  return ok("stiffness — a stiff vine refuses to bend and is clamped where it hangs", passed, details);
+}
+
 export function runVineCases(): VineResult[] {
   return [
     caseFormat(),
     caseWeight(),
+    caseStiffness(),
     caseLinkContacts(),
     caseRest(),
     caseDrape(),

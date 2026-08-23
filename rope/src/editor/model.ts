@@ -479,6 +479,11 @@ export interface EdVine {
   // how the vine answers a hooked player and what it leans on the body it hangs
   // from, not about how it falls (see `DEFAULT_VINE_DENSITY`).
   density: number | null;
+  // How hard it is to bend, 0..1: 0 is a rope, 1 a pole (see
+  // `level/vineBend.ts`). Null = the builder's default, which is a rope - and a
+  // real third state, because a vine that never asked for stiffness builds no
+  // bend constraints at all and is written to the file without the field.
+  stiffness: number | null;
   // Hex cord colour; null = the renderer's own vine colours.
   color: string | null;
 }
@@ -1207,6 +1212,7 @@ function lightItem(
       length: v.length,
       spacing: v.spacing ?? null,
       density: v.density ?? null,
+      stiffness: v.stiffness ?? null,
       color: v.color ?? null,
     });
   }
@@ -1559,6 +1565,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       length: v.length,
       ...(v.spacing !== null ? { spacing: v.spacing } : {}),
       ...(v.density !== null ? { density: v.density } : {}),
+      ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
       ...(v.color !== null ? { color: v.color } : {}),
     });
   }

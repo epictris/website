@@ -26,7 +26,12 @@ import {
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import { collectDecor, type SceneDecor } from "./decor";
-import { buildSceneChains, stepSceneChains, type SceneChain } from "./chains";
+import {
+  buildSceneChains,
+  stepSceneChains,
+  type SceneChain,
+  type SceneConstraint,
+} from "./chains";
 import {
   buildVines,
   stepVines,
@@ -87,7 +92,7 @@ export class Level {
   // wherever a vine hangs off something a chain also holds, and a set solved in
   // two passes is two constraints spending every frame undoing each other (see
   // `sweepChains`). Rebuilt in place once a frame (see `vineChainSet`).
-  private readonly solveSet: SceneChain[] = [];
+  private readonly solveSet: SceneConstraint[] = [];
   // What a vine's load rope may bend around: the level's static geometry.
   private readonly vineWraps: PhysicsBody2D[];
   // Render-only: the metre-scaled level as built, and the engine object each
