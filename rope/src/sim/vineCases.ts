@@ -41,7 +41,7 @@ import { World } from "../engine/world";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { mechanicalEnergy } from "./trace";
-import { CHAIN_TOLERANCE } from "../level/chains";
+import { CHAIN_TOLERANCE, VINE_TOLERANCE } from "../level/chains";
 import {
   DEFAULT_VINE_DENSITY,
   DEFAULT_VINE_SPACING,
@@ -214,11 +214,11 @@ class Rig {
 // ---------------------------------------------------------------------------
 // link-contacts: the engine guards, on bare bodies.
 //
-// The rule they implement is one sentence - a non-solid body blocks nothing, and
-// is blocked only by statics - and it is asserted here rather than through a
-// level because every one of these is a NEGATIVE: what must be checked is that a
-// pair produces no contact, which a scene can satisfy by the two never being
-// near each other.
+// The rule they implement is one sentence - a vine link blocks nothing and is
+// blocked by nothing (`passable`) - and it is asserted here rather than through
+// a level because every one of these is a NEGATIVE: what must be checked is
+// that a pair produces no contact, which a scene can satisfy by the two never
+// being near each other.
 // ---------------------------------------------------------------------------
 function caseLinkContacts(): VineResult {
   const details: string[] = [];
@@ -258,7 +258,7 @@ function caseLinkContacts(): VineResult {
   const contacts = world.collectContacts();
   const pair = (a: PhysicsBody2D, b: PhysicsBody2D): boolean =>
     contacts.some((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
-  check("link vs static: a contact exists (this is how a vine drapes)", pair(link, ground));
+  check("link vs static: no contact (vines ignore the scenery)", !pair(link, ground));
   check("link vs link: no contact", !pair(link, twin));
   check("link vs rigid: no contact", !pair(link, box));
   check("rigid vs static: unaffected", pair(box, ground));
@@ -301,9 +301,11 @@ function caseLinkContacts(): VineResult {
       `${(link.globalPosition.distanceTo(linkBefore) * 1000).toFixed(3)} mm)`,
     linkPushed.length === 0 && link.globalPosition.distanceTo(linkBefore) === 0,
   );
-  // ...while the floor still holds it up, which is the "only by statics" half.
+  // ...and not out of static scenery either: a link is `passable`, blocked by
+  // nothing at all. (It used to be the weaker "blocked only by statics", which
+  // is how a vine draped; vines ignore the scenery outright now.)
   const held = world.depenetrateRigid(link, 2, (o) => o === ground);
-  check(`but it IS pushed out of static scenery (${held.length} normals)`, held.length > 0);
+  check(`nor out of static scenery (${held.length} normals)`, held.length === 0);
 
   // And the hook can still see one: links are on LAYER_ANCHOR, which is the
   // layer the hook's ray asks for and no other query does. In a world of its
@@ -318,7 +320,7 @@ function caseLinkContacts(): VineResult {
   check(`a hook ray (mask 1|2) reaches a link`, hookRay?.collider === target);
   check(`a mask-1 ray - every other query in the game - does not`, solidRay === null);
 
-  return ok("link-contacts — a non-solid body blocks nothing, and is blocked only by statics", passed, details);
+  return ok("link-contacts — a vine link blocks nothing and is blocked by nothing", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -360,8 +362,10 @@ function caseRest(): VineResult {
   const droop = hang - 3;
 
   const claims: Array<[string, boolean]> = [
-    [`${vine.links.length} links, ${vine.chains.length} pair chains`, vine.links.length === 20 && vine.chains.length === 20],
-    [`worst pair over-length ${(worstOver * 1000).toFixed(3)} mm <= ${CHAIN_TOLERANCE * 1000} mm`, worstOver <= CHAIN_TOLERANCE],
+    // 20 joints (anchor + 19 pairs) plus the 19 per-link long-range
+    // attachments a hanging vine builds (see `buildOne`).
+    [`${vine.links.length} links, ${vine.chains.length} chains`, vine.links.length === 20 && vine.chains.length === 39],
+    [`worst pair over-length ${(worstOver * 1000).toFixed(3)} mm <= ${VINE_TOLERANCE * 1000} mm`, worstOver <= VINE_TOLERANCE],
     [`hangs ${hang.toFixed(4)} m against 3 m authored: droop ${(droop * 1000).toFixed(1)} mm, bound ${(droopBound * 1000).toFixed(0)} mm`, droop >= 0 && droop <= droopBound],
     [`plumb: worst |x| ${(worstLean * 1000).toFixed(3)} mm <= 1 mm`, worstLean <= 0.001],
     [`settled: worst link speed ${worstSpeed.toFixed(5)} m/s <= 0.05`, worstSpeed <= 0.05],
@@ -375,22 +379,16 @@ function caseRest(): VineResult {
 }
 
 // ---------------------------------------------------------------------------
-// drape: a vine landing on a ledge, and a vine pooling on a floor.
+// scenery: a vine ignores the level's geometry outright.
 //
-// Both are emergent and need no vine-specific code at all - link-vs-static
-// contacts in `World.integrate`, plus the chain phase's own depenetration
-// against statics - so what is asserted is that the emergence is STABLE: the
-// geometry really is holding the vine up, nothing ends up inside it, nothing
-// buzzes, and nothing walks across the floor for ever.
-//
-// A vine longer than its drop is the case that made the spawn rule necessary,
-// and it is the pool: authored straight through the floor, its tail spawns past
-// the slab's midline, is depenetrated out of the FAR face, and hangs below the
-// world while the pair chain above pays out rope to it for ever (see
-// `dropDistance`). It reads as the vine growing without limit, and no invariant
-// in the project can see it.
+// This replaced the drape/pool case when the collision contract was retired:
+// links are `passable`, so a ledge across a vine's drop changes nothing at all
+// about how it hangs, and a level is authored so the situation never matters.
+// The sharp form of "changes nothing" is bit-identity against the same vine
+// with no ledge in the level - anything weaker is satisfiable by a ledge that
+// nudges a link a millimetre.
 // ---------------------------------------------------------------------------
-function caseDrape(): VineResult {
+function caseScenery(): VineResult {
   const details: string[] = [];
   let passed = true;
 
@@ -399,25 +397,8 @@ function caseDrape(): VineResult {
     details.push(`${got ? "ok  " : "BAD "} ${claim}`);
   };
 
-  const settle = (rig: Rig, frames: number): { speed: number; embed: number; drift: number } => {
-    rig.step(frames);
-    const p0 = rig.vine.links.map((l) => l.globalPosition);
-    let speed = 0;
-    let embed = 0;
-    rig.step(120, {}, () => {
-      embed = Math.max(embed, rig.worstEmbed());
-      for (const l of rig.vine.links) speed = Math.max(speed, l.linearVelocity.length());
-    });
-    let drift = 0;
-    rig.vine.links.forEach((l, i) => {
-      drift = Math.max(drift, l.globalPosition.distanceTo(p0[i]!));
-    });
-    return { speed, embed, drift };
-  };
-
-  // (a) A ledge across the vine's drop, 2.8 m below the anchor. A 4 m vine would
-  // hang to y = -0.8 in clear air; on the ledge its tail stops at the ledge's
-  // top face, a link's radius clear of it.
+  // A ledge across the vine's drop, 2.8 m below the anchor. A 4 m vine hangs
+  // straight through it to the same tip a clear-air vine reaches.
   const ledge: LevelBodyData = {
     kind: "static",
     x: -80,
@@ -425,40 +406,35 @@ function caseDrape(): VineResult {
     rot: 0,
     objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 40 } }],
   };
-  const over = new Rig(hall({ vineLength: 400, extra: [ledge] }));
-  const o = settle(over, 360);
-  const tipY = over.vine.links[over.vine.links.length - 1]!.globalPosition.y;
-  check(`ledge: the tail is held at ${tipY.toFixed(3)} m, not the -0.8 m of a free hang`, tipY <= -2.1);
-  check(`ledge: worst embed ${(o.embed * 1000).toFixed(2)} mm <= 5 mm`, o.embed <= 0.005);
-  check(`ledge: worst link speed ${o.speed.toFixed(4)} m/s <= 0.05`, o.speed <= 0.05);
-  check(`ledge: worst drift over 120 frames ${(o.drift * 1000).toFixed(2)} mm <= 5 mm`, o.drift <= 0.005);
-
-  // (b) A 6 m vine over a 4.6 m drop: 1.4 m of it has nowhere to go but the
-  // floor. This is the runaway case above.
-  const pool = new Rig(hall({ vineLength: 600, floorY: 100 }));
-  const p = settle(pool, 420);
-  const floorTop = 1 - 0.2;
-  const resting = pool.vine.links.filter((l) => l.globalPosition.y > floorTop - 0.2).length;
-  const deepest = Math.max(...pool.vine.links.map((l) => l.globalPosition.y));
-  // "Links pool" is a statement about ARC, not a count - the links have no
-  // self-collision, so the length past the drop lies at the floor however
-  // coarse the links are (the default spacing widens on a long vine) - so the
-  // bar is the surplus arc's own worth of links, derived from the geometry
-  // rather than pinned to one spacing's number.
-  const restingY = floorTop - pool.vine.spacing * 0.6;
-  const surplus = 6 - (restingY - pool.vine.anchorContact.globalPosition.y);
-  const expectedResting = Math.ceil(surplus / pool.vine.spacing);
+  const through = new Rig(hall({ vineLength: 400, extra: [ledge] }));
+  const clear = new Rig(hall({ vineLength: 400 }));
+  let firstDiff = -1;
+  let worstDiff = 0;
+  for (let f = 0; f < 360; f++) {
+    through.step(1);
+    clear.step(1);
+    for (let i = 0; i < through.vine.links.length; i++) {
+      const d = through.vine.links[i]!.globalPosition.distanceTo(clear.vine.links[i]!.globalPosition);
+      if (d > 0) {
+        if (firstDiff < 0) firstDiff = f;
+        worstDiff = Math.max(worstDiff, d);
+      }
+    }
+  }
   check(
-    `pool: ${resting} of ${pool.vine.links.length} links are down on the floor ` +
-      `(the ${surplus.toFixed(2)} m of surplus is >= ${expectedResting} links)`,
-    resting >= expectedResting,
+    `360 frames of a vine hanging through a ledge are bit-identical to the same vine in clear air ` +
+      `(first difference at frame ${firstDiff}, worst ${(worstDiff * 1000).toFixed(2)} mm)`,
+    firstDiff === -1,
   );
-  check(`pool: nothing is below the floor (deepest link ${deepest.toFixed(3)} m)`, deepest <= floorTop);
-  check(`pool: worst embed ${(p.embed * 1000).toFixed(2)} mm <= 5 mm`, p.embed <= 0.005);
-  check(`pool: worst link speed ${p.speed.toFixed(4)} m/s <= 0.05`, p.speed <= 0.05);
-  check(`pool: worst drift over 120 frames ${(p.drift * 1000).toFixed(2)} mm <= 5 mm`, p.drift <= 0.005);
+  const tipY = through.vine.links[through.vine.links.length - 1]!.globalPosition.y;
+  check(`the tail hangs to its free-hang depth (${tipY.toFixed(3)} m, want <= -0.7)`, tipY <= -0.7);
+  let speed = 0;
+  through.step(120, {}, () => {
+    for (const l of through.vine.links) speed = Math.max(speed, l.linearVelocity.length());
+  });
+  check(`and it is settled (worst link speed ${speed.toFixed(4)} m/s <= 0.05)`, speed <= 0.05);
 
-  return ok("drape — a vine landing on a ledge and a vine pooling on a floor both settle, and neither is inside the geometry", passed, details);
+  return ok("scenery — a vine hangs straight through the level's geometry, untouched by it", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +527,7 @@ function caseGrabHang(): VineResult {
       lraMissing++;
       return;
     }
-    worstLraOver = Math.max(worstLraOver, lra.rope.getCurrentLength() - lra.rope.maxRopeLength);
+    worstLraOver = Math.max(worstLraOver, lra.currentLength() - lra.restLength);
   });
 
   const player = rig.level.player;
@@ -630,62 +606,6 @@ function caseWinch(): VineResult {
       `${staticTravel.toFixed(3)} m up a static in the same place (${(ratio * 100).toFixed(0)}%, want >= 80%)`,
   );
   return ok("winch — hauling up a vine goes as far as hauling up a static", passed, details);
-}
-
-// ---------------------------------------------------------------------------
-// corner-grab: a load rope routed round a corner.
-//
-// This is the whole reason the load rope is a wrap-point `Rope` and not the
-// straight long-range attachment the PBD literature describes: a straight one is
-// wrong the moment the vine bends round something, and this one routes itself
-// and keeps its length exact along the routed path.
-// ---------------------------------------------------------------------------
-function caseCornerGrab(): VineResult {
-  const details: string[] = [];
-  let passed = true;
-  const check = (claim: string, got: boolean): void => {
-    if (!got) passed = false;
-    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
-  };
-
-  // A pillar beside the vine, so hauling the grabbed link sideways puts its
-  // corner between the anchor and the grab.
-  const pillar: LevelBodyData = {
-    kind: "static",
-    x: 90,
-    y: -330,
-    rot: 0,
-    objects: [{ type: "collision", shape: { kind: "rect", w: 60, h: 300 } }],
-  };
-  const rig = new Rig(hall({ vineLength: 400, playerX: 420, playerY: -120, extra: [pillar] }));
-  rig.step(60);
-  const grabIndex = rig.vine.links.length - 3;
-  const aim = rig.vine.links[grabIndex]!.globalPosition;
-  const index = grab(rig, aim, 40);
-  check(`grabbed a link near the free end (${index} of ${rig.vine.links.length})`, index >= 0);
-
-  let wrapped = 0;
-  let worstOver = 0;
-  rig.step(300, { fire: true, right: true, aim: rig.level.player.globalPosition.add(new Vec2(2, 0)) }, () => {
-    const lra = rig.vine.lra;
-    if (!lra) return;
-    if (lra.rope.path().length > 2) wrapped++;
-    worstOver = Math.max(worstOver, lra.rope.overLength);
-  });
-  check(`the load rope routed round the pillar on ${wrapped} frames`, wrapped > 0);
-  check(
-    `and stayed at its routed length: worst over-length ${(worstOver * 1000).toFixed(2)} mm <= ${CHAIN_TOLERANCE * 1000} mm`,
-    worstOver <= CHAIN_TOLERANCE,
-  );
-
-  // Release: the rule is derived per frame, so letting go of fire removes it.
-  rig.step(1, {});
-  check("releasing the hook removes the load rope on the very next frame", rig.vine.lra === null);
-  rig.step(300);
-  const maxSpeed = Math.max(...rig.vine.links.map((l) => l.linearVelocity.length()));
-  check(`and the vine relaxes and settles (worst link speed ${maxSpeed.toFixed(4)} m/s <= 0.15)`, maxSpeed <= 0.15);
-
-  return ok("corner-grab — the load rope wraps a corner, keeps its routed length, and goes away on release", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -832,10 +752,11 @@ function caseFormat(): VineResult {
       bare?.color === undefined,
   );
 
-  // A vine hung off the TOP of a body has nowhere to go, and every link piles at
-  // the anchor rather than threading down through the body it is bolted to (see
-  // `dropDistance`). Nothing else can see this: the vine renders, no invariant
-  // fires, and what a level gets is a vine hanging through its own floor.
+  // A vine hung off the TOP of a body hangs straight down THROUGH it - links
+  // collide with nothing, and there is no spawn-time geometry scan any more.
+  // Asserted as the contract it is, so a future scan cannot come back
+  // half-remembered: the full authored length below the anchor, plus at most
+  // the sweep's give per segment.
   const upsideDown = new Rig({
     ...authored,
     bodies: [
@@ -857,8 +778,8 @@ function caseFormat(): VineResult {
   const anchorY = upsideDown.vine.anchorContact.globalPosition.y;
   const deepest = Math.max(...upsideDown.vine.links.map((l) => l.globalPosition.y));
   check(
-    `a vine hung off the top of a body piles at its anchor (deepest link ${((deepest - anchorY) * 1000).toFixed(0)} mm below it, not 3000)`,
-    deepest - anchorY < 0.3,
+    `a vine hung off the top of a body hangs its full length through it (deepest link ${((deepest - anchorY) * 1000).toFixed(0)} mm below the anchor, vine 3000 + series give)`,
+    deepest - anchorY >= 3.0 && deepest - anchorY <= 3.0 + upsideDown.vine.links.length * 0.005,
   );
 
   // A vine naming an anchor the level does not have is dropped at both ends,
@@ -1375,15 +1296,15 @@ function caseWeight(): VineResult {
     let worst = 0;
     rig.step(400, { fire: true, aim }, () => {
       const lra = rig.vine.lra;
-      if (lra) worst = Math.max(worst, lra.rope.getCurrentLength() - lra.rope.maxRopeLength);
+      if (lra) worst = Math.max(worst, lra.currentLength() - lra.restLength);
     });
     return worst;
   };
   const lightStretch = stretch(built(2));
   const heavyStretch = stretch(built(60));
   check(
-    `the 60 kg/m vine holds the player: load rope stretched ${(heavyStretch * 1000).toFixed(2)} mm (bar 1)`,
-    heavyStretch <= 0.001,
+    `the 60 kg/m vine holds the player: load rope stretched ${(heavyStretch * 1000).toFixed(2)} mm (bar ${CHAIN_TOLERANCE * 1000})`,
+    heavyStretch <= CHAIN_TOLERANCE,
   );
   check(
     `the 2 kg/m one gives, which is the trade being offered: ${(lightStretch * 1000).toFixed(0)} mm`,
@@ -1831,8 +1752,8 @@ function caseSpanGrab(): VineResult {
       missing++;
       return;
     }
-    worstOver = Math.max(worstOver, lra.rope.getCurrentLength() - lra.rope.maxRopeLength);
-    worstOver2 = Math.max(worstOver2, lra2.rope.getCurrentLength() - lra2.rope.maxRopeLength);
+    worstOver = Math.max(worstOver, lra.currentLength() - lra.restLength);
+    worstOver2 = Math.max(worstOver2, lra2.currentLength() - lra2.restLength);
     worstArc = Math.max(worstArc, rig.arcTo(index));
     worstArc2 = Math.max(worstArc2, arcFrom2(index));
   });
@@ -1880,14 +1801,13 @@ export function runVineCases(): VineResult[] {
     caseStiffness(),
     caseLinkContacts(),
     caseRest(),
-    caseDrape(),
+    caseScenery(),
     caseSpan(),
     caseSpanStiffness(),
     caseSpanGrab(),
     casePassThrough(),
     caseGrabHang(),
     caseWinch(),
-    caseCornerGrab(),
     caseReleaseRefire(),
     caseBallVine(),
     caseBallSteer(),

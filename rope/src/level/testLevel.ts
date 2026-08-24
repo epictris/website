@@ -132,11 +132,10 @@ export const TEST_SPRING: LevelSpec = { data: SPRING_DATA };
 // apart rather than side by side, because chaining one to the next is the thing
 // a vine offers that a static anchor does not.
 //
-// The third is there for the two behaviours that need no player at all: it hangs
-// 7 m from a branch 5.6 m above the right ledge, so 1.4 m of it lies in a heap on
-// that ledge. That is the drape and the pool in one, and it is what `dropDistance`
-// exists for - authored straight through the ledge, its tail would otherwise
-// spawn past the slab's midline and hang below the world.
+// The third hangs 7 m from a branch 5.6 m above the right ledge. It used to
+// drape 1.4 m of itself onto that ledge; vines ignore the scenery now (see
+// `level/vines.ts`), so it hangs its full length straight through it - kept as
+// authored, as the visible statement of that contract.
 const VINE_DATA: RawLevelData = {
   player: { x: -300, y: 20, radius: 8 },
   bodies: [

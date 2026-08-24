@@ -51,7 +51,7 @@ import { RigidBody2D, type CollisionObject2D } from "../engine/body";
 import { Mathf } from "../engine/mathf";
 import { Rope } from "../classes/rope";
 import type { RopeContact } from "../lib/ropeContact";
-import type { SceneConstraint } from "./chains";
+import { VINE_TOLERANCE, type SceneConstraint } from "./chains";
 
 // How many times the projection is re-taken. One is exact for a single
 // constraint; the second is the float check that it landed, and is what keeps
@@ -68,11 +68,21 @@ function inverseMass(body: CollisionObject2D): number {
 }
 
 export class VinePair implements SceneConstraint {
-  // Metres of slack the geometry has refused, held as a lease rather than paid
-  // into the rest length - see `Rope.absorbBlockedLength`, whose statement this
-  // is a copy of because the vine's pair chains are in the same sweep as the
-  // ropes that need it and `settleChainBodies` calls `settle` on all of them
-  // alike.
+  // Metres of length the joint has accepted as a standing stretch, held as a
+  // lease - `Rope.absorbBlockedLength`'s statement. SPAN JOINTS ONLY (see
+  // `leased`): a taut span's pairs sit permanently over under their own
+  // tension, and the lease banking that residual is what turns their solves
+  // into no-ops so the span can be still and sleep. It is safe there exactly
+  // because the tight `CHAIN_TOLERANCE` bar keeps the standing residual under
+  // `SLACK_RELEASE_RATE`'s per-frame decay (5 mm against 8.3), so the lease
+  // hovers instead of ratcheting.
+  //
+  // A HANGING vine's joints carry no lease, and must not: their exit bar is
+  // the loose `VINE_TOLERANCE`, which is ABOVE the decay, and a lease there
+  // banks faster than it gives back - a pure ratchet that paid a vine out at
+  // ~7 mm a frame for ever (12.4 m of "5 m" vine) when it was tried. Nothing
+  // needs it either: a `passable` link is never geometry-blocked, and a
+  // hanging vine settles on its damping and sleeps on net displacement.
   private blockedSlack = 0;
   private leaseAtFrameStart = 0;
   private blockedLastFrame = false;
@@ -84,6 +94,14 @@ export class VinePair implements SceneConstraint {
     // The spacing this joint holds, in metres. Nothing pays a vine out, so
     // unlike a rope's `maxRopeLength` it never moves.
     readonly restLength: number,
+    // The exit bar the sweep holds this joint to: `VINE_TOLERANCE` on a
+    // hanging vine, `CHAIN_TOLERANCE` on a span (see `buildOne`).
+    readonly tolerance: number = VINE_TOLERANCE,
+    // Whether the standing-stretch lease above is live. Coupled to the
+    // tolerance by the builder: tight bar with lease (a span), loose bar
+    // without (a hanging vine) - the other two pairings are the ratchet and
+    // the ringing this split exists to avoid.
+    private readonly leased: boolean = false,
   ) {}
 
   get constraintLength(): number {
@@ -107,6 +125,7 @@ export class VinePair implements SceneConstraint {
   }
 
   beginFrame(delta: number): void {
+    if (!this.leased) return;
     this.stalledLength = 0;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
@@ -192,11 +211,13 @@ export class VinePair implements SceneConstraint {
     this.blockedLastFrame = blocked;
   }
 
-  // `Rope.absorbBlockedLength`, on a constraint whose length never moves. The
-  // stall is measured against the lease at FRAME START rather than the released
-  // one, so re-earning this frame's instalment reads as the release working
-  // rather than as the joint stalling.
+  // `Rope.absorbBlockedLength`, on a constraint whose length never moves - and
+  // only where the lease is live (see the field above). The stall is measured
+  // against the lease at FRAME START rather than the released one, so
+  // re-earning this frame's instalment reads as the release working rather
+  // than as the joint stalling.
   private absorbBlockedLength(): void {
+    if (!this.leased) return;
     const blocked = Mathf.max(this.currentLength() - this.restLength, 0);
     this.stalledLength += Mathf.max(
       blocked - Mathf.max(this.blockedSlack, this.leaseAtFrameStart),

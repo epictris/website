@@ -39,7 +39,7 @@ const STEP = 1 / 60;
 // 2x over budget (measured, session-198f at 4x CPU). Shedding the debt trades
 // that for sim time running slightly slower than the wall while overloaded,
 // which degrades gracefully and recovers instantly.
-const MAX_STEPS_PER_FRAME = 2;
+const MAX_STEPS_PER_FRAME = 5;
 
 // Two canvases stacked on the play frame (see index.html): the WebGL scene
 // underneath, and the 2D one on top carrying everything that is genuinely 2D.

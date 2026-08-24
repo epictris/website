@@ -37,7 +37,6 @@ import {
   stepVines,
   updateVineLoads,
   vineChainSet,
-  vineWrapBodies,
   type Vine,
 } from "./vines";
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
@@ -93,8 +92,6 @@ export class Level {
   // two passes is two constraints spending every frame undoing each other (see
   // `sweepChains`). Rebuilt in place once a frame (see `vineChainSet`).
   private readonly solveSet: SceneConstraint[] = [];
-  // What a vine's load rope may bend around: the level's static geometry.
-  private readonly vineWraps: PhysicsBody2D[];
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -131,7 +128,6 @@ export class Level {
     // so what this buys is that the list is what the world holds, rather than a
     // second, quieter definition of the scene.
     for (const vine of this.vines) this.bodies.push(...vine.links);
-    this.vineWraps = vineWrapBodies(built);
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
@@ -222,7 +218,7 @@ export class Level {
     // A vine's load rope is derived from the state of the world rather than
     // driven by grab and release events, so it is settled here, immediately
     // before the sweep that has to solve it.
-    const held = updateVineLoads(this.vines, this.player.rope, this.vineWraps);
+    const held = updateVineLoads(this.vines, this.player.rope);
     stepVines(this.vines);
     const chains = vineChainSet(this.sceneChains, this.vines, held, this.solveSet);
     // Scene chains solve last, after integration has moved the bodies they hold

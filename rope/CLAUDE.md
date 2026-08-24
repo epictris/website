@@ -2717,74 +2717,64 @@ The 2D renderer, the editor and the SVG snapshot draw it first, behind the solid
 ## Vines
 
 A **vine** hangs from one anchor, free at the bottom - or **spans between two**
-(see **Spanning vines** below): the player passes straight
-through it, the hook grabs it **anywhere along its length**, and it drapes over
-whatever it lands on and pools on the floor under it.
+(see **Spanning vines** below): the player passes straight through it, and the
+hook grabs it **anywhere along its length**.
 
-It is **a chain of small pass-through rigid links joined by `SceneChain` pair
-constraints, plus one wrap-point `Rope` from the vine's anchor to the grabbed
-link for exactly as long as the hook holds it** (`level/vines.ts`).
-The links carry the drape and the grab surface; that one extra rope carries the
-load, and everything else about a vine is a consequence of that split.
+**Vines ignore the scenery**, and that is a design decision rather than a
+simplification the solver forced: a link collides with nothing at all
+(`VineLink` is `passable`, the hook-only rule), so a vine neither drapes over a
+ledge nor pools on a floor, and levels are authored so that neither situation
+ever matters.
+What the decision bought is most of what a vine used to cost - the links leave
+the contact gather, the depenetration sweep and `settleChainBodies`' static
+push-out entirely, and the load path became a straight line by construction, so
+the wrap-routing `Rope` that dominated every held frame became a closed-form
+constraint.
 
-Both halves are forced. A wrap-point rope is a **constraint and not a surface**,
-so there is nothing for the hook's ray to hit halfway along one, and a taut one
-hangs dead straight where a vine has to drape - so the links have to be real
-bodies. And a plain chain of distance constraints is exactly what `Rope` exists
-as a rejection of: a Gauss-Seidel pass leaves an order-dependent residual that
-reads as elastic (73 mm on a 1.03 m chain, measured in `chains.ts`), and both the
-residual and the cost of converging it scale with **tension** - so a vine the
-player hangs 70 kg off would reintroduce that failure in the most visible place
-there is.
+It is **a chain of small pass-through rigid links joined by closed-form
+distance constraints, plus one straight long-range attachment from the vine's
+anchor to the grabbed link for exactly as long as the hook holds it**
+(`level/vines.ts`).
+The links carry the hang and the grab surface; that one extra constraint
+carries the load.
+The links have to be real bodies because a rope is a **constraint and not a
+surface** - there is nothing for the hook's ray to hit halfway along one.
 
-The resolution is that stretch is a **load** problem rather than a chain problem.
-An idle vine carries only its own weight, and in that regime the pair chains
-converge in a dozen cheap sweeps. Load appears only at the moment the hook grabs,
-and that is when the load rope appears with it - the long-range-attachment idea
-from the PBD literature, built out of the house rope, which makes it strictly
-better than the textbook version: a straight LRA is wrong the moment the vine
-bends round a corner, and this one **routes itself** around the level's statics
-and keeps its length exact along the routed path.
+**A vine is allowed a little stretch under load, and the allowance is what it
+costs to run.**
+A Gauss-Seidel pass over a serial chain leaves an order-dependent residual
+(73 mm on a 1.03 m chain, measured in `chains.ts`), converging it scales with
+tension, and holding every joint of a swinging stiff vine to the chain bar cost
+25-40 sweeps a frame for millimetres nobody can see.
+So a vine's joints run to `VINE_TOLERANCE` (15 mm) instead of
+`CHAIN_TOLERANCE` (5 mm), per constraint, through
+`SceneConstraint.tolerance` - and the stretch that allows is bounded twice
+over: per-link long-range attachments (anchor to every link, at the arc plus
+the sweep's give) cap the cumulative sag whatever the joints do locally, and
+the load rope holds the grabbed link itself at the tight bar, so the player
+never sinks.
+Spans are the exception and keep the tight bar - see **Spanning vines**.
 
-### A non-solid body blocks nothing, and is blocked only by statics
+### A vine link blocks nothing and is blocked by nothing
 
 `VineLink` is a `RigidBody2D` - it needs gravity and mass, and the whole chain
-phase (`snapshotChainBodies`, `settleChainBodies`, `creditScale`) is written
-against that class. That puts it INSIDE the `StaticBody2D | RigidBody2D`
-allowlist every collision path is written as, so unlike `AnchorBody` it cannot be
-excluded by class. It is excluded by `isSolid` instead, at every site that
-resolves an overlap (`moveAndCollide`'s sweep and its depenetration pass,
-`collectContacts`, `gatherDepenetration`), and the rule above is the one sentence
-that makes those coherent.
+phase (`snapshotChainBodies`, `settleChainBodies`, the credit scaling) is
+written against that class - carrying the `passable` flag, so every collision
+path drops it by the same rules that drop a hook-only leaf: no contacts against
+anything, no depenetration in either direction, out of every wrap list, found
+only by the hook's own queries.
+It used to be the weaker statement ("a non-solid body blocks nothing, and is
+blocked only by statics"), which is how a vine draped and pooled; that
+half-rule and its guards are still in the engine for any future body that wants
+it, and a vine simply no longer uses it.
+`cli vines` asserts the contract on bare bodies (`link-contacts`), through a
+level (`scenery`: a vine hanging through a ledge is bit-identical to the same
+vine in clear air), and from the ball's side (`ball-vine`).
 
-Both halves of the rule have to be guarded at every one of those sites, and the
-second half - *blocked only by statics* - is the one that is easy to miss,
-because missing it leaves the pair decoupled in one direction only. The ball then
-passes through the vine with a bit-identical track while the recovery sweep in
-`World.integrate` pushes the LINK out of the ball: the vine whipped 1.16 m out of
-the way of a ball falling through it, which is what "the ball collides with the
-vine" looks like from the outside even though nothing ever touched the ball. It
-also kept the vine permanently awake, so the sleeping above never engaged
-anywhere near the player. `cli vines` asserts both directions on bare bodies
-(`link-contacts`) and on a level (`ball-vine`, which also asserts that the ball
-gets close enough to the vine for the question to mean anything - a ball has no
-drive of its own, and a "roll at the vine" that never deploys the chain travels
-13 cm and passes 1.1 m clear).
-
-So link-vs-static contacts exist - that is the whole of how a vine drapes and
-pools, with no vine-specific code at all - and link-vs-link, link-vs-ball and
-link-vs-any-rigid do not. A vine never stacks, never pushes anything and never
-fights its own pair constraints through the contact solver, which is the
-"stacking and contact problems" `docs/game-design.md` cites against body-per-link
-chains, **removed by construction rather than solved**.
-
-The visible cost of that is the pool: with no self-collision the surplus links
-lie at the same spot rather than heaping, so a pooling vine reads as a vine
-reaching the floor rather than as a coil on it.
-
-Every guard is a behavioural no-op until a non-solid `RigidBody2D` exists, and it
-was verified as one rather than argued: every playtest in the corpus replays
-bit-identical across the engine change.
+A vine never stacks, never pushes anything and never fights its own pair
+constraints through the contact solver - the "stacking and contact problems"
+`docs/game-design.md` cites against body-per-link chains, **removed by
+construction rather than solved**.
 
 ### The load rope
 
@@ -2795,32 +2785,43 @@ vine's anchor to that link, and otherwise there is none*. Release, the hook bein
 destroyed and re-firing at a different link all fall out of that one statement,
 and `cli vines` `release-refire` asserts it frame by frame.
 
-Two things about it are load-bearing.
+It is a `VineAnchor` (`level/vineAnchor.ts`): a **closed-form point-distance
+inequality** from the anchor contact to the grabbed link's centre - textbook
+long-range attachment semantics, exact in one projection, with the rotational
+term in the effective mass (`w = 1/m + (r x n)^2 / I`) so a rigid, pivot or
+spring anchor body is turned and moved honestly.
+It was a wrap-routing `SceneChain` while vines collided with the level - a
+straight LRA is wrong the moment the vine bends round a corner - and that solve
+regenerated a wrap path on every coupled sweep, which was the single most
+expensive line of every held frame.
+With the scenery ignored, straight is always right, and the same class serves
+the anchor-to-first-link joint and the per-link LRAs.
+
+Three things about it are load-bearing.
 
 **Its rest length is the arc the vine actually has**, measured when it is built,
 not `spacing x links`. The sweep's tolerance is per chain and a vine is a SERIES
-of them, so a settled vine hangs up to `links x CHAIN_TOLERANCE` longer than its
-authored length - 55 mm on a 3 m vine, and invisible, since nothing on screen
-says how long the vine should be. A load rope born at the nominal figure is born
-SHORT and yanks the grabbed link up on the frame the player grabs it, which is
-`rope-anchor-kick` in the ball's words and is answered the way the ball answers
-it (`BallPlayer`'s attach callback re-takes the birth length).
+of them, so a settled vine hangs longer than its authored length - invisible,
+since nothing on screen says how long the vine should be. A load rope born at
+the nominal figure is born SHORT and yanks the grabbed link up on the frame the
+player grabs it, which is `rope-anchor-kick` in the ball's words and is answered
+the way the ball answers it (`BallPlayer`'s attach callback re-takes the birth
+length).
+
+**It keeps the tight `CHAIN_TOLERANCE` bar** while the vine's own joints run
+loose: it is the line the player hangs from, and its closed-form solve pays
+nothing for the precision.
 
 **It is swept WITH the scene chains, and the set has to converge.** The player's
 rope pins to a link, so the two share a body, and solved in separate phases each
 one's correction is the other's residual - `session-521f`, at a far worse mass
 ratio than the ball ever saw. `stepSceneChains` therefore takes the player's rope
-as its `extra`, exactly as `BallLevel` passes the ball's chain.
-
-What is new is `CoupledRope.settleSet`. The ball gates that loop on the
-COUPLING's residual alone, because the arena's chains never converge and waiting
-for them spends the whole sweep cap on a wrap-enabled solve (`session-1618f`). A
-vine is the opposite case and the gate starves it: thirty pair chains in series
-got exactly one sweep per frame from the moment the hook grabbed, every pair
-ended over its length, the blocked-length lease absorbed the difference, and the
-vine came apart - link 7 of 30 on the floor four seconds after the grab while the
-grabbed link hung where it was caught. So the caller says which residual ends the
-sweep, and each answer carries its measurement.
+as its `extra`, exactly as `BallLevel` passes the ball's chain, and
+`CoupledRope.settleSet` makes the loop wait for the vine's own residuals too
+(gated on the coupling alone, a vine got one sweep per frame and came apart).
+The sweep count is set by the exit gate rather than the cap now: a held vine
+exits in a handful of coupled sweeps (5-11 measured on `session-322f`), the cap
+(`MAX_COUPLED_SWEEPS`) being only the bound on a rig that will not converge.
 
 ### The numbers, and which of them an author sets
 
@@ -2835,17 +2836,19 @@ frame, at rest and with the player swinging on the middle of it:
 | 0.15 m  | 20    | 0.84 ms | 3.56 ms  |
 | 0.20 m  | 15    | 0.44 ms | 2.67 ms  |
 
-15 cm is the default. A level pays for all of its vines at once, so the budget is
-the TOTAL link count: `TEST_VINES`'s three vines are 111 links and 8.0 ms at the
-default and 66 links and 2.4 ms at the 25 cm they are authored with. Coarser
-spacing costs grab-anywhere nothing (the grab radius grows with it) and coarsens
-the drape.
+(The table predates vines ignoring the scenery and the closed-form load rope -
+the shape of the argument holds and the absolute numbers are now several times
+smaller: a nine-vine arena with the player swinging on one runs ~1 ms a physics
+frame average, spikes under 5, measured on `session-322f`.)
 
-A link also costs more on a DENSE level, because `settleChainBodies` pushes every
-chain-held body out of the statics around it and that scan is over the level's
-geometry. Two 3 m vines in the ball arena are 40 links and **3.9 ms** a frame at
-the 15 cm default against 1.7 ms for the same two vines in an empty scene - and
-1.9 ms at 25 cm, which is the lever.
+15 cm is the default. A level pays for all of its vines at once, so the budget is
+the TOTAL link count. Coarser spacing costs grab-anywhere nothing (the grab
+radius grows with it) and coarsens the curve.
+
+A link no longer costs more on a dense level: `settleChainBodies`' static
+push-out early-outs on a `passable` body, so the scan over the level's geometry
+that used to double a vine's frame cost (3.9 ms against 1.7 in an empty scene)
+is gone with the collisions.
 
 ### A settled vine costs nothing
 
@@ -2862,11 +2865,11 @@ to them, and nearly all of that is spent on vines hanging perfectly still. Two
 | the same arena with no vines at all | 0.21 |
 
 Asleep is therefore free, exactly. A sleeping link is skipped by
-`World.integrate` (no gravity, no step), by the contact gather (the O(n²) half of
-the frame) and by `depenetrateRigid`, and its vine is left out of the chain sweep
-entirely - which is where the cost is. What it is NOT skipped by is the hook's
-raycast: a sleeping vine is still a thing you can catch, and being caught is what
-wakes it.
+`World.integrate` (no gravity, no step) and its vine is left out of the chain
+sweep entirely - which is where the cost is (an awake link no longer reaches
+the contact gather or the depenetration sweep at all, being `passable`). What
+it is NOT skipped by is the hook's raycast: a sleeping vine is still a thing
+you can catch, and being caught is what wakes it.
 
 **The test is net DISPLACEMENT over a window, and both halves of that were
 arrived at the hard way.**
@@ -3045,25 +3048,19 @@ that a vine must not visibly load its anchor.
 
 ### Where a vine spawns
 
-A vine hangs straight down from its anchor and **stops at the first thing it
-meets** (`dropDistance`). That is not cosmetic. A vine longer than its drop is the
-ordinary case - it is how one pools on a floor - and spawned straight through the
-floor, the links past the slab's MIDLINE are depenetrated out of its far face
-(`circleOverlap` answers the shortest exit), so they end up below the world with
-nothing under them; the pair chain above then reads its own resting neighbour as
-geometry refusing the correction, never releases its lease, and pays out rope to
-the falling link at 0.33 m/s for ever. That is `session-537f`'s runaway reached
-from the level file rather than from the solver.
-
-A vine anchored on the **top** of a body has nowhere to hang at all, and every
-link piles at the anchor rather than threading down through the body it is bolted
-to - visibly the wrong way up, rather than quietly through the floor.
+A hanging vine spawns straight down its full authored length, which IS its rest
+pose - a link collides with nothing, so there is nothing for it to stop at or
+pile on, and the geometry scan the spawn used to run (`dropDistance`, and the
+runaway it closed) went with the collisions.
+A vine authored longer than the space under its anchor simply hangs through the
+floor, and that is the level author's to avoid - the same contract as the rest
+of the scenery-ignoring decision.
 
 ### Spanning vines
 
 A vine may name a **second anchor** (`VineData.anchor2`) and become a span attached at both ends.
 The length stays the whole authored arc, deliberately decoupled from the distance between the anchors: a span longer than the gap **sags into the catenary** that length implies (`level/catenary.ts`), which is both where the editor draws it at rest and the pose `buildVines` spawns the links in.
-The spawn pose matters the way `dropDistance` matters for a hanging vine - the catenary is the solver's own fixed point over empty ground, so a span at rest is at rest on frame one, with nothing for the first frames to correct (`cli vines` `span` bounds the settle movement in millimetres).
+The catenary is the solver's own fixed point, so a span at rest is at rest on frame one, with nothing for the first frames to correct (`cli vines` `span` bounds the settle movement in millimetres).
 The catenary solve is closed-form once its parameter is bisected, sampled BY ARC LENGTH so the links land at their exact spacings; the taut and near-vertical regimes are their own branches (the chord, and the fold).
 
 A span authored **shorter than the gap is built taut at the separation itself**.
@@ -3079,9 +3076,11 @@ A vine lashed at both ends is hinged there, not cantilevered, so a span builds N
 The triples cannot all be satisfied (a span with slack can never be straight) and do not have to be: XPBD bends are springs, and the equilibrium is a force balance with the chains.
 Because the chains are rope INEQUALITIES - a compressed joint is satisfied - that balance absorbs the slack rather than bowing it: measured on 5 m over a 4 m gap, sag 1.38 m at 0 (the catenary), 1.35 at 0.25, 0.21 at 0.5, 0.09 at 1 - a taut wire - monotone, settling and sleeping at every setting (`cli vines` `span-stiffness`).
 
-Two deliberate exclusions.
-**A dead second anchor falls back to hanging** rather than dropping the vine - one anchor is still a complete vine, unlike a chain end - and so does a span naming its own anchor twice.
-And the spawn does no geometry scan: a span authored through scenery settles by the ordinary contact solve, its total length held from both ends, so the free-tip runaway `dropDistance` exists for has no purchase.
+**A span keeps the tight bar and the lease a hanging vine gave up.**
+Its joints run to `CHAIN_TOLERANCE` and carry the standing-stretch lease (`VinePair.leased`), because the two regimes fail in opposite ways: a taut span's joints sit permanently over under their own tension and must be allowed to bank that residual or the span rings for ever and never sleeps, while a loose-bar joint carrying a lease banks its allowed residual faster than `SLACK_RELEASE_RATE` decays it and pays the vine out at ~7 mm a frame for ever (12.4 m of "5 m" span, found the hard way).
+Tight-with-lease and loose-without are the two stable pairings, and `buildOne` couples each vine kind to its own.
+
+One deliberate exclusion: **a dead second anchor falls back to hanging** rather than dropping the vine - one anchor is still a complete vine, unlike a chain end - and so does a span naming its own anchor twice.
 
 Sleep watches **both** anchors, so a span whose far end rides a swinging body wakes exactly as a hanging vine on one does.
 
@@ -3214,11 +3213,13 @@ apart, and a build that quietly stopped making links renders as a level with no
 vine in it and passes everything else.
 
 The cases that matter most are the ones nothing else could make: the engine
-guards on bare bodies, in BOTH directions (`link-contacts`); that 300 frames of
-walking, jumping and landing are **bit-identical** with and without a vine in the
-way (`pass-through`), which is the only form of "the player passes through it" a
-nearly-no-op cannot satisfy; that the anchor-to-grab arc holds in MILLIMETRES
-under a swinging player (`grab-hang`); that a winch hauls as far up a vine as up
+guards on bare bodies (`link-contacts`, a link touching nothing in either
+direction); that 300 frames of walking, jumping and landing are
+**bit-identical** with and without a vine in the way (`pass-through`), and 360
+frames of a vine hanging through a ledge bit-identical to the same vine in
+clear air (`scenery`) - the only forms of "passes through" a nearly-no-op
+cannot satisfy; that the anchor-to-grab arc holds in MILLIMETRES under a
+swinging player (`grab-hang`); that a winch hauls as far up a vine as up
 a static in the same place (`winch`, `ball-winch-hung-anchor`'s methodology);
 that the ball still turns to its aim while it hangs on one (`ball-steer`); and
 that exactly zero or one load rope exists on every frame of a
@@ -3234,9 +3235,10 @@ between the loop and the aim in DEGREES over a hand-speed sweep, because the
 failure it is written against (the unwind billing the spin for the sweep's
 tolerance) leaves every other number in the game looking correct. `playtests/vine-swing.json` is the mechanic end to
 end - two chained swings across an 8 m chasm - and
-`playtests/regressions/vine-swing-320f.json.gz` is the same run as a bundle,
-which replays bit-exact over all 66 links and is what says the determinism stays
-true.
+`playtests/regressions/vine-swing-320f.json.gz` is the same run as a bundle.
+(It was recorded against the rigid-vine physics, so it legitimately diverges a
+few pixels mid-run now; the invariants are the pass signal, per the usual
+bundle semantics.)
 
 ## Pivot bodies
 

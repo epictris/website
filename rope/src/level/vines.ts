@@ -1,71 +1,78 @@
 // Hanging vines - a rope of small pass-through links hanging from one anchor,
-// free at the bottom. The player walks and swings straight through it, the hook
-// grabs it anywhere along its length, and it drapes over whatever it is hanging
-// against.
+// free at the bottom. The player walks and swings straight through it, and the
+// hook grabs it anywhere along its length.
 //
 // The load-bearing decision, stated once: a vine is **a chain of small
-// pass-through rigid links joined by distance constraints, plus one wrap-point
-// `Rope` from the vine's anchor to the grabbed link for exactly as long as the
-// hook holds it**. The links carry the drape and the grab surface; that one
-// extra rope carries the load. Everything else here is a consequence of that
-// split.
+// pass-through rigid links joined by distance constraints, plus one straight
+// long-range attachment from the vine's anchor to the grabbed link for exactly
+// as long as the hook holds it**. The links carry the hang and the grab
+// surface; that one extra constraint carries the load. Everything else here is
+// a consequence of that split.
 //
-// The pair constraints are `VinePair`s (`level/vinePair.ts`) and not `Rope`s.
-// They were `SceneChain`s, which bought the whole chain phase for free and cost
-// two orders of magnitude for it: a joint between two link CENTRES with an empty
-// wrap-candidate list is degenerate in `Rope`'s terms, and solving it in closed
-// form reaches the same fixed point - every number in `cli vines` to the last
-// digit - at 0.14 us against 1.6. The anchor chain stays a `SceneChain`, its
-// start being snapped to the anchor body's surface and so not degenerate.
+// VINES IGNORE THE SCENERY, and that is a design decision rather than a
+// simplification the solver forced: a link collides with nothing at all
+// (`VineLink` is `passable`), so a vine neither drapes over a ledge nor pools
+// on a floor, and a level is authored so that neither ever has to happen. What
+// that buys is most of what a vine used to cost. The links leave the contact
+// gather, the depenetration sweep and `settleChainBodies`' static push-out
+// entirely (the dense-scene scan was 3.9 ms a frame against 1.7 in an empty
+// scene, for the same two vines), and the load path is a straight line by
+// construction - so the load rope stops being a wrap-routing `Rope` and
+// becomes `VineAnchor`, a closed-form distance inequality (see
+// `level/vineAnchor.ts`), which is the solve that used to dominate every held
+// frame.
+//
+// The pair constraints are `VinePair`s (`level/vinePair.ts`) and not `Rope`s,
+// for the cost reason recorded there: closed form reaches the same fixed point
+// at 0.14 us against 1.6. The anchor joint and the load ropes are
+// `VineAnchor`s - the same closed form with the torque arm the anchor contact
+// needs, since it sits on the anchor body's surface rather than at a centre.
 //
 // Why the split. A uniform particle chain is the standard game rope and it is
 // the thing `Rope` exists as a rejection of: a Gauss-Seidel pass over coupled
-// distance constraints leaves an order-dependent residual that reads as elastic,
-// 73 mm on a 1.03 m chain in the measurements `chains.ts` records, and the
-// convergence cost of getting rid of it scales with tension. So a plain dense
-// chain the player hangs 70 kg off would reintroduce exactly the failure the
-// rope system was built to avoid, in the most visible place there is.
+// distance constraints leaves an order-dependent residual that reads as
+// elastic, 73 mm on a 1.03 m chain in the measurements `chains.ts` records,
+// and the convergence cost of getting rid of it scales with tension. A vine
+// accepts a LITTLE of that - a few millimetres of visible give under a
+// swinging player is vine flex, not elastic - but the unbounded form of it
+// (the player sinking as the whole series pays out) is refused by the load
+// rope, which bounds the grabbed link inside its arc of the anchor whatever
+// the sweep count. That is what lets the coupled sweep run to a much lower
+// cap than the rigid-vine contract needed (see `MAX_COUPLED_SWEEPS`).
 //
-// But the house rope alone cannot be a vine either. A wrap-point rope is a
+// The house rope alone cannot be a vine either: a wrap-point rope is a
 // CONSTRAINT rather than a surface, so there is nothing for the hook's ray to
-// hit halfway along one, and a taut one hangs dead straight where a vine has to
-// drape.
+// hit halfway along one, which is why the links are real bodies at all.
 //
-// The resolution is that stretch is a LOAD problem rather than a chain problem.
-// Both the residual and the convergence cost scale with tension, and an idle
-// vine carries only its own weight - a few kilograms, not the 476 kg slab those
-// measurements were taken against - so in that regime the pair chains reach the
-// sweep's own tolerance in a dozen cheap sweeps, and each one ends the frame
-// within the 5 mm that is under what the renderer can show. What a SERIES of
-// them still accumulates is `links * 5 mm` of hang - 55 mm on a 3 m vine,
-// measured, and invisible because nothing on screen says how long the vine
-// should be. Load appears only at the
-// moment the hook grabs, and that is exactly when the wrap-point rope appears
-// with it (`updateVineLoads`), long-range-attachment style: one unstretchable
-// constraint from the anchor straight to the grabbed link, routed around
-// whatever geometry is in the way, with the pair chains above the grab left
-// holding nothing but their own links against an already-taut line.
+// Load appears only at the moment the hook grabs, and that is exactly when the
+// load rope appears with it (`updateVineLoads`), long-range-attachment style:
+// one inextensible straight-line bound from the anchor to the grabbed link,
+// with the pair chains above the grab left holding nothing but their own links
+// against an already-taut line.
 
 import { Vec2 } from "../engine/vec2";
-import { StaticBody2D, VineLink, type PhysicsBody2D } from "../engine/body";
+import { VineLink } from "../engine/body";
 import { circleShape } from "../engine/shapes";
-import { bodyContainsPoint, bodyOverlapCircle, bodySweepCircle } from "../engine/collision";
+import { bodyOverlapCircle } from "../engine/collision";
 import { GRAVITY, type World } from "../engine/world";
 import type { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import {
+  CHAIN_TOLERANCE,
+  VINE_TOLERANCE,
   collectAnchorSites,
   snapToSurface,
-  SceneChain,
   stepSceneChains,
   type AnchorSite,
+  type SceneChain,
   type SceneConstraint,
 } from "./chains";
+import { VineAnchor } from "./vineAnchor";
 import { VinePair } from "./vinePair";
 import { buildVineBends, type VineBend } from "./vineBend";
 import { catenaryPoints } from "./catenary";
-import { RIGID_KINETIC_FRICTION, worldPlacement, type BuiltBodies } from "./buildBodies";
+import { worldPlacement, type BuiltBodies } from "./buildBodies";
 import type { LevelData, VineData } from "./levelFormat";
 
 // Metres between links when a vine does not say.
@@ -81,10 +88,11 @@ import type { LevelData, VineData } from "./levelFormat";
 //     0.15 m     20    0.84 ms    3.56 ms
 //     0.20 m     15    0.44 ms    2.67 ms
 //
-// 15 cm is where that stops being most of a 16.7 ms frame for one piece of
-// scenery. It costs grab-anywhere nothing (the grab radius grows with it, so
-// consecutive links still overlap) and coarsens the drape slightly, which is the
-// only thing it does cost.
+// (Those were measured before vines ignored the scenery and the load rope went
+// closed-form; the scaling argument holds and the absolute costs are several
+// times smaller now.) 15 cm is the default: it costs grab-anywhere nothing
+// (the grab radius grows with it, so consecutive links still overlap) and
+// coarsens the curve slightly, which is the only thing it does cost.
 export const DEFAULT_VINE_SPACING = 0.15;
 
 // ...and the ceiling that default rises to on a long HANGING vine. Cost
@@ -179,6 +187,12 @@ export const LIGHT_LINK_MASS = 1.5;
 // and the pair chains spend the sweep arguing over a link neither can move. A
 // file may say anything; this is what gets built.
 export const MIN_VINE_DENSITY = 1;
+
+// The slack a per-link long-range attachment leaves per segment over the exact
+// arc: the sweep's own tolerance, so a settled vine's series give (up to
+// `CHAIN_TOLERANCE` a pair) never lands ON the attachment and grinds against
+// it. See the LRA note in `buildOne`.
+const VINE_LRA_GIVE = 0.005;
 
 // What a vine hangs at when it does not say: a rope, which is what every vine
 // was before stiffness existed. A vine that does not ask for stiffness builds
@@ -402,15 +416,15 @@ export interface Vine extends VineCord {
   // Authored fill; null = the renderer's own vine colours.
   readonly color: string | null;
   // The live load rope, and the link it is tied to. Null whenever the hook is
-  // not holding this vine. Held here rather than rebuilt per frame because a
-  // `Rope` carries state a rebuild would throw away every frame: its wrap path
-  // and its blocked-length lease.
-  lra: SceneChain | null;
+  // not holding this vine. Held here rather than rebuilt per frame because it
+  // carries state a rebuild would throw away: its blocked-length lease, and
+  // the arc it was born at.
+  lra: VineAnchor | null;
   // The second load rope of a held SPANNING vine, from `anchor2Contact` to the
   // same grabbed link - null for a hanging vine, whose arc below the grab
   // carries nothing but itself. Without it the player's weight on a span is
   // held by one end alone and the whole run to the other anchor pays out.
-  lra2: SceneChain | null;
+  lra2: VineAnchor | null;
   lraLink: VineLink | null;
   // Settled, and costing nothing: out of the chain sweep entirely, and skipped
   // by `World.integrate` and the contact gather (see `VineLink.asleep`). Two 3 m
@@ -438,10 +452,9 @@ export interface Vine extends VineCord {
 // solver that has no meaning for it - the same tolerance a chain end gets.
 export function buildVines(world: World, data: LevelData, built: BuiltBodies): Vine[] {
   const anchors = collectAnchorSites(built);
-  const statics = vineWrapBodies(built);
   const vines: Vine[] = [];
   for (const v of data.vines ?? []) {
-    const vine = buildOne(world, v, anchors, statics);
+    const vine = buildOne(world, v, anchors);
     if (vine) vines.push(vine);
   }
   settleVinesAtBuild(world, vines);
@@ -493,58 +506,10 @@ function settleVinesAtBuild(world: World, vines: Vine[]): void {
   }
 }
 
-// How far the vine can hang straight down from its anchor before it meets
-// something, in metres: the earliest swept-circle hit of a link-sized circle
-// dropped from the anchor, over the level's statics.
-//
-// A vine authored longer than its drop is the ordinary case - it is how a vine
-// pools on the floor - and left to spawn straight through the floor it is not an
-// authored overlap the first frames settle. A link spawned past the MIDLINE of a
-// slab is depenetrated out of the slab's FAR face (`circleOverlap` answers the
-// shortest exit, which is downward from there), so it ends up hanging below the
-// floor with nothing under it; the pair chain above it then reads its own
-// resting neighbour as geometry refusing the correction, never releases its
-// blocked-length lease, and pays out rope to the falling link at 0.33 m/s for
-// ever. That is `session-537f`'s runaway, reached from the level file rather
-// than from the solver, and it is what a 6 m vine over a 4.6 m drop did.
-//
-// The vine's own body is excluded because the anchor is ON it: a sweep that
-// starts inside the ceiling the vine hangs from stops at zero.
-function dropDistance(
-  from: Vec2,
-  length: number,
-  spacing: number,
-  radius: number,
-  anchorBody: PhysicsBody2D,
-  statics: readonly PhysicsBody2D[],
-): number {
-  // A vine anchored on the TOP of something has nowhere to hang: the body it is
-  // bolted to is in the way, and left to spawn straight down its links land
-  // inside that body - the ones past its midline out of the far face, which is
-  // the same hole this whole function exists to close. Every link at the anchor
-  // is the honest answer to a vine hung the wrong way up, and it is visibly the
-  // wrong way up rather than quietly threaded through the floor.
-  //
-  // The test is where the FIRST LINK would go, and not a sweep against the
-  // anchor body, because a sweep against that body says nothing: the anchor is
-  // on its surface, so a link-sized circle there straddles it and the sweep
-  // reports an immediate hit whichever way the vine hangs.
-  if (bodyContainsPoint(anchorBody, from.add(new Vec2(0, Math.min(spacing, length))))) return 0;
-  const motion = new Vec2(0, length);
-  let stop = length;
-  for (const body of statics) {
-    if (body === anchorBody) continue;
-    const hit = bodySweepCircle(body, from, motion, radius);
-    if (hit) stop = Math.min(stop, hit.t * length);
-  }
-  return stop;
-}
-
 function buildOne(
   world: World,
   v: VineData,
   anchors: Map<number, AnchorSite>,
-  statics: readonly PhysicsBody2D[],
 ): Vine | null {
   const site = anchors.get(v.anchor);
   if (!site) return null;
@@ -604,17 +569,14 @@ function buildOne(
   // the harder it is bent.
   const stiffness = Math.min(1, Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS));
 
-  // Where the links spawn. A hanging vine goes straight down and lies on the
-  // first thing it meets rather than through it (see `dropDistance`); a
+  // Where the links spawn. A hanging vine goes straight down its full length -
+  // there is nothing for it to lie on, a link colliding with nothing - and a
   // spanning one spawns ON its resting catenary, which is the pose the solver
-  // would settle it into over empty ground - so a span at rest is at rest on
-  // frame one, with nothing for the first frames to correct. A span authored
-  // through geometry settles by the ordinary contact solve, its total length
-  // being held from both ends.
+  // would settle it into: either way a vine at rest is at rest on frame one,
+  // with nothing for the first frames to correct.
   let spawnAt: (i: number) => Vec2;
-  // Whether the spawn pose is the vine's own REST pose: a hanging vine's is
-  // when nothing clips the drop (a clipped one piles at the clip and drapes
-  // from there), a span's is the catenary it spawns on - unless it is stiff,
+  // Whether the spawn pose is the vine's own REST pose: a hanging vine's
+  // always is now, a span's is the catenary it spawns on - unless it is stiff,
   // in which case the rest pose is the bends' force balance with the chains
   // and NOT the catenary (see `buildVineBends`).
   let spawnIsRest: boolean;
@@ -625,9 +587,8 @@ function buildOne(
     spawnAt = (i) => rest[i]!;
     spawnIsRest = stiffness === 0;
   } else {
-    const reach = dropDistance(anchorPoint, length, spacing, radius, obj as PhysicsBody2D, statics);
-    spawnAt = (i) => anchorPoint.add(new Vec2(0, Math.min(spacing * (i + 1), reach)));
-    spawnIsRest = reach >= length;
+    spawnAt = (i) => anchorPoint.add(new Vec2(0, spacing * (i + 1)));
+    spawnIsRest = true;
   }
 
   const links: VineLink[] = [];
@@ -636,15 +597,10 @@ function buildOne(
     link.setShape(circleShape(radius));
     link.mass = density * spacing;
     link.inertia = ShapeGeometry.computeMomentOfInertia(link.primaryShape(), link.mass);
-    // Kinetic friction so a vine dragged over a ledge is slowed by it, and no
-    // stiction: the static-friction pin holds a body's along-surface position
-    // against the surface it rests on, which for a vine pooling on a floor is a
-    // vine welded to the spot it first touched rather than one that settles.
-    link.contactFriction = RIGID_KINETIC_FRICTION;
-    // At rest (see `spawnAt`). A spawn pose that intersects geometry needs no
-    // special handling - the first frames' contact solve and the chain phase's
-    // own depenetration settle it, which is the answer the game already gives
-    // any authored overlap.
+    // No friction coefficients: a link contacts nothing (`passable`), so there
+    // is no surface for a coefficient to mean anything against.
+    // At rest (see `spawnAt`) - which may be inside geometry, links ignoring
+    // the scenery entirely.
     link.globalPosition = spawnAt(i);
     world.add(link);
     links.push(link);
@@ -652,28 +608,78 @@ function buildOne(
 
   const color = v.color ?? null;
   const chains: SceneConstraint[] = [];
+  // A HANGING vine's joints run to the loose `VINE_TOLERANCE` and carry no
+  // standing-stretch lease; a SPAN's run to the tight `CHAIN_TOLERANCE` and
+  // do. The pairing is load-bearing in both directions - see `VinePair`'s
+  // lease note: a taut span's joints sit permanently over under their own
+  // tension and must be allowed to accept that or the span rings for ever,
+  // while a loose-bar joint carrying a lease banks its allowed residual
+  // faster than the lease decays and pays the vine out for ever.
+  const jointTolerance = anchor2Contact ? CHAIN_TOLERANCE : VINE_TOLERANCE;
+  const leased = anchor2Contact !== null;
   // Anchor to the first link, then every adjacent pair. Link ends sit at the
   // link's CENTRE (`Vec2.ZERO`) rather than on its rim: a link is a 6 cm circle
   // whose whole job is to be somewhere, and a rim contact would give the pair
-  // constraint a torque arm on a body whose rotation means nothing.
-  chains.push(new SceneChain(anchorContact, new RopeContact(links[0]!, Vec2.ZERO), spacing, color));
+  // constraint a torque arm on a body whose rotation means nothing. The anchor
+  // joint is a `VineAnchor` and not a `VinePair` because its other end is on
+  // the anchor body's SURFACE, which is a real torque arm when that body is
+  // rigid (see `level/vineAnchor.ts`).
+  chains.push(
+    new VineAnchor(
+      anchorContact,
+      new RopeContact(links[0]!, Vec2.ZERO),
+      spacing,
+      jointTolerance,
+      leased,
+    ),
+  );
   for (let i = 1; i < links.length; i++) {
     chains.push(
       new VinePair(
         new RopeContact(links[i - 1]!, Vec2.ZERO),
         new RopeContact(links[i]!, Vec2.ZERO),
         spacing,
+        jointTolerance,
+        leased,
       ),
     );
   }
-  // ...and, spanning, the last link to the second anchor. A `SceneChain` like
-  // the first for the same reason the first is one: an end snapped to a body's
-  // surface is not the degenerate centre-to-centre joint a `VinePair` is the
-  // cheap answer to (see `level/vinePair.ts`).
+  // ...and, spanning, the last link to the second anchor - a `VineAnchor` like
+  // the first, for the same reason the first is one.
   if (anchor2Contact) {
     chains.push(
-      new SceneChain(anchor2Contact, new RopeContact(links[links.length - 1]!, Vec2.ZERO), spacing, color),
+      new VineAnchor(
+        anchor2Contact,
+        new RopeContact(links[links.length - 1]!, Vec2.ZERO),
+        spacing,
+        jointTolerance,
+        leased,
+      ),
     );
+  } else {
+    // A HANGING vine also gets a textbook long-range attachment per link:
+    // anchor to link i, at the arc down to it plus the sweep's give per
+    // segment, an inequality that is slack on every settled frame. A stiff
+    // serial chain is the one shape a Gauss-Seidel sweep is worst at - news
+    // travels one link per sweep - and these carry the anchor's refusal to
+    // every link in ONE pass. They were tried before and measured out, but
+    // against a different knee: with the load rope still a wrap-routing
+    // `Rope`, the sweep count was set by the player rope and the load rope
+    // converging against each other, which no pair-chain aid could touch.
+    // With that fight closed-form the sweep count IS the pair-chain series
+    // (~40 sweeps on a held vertical vine, measured on `session-322f`), and
+    // this is the standard answer to it. Hanging vines only: a taut span has
+    // zero slack anywhere by construction, sits ON every LRA's rest length,
+    // and rang at 0.27 m/s for ever when this was tried there.
+    for (let i = 1; i < links.length; i++) {
+      chains.push(
+        new VineAnchor(
+          anchorContact,
+          new RopeContact(links[i]!, Vec2.ZERO),
+          (spacing + VINE_LRA_GIVE) * (i + 1),
+        ),
+      );
+    }
   }
 
   // The vine's rest direction: straight down, that being the only pose a
@@ -686,16 +692,15 @@ function buildOne(
 
   // Whether this vine's settle may run AT BUILD instead of over the level's
   // first visible frames (see `settleVinesAtBuild`): its spawn pose is its own
-  // rest pose, and every link is clear of the scenery AND of every area - a
-  // link the contact solve would push, or one a current or water would keep
-  // stirring, is not going to rest where it spawned, and such a vine settles
-  // live exactly as it always did.
+  // rest pose, and every link is clear of every area - a link a current or
+  // water would keep stirring is not going to rest where it spawned, and such
+  // a vine settles live exactly as it always did. Scenery no longer matters: a
+  // link collides with nothing, so the geometry around it cannot touch the
+  // settle either at build or live.
   const settleAtBuild =
     spawnIsRest &&
-    links.every(
-      (link) =>
-        statics.every((body) => bodyOverlapCircle(body, link.globalPosition, radius) === null) &&
-        world.areas.every((area) => bodyOverlapCircle(area, link.globalPosition, radius) === null),
+    links.every((link) =>
+      world.areas.every((area) => bodyOverlapCircle(area, link.globalPosition, radius) === null),
     );
 
   return {
@@ -729,33 +734,6 @@ function buildOne(
       if (anchor2Contact) out.push(anchor2Contact.renderGlobalPosition(alpha));
     },
   };
-}
-
-// The bodies a vine's load rope may bend around: the level's STATIC geometry.
-//
-// A scene chain solves against `NOTHING`, and that is right for a chain whose
-// two ends are the whole of it. A load rope's whole point is that it is the
-// force path, so tension routed past a corner has to go round it - a straight
-// long-range attachment is wrong the moment the vine bends, and routing it is
-// the one thing the house rope does that a textbook LRA does not.
-//
-// PER-LINK textbook LRAs (anchor-to-every-link inequality at arc rest, the
-// standard convergence aid) were tried and measured out. They never disagree
-// with the pair chains geometrically, but they bought nothing the sweep could
-// cash: the coupled cap's knee is set by the player rope and the load rope
-// converging AGAINST EACH OTHER, not by error walking the pair chains, so the
-// 1 mm load-rope contract still needed the full 48 sweeps with LRAs in
-// (26.6 mm at cap 16 vs 35 without; 1.2-2.7 mm at 32-40, non-monotone), frame
-// cost rose ~6% on the vine-hang sessions, and an over-taut span - zero slack
-// anywhere by construction - sat on every LRA's rest length and rang at
-// 0.27 m/s for ever.
-//
-// Statics only, and not every wrappable body: a static cannot move, so the wrap
-// path it produces is a fact about the level rather than a thing the load rope
-// could haul about, and the intermediate vine links are pass-through and are
-// ignored by the wrap generator in any case (`isPassThrough`).
-export function vineWrapBodies(built: BuiltBodies): PhysicsBody2D[] {
-  return built.wrapBodies.filter((b) => b instanceof StaticBody2D);
 }
 
 // The load-rope rule, applied every frame from the level: derived from the
@@ -820,11 +798,7 @@ function arcFrom2(vine: Vine, index: number): number {
 // the whole run to the other anchor is just pair chains carrying a player, and
 // it pays out exactly the way an unheld hanging arc is meant to and a span is
 // not.
-export function updateVineLoads(
-  vines: readonly Vine[],
-  rope: Rope | null,
-  wrapBodies: PhysicsBody2D[],
-): Vine | null {
+export function updateVineLoads(vines: readonly Vine[], rope: Rope | null): Vine | null {
   const held = rope ? rope.end.contact.obj : null;
   let active: Vine | null = null;
   for (const vine of vines) {
@@ -837,20 +811,18 @@ export function updateVineLoads(
     }
     const link = vine.links[index]!;
     if (!vine.lra || vine.lraLink !== link) {
-      vine.lra = new SceneChain(
+      vine.lra = new VineAnchor(
         vine.anchorContact,
         new RopeContact(link, Vec2.ZERO),
         arcTo(vine, index),
-        vine.color,
-        wrapBodies,
+        CHAIN_TOLERANCE,
       );
       vine.lra2 = vine.anchor2Contact
-        ? new SceneChain(
+        ? new VineAnchor(
             vine.anchor2Contact,
             new RopeContact(link, Vec2.ZERO),
             arcFrom2(vine, index),
-            vine.color,
-            wrapBodies,
+            CHAIN_TOLERANCE,
           )
         : null;
       vine.lraLink = link;

@@ -68,10 +68,17 @@ export interface SceneConstraint {
   beginFrame(delta: number): void;
   // One pass.
   solve(delta: number): void;
-  // Metres of error left after the last pass - what `CHAIN_TOLERANCE` bounds.
-  // Zero for a constraint that is satisfied, whatever satisfying it means for
-  // that kind (a rope is satisfied slack; a compliant bend is satisfied bent).
+  // Metres of error left after the last pass - what the sweep's exit gate
+  // bounds. Zero for a constraint that is satisfied, whatever satisfying it
+  // means for that kind (a rope is satisfied slack; a compliant bend is
+  // satisfied bent).
   readonly residual: number;
+  // The residual this constraint may END a frame at - the bar the sweep's exit
+  // gate holds it to. `CHAIN_TOLERANCE` for everything that must not visibly
+  // stretch; a vine joint's is looser (`VINE_TOLERANCE`), a little stretch
+  // under load being an accepted part of what a vine is - and the difference
+  // is most of the sweeps a swinging vine used to cost (see `sweepOneSet`).
+  readonly tolerance: number;
   // Every DYNAMIC body this constraint is attached to as it currently stands.
   eachBody(fn: (body: RigidBody2D) => void): void;
   // Whether it is one of them, for the credit scaling below.
@@ -168,6 +175,10 @@ export class SceneChain implements SceneConstraint {
     return this.rope.overLength;
   }
 
+  get tolerance(): number {
+    return CHAIN_TOLERANCE;
+  }
+
   get creditScale(): number {
     return this.rope.topologyCreditScale;
   }
@@ -199,6 +210,18 @@ export class SceneChain implements SceneConstraint {
 // renderer can show.
 export const CHAIN_TOLERANCE = 0.005;
 
+// ...and the bar a VINE JOINT runs to instead - a pair chain, a bend, a
+// per-link long-range attachment. Deliberately looser, and the looseness is a
+// design decision rather than a solver concession: a vine is allowed a little
+// visible stretch under load (it reads as vine flex), the per-link attachments
+// bound the cumulative sag whatever the joints do locally, and the held link
+// itself is bound by the load rope at `CHAIN_TOLERANCE`. What the looseness
+// buys is the sweep count: a stiff vine's bends and pairs disagree by
+// construction and converge at one link per sweep, so holding every joint to
+// 5 mm cost a swinging vine 25-40 sweeps a frame (measured, `session-322f`)
+// for millimetres nobody can see.
+export const VINE_TOLERANCE = 0.015;
+
 // Sweeps the tolerance may spend getting there. A ceiling, not a target - a rig
 // that converges leaves the loop on the sweep it converges on, which for the
 // single-chain rigs that are most of every level is the first one.
@@ -229,16 +252,15 @@ export const CHAIN_TOLERANCE = 0.005;
 // bounded rather than silently expensive.
 const MAX_CHAIN_SWEEPS = 64;
 
-// The cap when a player rope is coupled into the set. Lower than
-// `MAX_CHAIN_SWEEPS`, and only modestly, because the number was MEASURED
-// rather than wished for: a held vine's load rope holds its 1 mm contract
-// (`cli vines` grab-hang) at 48 sweeps and visibly stretches below it -
-// 2.9 mm at 32, 5.3 mm at 24, 35 mm at 16 - so a Gauss-Seidel sweep over a
-// vine under player load genuinely spends ~40 sweeps, and an aggressive cap
-// is not a free lunch but the stretch coming back. What made the held-vine
-// frame cheap is `SceneChain.solve`'s identity skip instead: a converged
-// chain inside a still-converging component skips its solve outright, so a
-// deep sweep pays only for the constraints the rope is actually disturbing.
+// The cap when a player rope is coupled into the set. It is a genuine ceiling
+// now rather than the working sweep count: a held vine exits on the residual
+// gate in a handful of sweeps (5-11 coupled sweeps measured on
+// `session-322f`), because its load rope is a closed-form `VineAnchor` (one
+// projection, exact) and its joints run to `VINE_TOLERANCE` rather than the
+// chain bar. Lowering the cap was measured against that arrangement and
+// bought nothing - the exit gate, not the cap, is what sets the count - so it
+// stays where the old rigid-vine contract needed it, as the bound on a rig
+// that will not converge.
 const MAX_COUPLED_SWEEPS = 48;
 
 // One frame of every scene chain, as ONE system rather than as a list of
@@ -308,15 +330,23 @@ export function stepSceneChains(
 
 const isStatic = (body: PhysicsBody2D): boolean => body instanceof StaticBody2D;
 
-// The share of this frame's chain-phase displacement that `body` may be paid
-// velocity for: the lowest `topologyCreditScale` among the chains that hold it,
-// and 1 for a body no chain in the set touches.
-function creditScale(chains: readonly SceneConstraint[], body: RigidBody2D): number {
-  let scale = 1;
+// The share of this frame's chain-phase displacement each body may be paid
+// velocity for: the lowest `topologyCreditScale` among the chains that hold it
+// (a body no chain touches is simply absent, and reads as 1). One pass over
+// the chains' OWN bodies rather than chains x bodies of `holds` queries, which
+// on a level of vines was the single most expensive line of the settle
+// (~40 ms of a 340 ms replay, measured on `session-322f`).
+function creditScales(chains: readonly SceneConstraint[]): Map<RigidBody2D, number> {
+  const scales = new Map<RigidBody2D, number>();
   for (const chain of chains) {
-    if (chain.holds(body)) scale = Math.min(scale, chain.creditScale);
+    const scale = chain.creditScale;
+    if (scale >= 1) continue;
+    chain.eachBody((body) => {
+      const prev = scales.get(body);
+      if (prev === undefined || scale < prev) scales.set(body, scale);
+    });
   }
-  return scale;
+  return scales;
 }
 
 // A body a chain solve is about to move, as it stood before that solve. The
@@ -412,6 +442,7 @@ export function settleChainBodies(
   delta: number,
 ): void {
   const blockedBodies = new Set<RigidBody2D>();
+  const scales = creditScales(chains);
   for (const s of before) {
     // Out of the SCENERY, and not out of other dynamic bodies. A chain-hung body
     // is as often a platform as a weight, and an overlap with something resting
@@ -436,7 +467,7 @@ export function settleChainBodies(
     // The lowest scale of the chains holding this body, because the credit being
     // scaled is the sum of what they all did to it and a jump on any one of them
     // is a jump in that sum.
-    const credit = creditScale(chains, s.body);
+    const credit = scales.get(s.body) ?? 1;
     s.body.angularVelocity =
       s.spin + ((s.body.globalRotation - s.rotation) / delta) * credit;
     s.body.linearVelocity = s.velocity.add(
@@ -679,9 +710,14 @@ function sweepOneSet(
       // ...and, where the caller says so, the set's own residual as well (see
       // `CoupledRope.settleSet`). Measured before the extra's solve for the same
       // reason `disturbed` is: it is what this sweep left behind.
+      // ...as how far each constraint stands past its OWN bar (see
+      // `SceneConstraint.tolerance`): zero or less is a set every member of
+      // which is inside what it is allowed to end the frame at.
       let worstSet = 0;
       if (extra.settleSet) {
-        for (const chain of chains) worstSet = Math.max(worstSet, chain.residual);
+        for (const chain of chains) {
+          worstSet = Math.max(worstSet, chain.residual - chain.tolerance);
+        }
       }
       // Solved last, so the frame ends on the rope whose books the caller takes:
       // `BallLevel` credits the ball for the position the chain phase leaves it
@@ -706,15 +742,16 @@ function sweepOneSet(
       if (!extra.settleSet || disturbed > CHAIN_TOLERANCE) {
         extra.rope.solvePass(extra.bodies, delta);
       }
-      if (disturbed <= CHAIN_TOLERANCE && worstSet <= CHAIN_TOLERANCE) break;
+      if (disturbed <= CHAIN_TOLERANCE && worstSet <= 0) break;
       continue;
     }
     // Measured after the sweep, so a set that is already satisfied still pays
     // one solve - the sweep is what discovers that, and gravity has moved the
-    // bodies since the last one.
+    // bodies since the last one. Each constraint is held to its own bar (see
+    // `SceneConstraint.tolerance`).
     let worst = 0;
-    for (const chain of chains) worst = Math.max(worst, chain.residual);
-    if (worst <= CHAIN_TOLERANCE) break;
+    for (const chain of chains) worst = Math.max(worst, chain.residual - chain.tolerance);
+    if (worst <= 0) break;
   }
 }
 

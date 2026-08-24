@@ -26,7 +26,6 @@ import {
   stepVines,
   updateVineLoads,
   vineChainSet,
-  vineWrapBodies,
   type Vine,
 } from "./vines";
 import {
@@ -83,8 +82,6 @@ export class BallLevel {
   // This frame's set, settled once at the top of the frame so both halves of the
   // chain phase solve the same one.
   private frameChains: readonly SceneConstraint[] = [];
-  // What a vine's load rope may bend around: the level's static geometry.
-  private readonly vineWraps: PhysicsBody2D[];
   // This frame's held vine, if the chain is holding a vine link - the vine
   // whose load ropes are in the solve set. Derived once a frame (see
   // `updateVineLoads`) and read by both halves of the chain phase, so the set
@@ -189,7 +186,6 @@ export class BallLevel {
     this.sceneChains = buildSceneChains(data, built);
     this.vines = buildVines(this.world, data, built);
     for (const vine of this.vines) this.bodies.push(...vine.links);
-    this.vineWraps = vineWrapBodies(built);
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
@@ -281,7 +277,7 @@ export class BallLevel {
 
     // A vine is damped and its load rope settled before anything solves against
     // either, so both halves of the chain phase below see the same set.
-    this.heldVine = updateVineLoads(this.vines, this.ball.chain, this.vineWraps);
+    this.heldVine = updateVineLoads(this.vines, this.ball.chain);
     stepVines(this.vines);
     this.frameChains = vineChainSet(this.sceneChains, this.vines, this.heldVine, this.solveSet);
 

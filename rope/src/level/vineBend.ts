@@ -79,7 +79,7 @@
 import { Vec2 } from "../engine/vec2";
 import { RigidBody2D, VineLink } from "../engine/body";
 import { RopeContact } from "../lib/ropeContact";
-import type { SceneConstraint } from "./chains";
+import { CHAIN_TOLERANCE, VINE_TOLERANCE, type SceneConstraint } from "./chains";
 
 // The bending rigidity EI, in newton-metres squared, that `stiffness` 0 and 1
 // stand for. A vine's compliance is interpolated GEOMETRICALLY between them, so
@@ -205,6 +205,12 @@ export class VineBend implements SceneConstraint {
     private readonly c: BendEnd,
     // Metres per newton. Zero is a rigid joint.
     private readonly compliance: number,
+    // The exit bar the sweep holds this bend to: loose on a hanging vine,
+    // tight on a span, exactly as the pair chains split (see `buildOne`'s
+    // joint-tolerance note) - a span's bends argue with leased tight pairs,
+    // and left on the loose bar the mid-stiffness span rang at 0.63 m/s and
+    // never slept.
+    readonly tolerance: number = VINE_TOLERANCE,
   ) {}
 
   beginFrame(delta: number): void {
@@ -225,6 +231,7 @@ export class VineBend implements SceneConstraint {
   get residual(): number {
     return Math.abs(this.curvature() + this.alphaTilde * this.lambda);
   }
+
 
   // How far the middle point is off the chord midpoint of its neighbours, in
   // metres: zero when the triple is straight and evenly spaced, and read live
@@ -324,6 +331,9 @@ export function buildVineBends(
   anchor2: RopeContact | null = null,
 ): VineBend[] {
   if (!(stiffness > 0) || links.length === 0) return [];
+  // The exit bar every bend of this vine takes: loose on a hanging vine,
+  // tight on a span (see `VineBend.tolerance`).
+  const tolerance = anchor2 ? CHAIN_TOLERANCE : VINE_TOLERANCE;
   const at = (i: number): BendEnd => new BendEnd(links[i]!, null);
   const fixed = (c: RopeContact): BendEnd => new BendEnd(null, c);
   // The scale-k ghost: k spacings back up the rest direction from the anchor.
@@ -341,15 +351,15 @@ export function buildVineBends(
     // The clamp at this scale: ghost - anchor - the link k spacings down.
     // Hanging vines only; a span's ends are pinned (see above).
     if (!anchor2 && k - 1 < n) {
-      bends.push(new VineBend(fixed(ghost(k)), fixed(anchor), at(k - 1), compliance));
+      bends.push(new VineBend(fixed(ghost(k)), fixed(anchor), at(k - 1), compliance, tolerance));
     }
     // The joint AT that link, whose upper neighbour is the anchor itself.
     if (2 * k - 1 < n) {
-      bends.push(new VineBend(fixed(anchor), at(k - 1), at(2 * k - 1), compliance));
+      bends.push(new VineBend(fixed(anchor), at(k - 1), at(2 * k - 1), compliance, tolerance));
     }
     // ...and every joint below it that has a neighbour k links either side.
     for (let i = k; i + k < n; i++) {
-      bends.push(new VineBend(at(i - k), at(i), at(i + k), compliance));
+      bends.push(new VineBend(at(i - k), at(i), at(i + k), compliance, tolerance));
     }
     // A span's far end, mirrored: the joint whose outer neighbour is the
     // second anchor itself. In the vine's positions - anchor at 0, link i at
@@ -359,9 +369,9 @@ export function buildVineBends(
     if (anchor2) {
       const upper = n + 1 - 2 * k;
       if (upper > 0) {
-        bends.push(new VineBend(at(upper - 1), at(n - k), fixed(anchor2), compliance));
+        bends.push(new VineBend(at(upper - 1), at(n - k), fixed(anchor2), compliance, tolerance));
       } else if (upper === 0) {
-        bends.push(new VineBend(fixed(anchor), at(n - k), fixed(anchor2), compliance));
+        bends.push(new VineBend(fixed(anchor), at(n - k), fixed(anchor2), compliance, tolerance));
       }
     }
   }

@@ -750,34 +750,25 @@ export class RigidBody2D extends PhysicsBody2D {
 //
 // It is a `RigidBody2D` because it needs gravity integration and mass, and
 // because the entire chain phase (`snapshotChainBodies`, `settleChainBodies`,
-// `creditScale`) is written against `instanceof RigidBody2D`. That puts it
-// INSIDE the `StaticBody2D | RigidBody2D` allowlist every collision path is
-// written as, so it is excluded by the `isSolid` flag instead. The rule the
-// guards in `World` implement, and the only one that makes them coherent: **a
-// non-solid body blocks nothing, and is blocked only by statics.**
+// `creditScale`) is written against `instanceof RigidBody2D`.
 //
-// A `passable` body is the stronger statement of the same shape - blocked by
-// nothing at all, statics included - and a vine deliberately is not one: being
-// blocked by statics is how a vine drapes over a ledge instead of hanging
-// through it.
-//
-// Both halves of that sentence have to be guarded at every site, and the second
-// is the one that is easy to miss. Decoupled in one direction only, the ball
-// sails through the vine untouched and the recovery sweep then pushes the VINE
-// out of the ball - so a vine the ball passes through whips a metre out of its
-// way as it goes, which is what "the ball collides with the vine" looks like
-// from the outside even though the ball's own track is bit-identical
-// (`cli vines` `link-contacts`, `ball-vine`).
+// It is `passable`: blocked by nothing at all, statics included, exactly as a
+// hook-only leaf is - the hook is the one thing in the sim that finds it. A
+// vine used to be the weaker statement ("a non-solid body blocks nothing, and
+// is blocked only by statics"), which is how one draped over a ledge and
+// pooled on a floor; vines ignore the scenery outright now (see
+// `level/vines.ts`), which takes the links out of the contact gather, the
+// depenetration sweep and `settleChainBodies`' static push-out - most of what
+// an awake vine cost.
 //
 // So the player walks and swings straight through a vine, a vine never pushes
-// the ball or is pushed by it, never stacks on another vine or fights its own
-// pair constraints through the contact solver - the stacking-and-contact problem `docs/game-design.md`
-// cites against body-per-link chains, removed by construction rather than
-// solved - while link-vs-static contacts are kept, which is how a vine drapes
-// over a ledge and piles on the floor.
+// the ball or is pushed by it, never stacks on another vine and never fights
+// its own pair constraints through the contact solver - the
+// stacking-and-contact problem `docs/game-design.md` cites against
+// body-per-link chains, removed by construction rather than solved.
 //
-// `LAYER_ANCHOR` is what the hook sees and what every mask-1 query (the
-// player's raycasts, ledge detection) therefore misses.
+// `LAYER_ANCHOR` (set by `passable`) is what the hook sees and what every
+// mask-1 query (the player's raycasts, ledge detection) therefore misses.
 export class VineLink extends RigidBody2D {
   // A settled vine costs nothing.
   //
@@ -804,7 +795,7 @@ export class VineLink extends RigidBody2D {
   constructor() {
     super();
     this.name = "VineLink";
-    this.collisionLayer = LAYER_ANCHOR;
+    this.passable = true;
   }
 
   override get isSolid(): boolean {
