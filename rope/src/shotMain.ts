@@ -177,9 +177,9 @@ function drawFrame(frame: number): void {
     }
   }
   if (isBall) {
-    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, [], sparks);
+    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, sparks);
   } else {
-    render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null, [], sparks);
+    render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null, sparks);
   }
 }
 

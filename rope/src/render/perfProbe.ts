@@ -15,9 +15,18 @@
 // It is render-side only, allocated once, and touches no sim state, so it can
 // never reach the fixed step.
 
+import { PerfHistory, type MetricKey as HistoryMetric, type MetricStats } from "./perfHistory";
+
+export type { MetricStats };
+
 export interface PerfSnapshot {
   // Frames per second over the last window, from the frames actually drawn.
   fps: number;
+  // The frame just drawn, in milliseconds. Every other figure here is a window
+  // - which is what makes them readable - but a HUD also has to show the number
+  // that is true RIGHT NOW, or a change made while watching it takes a second to
+  // appear and reads as having done nothing.
+  frameMs: number;
   // Frame time in milliseconds. p99 is the number that says whether the game
   // hitches; a mean hides exactly the frames worth knowing about.
   frameMsP50: number;
@@ -37,6 +46,27 @@ export interface PerfSnapshot {
   drawCalls: number;
   triangles: number;
   programs: number;
+  // What the machine is spending, beyond the frame time itself. The browser
+  // exposes no process CPU or GPU utilisation, so each of these is the honest
+  // proxy rather than a task-manager figure:
+  //
+  // - `cpuPct` is the MAIN THREAD's busy fraction: the milliseconds the frame
+  //   callback occupied over the milliseconds of wall clock it covered. 100%
+  //   means the loop is the frame; a low number with a high frame time means the
+  //   wait is somewhere else (the GPU, the compositor, vsync).
+  // - `gpuMs` is the GPU's own clock around the draw (see render/gpuTimer.ts),
+  //   null on a context with no timer extension.
+  // - `heapMb` is the JS heap in use (`performance.memory`, Chromium-only, and
+  //   null elsewhere). It is JS objects only - textures, geometry and the
+  //   drawing buffers are GPU memory and appear in no browser API at all.
+  cpuPct: number;
+  gpuMs: number | null;
+  heapMb: number | null;
+  heapLimitMb: number | null;
+  // The same four readings aggregated over the last five seconds (see
+  // render/perfHistory.ts), which is the window the HUD graphs. Rewritten in
+  // place with the rest of the snapshot.
+  w5: Record<HistoryMetric, MetricStats>;
 }
 
 // How often the snapshot is rewritten. Once a second: a number that changes
@@ -46,12 +76,16 @@ const WINDOW_MS = 1000;
 // Room for one window at any sane refresh rate (240 Hz for 4 s). A window that
 // somehow overruns it drops its oldest samples rather than growing.
 const MAX_SAMPLES = 960;
+// The metrics carried into the snapshot's five-second fold, in the order the HUD
+// draws them.
+const W5_METRICS: readonly HistoryMetric[] = ["frameMs", "cpuPct", "gpuMs", "heapMb"];
 
 export class PerfProbe {
   // ONE object, mutated in place: `window.__perf` is a live handle, and handing
   // out a fresh object every second would leave a script reading a stale one.
   readonly snapshot: PerfSnapshot = {
     fps: 0,
+    frameMs: 0,
     frameMsP50: 0,
     frameMsP99: 0,
     simMsP50: 0,
@@ -63,7 +97,22 @@ export class PerfProbe {
     drawCalls: 0,
     triangles: 0,
     programs: 0,
+    cpuPct: 0,
+    gpuMs: null,
+    heapMb: null,
+    heapLimitMb: null,
+    w5: {
+      frameMs: { avg: 0, min: 0, max: 0, samples: 0 },
+      cpuPct: { avg: 0, min: 0, max: 0, samples: 0 },
+      gpuMs: { avg: 0, min: 0, max: 0, samples: 0 },
+      heapMb: { avg: 0, min: 0, max: 0, samples: 0 },
+    },
   };
+
+  // The last five seconds, bucketed, for the HUD's graphs and its five-second
+  // aggregates (see render/perfHistory.ts). Written every frame; the snapshot's
+  // `w5` is a fold of it taken on the snapshot's own cadence.
+  readonly history = new PerfHistory();
 
   private readonly samples = new Float64Array(MAX_SAMPLES);
   private readonly simSamples = new Float64Array(MAX_SAMPLES);
@@ -77,10 +126,39 @@ export class PerfProbe {
   sample(
     dtSeconds: number,
     stats: { calls: number; triangles: number; programs: number } | null,
-    phases?: { simMs: number; draw3dMs: number; draw2dMs: number },
+    phases?: {
+      simMs: number;
+      draw3dMs: number;
+      draw2dMs: number;
+      // The whole frame callback's own wall time, the GPU's clock for the draw,
+      // and the JS heap - see the snapshot's `cpuPct`/`gpuMs`/`heapMb`. Absent
+      // from a caller that has no clock for them (`shotMain`), which leaves
+      // those rows unavailable rather than zero.
+      cpuMs?: number;
+      gpuMs?: number | null;
+      heapMb?: number | null;
+      heapLimitMb?: number | null;
+    },
   ): void {
     const ms = dtSeconds * 1000;
     if (ms > 0) {
+      // The rolling five seconds is fed from every frame, independently of the
+      // snapshot's own once-a-second cadence: the graph is what happened, and a
+      // window that only advanced on the tick would be a graph of the ticks.
+      const cpuPct = phases?.cpuMs !== undefined ? (phases.cpuMs / ms) * 100 : 0;
+      this.history.push(
+        performance.now(),
+        ms,
+        cpuPct,
+        phases?.gpuMs ?? null,
+        phases?.heapMb ?? null,
+      );
+      this.snapshot.frameMs = ms;
+      this.snapshot.cpuPct = cpuPct;
+      this.snapshot.gpuMs = phases?.gpuMs ?? null;
+      this.snapshot.heapMb = phases?.heapMb ?? null;
+      this.snapshot.heapLimitMb = phases?.heapLimitMb ?? null;
+
       if (this.count === MAX_SAMPLES) {
         this.samples.copyWithin(0, 1);
         this.simSamples.copyWithin(0, 1);
@@ -117,23 +195,19 @@ export class PerfProbe {
     this.snapshot.drawCalls = stats?.calls ?? 0;
     this.snapshot.triangles = stats?.triangles ?? 0;
     this.snapshot.programs = stats?.programs ?? 0;
+    // `stats()` hands back a reused object, so each fold is COPIED into the
+    // snapshot's own - `window.__perf` is a live handle, and storing the scratch
+    // would leave all four rows aliasing the last metric folded.
+    for (const key of W5_METRICS) {
+      const from = this.history.stats(key);
+      const into = this.snapshot.w5[key];
+      into.avg = from.avg;
+      into.min = from.min;
+      into.max = from.max;
+      into.samples = from.samples;
+    }
     this.count = 0;
     this.windowMs = 0;
   }
 
-  // The same numbers as text, for the on-screen HUD. Rebuilt only when the
-  // snapshot is, so `?hud=1` costs a couple of strings a second.
-  hudLines(): string[] {
-    const s = this.snapshot;
-    const lines = [`${s.frameMsP50.toFixed(1)}/${s.frameMsP99.toFixed(1)} ms p50/p99`];
-    if (s.simMsP50 > 0 || s.draw3dMsP50 > 0 || s.draw2dMsP50 > 0) {
-      lines.push(
-        `sim ${s.simMsP50.toFixed(1)}/${s.simMsP99.toFixed(1)} · 3d ${s.draw3dMsP50.toFixed(1)}/${s.draw3dMsP99.toFixed(1)} · 2d ${s.draw2dMsP50.toFixed(1)}/${s.draw2dMsP99.toFixed(1)}`,
-      );
-    }
-    if (s.programs > 0) {
-      lines.push(`${s.drawCalls} calls · ${(s.triangles / 1000).toFixed(0)}k tris · ${s.programs} programs`);
-    }
-    return lines;
-  }
 }

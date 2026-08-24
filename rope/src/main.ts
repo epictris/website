@@ -11,6 +11,7 @@ import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
+import { drawPerfHud } from "./render/perfHud";
 import { SparkSystem } from "./render/sparks";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import {
@@ -206,6 +207,12 @@ let showDebug = false;
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyP") downloadRecording();
   if (e.code === "KeyL") showDebug = !showDebug;
+  if (e.code === "F3") {
+    // The browser's own F3 is find-again; a game with an instrument panel on
+    // that key does not want it.
+    e.preventDefault();
+    showPerfHud = !showPerfHud;
+  }
 });
 
 if (replayName) {
@@ -228,18 +235,56 @@ if (replayName) {
 
 let last = -1;
 let accumulator = 0;
+// The previous frame callback's wall time, spent in the interval this frame's
+// `dt` measures (see `cpuMs` in the loop).
+let lastCpuMs = 0;
 let fps = 0;
 
 // What the renderer is costing on THIS machine, which is the one thing a
 // headless grab cannot report (see render/perfProbe.ts). `window.__perf` is a
-// live handle a script can read; `?hud=1` puts the same numbers on the overlay
+// live handle a script can read; the HUD puts the same numbers on the overlay
 // for a human. The probe itself is always on - it is a few adds a frame and one
 // sort a second - and only the HUD is opt-in.
 const perf = new PerfProbe();
 (window as unknown as { __perf: typeof perf.snapshot }).__perf = perf.snapshot;
-const wantsHud = params.get("hud") !== null;
+// `?hud=1` opens the page with it up; F3 toggles it while playing, because the
+// frames worth looking at are the ones being played rather than the ones after a
+// reload with a different URL.
+let showPerfHud = params.get("hud") !== null;
+
+// The JS heap, read on its own slow cadence. `performance.memory` is a
+// Chromium-only getter that walks bookkeeping rather than reading a counter, and
+// the heap is a level that moves in seconds - reading it every frame would put
+// the HUD's own cost into the frame it is measuring. Null everywhere the getter
+// does not exist, which the HUD reports as unavailable rather than as 0 MB.
+const HEAP_POLL_MS = 250;
+let heapMb: number | null = null;
+let heapLimitMb: number | null = null;
+let heapPolledAt = -Infinity;
+
+function pollHeap(now: number): void {
+  if (now - heapPolledAt < HEAP_POLL_MS) return;
+  heapPolledAt = now;
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } })
+    .memory;
+  if (!memory) return;
+  heapMb = memory.usedJSHeapSize / (1024 * 1024);
+  heapLimitMb = memory.jsHeapSizeLimit / (1024 * 1024);
+}
 
 function frame(now: number): void {
+  // The whole callback's wall time, which is the HUD's "cpu": the share of each
+  // frame the main thread is actually busy in. Everything below is inside it,
+  // the panel's own drawing included - an instrument that leaves its own cost
+  // out of the reading is the wrong instrument.
+  const cpuT0 = performance.now();
+  // LAST frame's callback over THIS frame's dt, because that is the interval it
+  // was spent in: `dt` is the gap since the previous callback started, so the
+  // work it contains is the previous callback's. Dividing a callback by the dt
+  // measured before it ran reported 339% busy for one 30 ms frame that followed
+  // a 9 ms one - a ratio of two different intervals, and a number that cannot
+  // mean anything.
+  const cpuMs = lastCpuMs;
   if (last < 0) last = now;
   let dt = (now - last) / 1000;
   last = now;
@@ -315,7 +360,6 @@ function frame(now: number): void {
       ballInput!.aimPoint(),
       alpha,
       scene3d !== null,
-      wantsHud ? perf.hudLines() : [],
       sparks,
     );
   } else {
@@ -330,17 +374,34 @@ function frame(now: number): void {
       alpha,
       cameraCtl.held,
       scene3d !== null,
-      wantsHud ? perf.hudLines() : [],
       sparks,
     );
   }
   const draw2dMs = performance.now() - draw2dT0;
-  // After the frame is drawn, so the draw-call and triangle counts are this
-  // frame's rather than the last one's.
-  perf.sample(dt, scene3d?.renderStats() ?? null, { simMs, draw3dMs, draw2dMs });
 
   if (probeRect) drawProbeOutline(ctx, view, camera, probeRect);
 
+  // The panel reads the readings the LAST frame produced, which is what lets the
+  // sample below cover this frame's own drawing of it.
+  if (showPerfHud) drawPerfHud(ctx, view, perf.snapshot, perf.history);
+
+  // After the frame is drawn, so the draw-call and triangle counts are this
+  // frame's rather than the last one's, and so the CPU figure covers all of it.
+  pollHeap(now);
+  perf.sample(dt, scene3d?.renderStats() ?? null, {
+    simMs,
+    draw3dMs,
+    draw2dMs,
+    cpuMs,
+    // The GPU's own clock, from a query that retired a frame or two ago (see
+    // render/gpuTimer.ts). Null on the 2D path, which has no WebGL context to
+    // ask.
+    gpuMs: scene3d?.gpuFrameMs() ?? null,
+    heapMb,
+    heapLimitMb,
+  });
+
+  lastCpuMs = performance.now() - cpuT0;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

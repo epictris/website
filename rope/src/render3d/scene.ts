@@ -29,6 +29,7 @@ import type { LevelVisualSource } from "../level/buildBodies";
 import type { EnvironmentData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
+import { GpuTimer } from "../render/gpuTimer";
 import { BodyVisual, pickTagOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
@@ -167,6 +168,10 @@ export class Scene3D {
   // Diagnostics: the shader-error log and the frame readback below cost the game
   // nothing because only `shotMain` asks for them.
   private readonly diagnostics: boolean;
+  // The GPU's own clock around the draw (see render/gpuTimer.ts). Always on: an
+  // asynchronous query is a couple of GL calls a frame, and it is the only
+  // reading that distinguishes a GPU-bound frame from a CPU-bound one.
+  private readonly gpuTimer: GpuTimer | null;
 
   constructor(canvas: HTMLCanvasElement, opts: Scene3DOptions = {}) {
     this.diagnostics = opts.diagnostics === true;
@@ -192,6 +197,16 @@ export class Scene3D {
     this.envKey = JSON.stringify(null);
     this.chains = new ChainLayer(this.scene);
     this.vines = new VineLayer(this.scene);
+    // Null wherever the driver has no timer extension (see GpuTimer); the perf
+    // HUD says so rather than plotting a zero.
+    this.gpuTimer = GpuTimer.create(this.renderer.getContext());
+  }
+
+  // GPU milliseconds for the most recently retired frame, or null while the
+  // first query is still in flight - or for ever, on a context with no timer
+  // extension. Read by the perf HUD (see render/perfHud.ts).
+  gpuFrameMs(): number | null {
+    return this.gpuTimer?.lastMs ?? null;
   }
 
   // Build the scene for a level. Called once per level instance (a reset builds
@@ -560,7 +575,9 @@ export class Scene3D {
     // created, and it costs a traverse only while something is selected.
     this.syncHighlight();
 
+    this.gpuTimer?.begin();
     this.renderer.render(this.scene, this.camera);
+    this.gpuTimer?.end();
   }
 
   private dropStaleBodies(): void {

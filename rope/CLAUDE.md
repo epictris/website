@@ -1328,12 +1328,33 @@ The live browser is the channel for anything SwiftShader cannot represent: frame
 
 1. `cd rope && bun run dev`.
 2. Drive Chrome with the claude-in-chrome extension (or a human): navigate to the level, `?hud=1` for the on-screen instruments, `?level=NAME` and `?render=2d|3d` as usual.
-3. Read `window.__perf` by JS evaluation - `{fps, frameMsP50, frameMsP99, drawCalls, triangles, programs}`, rewritten once a second (`render/perfProbe.ts`).
+   **F3 toggles the panel while playing**, which is the form a human wants: the frames worth looking at are the ones being played, not the ones after a reload with a different URL.
+3. Read `window.__perf` by JS evaluation - `{fps, frameMs, frameMsP50, frameMsP99, cpuPct, gpuMs, heapMb, drawCalls, triangles, programs, w5}`, rewritten once a second (`render/perfProbe.ts`).
    The 2D path reports the FPS half and zeros for the rest, since it has no draw calls to speak of.
 4. Screenshot on a real GPU, and read the live console.
 
-`?hud=1` draws exactly those numbers under the FPS counter, so what a human eyeballs and what a script reads cannot disagree.
+`?hud=1`/F3 draws exactly those numbers under the FPS counter, so what a human eyeballs and what a script reads cannot disagree.
 The probe is render-side, allocated once, and touches no sim state, so it can never reach the fixed step.
+
+**A tab the browser has backgrounded renders nothing.**
+`requestAnimationFrame` stops when `document.visibilityState` is `hidden`, and a claude-in-chrome screenshot resumes it for the length of the capture - so the panel a script grabs off an unfocused window is a page starting from cold every time, showing 120 ms frames and near-empty graphs.
+Check `document.visibilityState` before believing any live reading, and get the window focused (or ask the user to look) rather than reporting the capture's own stall as the game's frame time.
+
+#### What the four rows actually measure
+
+The browser exposes no process CPU and no GPU utilisation, so each row is the honest proxy rather than a task-manager figure, and saying which is which is the difference between an instrument and a decoration:
+
+- **frame** - wall time between rendered frames. The 60 Hz and 30 Hz budgets are the dashed lines on its graph.
+- **cpu** - the MAIN THREAD's busy fraction: the previous frame callback's own wall time over the interval it was spent in. 100% means the loop IS the frame; a low number beside a high frame time means the wait is elsewhere (GPU, compositor, vsync).
+  Pairing a callback with the `dt` measured *before* it ran reports ratios of two different intervals - it once read 339% - so the loop deliberately reports last frame's cost against this frame's `dt`.
+- **gpu** - the GPU's own clock around `renderer.render`, via `EXT_disjoint_timer_query_webgl2` (`render/gpuTimer.ts`). The CPU-side bracket around the same call measures command submission and cannot see a GPU-bound frame at all.
+  Queries retire a few frames late and must be polled every frame whether or not a new one is opened; a pool that fills while nothing drains it freezes the reading at its last value for ever, which is what it did.
+  Unavailable (and labelled so) on the 2D path and on any driver without the extension.
+- **ram** - `performance.memory.usedJSHeapSize`, Chromium-only, polled at 4 Hz. **JS objects only**: textures, geometry and the drawing buffers are GPU memory and appear in no browser API.
+
+Each row carries its five-second average and worst alongside a graph of the same window (`render/perfHistory.ts`, 50 buckets of 100 ms; `w5` in the snapshot is the same fold).
+The graphs scale to the window's 90th percentile rather than its worst column, so one 250 ms stall does not flatten five seconds of 7 ms frames into a line along the floor - the spike runs off the top, and the exact figure is the `max` on the row above.
+Memory is the exception on both counts: it is not zero-based and it is not clipped, because a heap's shape is its reading.
 
 ### What a grab is doing under the hood
 

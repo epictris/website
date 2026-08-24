@@ -7084,7 +7084,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           ballInput?.aimPoint() ?? null,
           alpha,
           testIn3d,
-          [],
           testSparks,
         );
       } else {
@@ -7099,7 +7098,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           alpha,
           testCameraCtl.held,
           testIn3d,
-          [],
           testSparks,
         );
       }
