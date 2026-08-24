@@ -277,6 +277,34 @@ export abstract class CollisionObject2D {
     this.authoredFriction = value;
   }
 
+  // How bouncy this body's surface is, and how hard it throws back whatever
+  // lands on it. Both are read off BOTH sides of a contact and the larger wins
+  // (`contactBounce` in world.ts), so a trampoline pad states its own bounce
+  // once and everything that meets it - the ball, its hook, a crate - is thrown
+  // by it without knowing the pad exists.
+  //
+  // Here rather than on `RigidBody2D`, which is where `restitution` lived while
+  // only a dynamic body could author one: a trampoline is a STATIC surface, and
+  // the pair's bounce is a fact about the two surfaces meeting rather than about
+  // whichever of them is the one that moves. Both default to 0 and MUST stay so
+  // - recorded replays predate the fields, and a static contributing 0 is
+  // exactly what the pair max used to read off it.
+  //
+  // `restitution` is the fraction of the inward normal velocity reflected back:
+  // 0 is fully inelastic (the approach is simply cancelled), 1 a perfect bounce.
+  // It is a RATIO, so what a body leaves with is proportional to what it arrived
+  // with, and a body that arrives slowly leaves slowly.
+  //
+  // `launchSpeed` is the m/s the surface throws with regardless of that - the
+  // spring in a trampoline, which is stored in the pad and not in the arrival.
+  // It is a FLOOR under the outgoing normal speed, so a ball that has dropped
+  // 20 cm leaves at the same speed as one that has fallen the height of the
+  // level, which is the whole of what makes a pad a launcher rather than a
+  // bouncy floor. See `contactBounce` for how the two combine and for why the
+  // floor fades out at low approach speeds instead of applying at any touch.
+  restitution = 0;
+  launchSpeed = 0;
+
   // How much of this body is inside a `WaterArea`, 0 (dry) .. 1 (under). Written
   // once per frame by `World.applyWaterDrag` and never read by anything the sim
   // does not run: it is 0 for every body in a level with no water areas, so the
@@ -575,11 +603,6 @@ export class RigidBody2D extends PhysicsBody2D {
   // the FREE ball, whose wall impact has no chain to answer for it
   // (`session-773f`).
   constraintTethered = false;
-  // Coefficient of restitution (bounciness) for static contacts: the fraction
-  // of inward normal velocity reflected back on impact. 0 = fully inelastic
-  // (kill inward velocity) and MUST stay the default — recorded replays predate
-  // this field. 1 would be a perfect bounce.
-  restitution = 0;
   // When true, the body's rotation is driven externally (the ball & chain
   // avatar's aim steering overwrites angularVelocity every frame), so contact
   // resolution treats it as rotationally locked (infinite rotational inertia):

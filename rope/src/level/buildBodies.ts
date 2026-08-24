@@ -33,6 +33,8 @@ import {
   isCollisionObject,
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
+  DEFAULT_BOUNCE,
+  DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
   type CollisionObjectData,
   type LevelBodyData,
@@ -79,6 +81,13 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
   body.fillColor = b.color ?? DEFAULT_BODY_COLOR;
   body.fillOpacity = b.opacity ?? DEFAULT_BODY_OPACITY;
   body.surfaceFriction = b.friction ?? DEFAULT_SURFACE_FRICTION;
+  // The trampoline pair (see `LevelBodyData.bounce`). Applied here, with the
+  // friction, because it is the same sort of thing: what this surface is like to
+  // meet, stated once by the body and read by whatever meets it. Every kind gets
+  // it - an area is never a contact side, so setting it there costs nothing and
+  // saves the build a branch that would have to be kept in step with the kinds.
+  body.restitution = b.bounce ?? DEFAULT_BOUNCE;
+  body.launchSpeed = b.launch ?? DEFAULT_LAUNCH;
 }
 
 // Where an object actually is, in world metres: its own placement composed

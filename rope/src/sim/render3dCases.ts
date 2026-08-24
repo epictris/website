@@ -609,6 +609,8 @@ function flattened(data: LevelData): string {
       color: b.color,
       opacity: b.opacity,
       friction: b.friction,
+      bounce: b.bounce,
+      launch: b.launch,
       force: b.force,
       // Keys sorted, because two builders that emit the same fields in a
       // different order have not lost anything - and they legitimately do: an
@@ -2039,6 +2041,87 @@ function waterFormat(): CaseResult[] {
   ];
 }
 
+// A TRAMPOLINE: one authored ratio and one authored speed.
+//
+// The same units trap water sets, and the same silence when it is sprung. A
+// `bounce` is dimensionless, so scaling it would make every pad a hundred times
+// bouncier than it was typed; a `launch` is a speed, so leaving it in pixels
+// makes a pad that throws the ball a hundred times as far. Neither is visible in
+// the editor, which shows both in the units they were typed in.
+//
+// And the editor round trip, because the pair is written CONDITIONALLY (an
+// unset field stays off disk, so a level of ordinary walls does not grow a
+// `bounce: 0` on every body). A conditional write is exactly the shape of thing
+// that loses a value: the condition is one more place the field can be
+// forgotten, and the editor rewrites the file every 750 ms.
+function bounceFormat(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 300,
+        rot: 0,
+        color: "#8a4f7d",
+        opacity: 1,
+        friction: 1,
+        bounce: 0.6,
+        launch: 900,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 300, h: 40 } },
+          { type: "geometry" },
+        ],
+      },
+      // A body that authors NEITHER, so the conditional write is asserted in
+      // both directions: a wall must not come back from the editor carrying a
+      // pad's fields at zero.
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 300, h: 40 } }],
+      },
+    ],
+  };
+  const a = flattened(scaleLevelData(normalizeLevelData(authored), 1));
+  const b = flattened(
+    scaleLevelData(scaleLevelData(normalizeLevelData(authored), PX), PIXELS_PER_METER),
+  );
+  const scaled = scaleLevelData(normalizeLevelData(authored), PX);
+  const units = scaled.bodies[0]!.bounce === 0.6 && scaled.bodies[0]!.launch === 9;
+  const saved = modelToDisk(modelFromDisk(authored));
+  const kept =
+    saved.bodies[0]!.bounce === 0.6 &&
+    saved.bodies[0]!.launch === 900 &&
+    saved.bodies[1]!.bounce === undefined &&
+    saved.bodies[1]!.launch === undefined;
+
+  return [
+    {
+      name: "level format: a trampoline round-trips px -> m -> px",
+      pass: a === b,
+      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
+    },
+    {
+      name: "level format: a bounce is a ratio and a launch is a speed",
+      pass: units,
+      detail: units
+        ? "bounce 0.6 unchanged, launch 900 px/s -> 9 m/s"
+        : `bounce ${scaled.bodies[0]!.bounce}, launch ${scaled.bodies[0]!.launch}`,
+    },
+    {
+      name: "editor: a trampoline keeps its throw through a save, and a wall gains none",
+      pass: kept,
+      detail: kept
+        ? "bounce and launch survive, and stay off a body that authors neither"
+        : JSON.stringify([saved.bodies[0], saved.bodies[1]]),
+    },
+  ];
+}
+
 // NOTHING BUT A GEOMETRY OBJECT DRAWS. A collision shape used to draw itself
 // whenever no one said otherwise, and this is the case that keeps that from
 // creeping back: the old default was invisible by construction (a level that
@@ -2270,5 +2353,6 @@ export function runRender3dCases(): CaseResult[] {
     ...emissiveMaterials(),
     ...realLevelRoundTrip(),
     ...waterFormat(),
+    ...bounceFormat(),
   ];
 }

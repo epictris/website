@@ -223,3 +223,99 @@ const VINE_DATA: RawLevelData = {
 };
 
 export const TEST_VINES: LevelSpec = { data: VINE_DATA };
+
+// Trampolines to bounce and be thrown by (see `LevelBodyData.bounce`): a floor
+// with three pads set flush into it, and a bouncy wall to be flung off.
+//
+// The three pads are the mechanic's two halves and the difference between them,
+// laid out so an author can feel it rather than read it. The first states a
+// BOUNCE and no launch, which is the lively floor: roll onto it and nothing
+// happens, drop onto it from the ledge and most of the drop comes back. The
+// other two state a LAUNCH and no bounce, at 6 and 10 m/s, and they throw
+// whatever touches them 1.8 m and 5.1 m up whether it arrived from a hop or a
+// dive. The far one is sized to the ledge above it, which is what a launch is
+// for: a jump an author can place, because the height it reaches is a property
+// of the pad and not of how the player happened to arrive.
+//
+// The pads are floor SEGMENTS rather than slabs laid on top of one, so the
+// surface stays flush and a ball rolls onto a pad without a step to climb. The
+// wall is at the right-hand end, where a ball driven along the floor arrives at
+// speed with somewhere to be thrown back to.
+const TRAMPOLINE_DATA: RawLevelData = {
+  player: { x: -1400, y: -100, radius: 8 },
+  bodies: [
+    // The floor, in the segments the pads are set between. Top face at y = 0.
+    ...([
+      { x: -1300, w: 600 },
+      { x: -400, w: 400 },
+      { x: 400, w: 400 },
+      { x: 1300, w: 600 },
+    ].map((seg) => ({
+      kind: "static" as const,
+      x: seg.x,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision" as const, shape: { kind: "rect" as const, w: seg.w, h: 200 } }],
+    }))),
+    // The lively floor: gives back most of a drop, and nothing at all to a body
+    // that rolls across it.
+    {
+      kind: "static",
+      x: -800,
+      y: 100,
+      rot: 0,
+      color: "#8a4f7d",
+      bounce: 0.85,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 200 } }],
+    },
+    // A short pad: 6 m/s, so 1.8 m up.
+    {
+      kind: "static",
+      x: 0,
+      y: 100,
+      rot: 0,
+      color: "#4f8a6b",
+      launch: 600,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 200 } }],
+    },
+    // ...and the one the ledge is placed against: 10 m/s, so 5.1 m up.
+    {
+      kind: "static",
+      x: 800,
+      y: 100,
+      rot: 0,
+      color: "#c4813d",
+      launch: 1000,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 200 } }],
+    },
+    // The ledge the far pad reaches, 4.2 m up and set back over the floor so the
+    // throw has to carry some travel with it rather than landing where it left.
+    {
+      kind: "static",
+      x: 400,
+      y: -400,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 40 } }],
+    },
+    // The left wall, plain, and the right one bouncy - a ball driven along the
+    // floor arrives at it with speed and is thrown back down the level.
+    {
+      kind: "static",
+      x: -1650,
+      y: -600,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 1400 } }],
+    },
+    {
+      kind: "static",
+      x: 1650,
+      y: -600,
+      rot: 0,
+      color: "#8a4f7d",
+      bounce: 0.85,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 1400 } }],
+    },
+  ],
+};
+
+export const TEST_TRAMPOLINE: LevelSpec = { data: TRAMPOLINE_DATA, controller: "ball" };

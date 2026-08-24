@@ -60,6 +60,11 @@
 // for is a background leaf on a sprung stem, which is a `rigid` body. A flag
 // composes with every kind; a kind excludes every other.
 //
+// A TRAMPOLINE is not among them either, for the same reason and with the same
+// answer: it is the `bounce`/`launch` pair below, so a pad can be static scenery,
+// a bouncy crate that still falls, or a paddle on a bearing that swats what it
+// hits, rather than one of the three at the cost of the other two.
+//
 // Hook-proof (`impermeable`) is deliberately NOT among them - it is a per-object
 // flag below. It was a kind while it could only ever be static scene geometry,
 // and that cost the two things a level actually wants: a hook-proof crate that
@@ -116,6 +121,20 @@ export const DEFAULT_BODY_OPACITY = 0.5;
 // this field). Only authored ice changes behaviour.
 export const DEFAULT_SURFACE_FRICTION = 1;
 
+// How bouncy authored geometry is, and how hard it throws. Both are 0 by
+// default and MUST stay so - a surface that cancels an approach outright is
+// what every level authored before these fields has, and what the contact solve
+// did before it could be told otherwise.
+//
+// `bounce` is the coefficient of restitution: 0 is a dead floor, 1 a perfect
+// bounce, and what a body leaves with is proportional to what it arrived with.
+// `launch` is the trampoline half - a floor under the outgoing speed, in scene
+// pixels/s, that the surface pays whatever the arrival was worth. 900 px/s
+// (→ 9 m/s) throws the ball a little over four metres up.
+//
+// See `CollisionObject2D.restitution` for how the two combine.
+export const DEFAULT_BOUNCE = 0;
+export const DEFAULT_LAUNCH = 0;
 // Default strength of a new force area, in scene pixels/s² (→ 3 m/s², roughly a
 // third of gravity: a current that carries but does not fling).
 export const DEFAULT_FORCE_MAGNITUDE = 300;
@@ -589,6 +608,29 @@ export interface LevelBodyData {
   opacity?: number;
   // Surface friction, 0 (ice) .. 1 (rubber). Absent = DEFAULT_SURFACE_FRICTION.
   friction?: number;
+  // How this surface throws back whatever lands on it: a TRAMPOLINE, authored
+  // as a property of the surface rather than as a kind of body.
+  //
+  // `bounce` is the coefficient of restitution, 0 (dead) .. 1 (perfect), and it
+  // is proportional - a body that arrives gently leaves gently. `launch` is a
+  // FLOOR under the outgoing speed in pixels/s, which is what makes a pad a
+  // launcher: the spring is stored in the pad, so a ball that has dropped 20 cm
+  // onto it leaves as fast as one that fell the height of the level. Both are
+  // read off both sides of a contact and the larger wins, so a pad states its
+  // throw once and everything that meets it is thrown.
+  //
+  // A pair of properties rather than a `trampoline` kind, for the reason the
+  // note at the top of this file gives: a kind is what a body IS and excludes
+  // every other, while this composes with all of them. A static pad is the
+  // ordinary case; a `rigid` one is a bouncy crate that is also shoved about and
+  // falls; a `pivot` one is a paddle that swats the player away as it turns.
+  // None of those is expressible as a kind, and every one of them is the same
+  // two numbers on the surface.
+  //
+  // Absent = DEFAULT_BOUNCE / DEFAULT_LAUNCH, which is the dead surface every
+  // level authored before these fields has.
+  bounce?: number;
+  launch?: number;
   // Force areas only: acceleration magnitude in pixels/s² (metres/s² once
   // scaled), applied along the body's own rotation — rot 0 flows right, so
   // rotating the area steers the current. Negative reverses it.
@@ -2140,6 +2182,12 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.color !== undefined ? { color: b.color } : {}),
       ...(b.opacity !== undefined ? { opacity: b.opacity } : {}),
       ...(b.friction !== undefined ? { friction: b.friction } : {}),
+      // A restitution is a ratio and a launch is a speed, so exactly one of the
+      // trampoline pair converts - the same split `flow`/`drag` makes below, and
+      // the same silent failure if it is got wrong: a launch left in pixels is a
+      // pad a hundred times too strong.
+      ...(b.bounce !== undefined ? { bounce: b.bounce } : {}),
+      ...(b.launch !== undefined ? { launch: b.launch * factor } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),

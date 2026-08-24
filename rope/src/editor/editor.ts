@@ -30,6 +30,8 @@ import {
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
+  DEFAULT_BOUNCE,
+  DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
 } from "../level/levelFormat";
@@ -2504,6 +2506,45 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
+  // The trampoline pair (see `LevelBodyData.bounce`): how much of an arrival the
+  // surface gives back, and the speed it throws with regardless of the arrival.
+  // Beside the friction because it is the same sort of property - what this
+  // surface is LIKE to meet - and offered wherever a friction is, so a bouncy
+  // crate and a bouncy wall are authored the same way.
+  //
+  // The readout is the point of the panel, as the spring's droop is of its. A
+  // launch speed is not a height and an author is choosing a height, so the
+  // field on its own is unauthorable; `v²/2g` turns it into the number actually
+  // being picked - how far up the pad throws what lands on it.
+  function addBounceFields(g: HTMLElement, num: GroupNum, leads: EdItem[]): void {
+    num("bounce", (b) => b.bounce, (b, v) => (b.bounce = Math.min(1, Math.max(0, v))), 0.1);
+    // A speed in px/s, like every other length per second on the panel. Never
+    // negative: a surface that threw a body INTO itself is not a thing to
+    // author, and the sign a force area and a current carry means direction,
+    // which a launch takes from the contact normal instead.
+    num("launch", (b) => b.launch * M2PX, (b, v) => (b.launch = Math.max(0, v) * PX), 50);
+    // Live, and re-derived from the items rather than from the values the panel
+    // was built with, for the same reason the spring's droop is: typing a launch
+    // has to move the number the launch was typed FOR.
+    const height = (): string => {
+      const v = shared(leads, (b) => b.launch);
+      if (v === null) return "mixed";
+      if (v <= 0) return "-";
+      return `${((v * v) / (2 * 9.8)).toFixed(2)} m`;
+    };
+    const row = el("label", "ed-field");
+    row.textContent = "throws";
+    const val = document.createElement("span");
+    val.textContent = height();
+    row.appendChild(val);
+    g.appendChild(row);
+    readouts.push({ el: val, get: height });
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. It fades out on the gentlest touches, so a body that has come to rest on the pad stays put instead of humming. Both are read off both surfaces meeting and the bouncier wins.";
+    g.appendChild(hint);
+  }
+
   // Hook-only geometry (see `LevelBodyData.passable`): the hook catches on this
   // body and everything else - the avatar, the rope, loose debris - passes
   // straight through it. A background leaf on a sprung stem, a grate, a girder,
@@ -3412,6 +3453,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       g.appendChild(kw);
       if (!leads.some(frictionless)) {
         num("friction", (b) => b.friction, (b, v) => (b.friction = Math.min(1, Math.max(0, v))), 0.1);
+        addBounceFields(g, num, leads);
       }
       if (leads.every((b) => b.kind === "force")) {
         // Acceleration along rot°, authored in px/s² like every other length.
@@ -5017,6 +5059,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       color: style.color,
       opacity: style.opacity,
       friction: DEFAULT_SURFACE_FRICTION,
+      // ...and a fresh shape is a dead one: bounce is opt-in, exactly as
+      // hook-proofing below is.
+      bounce: DEFAULT_BOUNCE,
+      launch: DEFAULT_LAUNCH,
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
       // A fresh shape is 20 cm of oak, which is what every body authored before

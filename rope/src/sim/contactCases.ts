@@ -1775,6 +1775,101 @@ function caseWaterCurrent(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// trampoline - a surface that states a bounce gives an impact back, and one
+// that states a launch throws whatever lands on it to the same height whether
+// it fell twenty centimetres or two metres.
+//
+// The two halves are deliberately different mechanics and the case asserts the
+// difference rather than only that "it bounces". A RESTITUTION is a ratio, so it
+// is a property of the arrival: drop from four times the height and you come
+// back four times as high, and a body that arrives with nothing leaves with
+// nothing. A LAUNCH is the pad's own spring, so it is a property of the SURFACE:
+// the two drops leave at the same speed, which is what makes a pad a launcher an
+// author can place a jump against rather than a floor that happens to be lively.
+//
+// The fourth assertion is the one the mechanic would be unshippable without. A
+// floor under the outgoing speed is by construction a floor the body keeps
+// landing back on top of, so a pad that pays it at any touch pays it for ever:
+// a ball that has come to rest on the pad hums at the launch speed, and nothing
+// on the level can ever settle on a trampoline. `contactBounce`'s dead zone is
+// what stops it, and this is what holds the dead zone in place.
+// ---------------------------------------------------------------------------
+function caseTrampoline(): ContactResult {
+  // The apex a ball reaches after being dropped `drop` metres onto a pad, in
+  // metres above where the pad's surface is. y is down, so the apex is the
+  // smallest y the ball reaches after its first bounce.
+  const PAD_TOP = 0;
+  const RADIUS = 0.12;
+  const bounced = (drop: number, bounce: number, launch: number): { apex: number; rest: number } => {
+    const world = new World();
+    const pad = new StaticBody2D();
+    // A 1 m thick slab so nothing can be pushed through it, with its top face at
+    // PAD_TOP.
+    pad.globalPosition = new Vec2(0, PAD_TOP + 0.5);
+    pad.setShape(rectShape(40, 1));
+    pad.restitution = bounce;
+    pad.launchSpeed = launch;
+    world.add(pad);
+
+    const ball = new RigidBody2D();
+    ball.globalPosition = new Vec2(0, PAD_TOP - RADIUS - drop);
+    ball.setShape(circleShape(RADIUS));
+    ball.mass = ShapeGeometry.computeMass(ball.primaryShape());
+    ball.inertia = ShapeGeometry.computeMomentOfInertia(ball.primaryShape(), ball.mass);
+    ball.contactFriction = RIGID_KINETIC_FRICTION;
+    ball.staticFriction = RIGID_STATIC_FRICTION;
+    world.add(ball);
+
+    // Long enough for a 9 m/s launch to go up and come back twice over.
+    let landed = false;
+    let apex = 0;
+    for (let f = 0; f < 400; f++) {
+      world.integrate(DT);
+      const height = PAD_TOP - RADIUS - ball.globalPosition.y;
+      // Only after the FIRST landing: the release height is not an apex.
+      if (!landed && ball.linearVelocity.y < 0) landed = true;
+      if (landed) apex = Math.max(apex, height);
+    }
+    return { apex, rest: PAD_TOP - RADIUS - ball.globalPosition.y };
+  };
+
+  // A ratio gives back a fixed FRACTION of the drop: v_out = e*v_in and the
+  // height goes as v², so the apex is e² of the drop. Bounds either side of it,
+  // wide enough for the contact damp and the frame the bounce is spread over.
+  const DROP = 2;
+  const E = 0.8;
+  const elastic = bounced(DROP, E, 0);
+  const ratio = elastic.apex / DROP;
+  const proportional = ratio > 0.5 && ratio < E * E + 0.02;
+
+  // A launch gives back a fixed SPEED, so both drops reach v²/2g = 4.13 m
+  // whatever they arrived with. The short drop is 20 cm, which is where the
+  // fade-in is already at full strength (see `contactBounce`).
+  const LAUNCH = 9;
+  const IDEAL = (LAUNCH * LAUNCH) / (2 * 9.8);
+  const shallow = bounced(0.2, 0, LAUNCH);
+  const deep = bounced(2, 0, LAUNCH);
+  const thrown = shallow.apex > IDEAL * 0.9 && shallow.apex < IDEAL * 1.05;
+  // The whole point: the two apexes agree, where a restitution would have put
+  // them a factor of ten apart.
+  const independent = Math.abs(shallow.apex - deep.apex) < 0.25;
+
+  // ...and a ball that has come to rest on the pad is left alone: dropped from
+  // 2 mm, which is under the dead zone at every frame of the fall, it never
+  // leaves the surface and is not still moving at the end.
+  const resting = bounced(0.002, 0, LAUNCH);
+  const settles = resting.apex < 0.01;
+
+  const passed = proportional && thrown && independent && settles;
+  return ok("trampoline - a bounce returns a fraction, a launch returns a speed", passed, [
+    `${proportional ? "ok  " : "BAD "} bounce ${E} off a ${DROP} m drop returns ${(ratio * 100).toFixed(1)}% of it (want 50%..${((E * E + 0.02) * 100).toFixed(0)}%)`,
+    `${thrown ? "ok  " : "BAD "} launch ${LAUNCH} m/s off a 20 cm drop throws ${shallow.apex.toFixed(2)} m (want ${(IDEAL * 0.9).toFixed(2)}..${(IDEAL * 1.05).toFixed(2)})`,
+    `${independent ? "ok  " : "BAD "} the same pad off a 2 m drop throws ${deep.apex.toFixed(2)} m: ${Math.abs(shallow.apex - deep.apex).toFixed(3)} m apart (want < 0.25)`,
+    `${settles ? "ok  " : "BAD "} a ball at rest on the pad does not hum: apex ${(resting.apex * 1000).toFixed(2)} mm (want < 10)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // chain-order — a symmetrical rig hangs symmetrically, whichever order its
 // chains are written in.
 //
@@ -2692,6 +2787,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseDecorGroup());
   results.push(caseAreaReach());
   results.push(caseWaterCurrent());
+  results.push(caseTrampoline());
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());

@@ -45,6 +45,8 @@ import {
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
   DEFAULT_NOTE_TEXT_SIZE,
+  DEFAULT_BOUNCE,
+  DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
@@ -289,6 +291,13 @@ export interface EdItem {
   //
   kind: BodyKind;
   friction: number; // surface friction, 0 (ice) .. 1 (rubber)
+  // The trampoline pair (see `LevelBodyData.bounce`): the coefficient of
+  // restitution, 0 (dead) .. 1 (perfect), and the floor under the outgoing
+  // speed in m/s that makes a pad a launcher rather than a bouncy floor. Per
+  // BODY, like the friction beside them, so `syncBodyProps` carries both across
+  // a compound one: half a pad is not a thing a level can mean.
+  bounce: number;
+  launch: number;
   // There is no body depth here, and none on a collision item either: a body is
   // a thing in the gameplay plane and so is the shape it collides as (see
   // `LevelBodyData`). Depth is `EdVisual.offsetZ`, on the geometry objects and
@@ -879,6 +888,8 @@ function fromLevelData(data: LevelData): EdModel {
       color: b.color ?? DEFAULT_BODY_COLOR,
       opacity: b.opacity ?? DEFAULT_BODY_OPACITY,
       friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
+      bounce: b.bounce ?? DEFAULT_BOUNCE,
+      launch: b.launch ?? DEFAULT_LAUNCH,
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
@@ -991,6 +1002,8 @@ function fromLevelData(data: LevelData): EdModel {
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    bounce: DEFAULT_BOUNCE,
+    launch: DEFAULT_LAUNCH,
     impermeable: false,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
@@ -1055,6 +1068,8 @@ function fromLevelData(data: LevelData): EdModel {
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    bounce: DEFAULT_BOUNCE,
+    launch: DEFAULT_LAUNCH,
     impermeable: false,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
@@ -1121,6 +1136,8 @@ function lightItem(
     color: l.color ?? DEFAULT_LIGHT_COLOR,
     opacity: LIGHT_FILL_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    bounce: DEFAULT_BOUNCE,
+    launch: DEFAULT_LAUNCH,
     impermeable: false,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
@@ -1165,6 +1182,8 @@ function lightItem(
     color: NOTE_COLOR,
     opacity: NOTE_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
+    bounce: DEFAULT_BOUNCE,
+    launch: DEFAULT_LAUNCH,
     impermeable: false,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
@@ -1503,6 +1522,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(lead.object === "collision"
         ? {
             friction: lead.friction,
+            // The trampoline pair, and only when it is set: an absent field is
+            // the dead surface every level authored before them has, and
+            // writing `bounce: 0` onto every wall in every file would state a
+            // property nothing has chosen.
+            ...(lead.bounce ? { bounce: lead.bounce } : {}),
+            ...(lead.launch ? { launch: lead.launch } : {}),
             // Only force areas carry a magnitude; omitting it elsewhere keeps
             // saved levels free of a field that would read as meaningful.
             ...(lead.kind === "force" ? { force: lead.force } : {}),
@@ -2315,6 +2340,8 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.color = lead.color;
     m.opacity = lead.opacity;
     m.friction = lead.friction;
+    m.bounce = lead.bounce;
+    m.launch = lead.launch;
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
@@ -2558,6 +2585,8 @@ export function emptyModel(): EdModel {
         color: DEFAULT_BODY_COLOR,
         opacity: DEFAULT_BODY_OPACITY,
         friction: DEFAULT_SURFACE_FRICTION,
+        bounce: DEFAULT_BOUNCE,
+        launch: DEFAULT_LAUNCH,
         impermeable: false,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,

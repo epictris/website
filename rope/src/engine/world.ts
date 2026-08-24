@@ -121,6 +121,44 @@ export const CONTACT_SLOP = 0.01;
 // rigid-rigid contacts have never had any, so with the shipped defaults this
 // costs nothing; it is here so that turning restitution on is not a trap.
 const RESTITUTION_THRESHOLD = 1;
+
+// The outgoing normal speed a contact is solved toward: the elastic bounce the
+// pair's restitution earns, or the surface's own launch, whichever is larger.
+// `approach` is the closing speed at the point (positive when the two are
+// coming together).
+//
+// One function, called by the solver and by `BallPlayer.applyLoopCap`, because
+// the cap's whole job is to hold a loop landing to what the ball's own arrival
+// was worth - and it can only do that if it computes "what was that worth" the
+// same way the solve does.
+//
+// THE DEAD ZONE is `RESTITUTION_THRESHOLD` and it is the same one restitution
+// has always had: below it a contact earns nothing at all, so a body resting on
+// a surface does not re-bounce for ever on the velocity gravity re-adds each
+// frame. A launch needs it more than a restitution does, not less - a floor
+// under the outgoing speed is by construction a floor a body keeps landing back
+// on top of, so without the gate a pad would hum at its own launch speed under
+// a body that had come to rest on it.
+//
+// THE RAMP is what the launch adds. A restitution is proportional to the
+// approach and so already fades to nothing as a body settles; a floor does not,
+// and applied flat it would step from nothing to the full launch across the
+// threshold - a touch at 0.99 m/s doing nothing and one at 1.01 m/s throwing the
+// body six metres up. So the launch fades in across a band as wide as the dead
+// zone: nothing at the threshold, full at twice it (2 m/s, a 20 cm drop). Every
+// real landing on a pad is far past that, and what the band buys is that the
+// gentle ones approach it continuously rather than off a cliff.
+//
+// `launch <= 0` returns the elastic answer by the same arithmetic the solver
+// used before this existed, which is what keeps every recorded replay - none of
+// which authors a launch - bit-identical.
+export function contactBounce(approach: number, restitution: number, launch: number): number {
+  if (approach <= RESTITUTION_THRESHOLD) return 0;
+  const elastic = restitution * approach;
+  if (launch <= 0) return elastic;
+  const ramp = Math.min(1, (approach - RESTITUTION_THRESHOLD) / RESTITUTION_THRESHOLD);
+  return Math.max(elastic, launch * ramp);
+}
 // Sweeps of the scene-wide positional recovery per physics step. Each sweep gives
 // every rigid body one depenetration pass, so a pile settles together instead of
 // whichever body the loop reached last winning its overlap outright.
@@ -1225,6 +1263,23 @@ export class World {
   // rather than re-deriving contacts it would then have to keep in step.
   frameContacts: ContactConstraint[] = [];
 
+  // Did a contact this frame pay a LAUNCH - a trampoline throwing something
+  // harder than its arrival justified (see `contactBounce`)?
+  //
+  // A pad is a source of energy in the way the winch and the steering are: it
+  // does work on whatever touches it, out of a spring the sim does not model as
+  // storing anything. So `EnergyMonitor` has to be told, or the mechanic reads
+  // as the solver inventing energy and every recorded session over a pad carries
+  // an `energy-gained` violation. A spring body is the other answer to the same
+  // problem and could not be used here: its energy is accounted for exactly
+  // because it HAS a state to account (`mechanicalEnergy`), where a pad's throw
+  // is deliberately independent of how far anything pushed it in.
+  //
+  // Written by the contact gather and read once a frame; false in every level
+  // that authors no launch, which is what keeps the invariant armed everywhere
+  // it always was.
+  launchedThisFrame = false;
+
   // The frame's worst overspend against the kinematic-spin drive cap (N·s), and
   // which contact spent it. 0 while the cap in `solveTangent` holds; the
   // `spin-overdrive` invariant reads it so a future path that spends spin-funded
@@ -1460,6 +1515,7 @@ export class World {
   private solveContacts(constraints: ContactConstraint[], dt: number): void {
     const previous = this.contactCache;
     this.contactCache = new Map<string, CachedImpulses>();
+    this.launchedThisFrame = false;
     this.spinDriveOverspend = 0;
     this.spinDriveDetail = null;
     const prevLoads = this.pairLoad;
@@ -1507,8 +1563,17 @@ export class World {
       // per iteration. Re-applying a bounce to a velocity that already contains
       // it is how an iterated solver invents energy.
       const vn = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(c.normal);
-      const restitution = Math.max(c.a.restitution, bRigid ? bRigid.restitution : 0);
-      const bounce = vn < -RESTITUTION_THRESHOLD ? -restitution * vn : 0;
+      // Both sides' surfaces, and the bouncier of them wins: a trampoline pad is
+      // a STATIC body, so reading `b`'s only when it is rigid is what would
+      // leave a pad unable to state that it throws anything at all.
+      const restitution = Math.max(c.a.restitution, c.b.restitution);
+      const launch = Math.max(c.a.launchSpeed, c.b.launchSpeed);
+      const bounce = contactBounce(-vn, restitution, launch);
+      // Only when the pad's own throw is what the contact will be solved to.
+      // A body that arrives faster than the pad throws is bouncing off it
+      // elastically and takes away no more than it brought, which is not a
+      // source and must not disarm the energy invariant.
+      if (bounce > restitution * Math.max(0, -vn)) this.launchedThisFrame = true;
 
       // The tangential slip a KINEMATIC spin contributes at this point, and the
       // sustained load that spin is allowed to buy traction from. Constant
@@ -2559,6 +2624,12 @@ function brakeScale(a: RigidBody2D, bRigid: RigidBody2D | null, dir: Vec2): numb
 // travel (`ball-roll-drive`, 2.4 m against 4.9) and a ground wind-up stops
 // paying its chain in (`ball-ground-wind-up`). The load is what was fabricated;
 // the slip was always real.
+//
+// A LAUNCH is deliberately not part of this. What the term takes off the cone is
+// what the SPIN pressed the surface with, and a launch is not something a spin
+// presses out of a pad: it is the pad's own spring, which it spends on whatever
+// touches it however that thing arrived. So a bouncy pad's larger normal impulse
+// widens the cone, exactly as any other surface pressing back harder would.
 //
 // The gate is the MOUNT and not the arithmetic: for a centred shape the term is
 // identically zero, and asking the shape where it is mounted keeps it exactly

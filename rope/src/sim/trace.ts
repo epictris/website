@@ -743,8 +743,14 @@ export class EnergyMonitor {
     // overwritten the spin this frame.
     const steering =
       level.ball.kinematicRotation && Math.abs(level.ball.angularVelocity) > STEERING_SPIN;
+    // A trampoline pays out of a spring nothing in the scene stores, so a frame
+    // one fired is a frame energy legitimately entered the level - the same
+    // statement `FORCED_ACTIONS` makes about the winch, and made by the sim
+    // itself rather than by the input, because a pad fires on contact and no
+    // button is pressed for it (see `World.launchedThisFrame`).
+    const launched = level.world.launchedThisFrame;
     const bodies = level.world.bodies.filter((b) => !b.removed).length;
-    if (anyForcedInput(input) || steering || bodies !== this.bodyCount) {
+    if (anyForcedInput(input) || steering || launched || bodies !== this.bodyCount) {
       // A body appearing or disappearing (a hook spawned, a hook removed)
       // changes the total by construction, so the span restarts rather than
       // reading the difference as the solver's doing.

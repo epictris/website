@@ -12,7 +12,7 @@ import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape, nearestShapeIndex } from "../engine/shapes";
-import type { ContactConstraint } from "../engine/world";
+import { contactBounce, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import type { FrameInput } from "../input/frameInput";
@@ -182,7 +182,23 @@ export class BallPlayer extends RigidBody2D {
     // Scaled by (1 + restitution) because that is what the solve does with an
     // approach: it cancels it and adds the bounce on top.
     const spinNormal = Math.abs(spinAtPoint.dot(normal)) * (1 + this.restitution);
-    const allowed = Math.max(this.restitution * approach, solved - spinNormal);
+    // Two floors under the cap. The first is the ball's own plain restitution
+    // against its own approach, which is the line this has always been and what
+    // an ordinary surface is worth.
+    //
+    // The second is what the SURFACE states, asked of the pair exactly as the
+    // solve asks it, and it is zero everywhere a level authors no bounce. On a
+    // trampoline it is the pad's throw, and the cap must not take that away: a
+    // launch is the one thing on this contact deliberately independent of how
+    // the ball arrived, so holding it down to what the arrival earned would put
+    // the pad's answer back at the mercy of the loop's rotation phase - the
+    // exact fault this cap exists to remove.
+    const surfaceBounce = contactBounce(
+      approach,
+      Math.max(this.restitution, best.b.restitution),
+      Math.max(this.launchSpeed, best.b.launchSpeed),
+    );
+    const allowed = Math.max(this.restitution * approach, surfaceBounce, solved - spinNormal);
 
     const along = this.linearVelocity.dot(normal);
     // This only ever takes speed away: what the solve did to keep the loop out
