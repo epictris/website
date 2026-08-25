@@ -767,6 +767,13 @@ export class BallLevel {
     }
     this.endWasFixed = endFixed;
 
+    // The slack chain's visual drape, stepped against the frame's FINAL
+    // transforms — after the chain phase, the push-out and the stall lease, so
+    // its pinned ends sit exactly where the renderer will draw the ball and
+    // the hook. Strictly read-only against the sim (see SlackChain): it moves
+    // no body, so every phase mark and invariant above is blind to it.
+    this.ball.chainSlack?.step(this.bodies, delta);
+
     this.cameraPosition = this.ball.globalPosition;
   }
 

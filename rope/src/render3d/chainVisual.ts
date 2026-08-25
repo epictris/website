@@ -118,25 +118,27 @@ export class ChainLayer {
     const ball = level.ball;
     const chain = ball?.chain;
     if (ball && chain) {
-      const spans = chain.getSpans();
-      if (spans.length) {
+      // The slack sim's polyline, loop→anchor — the drape while the chain has
+      // slack, the straight wrap path when it is taut (see SlackChain).
+      const loopToAnchor =
+        ball.chainSlack?.pathLoopToAnchor(alpha) ??
+        chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
+      if (loopToAnchor.length >= 2) {
         // Anchor first, ball last: the links then stay put in the world as the
         // chain reels and are consumed INTO the ball, rather than the whole
         // chain compressing toward the anchor (see chainMetrics.ts).
         this.path.length = 0;
-        for (let i = spans.length - 1; i >= 0; i--) {
-          this.path.push(spans[i]!.to.contact.renderGlobalPosition(alpha));
+        for (let i = loopToAnchor.length - 1; i >= 0; i--) {
+          this.path.push(loopToAnchor[i]!);
         }
-        this.path.push(spans[0]!.from.contact.renderGlobalPosition(alpha));
         this.path.push(ball.renderPosition(alpha));
         this.tint.set(DEFAULT_CHAIN_COLOR);
         this.lay(this.path);
 
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - with its housing facing the span it hangs from.
-        const last = spans[spans.length - 1]!;
-        const tip = last.to.contact.renderGlobalPosition(alpha);
-        const prev = last.from.contact.renderGlobalPosition(alpha);
+        const tip = loopToAnchor[loopToAnchor.length - 1]!;
+        const prev = loopToAnchor[loopToAnchor.length - 2]!;
         const dir =
           tip.distanceTo(prev) > 1e-5 ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
         this.manacle.position.set(tip.x, threeY(tip.y), 0);

@@ -851,27 +851,23 @@ export function renderBall(
   const ball = level.ball;
   const chain = ball.chain;
   if (chain && !overlayOnly) {
-    const spans = chain.getSpans();
-    // Node path loop→anchor (the loop is the first span's `from`, then each
-    // span's `to`). Resolved against the render transforms, so the chain stays
-    // welded to the drawn ball and the drawn hook rather than to their 60 Hz
-    // sim positions — otherwise the chain visibly detaches between steps.
-    const loopToAnchor = [
-      spans[0]!.from.contact.renderGlobalPosition(alpha),
-      ...spans.map((s) => s.to.contact.renderGlobalPosition(alpha)),
-    ];
+    // Node path loop→anchor. The slack sim's polyline: the coil and both ends
+    // welded to the render transforms (so the chain never visibly detaches
+    // from the drawn ball or hook between steps), the free run draped — and
+    // exactly the straight wrap path whenever the chain is taut.
+    const loopToAnchor =
+      ball.chainSlack?.pathLoopToAnchor(alpha) ??
+      chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
+    // Manacle at the chain's far end (flying hook, dangling tip, or anchor).
+    // Orient its housing toward the previous chain node.
+    const tip = loopToAnchor[loopToAnchor.length - 1]!;
+    const prev = loopToAnchor[loopToAnchor.length - 2] ?? tip;
+    const dir =
+      tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
     // Walk anchor → … → loop → ball centre: reverse to start at the anchor,
     // then extend past the loop into the covered centre at the ball end.
     const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
     drawChainPolyline(ctx, path);
-
-    // Manacle at the chain's far end (flying hook, dangling tip, or anchor).
-    // Orient its housing toward the previous chain node.
-    const last = spans[spans.length - 1]!;
-    const tip = last.to.contact.renderGlobalPosition(alpha);
-    const prev = last.from.contact.renderGlobalPosition(alpha);
-    const dir =
-      tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
     drawManacle(ctx, tip, dir);
   }
   if (!overlayOnly) {

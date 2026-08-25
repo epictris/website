@@ -271,6 +271,18 @@ export function renderFrameSVG(level: Level | BallLevel): string {
     }
   }
 
+  // The slack chain's visual drape (ball level only), in green over the wrap
+  // path's amber: the two coincide when taut, and the drape hanging below the
+  // straight spans is exactly what a snapshot is opened to check.
+  if (level instanceof BallLevel && level.ball.chainSlack) {
+    const nodes = level.ball.chainSlack.nodePositions();
+    if (nodes.length >= 2) {
+      for (const n of nodes) grow(box, n.x * M, n.y * M, 4);
+      const pts = nodes.map((n) => `${(n.x * M).toFixed(1)},${(n.y * M).toFixed(1)}`).join(" ");
+      ropeEls.push(`<polyline points="${pts}" fill="none" stroke="#7dba6a" stroke-width="1.5"/>`);
+    }
+  }
+
   // Authored scene chains, in a cooler steel than the avatar's rope so the two
   // are never confused in a snapshot. Same treatment otherwise: the wrap-node
   // polyline, with the nodes marked, since a chain catching a corner is exactly

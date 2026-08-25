@@ -163,7 +163,9 @@ static geometry included. What is left outside it is the ball avatar's aim **ste
   have their own tooling. (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
 - Circles remain single-point; polygon contacts get a real two-point manifold (above).
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
-  `slackSimulation` field unused; the rope renders straight spans.
+  `slackSimulation` field unused; the grapple rope renders straight spans.
+  The BALL chain no longer does: `SlackChain` (below) is a fresh visual drape sim, unrelated
+  to that port.
 - `ApplyFrictionImpulse` is ported behaviour-for-behaviour but, as in the C# source, is
   not invoked from `physicsStep` (the call is commented out there too).
 
@@ -2707,6 +2709,55 @@ A migration a caller can forget is one that is missing wherever the next caller 
 
 `cli contacts` `impermeable-shape` is the detector, and it asserts both hooks against one compound body: the hook-proof piece turns each away, its sibling anchors each, a hook-proof **rigid** body deflects the ball's hook, and the retired kind still loads hook-proof.
 Both hooks, because they reach a surface by different means - a raycast that destroys, a sweep/probe that deflects - and a fix applied to one of them alone is exactly the class of bug the shape-versus-body rule exists to stop.
+
+## The slack chain drape
+
+A deployed ball chain with length to spare no longer draws as straight spans: `SlackChain`
+(`classes/slackChain.ts`) is a **visual-only** simulation of the loose chain - a fixed-count
+Verlet particle chain pinned at the point the chain leaves the ball (the coil's tangent
+point) and at the far end (flying hook, dangling tip, or anchor).
+It sags in a catenary, drapes over the ball and the scenery, and heaps on the floor.
+It is strictly one-way: it reads body transforms and the wrap path at the END of the physics
+frame (`BallLevel.physicsProcess` steps it last) and writes nothing back - no forces, no
+impulses, no positions - so every replay, digest and invariant is bit-identical with it in
+(asserted the usual way: the whole corpus replays byte-for-byte across the change).
+
+Both renderers draw its polyline instead of the chain's spans (`pathLoopToAnchor(alpha)`,
+with the coil and both ends still welded to the render transforms so the chain never
+detaches from the drawn ball or manacle); `cli render` overlays it in green over the wrap
+path's amber, which coincide exactly when the chain is taut.
+
+Four mechanisms carry the requirements:
+
+- **Length is preserved.** The drape's rest length is the free wrap-path length plus the
+  slack the solver is not using, so the drawn chain is the length the chain actually has.
+  Equality distance constraints plus long-range attachments from both pins kill the
+  sag-stretch a few Gauss-Seidel passes leave (measured: within ~3% of target in every
+  scenario, where a plain PBD chain drifted 20%).
+- **Compression buckles.** A chain pressed shorter than its length must fold, and the
+  distance correction acts only along the segment, so a collinear compressed run has no
+  lateral gradient and Gauss-Seidel would leave the drawn chain simply shorter for ever.
+  A segment compressed past a few percent is nudged perpendicular, alternating sides, and
+  gravity plus the floor settle the folds into an honest pile.
+- **Collision is one-way and wrap-shaped.** Nodes are pushed out of every `wrappable` shape
+  (the same set the rope solver may wrap, so the mounting loop is excluded and the ball's
+  own rim is not), with dead restitution and strong tangential friction; the far-end body
+  itself is skipped, since the chain threads into the manacle.
+- **Taut is the limit of almost-taut.** Sag grows like the square root of slack, so even
+  millimetres of slack sag visibly, and a renderer that switched representation at taut
+  would show the chain snapping straight in one frame.
+  Instead the drawn chain is ALWAYS this polyline, and below `TAUT_BLEND_SLACK` every node
+  is blended toward its arc-length position on the straight wrap path, fully there at zero
+  slack - so the drawn shape is a continuous function of the physics state and there is no
+  frame on which the representation changes.
+  The length the blend hides is bounded by the blend weight times the slack, at most a link
+  or two right at the crossover.
+
+Nothing gates the look (a drape is exactly the kind of thing the suite cannot see - see
+**What the verification suite cannot see**); what was measured when it was built: worst
+single-frame interior-node motion beyond what the endpoints moved is ~2 cm (sub-link), floor
+penetration is exactly zero, and the whole sim costs ~0.1 ms a frame inside the 16.7 ms
+budget.
 
 ## Sparks
 

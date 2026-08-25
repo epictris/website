@@ -17,6 +17,7 @@ import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
+import { SlackChain } from "./slackChain";
 import { BallHook } from "./ballHook";
 
 export class BallPlayer extends RigidBody2D {
@@ -81,6 +82,10 @@ export class BallPlayer extends RigidBody2D {
   static readonly AIM_BRAKE_MIN = 0.15; // braking fraction remaining at high speed
 
   chain: Rope | null = null;
+  // Visual drape of the deployed chain while it has slack. Strictly one-way
+  // (reads the sim, writes only its own nodes; see SlackChain) — the renderers
+  // draw its polyline instead of the chain's straight spans.
+  chainSlack: SlackChain | null = null;
   hookInFlight: BallHook | null = null;
   // Free chain end after a miss: the hook disarms in place and lives on as a
   // dangling tip weight — the chain stays deployed at max length until reeled
@@ -691,6 +696,7 @@ export class BallPlayer extends RigidBody2D {
       [],
       null,
     );
+    this.chainSlack = new SlackChain(this.chain);
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
     // keeps paying out until it reaches max length or snags on geometry.
@@ -768,5 +774,6 @@ export class BallPlayer extends RigidBody2D {
     this.hookInFlight = null;
     this.chainTip = null;
     this.chain = null;
+    this.chainSlack = null;
   }
 }
