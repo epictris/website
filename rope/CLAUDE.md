@@ -403,7 +403,7 @@ The measurement that isolates it (a thin hinged bar the shape of `levels/ball.js
 The winch's governor assumes winding either hauls the ball to the anchor or is refused by the unwind, and a pivot leaks through it: the bar's rotation co-rotates with the whirling ball, so the pair orbits together, the chain never winds tight, nothing is ever refused, and the kinematic aim pays its winch budget into the system every frame with the frictionless bearing storing it.
 The share of each correction the rollback leaves (the real-motion share, `1 − spinShare`) lands in the pivot's rotation, whose credit has no velocity-level bound — and bounding it by `creditBound` was implemented and measured ineffective, since the bound reads the bodies' own (by then polluted) velocities.
 It is not this feature's regression — a windmill fin has been anchorable since pivot bodies existed — but the sprung branch makes the play pattern common.
-The honest fix likely involves the unwind refusing spin whose correction landed in an anchor's ROTATION, which is a solver design question; two bounded attempts are spent, so it is recorded here instead.
+The honest fix likely involves the unwind refusing spin whose correction landed in an anchor's ROTATION, which is a solver design question; two bounded attempts are spent, so it is recorded instead — **`plans/pivot-anchor-slingshot.md`** carries the full diagnosis, the repro script and the fix directions.
 
 The fifth piece is that the frame may not *end* with the chain driving the ball
 through a surface.
