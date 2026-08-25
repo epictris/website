@@ -2186,7 +2186,14 @@ export class World {
         j++;
       }
       i = j;
-      if (deepest.depth <= 0) continue; // speculative: not resting on anything yet
+      // No depth gate. Resting is what the contact CARRIED, not how deep it is
+      // — the same lesson the steered grip learnt on `steered-ramp-hold`: the
+      // solve pushes a resting interface to exactly zero overlap, so a depth
+      // test reads float noise, and a CCD body (the hook is `continuous`) is
+      // SEATED at exact touch every frame — its resting contact is speculative
+      // by construction and a depth gate refuses it the grip for ever. The
+      // impulse check below is the honest form: a speculative contact that
+      // asked for nothing carries none.
       if (normalImpulse <= 0) continue; // touching, but carrying nothing
       const shared = { point: deepest.point, slipped, normalImpulse };
       offer({ body: head.a, other: head.b, normal: deepest.normal, ...shared });

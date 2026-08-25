@@ -747,7 +747,29 @@ a `BallHook` — a RigidBody2D projectile that anchors to the first surface it
 contacts, flying or dangling.
 The throw is a **straight line**: the hook carries `gravityScale = 0` for the
 deploy and `BallHook.endFlight()` switches gravity back on the moment the throw
-ends, so the shot goes exactly where it was aimed and only then falls. Every
+ends, so the shot goes exactly where it was aimed and only then falls.
+
+A hook that lands on a hook-proof surface and STAYS there is steel, not a puck
+on ice, and four pieces make that true (session: the tip crept indefinitely
+across the shallowest slopes; `cli contacts` `hook-rest` is the detector -
+holds on 10° and 25°, still slides off 50°).
+It carries real coefficients (`contactFriction` 0.55, `staticFriction` 0.6,
+breakaway atan(0.6) ≈ 31°) where the RigidBody2D defaults are 0.
+`probeContact` deflects a hook-proof contact only above
+`PROBE_DEFLECT_MIN_SPEED` (0.5 m/s): the probe's seat holds the hook a margin
+clear of the surface, so a RESTING tip deflected every frame hovered outside
+the solver's reach for ever - no loaded contact, no normal impulse, no
+friction cone however real the coefficients; below the gate the contact solver
+owns the tip, and above it the deflection (and the spark stream made of its
+reports, well over this speed in every recorded drag) is untouched.
+Its rotational inertia is the disc's times `ROLL_RESISTANCE` (1e4), because a
+circle with friction ROLLS - the contact point is stationary, the slip Coulomb
+acts on is zero, and the stiction gate reads a spin far over `STICK_SPIN` - so
+the hook trundled downhill with its friction fully satisfied; a manacle is
+nothing like round, and the inertia is that statement (nothing else reads the
+hook's rotation - the chain pulls at its centre and the drawn manacle is
+oriented by the chain).
+And `applyStaticGrip` no longer gates on depth (see **Resting contacts**). Every
 ending calls it — the hook attaching, a bounce off a hook-proof surface (the deflected
 remainder does arc), the chain snagging geometry, and the chain running out of
 length (so the dangling tip swings instead of hanging in the air).
@@ -959,9 +981,12 @@ entitlement, on frames whose over-length was 100% the winding's (`session-234f`
 f84, `session-576f` f61).
 
 What the invariant *is* for still happens, and the cause is an ordering one.
-An anchor is born at the length the chain had reached (`BallPlayer`'s attach
-callback), which is what leaves the constraint already satisfied on its first
-frame and the solver with nothing to correct - but that measurement is taken in
+An anchor is born at no less than the length the chain had reached
+(`BallPlayer`'s attach callback - the length may GROW to what the hook reached
+and never shrinks, so a tip that dangled slack and then touched down keeps its
+slack instead of snapping to a straight line, session-161f; `cli contacts`
+`attach-keeps-length` is the detector), which is what leaves the constraint
+already satisfied on its first frame and the solver with nothing to correct - but that measurement is taken in
 the hook's swept attach check at the **top** of the frame, before `integrate` and
 the push-out move the ball, so the promise holds only for a ball that then does
 not move.
@@ -2739,10 +2764,18 @@ Four mechanisms carry the requirements:
   lateral gradient and Gauss-Seidel would leave the drawn chain simply shorter for ever.
   A segment compressed past a few percent is nudged perpendicular, alternating sides, and
   gravity plus the floor settle the folds into an honest pile.
+- **Friction has a static half, in position.** Velocity friction cannot stop a drape on a
+  slope for the reason the engine's position pin exists: the verlet step takes gravity's
+  displacement before anything resists it, and the tangential remainder after the push-out
+  is position creep no velocity term sees (~8 cm/s on a 30° ramp, at almost no reported
+  velocity). A contacting node whose tangential travel this step is under `STICK_STEP`
+  (2.5 mm ≈ 0.15 m/s) has the whole of it removed, so resting chain sticks and a genuinely
+  hauled one slides against the velocity friction alone.
 - **Collision is one-way and wrap-shaped.** Nodes are pushed out of every `wrappable` shape
-  (the same set the rope solver may wrap, so the mounting loop is excluded and the ball's
-  own rim is not), with dead restitution and strong tangential friction; the far-end body
-  itself is skipped, since the chain threads into the manacle.
+  of every SOLID body (the same set the rope solver may wrap, so the mounting loop, vine
+  links and hook-only grates are excluded and the ball's own rim is not), with dead
+  restitution and strong tangential friction; the far-end body itself is skipped, since the
+  chain threads into the manacle.
 - **Taut is the limit of almost-taut.** Sag grows like the square root of slack, so even
   millimetres of slack sag visibly, and a renderer that switched representation at taut
   would show the chain snapping straight in one frame.
@@ -3899,6 +3932,12 @@ Four things make a relative pin friction rather than a weld, and each of them wa
 - **Coulomb, in position.** The correction is capped at `mu_s` times the normal impulse the contact actually carried this frame, as a displacement: `mu*Pn*(1/m_eff)*dt`. Uncapped, a pin whose anchor had gone stale hauled a struck slab 200 mm *inside* the body that struck it.
 - **Asking for more than the cone allows means it slipped**, so the capped correction is applied and the anchor is re-seeded where the body now is. Remembering the excess is the pin hauling a body toward a place it slid away from frames ago - 3 mm of positional work per frame in `298f`, which the energy invariant reads (correctly) as 17 J invented out of nothing.
 - **Split by inverse mass, applied to both bodies**, so a light body on a heavy one is the one that gives way.
+- **A contact is offered a pin by what it CARRIED, never by its depth.** The gather's depth
+  is float noise on a resting interface (the solve pushes it to exactly zero) and
+  systematically non-positive for a CCD body, which is seated at exact touch every frame -
+  the hook is `continuous`, so the old `depth > 0` gate refused its resting contact the grip
+  for ever and it slid down the shallowest slope. `normalImpulse > 0` is the honest test,
+  the same lesson `steered-ramp-hold` taught the steered grip.
 - **One pin per body, to whichever surface carries it** - the pair with the largest normal impulse, offered from *both* sides of every pair. Which body leads a constraint is an id ordering and nothing more, so pinning only the leader pinned whichever of two stacked slabs happened to be built first, and taking the first pair instead of the loaded one let a crate being shoved by a spinning ball anchor itself to the **ball** and let go of the floor (`cli contacts` spin-drive).
 
 The anchor rides along with the **normal** part of what the depenetration sweep moves the body by, and with none of the tangential part.

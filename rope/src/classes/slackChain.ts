@@ -62,7 +62,18 @@ const DAMPING = 0.995;
 // Fraction of a node's tangential motion removed per contact resolution.
 // Metal on stone drags hard; this is what lets a thrown chain heap and stay
 // heaped instead of creeping downhill forever.
-const FRICTION = 0.5;
+const FRICTION = 0.7;
+// Static friction, in position. Velocity friction alone cannot stop a chain
+// on a slope, for the reason the engine's position pin exists: the verlet step
+// takes gravity's displacement BEFORE anything resists it, the collision
+// push-out resolves it along the normal, and the tangential remainder
+// (~2.7 mm × sinθ per frame) is position creep no velocity term ever sees — a
+// drape on a 30° ramp slid at ~8 cm/s while reporting almost no velocity. So
+// a contacting node whose tangential travel THIS STEP is under this bound has
+// the whole of it removed (and the tangential velocity with it): resting chain
+// sticks, and a genuinely hauled or flung one — many millimetres a step —
+// slides with only the velocity friction dragging on it.
+const STICK_STEP = 0.25 * PX; // 2.5 mm per step ≈ 0.15 m/s
 // Gauss-Seidel passes per step. The pinned ends propagate one node per pass,
 // so this must comfortably exceed nothing — it is paired with the long-range
 // attachments below, which enforce the global statement the local passes
@@ -218,12 +229,14 @@ export class SlackChain {
     }
   }
 
-  // Every wrappable shape near the chain this step. Wrappable is the right
-  // filter because it is the rope's own notion of solid — the mounting loop
-  // the chain threads through is exactly what it exists to exclude. The far
-  // end's own body (hook / dangling tip) is skipped: the chain threads into
-  // it. The AABB gate keeps the per-node narrowphase to the shapes that could
-  // possibly matter.
+  // Every wrappable shape of every SOLID body near the chain this step. Both
+  // halves are the rope's own notion of what a chain may touch: `wrappable`
+  // excludes the mounting loop the chain threads through, and a non-solid body
+  // (`isPassThrough` in Rope) excludes vine links and hook-only grates — the
+  // real chain never wraps either, so the drape resting on one would be a
+  // drawing of a collision the level does not contain. The far end's own body
+  // (hook / dangling tip) is skipped: the chain threads into it. The AABB gate
+  // keeps the per-node narrowphase to the shapes that could possibly matter.
   private collectCollisionShapes(bodies: readonly PhysicsBody2D[]): CollisionShape2D[] {
     let minX = Infinity;
     let minY = Infinity;
@@ -238,7 +251,7 @@ export class SlackChain {
     const margin = NODE_RADIUS + MAX_STEP;
     const out: CollisionShape2D[] = [];
     for (const body of bodies) {
-      if (body.removed || body === this.tipBody) continue;
+      if (body.removed || !body.isSolid || body === this.tipBody) continue;
       for (const s of body.getShapes()) {
         if (!s.wrappable) continue;
         const c = s.globalPosition;
@@ -333,6 +346,11 @@ export class SlackChain {
         const ov = circleOverlap(p, NODE_RADIUS, s);
         if (!ov) continue;
         p = p.add(ov.normal.mul(ov.depth));
+        // Static friction first: a contacting node that has only crept this
+        // step is put back where it started along the surface (see STICK_STEP).
+        const step = p.sub(this.renderFrom[i]!);
+        const st = step.sub(ov.normal.mul(step.dot(ov.normal)));
+        if (st.length() < STICK_STEP) p = p.sub(st);
         const vel = p.sub(this.prev[i]!);
         const vn = ov.normal.mul(vel.dot(ov.normal));
         const vt = vel.sub(vn);

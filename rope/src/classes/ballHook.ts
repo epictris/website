@@ -34,6 +34,23 @@ export class BallHook extends RigidBody2D {
   // of a near-zero velocity is numerical noise, so the glancing factor below
   // would be meaningless.
   private static readonly BOUNCE_MIN_SPEED = 1e-6;
+  // Below this the probe leaves a hook-proof contact to the contact solver
+  // instead of deflecting it — the resting-tip case; see probeContact. Above
+  // the fastest resting hover (gravity's own 0.16 m/s step) and well under
+  // the slowest recorded drag the spark stream depends on.
+  private static readonly PROBE_DEFLECT_MIN_SPEED = 0.5;
+  // How much harder than a solid steel disc the hook is to SPIN. A hook is
+  // simulated as a circle, and a circle with friction ROLLS: its contact point
+  // is stationary while it turns, so the slip Coulomb friction acts on is
+  // zero, the stiction gate reads a spin far over `STICK_SPIN`, and the hook
+  // trundled down the shallowest hook-proof slope with its friction fully
+  // satisfied. A real manacle is nothing like round - its lugs and the chain
+  // link catch - so rolling resistance is modelled as rotational inertia far
+  // above the disc's: the friction impulse then acts on the slide rather than
+  // being converted into spin, and stiction can park the hook. Nothing else
+  // reads the hook's rotation (the chain pulls at its centre, and the drawn
+  // manacle is oriented by the chain, not the body).
+  private static readonly ROLL_RESISTANCE = 1e4;
 
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
   private chainOutCallbacks: Array<() => void> = [];
@@ -64,10 +81,22 @@ export class BallHook extends RigidBody2D {
     // throw - the hook is what the ball flicks out and reels back, not a second
     // weight the chain has to swing.
     this.mass = ShapeGeometry.computeMass(this.primaryShape(), Density.STEEL);
-    this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
+    this.inertia =
+      ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass) *
+      BallHook.ROLL_RESISTANCE;
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.
     this.restitution = 0.0375;
+    // Steel on steel, so a hook that lands on a hook-proof surface and stays
+    // there behaves like a lump of steel rather than a puck on ice: without
+    // these the only thing resisting a resting tip's slide was `contactDamp`'s
+    // exponential coast, which never grips, so the tip crept indefinitely
+    // across the shallowest of slopes. Real coefficients, not the ball's
+    // drive-mechanic 3.8: kinetic 0.55 decelerates a slide on anything up to
+    // atan(0.55) ≈ 29°, and static 0.6 puts the breakaway at atan(0.6) ≈ 31° —
+    // the tip rests on a moderate incline and still slides off a steep one.
+    this.contactFriction = 0.55;
+    this.staticFriction = 0.6;
     // The deploy is a straight line: no gravity until the throw ends (see the
     // file header). `endFlight` restores it.
     this.gravityScale = 0;
@@ -458,6 +487,7 @@ export class BallHook extends RigidBody2D {
   probeContact(): void {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
+    const speed = this.linearVelocity.length();
     const shape = this.primaryShape().shape;
     const r = shape.kind === "circle" ? shape.radius : 2 * PX;
     const probeR = r + 0.5 * PX;
@@ -486,7 +516,21 @@ export class BallHook extends RigidBody2D {
       this.attach(body, s ? nearestSurfacePoint(s, from) : from);
       return;
     }
-    if (proof) this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth)));
+    // Deflect only a hook genuinely MOVING: the probe's seat holds the hook a
+    // probe margin clear of the surface, so a resting tip deflected every
+    // frame hovers just outside the solver's reach for ever — no loaded
+    // contact, no normal impulse, and therefore no friction cone however real
+    // the hook's coefficients are. It slid down the shallowest hook-proof
+    // slope like a puck on ice, with `contactFriction` powerless to stop it.
+    // Below this speed the tip is left to the contact solver, which holds it
+    // ON the surface with a real normal load — friction and stiction included
+    // (see the coefficients in the constructor). Above it the deflection is
+    // the mechanic: a skipping or dragged hook keeps its bounce, and with it
+    // the spark reports the drag stream is made of (well over this speed in
+    // every recorded drag).
+    if (proof && speed > BallHook.PROBE_DEFLECT_MIN_SPEED) {
+      this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth)));
+    }
   }
 
   // Deflect off a hook-proof surface and seat the hook at `seatPos` so the

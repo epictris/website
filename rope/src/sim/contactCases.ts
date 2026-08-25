@@ -1568,6 +1568,155 @@ function caseChainOut(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// attach-keeps-length — anchoring a SLACK chain keeps the chain's length.
+//
+// A missed throw dangles the tip at the full deployed length, and a dangling
+// tip anchors to the first surface it touches — usually the floor right next
+// to the ball, at a wrap path a fraction of what was deployed. The attach
+// callback used to rebase `maxRopeLength` to that as-anchored path length,
+// which silently retracted the difference: a chain that had reached its full
+// 1.8 m and then brushed the ground snapped to a 0.5 m line on the attach
+// frame (session-161f). Invisible while the renderer drew straight spans
+// anyway — the slack drape (`SlackChain`) is what made it a visible teleport —
+// and invisible to every invariant, since a chain SHRINKING violates nothing:
+// `rope-grew` measures growth, and a satisfied inequality constraint moves no
+// body. Hence a case, not a bundle.
+//
+// The claim is two-sided: the length survives the attach (may only GROW, by
+// the snap tolerance's overshoot — never shrink), and the case genuinely
+// exercises the slack form of it (the anchored path is well UNDER the length,
+// or the assertion is vacuous).
+// ---------------------------------------------------------------------------
+function caseChainAttachKeepsLength(): ContactResult {
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 12 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: 50,
+          rot: 0,
+          shape: { kind: "rect", w: 400, h: 40 },
+          friction: 1,
+        },
+      ],
+    },
+    1,
+  );
+  const level = new BallLevel(data);
+  let prev = emptyFrameInput();
+  // Straight up, nothing to hit: chain out to the full 1.8 m, tip falls back
+  // past the ball (they carry a collision exception) and lands on the floor
+  // beside it, where the probe anchors it.
+  let lengthBeforeAttach = Number.NaN;
+  let attachFrame = 0;
+  let anchoredPath = Number.NaN;
+  for (let f = 1; f <= 360 && attachFrame === 0; f++) {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      // Aim at the ball's centre means "not aiming": the loop stays up.
+      mouseWorldPosition: level.ball.globalPosition,
+      fire: button(f > 5, prev.fire),
+    };
+    prev = input;
+    const chain = level.ball.chain;
+    if (chain) lengthBeforeAttach = chain.maxRopeLength;
+    level.physicsProcess(input, DT);
+    const after = level.ball.chain;
+    if (after && !(after.end.contact.obj instanceof BallHook)) {
+      attachFrame = f;
+      anchoredPath = after.getCurrentLength();
+    }
+  }
+  const chain = level.ball.chain!;
+  const details = [
+    `attached @f${attachFrame} pathLength=${anchoredPath.toFixed(3)} m`,
+    `maxRopeLength before attach ${lengthBeforeAttach.toFixed(3)} m, after ${chain.maxRopeLength.toFixed(3)} m`,
+  ];
+  const attached = attachFrame > 0;
+  // The scenario must be the slack one: anchored at well under the length.
+  const slackAtAnchor = attached && anchoredPath < lengthBeforeAttach - 0.5;
+  // The length survives the attach exactly (nothing here reaches the snap
+  // tolerance's legitimate growth, so equal means equal).
+  const kept = attached && Math.abs(chain.maxRopeLength - lengthBeforeAttach) < 1e-9;
+  details.push(`attached=${attached} slackAtAnchor=${slackAtAnchor} kept=${kept}`);
+  return {
+    name: "attach-keeps-length",
+    passed: attached && slackAtAnchor && kept,
+    details,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// hook-rest — the hook is steel, not a puck on ice.
+//
+// A hook that lands on a hook-proof surface and stays there is held only by
+// the contact solver — `bounce()` reflects an arrival and does nothing to a
+// resting tip — and with the RigidBody2D friction defaults (0, kept 0 for
+// replay compatibility) the only thing resisting its slide was `contactDamp`'s
+// exponential coast, which never grips: the tip crept indefinitely across the
+// shallowest of slopes and read as sliding on ice. The hook now carries real
+// steel coefficients (BallHook's constructor), and this asserts the behaviour
+// from both sides: it holds still on a shallow AND a moderate hook-proof
+// incline, and it still slides off a steep one — which is what keeps the fix
+// from quietly becoming "the hook is glued to whatever it touches".
+// ---------------------------------------------------------------------------
+function caseHookRest(): ContactResult {
+  // Drop a dangling-tip hook a few centimetres onto a hook-proof incline and
+  // watch where it goes. The full real path runs — armed probe deflections
+  // included — so this is the resting tip as the game has it, minus the chain
+  // (whose tension is a force the friction question is not about).
+  const restOn = (angleDeg: number): { drift: number; settled: Vec2 } => {
+    const world = new World();
+    const angle = (angleDeg * Math.PI) / 180;
+    const slab = new StaticBody2D();
+    slab.globalPosition = new Vec2(0, 0.5);
+    slab.globalRotation = angle;
+    slab.setShape(rectShape(6, 1));
+    slab.primaryShape().impermeable = true;
+    world.add(slab);
+
+    const hook = new BallHook();
+    // A radius plus a few mm above the surface at the slab's centre, so the
+    // hook settles rather than arriving with half a metre of fall.
+    const up = new Vec2(0, -1).rotated(angle);
+    hook.globalPosition = slab.globalPosition.add(up.mul(0.5 + 0.02 + 0.005));
+    hook.endFlight();
+    world.add(hook);
+
+    let settled = hook.globalPosition;
+    let drift = 0;
+    for (let f = 0; f < 300; f++) {
+      hook.physicsStep(DT);
+      world.integrate(DT);
+      // Three seconds to land and stop; drift is everything after that.
+      if (f === 180) settled = hook.globalPosition;
+      if (f > 180) {
+        drift = Math.max(drift, hook.globalPosition.distanceTo(settled));
+      }
+    }
+    return { drift, settled: hook.globalPosition };
+  };
+
+  const shallow = restOn(10);
+  const moderate = restOn(25);
+  const steep = restOn(50); // past atan(0.6) ≈ 31°: must still slide
+  // The hold bars leave room for the position pin's own residual: `PIN_RELAX`
+  // removes 0.15 of the along-surface error per frame by design, so a resting
+  // body keeps a few mm per second of creep on a steep-ish slope — the same
+  // residual every settled crate in this suite carries. What the bars refuse
+  // is SLIDING: a hook that breaks away moves metres, not millimetres.
+  const details = [
+    `10° drift ${(shallow.drift * 1000).toFixed(1)} mm (hold: < 5 mm)`,
+    `25° drift ${(moderate.drift * 1000).toFixed(1)} mm (hold: < 10 mm)`,
+    `50° drift ${(steep.drift * 1000).toFixed(1)} mm (slide: > 300 mm)`,
+  ];
+  const passed = shallow.drift < 0.005 && moderate.drift < 0.01 && steep.drift > 0.3;
+  return { name: "hook-rest", passed, details };
+}
+
+// ---------------------------------------------------------------------------
 // chain-out-vs-solver — the chain ends the throw, never World.integrate.
 //
 // `chain-out` above asserts the race the hook's own sweep can see. This one is
@@ -3463,6 +3612,8 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());
+  results.push(caseChainAttachKeepsLength());
+  results.push(caseHookRest());
   results.push(caseChainOutVsSolver());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));

@@ -731,15 +731,26 @@ export class BallPlayer extends RigidBody2D {
         this.releaseChain();
         return;
       }
-      // Anchor at the length the chain actually reached, NOT clamped to
-      // CHAIN_MAX_LENGTH. Two things fall out of this: the constraint is already
-      // satisfied on the anchoring frame (path length == maxRopeLength), so the
-      // solver injects no correction — no one-frame lurch/whip/launch into the
-      // ball; and the anchor stays exactly where the hook hit the surface,
-      // instead of being dragged inward off the geometry to hit a shorter target
-      // (which floated the anchor in mid-air — session-601f). The small overshoot
-      // past CHAIN_MAX_LENGTH is bounded by ATTACH_SNAP_TOLERANCE above.
-      this.chain.maxRopeLength = len;
+      // Anchoring may GROW the length to what the chain reached (NOT clamped
+      // to CHAIN_MAX_LENGTH) and never shrink it. Growing to `len` is what
+      // keeps the constraint satisfied on the anchoring frame (path length <=
+      // maxRopeLength), so the solver injects no correction — no one-frame
+      // lurch/whip/launch into the ball — and the anchor stays exactly where
+      // the hook hit the surface, instead of being dragged inward off the
+      // geometry to hit a shorter target (which floated the anchor in mid-air —
+      // session-601f). The small overshoot past CHAIN_MAX_LENGTH is bounded by
+      // ATTACH_SNAP_TOLERANCE above.
+      //
+      // Never shrink, because a chain that was dangling SLACK when its tip
+      // touched down anchors with that slack still in hand: the chain's length
+      // is what was deployed, and rebasing it to the as-anchored path length
+      // silently retracted the difference — a chain that had reached its full
+      // 1.8 m and then brushed a wall snapped to a 0.5 m straight line on the
+      // attach frame (session-161f). Invisible while the renderer drew straight
+      // spans anyway; the slack drape is what made it a visible teleport. The
+      // inequality constraint is satisfied either way, so keeping the slack
+      // injects nothing.
+      this.chain.maxRopeLength = Math.max(this.chain.maxRopeLength, len);
     });
 
     // The flight may not outrun the chain (see the chain-out cap in
@@ -764,9 +775,9 @@ export class BallPlayer extends RigidBody2D {
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
   }
 
-  // (settleAnchorOvershoot removed: anchoring at the as-reached length leaves the
-  // constraint satisfied, so there is no overshoot to absorb and no anchor to
-  // drag off the surface.)
+  // (settleAnchorOvershoot removed: anchoring at no less than the as-reached
+  // length leaves the constraint satisfied, so there is no overshoot to absorb
+  // and no anchor to drag off the surface.)
 
   releaseChain(): void {
     if (this.hookInFlight) this.hookInFlight.world?.remove(this.hookInFlight);
