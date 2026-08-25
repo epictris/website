@@ -763,6 +763,20 @@ export class RigidBody2D extends PhysicsBody2D {
     this.linearVelocity = this.linearVelocity.add(impulse.mul(this.inverseMass));
     this.angularVelocity += this.inverseInertia * position.cross(impulse);
   }
+
+  // Reconcile the body with its own shape, after the frame's rotation step and
+  // before any contact is gathered against it. A no-op for everything but the
+  // ball, whose mounting loop makes its silhouette turn with it
+  // (`BallPlayer.applyLoopRide`).
+  //
+  // The window is the whole point and is not interchangeable with running before
+  // `integrate` or after the solve. Before, the rotation this answers has not
+  // happened yet; after, the gather has already decided the frame's contacts
+  // against a pose the body was not going to keep - which for the ball is the
+  // difference between rolling and hopping. Position only, so the body is paid
+  // nothing for it and the solve still sizes its normal impulse (and so its
+  // Coulomb cone) from gravity's own step, exactly as for a resting body.
+  preContactStep(_dt: number): void {}
 }
 
 // One link of a hanging vine (see `level/vines.ts`). A real dynamic body - it

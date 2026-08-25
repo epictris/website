@@ -1110,6 +1110,124 @@ function caseLoopCap(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// loop-ride: a ball rolling over its own mounting loop must stay ON the ground.
+//
+// `loop-cap` above is the statement that the loop may not HOP the ball, and it
+// is a statement about velocity: the ball leaves every frame the loop is down on
+// at a normal speed of exactly zero. What lifts it anyway is the contact solve's
+// POSITIONAL correction, which tracks the ball's own silhouette
+// (`BallPlayer.loopExcess`) to 0.02 mm all the way to the lug's
+// bottom-dead-centre. Past that the loop turns away from the floor faster than
+// gravity can drop a 52 kg ball - 2.45 m/s of profile against gravity's 0.163 a
+// frame at the aim's ordinary 27 rad/s - the overlap vanishes, no contact is
+// gathered, and the ball free-falls the 35 mm the lug had raised it.
+//
+// Five frames of it, once per revolution: 24% of `session-105f`'s frames with no
+// contact at all, so no `applySteeringGrip`, so no drive - read from the game as
+// the ball's sideways acceleration cutting out every time it comes round.
+//
+// So the three things this asks are one mechanic, and none of them alone is it:
+// the ball must never leave the floor, must never stand higher than its own lug,
+// and must never put the lug through the floor. Deleting the loop's collision
+// entirely passes the first two and fails the third; leaving it alone passes the
+// last two and fails the first.
+//
+// Spins are ordinary rolling up to well past what aim steering produces, and
+// every one of them is run at eight starting phases, because the fault was
+// phase-dependent before and a mechanic that only works from some angles is the
+// same bug wearing a hat.
+// ---------------------------------------------------------------------------
+function caseLoopRide(sims: Sim[]): ContactResult {
+  // Ordinary rolling up to a hard wind-up. Real play peaks in the mid 40s - the
+  // aim's proportional gain caps the spin at `AIM_TURN_GAIN * pi` - and the ride
+  // holds the ball on the ground across the whole of that range. `loop-cap` goes
+  // past it on purpose, because a CAP must hold at any spin; a ride cannot, and
+  // does not pretend to: at 90 rad/s the window is a single frame wide and the
+  // ball still leaves the floor for 623 of 1440, against 1049 without it.
+  const SPINS = [8, 20, 27, 45];
+  const PHASES = 8;
+  // The floor's top face, and the frames the ball is given to settle onto it
+  // before anything is asked - it is placed resting, but the first contact still
+  // takes a frame or two to warm up.
+  const FLOOR_Y = -0.5;
+  const SETTLE = 20;
+  const FRAMES = 200;
+  // A contact is "touching" at a millimetre of the skin. The gather keeps
+  // speculative contacts out to `CONTACT_SLOP`, which is a centimetre and would
+  // call a ball most of the way through its old hop still on the ground.
+  const TOUCH = 0.001;
+
+  type Run = { spin: number; air: number; gap: number; lift: number; sink: number };
+  const run = (spin: number): Run => {
+    let air = 0;
+    let gap = 0;
+    let lift = 0;
+    let sink = 0;
+    for (let i = 0; i < PHASES; i++) {
+      const sim = new Sim(`loop-ride-${spin}-${i}`);
+      sims.push(sim);
+      floor(sim);
+      const ball = new BallPlayer(0.12);
+      ball.globalPosition = new Vec2(0, FLOOR_Y - 0.12);
+      ball.globalRotation = (i * 2 * Math.PI) / PHASES;
+      sim.world.add(ball);
+      let before = ball.linearVelocity;
+      sim.step(FRAMES, (n) => {
+        // What aim steering does every frame: drive the spin kinematically.
+        ball.kinematicRotation = true;
+        ball.angularVelocity = spin;
+        ball.applyLoopCap(sim.world.frameContacts, before);
+        before = ball.linearVelocity;
+        if (n <= SETTLE) return;
+        const own = sim.world.frameContacts.filter((c) => c.a === ball);
+        if (!own.some((c) => c.depth > -TOUCH)) air++;
+        if (!own.some((c) => c.normalImpulse > 0)) gap++;
+        // Up is -y. How far the ball stands over what its own rim needs, against
+        // what its own lug is worth, and how far the lug reaches through the
+        // floor it is riding.
+        lift = Math.max(lift, FLOOR_Y - ball.globalPosition.y - ball.radius);
+        sink = Math.max(sink, ball.loopCenter.y + BallPlayer.LOOP_RADIUS - FLOOR_Y);
+      });
+    }
+    return { spin, air, gap, lift, sink };
+  };
+
+  // Never off the ground at all, and the two geometric bounds to the contact
+  // skin the resting solve leaves either way (0.75 mm standing, see
+  // `penetration`).
+  //
+  // The load-bearing bar is separate and looser, and the gap between the two is
+  // the honest residue of the profile's corner: on the frame it falls faster than
+  // what is left of the lug the ball is held to the rim, so the loop grazes at
+  // exactly zero depth while turning away from the floor - touching, and carrying
+  // nothing. 23 frames of 1440 at 27 rad/s, 52 at 45, none at all below 20.
+  // Before the ride the same scene spent 328 frames of 1440 carrying nothing and
+  // 353 with no contact at all, in runs of four and five - which is the hop, and
+  // is what the zero above is about.
+  const SKIN = 0.005;
+  const GAP = 0.05;
+  const frames = (FRAMES - SETTLE) * PHASES;
+  const runs = SPINS.map(run);
+  const good = (r: Run): boolean =>
+    r.air === 0 &&
+    r.gap <= GAP * frames &&
+    r.lift <= BallPlayer.LOOP_EXCESS + SKIN &&
+    r.sink <= SKIN;
+  return ok(
+    "loop-ride — a ball rolling over its own loop never leaves the ground",
+    runs.every(good),
+    runs.map(
+      (r) =>
+        `${good(r) ? "ok  " : "BAD "} ${String(r.spin).padStart(2)} rad/s: ${r.air} of ${frames} ` +
+        `frames off the ground (want 0), ${r.gap} carrying nothing ` +
+        `(want <=${Math.round(GAP * frames)}), stood ${(r.lift * 1000).toFixed(2)}mm over its rim ` +
+        `(want <=${((BallPlayer.LOOP_EXCESS + SKIN) * 1000).toFixed(0)}), loop ` +
+        `${(r.sink * 1000).toFixed(2)}mm through the floor (want <=${SKIN * 1000})`,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // loop-wall: a spinning ball must not climb a wall on its loop.
 //
 // `loop-cap` above is about the NORMAL half of the same object: the loop is
@@ -3326,6 +3444,7 @@ export function runContactCases(): ContactResult[] {
     caseSpinDrive(sims),
     caseRollDrive(sims),
     caseLoopCap(sims),
+    caseLoopRide(sims),
     caseLoopWall(sims),
     caseGripReseed(sims),
   ];

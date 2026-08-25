@@ -205,7 +205,11 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 RigidBody2D (rolls via the opt-in `contactFriction` field on RigidBody2D;
 default 0 keeps old replays bit-identical). The chain reuses the Rope wrap
 solver: its start contact sits on the ball's edge in the ball's local frame, so
-it rotates with the ball, winds around it, and applies torque. The chain solve
+it rotates with the ball, winds around it, and applies torque. `World.integrate`
+gives every rigid body a `preContactStep` between the rotation step and the
+contact gather, and the ball is the only thing in the game that uses it: its
+silhouette turns with it, so it settles onto its own support profile there (see
+**The loop ride**). The chain solve
 runs *after* `World.integrate` (see `BallLevel.physicsProcess`), and `Rope`
 writes its positional correction straight onto a rigid body — only the grapple
 avatar sweeps — so the ball frame ends with `World.depenetrateRigid(ball)`, a
@@ -591,6 +595,69 @@ newton the wall pushes with is the spin's own doing, and the only honest answer
 is that it stays where it is - 3.8 cm of the capped bounce off its own loop,
 against 44 cm and 7.4 m uncapped.
 
+### The loop ride
+
+The cap is a statement in **velocity**, and it is only half the loop's descent.
+
+A rolling ball leaves every ascent frame at a normal velocity of exactly 0.000: the cap sees to that, and it is right to.
+What lifts it anyway is the contact solve's **positional** correction, which tracks the ball's own silhouette to 0.02 mm all the way to the lug's bottom-dead-centre.
+That silhouette is the support function of the ball-and-loop union, `BallPlayer.loopExcess`: `max(0, loopArm·cos θ + LOOP_RADIUS − radius)`, a 35 mm lug standing over an otherwise circular ball for the 84.4° of each turn where the loop reaches past the rim.
+
+Past bottom-dead-centre the loop turns **away** from the surface faster than gravity can drop a 52 kg ball - 2.45 m/s of profile against gravity's 0.163 a frame, at the aim's ordinary 27 rad/s.
+The overlap vanishes, no contact is gathered, and nothing holds the ball to its own silhouette: it free-falls the 35 mm instead, `sqrt(2h/g)` = 5.1 frames, once per revolution.
+24% of `session-105f`'s frames with no contact at all, so no `applySteeringGrip` and no sideways drive, in runs of four - read from the game as the ball's acceleration cutting out every time it comes round.
+The free-fall time does not depend on the spin (it is a fall from 35 mm) but the **fraction of a revolution** does, which is why it is a fast wind-up that feels broken and a slow roll that does not.
+
+`BallPlayer.applyLoopRide` owns the descent, and owns it the way the ascent already happens: as **position**, with the velocity left where it was found.
+It is called from `RigidBody2D.preContactStep`, a hook `World.integrate` runs after the rotation step and before the contact gather.
+That window is the whole thing and is not interchangeable with either side of it: run before `integrate` and the rotation it answers has not happened; run after the solve and the frame's contacts have already been decided against a pose the ball was not going to keep - which is exactly the difference between rolling and hopping.
+
+Four pieces make it work, and each of them was a bug first.
+
+The ride **places** the ball on `loopExcess` and never lifts it: raising is the solve's, and taking it would put the ride in the business of raising a ball off its own kinematic spin, which is the cap's whole subject.
+Where the ball stands is **measured**, not assumed - the clearance the ride left it at last frame, plus the projection of everything that has moved it since.
+Assumed instead, the ride's two halves both descend, the same centimetres are spent twice, the ball ends a frame 1.6 mm under its rim, and the depenetration sweep lifts it back out along the **loop**: 2.2 mm high once a revolution, compounding, until it is floating clear of the floor with nothing under it at all.
+
+It also writes the profile's own **rate** along the normal, and this is not the same job as the placement.
+Placed but not tracking, the solver reads a contact point separating at the loop's full `ω × r`, and a separating contact carries no load - no normal impulse, no Coulomb cone, no grip.
+A ball perfectly on its own profile and still not driving is the bug this exists to fix, arriving as a silent zero rather than as a hop.
+The rate is taken **analytically**, `ω · (n × loopDir) · loopArm`, the support function differentiated: a finite difference of `loopExcess` over the step is a chord of the arc, and 0.42 m/s of chord error was enough to make the loop read as separating on the sharpest frame of each revolution.
+Gravity's step stays on top of it, because that step is the whole of what a resting contact answers and what sizes its cone.
+And it is floored at the rim plus a contact skin: unfloored, the ball reached the rim carrying the profile's 2.1 m/s, which is over `RESTITUTION_THRESHOLD`, and 0.15 of it came back as a bounce - the hop again, wearing the ride's clothes.
+
+The rate is written on the **descent only**.
+Writing the rise as velocity would hand the ball up to 2.45 m/s of outgoing normal speed for its own kinematic spin, which is precisely what the cap refuses - and the cap, running later in the frame, takes it straight back off.
+
+The ride ends by setting the ball **down** on its rim and handing the normal velocity back, in that order.
+Returning before the placement left the ball wherever the last frame's tracking had reached: 6.4 mm short of the floor at 45 rad/s, a two-frame hop at the end of every ride.
+Handing the velocity back before the gather is what keeps the frame the rim takes over from reading the tracking speed as an **approach**: solved as one it is up to 2.45 m/s of `vnKilled` sizing a cone, and the ball is spinning kinematically, so that cone is spent driving - the fabricated traction `spinFabricatedNormal` and the ceiling case exist to refuse, arriving once a revolution.
+It is handed back only when the ride actually tracked, because a ride that never had to write has nothing to give back and handing it an opinion anyway reaches past the mechanic (0.42 m/s of `roll-unfunded` in `session-726f`, 8.3 m/s of `rope-solve-kick` in `session-611f`).
+Subtracting the written term instead is the other tempting answer and it is worse: by the time a ride ends the solve and gravity have both had their say on it, so taking the whole of it out again is a kick **upward** - 61 airborne frames at 8 rad/s, where setting leaves none.
+
+Three gates decide what may be ridden, and all three are about not fabricating load.
+
+A ride is taken only while the loop is on its way **in** to a surface that was already carrying the ball two frames running - the first half is what separates a ball rolling onto its loop from one landing on it, the second is what stops a ride being picked up halfway down something it never rode up.
+
+The surface must **carry the ball's weight**: `restsOn`, at least half of gravity along the normal, which is every slope out to 60° and no wall at all.
+Against a wall the ball has no weight pressing it on, so every newton the wall pushes back with would be the spin's own doing - the same fault `spinFabricatedNormal` refuses, arriving by another door.
+Unfenced it climbed 148 cm at 20 rad/s on `loop-wall`'s frictionless floor against an 8 cm bar, and 1.20 m on `ball-roll-wall` against 0.15.
+The line is drawn on the **normal** and not on stiction, which is the tempting one-line test (`applySteeringGrip` asks exactly that): the arena's 32° ramp sits a degree and a half past `STATIC_FRICTION`'s breakaway, so a ball rolling down it was refused a ride while carrying 85% of its weight on the surface, and hopped down the slope exactly as before.
+
+An **anchored chain switches the regime off** entirely (`constraintTethered`), exactly as it does for the spin-traction cap.
+A ride is a statement about a ball rolling on the ground; a chain gone taut is the one thing in the game that owns where the ball is instead, and the winch budget, the unwind and the lease are what police that era.
+A ride laid over the top of it is a second author of the same quantity, and it read as both bugs it could.
+
+Finally, a ride may only ever write what a ride is **worth** - the fastest the profile can move at this spin, plus a step of gravity either side.
+Asked for more, the ball is not rolling on that surface and the ride sits the frame out rather than overruling whatever is.
+It sits out rather than releasing, because a bound this close to the mechanic's own scale will clip a real ride now and then and a release cannot be undone until the loop comes round again.
+
+`cli contacts` `loop-ride` is the detector, and it asks three things of the same scene at four spins and eight phases each: the ball never leaves the ground, never stands higher than its own lug, and never puts the lug through the floor.
+Deleting the loop's collision passes the first two and fails the third; leaving it alone passes the last two and fails the first.
+It is green at 0 airborne frames of 1440 everywhere out to 45 rad/s, which is where the aim's proportional gain caps the spin, against 261/353/623 before.
+The load-bearing bar is separate and looser, and the gap between them is the honest residue of the profile's corner: on the frame it falls faster than what is left of the lug the ball is held to the rim, so the loop grazes at exactly zero depth while turning away - touching, and carrying nothing.
+23 frames of 1440 at 27 rad/s, against 328.
+Past the aim's range it degrades rather than breaking: at 90 rad/s the window is one frame wide and the ball still leaves the floor for 623 of 1440, against 1049.
+
 ### The coil
 
 Rope wound onto the circular body the rope *starts* on — the ball winding its own
@@ -801,7 +868,7 @@ bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (spe
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
-bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap)
+bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip

@@ -12,7 +12,7 @@ import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape, nearestShapeIndex } from "../engine/shapes";
-import { contactBounce, type ContactConstraint } from "../engine/world";
+import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import type { FrameInput } from "../input/frameInput";
@@ -49,6 +49,21 @@ export class BallPlayer extends RigidBody2D {
   // circle) and the renderer so the solid loop matches the drawn one.
   static readonly LOOP_RADIUS = 2 * PX;
   static readonly LOOP_GAP = 1.5 * PX;
+  // Consecutive frames a loop ride survives with no load-bearing contact against
+  // the surface it is riding before it is dropped (see `applyLoopRide`). A ride
+  // holds the loop exactly ON the surface, so the contact is there every frame it
+  // is genuinely riding; the grace is for solver flicker, not for a ball that has
+  // left.
+  static readonly RIDE_CONTACT_GRACE = 2;
+  // The least share of the ball's weight a surface must carry before the ball
+  // will ride its loop over it - half, which is every slope out to 60 degrees
+  // and no wall at all. See `restsOn`.
+  static readonly RIDE_MIN_SUPPORT = 0.5;
+  // How far the mounting loop stands proud of the rim: the ring's centre sits
+  // `LOOP_GAP` off the surface and the ring is `LOOP_RADIUS` across, so the
+  // assembly is a 35 mm lug on an otherwise circular ball. The height a ride
+  // owes back, and the bound on any one frame's instalment.
+  static readonly LOOP_EXCESS = BallPlayer.LOOP_GAP + BallPlayer.LOOP_RADIUS;
   // The ball is a solid cast-iron sphere and weighs what one weighs: at the
   // level's 0.12 m radius, ρ·(4/3)πr³ ≈ 52 kg. That number is the feel - a
   // wrecking ball, sluggish under aim-kicks and chain tugs and hard for
@@ -79,6 +94,31 @@ export class BallPlayer extends RigidBody2D {
   // The loop is mounted second, so it is shape 1. Named because a contact's
   // `shapeA` is how the cap tells a loop strike from the ball's own rim.
   static readonly LOOP_SHAPE_INDEX = 1;
+  // The surface the ball is currently riding its own mounting loop over, the way
+  // that surface faces, the excess the last frame left it standing at, and how
+  // many frames it has gone unsupported — see `applyLoopRide`.
+  private ride: {
+    body: PhysicsBody2D;
+    normal: Vec2;
+    // The clearance over the rim this ride last placed the ball at, and where it
+    // placed it. The pair is what lets the next frame measure how far the ball
+    // ACTUALLY moved along the normal since - the solve's push-out and this
+    // ride's own tracking velocity included - rather than assume it.
+    height: number;
+    placedAt: Vec2;
+    missing: number;
+    // The tracking speed the last frame wrote along the normal, and so the only
+    // thing this ride has to give back when it ends. Zero on a frame it wrote
+    // nothing, which is every frame of the ascent.
+    wrote: number;
+  } | null =
+    null;
+  // What carried the ball last frame. The test that separates a ball ROLLING
+  // onto its loop, which may ride, from one LANDING on it, which may not.
+  private lastSupport: PhysicsBody2D | null = null;
+  // The loop excess the previous frame ended on, so a ride can tell the loop
+  // turning INTO a surface from it turning out, before it has a ride to ask.
+  private lastExcess = 0;
 
   constructor(radius = 0.08) {
     super();
@@ -130,6 +170,25 @@ export class BallPlayer extends RigidBody2D {
   // loop swings on, and so the radius its tip speed is measured at.
   get loopArm(): number {
     return this.radius + BallPlayer.LOOP_GAP;
+  }
+
+  // How far the mounting loop holds the ball's centre off a surface facing
+  // `normal`, over and above what the rim alone would — the support function of
+  // the ball-and-loop union along `-normal`, less the radius.
+  //
+  // `normal` points out of the surface toward the ball, so `-loopDir·normal` is 1
+  // with the loop pointing straight into it and the excess is the whole
+  // `LOOP_GAP + LOOP_RADIUS`, 35 mm at the level's 12 cm ball. It falls to zero at
+  // `acos((radius - LOOP_RADIUS) / loopArm)` = 42.21°, so the assembly is a plain
+  // circle for 76.6% of a revolution and a lug for the rest.
+  //
+  // This is the ball's own silhouette and nothing more: the contact solver
+  // already puts the ball exactly on it going up (measured against `e(theta)`
+  // over `ball-roll-drive` f205..211, agreeing to 0.02 mm), which is why
+  // `applyLoopRide` only has to own the way back down.
+  loopExcess(normal: Vec2, rotation = this.globalRotation): number {
+    const dir = new Vec2(0, -1).rotated(rotation);
+    return Math.max(0, this.loopArm * -dir.dot(normal) + BallPlayer.LOOP_RADIUS - this.radius);
   }
 
   // The loop striking a surface may never launch the ball. Called once per
@@ -206,6 +265,281 @@ export class BallPlayer extends RigidBody2D {
     if (along > allowed) {
       this.linearVelocity = this.linearVelocity.add(normal.mul(allowed - along));
     }
+  }
+
+  // Is this a surface the ball's own WEIGHT is carried by - a floor or a slope,
+  // rather than a wall or a ceiling it merely touches?
+  //
+  // The gate on taking a ride, and not a detail. A ride's whole job is to keep a
+  // contact BEARING through the loop's descent, and a contact that bears is a
+  // contact with a Coulomb cone. Against a wall the ball has no weight pressing
+  // it on and every newton the wall pushes back with would be the kinematic
+  // spin's own doing - which is the fabricated traction `spinFabricatedNormal`
+  // exists to refuse, arriving by another door: unfenced, `cli contacts`
+  // `loop-wall` climbed 148 cm at 20 rad/s on a frictionless floor against an
+  // 8 cm bar, and `ball-roll-wall` rose 1.20 m against 0.15.
+  //
+  // The line is drawn at how much of the ball's weight the surface takes, and
+  // NOT at whether the ball would slide on it. Stiction is the tempting test -
+  // `World.applySteeringGrip` asks exactly that, and it is one line - but it is a
+  // statement about the TANGENT and this is a question about the normal: the
+  // arena's 32 degree ramp sits a degree and a half past `STATIC_FRICTION`'s
+  // breakaway, so a ball rolling down it was refused a ride while carrying 85%
+  // of its weight on the surface, and hopped down the slope exactly as before
+  // (session-105f f85..88). A wall carries none of it, which is the case that
+  // matters, and half is a long way from either.
+  private restsOn(normal: Vec2): boolean {
+    const g = GRAVITY.mul(this.gravityScale);
+    return -g.dot(normal) >= g.length() * BallPlayer.RIDE_MIN_SUPPORT;
+  }
+
+  // The other half of the loop cap, and the half it could not state: a ball
+  // rolling over its own mounting loop must come back DOWN off it, rather than
+  // being left in the air where the loop put it.
+  //
+  // The cap above refuses to PAY the ball for the ride up, and it is right to -
+  // the trace of a roll shows the ball leaving every ascent frame at a normal
+  // velocity of exactly 0.000. What lifts it is the contact solve's POSITIONAL
+  // correction, which tracks `loopExcess` to 0.02 mm all the way to the lug's
+  // bottom-dead-centre. Past that the loop turns away from the surface faster
+  // than gravity can drop a 52 kg ball - 2.45 m/s of profile against gravity's
+  // 0.163 per frame, at the aim's ordinary 27 rad/s - so the overlap vanishes,
+  // no contact is gathered, and nothing holds the ball to its own silhouette.
+  // It free-falls the 35 mm instead: 5.1 frames airborne, once per revolution,
+  // 24% of `session-105f`'s frames with no contact at all and so no
+  // `applySteeringGrip` and no sideways drive. Read from the game as the ball
+  // stalling every time it comes round.
+  //
+  // So the descent is written here, and written the way the ascent already
+  // happens - as POSITION, with the velocity left alone. That symmetry is the
+  // point rather than a convenience:
+  //
+  //  - Paid as velocity instead, the ball would carry the profile's own 2.45 m/s
+  //    into the frame the rim takes back over, where the solve kills it as an
+  //    approach and `maxImpulse = mu * m * (vnKilled + gravityBite)` sizes a
+  //    Coulomb cone from it. The ball is spinning kinematically, so that cone is
+  //    spent DRIVING - the fabricated traction `spinFabricatedNormal` and the
+  //    ceiling case exist to refuse, arriving once per revolution.
+  //  - Left to gravity, it is the hop.
+  //
+  // Position only also leaves gravity's own step in the ball's velocity, which is
+  // what the solve then sizes a resting contact's normal impulse - and so its
+  // honest friction cone - from. A ride is a displacement the ball owes back and
+  // never a motion it is paid for, and the books balance over the window: up
+  // 35 mm on the solve's correction, down 35 mm here, ending on the rim carrying
+  // exactly what it would have had had the lug never been there.
+  //
+  // Called from `preContactStep`, so `contacts` is the set the frame BEFORE this
+  // one solved, and `this.globalRotation` has already taken this frame's step:
+  // `loopExcess` here is the profile the gather about to run will measure
+  // against, which is what keeps the loop touching and the contact alive the
+  // whole way down.
+  applyLoopRide(contacts: readonly ContactConstraint[], dt: number): void {
+    // An anchored chain switches the whole regime off, exactly as it does for the
+    // spin-traction cap (`RigidBody2D.constraintTethered`). A ride is a statement
+    // about a ball ROLLING on the ground, and a chain gone taut is the one thing
+    // in the game that owns where the ball is instead - it writes position
+    // straight onto the body and pays itself velocity for it, and the winch
+    // budget, the unwind and the lease are what police that era's traction. A
+    // ride laid over the top of it is a second author of the same quantity, and
+    // it read as both bugs it could: 8.3 m/s of `rope-solve-kick` in
+    // `session-611f`, and 0.42 m/s of `roll-unfunded` in `session-726f`.
+    if (this.constraintTethered) this.ride = null;
+    // The load-bearing contact the ball ended last frame on, either shape: `a` is
+    // always the dynamic body of a pair, which against scenery is the ball.
+    // Speculative contacts carry no impulse and are not something met.
+    let support: ContactConstraint | null = null;
+    for (const c of contacts) {
+      if (c.a !== this || c.normalImpulse <= 0) continue;
+      if (support === null || c.normalImpulse > support.normalImpulse) support = c;
+    }
+    const carriedBefore = this.lastSupport;
+    this.lastSupport = support?.b ?? null;
+
+    // Keep or drop the ride in hand. It follows the surface it started on and no
+    // other: re-acquiring onto whatever the ball happens to touch would let a
+    // ride begun on the floor finish against a wall.
+    const held = this.ride;
+    if (held !== null) {
+      if (held.body.removed) {
+        this.ride = null;
+      } else if (support !== null && support.b === held.body) {
+        held.normal = support.normal;
+        held.missing = 0;
+      } else if (++held.missing > BallPlayer.RIDE_CONTACT_GRACE) {
+        // The ball has genuinely left - rolled off a ledge, been bounced, been
+        // hauled off by the chain. There is nothing left to ride down onto.
+        this.ride = null;
+      }
+    }
+
+    // Take a ride while the loop is on its way IN to a surface that was already
+    // carrying the ball two frames running. Both halves of that gate matter:
+    // `carriedBefore` is what makes this a ball ROLLING onto its loop rather than
+    // one LANDING on it, and a rising excess is the loop entering its window
+    // rather than leaving it, so a ride is never picked up halfway down something
+    // it did not ride up.
+    //
+    // A launch pad is excluded outright. A throw is deliberately independent of
+    // how the ball arrived (see the cap's `surfaceBounce`), and a ride is the
+    // opposite statement - that the ball stays on the surface - so the two cannot
+    // both hold and the pad wins.
+    const rollingOn =
+      !this.constraintTethered && support !== null && support.b === carriedBefore;
+    if (this.ride === null && rollingOn && support !== null) {
+      const excess = this.loopExcess(support.normal);
+      if (support.b.launchSpeed <= 0 && excess > this.lastExcess && this.restsOn(support.normal)) {
+        this.ride = {
+          body: support.b,
+          normal: support.normal,
+          height: this.lastExcess,
+          placedAt: this.globalPosition,
+          missing: 0,
+          wrote: 0,
+        };
+      }
+    }
+
+    const ride = this.ride;
+    const rot = this.globalRotation;
+    const excess = ride === null ? 0 : this.loopExcess(ride.normal, rot);
+    this.lastExcess =
+      ride === null && support !== null ? this.loopExcess(support.normal, rot) : excess;
+    if (ride === null) return;
+    const normal = ride.normal;
+    // Gravity has already been applied this frame, and the step it put into the
+    // ball is kept ON TOP of everything below rather than overwritten by it. That
+    // step is the whole of what a resting contact pushes back against: write the
+    // tracking rate alone and the contact has nothing to answer, so it carries no
+    // impulse, so there is no Coulomb cone and no `applySteeringGrip` - a ball
+    // placed perfectly on its own profile and still not driving, which is the very
+    // thing this exists to fix, arriving as a silent zero instead of as a hop.
+    const gravityStep = GRAVITY.mul(this.gravityScale * dt).dot(normal);
+    const surfaceNormalSpeed = ride.body.velocityAtPoint(this.globalPosition).dot(normal);
+
+    // A ride may only ever write what a ride is WORTH: the fastest the profile can
+    // move at this spin, plus a step of gravity either side of it. Asked for more,
+    // the ball is not rolling on this surface - something else has hold of one of
+    // them - and the ride sits the frame out rather than overruling whatever that
+    // is. `session-611f` f209 is the case: the ball is wedged in a corner, the
+    // chain is hauling it and the rigid body it is wedged against at 9.6 m/s,
+    // gravity still presses it onto that face and that face has carried it two
+    // frames running, so every gate above says roll. Written anyway, the ride
+    // matched the surface's own 4.2 m/s and the chain solve put it straight back
+    // on the next frame: 8.3 m/s in one, `rope-solve-kick`.
+    //
+    // Sitting out rather than releasing, because a bound this close to the
+    // mechanic's own scale will clip a real ride now and then, and a release
+    // cannot be undone until the loop comes round again - one clipped frame would
+    // cost the whole of the rest of that revolution's descent.
+    const rideBound = Math.abs(this.angularVelocity) * this.loopArm + 2 * Math.abs(gravityStep);
+    const settle = (to: number): boolean => {
+      const from = this.linearVelocity.dot(normal);
+      if (Math.abs(to - from) > rideBound) return false;
+      this.linearVelocity = this.linearVelocity.add(normal.mul(to - from));
+      return true;
+    };
+
+    // Sit on this frame's profile - and only ever DOWNWARD onto it. Lifting is
+    // the contact solve's, which is already exact there, and taking it would put
+    // this in the business of raising the ball off its own kinematic spin, which
+    // is `applyLoopCap`'s whole subject.
+    //
+    // Where the ball stands is MEASURED and not assumed: `height` is the
+    // clearance this ride left it at last frame and `placedAt` is where that was,
+    // so everything that has moved it since - the solve's push-out, gravity, and
+    // this ride's own tracking velocity above - is in the projection. Assumed
+    // instead, the two halves of the ride both descend and the same centimetres
+    // are spent twice: the ball ends the frame 1.6 mm under its rim, the
+    // depenetration sweep lifts it back out along the LOOP, and it leaves 2.2 mm
+    // high - once a revolution, compounding, until it is floating clear of the
+    // floor with nothing under it at all.
+    const stood = ride.height + this.globalPosition.sub(ride.placedAt).dot(normal);
+    const drop = Math.min(Math.max(0, stood - excess), BallPlayer.LOOP_EXCESS);
+    if (drop > 0) this.globalPosition = this.globalPosition.sub(normal.mul(drop));
+    ride.height = Math.min(stood, excess);
+    ride.placedAt = this.globalPosition;
+
+    // Off the lug and back on the rim - and set DOWN on it first, which is why
+    // this follows the placement above rather than leading it. Returning before
+    // it left the ball wherever the last frame's tracking had reached, which at
+    // 45 rad/s is 6.4 mm short of the floor with nothing left to bring it down:
+    // a two-frame hop at the end of every ride, which is the bug in miniature.
+    //
+    // Off the lug and back on the rim. The ride hands the normal velocity back
+    // where it found it - the ball resting on its own circle with no motion
+    // against the surface, carrying gravity's step and nothing else - which is
+    // the state it would have been in had the lug never been there.
+    //
+    // Only when it actually TRACKED, though (`wrote`). A ride that ends without
+    // ever having had to write is a ride with nothing to give back, and handing
+    // it an opinion about the ball's normal velocity anyway reaches past the
+    // mechanic every time one ends on a frame the ball is busy with something
+    // else - 0.42 m/s of `roll-unfunded` in `session-726f` out of a ball
+    // spinning at 0.01 rad/s, and 8.3 m/s of `rope-solve-kick` in
+    // `session-611f`. Subtracting `wrote` back off instead is the other tempting
+    // answer and it is worse: by the time the ride ends the solve and gravity
+    // have both had their say on that term, so taking the whole of it out again
+    // is a kick UPWARD - the hop, restored, at every spin (61 airborne frames at
+    // 8 rad/s, where the set leaves none).
+    //
+    // Handed back HERE, before the gather, so the frame the rim takes over never
+    // sees the tracking speed as an approach: solved as one it would be up to
+    // 2.45 m/s of `vnKilled` sizing a Coulomb cone, and the ball is spinning
+    // kinematically, so that cone would be spent DRIVING - the fabricated
+    // traction `spinFabricatedNormal` and the ceiling case exist to refuse,
+    // arriving once per revolution.
+    if (excess <= 0) {
+      if (ride.wrote !== 0) settle(surfaceNormalSpeed + gravityStep);
+      this.ride = null;
+      return;
+    }
+
+    // Carry the profile's own rate into the step about to be integrated, so the
+    // loop stays ON the surface rather than merely being placed against it.
+    // Without it the position tracks and the VELOCITY does not, the solver reads
+    // a contact point separating at the loop's full `omega x r`, and a separating
+    // contact carries no load. With it the ball's descent and the loop's rise
+    // cancel at the contact point, which is what rolling on a profile means, and
+    // what is left for the solve to answer is gravity's step, exactly as for a
+    // resting ball.
+    //
+    // The rate is the ball's own support function differentiated, which is the
+    // same statement as "the loop's lowest point is stationary along the normal":
+    // d/dt of `loopArm * -loopDir·n` is `omega * (n x loopDir) * loopArm`, and
+    // `LOOP_RADIUS` falls out because a circle's lowest point turns with the arm
+    // and not with the ring. Taken analytically rather than as a difference of
+    // `loopExcess` over the step, because the difference is a chord of the arc
+    // and its error is exactly the thing that matters: 0.42 m/s of it left the
+    // loop reading as SEPARATING on the sharpest frame of each revolution.
+    //
+    // Floored at the rim, plus the skin a resting contact sits in anyway. The
+    // floor is what stops the ball diving THROUGH its own rim on the frame the
+    // profile's corner falls faster than a 60 Hz step can follow: unfloored it
+    // reached the rim carrying the profile's 2.1 m/s, which is over
+    // `RESTITUTION_THRESHOLD`, and 0.15 of that came back as a bounce - the hop
+    // again, once per revolution, wearing the ride's clothes, compounding 4.5 mm
+    // a turn into a ball floating a centimetre off the floor. The skin is what
+    // keeps that frame BEARING rather than merely touching: seated the depth
+    // every resting contact carries, the rim answers on the next frame instead of
+    // a frame later.
+    //
+    // The DESCENT only. The ascent is the solve's and is already exact there;
+    // writing the rise as velocity would hand the ball up to 2.45 m/s of outgoing
+    // normal speed for its own kinematic spin, which is the launch `applyLoopCap`
+    // exists to refuse - and the cap, running later in the frame, would take it
+    // straight back off.
+    const rate = Math.max(
+      this.angularVelocity * normal.cross(this.loopDirection) * this.loopArm,
+      -(excess + CONTACT_SLOP) / dt,
+    );
+
+    ride.wrote = 0;
+    if (rate < 0 && settle(surfaceNormalSpeed + rate + gravityStep)) ride.wrote = rate;
+  }
+
+  override preContactStep(dt: number): void {
+    this.applyLoopRide(this.world?.frameContacts ?? [], dt);
   }
 
   get chainAnchored(): boolean {

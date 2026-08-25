@@ -850,6 +850,16 @@ export class World {
       }
     }
     PhaseTrace.mark("gravity", this);
+    // Bodies whose own shape has turned under them settle onto it here — after
+    // the rotation step above, before the gather below. See
+    // `RigidBody2D.preContactStep`; the ball rolling down off its mounting loop
+    // is the only one in the game that does anything.
+    for (const body of this.bodies) {
+      if (!(body instanceof RigidBody2D) || body.removed) continue;
+      if (World.isAsleep(body)) continue;
+      body.preContactStep(dt);
+    }
+    PhaseTrace.mark("shape-settle", this);
     this.resolveDynamicCollisions(dt);
     this.notifyAreas();
   }
