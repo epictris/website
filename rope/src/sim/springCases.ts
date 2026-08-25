@@ -1536,6 +1536,149 @@ function caseWinchLoad(): SpringResult {
   return ok("winch-load — a wind-up bears down on the sprung body it hangs from", passed, details);
 }
 
+function caseWhirlAnchor(): SpringResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // The pivot-anchor slingshot, isolated (formerly plans/pivot-anchor-slingshot.md):
+  // anchor the chain to a thin hinged elbow - the shape of levels/ball.json's
+  // pivoting log - and whip the aim in circles at a hand's pace, a full turn
+  // per 1.5 s. The winch's governor assumed winding either hauls the ball to
+  // its anchor or is refused by the unwind, and a pivot leaked through it: the
+  // bar co-rotates with the whirl so the chain never winds tight, the solve's
+  // rotation credit ratcheted the frictionless bearing (24 rad/s off a 3.3
+  // rad/s drive), the un-refunded winding leased into 1.7 m of free chain on a
+  // 1.63 m rope, and the raw winch allowance re-fed the orbit 4-7 m/s of
+  // credit per frame. Identical inputs on a static mounting peak at 2.5 m/s;
+  // the same bar on a pivot peaked at 37-45 m/s and slung the ball off.
+  //
+  // Four halves closed it and every one is red alone here: the pivot rotation
+  // credit saturating at the solve's own drive rate (Rope.boundRotationCredit),
+  // the bearing-absorbed length charged back to the spin through the unwind's
+  // forgiveness, the stall lease gated on geometry having actually refused
+  // something, and the winch allowance granted only for winding that stayed
+  // wound (all in BallLevel's chain phase).
+  const verts = [
+    { x: 116.01307189541359, y: -80.39215686274304 },
+    { x: 26.01307189541373, y: 29.60784313725693 },
+    { x: -153.9869281045867, y: 39.60784313725689 },
+    { x: -153.9869281045867, y: 29.60784313725693 },
+    { x: 16.01307189541359, y: 9.607843137257 },
+    { x: 106.01307189541345, y: -90.39215686274301 },
+  ];
+  const mounts: Record<string, Record<string, unknown>> = {
+    static: { kind: "static" },
+    plain: { pivot: true, pivotX: 110, pivotY: -80 },
+    sprung: { pivot: true, pivotX: 110, pivotY: -80, pivotFreq: 0.5, pivotDamping: 0.15 },
+  };
+  // Anchor points on the bar, in the AUTHORED body frame (metres); the hinge
+  // the pivot variants re-origin onto sits at (1.1, -0.8).
+  const points: Record<string, Vec2> = {
+    midarm: new Vec2(-0.69, 0.196),
+    elbow: new Vec2(0.16, 0.096),
+    tip: new Vec2(-1.53, 0.296),
+  };
+  const hinge = new Vec2(1.1, -0.8);
+
+  const makeLevel = (mountKey: string, playerPx: { x: number; y: number }): BallLevel =>
+    new BallLevel({
+      player: { x: playerPx.x, y: playerPx.y, radius: 12 },
+      bodies: [
+        {
+          kind: "rigid",
+          x: 2700,
+          y: -810,
+          rot: 0.2618,
+          friction: 1,
+          ...mounts[mountKey],
+          objects: [{ type: "collision", shape: { kind: "poly", verts } }],
+        },
+      ],
+    } as RawLevelData);
+  const findBar = (level: BallLevel): RigidBody2D | StaticBody2D =>
+    level.bodies.find(
+      (b): b is RigidBody2D | StaticBody2D =>
+        b !== level.ball && (b instanceof RigidBody2D || b instanceof StaticBody2D),
+    )!;
+
+  const run = (mountKey: string, pointKey: string): { maxV: number; maxW: number } => {
+    // The bar spawns at its REST pose (spawn-at-rest), so the target point is
+    // read off a probe build first and the player placed 1.2 m under it.
+    const local = mountKey === "static" ? points[pointKey]! : points[pointKey]!.sub(hinge);
+    const probe = makeLevel(mountKey, { x: 2600, y: -650 });
+    const probeBar = findBar(probe);
+    const target = probeBar.globalPosition.add(local.rotated(probeBar.globalRotation));
+    const level = makeLevel(mountKey, { x: target.x * 100, y: (target.y + 1.2) * 100 });
+    const bar = findBar(level);
+    let prev = emptyFrameInput();
+    const feed = (aim: Vec2): void => {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(true, prev.fire),
+        mouseWorldPosition: aim,
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+    };
+    const aimAt = bar.globalPosition.add(local.rotated(bar.globalRotation));
+    for (let f = 0; f < 240; f++) feed(aimAt);
+    check(
+      `${mountKey}/${pointKey}: the chain is anchored to the bar`,
+      level.ball.chain?.end.contact.obj === bar,
+    );
+    const start = level.ball.loopDirection.angle();
+    let maxV = 0;
+    let maxW = 0;
+    for (let f = 0; f < 600; f++) {
+      const angle = start + (f / 90) * Math.PI * 2;
+      feed(
+        level.ball.globalPosition.add(new Vec2(Math.cos(angle), Math.sin(angle)).mul(2)),
+      );
+      maxV = Math.max(maxV, level.ball.linearVelocity.length());
+      if (bar instanceof RigidBody2D) maxW = Math.max(maxW, Math.abs(bar.angularVelocity));
+    }
+    check(
+      `${mountKey}/${pointKey}: still anchored after 10 s of whipping`,
+      level.ball.chain?.end.contact.obj === bar,
+    );
+    return { maxV, maxW };
+  };
+
+  // The governed control. 2.5 m/s measured; anything near the pivot bars here
+  // means the rig itself has changed, not the mounting.
+  const ctl = run("static", "midarm");
+  check(`static control is governed (peak ${ctl.maxV.toFixed(1)} m/s, bar 4)`, ctl.maxV < 4);
+
+  // The pivot legs. Measured up to 11.0 m/s and 3.7 rad/s with the fix in;
+  // 35-45 m/s and 14-24 rad/s without it - the bars sit between the regimes.
+  for (const [mountKey, pointKey] of [
+    ["plain", "midarm"],
+    ["sprung", "midarm"],
+    ["sprung", "elbow"],
+    ["sprung", "tip"],
+  ] as const) {
+    const r = run(mountKey, pointKey);
+    check(
+      `${mountKey}/${pointKey}: the bar is never whipped (peak ${r.maxW.toFixed(1)} rad/s, bar 6)`,
+      r.maxW < 6,
+    );
+    check(
+      `${mountKey}/${pointKey}: the ball is never slung (peak ${r.maxV.toFixed(1)} m/s, bar 14)`,
+      r.maxV < 14,
+    );
+  }
+
+  return ok(
+    "whirl-anchor — a pivot-mounted anchor cannot be whirled into a slingshot",
+    passed,
+    details,
+  );
+}
+
 export function runSpringCases(): SpringResult[] {
   return [
     caseDroop(),
@@ -1555,5 +1698,6 @@ export function runSpringCases(): SpringResult[] {
     casePivotAuthored(),
     caseSpawnAtRest(),
     caseWinchLoad(),
+    caseWhirlAnchor(),
   ];
 }

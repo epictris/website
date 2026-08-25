@@ -668,7 +668,10 @@ export class Rope {
             ),
           );
           dynamicBody.addRotation(
-            ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale,
+            Rope.boundRotationCredit(
+              body,
+              ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale,
+            ),
           );
           // (Godot pushed the mutated transform back into the physics server here;
           // in this engine the body transform is already authoritative.)
@@ -736,6 +739,41 @@ export class Rope {
         velocity.dot(pathObject.resolveCorrectionDir());
     }
     return Math.max(openingRate + this.retractedSinceCredit / delta + extraInward, 0);
+  }
+
+  // The rotation credit for a PIVOT body may only top its spin up to the rate
+  // the solve's own position correction sustained this pass, never past it.
+  //
+  // The credit is Δrotation over Δt, ADDED to the angular velocity - and for a
+  // free body that add-form is kept honest by everything else acting on it: its
+  // contacts damp it, its mass bounds the linear half, and a correction that
+  // repeats stops repeating once the credited velocity carries the body with
+  // the constraint. A pivot body has none of that. Its bearing is frictionless
+  // and its axle immovable, so when the correction PERSISTS - a ball whirled in
+  // circles on a chain anchored to a hinged bar, whose rotation co-rotates with
+  // the whirl so the constraint direction turns and the correction never stops
+  // - each frame's Δθ/dt lands on top of the ω the last frame's credit already
+  // left, and the bearing integrates: the solve was correcting ~0.055 rad a
+  // frame (a 3.3 rad/s drive) and the bar wound up to 24 rad/s, slinging the
+  // ball at 39 m/s off a rig whose static-anchor control peaks at 2.5 (the
+  // `whirl-anchor` case in `cli spring` is that rig; killing this credit alone
+  // took the whip to 2.4 rad/s).
+  //
+  // So the credit saturates instead of accumulating - the standard PBD velocity
+  // update is a SET, `v = Δx/Δt`, and topping up to the drive rate is that
+  // statement made compatible with the add-form the loop uses. A body at rest
+  // yanked hard still receives the full Δθ/dt (that is momentum transfer); one
+  // already turning with the correction at the drive rate receives nothing,
+  // which is exactly the frame on which the add-form was minting energy. The
+  // bound is the solve's own position correction, so unlike a velocity-derived
+  // bound (`creditBound`'s angular image, tried and reverted) it cannot chase
+  // the runaway it exists to stop. Non-pivot bodies keep the add-form to the
+  // bit.
+  private static boundRotationCredit(body: PhysicsBody2D, credit: number): number {
+    if (!(body instanceof RigidBody2D) || !body.pivot || credit === 0) return credit;
+    const dir = Math.sign(credit);
+    const alongCredit = body.angularVelocity * dir;
+    return dir * Mathf.clamp(Math.abs(credit) - Math.max(alongCredit, 0), 0, Math.abs(credit));
   }
 
   // Spend the bound: strip whatever inward speed a credit carries past what the

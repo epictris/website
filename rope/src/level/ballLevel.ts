@@ -609,6 +609,28 @@ export class BallLevel {
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
       }
+      // Length the solve paid by rotating a PIVOT body, and which the rollback
+      // kept, is length the ball's spin still owes (the unwind below is handed
+      // it as negative forgiveness). A pivot anchor is the one body the winch's
+      // governor cannot reach on its own: it co-rotates with a whirling ball, so
+      // the chain never winds tight, the unwind never sees the over-length, and
+      // the kinematic aim's winch budget pays the whirl every frame with the
+      // frictionless bearing storing it - the elbow rig's slingshot (static
+      // anchor 2.5 m/s, the same bar on a pivot 37 m/s, identical inputs).
+      // Charging the paid length back to the spin stalls the whirl the way a
+      // static anchor does. Free rigid bodies are deliberately NOT charged: their
+      // kept share is real momentum transfer, damped by their own contacts and
+      // mass, and double-refusing it is session-337f's stiffness. The unwind's
+      // own window bounds the charge to the frame's turn, so a frame with no
+      // aim spin is charged nothing whatever the debt says.
+      let pivotSpinDebt = 0;
+      for (const [body, before] of haulAtSolve) {
+        if (!body.pivot) continue;
+        const keptRotation = body.globalRotation - before.rotation;
+        if (keptRotation === 0) continue;
+        const lengthChange = this.ball.chain.lengthPerRadian(body) * keptRotation;
+        if (lengthChange < 0) pivotSpinDebt -= lengthChange;
+      }
       // The load the rollback just removed from a SPRUNG anchor, re-applied as
       // the bounded force it really is (see the comment above `haulAtSolve`):
       // the ball's weight, straight down at the anchor point, scaled by the
@@ -682,6 +704,18 @@ export class BallLevel {
       // (session-394f). And never at all while the chain is unattached: the
       // rotation is only the spin's to give back where winding it on was
       // something an anchor could refuse — see `spinShare` above.
+      // The whole slingshot machinery below - the kept-winding allowance and
+      // the geometry-gated lease - is scoped to a chain ANCHORED TO A PIVOT
+      // body, which is the diagnosed class: only a frictionless bearing lets
+      // the whirl run, and only there do the two gates bite. Every other
+      // anchor's frame is bit-identical to what it always was, which is what
+      // keeps session-726f's legitimately blocked point-blank anchor (whose
+      // wound-tight unwind runs for hundreds of resting frames) exactly as
+      // recorded - scoped wider, the dying allowance there stripped credit for
+      // travel the solve still wrote, and `roll-unfunded` fired on it.
+      const anchorHolder = this.ball.chain.end.contact.obj;
+      const pivotAnchored = anchorHolder instanceof RigidBody2D && anchorHolder.pivot;
+      let unwindRemoved = 0;
       if (endFixed) {
         // Forgiving the sweep's own tolerance while a vine is held: that is the
         // one case where the coupled sweep leaves the chain inside
@@ -689,11 +723,18 @@ export class BallLevel {
         // may not be billed for a solve the phase chose to skip (session-337f,
         // and see `Rope.unwindOverLength`). Zero on every other frame, so
         // nothing without a vine in it changes at all.
+        const lengthBeforeUnwind = this.ball.chain.getCurrentLength();
         this.ball.chain.unwindOverLength(
           this.ball,
           ballRotationAtFrameStart,
           delta,
-          this.heldVine !== null ? CHAIN_TOLERANCE : 0,
+          (this.heldVine !== null ? CHAIN_TOLERANCE : 0) - pivotSpinDebt,
+        );
+        // The unwind only rotates the ball, so this difference is exactly the
+        // wound length it gave back - winding the frame did not keep.
+        unwindRemoved = Math.max(
+          0,
+          lengthBeforeUnwind - this.ball.chain.getCurrentLength(),
         );
       }
       PhaseTrace.mark("unwind", this.world);
@@ -716,6 +757,26 @@ export class BallLevel {
       // budget rides in as the allowance the path Jacobian cannot see: chain
       // wound onto the ball's own rim shortens the free path with nothing
       // moving, and hauling the ball in to pay for it is the mechanic.
+      // The winch allowance is granted for winding that STAYED wound: the raw
+      // budget, less what the unwind just gave back and what a pivot anchor's
+      // bearing absorbed (`pivotSpinDebt` - length the solve paid by rotating
+      // the anchor, kept after the rollback). Neither sink hauled the ball in,
+      // so neither entitles it to credit. On an ordinary wind-up both are zero
+      // and the allowance is exactly what it always was; wound tight the unwind
+      // refuses the winding and the allowance dies with it, which is the same
+      // statement the stall already makes in length. Against a whirled pivot
+      // this is the half of the slingshot the rotation-credit bound cannot
+      // reach: the aim's winding churned on and off the rim every cycle, never
+      // accumulating, while its full raw budget re-fed the ball's orbit 4-7 m/s
+      // of fresh credit per frame (the `whirl-anchor` case in `cli spring`).
+      // The field keeps the effective value so `rope-solve-kick` measures
+      // against the entitlement the clamp actually used.
+      if (pivotAnchored) {
+        this.chainWinchSpeedBudget = Math.max(
+          0,
+          this.chainWinchSpeedBudget - (unwindRemoved + pivotSpinDebt) / delta,
+        );
+      }
       const chainBound = this.ball.chain.creditBound(
         delta,
         new Map([[this.ball as PhysicsBody2D, velocityBeforeChain]]),
@@ -795,7 +856,19 @@ export class BallLevel {
       // Whatever the solve could not reach is the winch stall: a point-blank
       // anchor is held over its length by the geometry the ball is resting on,
       // and re-basing lets the constraint settle there instead of winding up.
-      this.ball.chain.absorbBlockedLength();
+      //
+      // On a pivot anchor, only where geometry actually refused something. The
+      // lease's whole premise is a correction a SURFACE would not let through,
+      // and this frame's push-out normals are the direct evidence of that. With
+      // the ball whirled in free air nothing blocked anything - what stands
+      // over-length there is the spin-rollback's re-broken share that the
+      // unwind's window could not refund this frame, and leasing it mints real
+      // chain out of the kinematic spin: the elbow whirl banked 1.7 m of lease
+      // on a 1.63 m chain that way, and the doubled radius is most of what its
+      // 37 m/s slingshot was made of. Left un-leased, next frame's solve
+      // corrects it like any other length error. Every other anchor keeps the
+      // unconditional raise it always had (see `pivotAnchored` above).
+      if (!pivotAnchored || pushedOutOf.length > 0) this.ball.chain.absorbBlockedLength();
       // Whether the geometry actually refused the chain this frame — the same
       // push-out normals the velocity above was cancelled against. Next frame's
       // `beginFrame` reads it to decide whether the lease may be handed back:
