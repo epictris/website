@@ -103,7 +103,7 @@ export class BallLevel {
   // that event is the arrival and therefore final, so a second report of the
   // same touch resolves against the first rather than doubling it (see
   // `reportSpark`). Cleared with `sparkEvents`.
-  private sparkEventIndex = new Map<BallHook, { at: number; arrival: boolean }>();
+  private sparkEventIndex = new Map<PhysicsBody2D, { at: number; arrival: boolean }>();
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -211,7 +211,7 @@ export class BallLevel {
     // and the controller has no business knowing there is a renderer.
     if (body instanceof BallHook) {
       body.registerBounceCallback((point, normal, vel, fromFlight) =>
-        this.reportSpark(body, { point, normal, vel }, fromFlight),
+        this.reportSpark(body, { source: body.id, point, normal, vel }, fromFlight),
       );
     }
     this.world.add(body);
@@ -257,10 +257,10 @@ export class BallLevel {
   // it is not. Once an arrival is recorded for a hook this frame it is final:
   // nothing later in the frame can be a better account of a touch that has
   // already happened, and `bounce()` ends the flight, so there can only be one.
-  private reportSpark(hook: BallHook, event: SparkEvent, arrival = false): void {
-    const held = this.sparkEventIndex.get(hook);
+  private reportSpark(body: PhysicsBody2D, event: SparkEvent, arrival = false): void {
+    const held = this.sparkEventIndex.get(body);
     if (held === undefined) {
-      this.sparkEventIndex.set(hook, { at: this.sparkEvents.length, arrival });
+      this.sparkEventIndex.set(body, { at: this.sparkEvents.length, arrival });
       this.sparkEvents.push(event);
       return;
     }
@@ -321,6 +321,10 @@ export class BallLevel {
     this.ball.constraintTethered = this.ball.chainAnchored;
 
     const ballVelocityBeforeContacts = this.ball.linearVelocity;
+    // The ball's pose BEFORE the contact solve answers it. Sparks are struck by
+    // the arrival, and by the time `collectContactSparks` runs the solve has
+    // already cancelled it (see there).
+    const ballSpinBeforeContacts = this.ball.angularVelocity;
     this.world.integrate(delta);
 
     // Driving the mounting loop into a surface may never launch the ball. It is
@@ -330,7 +334,7 @@ export class BallLevel {
     this.ball.applyLoopCap(this.world.frameContacts, ballVelocityBeforeContacts);
     PhaseTrace.mark("loop-cap", this.world);
 
-    this.collectContactSparks();
+    this.collectContactSparks(ballVelocityBeforeContacts, ballSpinBeforeContacts);
 
     // A vine is damped and its load rope settled before anything solves against
     // either, so both halves of the chain phase below see the same set.
@@ -778,7 +782,7 @@ export class BallLevel {
   // a hook sitting still is a question about the velocity's components, and
   // every spark threshold lives on the render side (`render/sparks.ts`) so
   // tuning has one home.
-  private collectContactSparks(): void {
+  private collectContactSparks(ballVel: Vec2, ballSpin: number): void {
     for (const c of this.world.frameContacts) {
       // Deliberately NOT filtered on `normalImpulse > 0`, the "it really pushed
       // back" test `attachToBlockingContact` uses. That is the right question
@@ -796,23 +800,64 @@ export class BallLevel {
       // slide frames above sit 2-3 mm out - touching by any reading. How fast
       // the two are rubbing is then the render side's question, and
       // `SLIDE_MIN_SPEED` is where it is asked.
-      // Either side may be the hook. Hook-proof is a per-SHAPE flag, so the
+      // STEEL is what strikes sparks off hook-proof steel, and the level has two
+      // pieces of it: the hook, and the cast-iron ball itself. Either side of
+      // the pair may be either one. Hook-proof is a per-SHAPE flag, so the
       // surface may be a rigid body (see "Hook-proof surfaces"), and which body
       // leads a constraint is an id ordering - reading `a` alone would answer
       // for half the pairs (the same mistake `applyStaticGrip` was fixed for).
-      const hookIsA = c.a instanceof BallHook;
-      const hook = hookIsA ? c.a : c.b instanceof BallHook ? c.b : null;
-      if (!hook) continue;
-      const other = hookIsA ? c.b : c.a;
-      const s = other.getShapes()[hookIsA ? c.shapeB : c.shapeA];
+      const aSparks = c.a === this.ball || c.a instanceof BallHook;
+      const bSparks = c.b === this.ball || c.b instanceof BallHook;
+      // A pair of them meeting each other strikes nothing: the flag is about
+      // the SURFACE, and neither of these is one.
+      if (aSparks === bSparks) continue;
+      const steel = aSparks ? c.a : c.b;
+      const other = aSparks ? c.b : c.a;
+      const s = other.getShapes()[aSparks ? c.shapeB : c.shapeA];
       if (!s?.impermeable) continue;
       // `c.normal` points out of `b` toward `a`, so it is out of the SURFACE
-      // only when the hook is `a`.
-      const normal = hookIsA ? c.normal : c.normal.neg();
+      // only when the sparking body is `a`.
+      const normal = aSparks ? c.normal : c.normal.neg();
+      // The relative velocity AT THE CONTACT POINT, which for the ball is the
+      // whole question and not a refinement.
+      //
+      // A rolling ball's contact point is stationary against the ground - that
+      // is what rolling IS - so `omega x r` cancels its linear velocity there
+      // exactly, and a ball rolling along hook-proof steel throws nothing while
+      // one SKIDDING along it throws a stream. Read from `linearVelocity`
+      // instead, every ball crossing the level would grind sparks the whole
+      // way, and in `levels/ball.json` that is the entire terrain: measured
+      // over the corpus the ball is on hook-proof steel on 79 to 99% of frames
+      // and its slip there is a mean of 0.00 to 0.05 m/s, so the distinction
+      // is the difference between silence and a permanent shower.
+      //
+      // It is the honest quantity for the hook too and costs it nothing: a
+      // `BallHook` carries no spin at all (measured at exactly 0 rad/s across
+      // the corpus), so the two spellings agree to the bit and one rule serves
+      // both.
+      //
+      // The BALL's half is taken from the pose it had BEFORE the contact solve,
+      // which is the same correction `BallHook.bounce` makes by reporting its
+      // pre-reflection velocity. This routine runs after `World.integrate`, and
+      // by then the solve has cancelled the approach the sparks are struck by:
+      // a ball dropped twelve metres onto hook-proof steel arrives at 15.4 m/s
+      // and is reported at 0.11 m/s of closing, under every threshold, so the
+      // slam threw nothing at all. The hook needs no such reconstruction, its
+      // own `bounce()` having read the arrival at the moment of contact.
+      //
+      // The lever arm is measured from where the ball ENDED the step, a frame's
+      // worth of travel from where it began the approach, which is a millimetre
+      // on a 12 cm ball and nothing any threshold here can see.
+      //
       // Relative to the surface, since sparks are struck by the two rubbing
-      // together: a hook riding a moving platform is not sliding on it.
-      const vel = hook.linearVelocity.sub(other.velocityAtPoint(c.point));
-      this.reportSpark(hook, { point: c.point, normal, vel });
+      // together: steel riding a moving platform is not sliding on it.
+      const r = c.point.sub(steel.globalPosition);
+      const arrival =
+        steel === this.ball
+          ? ballVel.add(new Vec2(-r.y, r.x).mul(ballSpin))
+          : steel.velocityAtPoint(c.point);
+      const vel = arrival.sub(other.velocityAtPoint(c.point));
+      this.reportSpark(steel, { source: steel.id, point: c.point, normal, vel });
     }
   }
 }

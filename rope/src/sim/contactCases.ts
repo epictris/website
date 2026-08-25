@@ -2245,8 +2245,13 @@ function caseHookSparks(): ContactResult {
     slidDistance: number;
   }
 
+  // Measured over the HOOK's own events. The ball sparks off hook-proof steel
+  // too (see `ball-sparks`) and in these arenas it is standing on the same
+  // face, so every clause here filters to the source it is about - which is
+  // exactly what tracking arrivals per source is for.
   const throwAt = (data: RawLevelData, aim: Vec2, frames: number): Run => {
     const level = new BallLevel(scaleLevelData(data, 1));
+    const ballId = level.ball.id;
     const sparks = new SparkSystem();
     let prev = emptyFrameInput();
     const run: Run = {
@@ -2269,7 +2274,7 @@ function caseHookSparks(): ContactResult {
       };
       prev = input;
       level.physicsProcess(input, DT);
-      const events = level.sparkEvents;
+      const events = level.sparkEvents.filter((e) => e.source !== ballId);
       const beforeBursts = sparks.bursts;
       const beforeSlide = sparks.slideParticles;
       sparks.ingest(events);
@@ -2341,7 +2346,7 @@ function caseHookSparks(): ContactResult {
     ["graze", graze],
   ] as const) {
     const most = Math.max(0, ...run.perFrame);
-    check(`${name}: one event per frame, never two (worst ${most})`, most <= 1);
+    check(`${name}: one event per source per frame, never two (worst ${most})`, most <= 1);
     check(`${name}: no silent frame inside the contact (${run.gaps})`, run.gaps === 0);
   }
 
@@ -2383,6 +2388,7 @@ function caseHookSparks(): ContactResult {
         1,
       ),
     );
+    const ballId = level.ball.id;
     const sparks = new SparkSystem();
     let contact = 0;
     let throughRamp = 0;
@@ -2398,7 +2404,7 @@ function caseHookSparks(): ContactResult {
       };
       prev = input;
       level.physicsProcess(input, DT);
-      const events = level.sparkEvents;
+      const events = level.sparkEvents.filter((e) => e.source !== ballId);
       const before = sparks.slideParticles;
       sparks.ingest(events);
       sparks.advance(DT);
@@ -2471,6 +2477,217 @@ function caseHookSparks(): ContactResult {
 
   return ok(
     "hook-sparks — one report per touch, at the arrival's own velocity, and a drag that grinds",
+    passed,
+    details,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ball-sparks — the cast-iron ball strikes hook-proof steel on impact and
+// grinds it when it SLIDES, and does neither while it is rolling.
+//
+// The second clause is the whole feature. `levels/ball.json`'s terrain is one
+// enormous hook-proof polygon, so the ball is on hook-proof steel on 79 to 99%
+// of the frames of every recording in the corpus. What keeps that from being a
+// permanent shower is that the spark velocity is taken AT THE CONTACT POINT: a
+// rolling ball's contact point is stationary against the ground - that is what
+// rolling is - so `omega x r` cancels its linear velocity there and the slip
+// the render side thresholds on is a measured mean of 0.00 to 0.05 m/s. Read
+// from `linearVelocity` instead, every ball crossing the level would grind the
+// whole way, and no invariant anywhere would notice.
+//
+// The arrival is the other half, and it is the same correction
+// `BallHook.bounce` makes for the hook: `collectContactSparks` runs after
+// `World.integrate`, so by then the solve has cancelled the very approach the
+// sparks are struck by. A ball dropped twelve metres is reported at 0.11 m/s of
+// closing where it arrived at 15.4, which is under every threshold - the slam
+// threw nothing at all until the ball's pre-solve pose was carried in.
+//
+// Five rigs, and the pairs are the point: skid against roll says the slip test
+// works, slam against roll says the arrival survives the solve, and hook-proof
+// against ordinary says the flag is still being read.
+// ---------------------------------------------------------------------------
+function caseBallSparks(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // `spawnY` is in the file's pixels like every other coordinate here, so the
+  // drop height goes through the same scaling the geometry does.
+  const floor = (impermeable: boolean, friction: number, spawnY = 0): RawLevelData => ({
+    player: { x: 0, y: spawnY, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 60,
+        rot: 0,
+        shape: { kind: "rect", w: 8000, h: 40 },
+        friction,
+        ...(impermeable ? { impermeable: true } : {}),
+      },
+    ],
+  });
+
+  interface Run {
+    contactFrames: number;
+    maxSlip: number;
+    bursts: number;
+    slide: number;
+    // The fastest the ball was travelling before it first touched anything.
+    // Read off the BALL rather than off an event, because the arrival is
+    // exactly what a blunt body's events do not carry: by the time
+    // `collectContactSparks` runs the solve has answered it.
+    arrivalSpeed: number;
+    // Drag particles thrown over the LAST third of the run, and how fast the
+    // ball was still travelling at the end of it. Together they are the only
+    // way to tell "silent because it is rolling" from "silent because it has
+    // stopped", and the first is the whole point of measuring slip at the
+    // contact point rather than at the ball's centre.
+    lateSlide: number;
+    finalSpeed: number;
+  }
+
+  // Drop the ball onto the floor and watch its OWN contact. `drive` is the
+  // one shove a rig gets; nothing is held frame to frame, so what the contact
+  // does afterwards is the solver's answer rather than the rig's.
+  const drop = (
+    data: RawLevelData,
+    frames: number,
+    drive?: (level: BallLevel, frame: number) => void,
+  ): Run => {
+    const level = new BallLevel(scaleLevelData(data, 1));
+    const ballId = level.ball.id;
+    const sparks = new SparkSystem();
+    const run: Run = {
+      contactFrames: 0, maxSlip: 0, bursts: 0, slide: 0, arrivalSpeed: 0,
+      lateSlide: 0, finalSpeed: 0,
+    };
+    for (let f = 1; f <= frames; f++) {
+      drive?.(level, f);
+      if (run.contactFrames === 0) {
+        run.arrivalSpeed = Math.max(run.arrivalSpeed, level.ball.linearVelocity.length());
+      }
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        mouseWorldPosition: level.ball.globalPosition,
+      };
+      level.physicsProcess(input, DT);
+      const events = level.sparkEvents.filter((e) => e.source === ballId);
+      const beforeBursts = sparks.bursts;
+      const beforeSlide = sparks.slideParticles;
+      sparks.ingest(events);
+      sparks.advance(DT);
+      run.bursts += sparks.bursts - beforeBursts;
+      run.slide += sparks.slideParticles - beforeSlide;
+      if (f > (2 * frames) / 3) run.lateSlide += sparks.slideParticles - beforeSlide;
+      run.finalSpeed = level.ball.linearVelocity.length();
+      if (events.length === 0) continue;
+      run.contactFrames++;
+      for (const e of events) {
+        const dot = e.vel.dot(e.normal);
+        run.maxSlip = Math.max(run.maxSlip, e.vel.sub(e.normal.mul(dot)).length());
+      }
+    }
+    return run;
+  };
+
+  // One shove, on the frame the ball has settled, and nothing after it.
+  const shove = (level: BallLevel, frame: number): void => {
+    if (frame === 30) level.ball.linearVelocity = new Vec2(12, 0);
+  };
+
+  const say = (name: string, r: Run): void =>
+    void details.push(
+      `${name}: ${r.contactFrames} contact frames, arrived at ${r.arrivalSpeed.toFixed(2)} m/s, ` +
+        `max slip ${r.maxSlip.toFixed(2)} m/s, burst=${r.bursts} slide=${r.slide} ` +
+        `(${r.lateSlide} late, still at ${r.finalSpeed.toFixed(1)} m/s)`,
+    );
+
+  // (a) Landing, then rolling. The landing is a real arrival and earns its
+  // burst; everything after it is a contact the solver has driven to no slip,
+  // and it must be silent.
+  const rolling = drop(floor(true, 1), 240);
+  say("roll", rolling);
+  check("roll: the landing earns exactly one burst", rolling.bursts === 1);
+  check(`roll: and a rolling ball then grinds nothing (${rolling.slide})`, rolling.slide === 0);
+  check(`roll: because its contact does not slip (${rolling.maxSlip.toFixed(2)} m/s)`, rolling.maxSlip < 0.3);
+
+  // (b) The same ball shoved across SLICK hook-proof steel, where friction
+  // cannot spin it up to rolling: the contact point really does slide, and it
+  // grinds for as long as it does.
+  const skid = drop(floor(true, 0.05), 240, shove);
+  say("skid", skid);
+  check(`skid: the contact really slips (${skid.maxSlip.toFixed(1)} m/s)`, skid.maxSlip > 5);
+  check(`skid: and throws a real stream (${skid.slide})`, skid.slide > 200);
+  check(`skid: the shove itself is not a fresh strike (${skid.bursts} bursts)`, skid.bursts <= 1);
+
+  // (c) The same shove on a GRIPPY floor. Friction spins the ball up to rolling
+  // within a few dozen frames, so it grinds while it is skidding and then stops
+  // - which is the pair that says (a) is silent because of the slip test rather
+  // than because the ball never sparks.
+  // Shorter than the others on purpose: this rig has to catch the ball still
+  // MOVING, and `contactDamp` takes a shoved ball from 12 m/s to a standstill
+  // inside 200 frames. Shoved at frame 30, it has spun up to rolling by about
+  // frame 50 and is still crossing the level at frame 75, which is the window
+  // the clause below reads.
+  const grippy = drop(floor(true, 1), 75, shove);
+  say("grip", grippy);
+  check(`grip: a shove skids briefly (${grippy.slide})`, grippy.slide > 0);
+  check(
+    `grip: far less than the slick floor (${grippy.slide} against ${skid.slide})`,
+    grippy.slide * 5 < skid.slide,
+  );
+  // The sharp half, and the one nothing else here can make: by the end of the
+  // run the ball is still CROSSING the level and is silent, because a rolling
+  // contact does not slip. Measured at the ball's centre instead of at the
+  // contact it reads its full travelling speed and grinds the whole way - which
+  // in `levels/ball.json`, whose terrain is one hook-proof polygon, is every
+  // ball in the game sparking permanently.
+  check(
+    `grip: once rolling it goes near-silent while still moving ` +
+      `(${grippy.lateSlide} late, at ${grippy.finalSpeed.toFixed(1)} m/s)`,
+    grippy.lateSlide < 10 && grippy.finalSpeed > 1.5,
+  );
+  check(
+    `skid: and the slick floor is still grinding at the end (${skid.lateSlide} late)`,
+    skid.lateSlide > 20,
+  );
+
+  // (d) The same skid on ordinary steel. Hook-proof is a per-SHAPE flag and it
+  // still decides: nothing here should report a touch at all.
+  const ordinary = drop(floor(false, 0.05), 240, shove);
+  say("not hook-proof", ordinary);
+  check(
+    `not hook-proof: no touch is even reported (${ordinary.contactFrames} frames)`,
+    ordinary.contactFrames === 0,
+  );
+
+  // (e) Dropped from twelve metres onto the same steel. It arrives at 15 m/s
+  // and must strike: this is the clause the ball's pre-solve pose exists for,
+  // and it is red on a ball whose spark velocity is read after the contact
+  // solve - which reports that arrival as 0.11 m/s of closing.
+  const slam = drop(floor(true, 1, -1200), 240);
+  say("slam", slam);
+  check(`slam: it really does arrive hard (${slam.arrivalSpeed.toFixed(1)} m/s)`, slam.arrivalSpeed > 10);
+  // More than one, and correctly so: at 15 m/s and 0.15 restitution the ball
+  // rebounds a quarter of a metre and lands again, and a second landing is a
+  // second strike. What must not happen is a burst per frame of the 120 it
+  // spends in contact, which is what the arrival test is there to prevent.
+  check(
+    `slam: it strikes on landing and not every frame (${slam.bursts} over ${slam.contactFrames})`,
+    slam.bursts >= 1 && slam.bursts <= 3,
+  );
+  check(
+    `slam: and grinds nothing, having never slid (${slam.slide})`,
+    slam.slide === 0,
+  );
+
+  return ok(
+    "ball-sparks — the ball strikes hook-proof steel, grinds it when it slides, and is silent rolling",
     passed,
     details,
   );
@@ -3116,6 +3333,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseMaterials());
   results.push(caseImpermeableShape());
   results.push(caseHookSparks());
+  results.push(caseBallSparks());
   results.push(caseHookSeam());
   results.push(casePassableBody());
   results.push(caseDecorGroup());

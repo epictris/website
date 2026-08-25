@@ -141,7 +141,7 @@ export class Level {
     // does the same for the ball's).
     if (body instanceof Hook) {
       body.onDestroyed((point, normal, vel) =>
-        this.sparkEvents.push({ point, normal, vel }),
+        this.sparkEvents.push({ source: body.id, point, normal, vel }),
       );
     }
     this.world.add(body);

@@ -188,6 +188,27 @@ const SPARK_RAMP_STEPS = 24;
 // The pool's size, and with it the per-frame spawn ceiling.
 const MAX_SPARKS = 256;
 
+// Silent steps after which a source's track is forgotten. Well past
+// `CONTACT_GAP_FRAMES`, so it can never decide whether a touch is an arrival -
+// it only stops the map growing across a session, which spawns a fresh hook
+// with a fresh id on every throw.
+const CONTACT_TRACK_TTL = 600;
+
+// What one sparking body's contact is doing. Per SOURCE rather than per system
+// because the ball and its hook can be on hook-proof steel at the same time -
+// see `SparkEvent.source`.
+interface ContactTrack {
+  // Sim steps since this source last reported a touch. Starts high, so a
+  // source's first touch is an arrival.
+  quiet: number;
+  // Steps of UNBROKEN contact, counted from the arrival: what tells a strike
+  // from a grind, and what the stream's rate is ramped in over.
+  steps: number;
+  // The fractional spark a slow slide is owed, carried to the next step so it
+  // sparks occasionally rather than never.
+  carry: number;
+}
+
 // A fixed seed, so a screenshot of a given bundle frame is the same picture
 // every run (see `shotMain.ts`, which advances at the sim's own step).
 const PRNG_SEED = 0x5eed5a11;
@@ -200,18 +221,10 @@ export class SparkSystem {
   private readonly age = new Float32Array(MAX_SPARKS);
   private readonly ttl = new Float32Array(MAX_SPARKS);
   private live = 0;
-  // The fractional spark a slow slide is owed this frame, carried to the next
-  // so it sparks occasionally rather than never.
-  private slideCarry = 0;
   private rngState = PRNG_SEED;
-  // Sim steps since the last one that reported any contact at all, which is how
-  // a strike is told from a slide (see `ingest`). Starts high so the first touch
-  // of a level is an arrival.
-  private quietSteps = Number.MAX_SAFE_INTEGER;
-  // Sim steps of UNBROKEN contact, counted from the arrival. It is what tells a
-  // strike from a grind, and the stream's rate is ramped in over the first
-  // `SLIDE_RAMP_STEPS` of it.
-  private contactSteps = 0;
+  // What each sparking body's own contact is doing, keyed by `SparkEvent.source`
+  // (see there for why this cannot be one counter for the system).
+  private readonly contacts = new Map<number, ContactTrack>();
   // Impact bursts fired, and slide particles spawned, since the last `reset`.
   // Nothing here reads either and the draw does not either: they exist so the
   // shower is OBSERVABLE, which is what `cli contacts` `hook-sparks` counts.
@@ -235,7 +248,7 @@ export class SparkSystem {
   // slide in the game. The burst and the stream are properties of the velocity,
   // not of the call site.
   ingest(events: readonly SparkEvent[]): void {
-    // A burst is for an ARRIVAL - the hook coming out of free flight into a
+    // A burst is for an ARRIVAL - the body coming out of free flight into a
     // surface - and not for every frame that happens to report a normal
     // component. Once it is down and sliding, the wall's own shape supplies
     // those: a hook skimming a faceted hook-proof polygon crosses a seam between
@@ -246,37 +259,67 @@ export class SparkSystem {
     // by 15.5 degrees). Read as a fresh strike, that fired a second burst
     // mid-slide.
     //
-    // Whether the hook is arriving is itself collision information - it was not
-    // touching anything, and now it is - so it stays on this side of the boundary
-    // like every other threshold. The counter is per SYSTEM rather than per hook,
-    // which is exact while at most one hook is in contact at a time (the ball's
-    // chain has a single tip, and the grapple hook is destroyed by the surface
-    // that would spark); two hooks grinding different walls at once would have
-    // the second one's arrival read as the first one's continuation.
-    const arriving = this.quietSteps > CONTACT_GAP_FRAMES;
-    if (arriving) this.contactSteps = 0;
-    this.quietSteps = events.length > 0 ? 0 : this.quietSteps + 1;
-    if (events.length > 0) this.contactSteps++;
-    // How far this contact has settled into a grind, 0 at the strike and 1 once
-    // it has been sliding for `SLIDE_RAMP_STEPS`. Computed once a step rather
-    // than per event: it is a property of the contact, and there is one event
-    // per hook per frame in any case.
-    const settled = Math.min(1, this.contactSteps / SLIDE_RAMP_STEPS);
+    // Whether a body is arriving is itself collision information - it was not
+    // touching anything, and now it is - so it stays on this side of the
+    // boundary like every other threshold. It is tracked PER SOURCE, because
+    // the ball and its hook can be on hook-proof steel at the same time and in
+    // `levels/ball.json` the ball very nearly always is: one counter for the
+    // system would read every hook arrival as a continuation of the ball's own
+    // grind. The ramp and the fractional carry are per source for the same
+    // reason - a hook striking a wall must not inherit how long the ball has
+    // been grinding, nor spend the particle the ball's slide was owed.
     for (const e of events) {
-      const nx = e.normal.x;
-      const ny = e.normal.y;
-      // Split the hook's velocity at the surface: `vn` is how fast it is
-      // closing (positive into the face), `vt` how fast it is travelling along.
-      const vDotN = e.vel.x * nx + e.vel.y * ny;
-      const vn = -vDotN;
-      const tx = e.vel.x - nx * vDotN;
-      const ty = e.vel.y - ny * vDotN;
-      const vt = Math.hypot(tx, ty);
-      // A head-on hit is all burst, a drag all stream, and a glancing skip is
-      // legitimately both.
-      if (arriving) this.burst(e.point.x, e.point.y, nx, ny, vn, vt, tx, ty);
-      this.stream(e.point.x, e.point.y, nx, ny, vt, tx, ty, settled);
+      const track = this.track(e.source);
+      const arriving = track.quiet > CONTACT_GAP_FRAMES;
+      if (arriving) track.steps = 0;
+      track.quiet = 0;
+      track.steps++;
+      // How far this contact has settled into a grind, 0 at the strike and 1
+      // once it has been sliding for `SLIDE_RAMP_STEPS`.
+      const settled = Math.min(1, track.steps / SLIDE_RAMP_STEPS);
+      this.emit(e, arriving, settled, track);
     }
+    // Every track that said nothing this step ages, and one silent long enough
+    // to be past any question of continuing is dropped - the map is keyed by
+    // body id and a session spawns a fresh hook per throw.
+    for (const [source, track] of this.contacts) {
+      if (track.quiet === 0 && this.reported(events, source)) continue;
+      track.quiet++;
+      if (track.quiet > CONTACT_TRACK_TTL) this.contacts.delete(source);
+    }
+  }
+
+  // This step's track for one source, created on first sight with a quiet count
+  // high enough that its first touch is an arrival.
+  private track(source: number): ContactTrack {
+    let track = this.contacts.get(source);
+    if (!track) {
+      track = { quiet: Number.MAX_SAFE_INTEGER, steps: 0, carry: 0 };
+      this.contacts.set(source, track);
+    }
+    return track;
+  }
+
+  private reported(events: readonly SparkEvent[], source: number): boolean {
+    for (const e of events) if (e.source === source) return true;
+    return false;
+  }
+
+  // One event's worth of particles. EVERY event is asked BOTH questions and
+  // each answers on its own threshold: a head-on hit is all burst, a drag all
+  // stream, and a glancing skip is legitimately both.
+  private emit(e: SparkEvent, arriving: boolean, settled: number, track: ContactTrack): void {
+    const nx = e.normal.x;
+    const ny = e.normal.y;
+    // Split the velocity at the surface: `vn` is how fast the two are closing
+    // (positive into the face), `vt` how fast they are rubbing along it.
+    const vDotN = e.vel.x * nx + e.vel.y * ny;
+    const vn = -vDotN;
+    const tx = e.vel.x - nx * vDotN;
+    const ty = e.vel.y - ny * vDotN;
+    const vt = Math.hypot(tx, ty);
+    if (arriving) this.burst(e.point.x, e.point.y, nx, ny, vn, vt, tx, ty);
+    this.stream(e.point.x, e.point.y, nx, ny, vt, tx, ty, settled, track);
   }
 
   // Advance the particles by `dt` seconds of RENDER time. The live game passes
@@ -329,9 +372,7 @@ export class SparkSystem {
   // embers and two runs of the same bundle draw the same sparks.
   reset(): void {
     this.live = 0;
-    this.slideCarry = 0;
-    this.quietSteps = Number.MAX_SAFE_INTEGER;
-    this.contactSteps = 0;
+    this.contacts.clear();
     this.rngState = PRNG_SEED;
     this.bursts = 0;
     this.slideParticles = 0;
@@ -399,11 +440,12 @@ export class SparkSystem {
     tx: number,
     ty: number,
     settled: number,
+    track: ContactTrack,
   ): void {
     if (vt < SLIDE_MIN_SPEED) return;
-    const wanted = vt * SIM_STEP * SLIDE_SPARKS_PER_METRE * settled + this.slideCarry;
+    const wanted = vt * SIM_STEP * SLIDE_SPARKS_PER_METRE * settled + track.carry;
     const count = Math.floor(wanted);
-    this.slideCarry = wanted - count;
+    track.carry = wanted - count;
     if (count <= 0) return;
     // Along the slide, tilted a little off the face (see slideSparkDirection).
     const along = slideSparkDirection(nx, ny, tx, ty, vt);

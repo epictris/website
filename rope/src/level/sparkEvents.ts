@@ -34,6 +34,21 @@ import type { Vec2 } from "../engine/vec2";
 // questions and each answers independently, which is what makes a head-on hit
 // a burst, a drag a stream, and a glancing skip both.
 export interface SparkEvent {
+  // Which body reported the touch (`CollisionObject2D.id`), and the ONLY thing
+  // in here that is not a vector.
+  //
+  // It is an identity and not a kind - it says which contact this is, never
+  // what sort of touch it was, so the warning above stands unchanged and the
+  // render side still asks both questions of every event. What needs it is the
+  // arrival test: a burst is for a hook coming out of free flight, and whether
+  // it is arriving is measured by how long it went without reporting a touch.
+  // That counter was per SYSTEM while a hook was the only thing that sparked,
+  // which was exact while at most one of them was in contact at a time. The
+  // BALL sparks now too, and in `levels/ball.json` the whole terrain is
+  // hook-proof, so the ball is in continuous contact with it - one counter
+  // would read every hook arrival as a continuation of the ball's own grind and
+  // fire no burst at all.
+  source: number;
   // World metres - the contact point.
   point: Vec2;
   // Out of the surface.

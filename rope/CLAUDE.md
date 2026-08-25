@@ -2669,6 +2669,23 @@ Read as the whole of the strike, that is a head-on hit into hook-proof steel thr
 Once an arrival is recorded for a hook this frame it is final: nothing later in the frame can be a better account of a touch that has already happened, and `bounce()` ends the flight, so there can only be one.
 It is deliberately NOT a field on `SparkEvent`, for the reason given below - it settles which of several reports of one touch is accurate, inside the sim, and the render side still receives one event with no field naming the kind of touch.
 
+**The BALL sparks too**, and by both mechanisms: it is cast iron and the surface is hook-proof steel, so it strikes them off on impact and grinds them off when it skids.
+Its ARRIVAL is taken from the pose it had BEFORE the contact solve, which is the same correction `BallHook.bounce` makes by reporting its pre-reflection velocity.
+`collectContactSparks` runs after `World.integrate`, and by then the solve has cancelled the very approach the sparks are struck by: a ball dropped twelve metres onto hook-proof steel arrives at 15.4 m/s and is reported at 0.11 m/s of closing, under every threshold, so the slam threw nothing at all.
+The hook needs no such reconstruction, its own `bounce()` having read the arrival at the moment of contact; the ball's lever arm is measured from where it ENDED the step, a millimetre out on a 12 cm ball and nothing any threshold here can see.
+
+**The velocity is taken AT THE CONTACT POINT, and for the ball that is the whole feature rather than a refinement.**
+A rolling ball's contact point is stationary against the ground - that is what rolling is - so `omega x r` cancels its linear velocity there and the slip the render side thresholds on is nothing.
+`levels/ball.json`'s terrain is one enormous hook-proof polygon, so the ball is on hook-proof steel on 79 to 99% of the frames of every recording in the corpus, and its measured slip there is a mean of 0.00 to 0.05 m/s: it throws, in total, one particle across three sessions.
+Read from `linearVelocity` instead and every ball in the game grinds sparks for as long as it is moving, with no invariant anywhere to notice.
+What does spark is a genuine skid - a shove across slick steel throws 844 particles over 227 frames, and the same shove on a grippy floor throws 18 while friction spins it up to rolling and then goes quiet.
+It is the honest quantity for the hook too and costs it nothing, a `BallHook` carrying no spin at all (measured at exactly 0 rad/s across the corpus), so one rule serves both.
+
+**Arrivals are tracked PER SOURCE** (`SparkEvent.source`, the reporting body's id), because the ball and its hook can be on hook-proof steel at the same time and the ball very nearly always is.
+One counter for the system would read every hook arrival as a continuation of the ball's own grind and fire no burst at all.
+The ramp and the fractional carry are per source for the same reason: a hook striking a wall must not inherit how long the ball has been grinding, nor spend the particle the ball's slide was owed.
+A source's track is forgotten after `CONTACT_TRACK_TTL` silent steps, which is well past `CONTACT_GAP_FRAMES` so it can never decide whether a touch is an arrival - it only stops the map growing across a session, which mints a fresh hook id on every throw.
+
 Three sources feed it, and each is the one funnel for its case:
 
 - `BallHook.bounce` fires `registerBounceCallback` with the contact point, the surface normal and the **pre-reflection** velocity, behind the same `vn < 0 && speed > BOUNCE_MIN_SPEED` guard the reflection itself sits behind.
@@ -2748,7 +2765,10 @@ Longer ramps quiet the strike further and the drag with it (10 gives 1.25x on th
 Measured on a dangling tip dragged 18 m along hook-proof steel, a sustained drag runs at **30.0 particles per metre** past the ramp - the full rate, to a decimal place - with 40 to 60 alive on screen at any moment.
 Nothing in the recorded corpus is that: every hook-proof contact in it is a 2 to 7 frame strike, which is why the drag case has to be built rather than replayed (`cli contacts` `hook-sparks` builds it).
 
-Most of it is gated, by `cli contacts` **`hook-sparks`**, over three rigs - a head-on throw, a skimming one, and a dangling tip dragged 18 m along hook-proof steel.
+The ball's half is gated by `cli contacts` **`ball-sparks`**, over five rigs, and the pairs are what make each clause a statement: a shove across slick hook-proof steel grinds 848 particles where a rolling ball is silent, a twelve-metre slam strikes twice (it rebounds and lands again) and grinds nothing, and the same skid on ordinary steel reports no touch at all.
+The sharpest is the grippy shove, which catches the ball still crossing the level at 1.9 m/s and silent - measured at the ball's centre instead of at the contact it reads 30 particles over the same stretch, which is every ball in the game sparking permanently.
+
+The hook's half is gated by `cli contacts` **`hook-sparks`**, over three rigs - a head-on throw, a skimming one, and a dangling tip dragged 18 m along hook-proof steel.
 It asserts one report per touch and never two, the arrival carrying the velocity the hook came in at rather than what the bounce left behind, a burst on an oblique arrival as well as a head-on one, not one silent frame in the middle of a contact, a slide's sparks travelling along the slide and clear of the face on a floor, a ceiling, a wall and a 45 degree ramp, and a sustained drag grinding at the full per-metre rate where a three-frame strike is charged a fraction of it.
 Every one of those is red on its own with the corresponding half reverted, which is the point of writing them as clauses rather than as one number.
 The last is stated as the RATIO between the strike and the drag rather than as a bar on either, since either alone is a tuning value and the separation is the behaviour: 6.9 per metre against 30.0 with the ramp, 29.3 against 30.0 without it.
