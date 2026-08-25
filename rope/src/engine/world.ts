@@ -179,7 +179,7 @@ const STICK_RELEASE_FRAMES = 6;
 // surface stays below this. Rotate/move slowly and the contact sticks — precise
 // placement; rotate or travel fast and the slip exceeds it, so the contact
 // falls through to the slippery, Coulomb-capped kinetic friction instead.
-const SLIP_STICK = 0.15;
+const SLIP_STICK = 0.5;
 // Fraction of the along-surface error a pin removes per frame.
 const PIN_RELAX = 0.15;
 
@@ -929,7 +929,22 @@ export class World {
             // normal agrees with the side of the shape the sweep starts on -
             // without them a shape the body is already touching answers with
             // its far face and the "contact" points inward.
-            if (hit.normal.dot(remaining) > 1e-9) continue;
+            //
+            // "Opposes" is measured against the STEP, not against an absolute
+            // epsilon, because a body already touching answers t=0 for every
+            // direction that keeps it inside the expanded hull - tangential
+            // ones included (`sweepCirclePoly` clamps a negative tEnter to
+            // zero). On a face that is harmless: the slide takes the normal
+            // component off and the next pass clears the shape. On a CORNER it
+            // is the whole step: the contact sits on a vertex, so what the
+            // slide leaves is exactly tangential (n.rem of 4e-19, which is not
+            // `> 1e-9`), the same corner answers t=0 again, and passes 1 and 2
+            // repeat the first verbatim until the budget runs out and the
+            // remainder is dropped. A ball rolling onto a convex corner then
+            // froze in place - spin, velocity and contact all live, position
+            // bit-identical for 190 frames while 4 mm of step was discarded
+            // every one of them (`session-287f` f98).
+            if (hit.normal.dot(remaining) > -1e-9 * remaining.length()) continue;
             if (hit.normal.dot(outwardDirection(start, ts)) < -1e-6) continue;
             if (!best || hit.t < best.t) best = hit;
           }
