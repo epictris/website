@@ -47,7 +47,9 @@ import {
 } from "../level/levelFormat";
 import { SceneChain, stepSceneChains } from "../level/chains";
 import { RopeContact } from "../lib/ropeContact";
-import { emptyFrameInput } from "../input/frameInput";
+import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
+import { BallLevel } from "../level/ballLevel";
+import { slideSparkDirection, SLIDE_RAMP_STEPS, SparkSystem } from "../render/sparks";
 
 const DT = 1 / 60;
 const DEG = Math.PI / 180;
@@ -2144,6 +2146,337 @@ function caseMaterials(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// hook-sparks — one report per touch, the arrival's own velocity, a slide
+// reported on every frame of it, and a drag that grinds where a strike pops.
+//
+// Sparks reach no digest and no invariant by construction (see "Sparks" in
+// CLAUDE.md), so a system emitting nothing at all is exactly as green as one
+// that works, and every failure this case is written against was found by
+// somebody looking at the game. Each clause is a way it goes quietly wrong:
+//
+// A single touch is reported by three places that do not know about each other
+// - the flight sweep's hook-proof branch, `probeContact`'s deflection and the
+// solver's contact list - and `BallLevel.reportSpark` resolves them to one
+// event. Reporting two doubles a slide's spark rate on the frames both fire and
+// spawns the two halves a fifth of a metre apart, which reads as a steady drag
+// throwing repeated impacts. Preferring the wrong one of them is worse: on the
+// frame a throw ends on a wall the solver's contact is the AFTERMATH, taken
+// after `bounce()` has already killed the throw, so a head-on hit into
+// hook-proof steel reports 0.02 m/s of separation where the hook arrived at 12
+// and throws no sparks at all.
+//
+// `collectContactSparks` is deliberately not filtered on `normalImpulse > 0`,
+// because a hook riding a face it is neither sinking into nor bouncing off
+// carries no normal load, so that filter threw away the middle of every drag -
+// and a gap long enough is what lets the render side read the far side of it as
+// a fresh arrival and fire a second impact burst in the middle of a slide.
+//
+// The last two clauses are about the SHOWER rather than the reporting: which
+// way a slide throws its sparks, and that a sustained drag grinds at the full
+// per-metre rate where a brief strike gets a fraction of it.
+//
+// Counted through the REAL `SparkSystem`, since what the sim reports only
+// matters through what the render side makes of it, and every threshold is on
+// that side.
+// ---------------------------------------------------------------------------
+function caseHookSparks(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // Two arenas in the file's pixels, differing only in which piece is
+  // hook-proof and therefore in how the throw meets it. `false` is a hook-proof
+  // wall standing in front of the ball, met head on; `true` takes the wall away
+  // and makes the FLOOR hook-proof, so a shallow throw skims along it instead.
+  const scene = (proofFloor: boolean): RawLevelData => ({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 50,
+        rot: 0,
+        shape: { kind: "rect", w: 2000, h: 40 },
+        friction: 1,
+        ...(proofFloor ? { impermeable: true } : {}),
+      },
+      ...(proofFloor
+        ? []
+        : ([
+            {
+              kind: "static",
+              x: 130,
+              y: -100,
+              rot: 0,
+              shape: { kind: "rect", w: 40, h: 400 },
+              impermeable: true,
+              friction: 1,
+            },
+          ] as LegacyBodyData[])),
+    ],
+  });
+
+  // Drive a throw and collect what the sim reported and what the render side
+  // made of it, frame by frame.
+  interface Run {
+    // Events reported per frame, over the frames any were.
+    perFrame: number[];
+    // First and last frame that reported a touch, and how many frames between
+    // them reported none.
+    first: number;
+    last: number;
+    gaps: number;
+    // Frames on which the render side fired a burst, and the largest speed any
+    // single event carried.
+    burstFrames: number[];
+    maxSpeed: number;
+    // The arrival's velocity split at the face: how hard it closed, and how
+    // fast it was travelling along. A throw that arrives almost entirely
+    // TANGENTIALLY is the case a burst gated on `vn` alone scores as no arrival.
+    arrivalVn: number;
+    arrivalVt: number;
+    // Slide particles thrown, and how far the hook actually slid to throw them.
+    // Their ratio is the per-metre rate the STRIKE was charged, which is the
+    // half of `SLIDE_RAMP_STEPS` a strike can show.
+    slideParticles: number;
+    slidDistance: number;
+  }
+
+  const throwAt = (data: RawLevelData, aim: Vec2, frames: number): Run => {
+    const level = new BallLevel(scaleLevelData(data, 1));
+    const sparks = new SparkSystem();
+    let prev = emptyFrameInput();
+    const run: Run = {
+      perFrame: [],
+      first: 0,
+      last: 0,
+      gaps: 0,
+      burstFrames: [],
+      maxSpeed: 0,
+      arrivalVn: 0,
+      arrivalVt: 0,
+      slideParticles: 0,
+      slidDistance: 0,
+    };
+    for (let f = 1; f <= frames; f++) {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(f > 20, prev.fire),
+        mouseWorldPosition: level.ball.globalPosition.add(aim),
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+      const events = level.sparkEvents;
+      const beforeBursts = sparks.bursts;
+      const beforeSlide = sparks.slideParticles;
+      sparks.ingest(events);
+      sparks.advance(DT);
+      if (sparks.bursts > beforeBursts) run.burstFrames.push(f);
+      if (events.length === 0) continue;
+      run.slideParticles += sparks.slideParticles - beforeSlide;
+      if (run.first === 0) {
+        run.first = f;
+        const e = events[0]!;
+        const dot = e.vel.dot(e.normal);
+        run.arrivalVn = -dot;
+        run.arrivalVt = e.vel.sub(e.normal.mul(dot)).length();
+      }
+      run.last = f;
+      run.perFrame.push(events.length);
+      for (const e of events) {
+        run.maxSpeed = Math.max(run.maxSpeed, e.vel.length());
+        const dot = e.vel.dot(e.normal);
+        run.slidDistance += e.vel.sub(e.normal.mul(dot)).length() * DT;
+      }
+    }
+    run.gaps = run.first === 0 ? 0 : run.last - run.first + 1 - run.perFrame.length;
+    return run;
+  };
+
+  // (a) Straight into the wall. The arrival is the flight sweep's, and its
+  // pre-reflection velocity is the whole of what the hit looked like - the
+  // solver's contact on that same frame has the hook already stopped.
+  const headOn = throwAt(scene(false), new Vec2(1, -0.05), 90);
+  details.push(
+    `head-on: contact f${headOn.first}-${headOn.last}, ` +
+      `bursts@${headOn.burstFrames.join(",") || "-"}, arrival ${headOn.maxSpeed.toFixed(2)} m/s ` +
+      `(vn ${headOn.arrivalVn.toFixed(2)}, vt ${headOn.arrivalVt.toFixed(2)})`,
+  );
+  check("head-on: a throw into hook-proof steel reports its arrival", headOn.first > 0);
+  check("head-on: the arrival carries the throw's own speed", headOn.maxSpeed > 8);
+  check("head-on: it throws exactly one burst", headOn.burstFrames.length === 1);
+  check("head-on: the burst is on the arrival frame", headOn.burstFrames[0] === headOn.first);
+
+  // (b) A shallow throw skimming a hook-proof floor: the case that arrives
+  // almost entirely TANGENTIALLY, so a burst gated on the normal component
+  // alone scores it as no arrival at all and the whole shower is drag.
+  const graze = throwAt(scene(true), new Vec2(1, 0.08), 90);
+  details.push(
+    `graze: contact f${graze.first}-${graze.last} (${graze.perFrame.length} frames, ` +
+      `${graze.gaps} silent), bursts@${graze.burstFrames.join(",") || "-"}, ` +
+      `arrival vn ${graze.arrivalVn.toFixed(2)}, vt ${graze.arrivalVt.toFixed(2)}`,
+  );
+  check("graze: a skimming throw reports a touch", graze.first > 0);
+  // Without this the clause stops testing what it claims the moment the arena
+  // shifts: a throw that arrives steeply is the head-on case again, and would
+  // pass the burst clause on the normal component alone.
+  check(
+    `graze: it really is oblique - vn ${graze.arrivalVn.toFixed(2)} against vt ` +
+      `${graze.arrivalVt.toFixed(2)}`,
+    graze.arrivalVn < 1 && graze.arrivalVt > 8,
+  );
+  check("graze: it earns a burst", graze.burstFrames.length >= 1);
+  check("graze: and only one, on the arrival frame", graze.burstFrames.length === 1);
+
+  // (c) Both runs, on the two clauses that are about the REPORTING rather than
+  // about any one touch: never two reports of one touch, and never a silent
+  // frame in the middle of a contact. The second is what the render side's
+  // arrival test stands on - `CONTACT_GAP_FRAMES` bridges two silent frames,
+  // and a third is read as the hook having left and come back.
+  for (const [name, run] of [
+    ["head-on", headOn],
+    ["graze", graze],
+  ] as const) {
+    const most = Math.max(0, ...run.perFrame);
+    check(`${name}: one event per frame, never two (worst ${most})`, most <= 1);
+    check(`${name}: no silent frame inside the contact (${run.gaps})`, run.gaps === 0);
+  }
+
+  // (d) A sustained DRAG grinds at the full per-metre rate where a brief strike
+  // gets a fraction of it. Both are the same law - chips per metre of face
+  // ground - and the rate alone cannot tell them apart, since a glancing strike
+  // covers 0.4 m in the three frames it lasts. `SLIDE_RAMP_STEPS` is what
+  // separates them, and this is the end of it no strike can show.
+  //
+  // The rig is BUILT rather than replayed because nothing in the recorded
+  // corpus reaches the far side of the ramp: every hook-proof contact in it is
+  // a 2 to 7 frame strike. The ball's speed is held rather than driven, a drag
+  // being about the contact lasting rather than about how the ball got moving.
+  {
+    const level = new BallLevel(
+      scaleLevelData(
+        {
+          player: { x: 0, y: 0, radius: 8 },
+          bodies: [
+            {
+              kind: "static",
+              x: 0,
+              y: 60,
+              rot: 0,
+              shape: { kind: "rect", w: 6000, h: 40 },
+              friction: 1,
+            },
+            {
+              kind: "static",
+              x: 0,
+              y: 20,
+              rot: 0,
+              shape: { kind: "rect", w: 6000, h: 6 },
+              impermeable: true,
+              friction: 1,
+            },
+          ],
+        },
+        1,
+      ),
+    );
+    const sparks = new SparkSystem();
+    let contact = 0;
+    let throughRamp = 0;
+    let lateDist = 0;
+    let lateParticles = 0;
+    let prev = emptyFrameInput();
+    for (let f = 1; f <= 240; f++) {
+      level.ball.linearVelocity = new Vec2(9, level.ball.linearVelocity.y);
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(f > 10, prev.fire),
+        mouseWorldPosition: level.ball.globalPosition.add(new Vec2(0.2, 1)),
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+      const events = level.sparkEvents;
+      const before = sparks.slideParticles;
+      sparks.ingest(events);
+      sparks.advance(DT);
+      if (events.length === 0) continue;
+      contact++;
+      if (contact <= SLIDE_RAMP_STEPS) {
+        throughRamp = sparks.slideParticles;
+        continue;
+      }
+      const e = events[0]!;
+      const dot = e.vel.dot(e.normal);
+      lateDist += e.vel.sub(e.normal.mul(dot)).length() * DT;
+      lateParticles += sparks.slideParticles - before;
+    }
+    const perMetre = lateDist > 0 ? lateParticles / lateDist : 0;
+    details.push(
+      `drag: ${contact} contact frames, ${throughRamp} particles through the ramp, ` +
+        `then ${lateParticles} over ${lateDist.toFixed(1)} m = ${perMetre.toFixed(1)}/m`,
+    );
+    check(`drag: the contact really is sustained (${contact} frames)`, contact > 100);
+    // Past the ramp a drag is entitled to the whole per-metre rate (30). A
+    // bound rather than an equality, since the fractional carry rounds.
+    check(`drag: past the ramp it grinds at the full rate (${perMetre.toFixed(1)}/m)`, perMetre > 28);
+    check(`drag: over a real distance, not a few frames (${lateDist.toFixed(1)} m)`, lateDist > 10);
+    // The other end of the same claim, and the one a strike is judged by: the
+    // ramp itself is quiet, or a glancing strike is charged a grinder's worth
+    // of stream on top of the burst it has already thrown.
+    // The other end of the same claim, and the one that says the ramp is doing
+    // anything at all: the GRAZE throw above is a three-frame strike over the
+    // same kind of face, and it must be charged a small fraction of what this
+    // drag is. Stated as the ratio between the two rather than as a bar on
+    // either, since either alone is a tuning value and the SEPARATION is the
+    // behaviour. Without the ramp both run at the full rate and it is 1.
+    const strikePerMetre = graze.slidDistance > 0 ? graze.slideParticles / graze.slidDistance : 0;
+    details.push(
+      `strike vs drag: ${graze.slideParticles} particles over ${graze.slidDistance.toFixed(2)} m ` +
+        `= ${strikePerMetre.toFixed(1)}/m, against the drag's ${perMetre.toFixed(1)}/m`,
+    );
+    check(
+      `strike vs drag: a strike is charged a fraction of a grind ` +
+        `(${strikePerMetre.toFixed(1)}/m against ${perMetre.toFixed(1)}/m)`,
+      strikePerMetre > 0 && perMetre > 3 * strikePerMetre,
+    );
+    check(
+      `drag: the ramp itself is quiet (${throughRamp} over ${SLIDE_RAMP_STEPS} frames)`,
+      throughRamp < 8,
+    );
+  }
+
+  // (e) Which way a slide throws them. A spark is a chip carried off by
+  // whatever sheared it, so it leaves ALONG the slide at a fraction of its
+  // speed - the grinder's fan follows the rim, and a car scraping the road
+  // throws sparks that are moving forwards even as they fall behind the car.
+  // Thrown against the travel they stream out of the hook's LEADING edge, which
+  // is the one thing about the look that a number can be put on: every other
+  // question about it is for eyes and a screenshot.
+  for (const [face, n, t] of [
+    ["floor", new Vec2(0, -1), new Vec2(1, 0)],
+    ["ceiling", new Vec2(0, 1), new Vec2(-1, 0)],
+    ["wall", new Vec2(-1, 0), new Vec2(0, 1)],
+    ["45deg", new Vec2(-1, -1).normalized(), new Vec2(1, -1).normalized()],
+  ] as const) {
+    const dir = slideSparkDirection(n.x, n.y, t.x, t.y, 1);
+    const along = dir.x * t.x + dir.y * t.y;
+    const out = dir.x * n.x + dir.y * n.y;
+    details.push(`${face}: along ${along.toFixed(2)}, out of the face ${out.toFixed(2)}`);
+    check(`${face}: thrown along the slide, not against it`, along > 0.9);
+    check(`${face}: and clear of the face, not into it`, out > 0 && out < 0.5);
+  }
+
+  return ok(
+    "hook-sparks — one report per touch, at the arrival's own velocity, and a drag that grinds",
+    passed,
+    details,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // impermeable-shape — hook-proof is a property of the SURFACE, and both hooks
 // ask the piece they reached.
 //
@@ -2782,6 +3115,7 @@ export function runContactCases(): ContactResult[] {
   ContactAudit.enabled = false;
   results.push(caseMaterials());
   results.push(caseImpermeableShape());
+  results.push(caseHookSparks());
   results.push(caseHookSeam());
   results.push(casePassableBody());
   results.push(caseDecorGroup());

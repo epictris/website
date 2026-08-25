@@ -37,7 +37,9 @@ export class BallHook extends RigidBody2D {
 
   private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
   private chainOutCallbacks: Array<() => void> = [];
-  private bounceCallbacks: Array<(point: Vec2, normal: Vec2, vel: Vec2) => void> = [];
+  private bounceCallbacks: Array<
+    (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void
+  > = [];
   // While the chain is still paying out, its owner budgets the flight: the
   // wrapped path's last fixed point, how much straight span is left before the
   // path reaches the chain's absolute length (`allowance`), and how much an
@@ -106,7 +108,16 @@ export class BallHook extends RigidBody2D {
   // end there - so one callback covers all of them, including the repeated
   // small probe bounces a dangling tip makes while pressed against a wall. Those
   // are the caller's problem to threshold on, not this one's to filter.
-  registerBounceCallback(onBounce: (point: Vec2, normal: Vec2, vel: Vec2) => void): void {
+  //
+  // `fromFlight` says the hook was in FREE FLIGHT when it struck: this touch is
+  // the throw ending rather than a deflection off a surface it was already
+  // riding. It is not a threshold and says nothing about how hard the hit was -
+  // it is there so a caller holding several reports of one touch knows which of
+  // them is the ARRIVAL, and therefore which velocity is the one the hook came
+  // in at (see `BallLevel.reportSpark`).
+  registerBounceCallback(
+    onBounce: (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void,
+  ): void {
     this.bounceCallbacks.push(onBounce);
   }
 
@@ -493,13 +504,18 @@ export class BallHook extends RigidBody2D {
   // scaling smoothly. The reflection about the normal happens first, so the
   // surviving speed points away from the wall.
   private bounce(normal: Vec2, seatPos: Vec2): void {
+    // Read before `endFlight` clears it: this is the one place that can tell a
+    // throw ending on a wall from a deflection off a surface the hook was
+    // already riding, and the two want opposite answers about which report of
+    // the touch to keep (see `registerBounceCallback`).
+    const fromFlight = this.flying;
     this.endFlight();
     const speed = this.linearVelocity.length();
     const vn = this.linearVelocity.dot(normal);
     if (vn < 0 && speed > BallHook.BOUNCE_MIN_SPEED) {
       // Before the reflection: the velocity the hook arrived with is what the
       // hit looked like (see registerBounceCallback).
-      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity);
+      for (const cb of this.bounceCallbacks) cb(seatPos, normal, this.linearVelocity, fromFlight);
       const glance = Math.abs(normal.cross(this.linearVelocity.mul(1 / speed)));
       const reflected = this.linearVelocity.sub(normal.mul((1 + this.restitution) * vn));
       this.linearVelocity = reflected.mul(glance);

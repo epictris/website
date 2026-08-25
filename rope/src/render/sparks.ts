@@ -9,12 +9,14 @@
 // Two behaviours, both driven from the one event shape by splitting the hook's
 // velocity at the surface:
 //
-// - an IMPACT burst, sized by the speed the hook came IN at (the normal
-//   component), fanned about the reflection;
+// - an IMPACT burst, fired once when the hook ARRIVES and sized by the speed it
+//   arrived at, fanned about the reflection;
 // - a SLIDE stream, sized by how fast the hook is travelling ALONG the face
-//   (the tangential component), trailing behind the contact the way a grinder
-//   throws them. A hook resting against a surface has no tangential speed and
-//   therefore throws nothing, which is what `SLIDE_MIN_SPEED` implements.
+//   (the tangential component) and thrown the way a grinder throws them: ALONG
+//   the slide at a fraction of its speed, so the shower falls behind the hook
+//   without any spark in it moving backwards (see `slideSparkDirection`). A
+//   hook resting against a surface has no tangential speed and therefore throws
+//   nothing, which is what `SLIDE_MIN_SPEED` implements.
 //
 // Every threshold lives here rather than in the sim, so tuning has one home.
 // Lengths and speeds are metres and m/s per the units rule; a fixed on-screen
@@ -23,24 +25,48 @@
 import { PX } from "../engine/units";
 import type { SparkEvent } from "../level/sparkEvents";
 
-// Below this approach speed a touch is a settle rather than a hit. The hook's
+// Below this ARRIVAL speed a touch is a settle rather than a hit. The hook's
 // own `probeContact` bounces a dangling tip off a wall repeatedly at near-zero
 // speed, and those are the events this exists to throw away.
+//
+// Asked of the whole velocity rather than of its normal component, because a
+// strike is a strike however oblique it was. A hook thrown flat down a floor
+// arrives almost entirely tangentially - `session-117f` f74 is 11.55 m/s along
+// the face against 0.04 m/s into it - and a threshold on the normal component
+// scored that as no arrival at all, so the one burst a first contact is owed
+// never fired and the whole shower was drag. The settle case this rejects is
+// slow in EVERY direction, so it is rejected just as firmly by the speed.
 const IMPACT_MIN_SPEED = 1.0;
-// Both scaled to 30% of what they first were (1.5 and 20), by eye: a full-speed
-// throw into a hook-proof face threw a fistful of sparks that read as an
-// explosion rather than as steel glancing off steel. Rate and cap move
-// together, or the cap alone would decide every hit above ~13 m/s and the
-// burst would stop growing with the throw.
-const IMPACT_SPARKS_PER_MPS = 0.45;
-const IMPACT_BURST_CAP = 6;
+// Both scaled to 21% of what they first were (1.5 and 20), by eye, in two
+// passes: to 30% because a full-speed throw into a hook-proof face threw a
+// fistful of sparks that read as an explosion rather than as steel glancing off
+// steel, and to 70% of that again once the burst stopped being the whole of
+// what a glancing hit produced (see IMPACT_MIN_SPEED - before it, an oblique
+// arrival earned no burst at all and the burst was carrying every strike the
+// player saw).
+//
+// Rate and cap move TOGETHER, or the cap alone would decide every hit above
+// ~13 m/s and the burst would stop growing with the throw. The cap is an
+// integer because the count is one, and 4 is what keeps the crossover where it
+// was: the pair binds at 12.7 m/s against 13.3 before.
+//
+// The granularity is coarse at these counts and that is the honest cost of a
+// small burst - a 12 m/s throw (the hook's own speed) goes from 5 particles to
+// 4, which is 80% rather than 70%, while a hit at the cap goes from 6 to 4.
+const IMPACT_SPARKS_PER_MPS = 0.315;
+const IMPACT_BURST_CAP = 4;
 // Half-angle of the fan about the reflected direction.
 const IMPACT_CONE = 0.9;
 // Frames of NO reported contact after which the next touch is an arrival rather
 // than a continuation of one. A burst is for an arrival only (see `arriving` in
-// `ingest`); two is enough to bridge the single-frame gaps a speculative contact
-// leaves while staying well under the flight time of any skip worth seeing as
-// two strikes - 33 ms, in which a 10 m/s hook covers a third of a metre.
+// `ingest`).
+//
+// The sim reports a continuous touch on every frame of it now (see
+// `BallLevel.reportSpark` and the note on the impulse filter in
+// `collectContactSparks`), so this no longer has a ragged supply to bridge and
+// is margin rather than the mechanism. Two frames stays well under the flight
+// time of any skip worth seeing as two strikes - 33 ms, in which a 10 m/s hook
+// covers a third of a metre.
 const CONTACT_GAP_FRAMES = 2;
 // A burst particle's launch speed, as a fraction of the approach speed: a
 // uniform draw in `[MIN, MIN + SPREAD]`, plus a share of the tangential speed
@@ -60,12 +86,77 @@ const IMPACT_TTL_SCALE = 0.5;
 // Below this along-surface speed the hook is not sliding, it is sitting there:
 // a seated tip's solver jitter stays under it and a real drag is well over.
 const SLIDE_MIN_SPEED = 0.3;
+// Chips per metre of face ground, once the contact has settled into a grind.
+// What a brief STRIKE gets is a fraction of it, ramped in - see
+// SLIDE_RAMP_STEPS, which is what separates the two.
 const SLIDE_SPARKS_PER_METRE = 30;
-// Half-angle of the shallow scatter about the trailing direction.
+// Frames of unbroken contact over which the stream fades in from nothing to the
+// full rate above. It is what makes a STRIKE a burst and a DRAG a stream, and
+// the two need separating because the rate is per METRE and a glancing strike
+// covers a lot of them in the three frames it lasts: at a flat rate a 51 degree
+// hit threw four times the shower of a square one off the same throw, and
+// cutting the rate to close that gap took the long grind down with it. A ramp
+// closes it without touching either end - the burst is untouched, and a contact
+// that goes on sliding still reaches the full per-metre rate.
+//
+// The fade is not arbitrary: the burst is ALREADY the material thrown off at
+// the strike, so a stream at full rate over those same frames is the arrival
+// counted twice, and the span to fade over is therefore the burst's own life. A
+// burst particle lives `(SPARK_TTL_MIN + rand * (MAX - MIN)) * IMPACT_TTL_SCALE`
+// - 4.5 frames at the shortest, 9 on average, 13.5 at the longest - so the
+// stream comes up as the burst dies rather than alongside it.
+//
+// 8 within that range is where the pair in `session-156f` lands at the 1.5x it
+// was tuned to: 6 particles for the 51 degree strike against 4 for the 5 degree
+// one, on both of its angled throws. Longer ramps quiet the strike further and
+// the drag with it (10 gives 1.25x on the shorter throw, 14 gives 1.25x on
+// both); shorter ones give the strike its full grinder's rate back.
+export const SLIDE_RAMP_STEPS = 8;
+// Half-angle of the shallow scatter about the sliding direction.
 const SLIDE_CONE = 0.35;
-// How far off the surface the trailing cone is tilted, so a stream leaves the
-// face rather than grinding along inside it.
+// A slide particle's launch speed, as a fraction of the sliding speed: a
+// uniform draw in `[MIN, MIN + SPREAD]`. Both are fractions of a real velocity
+// rather than free constants, so the sum must stay under 1 (see the note where
+// they are spent).
+const SLIDE_SPEED_MIN = 0.2;
+const SLIDE_SPEED_SPREAD = 0.4;
+// How far off the surface the cone is tilted, so a stream leaves the face
+// rather than grinding along inside it.
 const SLIDE_TILT = 0.25;
+
+// Which way a slide throws its sparks: ALONG the hook's travel over the face,
+// tilted `SLIDE_TILT` out of it. `tx`/`ty` is the hook's velocity in the plane
+// of the surface and `vt` its length.
+//
+// Along and not against, which is the whole of what this exists to state. A
+// spark is a chip sheared off the steel and carried away by whatever sheared
+// it, so it leaves at a fraction of the sliding speed IN THE SLIDING
+// DIRECTION - which is why an angle grinder throws its fan the way the rim is
+// travelling at the contact, and why a car scraping the road throws sparks that
+// are moving forwards even though they fall behind the car. Nothing at the
+// contact can push a chip backwards; a spark that recedes is one the hook has
+// outrun, and the launch speeds below are under 1 for exactly that reason.
+//
+// It read as backwards for a while because "trailing the hook" and "moving
+// backwards" are the same picture in the HOOK's frame and opposite ones in the
+// world, and this is drawn in the world. Sparks streaming out of the leading
+// edge of a hook is what that looks like.
+//
+// Exported and pure because it is the one claim about the shower that a number
+// can be put on (`cli contacts` `hook-sparks`); everything else about how a
+// spark looks is a matter for eyes and a screenshot.
+export function slideSparkDirection(
+  nx: number,
+  ny: number,
+  tx: number,
+  ty: number,
+  vt: number,
+): { x: number; y: number } {
+  const ax = tx / vt + nx * SLIDE_TILT;
+  const ay = ty / vt + ny * SLIDE_TILT;
+  const len = Math.hypot(ax, ay);
+  return { x: ax / len, y: ay / len };
+}
 
 // The sim's fixed step, which is what one event's worth of sliding covers.
 const SIM_STEP = 1 / 60;
@@ -94,9 +185,7 @@ const SPARK_COOL = { r: 0xb3, g: 0x50, b: 0x2a };
 // life of at most 0.45 s is a step every 19 ms, well under a frame's worth.
 const SPARK_RAMP_STEPS = 24;
 
-// The pool's size, and with it the per-frame spawn ceiling: two coincident
-// events (a probe bounce and a solver contact reporting the same touch) are
-// absorbed here rather than by matching them up in the sim.
+// The pool's size, and with it the per-frame spawn ceiling.
 const MAX_SPARKS = 256;
 
 // A fixed seed, so a screenshot of a given bundle frame is the same picture
@@ -119,6 +208,19 @@ export class SparkSystem {
   // a strike is told from a slide (see `ingest`). Starts high so the first touch
   // of a level is an arrival.
   private quietSteps = Number.MAX_SAFE_INTEGER;
+  // Sim steps of UNBROKEN contact, counted from the arrival. It is what tells a
+  // strike from a grind, and the stream's rate is ramped in over the first
+  // `SLIDE_RAMP_STEPS` of it.
+  private contactSteps = 0;
+  // Impact bursts fired, and slide particles spawned, since the last `reset`.
+  // Nothing here reads either and the draw does not either: they exist so the
+  // shower is OBSERVABLE, which is what `cli contacts` `hook-sparks` counts.
+  // Sparks reach no digest and no invariant, so without them the difference
+  // between "a head-on hit throws a shower" and "it throws nothing at all", or
+  // between a drag that grinds and one that trickles, is a thing only a person
+  // looking at the game can see.
+  bursts = 0;
+  slideParticles = 0;
 
   // Turn one frame's sim events into particles. Called once per sim step, from
   // inside the catch-up loop, so a stall drops nothing.
@@ -152,7 +254,14 @@ export class SparkSystem {
     // that would spark); two hooks grinding different walls at once would have
     // the second one's arrival read as the first one's continuation.
     const arriving = this.quietSteps > CONTACT_GAP_FRAMES;
+    if (arriving) this.contactSteps = 0;
     this.quietSteps = events.length > 0 ? 0 : this.quietSteps + 1;
+    if (events.length > 0) this.contactSteps++;
+    // How far this contact has settled into a grind, 0 at the strike and 1 once
+    // it has been sliding for `SLIDE_RAMP_STEPS`. Computed once a step rather
+    // than per event: it is a property of the contact, and there is one event
+    // per hook per frame in any case.
+    const settled = Math.min(1, this.contactSteps / SLIDE_RAMP_STEPS);
     for (const e of events) {
       const nx = e.normal.x;
       const ny = e.normal.y;
@@ -166,7 +275,7 @@ export class SparkSystem {
       // A head-on hit is all burst, a drag all stream, and a glancing skip is
       // legitimately both.
       if (arriving) this.burst(e.point.x, e.point.y, nx, ny, vn, vt, tx, ty);
-      this.stream(e.point.x, e.point.y, nx, ny, vt, tx, ty);
+      this.stream(e.point.x, e.point.y, nx, ny, vt, tx, ty, settled);
     }
   }
 
@@ -222,7 +331,10 @@ export class SparkSystem {
     this.live = 0;
     this.slideCarry = 0;
     this.quietSteps = Number.MAX_SAFE_INTEGER;
+    this.contactSteps = 0;
     this.rngState = PRNG_SEED;
+    this.bursts = 0;
+    this.slideParticles = 0;
   }
 
   // A burst off a hit, fanned about the reflection of the incoming velocity and
@@ -237,12 +349,22 @@ export class SparkSystem {
     tx: number,
     ty: number,
   ): void {
-    if (vn < IMPACT_MIN_SPEED) return;
-    const count = Math.min(Math.round(vn * IMPACT_SPARKS_PER_MPS), IMPACT_BURST_CAP);
+    // The speed the hook arrived at, whatever direction it was pointed: `vn`
+    // and `vt` are the two legs of it (see IMPACT_MIN_SPEED).
+    const speed = Math.hypot(vn, vt);
+    if (speed < IMPACT_MIN_SPEED) return;
+    this.bursts++;
+    // Only the closing half of the velocity throws sparks OFF the face, and it
+    // is negative when the frame that first reported contact already has the
+    // hook turning away - a graze that has bounced. Clamped rather than
+    // rejected, so that graze still gets its burst, thrown along the surface by
+    // the tangent share below.
+    const vnOut = Math.max(0, vn);
+    const count = Math.min(Math.round(speed * IMPACT_SPARKS_PER_MPS), IMPACT_BURST_CAP);
     // The reflection: the tangential half survives, the normal half turns
     // around. Normalised, since only its direction is wanted here.
-    const rx = tx + nx * vn;
-    const ry = ty + ny * vn;
+    const rx = tx + nx * vnOut;
+    const ry = ty + ny * vnOut;
     const rlen = Math.hypot(rx, ry);
     const dirx = rlen > 1e-9 ? rx / rlen : nx;
     const diry = rlen > 1e-9 ? ry / rlen : ny;
@@ -258,13 +380,16 @@ export class SparkSystem {
       const into = fx * nx + fy * ny;
       const dx = into < 0 ? fx - 2 * nx * into : fx;
       const dy = into < 0 ? fy - 2 * ny * into : fy;
-      const speed =
-        (IMPACT_SPEED_MIN + this.rand() * IMPACT_SPEED_SPREAD) * vn + IMPACT_TANGENT_SHARE * vt;
-      this.spawn(px, py, nx, ny, dx * speed, dy * speed, IMPACT_TTL_SCALE);
+      const launch =
+        (IMPACT_SPEED_MIN + this.rand() * IMPACT_SPEED_SPREAD) * vnOut + IMPACT_TANGENT_SHARE * vt;
+      this.spawn(px, py, nx, ny, dx * launch, dy * launch, IMPACT_TTL_SCALE);
     }
   }
 
-  // A stream off a slide, trailing the motion and sized by the distance slid.
+  // A stream off a slide, thrown along the motion and sized by the distance slid
+  // - times how far the contact has settled into a grind (see SLIDE_RAMP_STEPS),
+  // which is what keeps a three-frame glancing strike from being charged a
+  // grinder's worth of it.
   private stream(
     px: number,
     py: number,
@@ -273,25 +398,29 @@ export class SparkSystem {
     vt: number,
     tx: number,
     ty: number,
+    settled: number,
   ): void {
     if (vt < SLIDE_MIN_SPEED) return;
-    const wanted = vt * SIM_STEP * SLIDE_SPARKS_PER_METRE + this.slideCarry;
+    const wanted = vt * SIM_STEP * SLIDE_SPARKS_PER_METRE * settled + this.slideCarry;
     const count = Math.floor(wanted);
     this.slideCarry = wanted - count;
     if (count <= 0) return;
-    // Behind the contact, tilted a little off the face.
-    const backx = -tx / vt + nx * SLIDE_TILT;
-    const backy = -ty / vt + ny * SLIDE_TILT;
-    const blen = Math.hypot(backx, backy);
-    const dirx = backx / blen;
-    const diry = backy / blen;
+    // Along the slide, tilted a little off the face (see slideSparkDirection).
+    const along = slideSparkDirection(nx, ny, tx, ty, vt);
+    const dirx = along.x;
+    const diry = along.y;
     for (let i = 0; i < count; i++) {
       const angle = (this.rand() * 2 - 1) * SLIDE_CONE;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
       const dx = dirx * cos - diry * sin;
       const dy = dirx * sin + diry * cos;
-      const speed = (0.2 + this.rand() * 0.4) * vt;
+      // How much of the sliding speed the chip keeps. Under 1 by construction:
+      // the contact is what threw it, so it cannot leave faster than the thing
+      // that threw it, and the shortfall is what makes the shower fall behind
+      // the hook while every spark in it still travels forwards.
+      const speed = (SLIDE_SPEED_MIN + this.rand() * SLIDE_SPEED_SPREAD) * vt;
+      this.slideParticles++;
       this.spawn(px, py, nx, ny, dx * speed, dy * speed, 1);
     }
   }

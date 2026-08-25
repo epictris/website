@@ -99,6 +99,11 @@ export class BallLevel {
   // top of every `physicsProcess`, so it holds one frame's worth and never
   // accumulates through a headless replay. The sim writes it and never reads it.
   sparkEvents: SparkEvent[] = [];
+  // Where in `sparkEvents` each hook's event for THIS frame sits, and whether
+  // that event is the arrival and therefore final, so a second report of the
+  // same touch resolves against the first rather than doubling it (see
+  // `reportSpark`). Cleared with `sparkEvents`.
+  private sparkEventIndex = new Map<BallHook, { at: number; arrival: boolean }>();
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -205,12 +210,63 @@ export class BallLevel {
     // `BallPlayer`, because the sim-to-visual boundary is the level's to hold
     // and the controller has no business knowing there is a renderer.
     if (body instanceof BallHook) {
-      body.registerBounceCallback((point, normal, vel) =>
-        this.sparkEvents.push({ point, normal, vel }),
+      body.registerBounceCallback((point, normal, vel, fromFlight) =>
+        this.reportSpark(body, { point, normal, vel }, fromFlight),
       );
     }
     this.world.add(body);
     this.bodies.push(body);
+  }
+
+  // One spark event per hook per frame: the ARRIVAL if one was reported, and
+  // otherwise the LATEST report.
+  //
+  // A single touch is reported by three places that do not know about each
+  // other: the flight sweep's hook-proof branch, `probeContact`'s deflection,
+  // and the solver's contact list. Two of them fire on the same frame for the
+  // same contact, and they do not agree - `physicsStep` runs BEFORE
+  // `World.integrate`, so a bounce is taken at the moment of contact while
+  // `collectContactSparks` runs after the solve and carries what the frame left
+  // behind. Which of those is wanted depends on what the touch WAS, and the two
+  // cases want opposite answers:
+  //
+  // A CONTINUATION - the hook already riding a face - wants the later report.
+  // The bounce there is one frame stale, a verbatim copy of the previous
+  // frame's contact 0.19 m back along the floor (`session-117f` f74/f75, at
+  // 11.5 m/s):
+  //
+  //   f74 hook=(6.135,9.233)  solver@(6.134,9.255) v=(-11.53,-0.64)
+  //   f75 hook=(5.943,9.221)  bounce@(6.135,9.230) v=(-11.53,-0.64)
+  //                           solver@(5.942,9.244) v=(-11.30,-0.53)
+  //
+  // Kept as two events that doubles the slide's spark rate on the frames both
+  // fire and spawns the two halves a fifth of a metre apart, which is what made
+  // a steady drag read as a series of separate strikes; kept as the bounce it
+  // draws every other frame's sparks a frame behind the hook.
+  //
+  // An ARRIVAL - the throw ending on a wall - wants the bounce, and taking the
+  // later report there is exactly wrong. The solver's contact on that frame is
+  // the AFTERMATH: `bounce()` has already reflected the hook and scaled what
+  // survives by how glancing the hit was, so a shot straight into a face is
+  // killed dead and the solver reports the touch at -0.02 m/s of separation
+  // where the hook arrived at 11.99. Read as the whole of the strike that is a
+  // head-on hit into hook-proof steel throwing NO SPARKS AT ALL.
+  //
+  // `fromFlight` is what separates them, and it is the hook's own state rather
+  // than a judgement about the velocity - the hook was in free flight, and now
+  // it is not. Once an arrival is recorded for a hook this frame it is final:
+  // nothing later in the frame can be a better account of a touch that has
+  // already happened, and `bounce()` ends the flight, so there can only be one.
+  private reportSpark(hook: BallHook, event: SparkEvent, arrival = false): void {
+    const held = this.sparkEventIndex.get(hook);
+    if (held === undefined) {
+      this.sparkEventIndex.set(hook, { at: this.sparkEvents.length, arrival });
+      this.sparkEvents.push(event);
+      return;
+    }
+    if (held.arrival) return;
+    this.sparkEvents[held.at] = event;
+    held.arrival = arrival;
   }
 
   // Camera target for a render frame: the ball's interpolated position, so the
@@ -223,6 +279,7 @@ export class BallLevel {
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     this.sparkEvents.length = 0;
+    this.sparkEventIndex.clear();
     Debug.clear();
     PhysTrace.frame = this.frame;
     PhaseTrace.begin(this.frame, this.world);
@@ -723,11 +780,22 @@ export class BallLevel {
   // tuning has one home.
   private collectContactSparks(): void {
     for (const c of this.world.frameContacts) {
-      // `normalImpulse > 0` is the same "it really pushed back" filter
-      // `attachToBlockingContact` uses: a speculative contact that asked for
-      // nothing is a hook coasting millimetres clear, and a hook that never
-      // touched the wall shakes no sparks off it.
-      if (c.normalImpulse <= 0) continue;
+      // Deliberately NOT filtered on `normalImpulse > 0`, the "it really pushed
+      // back" test `attachToBlockingContact` uses. That is the right question
+      // for an attach and the wrong one for a drag: a hook riding along a face
+      // it is neither sinking into nor bouncing off carries no normal load at
+      // all, so the solver asks for nothing and the filter threw the middle of
+      // every slide away. `session-117f` f78-f80 is three consecutive frames of
+      // a 8 m/s drag at `normalImpulse = 0.0000`, which is where the stream
+      // went silent - and a silence long enough to pass `CONTACT_GAP_FRAMES` is
+      // what lets the render side read the far side of it as a fresh arrival
+      // and fire a second impact burst mid-slide.
+      //
+      // What is left is exactly the narrowphase's own answer: a pair inside
+      // `CONTACT_SLOP` of each other. On a 2 cm hook that band is 1 cm, and the
+      // slide frames above sit 2-3 mm out - touching by any reading. How fast
+      // the two are rubbing is then the render side's question, and
+      // `SLIDE_MIN_SPEED` is where it is asked.
       // Either side may be the hook. Hook-proof is a per-SHAPE flag, so the
       // surface may be a rigid body (see "Hook-proof surfaces"), and which body
       // leads a constraint is an id ordering - reading `a` alone would answer
@@ -744,7 +812,7 @@ export class BallLevel {
       // Relative to the surface, since sparks are struck by the two rubbing
       // together: a hook riding a moving platform is not sliding on it.
       const vel = hook.linearVelocity.sub(other.velocityAtPoint(c.point));
-      this.sparkEvents.push({ point: c.point, normal, vel });
+      this.reportSpark(hook, { point: c.point, normal, vel });
     }
   }
 }

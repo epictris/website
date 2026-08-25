@@ -2653,21 +2653,54 @@ No sim constant, body state or digest field changes, and the whole committed bun
 `BallLevel.sparkEvents` and `Level.sparkEvents` are **cleared at the top of every `physicsProcess`** rather than when a renderer drains them.
 Headless replay (`cli replay`, `cli bundles`, playtests) steps a level with nothing attached, and an append-only list would grow for the length of a bundle; a frame's events live exactly one frame, and a tool that never looks loses nothing.
 
+**One event per hook per frame: the ARRIVAL if one was reported, and otherwise the latest report** (`BallLevel.reportSpark`).
+The sources below do not know about each other and two of them fire on the same frame for the same touch, disagreeing about when: `physicsStep` runs before `World.integrate`, so a bounce is taken at the moment of contact while `collectContactSparks` runs after the solve and carries what the frame left behind.
+Which of those is wanted depends on what the touch was, and the two cases want opposite answers.
+
+A **continuation** - the hook already riding a face - wants the later report, the bounce there being one frame stale.
+In `session-117f` f75 it is a verbatim copy of f74's contact, 0.19 m back along the floor, one frame of travel at 11.5 m/s.
+Kept as two events that doubled the slide's spark rate on the frames both fired and spawned the two halves a fifth of a metre apart, which is what made a steady drag read as a series of separate strikes; kept as the bounce it draws every other frame's sparks a frame behind the hook.
+
+An **arrival** - the throw ending on a wall - wants the bounce, and taking the later report there is exactly wrong.
+The solver's contact on that frame is the aftermath: `bounce()` has already reflected the hook and scaled what survives by how glancing the hit was, so a shot straight into a face is killed dead and the solver reports the touch at 0.02 m/s of separation where the hook arrived at 11.99.
+Read as the whole of the strike, that is a head-on hit into hook-proof steel throwing **no sparks at all**.
+
+`BallHook.registerBounceCallback`'s `fromFlight` is what separates them, and it is the hook's own state rather than a judgement about the velocity - the hook was in free flight, and now it is not.
+Once an arrival is recorded for a hook this frame it is final: nothing later in the frame can be a better account of a touch that has already happened, and `bounce()` ends the flight, so there can only be one.
+It is deliberately NOT a field on `SparkEvent`, for the reason given below - it settles which of several reports of one touch is accurate, inside the sim, and the render side still receives one event with no field naming the kind of touch.
+
 Three sources feed it, and each is the one funnel for its case:
 
 - `BallHook.bounce` fires `registerBounceCallback` with the contact point, the surface normal and the **pre-reflection** velocity, behind the same `vn < 0 && speed > BOUNCE_MIN_SPEED` guard the reflection itself sits behind.
   Every impermeable contact the ball's hook has ends there - the flight sweep's hook-proof branch and `probeContact`'s deflection both - so one callback covers all of them.
   That includes the repeated bounces a dangling tip makes while pressed against a wall, which the probe deflects on **every frame**, and those are not a nuisance to be filtered: a tip dragged along hook-proof steel is reported almost entirely through this path, with a normal component of 0.03 m/s and a tangential one running to 3.6, so it is where the SLIDE comes from as much as the bounce.
   The solver's own contacts, below, catch it on a handful of frames and no more.
-- The **solver's own contacts**, scanned in `BallLevel.collectSlideSparks` after `integrate`.
+- The **solver's own contacts**, scanned in `BallLevel.collectContactSparks` after `integrate`.
   A hook the solver is holding against a face may never re-enter `bounce()`, since the contact does the holding, and `World.frameContacts` is exactly the "what did this body touch this frame" question (`attachToBlockingContact` reads it for the same reason).
-  `normalImpulse > 0` is the same "it really pushed back" filter, so a hook coasting millimetres clear sheds nothing.
+  It is the one source that is CONTINUOUS through a slide, which is why it is the one that gets the last word.
+  It is deliberately **not** filtered on `normalImpulse > 0`, the "it really pushed back" test `attachToBlockingContact` uses: that is the right question for an attach and the wrong one for a drag, since a hook riding along a face it is neither sinking into nor bouncing off carries no normal load at all, so the solver asks for nothing.
+  `session-117f` f78-f80 is three consecutive frames of an 8 m/s drag at `normalImpulse = 0.0000`, which is where the stream went silent - and a silence long enough to pass `CONTACT_GAP_FRAMES` is what lets the render side read the far side of it as a fresh arrival and fire a second impact burst mid-slide.
+  What is left is exactly the narrowphase's own answer, a pair inside `CONTACT_SLOP` of each other; on a 2 cm hook that band is 1 cm and those slide frames sit 2-3 mm out.
+  How fast the two are rubbing is then the render side's question, and `SLIDE_MIN_SPEED` is where it is asked.
   Either side of the pair may be the hook and hook-proof is a per-SHAPE flag, so the surface may be a rigid body: reading `a` alone would answer for half the pairs, and the velocity is taken **relative to the surface** so a hook riding a moving platform is not sliding on it.
 - `Hook.onDestroyed` for the grapple hook, which is destroyed rather than deflected by a hook-proof surface, so it gets the burst and never the stream.
   Its `velocity` is a per-frame displacement and is divided by the step on the way out, since every threshold downstream is in m/s.
 
+**A slide throws its sparks ALONG the slide, not against it** (`slideSparkDirection`).
+A spark is a chip sheared off the steel and carried away by whatever sheared it, so it leaves at a fraction of the sliding speed in the sliding direction: an angle grinder throws its fan the way the rim is travelling at the contact, and a car scraping the road throws sparks that are moving forwards even though they fall behind the car.
+Nothing at the contact can push a chip backwards, which is why the launch fractions are under 1 - the shortfall is the whole of why the shower falls behind the hook.
+It was written backwards first, because "trailing the hook" and "moving backwards" are the same picture in the HOOK's frame and opposite ones in the world, and this is drawn in the world; what that looks like is sparks streaming out of the hook's leading edge.
+`SLIDE_TILT` then lifts the cone off the face so the stream leaves it rather than grinding along inside it.
+
 **Every threshold is on the render side**, so tuning has one home: the sim reports contacts and pre-judges nothing.
-`SparkSystem` splits the event velocity at the surface - the normal component sizes the burst, the tangential one the stream - and `SLIDE_MIN_SPEED` is the constant that implements "not while it is stationary".
+`SparkSystem` splits the event velocity at the surface - the normal component aims the burst, the tangential one sizes the stream - and `SLIDE_MIN_SPEED` is the constant that implements "not while it is stationary".
+
+**The burst is sized and gated by the ARRIVAL SPEED, not by its normal component.**
+A strike is a strike however oblique it was, and a hook thrown flat down a floor arrives almost entirely tangentially: `session-117f` f74 is 11.55 m/s along the face against 0.04 m/s into it.
+Measured on the normal component alone that scored as no arrival at all, so the one burst a first contact is owed never fired and the whole shower was drag - which is the other half of why a slide read as repeated impacts, the drag particles being 3-4x faster and twice as long-lived as a burst's.
+The settle case `IMPACT_MIN_SPEED` exists to reject is slow in EVERY direction, so it is rejected just as firmly by the speed.
+The closing half is clamped at zero where it is spent (`vnOut`), since a graze whose first reported contact already has the hook turning away would otherwise throw its sparks backwards into the face.
+Across the corpus this adds eight bursts to `session-1085f`, every one of them an oblique throw that previously arrived in silence, and no two bursts in the run are closer than 27 frames apart.
 
 **A burst is for an ARRIVAL**, and only the burst is: the stream runs on every frame the hook is moving along a face.
 Once a hook is down and sliding, further normal components are the WALL's shape rather than a new strike, and a faceted hook-proof polygon supplies them constantly - crossing the seam between two facets turns the normal under the hook, so a velocity that was 0.14 m/s into the old facet is 2.78 m/s into the new one with the hook having neither gained speed nor left the surface.
@@ -2682,7 +2715,7 @@ A head-on hit is all burst, a drag all stream, and a glancing skip is legitimate
 That is the design rather than a simplification, and `SparkEvent` therefore carries **no field naming the kind of touch** - only the point, the normal and the velocity.
 It carried one first, and the drag case is what that cost: reading a bounce as "an impact, therefore a burst" threw away the tangential half of the only events a dragged tip produces, so the tip ground along the steel in silence (`session-152f`, f123-152, tangential speed climbing 0.44 to 3.64 m/s with not one spark).
 A field whose only correct use is "do not branch on me" is a field somebody eventually branches on.
-The pool is a fixed 256 with struct-of-arrays `Float32Array`s and swap-remove, so there is no per-frame allocation and the cap doubles as the ceiling that absorbs a probe bounce and a solver contact reporting the same touch as two events.
+The pool is a fixed 256 with struct-of-arrays `Float32Array`s and swap-remove, so there is no per-frame allocation.
 The colour ramp is baked into a lookup for the same reason: 256 formatted `rgba(...)` strings a frame would otherwise be the only thing the draw allocates.
 
 The PRNG is a **seeded** mulberry32 reset by `reset()`, and `advance` takes its `dt` as a parameter, because `shot.html` and `cli shot` replay a bundle and screenshot frames.
@@ -2698,12 +2731,33 @@ Worth knowing before judging a screenshot: the sparks are drawn with `globalComp
 A 2D grab is evidence that they are in the right place; the 3D one is evidence of the look.
 
 The burst is deliberately the quieter of the two, and its three knobs are not interchangeable.
+It is at 21% of the size it was first written at, in two passes by eye: to 30% because a full-speed throw read as an explosion rather than as steel glancing off steel, and to 70% of that again once it stopped being the whole of what a glancing hit produced - before the arrival-speed gate an oblique throw earned no burst at all, so the burst was carrying every strike the player saw.
+At the hook's own 12 m/s that is 4 particles where it was 5, and a hit at the cap 4 where it was 6; the count is an integer, so the granularity at these sizes is coarse and a request for 70% lands between 67% and 80% depending on the speed.
 `IMPACT_SPARKS_PER_MPS` and `IMPACT_BURST_CAP` move **together** (a cap alone would decide every hit above a certain speed and the burst would stop growing with the throw); the speed fractions set how hard the sparks are thrown and, since a streak is drawn from the velocity, how long each drawn streak is; and `IMPACT_TTL_SCALE` sets how far they get before they wink out.
 Reach is speed times lifetime, so all speed reads as a puff and all lifetime as sparks hanging in the air - they are tuned by eye as a pair.
 
-Nothing here is gated by a test, and the two cases to check by hand after touching a threshold are the ones that pin it from both sides.
+**A STRIKE is a burst and a DRAG is a stream, and `SLIDE_RAMP_STEPS` is what separates them.**
+The stream's rate is per METRE of face ground, which is the right law and cannot on its own tell a three-frame glancing strike from a second of grinding: a strike at 51 degrees covers 0.4 m in those three frames, so at the full rate it threw four times the shower of a square hit off the same throw (`session-156f`, whose two throws are the pair this was tuned against).
+Cutting the rate closes that gap and takes the long grind down with it - at 5 per metre the pair reads 1.5x and a sustained drag is a trickle - so the fix is a ramp rather than a rate: the stream fades in over the first `SLIDE_RAMP_STEPS` frames of unbroken contact, and both ends are left alone.
+The burst is untouched, and a contact that goes on sliding still reaches the full 30 per metre.
+
+The span to fade over is the BURST's own life, because the burst is already the material thrown off at the strike and a stream at full rate over those same frames is the arrival counted twice.
+A burst particle lives 4.5 frames at the shortest, 9 on average and 13.5 at the longest, and 8 within that range is where `session-156f` lands at the 1.5x it was tuned to: 6 particles for the 51 degree strike against 4 for the 5 degree one, on both of its angled throws.
+Longer ramps quiet the strike further and the drag with it (10 gives 1.25x on the shorter of the two, 14 gives 1.25x on both); shorter ones hand the strike its full grinder's rate back.
+
+Measured on a dangling tip dragged 18 m along hook-proof steel, a sustained drag runs at **30.0 particles per metre** past the ramp - the full rate, to a decimal place - with 40 to 60 alive on screen at any moment.
+Nothing in the recorded corpus is that: every hook-proof contact in it is a 2 to 7 frame strike, which is why the drag case has to be built rather than replayed (`cli contacts` `hook-sparks` builds it).
+
+Most of it is gated, by `cli contacts` **`hook-sparks`**, over three rigs - a head-on throw, a skimming one, and a dangling tip dragged 18 m along hook-proof steel.
+It asserts one report per touch and never two, the arrival carrying the velocity the hook came in at rather than what the bounce left behind, a burst on an oblique arrival as well as a head-on one, not one silent frame in the middle of a contact, a slide's sparks travelling along the slide and clear of the face on a floor, a ceiling, a wall and a 45 degree ramp, and a sustained drag grinding at the full per-metre rate where a three-frame strike is charged a fraction of it.
+Every one of those is red on its own with the corresponding half reverted, which is the point of writing them as clauses rather than as one number.
+The last is stated as the RATIO between the strike and the drag rather than as a bar on either, since either alone is a tuning value and the separation is the behaviour: 6.9 per metre against 30.0 with the ramp, 29.3 against 30.0 without it.
+The drag rig has to be built rather than replayed - every hook-proof contact in the recorded corpus is a 2 to 7 frame strike, so nothing in it reaches the far side of the ramp at all.
+Particles are counted through the real `SparkSystem` (`bursts` and `slideParticles`, which exist for exactly that and are read by nothing else), since what the sim reports only matters through what the render side makes of it.
+
+The **thresholds and the look** are still ungated, and the three cases to check by hand after touching one are the ones that pin them from all sides.
 A hook **skimming** a face must strike once and then trail (`session-127f` f101 onward: one burst, then a stream growing to 63 particles by f109), a tip **dragged** along one must produce a steady stream (`session-152f` f123 onward, and `session-339f`, whose tangential speed reaches 5.4 m/s), and a tip left **resting** against one must produce nothing at all - the resting case fires one or two events every frame for ever, at gravity's own 0.13 m/s of approach and zero tangential speed, so it is silent because both thresholds reject it rather than because nothing is reported.
-Neither is visible to `bun run test`: sparks reach no digest and no invariant by construction, so a system emitting nothing at all is exactly as green as one that works.
+None of those three is visible to a number: sparks reach no digest and no invariant by construction, so a shower that is the wrong size, the wrong shape or the wrong colour is exactly as green as one that is right.
 
 ## Hook-only bodies
 
