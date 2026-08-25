@@ -607,6 +607,14 @@ export class BallPlayer extends RigidBody2D {
     // (which this line would overwrite anyway) and instead brake the linear
     // slide — otherwise a ball balanced on its loop coasts sideways forever.
     this.kinematicRotation = aiming;
+    // Firing snaps the facing straight to the aim point. The steered turn is
+    // rate-limited, so a release-and-quick-retarget would otherwise launch the
+    // hook wherever the ball happens to be pointing mid-turn, not at the
+    // cursor. A pure rotation teleport: the steering below then sees zero
+    // error and writes ~0 angular velocity, so the snap never becomes spin.
+    if (aiming && input.fire.pressed && !this.chain) {
+      this.globalRotation += wrapAngle(toAim.angle() - this.loopDirection.angle());
+    }
     if (aiming) {
       const delta = wrapAngle(toAim.angle() - this.loopDirection.angle());
       this.angularVelocity = delta * BallPlayer.AIM_TURN_GAIN;

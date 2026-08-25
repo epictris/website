@@ -812,7 +812,7 @@
       },
       "minChainNodes": 8,
       "minAnchorApproach": 1.0,
-      "maxChainGrowth": 0.1
+      "maxChainGrowth": 0.2
     }
   ]
 }

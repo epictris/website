@@ -2585,7 +2585,11 @@ function caseHookSparks(): ContactResult {
   // (b) A shallow throw skimming a hook-proof floor: the case that arrives
   // almost entirely TANGENTIALLY, so a burst gated on the normal component
   // alone scores it as no arrival at all and the whole shower is drag.
-  const graze = throwAt(scene(true), new Vec2(1, 0.08), 90);
+  // 0.104 sits mid-way through the angle window (0.100..0.108) whose first
+  // touch leaves no rebound: a shade shallower or steeper and the arrival's
+  // normal component lofts the hook clear of the face for a few frames, which
+  // the no-silent-frame clause below would count as a gap in the drag.
+  const graze = throwAt(scene(true), new Vec2(1, 0.104), 90);
   details.push(
     `graze: contact f${graze.first}-${graze.last} (${graze.perFrame.length} frames, ` +
       `${graze.gaps} silent), bursts@${graze.burstFrames.join(",") || "-"}, ` +

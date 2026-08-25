@@ -378,6 +378,15 @@ export const ContactAudit = {
 };
 
 export class World {
+  // Largest translation the two-face wedge solve in `depenetrateRigid` may
+  // apply, as a multiple of the deeper overlap. For equal depths the exact
+  // escape is depth * sqrt(2/(1+c)), so the real wedges the scenery presents
+  // stay well under this: a floor-and-overhang pair 152 degrees apart escapes
+  // at 4.1x its depth (session-726f rides that wedge for seconds at a time).
+  // What sits above the cap is the near-antiparallel pair whose "escape" is a
+  // teleport - 7.6x at c=-0.965 (session-1486f).
+  private static readonly WEDGE_ESCAPE_CAP = 5;
+
   readonly bodies: PhysicsBody2D[] = [];
   readonly areas: Area2D[] = [];
 
@@ -1149,9 +1158,28 @@ export class World {
       const c = b ? a.normal.dot(b.normal) : 1;
       if (b && c < 0 && c > -0.98) {
         const inv = 1 / (1 - c * c);
-        body.globalPosition = body.globalPosition
-          .add(a.normal.mul((a.depth - c * b.depth) * inv))
-          .add(b.normal.mul((b.depth - c * a.depth) * inv));
+        const pushA = a.normal.mul((a.depth - c * b.depth) * inv);
+        const pushB = b.normal.mul((b.depth - c * a.depth) * inv);
+        // The wedge-mouth escape is exact only for a genuine wedge. As the two
+        // normals approach antiparallel the mouth recedes to infinity and the
+        // solve's translation diverges with it (1/(1-c^2) is already 14x at
+        // c=-0.965) - and that is not a wedge a translation can escape.
+        // Depenetration may never move a body a large multiple of what it
+        // overlaps: a wound-up ball whose over-spun loop reported a far-side
+        // exit almost opposite the ball's own corner contact was translated
+        // 0.31 m sideways out of 46 mm of overlap in one call, which the chain
+        // phase's PBD velocity update then read as a 16.6 m/s launch
+        // (session-1486f f1365). Past the cap, resolve the SHALLOWER overlap
+        // alone: two near-opposite demands cannot both be met, and the shallow
+        // one is the nearest genuine exit - in the launch above it was the
+        // ball's real corner contact, the deeper one a phantom through-face
+        // from the loop buried past a thin feature's midplane, which the
+        // unwind was about to rotate back out anyway.
+        if (pushA.add(pushB).length() <= World.WEDGE_ESCAPE_CAP * Math.max(a.depth, b.depth)) {
+          body.globalPosition = body.globalPosition.add(pushA).add(pushB);
+        } else {
+          body.globalPosition = body.globalPosition.add(b.normal.mul(b.depth));
+        }
         pushedOutOf.push(a.normal, b.normal);
       } else if (b && c <= -0.98) {
         // A true crush: two near-opposite faces, whose simultaneous solve has no
