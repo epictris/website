@@ -20,7 +20,8 @@ import {
 } from "../engine/body";
 import { rectShape, circleShape, polyShapeCentred, type Shape } from "../engine/shapes";
 import { decomposeConvex } from "../lib/polygon";
-import { World } from "../engine/world";
+import { GRAVITY, World } from "../engine/world";
+import { wrapAngle } from "../engine/mathf";
 import {
   DEFAULT_THICKNESS,
   materialDensity,
@@ -333,6 +334,90 @@ function setCompoundInertia(rb: RigidBody2D, pieces: Piece[]): void {
   rb.inertia = inertia;
 }
 
+// Move a mounted rigid body's origin from the centre of mass `mountPieces`
+// placed it at onto `point` - the authored bearing of an off-centre pivot
+// (`LevelBodyData.pivotX`). Every piece keeps its world placement (the local
+// offsets absorb the shift), the inertia gains the parallel-axis term for the
+// centre of mass now being off-origin, and the return value is that centre in
+// the body's new local frame - which is what gravity's torque about the
+// bearing is measured by (`RigidBody2D.pivotComOffset`). Must run AFTER
+// `setCompoundInertia` (the term stacks on the centre-of-mass inertia) and at
+// build only, before anything queries the body: the per-shape caches never see
+// the old frame (see `CollisionShape2D.isVertexExposed`).
+function reoriginTo(rb: RigidBody2D, point: Vec2): Vec2 {
+  const comLocal = rb.globalPosition.sub(point).rotated(-rb.globalRotation);
+  for (const s of rb.getShapes()) s.localOffset = s.localOffset.add(comLocal);
+  rb.inertia += rb.mass * comLocal.lengthSquared();
+  rb.globalPosition = point;
+  return comLocal;
+}
+
+// A sprung body SPAWNS at its rest pose rather than at the authored one, so a
+// level does not open with every leaf and branch visibly falling to where it
+// was always going to hang - and so the editor's scene, built through this same
+// function, shows the level as it will actually stand. The authored pose keeps
+// its whole meaning: it is the spring's anchor and the torsion spring's rest
+// angle, and the displacement here is the same closed-form equilibrium
+// `cli spring` asserts the sim settles to. A fixed point of the integrator, the
+// statement `buildVines` already makes about a catenary: a settled body is at
+// rest on frame one, with nothing for the first seconds to correct.
+//
+// Called AFTER the `BuiltBody` frame is captured (see the build loop), which is
+// load-bearing: `localPlacement` resolves every geometry object, decoration and
+// chain anchor against the frame the authored placements were written in, so
+// the origin recorded there must be the pre-settle one - resolved against the
+// settled pose instead, a leaf's visual stands at the authored spot while its
+// body hangs below it.
+function applyRestPose(rb: RigidBody2D): void {
+  if (rb.spring) {
+    // Per-axis droop `g/w²`: gravity has no x component, and a pinned axis
+    // (omega 0) is pinned to the anchor already.
+    if (rb.spring.omegaY > 0) {
+      const droop = (GRAVITY.y * rb.gravityScale) / (rb.spring.omegaY * rb.spring.omegaY);
+      rb.globalPosition = new Vec2(rb.spring.anchor.x, rb.spring.anchor.y + droop);
+    }
+    return;
+  }
+  if (rb.pivot) rb.globalRotation = settledPivotAngle(rb);
+}
+
+// Where a pivot body comes to rest, from the pose it stands at now. Exported
+// for the editor's settled ghost, so what the canvas draws cannot disagree with
+// where the build spawns.
+export function settledPivotAngle(rb: RigidBody2D): number {
+  const r = rb.pivotComOffset;
+  const d = r.length();
+  const theta0 = rb.globalRotation;
+  const g = GRAVITY.y * rb.gravityScale;
+  // A bearing at the centre of mass gives gravity no leverage (the plain
+  // windmill, bit-for-bit unchanged); the epsilon guards a bearing authored a
+  // float's width off it, whose "hanging" angle would be the noise's atan2.
+  if (d < 1e-9 || g === 0) return theta0;
+  if (!rb.pivotSpring) {
+    // A free bearing hangs with the centre of mass straight below (or above,
+    // for a negative gravity scale), at the representative nearest the
+    // authored angle.
+    const hang = (g > 0 ? Math.PI / 2 : -Math.PI / 2) - Math.atan2(r.y, r.x);
+    return theta0 + wrapAngle(hang - theta0);
+  }
+  // Torsion spring: the root of `I·w²·(θ - rest) = m·g·(r rotated θ).x`,
+  // gravity's torque about the bearing against the spring's. Transcendental,
+  // so it is bisected from the same statement `World.integrate` applies; the
+  // bracket is the largest deflection gravity's bounded torque can buy
+  // (`m·|g|·d / I·w²`), inside which the two sides are guaranteed to cross.
+  const s = rb.pivotSpring;
+  const k = rb.inertia * s.omega * s.omega;
+  const span = (rb.mass * Math.abs(g) * d) / k + 1e-6;
+  let lo = s.restAngle - span;
+  let hi = s.restAngle + span;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (k * (mid - s.restAngle) - rb.mass * g * r.rotated(mid).x < 0) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
 // the avatar enters a killzone.
 export function buildLevelBodies(
@@ -360,6 +445,12 @@ export function buildLevelBodies(
       origin: built.globalPosition,
       rotation: built.globalRotation,
     });
+    // The rest-pose displacement comes AFTER the frame above is captured - the
+    // local placements every geometry object, decoration and chain anchor
+    // resolve through must be measured in the authored frame, so they ride the
+    // settled body rather than standing where it was drawn (see
+    // `applyRestPose`).
+    if (built instanceof RigidBody2D) applyRestPose(built);
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and a `passable` body reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
@@ -417,6 +508,27 @@ function buildOne(
     // computed - the inertia is what torque answers to, and the mass is what a
     // pushing character's impulse is sized against.
     rb.pivot = b.pivot === true;
+    // An authored pivot POINT re-origins the body onto its bearing (see
+    // `LevelBodyData.pivotX`): with the origin at the hinge, `inverseMass` 0
+    // holds the axle and every lever arm the engine measures from
+    // `globalPosition` is the hinged body's own, so no impulse path needs to
+    // know. What is kept is the centre of mass in the body's local frame, for
+    // gravity's torque about the bearing.
+    if (rb.pivot && (b.pivotX !== undefined || b.pivotY !== undefined)) {
+      const bearing = worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 });
+      rb.pivotComOffset = reoriginTo(rb, bearing.pos);
+    }
+    // ...and a torsion spring about it (see `LevelBodyData.pivotFreq`): the
+    // rest angle is the angle the body was BUILT at, the same statement the
+    // linear spring's anchor makes about position. Clamped exactly as the
+    // linear spring's frequency is, and for the same integrator reason.
+    if (rb.pivot && b.pivotFreq) {
+      rb.pivotSpring = {
+        restAngle: rb.globalRotation,
+        omega: 2 * Math.PI * clampFreq(b.pivotFreq),
+        zeta: Math.min(1, Math.max(0, b.pivotDamping ?? DEFAULT_SPRING_DAMPING)),
+      };
+    }
     // Held at its authored position by a two-axis spring-damper instead (see
     // `LevelBodyData.springFreqX`): it sags under load and springs back. The
     // anchor is taken AFTER `mountPieces`, so it is the body's centre of mass -

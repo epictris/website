@@ -90,6 +90,8 @@ import {
   rotateItemsAbout,
   translateItems,
   bodyFrameOf,
+  settledGhosts,
+  type SettleGhost,
   pinBodyFrame,
   setArrowEnds,
   shapeMass,
@@ -577,6 +579,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // knows to rebuild (see `syncEditorScene`).
   let modelRev = 0;
   let saveError: string | null = null;
+  // Where sprung bodies rest, for the canvas's settled ghosts (see
+  // `settledGhosts` in model.ts). Cached per model revision because computing
+  // it is a full level build - the same cost, and the same cadence, as the 3D
+  // scene rebuild.
+  let settleGhostRev = -1;
+  let settleGhostCache: SettleGhost[] = [];
+  function currentSettleGhosts(): readonly SettleGhost[] {
+    if (settleGhostRev !== modelRev) {
+      settleGhostRev = modelRev;
+      settleGhostCache = settledGhosts(model);
+    }
+    return settleGhostCache;
+  }
   let drag: Drag | null = null;
   // Vertices clicked out so far for a polygon in progress, in world metres.
   // Drawing a polygon is a run of clicks rather than one drag, so it needs state
@@ -2614,9 +2629,89 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     wrap.textContent = "pivot";
     wrap.appendChild(box);
     g.appendChild(wrap);
+
+    // The bearing's own fields, offered once every selected body is on one.
+    // `pivot x`/`pivot y` are in the body's frame, like every placement the
+    // inspector shows, and an unauthored bearing READS as the centre of mass -
+    // which is what it is at build - so typing a value moves the bearing off
+    // it and clearing the field puts it back. `return` is the torsion spring
+    // (`LevelBodyData.pivotFreq`): 0 leaves the bearing free-spinning, a
+    // frequency makes the body bend away under a load and come back to its
+    // authored angle - a tree branch, a springboard, a swing gate.
+    if (box.checked) {
+      const comLocalOf = (lead: EdItem): Vec2 => {
+        const members = bodyMembers(model.items, lead.bodyId).filter(
+          (m) => m.object === "collision",
+        );
+        let mass = 0;
+        let acc = Vec2.ZERO;
+        for (const m of members) {
+          const kg = shapeMass(m);
+          mass += kg;
+          acc = acc.add(m.pos.mul(kg));
+        }
+        const world = mass > 0 ? acc.div(mass) : (members[0]?.pos ?? Vec2.ZERO);
+        const f = bodyFrameOf(model, lead.bodyId);
+        return world.sub(f.pos).rotated(-f.rot);
+      };
+      const at = (b: EdItem): Vec2 => b.pivotAt ?? comLocalOf(b);
+      const setAt =
+        (mut: (cur: Vec2, v: number) => Vec2) =>
+        (v: number): void => {
+          for (const b of leads) b.pivotAt = mut(at(b), v);
+          syncEditedBodies(leads);
+        };
+      const clearAt = (): void => {
+        for (const b of leads) b.pivotAt = null;
+        syncEditedBodies(leads);
+      };
+      numField(
+        g,
+        "pivot x",
+        () => shared(leads, (b) => at(b).x),
+        setAt((c, v) => new Vec2(v, c.y)),
+        0.1,
+        leads.length > 1,
+        { onEmpty: clearAt, placeholder: "centre of mass" },
+      );
+      numField(
+        g,
+        "pivot y",
+        () => shared(leads, (b) => at(b).y),
+        setAt((c, v) => new Vec2(c.x, v)),
+        0.1,
+        leads.length > 1,
+        { onEmpty: clearAt, placeholder: "centre of mass" },
+      );
+      numField(
+        g,
+        "return (Hz)",
+        () => shared(leads, (b) => b.pivotFreq),
+        (v) => {
+          for (const b of leads) b.pivotFreq = Math.min(MAX_SPRING_FREQ, Math.max(0, v));
+          syncEditedBodies(leads);
+        },
+        0.1,
+        leads.length > 1,
+      );
+      numField(
+        g,
+        "damping",
+        () => shared(leads, (b) => b.pivotDamping),
+        (v) => {
+          for (const b of leads) b.pivotDamping = Math.min(1, Math.max(0, v));
+          syncEditedBodies(leads);
+        },
+        0.05,
+        leads.length > 1,
+        { disabled: !leads.some((b) => b.pivotFreq > 0) },
+      );
+    }
+
     const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.";
+    hint.textContent = box.checked
+      ? "Bolted to a bearing: the body swings about the pivot point (blank = the centre of mass, where gravity has no leverage) and never translates. An off-centre bearing feels gravity - an unbalanced body hangs from it - and a return frequency makes it a branch: it bends away under a load and springs back to its authored angle when the load leaves."
+      : "Bolted to a bearing at the centre of mass: the body spins freely when torque is applied - a landing, a hook, a chain - but never moves from where it is authored. Gravity does not pull it down.";
     g.appendChild(hint);
   }
 
@@ -5084,6 +5179,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // Hook-only is opt-in: a fresh body is one that collides.
       passable: false,
       pivot: false,
+      pivotAt: null,
+      pivotFreq: 0,
+      pivotDamping: DEFAULT_SPRING_DAMPING,
       springFreqX: 0,
       springFreqY: 0,
       springDamping: DEFAULT_SPRING_DAMPING,
@@ -7168,6 +7266,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         overlayLayers(),
         selectedBodyIds,
         selectedVerts,
+        currentSettleGhosts(),
       );
     }
     requestAnimationFrame(frame);

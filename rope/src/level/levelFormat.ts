@@ -669,6 +669,34 @@ export interface LevelBodyData {
   // that to say one thing. Absent = an ordinary free rigid body, which is what
   // every level authored before the field contains.
   pivot?: boolean;
+  // Pivot bodies only: where the bearing sits, in the body's own authored
+  // frame - the frame its objects are placed in. Absent = the centre of mass,
+  // which is what every pivot authored before the fields means and the one
+  // point gravity is torque-free about. Authored, the body swings about that
+  // point the way a branch swings about the trunk it grows from, and gravity's
+  // torque about it is real: an unbalanced body falls to hang from its
+  // bearing rather than staying where it was drawn, unless the torsion spring
+  // below holds it up. Both are lengths, so both scale.
+  pivotX?: number;
+  pivotY?: number;
+  // Pivot bodies only: a torsion return spring about the bearing, so the body
+  // bends away under a load - a player hanging off it, a crate dropped on it -
+  // and returns to its authored angle when the load leaves: a tree branch, a
+  // springboard, a swing gate. The frequency is in Hz for the reasons
+  // `springFreqX` gives: a 1/s RATE crosses `scaleLevelData` untouched, and
+  // the free oscillation is mass-independent (`k = I·w²` is implied), so the
+  // same figure means the same bounce whatever the branch is made of. What IS
+  // mass-dependent is the response to a load, which is the half an author
+  // tunes: a torque T bends it T/(I·w²) radians, so a heavy branch barely
+  // notices the player and a light one plunges. 0 or absent = the bearing is
+  // frictionless and free-spinning, which is every pivot authored before the
+  // field. Clamped to 0..8 Hz at build like the linear spring.
+  //
+  // `pivotDamping` is the damping ratio, 0..1, where 1 is critically damped
+  // and no overshoot survives; absent = 0.15, a few visible swings, the linear
+  // spring's own default.
+  pivotFreq?: number;
+  pivotDamping?: number;
   // Rigid bodies only: anchor the body to its authored position through a
   // two-axis spring-damper. It sags under its own weight, sags further under a
   // load - a hanging player, a resting rock, rope tension - and springs back
@@ -2194,6 +2222,13 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
       ...(b.passable !== undefined ? { passable: b.passable } : {}),
       ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
+      // The bearing is a POINT, so both halves are lengths and both convert;
+      // the torsion frequency is a rate and its damping a ratio, so neither
+      // does - the same split the linear spring's fields make below.
+      ...(b.pivotX !== undefined ? { pivotX: b.pivotX * factor } : {}),
+      ...(b.pivotY !== undefined ? { pivotY: b.pivotY * factor } : {}),
+      ...(b.pivotFreq !== undefined ? { pivotFreq: b.pivotFreq } : {}),
+      ...(b.pivotDamping !== undefined ? { pivotDamping: b.pivotDamping } : {}),
       // A spring frequency is a rate and a damping ratio is a ratio, so neither
       // is a length and neither scales - the same rule `drag` follows above,
       // and the reason `LevelBodyData.springFreqX` is authored as a frequency

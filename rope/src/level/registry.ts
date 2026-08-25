@@ -5,6 +5,7 @@ import { Vec2 } from "../engine/vec2";
 import { LEVEL_2 } from "./levelData";
 import { addSlidingPlatform, addWindmill } from "./movers";
 import {
+  TEST_BRANCH,
   TEST_MOVERS,
   TEST_SPRING,
   TEST_TRAMPOLINE,
@@ -40,6 +41,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   TEST_WINDMILL,
   // A spring body to hang off, dive from and hook into (see `TEST_SPRING`).
   TEST_SPRING,
+  // A branch on a sprung bearing to swing down and be sprung back by
+  // (see `TEST_BRANCH`).
+  TEST_BRANCH,
   // Hanging vines over a chasm, to swing across and to see drape and pool
   // (see `TEST_VINES`).
   TEST_VINES,

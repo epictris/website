@@ -33,7 +33,9 @@ import {
 } from "../render/cameraPath";
 import { DECOR_Z } from "../level/decor";
 import { catenaryPolyline } from "../level/catenary";
-import { DEFAULT_SPRING_DAMPING, worldPlacement } from "../level/buildBodies";
+import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
+import { World } from "../engine/world";
+import { RigidBody2D } from "../engine/body";
 import {
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
@@ -331,6 +333,17 @@ export interface EdItem {
   // Rigid bodies only: bolted to a bearing at the centre of mass - spins, never
   // translates (see `LevelBodyData.pivot`).
   pivot: boolean;
+  // Pivot bodies only: where the bearing sits, in the body's own frame
+  // (`bodyFrameOf`), or null for the centre of mass every plain pivot means
+  // (see `LevelBodyData.pivotX`). Frame-local on purpose: every gesture that
+  // moves or turns the whole body carries its frame, so the bearing rides
+  // along with no gesture knowing the field exists.
+  pivotAt: Vec2 | null;
+  // ...and the torsion return spring about it (see `LevelBodyData.pivotFreq`):
+  // frequency in Hz, 0 = a free-spinning bearing, which is how "absent" is
+  // spelled in a model whose fields are always present.
+  pivotFreq: number;
+  pivotDamping: number;
   // Rigid bodies only: held at the authored position by a two-axis
   // spring-damper - sags under load, springs back (see
   // `LevelBodyData.springFreqX`). Frequencies in Hz, 0 = that axis pinned; a
@@ -881,6 +894,21 @@ function fromLevelData(data: LevelData): EdModel {
     // holding a collision box and a mesh, and it arrives here as two items in
     // one body rather than as one item that is secretly both.
     const bodyId = newBodyId();
+    // An authored bearing, carried into the MODEL's body frame - which after a
+    // load is the first object's placement (`bodyFrames` records nothing on
+    // load), not necessarily the frame the file wrote. For an editor-written
+    // file the two coincide, so a level opened and saved untouched stays
+    // byte-stable; a hand-written file whose frame differs gets the same world
+    // point re-measured, which is what the save's re-origining already does to
+    // every object placement.
+    const pivotAt = (() => {
+      if (b.pivot !== true || (b.pivotX === undefined && b.pivotY === undefined)) return null;
+      const first = b.objects[0];
+      if (!first) return null;
+      const frame = worldPlacement(b, first);
+      const bearing = worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 });
+      return bearing.pos.sub(frame.pos).rotated(-frame.rot);
+    })();
     const base = {
       layer: "scene" as const,
       bodyId,
@@ -895,6 +923,9 @@ function fromLevelData(data: LevelData): EdModel {
       drag: b.drag ?? 0,
       passable: b.passable === true,
       pivot: b.pivot === true,
+      pivotAt,
+      pivotFreq: b.pivotFreq ?? 0,
+      pivotDamping: b.pivotDamping ?? DEFAULT_SPRING_DAMPING,
       springFreqX: b.springFreqX ?? 0,
       springFreqY: b.springFreqY ?? 0,
       springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
@@ -1014,6 +1045,9 @@ function fromLevelData(data: LevelData): EdModel {
     drag: 0,
     passable: false,
     pivot: false,
+    pivotAt: null,
+    pivotFreq: 0,
+    pivotDamping: DEFAULT_SPRING_DAMPING,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1080,6 +1114,9 @@ function fromLevelData(data: LevelData): EdModel {
     drag: 0,
     passable: false,
     pivot: false,
+    pivotAt: null,
+    pivotFreq: 0,
+    pivotDamping: DEFAULT_SPRING_DAMPING,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1148,6 +1185,9 @@ function lightItem(
     drag: 0,
     passable: false,
     pivot: false,
+    pivotAt: null,
+    pivotFreq: 0,
+    pivotDamping: DEFAULT_SPRING_DAMPING,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1194,6 +1234,9 @@ function lightItem(
     drag: 0,
     passable: false,
     pivot: false,
+    pivotAt: null,
+    pivotFreq: 0,
+    pivotDamping: DEFAULT_SPRING_DAMPING,
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
@@ -1540,8 +1583,21 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // `anchor` kind, a rigid one is the leaf it could not express.
             ...(lead.passable ? { passable: true } : {}),
             // A bearing means something only on a rigid body, and only when
-            // set - an absent field is the free body every old level has.
-            ...(lead.kind === "rigid" && lead.pivot ? { pivot: true } : {}),
+            // set - an absent field is the free body every old level has. Its
+            // authored point is already in the frame this body is being
+            // written in (`pivotAt` is frame-local, and `origin` above IS
+            // `bodyFrameOf`), so it goes out as it stands; the torsion spring
+            // rides with a real frequency only, damping alongside it, exactly
+            // as the linear spring's fields do below.
+            ...(lead.kind === "rigid" && lead.pivot
+              ? {
+                  pivot: true,
+                  ...(lead.pivotAt ? { pivotX: lead.pivotAt.x, pivotY: lead.pivotAt.y } : {}),
+                  ...(lead.pivotFreq > 0
+                    ? { pivotFreq: lead.pivotFreq, pivotDamping: lead.pivotDamping }
+                    : {}),
+                }
+              : {}),
             // A spring means something only on a rigid body that is not on a
             // bearing, and only when a frequency is actually set - a body with
             // neither axis sprung is the ordinary free rigid body every old
@@ -2238,6 +2294,53 @@ export function bodyCentroid(items: readonly EdItem[]): Vec2 {
   return weighed.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, weighed.length));
 }
 
+// --- settled ghosts ---------------------------------------------------------
+
+// A body whose REST pose differs from its authored one - a spring body's droop,
+// a pivot branch's settled angle, a free pendulum's hang - and by how much.
+// The editor's canvas draws geometry at the authored pose (that is the datum
+// being edited: the spring's anchor, the torsion spring's rest angle), so
+// without this the picture says nothing about where the body will actually
+// stand when the level opens.
+//
+// The BUILD is the authority: `buildLevelBodies` spawns sprung bodies at their
+// rest pose (`applyRestPose`), so the model is built into a throwaway world and
+// each displacement is read off the difference between the authored frame the
+// `BuiltBody` records and the pose the body spawned at - the ghost cannot
+// disagree with where the level stands, because it IS where the level stands.
+export interface SettleGhost {
+  bodyId: number;
+  // The point the displacement turns about (a pivot's bearing; unused while
+  // `drot` is 0), the turn, and the translation, all in world metres. An item
+  // at authored pose `(p, r)` rests at `about + (p - about).rotated(drot) +
+  // dpos`, rotated `r + drot`.
+  about: Vec2;
+  drot: number;
+  dpos: Vec2;
+}
+
+export function settledGhosts(model: EdModel): SettleGhost[] {
+  const itemOf = new Map<SceneObjectData, number>();
+  const data = toLevelData(model, itemOf);
+  const built = buildLevelBodies(new World(), data, () => {});
+  const out: SettleGhost[] = [];
+  for (const b of built.bodies) {
+    const body = b.body;
+    if (!(body instanceof RigidBody2D)) continue;
+    const dpos = body.globalPosition.sub(b.origin);
+    const drot = body.globalRotation - b.rotation;
+    if (dpos.x === 0 && dpos.y === 0 && drot === 0) continue;
+    // Back from the written body to the editor's items, through the same map a
+    // 3D pick uses: `toLevelData` records which item wrote each object.
+    const first = b.data.objects[0];
+    const itemId = first !== undefined ? itemOf.get(first) : undefined;
+    const item = itemId !== undefined ? model.items.find((i) => i.id === itemId) : undefined;
+    if (!item) continue;
+    out.push({ bodyId: item.bodyId, about: b.origin, drot, dpos });
+  }
+  return out;
+}
+
 // --- body frames ------------------------------------------------------------
 
 // The frame `bodyId`'s objects are placed in. Absent from the model it is the
@@ -2347,6 +2450,9 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.drag = lead.drag;
     m.passable = lead.passable;
     m.pivot = lead.pivot;
+    m.pivotAt = lead.pivotAt;
+    m.pivotFreq = lead.pivotFreq;
+    m.pivotDamping = lead.pivotDamping;
     m.springFreqX = lead.springFreqX;
     m.springFreqY = lead.springFreqY;
     m.springDamping = lead.springDamping;
@@ -2596,6 +2702,9 @@ export function emptyModel(): EdModel {
         drag: 0,
         passable: false,
         pivot: false,
+        pivotAt: null,
+        pivotFreq: 0,
+        pivotDamping: DEFAULT_SPRING_DAMPING,
         springFreqX: 0,
         springFreqY: 0,
         springDamping: DEFAULT_SPRING_DAMPING,

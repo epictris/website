@@ -61,6 +61,7 @@ import { ShapeGeometry } from "../lib/shapeGeometry";
 import {
   CHAIN_TOLERANCE,
   VINE_TOLERANCE,
+  anchorWorldPoint,
   collectAnchorSites,
   snapToSurface,
   stepSceneChains,
@@ -521,7 +522,7 @@ function buildOne(
   // own surface for the reason `chains.ts` gives: an anchor left in a body's
   // interior leaves the span starting INSIDE that body, and the wrap generator
   // resolves that as a self-intersection.
-  const anchorPoint = snapToSurface(obj, worldPlacement(site.built.data, site.anchor).pos);
+  const anchorPoint = snapToSurface(obj, anchorWorldPoint(site));
   const anchorContact = RopeContact.at(obj, anchorPoint);
 
   // The optional second anchor, making the vine a span. Missing - not in the
@@ -531,7 +532,7 @@ function buildOne(
   const site2 = v.anchor2 !== undefined && v.anchor2 !== v.anchor ? anchors.get(v.anchor2) : undefined;
   const obj2 = site2?.built.body ?? null;
   const anchor2Point =
-    site2 && obj2 ? snapToSurface(obj2, worldPlacement(site2.built.data, site2.anchor).pos) : null;
+    site2 && obj2 ? snapToSurface(obj2, anchorWorldPoint(site2)) : null;
   const anchor2Contact = obj2 && anchor2Point ? RopeContact.at(obj2, anchor2Point) : null;
 
   // A span authored SHORTER than the gap between its anchors is built taut, at

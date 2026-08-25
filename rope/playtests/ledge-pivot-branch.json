@@ -1,0 +1,16 @@
+{
+  "level": "TEST_BRANCH",
+  "frames": 1100,
+  "holds": [
+    { "action": "move_right", "from": 600, "to": 698 }
+  ],
+  "asserts": [
+    { "reachState": "LedgeHangState", "byFrame": 700 },
+    { "frame": 700, "state": "LedgeHangState" },
+    { "frame": 700, "minY": 1.4, "maxY": 1.48 },
+    { "frame": 760, "state": "LedgeHangState" },
+    { "frame": 760, "minY": 1.88, "maxY": 1.98 },
+    { "frame": 1000, "state": "LedgeHangState" },
+    { "frame": 1000, "minY": 1.85, "maxY": 1.94 }
+  ]
+}

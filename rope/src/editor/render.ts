@@ -17,6 +17,7 @@ import {
   ED_LAYERS,
   bodyBounds,
   bodyCentroid,
+  bodyFrameOf,
   bodyMembers,
   halfExtents,
   isArrowNote,
@@ -30,6 +31,7 @@ import {
   type EdItem,
   type EdLayer,
   type EdModel,
+  type SettleGhost,
 } from "./model";
 import { cubicAt, flattenPath } from "../render/cameraPath";
 import {
@@ -1128,6 +1130,7 @@ function drawCoil(
 // it.
 function drawGroupMarks(
   ctx: CanvasRenderingContext2D,
+  model: EdModel,
   visible: readonly EdItem[],
   all: readonly EdItem[],
   selectedIds: ReadonlySet<number>,
@@ -1143,7 +1146,16 @@ function drawGroupMarks(
     // visible on the canvas without a mark, and the two shapes look identical.
     const leadCollision = allMembers.find((m) => m.object === "collision");
     if (leadCollision && leadCollision.kind === "rigid" && leadCollision.pivot) {
-      const axle = bodyCentroid(allMembers);
+      // An authored bearing draws where it was authored - the point the body
+      // will actually swing about - and only an unauthored one falls back to
+      // the centre of mass, which is what an absent point means at build.
+      // `pivotAt` is in the body's frame, so it is resolved through the same
+      // `bodyFrameOf` the save writes it against.
+      const axle = ((): Vec2 => {
+        if (!leadCollision.pivotAt) return bodyCentroid(allMembers);
+        const f = bodyFrameOf(model, leadCollision.bodyId);
+        return f.pos.add(leadCollision.pivotAt.rotated(f.rot));
+      })();
       const ar = 6 * worldLine;
       ctx.strokeStyle = GROUP_MARK;
       ctx.lineWidth = worldLine * 1.5;
@@ -1297,6 +1309,11 @@ export function drawEditor(
   // what an edit applies to is legible at the corner itself rather than only in
   // the panel - the same thing the selection halo says about a whole object.
   selectedVerts: ReadonlySet<number> = new Set<number>(),
+  // Where sprung bodies actually REST (see `settledGhosts` in model.ts):
+  // dashed outlines at the settled pose, so a leaf's droop and a branch's hang
+  // are visible while the authored pose is what is being edited. Cached by the
+  // caller per model revision - the list is a full level build.
+  settleGhosts: readonly SettleGhost[] = [],
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -1559,7 +1576,32 @@ export function drawEditor(
   // so hiding a layer really does take it out of the picture; the diamond stays
   // put whatever is hidden, since it is the shapes' centre of mass alone.
   const markable = [...(visibleLayers.has("scene") ? geometry : []), ...decor];
-  drawGroupMarks(ctx, markable, model.items, selectedIds, worldLine);
+  drawGroupMarks(ctx, model, markable, model.items, selectedIds, worldLine);
+
+  // Where a sprung body actually rests, as a dashed outline of its collision
+  // shapes at the settled pose. The authored outline stays what is drawn and
+  // edited - it is the spring's anchor and the torsion spring's rest angle -
+  // and the ghost is what says where the body will stand when the level opens,
+  // which nothing else on this canvas can (the build spawns bodies settled, so
+  // in a 3D view the scene below already stands there; this is the 2D view's
+  // only account of it, and in a 3D view it ties the drawn model back to the
+  // outline it belongs to).
+  if (visibleLayers.has("scene") && settleGhosts.length) {
+    ctx.save();
+    ctx.strokeStyle = GROUP_MARK;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([6 * worldLine, 4 * worldLine]);
+    for (const g of settleGhosts) {
+      for (const m of bodyMembers(model.items, g.bodyId)) {
+        if (m.object !== "collision") continue;
+        const pos = g.about.add(m.pos.sub(g.about).rotated(g.drot)).add(g.dpos);
+        ctx.beginPath();
+        pathOutline(ctx, pos, m.rot + g.drot, outlineOf(m));
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
 
   // Chains over the bodies they hold. Drawn STRAIGHT, because that is what the
   // solver renders: a chain's span is a straight line between wrap nodes, and

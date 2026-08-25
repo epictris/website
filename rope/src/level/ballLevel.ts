@@ -522,6 +522,35 @@ export class BallLevel {
       // 90 degrees off the loop and the ball simply not turning (`session-1260f`).
       // The lease absorbed the difference meanwhile, so the chain grew 26 mm of
       // surplus while it happened.
+      //
+      // A SPRUNG body is rolled back like every other - and then handed the
+      // LOAD it is still carrying as an explicit force (below, after the
+      // rollback), because for it the rollback's premise is half right and
+      // half wrong, and the two halves want different answers. Wrong half:
+      // a ball winding itself up a chain anchored to a sprung branch is
+      // hanging off that branch the whole time, so a rollback that removes
+      // the branch's entire share leaves it standing at its UNLOADED rest
+      // angle with the ball dangling from it, then springing past it as the
+      // wind-up shortens the chain (session-454f, the pivoting log pulled UP
+      // by a wind-up that should bear down on it). Right half: the rollback
+      // is also the winch's GOVERNOR - re-breaking the constraint is what
+      // hands the unwind the length to refuse - and weakening it for a
+      // sprung body removes that governor exactly where the anchor is
+      // lightest. Both weakenings were tried and both ran away on
+      // session-136f's log (torque-arm effective mass arm²/I comparable to
+      // the ball's own, torsion damping 0.94/s against a credit re-earned at
+      // 60/s): exempted from the rollback entirely, the solve's velocity
+      // credit compounded at -2 rad/s per frame into a 13 rad/s whip that
+      // buried the log 733 mm in the wall and slung the ball at 24 m/s;
+      // keeping only the position share re-broke nothing, so the unwind
+      // refused nothing and the same whip arrived through position at
+      // -7 rad/s. Bounding the credit by `creditBound` was measured and does
+      // not hold either: the bound is computed from the bodies' own
+      // velocities, so once the pump pollutes them it chases the runaway
+      // (1.9 -> 7.9 rad/s while the credit ran away underneath it). So the
+      // rollback stays whole, and the load crosses by the ledge hang's
+      // mechanism instead (`applyHangLoad`): a bounded weight-sized impulse
+      // per frame, which a spring answers with a damped, settled droop.
       const haulAtSolve = new Map<
         RigidBody2D,
         { position: Vec2; velocity: Vec2; rotation: number; spin: number }
@@ -579,6 +608,48 @@ export class BallLevel {
         );
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
+      }
+      // The load the rollback just removed from a SPRUNG anchor, re-applied as
+      // the bounded force it really is (see the comment above `haulAtSolve`):
+      // the ball's weight, straight down at the anchor point, scaled by the
+      // share the rollback removed - `applyHangLoad`'s statement, made about
+      // the chain. A constant force is what a spring answers with a damped,
+      // settled droop; a velocity credit is what it answers with a whip
+      // (session-136f).
+      //
+      // It is applied ONLY while the chain is what carries the ball: the ball
+      // hanging below the anchor, with no loaded contact under it. Both gates
+      // are load-bearing, and the second was found the hard way. A ball wound
+      // all the way up RIDES the body it is anchored to, and the contact solve
+      // is already delivering its whole weight there - so the ungated impulse
+      // was a second, phantom 510 N, aimed along the anchor-to-ball line,
+      // which ROTATES as the wound-up ball orbits: a rotating force pumps the
+      // hinge like a hand on a swing, and over 40 riding frames of
+      // session-1010f it wound the log to -4 rad/s with the ball surfing the
+      // tip at 13 m/s, read as the branch flinging the player off. Gravity's
+      // own direction cannot pump (it is the constant force the spring's rest
+      // pose already answers), and a frame where a contact carries the ball
+      // has nothing for the chain to hand over.
+      if (spinShare > 0 && this.ball.chain) {
+        const holder = this.ball.chain.end.contact.obj;
+        if (
+          holder instanceof RigidBody2D &&
+          (holder.pivotSpring !== null || holder.spring !== null) &&
+          haulAtSolve.has(holder)
+        ) {
+          const anchor = this.ball.chain.end.contact.globalPosition;
+          const hanging =
+            this.ball.globalPosition.y > anchor.y &&
+            !this.world.frameContacts.some(
+              (c) => c.normalImpulse > 0 && (c.a === this.ball || c.b === this.ball),
+            );
+          if (hanging) {
+            holder.applyImpulse(
+              GRAVITY.mul(this.ball.mass * spinShare * delta),
+              anchor.sub(holder.globalPosition),
+            );
+          }
+        }
       }
       // What the spin's share of the solve took back off everything but the ball
       // (session-265f). Zero on a frame with no aim spin.

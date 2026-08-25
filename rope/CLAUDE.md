@@ -388,6 +388,23 @@ it is wrong — the solve paying for the spin by winching the ball in is exactly
 winding mechanic, and pre-refusing it cancelled 197 radians of legitimate spin in
 a ten-second wind-up and left the ball at zero wraps.
 
+A **sprung anchor** — a torsion-sprung pivot or a spring mount — is rolled back like every other, and then handed the load it is still carrying as an explicit force, because the rollback's premise splits for it.
+A ball winding itself up a chain anchored to a sprung branch is hanging off that branch the whole time, so the plain rollback left the branch at its UNLOADED rest angle with the ball dangling from it, then sprang it past that as the wind-up shortened the chain (`session-454f`, the pivoting log pulled up by a wind-up that should bear down on it).
+Weakening the rollback is not the answer, and both weakenings were measured before this landed where it is: the rollback re-breaking the constraint is the winch's GOVERNOR — it is what hands the unwind the length to refuse — and a sprung pivot is the anchor it matters most for, its torque-arm effective mass `arm²/I` sitting near the ball's own while its spring damping is a hundredth of the rate the credit is re-earned at.
+Exempted from the rollback entirely, the solve's velocity credit compounded at −2 rad/s per frame into a 13 rad/s whip that buried `session-136f`'s log 733 mm in the wall beside it and slung the ball at 24 m/s; keeping only the position share re-broke nothing, so the unwind refused nothing and the same whip arrived through position at −7 rad/s; bounding the credit by `creditBound` does not hold either, because the bound is computed from the bodies' own velocities and chases the runaway once the pump has polluted them (1.9 → 7.9 rad/s while the credit ran away underneath it).
+So the rollback stays whole and the load crosses by the ledge hang's mechanism instead (`applyHangLoad`'s statement, made about the chain): the ball's weight, straight down at the anchor point, scaled by the share the rollback removed — a bounded constant force, which a spring answers with a damped, settled droop, where a velocity credit is answered with a whip.
+Two gates decide when the chain is what carries the ball, and the second was found the hard way: the ball must hang BELOW the anchor, with NO loaded contact under it.
+Aimed along the anchor-to-ball line instead, the force rotates with a swinging ball and pumps the hinge parametrically — gravity's own constant direction cannot — and applied while the ball rides the body it is wound up to, it is a second, phantom 510 N on top of the contact that is already delivering the weight: over 40 such frames the log wound to −4 rad/s with the ball surfing its tip at 13 m/s and flinging off on release (`session-1010f`).
+`cli spring` `winch-load` is the detector, over both sprung kinds: the loaded hold, the slow wind (the body carries the load and never springs past rest), and a wound-tight endgame at a hand-whip pace that must neither whip the body nor fling the ball.
+The load half is red alone with the impulse removed (the log springs 0.2 rad past rest with the ball hanging off it); `session-136f` and `session-1010f` are the recorded artifacts.
+
+**Open, diagnosed, not fixed: a PIVOT body as the winch's anchor can be whirled into a slingshot.**
+The measurement that isolates it (a thin hinged bar the shape of `levels/ball.json`'s pivoting log, the ball anchored to its far arm, the cursor whipped in circles at a turn per 1.5 s for 10 s, identical inputs throughout): a **static** anchor peaks at 2.5 m/s, the same bar **sprung** at 55 m/s, and as a **plain pivot** at 137 m/s.
+The winch's governor assumes winding either hauls the ball to the anchor or is refused by the unwind, and a pivot leaks through it: the bar's rotation co-rotates with the whirling ball, so the pair orbits together, the chain never winds tight, nothing is ever refused, and the kinematic aim pays its winch budget into the system every frame with the frictionless bearing storing it.
+The share of each correction the rollback leaves (the real-motion share, `1 − spinShare`) lands in the pivot's rotation, whose credit has no velocity-level bound — and bounding it by `creditBound` was implemented and measured ineffective, since the bound reads the bodies' own (by then polluted) velocities.
+It is not this feature's regression — a windmill fin has been anchorable since pivot bodies existed — but the sprung branch makes the play pattern common.
+The honest fix likely involves the unwind refusing spin whose correction landed in an anchor's ROTATION, which is a solver design question; two bounded attempts are spent, so it is recorded here instead.
+
 The fifth piece is that the frame may not *end* with the chain driving the ball
 through a surface.
 `World.depenetrateRigid` returns the outward normals it pushed along, and
@@ -3502,6 +3519,40 @@ The impulse-pairing audit exempts the linear half - the difference is the bearin
 
 `cli contacts` `pivot-body` and `pivot-chain` are the detectors: the hold under gravity is exact (integrate skips the body, so the assertion is drift `=== 0`, not small), an off-centre impulse spins it by `cross(r, J)/I` while the axle holds, a falling box torques it the way the blow points through the pair solver, a hung weight turns it through the rope's torque arm (which is what reaches the `1/arm` branch), and the authored flag is asserted READ against a free control body - a build dropping it produces a level that looks identical and plays as a fin that falls out of the sky.
 The editor authors it as a `pivot` checkbox on the rigid body's panel and marks the bearing with a ring-and-dot at the centre of mass, drawn for a body of one as well - unlike the compound diamond, being pivot-mounted is otherwise invisible on the canvas.
+
+### An authored bearing, and the torsion spring
+
+The bearing does not have to be the centre of mass.
+`LevelBodyData.pivotX`/`pivotY` put it at an authored point in the body's own frame - a branch hinged where it meets the trunk - and `pivotFreq`/`pivotDamping` add a torsion return spring about it, so the body bends away under a load (a hanging player, a thrown crate, chain tension) and springs back to its authored angle when the load leaves.
+This is the "tree branch" mechanic, and it is deliberately NOT the linear spring: a spring body translates and never rotates, where a branch is locked to rotating about its hinge.
+
+The implementation is one move and everything else follows: `buildLevelBodies` re-origins the body onto the bearing (`reoriginTo` - the pieces' local offsets absorb the shift, the inertia gains the parallel-axis term, and the centre of mass is kept in the body's local frame as `RigidBody2D.pivotComOffset`).
+With the origin AT the hinge, `inverseMass` 0 holds the axle and every lever arm the engine measures from `globalPosition` is the hinged body's own, so contacts, the rope's `1/arm` branch, explosions and the character push are all exact for a hinged body with no code of their own.
+What does need code is gravity, which is no longer torque-free about the bearing: `World.integrate` applies `m·g × r` about the hinge, summed with the torsion spring's `-w²·Δθ - 2ζw·ω` into ONE acceleration and applied once - the damping term must read the frame's incoming angular velocity, not one with gravity's increment already in it, or the settled angle sits a measurable 10% off the closed form.
+Both terms are guarded so a plain centre-of-mass pivot adds literally nothing and every recorded pivot replay stays bit-identical.
+
+The frequency is in Hz for the linear spring's reasons - a rate crosses `scaleLevelData` untouched, and `k = I·w²` is implied so the free oscillation is mass-independent - while the bearing point is a length and scales.
+The angle is deliberately not wrapped: a body wound a full turn unwinds a full turn, which is what a torsion spring does.
+`mechanicalEnergy` reads a pivot body's gravitational potential off the CENTRE OF MASS (the bearing origin never moves, so PE read off it turns the whole KE↔PE exchange of a free swing into an unforced gain) and carries the torsion elastic term `0.5·I·w²·Δθ²`.
+
+`cli spring` carries the detectors (`pivot-droop`, `pivot-pendulum`, `pivot-period`, `pivot-authored`, `spawn-at-rest`, and `winch-load` for what a wind-up does to a sprung anchor - see the spin rollback under the ball chain), because like the linear spring the whole behaviour is arithmetic with a closed form: the droop is the root of `I·w²·Δθ = m·g·d·cos θ`, a free off-centre bearing is a physical pendulum at `2π·sqrt(I/(m·g·d))` with the axle asserted at `=== 0` drift, the torsion oscillator runs at `1/f` with the energy flat, and the authored fields are asserted read, scaled, clamped, and bit-for-bit inert on a plain pivot.
+`TEST_BRANCH` is the worked level - the spring level's chasm with the leaf replaced by a bough hinged at the far wall.
+In the editor, ticking `pivot` offers `pivot x`/`pivot y` (blank = the centre of mass; the axle ring draws at the authored point) and `return (Hz)`/`damping` for the spring; the point is held frame-local in the model (`EdItem.pivotAt`), so every gesture that moves or turns the body carries the bearing with it for free.
+
+### Sprung bodies spawn at rest
+
+A spring body, a torsion-sprung branch and a free off-centre pivot all SPAWN at the rest pose the suite proves they settle to (`applyRestPose` in `buildBodies.ts`), so a level does not open with its leaves and branches visibly falling into place.
+The authored pose keeps its whole meaning - it is the spring's anchor and the torsion spring's rest angle - and the spawn displacement is the same closed-form equilibrium `cli spring` asserts the sim settles to: a fixed point of the integrator, the statement `buildVines` already makes about a catenary, so a settled body is at rest on frame one.
+A centre-of-mass pivot and a plain rigid body spawn EXACTLY at their authored pose, which is the bit-identity rule; recorded bundles containing spring bodies legitimately diverge (informational, per the usual bundle semantics).
+
+Two frame correspondences are load-bearing.
+`BuiltBody.origin` is captured BEFORE the displacement, because `localPlacement` resolves every geometry object, decoration and chain anchor against the frame the authored placements were written in - captured after, a leaf's visual stands at the authored spot while its body hangs below it.
+And a chain or vine anchor on a sprung body resolves its material point through `anchorWorldPoint` (`chains.ts`): the authored placement mapped through that correspondence onto the body's spawned transform, so the anchor rides the settle and a taut chain's derived length is the distance between the anchors AS THEY LAND - resolved through the authored placement instead, the chain spawns slack by the droop and yanks on frame one.
+The undisplaced path deliberately keeps the plain `worldPlacement` answer, since the local round trip costs two rotations of float noise and every level with no sprung body must stay bit-identical.
+
+The editor shows the same thing twice.
+Its 3D scene is built through the same `buildLevelBodies`, so the drawn model simply stands at the rest pose; and the 2D canvas draws a dashed **settled ghost** of each displaced body's collision outlines at the rest pose (`settledGhosts` in `editor/model.ts`, cached per model revision - it is a full level build), while the authored outline stays what is drawn and edited, it being the datum the spring hangs from.
+`spawn-at-rest` in `cli spring` pins all of it: the three spawn poses against the closed forms, zero movement over 300 untouched frames, the exact authored spawn of the two controls, the chain length between the anchors as they land, and the ghosts reading the same three displacements with none for the controls.
 
 ## Spring bodies
 

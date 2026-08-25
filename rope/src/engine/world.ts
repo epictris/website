@@ -814,13 +814,40 @@ export class World {
         // change that is being woken (see `VineLink.asleep`).
         if (World.isAsleep(body)) continue;
         if (body.pivot) {
-          // A pivot body turns on a fixed bearing: no gravity, no translation.
-          // The velocity is ZEROED rather than trusted to stay zero, because
-          // the area passes above write `linearVelocity` directly (a current's
-          // dv, water's flow lerp) and inverse mass being 0 does not cover a
-          // direct write - cancelled here, before the position step, none of
-          // it ever moves the axle or leaks into `velocityAtPoint`.
+          // A pivot body turns on a fixed bearing: no gravity step, no
+          // translation. The velocity is ZEROED rather than trusted to stay
+          // zero, because the area passes above write `linearVelocity` directly
+          // (a current's dv, water's flow lerp) and inverse mass being 0 does
+          // not cover a direct write - cancelled here, before the position
+          // step, none of it ever moves the axle or leaks into
+          // `velocityAtPoint`.
           body.linearVelocity = Vec2.ZERO;
+          // An OFF-CENTRE bearing feels gravity as torque - `r × F` with `r`
+          // the world offset from the hinge to the centre of mass - and a
+          // torsion spring pulls the body back toward its built angle (see
+          // `RigidBody2D.pivotComOffset` / `pivotSpring`). Both fold into the
+          // same semi-implicit Euler step gravity takes for a free body, and
+          // both are guarded so a plain centre-of-mass pivot adds literally
+          // nothing: every recorded pivot replay stays bit-identical.
+          // Summed into ONE acceleration and applied once, the way the linear
+          // spring folds into gravity's step: the damping term must read the
+          // frame's INCOMING angular velocity, not one with gravity's dt
+          // already in it - read mid-update it damps that increment as though
+          // it were motion, which shifts the settled angle off the closed form
+          // by a measurable 10%.
+          const off = body.pivotComOffset;
+          let alpha = 0;
+          if (off.x !== 0 || off.y !== 0) {
+            const r = off.rotated(body.globalRotation);
+            alpha += (r.cross(GRAVITY.mul(body.gravityScale)) * body.mass) / body.inertia;
+          }
+          if (body.pivotSpring) {
+            const s = body.pivotSpring;
+            alpha +=
+              -s.omega * s.omega * (body.globalRotation - s.restAngle) -
+              2 * s.zeta * s.omega * body.angularVelocity;
+          }
+          if (alpha !== 0) body.angularVelocity += alpha * dt;
         } else {
           // A spring body is pulled back toward its anchor by a damped
           // harmonic oscillator per axis, folded into the same semi-implicit

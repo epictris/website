@@ -32,7 +32,7 @@ import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
-import { worldPlacement, type BuiltBodies } from "./buildBodies";
+import { localPlacement, worldPlacement, type BuiltBodies } from "./buildBodies";
 import {
   isAnchorObject,
   type AnchorObjectData,
@@ -807,6 +807,34 @@ export interface AnchorSite {
   readonly anchor: AnchorObjectData;
 }
 
+// Where the anchor IS, on the body as it stands now. The authored placement is
+// written in the authored frame, and a sprung body spawns displaced from it
+// (`applyRestPose`), so on a displaced body the material point is resolved
+// through `localPlacement` - the authored-frame correspondence `BuiltBody`
+// records - and then carried by the body's own transform, exactly as
+// decoration and geometry objects ride it. Resolved through the authored
+// placement instead, the anchor lands at the authored SPOT on a body that is
+// no longer there, a point off the intended one by the whole droop.
+//
+// The undisplaced path keeps the plain `worldPlacement` answer deliberately:
+// the local round trip costs two rotations of float noise, and every level
+// with no sprung body must stay bit-identical.
+export function anchorWorldPoint(site: AnchorSite): Vec2 {
+  const b = site.built;
+  const body = b.body;
+  const authored = worldPlacement(b.data, site.anchor).pos;
+  if (
+    !body ||
+    (body.globalPosition.x === b.origin.x &&
+      body.globalPosition.y === b.origin.y &&
+      body.globalRotation === b.rotation)
+  ) {
+    return authored;
+  }
+  const local = localPlacement(b, site.anchor);
+  return body.globalPosition.add(local.pos.rotated(body.globalRotation));
+}
+
 function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | null {
   const siteA = anchors.get(c.a);
   const siteB = anchors.get(c.b);
@@ -819,8 +847,8 @@ function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | 
   // through. The surface snap that follows is unchanged: an anchor left in a
   // body's interior leaves the chain's span starting INSIDE that body, and the
   // wrap generator resolves that as a self-intersection.
-  const worldA = snapToSurface(objA, worldPlacement(siteA.built.data, siteA.anchor).pos);
-  const worldB = snapToSurface(objB, worldPlacement(siteB.built.data, siteB.anchor).pos);
+  const worldA = snapToSurface(objA, anchorWorldPoint(siteA));
+  const worldB = snapToSurface(objB, anchorWorldPoint(siteB));
   // Absent length = exactly taut as authored, which is what dragging a chain out
   // between two bodies in the editor means - measured between the anchors as
   // they actually land, so "taut" is taut.

@@ -29,11 +29,18 @@ import { Player } from "../classes/player";
 import { mechanicalEnergy } from "./trace";
 import {
   buildLevelBodies,
+  DEFAULT_SPRING_DAMPING,
   MAX_SPRING_FREQ,
   RIGID_KINETIC_FRICTION,
   RIGID_STATIC_FRICTION,
 } from "../level/buildBodies";
 import { scaleLevelData } from "../level/levelFormat";
+import { buildSceneChains } from "../level/chains";
+import { PX as PX_FACTOR } from "../engine/units";
+import { modelFromDisk, modelToDisk, settledGhosts } from "../editor/model";
+import { BallLevel } from "../level/ballLevel";
+import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
+import type { RawLevelData } from "../level/levelFormat";
 
 const DT = 1 / 60;
 const G = GRAVITY.y;
@@ -726,9 +733,11 @@ function caseAuthored(): SpringResult {
     Math.abs(s.omegaX - 2 * Math.PI * 1.5) < 1e-12 &&
     Math.abs(s.omegaY - 2 * Math.PI) < 1e-12 &&
     s.zeta === 0.4 &&
-    // The anchor is the body's built centre of mass, which is where every
-    // impulse and the position step act.
-    s.anchor.sub(leaf!.globalPosition).length() === 0;
+    // The anchor is the body's AUTHORED centre of mass - the body itself
+    // spawns a droop below it (`applyRestPose`), so the two differ by exactly
+    // g/w² on the sprung axis.
+    s.anchor.x === leaf!.globalPosition.x &&
+    Math.abs(s.anchor.y - (leaf!.globalPosition.y - droopOf(1))) < 1e-12;
 
   const c = clamped!.spring;
   const clampOk =
@@ -793,6 +802,740 @@ function caseNoSpring(): SpringResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// The PIVOT half of the suite: an off-centre bearing and its torsion return
+// spring (`LevelBodyData.pivotX` / `pivotFreq`). It lives here rather than in
+// `cli contacts` beside `pivot-body` because, like the linear spring, its whole
+// behaviour is arithmetic with a closed form - the droop is the root of
+// `I·w²·Δθ = m·g·d·cos(θ)`, the free pendulum's period is `2π·sqrt(I/(m·g·d))`,
+// the torsion oscillator's is `1/f` - and every one of those is a number an
+// author reasons about while tuning a branch.
+// ---------------------------------------------------------------------------
+
+// A branch: a 1.2 m rect hinged at its left end, built through the REAL level
+// loader so the case exercises the authored fields, the re-origin onto the
+// bearing and the parallel-axis inertia together.
+function buildBranch(opts: {
+  rot?: number;
+  freq?: number;
+  damping?: number;
+}): { world: World; body: RigidBody2D } {
+  const world = new World();
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 0.08 },
+      bodies: [
+        {
+          kind: "rigid" as const,
+          x: 0,
+          y: -3,
+          rot: opts.rot ?? 0,
+          pivot: true,
+          pivotX: -0.6,
+          pivotY: 0,
+          ...(opts.freq !== undefined ? { pivotFreq: opts.freq } : {}),
+          ...(opts.damping !== undefined ? { pivotDamping: opts.damping } : {}),
+          objects: [
+            {
+              type: "collision" as const,
+              x: 0,
+              y: 0,
+              rot: 0,
+              shape: { kind: "rect" as const, w: 1.2, h: 0.12 },
+            },
+          ],
+        },
+      ],
+    },
+    1,
+  );
+  const body = buildLevelBodies(world, data, () => {}).bodies[0]!.body as RigidBody2D;
+  return { world, body };
+}
+
+// ---------------------------------------------------------------------------
+// pivot-droop: a sprung branch settles at exactly the angle its frequency
+// implies - the root of `I·w²·Δθ = m·g·d·cos(θ)`, gravity's torque about the
+// bearing against the torsion spring's. The one number an author picks the
+// frequency BY ("how far does this branch sag on its own"), asserted at three
+// frequencies; the axle is asserted at === 0 drift, because the bearing is held
+// by `inverseMass` 0 rather than by a solve, and "small" would be the bug.
+// ---------------------------------------------------------------------------
+function casePivotDroop(): SpringResult {
+  const details: string[] = [];
+  let passed = true;
+  for (const f of [0.5, 1, 2]) {
+    const { world, body } = buildBranch({ freq: f, damping: 0.5 });
+    const axle0 = body.globalPosition;
+    for (let i = 0; i < 2400; i++) world.integrate(DT);
+    const w = 2 * Math.PI * f;
+    const d = body.pivotComOffset.length();
+    // The equilibrium is transcendental, so the expectation is bisected from
+    // the same statement the sim integrates rather than linearised.
+    let lo = 0;
+    let hi = Math.PI / 2;
+    for (let i = 0; i < 80; i++) {
+      const mid = (lo + hi) / 2;
+      if (body.inertia * w * w * mid - body.mass * G * d * Math.cos(mid) < 0) lo = mid;
+      else hi = mid;
+    }
+    const err = Math.abs(body.globalRotation - lo);
+    const axleDrift = body.globalPosition.sub(axle0).length();
+    const good = err < 1e-9 && axleDrift === 0;
+    passed &&= good;
+    details.push(
+      `${good ? "ok  " : "BAD "} f=${f} Hz: droop ${((body.globalRotation * 180) / Math.PI).toFixed(3)}° ` +
+        `(want ${((lo * 180) / Math.PI).toFixed(3)}°, err ${err.toExponential(1)} rad), axle drift ${axleDrift}`,
+    );
+  }
+  return ok("pivot-droop — a sprung branch settles where its frequency says", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// pivot-pendulum: a FREE off-centre bearing is a physical pendulum. Small
+// oscillations about hanging must run at `2π·sqrt(I/(m·g·d))` - which is only
+// true if the build put the origin at the bearing, the inertia carries the
+// parallel-axis term AND gravity's torque reads the swung centre of mass - and
+// `mechanicalEnergy` over the swing must be flat, which is what pins the
+// energy accounting to the centre of mass rather than to the origin (a bearing
+// origin never moves, so PE read off it turns the whole KE↔PE exchange into an
+// unforced gain `EnergyMonitor` would fire on).
+// ---------------------------------------------------------------------------
+function casePivotPendulum(): SpringResult {
+  // A free bearing SPAWNS hanging (`applyRestPose`), so the swing is started
+  // by displacing the built body 0.05 rad off its equilibrium - the case is
+  // about the dynamics, and the spawn pose is `spawn-at-rest`'s to assert.
+  const { world, body } = buildBranch({});
+  body.globalRotation = Math.PI / 2 - 0.05;
+  const axle0 = body.globalPosition;
+  const d = body.pivotComOffset.length();
+  const want = 2 * Math.PI * Math.sqrt(body.inertia / (body.mass * G * d));
+  let last = body.globalRotation - Math.PI / 2;
+  const crossings: number[] = [];
+  const e0 = mechanicalEnergy(world);
+  let eMin = e0;
+  let eMax = e0;
+  for (let i = 0; i < 1200; i++) {
+    world.integrate(DT);
+    const cur = body.globalRotation - Math.PI / 2;
+    if (last < 0 !== cur < 0) crossings.push(i * DT);
+    last = cur;
+    const e = mechanicalEnergy(world);
+    eMin = Math.min(eMin, e);
+    eMax = Math.max(eMax, e);
+  }
+  const got =
+    crossings.length > 2
+      ? (2 * (crossings[crossings.length - 1]! - crossings[0]!)) / (crossings.length - 1)
+      : NaN;
+  const periodOk = Math.abs(got - want) < 0.005;
+  const axleOk = body.globalPosition.sub(axle0).length() === 0;
+  // The KE↔PE exchange itself is ~0.15 J at this amplitude; the integrator's
+  // residual is measured at 8.6e-3 J over 20 s, so 0.05 is a bound with room
+  // that still fails outright if PE is read off the origin (spread = the whole
+  // exchange).
+  const energyOk = eMax - eMin < 0.05;
+  const passed = periodOk && axleOk && energyOk;
+  return ok("pivot-pendulum — a free off-centre bearing swings at 2π·sqrt(I/mgd)", passed, [
+    `${periodOk ? "ok  " : "BAD "} period ${got.toFixed(4)} s (want ${want.toFixed(4)})`,
+    `${axleOk ? "ok  " : "BAD "} axle drift over 1200 frames: ${body.globalPosition.sub(axle0).length()}`,
+    `${energyOk ? "ok  " : "BAD "} mechanicalEnergy spread ${(eMax - eMin).toExponential(1)} J over the swing (PE reads the centre of mass, not the bearing)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// pivot-period: the torsion spring on its own - a bearing AT the centre of
+// mass, so gravity has no leverage and the oscillator is pure. Undamped it must
+// run at `1/f` with `mechanicalEnergy` flat (the elastic term `0.5·I·w²·Δθ²`,
+// without which the swing reads as energy flickering in and out of existence),
+// and damped it must overshoot its rest angle and then settle back onto it.
+// ---------------------------------------------------------------------------
+function casePivotPeriod(): SpringResult {
+  const details: string[] = [];
+  const mk = (zeta: number): { world: World; body: RigidBody2D } => {
+    const world = new World();
+    const b = new RigidBody2D();
+    b.setShape(rectShape(1.2, 0.12));
+    b.mass = ShapeGeometry.computeMass(b.primaryShape());
+    b.inertia = ShapeGeometry.computeMomentOfInertia(b.primaryShape(), b.mass);
+    b.pivot = true;
+    b.globalPosition = new Vec2(0, -3);
+    b.pivotSpring = { restAngle: 0, omega: 2 * Math.PI * 1.5, zeta };
+    b.globalRotation = 0.3;
+    world.add(b);
+    return { world, body: b };
+  };
+
+  const free = mk(0);
+  let last = free.body.globalRotation;
+  const crossings: number[] = [];
+  const e0 = mechanicalEnergy(free.world);
+  let eMin = e0;
+  let eMax = e0;
+  const samples: number[] = [];
+  for (let i = 0; i < 1200; i++) {
+    free.world.integrate(DT);
+    if (last < 0 !== free.body.globalRotation < 0) crossings.push(i * DT);
+    last = free.body.globalRotation;
+    const e = mechanicalEnergy(free.world);
+    samples.push(e);
+    eMin = Math.min(eMin, e);
+    eMax = Math.max(eMax, e);
+  }
+  const got = (2 * (crossings[crossings.length - 1]! - crossings[0]!)) / (crossings.length - 1);
+  const periodOk = Math.abs(got - 1 / 1.5) < 0.005;
+  // Symplectic Euler's energy RIPPLES within a period (O(w·dt), the same bound
+  // `energy` accepts for the linear spring) and must not DRIFT. The elastic
+  // term missing is not a ripple: the spread becomes the whole exchanged
+  // 0.5·I·w²·θ0², 100%, and the case is red.
+  const exchanged = 0.5 * free.body.inertia * free.body.pivotSpring!.omega ** 2 * 0.3 * 0.3;
+  const ripple = (eMax - eMin) / exchanged;
+  const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const drift =
+    Math.abs(mean(samples.slice(-300)) - mean(samples.slice(0, 300))) / exchanged;
+  const energyOk = ripple < 0.3 && drift < 0.005;
+  details.push(`${periodOk ? "ok  " : "BAD "} undamped period ${got.toFixed(4)} s (want ${(1 / 1.5).toFixed(4)})`);
+  details.push(
+    `${energyOk ? "ok  " : "BAD "} undamped 20 s: energy ripples ${(ripple * 100).toFixed(2)}% of the ${exchanged.toFixed(2)} J exchanged (symplectic O(w·dt), want < 30%) and drifts ${(drift * 100).toFixed(4)}% (want < 0.5%; the elastic term missing reads as 100% ripple)`,
+  );
+
+  const damped = mk(0.15);
+  let overshot = false;
+  for (let i = 0; i < 1200; i++) {
+    damped.world.integrate(DT);
+    if (damped.body.globalRotation < 0) overshot = true;
+  }
+  const settled = Math.abs(damped.body.globalRotation) < 1e-6 && Math.abs(damped.body.angularVelocity) < 1e-6;
+  details.push(
+    `${overshot ? "ok  " : "BAD "} underdamped release overshoots the rest angle (the visible spring-back)`,
+  );
+  details.push(
+    `${settled ? "ok  " : "BAD "} and settles back onto it: Δθ ${damped.body.globalRotation.toExponential(1)}, ω ${damped.body.angularVelocity.toExponential(1)}`,
+  );
+  return ok("pivot-period — the torsion oscillator runs at 1/f and returns", periodOk && energyOk && overshot && settled, details);
+}
+
+// ---------------------------------------------------------------------------
+// pivot-authored: the fields reach the body through the loader, and what they
+// build is checkable - the origin IS the authored bearing, the kept
+// centre-of-mass offset points back at the pieces, the inertia carries the
+// parallel-axis term, the frequency clamps, the point scales as a length while
+// the frequency does not, and a plain centre-of-mass pivot is left BIT-FOR-BIT
+// what it always was, which is the hard requirement of the whole change.
+// ---------------------------------------------------------------------------
+function casePivotAuthored(): SpringResult {
+  const world = new World();
+  const rect = { kind: "rect" as const, w: 1.2, h: 0.12 };
+  const raw = {
+    player: { x: 0, y: 0, radius: 0.08 },
+    bodies: [
+      {
+        kind: "rigid" as const,
+        x: 0,
+        y: -3,
+        rot: 0,
+        pivot: true,
+        pivotX: -0.6,
+        pivotY: 0,
+        pivotFreq: 99,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+      // The control: a plain pivot, no point and no spring - the windmill every
+      // recorded replay contains.
+      {
+        kind: "rigid" as const,
+        x: 4,
+        y: -3,
+        rot: 0,
+        pivot: true,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+    ],
+  };
+  const data = scaleLevelData(raw, 1);
+  const [branch, windmill] = buildLevelBodies(world, data, () => {}).bodies.map(
+    (b) => b.body,
+  ) as RigidBody2D[];
+
+  const comI =
+    ShapeGeometry.computeMomentOfInertia(branch!.primaryShape(), branch!.mass) ;
+  const originOk =
+    branch!.globalPosition.x === -0.6 &&
+    branch!.globalPosition.y === -3 &&
+    branch!.pivotComOffset.x === 0.6 &&
+    branch!.pivotComOffset.y === 0;
+  const inertiaOk = Math.abs(branch!.inertia - (comI + branch!.mass * 0.36)) < 1e-12;
+  const s = branch!.pivotSpring;
+  const clampOk =
+    s !== null && s.omega === 2 * Math.PI * MAX_SPRING_FREQ && s.zeta === DEFAULT_SPRING_DAMPING && s.restAngle === 0;
+
+  // The length/rate split, asserted on the DATA rather than the build: a
+  // bearing left in pixels is a branch hinged a hundred times too far out.
+  const scaled = scaleLevelData(raw, 0.5).bodies[0]!;
+  const scaleOk =
+    scaled.pivotX === -0.3 && scaled.pivotY === 0 && scaled.pivotFreq === 99 &&
+    scaled.pivotDamping === undefined;
+
+  // The control integrates exactly as every pivot always has: no gravity, no
+  // torque from nowhere, the spin it is given is the spin it keeps.
+  windmill!.angularVelocity = 3;
+  const w0 = windmill!.globalPosition;
+  world.integrate(DT);
+  const exact =
+    windmill!.pivotComOffset.x === 0 &&
+    windmill!.pivotComOffset.y === 0 &&
+    windmill!.pivotSpring === null &&
+    windmill!.angularVelocity === 3 &&
+    windmill!.globalRotation === 3 * DT &&
+    windmill!.globalPosition.sub(w0).length() === 0;
+
+  // The editor rewrites the whole file every 750 ms, so a field it does not
+  // carry is gone from disk before anyone notices it was read - the round trip
+  // is asserted here because the camera suite's round-trip cases compare
+  // camera fields alone.
+  const rt = modelToDisk(
+    modelFromDisk({
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [
+        {
+          kind: "rigid" as const,
+          x: 0,
+          y: -300,
+          rot: 0,
+          pivot: true,
+          pivotX: -50,
+          pivotY: 25,
+          pivotFreq: 1.25,
+          pivotDamping: 0.4,
+          objects: [
+            {
+              type: "collision" as const,
+              x: 0,
+              y: 0,
+              rot: 0,
+              shape: { kind: "rect" as const, w: 120, h: 12 },
+            },
+          ],
+        },
+      ],
+    }),
+  ).bodies[0]!;
+  const roundTripOk =
+    rt.pivot === true &&
+    rt.pivotX === -50 &&
+    rt.pivotY === 25 &&
+    rt.pivotFreq === 1.25 &&
+    rt.pivotDamping === 0.4;
+
+  const passed = originOk && inertiaOk && clampOk && scaleOk && roundTripOk && exact;
+  return ok("pivot-authored — the bearing fields reach the body, scaled and clamped", passed, [
+    `${roundTripOk ? "ok  " : "BAD "} the editor's modelFromDisk/modelToDisk carries all four fields (got pivotX=${rt.pivotX}, pivotY=${rt.pivotY}, freq=${rt.pivotFreq}, damping=${rt.pivotDamping})`,
+    `${originOk ? "ok  " : "BAD "} origin at the authored bearing (-0.6, -3), centre of mass kept at local (0.6, 0)`,
+    `${inertiaOk ? "ok  " : "BAD "} inertia ${branch!.inertia.toFixed(6)} = I_com + m·d² (${(comI + branch!.mass * 0.36).toFixed(6)})`,
+    `${clampOk ? "ok  " : "BAD "} 99 Hz clamps to ${MAX_SPRING_FREQ}, damping defaults to ${DEFAULT_SPRING_DAMPING}, rest angle is the built rotation`,
+    `${scaleOk ? "ok  " : "BAD "} the point is a length and scales; the frequency is a rate and does not`,
+    `${exact ? "ok  " : "BAD "} a plain centre-of-mass pivot integrates bit-for-bit as before`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// spawn-at-rest: a sprung body SPAWNS at the rest pose the suite's other cases
+// prove it settles to, so a level does not open with its leaves and branches
+// visibly falling into place (`applyRestPose`). Asserted at frame ZERO against
+// the closed forms, then over 300 frames as near-zero movement - the vine
+// suite's "a span spawns at rest" statement, made for spring and pivot bodies.
+// The controls are the other half: a centre-of-mass pivot and a plain rigid
+// body spawn EXACTLY at their authored pose, which is the bit-identity rule.
+//
+// The chain clause covers the piece nothing else can see: an anchor on a
+// sprung body must ride the settle (`anchorWorldPoint` resolves the material
+// point through the authored frame), so a taut chain's derived length is the
+// distance between the anchors AS THEY LAND - measured against the authored
+// pose instead, the chain spawns slack by the droop and yanks on frame one.
+//
+// The ghost clause is the editor's half of the same statement: `settledGhosts`
+// reads its displacement off this very build, and the case pins the ghost to
+// the same closed forms, plus that the controls produce no ghost at all.
+// ---------------------------------------------------------------------------
+function caseSpawnAtRest(): SpringResult {
+  const rect = { kind: "rect" as const, w: 1.2, h: 0.12 };
+  const px = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      // The chain's ground end, with its anchor on the top face.
+      {
+        kind: "static" as const,
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision" as const, x: 0, y: 0, rot: 0, shape: { kind: "rect" as const, w: 400, h: 100 } },
+          { type: "anchor" as const, id: 1, x: 0, y: -50 },
+        ],
+      },
+      // The leaf: sprung at 1 Hz vertically, with the chain's other anchor on
+      // its top edge.
+      {
+        kind: "rigid" as const,
+        x: 0,
+        y: -300,
+        rot: 0,
+        springFreqX: 1.5,
+        springFreqY: 1,
+        springDamping: 0.4,
+        objects: [
+          { type: "collision" as const, x: 0, y: 0, rot: 0, shape: { kind: "rect" as const, w: 120, h: 12 } },
+          { type: "anchor" as const, id: 2, x: 0, y: -6 },
+        ],
+      },
+      // The branch: hinged at its left end with a torsion spring.
+      {
+        kind: "rigid" as const,
+        x: 400,
+        y: -300,
+        rot: 0,
+        pivot: true,
+        pivotX: -60,
+        pivotY: 0,
+        pivotFreq: 1,
+        pivotDamping: 0.5,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+      // The pendulum: the same hinge, free - it hangs.
+      {
+        kind: "rigid" as const,
+        x: 800,
+        y: -300,
+        rot: 0,
+        pivot: true,
+        pivotX: -60,
+        pivotY: 0,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+      // The controls: a centre-of-mass pivot and a plain rigid body.
+      {
+        kind: "rigid" as const,
+        x: 1200,
+        y: -300,
+        rot: 0,
+        pivot: true,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+      {
+        kind: "rigid" as const,
+        x: 1600,
+        y: -300,
+        rot: 0,
+        objects: [{ type: "collision" as const, x: 0, y: 0, rot: 0, shape: rect }],
+      },
+    ],
+    chains: [{ a: 1, b: 2 }],
+  };
+  const data = scaleLevelData(px, PX_FACTOR);
+  const world = new World();
+  const built = buildLevelBodies(world, data, () => {});
+  const [, leaf, branch, pendulum, windmill, free] = built.bodies.map((b) => b.body) as [
+    unknown,
+    RigidBody2D,
+    RigidBody2D,
+    RigidBody2D,
+    RigidBody2D,
+    RigidBody2D,
+  ];
+
+  const droop = droopOf(1);
+  const leafAt0 =
+    leaf.globalPosition.x === 0 && Math.abs(leaf.globalPosition.y - (-3 + droop)) < 1e-12;
+
+  // The branch's settled angle, bisected independently of the build's own
+  // arithmetic (the same statement `pivot-droop` makes about the sim).
+  const w = 2 * Math.PI;
+  const d = branch.pivotComOffset.length();
+  let lo = 0;
+  let hi = Math.PI / 2;
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    if (branch.inertia * w * w * mid - branch.mass * G * d * Math.cos(mid) < 0) lo = mid;
+    else hi = mid;
+  }
+  const branchAt0 = Math.abs(branch.globalRotation - lo) < 1e-9;
+  const pendulumAt0 = Math.abs(pendulum.globalRotation - Math.PI / 2) < 1e-12;
+  const controlsAt0 =
+    windmill.globalRotation === 0 &&
+    windmill.globalPosition.x === 12 &&
+    windmill.globalPosition.y === -3 &&
+    free.globalPosition.x === 16 &&
+    free.globalPosition.y === -3;
+
+  // The chain went taut between the anchors as they LAND: static top face to
+  // the leaf's settled top edge.
+  const chains = buildSceneChains(data, built);
+  const settledDist = Math.abs(-0.5 - (-3.06 + droop));
+  const authoredDist = Math.abs(-0.5 - -3.06);
+  const chainLen = chains[0]?.rope.maxRopeLength ?? NaN;
+  const chainOk =
+    Math.abs(chainLen - settledDist) < 1e-9 && Math.abs(chainLen - authoredDist) > 0.2;
+
+  // 5 s untouched: a body spawned at its rest pose has nothing to settle.
+  const before = [leaf, branch, pendulum].map((b) => ({
+    p: b.globalPosition,
+    r: b.globalRotation,
+  }));
+  let moved = 0;
+  for (let i = 0; i < 300; i++) {
+    world.integrate(DT);
+    for (let k = 0; k < before.length; k++) {
+      const b = [leaf, branch, pendulum][k]!;
+      moved = Math.max(
+        moved,
+        b.globalPosition.sub(before[k]!.p).length(),
+        Math.abs(b.globalRotation - before[k]!.r),
+      );
+    }
+  }
+  const stillOk = moved < 1e-9;
+
+  // The editor's ghost reads the same displacements off the same build, and
+  // reads NOTHING off the controls.
+  const ghosts = settledGhosts(modelFromDisk(px));
+  const ghostLeaf = ghosts.find((g) => Math.abs(g.dpos.y - droop) < 1e-12 && g.drot === 0);
+  const ghostBranch = ghosts.find((g) => Math.abs(g.drot - lo) < 1e-9);
+  const ghostPendulum = ghosts.find((g) => Math.abs(g.drot - Math.PI / 2) < 1e-12);
+  const ghostOk = ghosts.length === 3 && !!ghostLeaf && !!ghostBranch && !!ghostPendulum;
+
+  const passed = leafAt0 && branchAt0 && pendulumAt0 && controlsAt0 && chainOk && stillOk && ghostOk;
+  return ok("spawn-at-rest — sprung bodies open the level already settled", passed, [
+    `${leafAt0 ? "ok  " : "BAD "} the leaf spawns at its g/w² droop (y=${leaf.globalPosition.y.toFixed(6)}, want ${(-3 + droop).toFixed(6)})`,
+    `${branchAt0 ? "ok  " : "BAD "} the branch spawns at its settled angle (${branch.globalRotation.toFixed(6)}, want ${lo.toFixed(6)})`,
+    `${pendulumAt0 ? "ok  " : "BAD "} the free pendulum spawns hanging (${pendulum.globalRotation.toFixed(6)}, want ${(Math.PI / 2).toFixed(6)})`,
+    `${controlsAt0 ? "ok  " : "BAD "} a centre-of-mass pivot and a plain rigid spawn exactly as authored`,
+    `${chainOk ? "ok  " : "BAD "} a taut chain measures its length between the anchors as they land (${chainLen.toFixed(4)}, settled ${settledDist.toFixed(4)}, authored ${authoredDist.toFixed(4)})`,
+    `${stillOk ? "ok  " : "BAD "} 300 untouched frames move the settled bodies ${moved.toExponential(1)} (want < 1e-9)`,
+    `${ghostOk ? "ok  " : "BAD "} the editor's ghosts read the same three displacements and nothing for the controls (${ghosts.length} ghosts)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// winch-load: a wind-up bears DOWN on the sprung body it hangs from.
+//
+// The ball's spin-share rollback (`BallLevel`, session-265f) undoes the chain
+// solve's motion of every free body the winch's kinematic spin would otherwise
+// export momentum to. Its premise - "the unwind is about to refuse the spin,
+// and the anchor keeps whatever it was given" - fails on both halves for a
+// SPRUNG anchor under a hanging ball: the winch genuinely hauls (the spin is
+// paid for by the ball rising, nothing is refused), and a spring answers every
+// displacement rather than keeping it. Rolled back anyway, the branch carries
+// nothing for exactly as long as the winch works, so a ball winding itself up
+// a chain pulled the pivoting log UP past its unloaded rest angle while
+// hanging off it (session-454f).
+//
+// So each rig here is the same scene twice over one question: hook a hanging
+// ball to a sprung body, load it, then wind up - and the body must go on
+// carrying the load. Asserted against the body's own measured LOADED
+// deflection, not a closed form, because during a haul the tension exceeds the
+// static weight and the exact trajectory is the solve's; what must never
+// happen is the deflection collapsing back to (or past) the unloaded rest pose
+// while the ball still hangs below the mount.
+// ---------------------------------------------------------------------------
+function caseWinchLoad(): SpringResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // Drive one rig: fire at `aimPx` (scene px), hold 240 frames, then wind the
+  // aim a full turn per 4 s for 600 frames. `deflection` reads the sprung
+  // body's displacement in its droop direction (positive = loaded further).
+  const run = (
+    label: string,
+    data: RawLevelData,
+    body: (level: BallLevel) => RigidBody2D,
+    deflection: (b: RigidBody2D) => number,
+  ): void => {
+    const level = new BallLevel(data);
+    const target = body(level);
+    let prev = emptyFrameInput();
+    const feed = (fire: boolean, aim: Vec2): void => {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(fire, prev.fire),
+        mouseWorldPosition: aim,
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+    };
+
+    // Spawn IS the rest pose (spawn-at-rest), so the unloaded datum is frame 0.
+    const rest = deflection(target);
+    const aimAt = target.globalPosition.add(
+      target.pivotComOffset.rotated(target.globalRotation),
+    );
+    for (let f = 0; f < 240; f++) feed(true, aimAt);
+    check(
+      `${label}: the chain is anchored to the sprung body`,
+      level.ball.chain?.end.contact.obj === target,
+    );
+    const loaded = deflection(target) - rest;
+    check(
+      `${label}: hanging off it deflects it ${loaded.toFixed(3)} in the droop direction`,
+      loaded > 0.05,
+    );
+
+    // Wind, at a hand's pace (a full turn per 6 s). The first 60 frames are
+    // the transient of the haul biting; after that, every frame the ball
+    // still hangs a chain's length below the mount is a frame the body must
+    // carry it. The window ends when the ball closes to within a metre: from
+    // there the chain is short enough that a swing's tension direction whips
+    // right round per orbit (and past it, the ball presses INTO the body by
+    // contact) - different regimes with their own police.
+    const start = level.ball.loopDirection.angle();
+    const startGap = level.ball.globalPosition.distanceTo(aimAt);
+    let closest = startGap;
+    let held = 0;
+    let worst = Infinity;
+    let sum = 0;
+    let wound = 0;
+    for (wound = 0; wound < 900; wound++) {
+      const angle = start + (wound / 360) * Math.PI * 2;
+      const aim = level.ball.globalPosition.add(
+        new Vec2(Math.cos(angle), Math.sin(angle)).mul(2),
+      );
+      feed(true, aim);
+      const gap = level.ball.globalPosition.distanceTo(aimAt);
+      closest = Math.min(closest, gap);
+      if (gap < 1.0) break;
+      const anchored = level.ball.chain?.end.contact.obj === target;
+      const below = level.ball.globalPosition.y > target.globalPosition.y;
+      if (wound >= 60 && anchored && below) {
+        held++;
+        worst = Math.min(worst, deflection(target) - rest);
+        sum += deflection(target) - rest;
+      }
+    }
+    check(
+      `${label}: the wind-up hauled the ball in (${closest.toFixed(2)} m of ${startGap.toFixed(2)})`,
+      closest < startGap * 0.8,
+    );
+    check(`${label}: the ball hung below the mount for ${held} wind frames (need 150)`, held >= 150);
+    // A swing transient may momentarily unload the body; standing at (or
+    // sprung past) the unloaded rest pose while the ball hangs may not.
+    check(
+      `${label}: it never sprang past its rest pose while the ball hung (worst ${worst.toFixed(3)}, tol -0.06)`,
+      worst >= -0.06,
+    );
+    check(
+      `${label}: and carried the load on average (mean ${(sum / Math.max(1, held)).toFixed(3)} of ${loaded.toFixed(3)} loaded, floor ${(0.3 * loaded).toFixed(3)})`,
+      sum / Math.max(1, held) >= 0.3 * loaded,
+    );
+
+    // The wound-tight endgame: keep winding for 300 more frames with the ball
+    // riding right at the body. This is the regime where session-1010f's log
+    // was pumped to -4 rad/s with the ball surfing its tip at 13 m/s and
+    // flinging off on release - a phantom weight impulse applied while the
+    // CONTACT was already carrying the ball, aimed along a line that rotates
+    // with the wound-up orbit. Nothing here may run away: the body's droop
+    // rate stays at spring-swing scale and the ball is never flung.
+    let bodyRate = 0;
+    let ballPeak = 0;
+    let prevDefl = deflection(target);
+    for (let f = 0; f < 600; f++) {
+      // A hand whipping the cursor round (a turn per 1.5 s), which is the
+      // recorded session's pace, not the measured window's gentle one.
+      const angle = start + (wound / 360 + f / 90) * Math.PI * 2;
+      const aim = level.ball.globalPosition.add(
+        new Vec2(Math.cos(angle), Math.sin(angle)).mul(2),
+      );
+      feed(true, aim);
+      const d = deflection(target);
+      bodyRate = Math.max(bodyRate, Math.abs(d - prevDefl) * 60);
+      prevDefl = d;
+      ballPeak = Math.max(ballPeak, level.ball.linearVelocity.length());
+    }
+    check(
+      `${label}: wound tight and still winding, the body is never whipped (peak ${bodyRate.toFixed(2)}/s, bar 2.5)`,
+      bodyRate < 2.5,
+    );
+    check(
+      `${label}: and the ball is never flung (peak ${ballPeak.toFixed(1)} m/s, bar 8)`,
+      ballPeak < 8,
+    );
+  };
+
+  // Rig 1: the pivoting log - a 3 m bough hinged at its left end with a
+  // torsion return spring, the ball hung from its underside. Deflection is the
+  // hinge angle, signed toward droop (rotation is unwrapped, so a plain
+  // difference is exact).
+  const logPx: RawLevelData = {
+    player: { x: 60, y: -150, radius: 12 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 0,
+        y: -400,
+        rot: 0,
+        pivot: true,
+        pivotX: -140,
+        pivotFreq: 0.5,
+        pivotDamping: 0.15,
+        objects: [
+          { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 300, h: 24 } },
+        ],
+      },
+    ],
+  };
+  {
+    const level0 = new BallLevel(logPx);
+    const log = level0.bodies.find(
+      (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+    )!;
+    // The droop direction: where gravity takes the hinge from its rest angle.
+    // Read off the spawn (settled) pose against the authored angle 0.
+    const droopSign = Math.sign(log.globalRotation - 0) || -1;
+    run(
+      "log",
+      logPx,
+      (lvl) =>
+        lvl.bodies.find(
+          (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+        )!,
+      (b) => droopSign * b.globalRotation,
+    );
+  }
+
+  // Rig 2: the spring leaf - sprung vertically at 1 Hz, x pinned. Deflection
+  // is how far below its rest height it hangs (+y is down).
+  const leafPx: RawLevelData = {
+    // Within CHAIN_MAX_LENGTH (1.8 m) of the leaf's settled height.
+    player: { x: 20, y: -150, radius: 12 },
+    bodies: [
+      // Heavy and well damped on purpose: the case is about the LOAD standing,
+      // so the rig must settle rather than ring - a light leaf under a 52 kg
+      // ball is a pumped oscillator and its swings are not the question here.
+      {
+        kind: "rigid",
+        x: 0,
+        y: -300,
+        rot: 0,
+        springFreqY: 1,
+        springDamping: 0.5,
+        objects: [
+          { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 200, h: 30 } },
+        ],
+      },
+    ],
+  };
+  run(
+    "leaf",
+    leafPx,
+    (lvl) => lvl.bodies.find((b): b is RigidBody2D => b instanceof RigidBody2D && b.spring !== null)!,
+    (b) => b.globalPosition.y,
+  );
+
+  return ok("winch-load — a wind-up bears down on the sprung body it hangs from", passed, details);
+}
+
 export function runSpringCases(): SpringResult[] {
   return [
     caseDroop(),
@@ -806,5 +1549,11 @@ export function runSpringCases(): SpringResult[] {
     caseEnergy(),
     caseAuthored(),
     caseNoSpring(),
+    casePivotDroop(),
+    casePivotPendulum(),
+    casePivotPeriod(),
+    casePivotAuthored(),
+    caseSpawnAtRest(),
+    caseWinchLoad(),
   ];
 }

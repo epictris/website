@@ -691,7 +691,17 @@ export function mechanicalEnergy(world: World): number {
     if (body.removed || !(body instanceof RigidBody2D)) continue;
     total += 0.5 * body.mass * body.linearVelocity.lengthSquared();
     total += 0.5 * body.inertia * body.angularVelocity * body.angularVelocity;
-    total += body.mass * 9.8 * body.gravityScale * -body.globalPosition.y;
+    // The height that stores gravitational energy is the CENTRE OF MASS's. For
+    // every ordinary body that is `globalPosition`; an off-centre pivot's
+    // origin is its bearing, which never moves, and its centre of mass swings
+    // with the rotation (`RigidBody2D.pivotComOffset` - ZERO everywhere else,
+    // so the sum is unchanged where it always was). Without this a free branch
+    // reads its whole KE↔PE exchange as energy appearing and vanishing.
+    const com =
+      body.pivotComOffset.x !== 0 || body.pivotComOffset.y !== 0
+        ? body.globalPosition.add(body.pivotComOffset.rotated(body.globalRotation))
+        : body.globalPosition;
+    total += body.mass * 9.8 * body.gravityScale * -com.y;
     // A spring body stores ELASTIC potential (see `RigidBody2D.spring`), and
     // without it the leaf springing back reads as kinetic plus gravitational
     // energy appearing out of nowhere - an unforced gain, which is precisely
@@ -706,6 +716,14 @@ export function mechanicalEnergy(world: World): number {
         body.mass *
         (body.spring.omegaX * body.spring.omegaX * d.x * d.x +
           body.spring.omegaY * body.spring.omegaY * d.y * d.y);
+    }
+    // A pivot body's torsion spring stores elastic potential exactly as the
+    // linear spring does: `k = I·w²` by construction, so 0.5·I·w²·Δθ². Damping
+    // only ever removes energy, so the monitor's one-sided bound stays valid.
+    if (body.pivotSpring) {
+      const s = body.pivotSpring;
+      const d = body.globalRotation - s.restAngle;
+      total += 0.5 * body.inertia * s.omega * s.omega * d * d;
     }
   }
   return total;

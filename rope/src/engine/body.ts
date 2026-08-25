@@ -110,7 +110,9 @@ export class CollisionShape2D implements ShapeTransform {
   //
   // Invalidated when the body's shape set changes. Mutating a mounted shape's
   // `localOffset` / `localRotation` after build would not invalidate it, and
-  // nothing does: pieces are placed once, by `mountPieces`.
+  // nothing does once the level is running: pieces are placed by `mountPieces`,
+  // and the one thing that moves them afterwards (`reoriginTo`, an off-centre
+  // pivot's bearing) still runs at build, before anything queries the body.
   isVertexExposed(i: number): boolean {
     if (this.shape.kind === "circle") return false;
     if (!this.exposedVertices) {
@@ -721,6 +723,26 @@ export class RigidBody2D extends PhysicsBody2D {
   // hangs where it was authored. Default false keeps every other body - and
   // recorded replays - unchanged.
   pivot = false;
+  // Where the centre of mass sits relative to the bearing, in the body's own
+  // frame. ZERO for a plain pivot body, whose origin IS the centre of mass
+  // (above). An authored pivot POINT (`LevelBodyData.pivotX`) re-origins the
+  // body onto the bearing instead - the origin is the hinge, the inertia
+  // carries the parallel-axis term - and this vector is what gravity's torque
+  // about the bearing is measured by in `World.integrate`. With the origin at
+  // the hinge every existing impulse path is exact for a hinged body with no
+  // code of its own: `inverseMass` 0 holds the axle, and every lever arm the
+  // engine measures from `globalPosition` is measured from the hinge.
+  pivotComOffset = Vec2.ZERO;
+  // Torsion return spring on a pivot body (`LevelBodyData.pivotFreq`): a
+  // damped angular oscillator about the rest angle the body was built at, so a
+  // branch bends away under a load - a hanging player, a thrown crate - and
+  // returns to its authored angle when the load leaves. The acceleration form
+  // (`alpha = -w²·Δθ - 2ζw·ω`, applied in `World.integrate`) makes the free
+  // oscillation mass-independent, exactly as the linear spring's is. The angle
+  // is deliberately NOT wrapped: a body wound a full turn unwinds a full turn,
+  // which is what a torsion spring does. Null for a free-spinning pivot and
+  // for every other body; recorded replays predate the field.
+  pivotSpring: { restAngle: number; omega: number; zeta: number } | null = null;
   // Spring mounting: the body is held at its authored position by a two-axis
   // spring-damper rather than bolted to it (see `LevelBodyData.springFreqX`).
   // It sags under its own weight, sags further under a load - a hanging

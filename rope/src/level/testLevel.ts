@@ -120,6 +120,81 @@ const SPRING_DATA: RawLevelData = {
 
 export const TEST_SPRING: LevelSpec = { data: SPRING_DATA };
 
+// A BRANCH to hang off (see `LevelBodyData.pivotX` / `pivotFreq`): the spring
+// level's chasm again, with the leaf replaced by a bough hinged where it meets
+// the far wall. Where the leaf TRANSLATES on its spring, the branch ROTATES
+// about its bearing - grab the free end and the whole thing swings down about
+// the trunk, then springs back up to its authored angle when you let go.
+//
+// The branch is 1.9 x 0.24 m of oak at the default 20 cm thickness, 63.8 kg,
+// hinged at its right end (pivotX = +95 px), so the centre of mass sits
+// d = 0.95 m out from the bearing and I about the bearing is
+// I_com + m·d² ≈ 77 kg·m². At 1.25 Hz the closed forms
+// (`I·w²·Δθ = τ·cos θ`) give:
+//
+//   its own weight   m·g·d = 594 N·m    ≈  7° of droop, the tip down ~23 cm
+//   a player on the tip adds 1303 N·m   ≈ 21° in all, the tip down ~69 cm
+//
+// so the swing is felt in tens of centimetres over the pit, exactly the range
+// the leaf's numbers were chosen for, and the free end still crosses the
+// run-off arrival height at x = 1.1 m. Damping 0.2 leaves a few visible
+// swings on the spring back.
+const BRANCH_DATA: RawLevelData = {
+  player: { x: -300, y: 20, radius: 8 },
+  bodies: [
+    // The left approach, ending at x = 0 - the lip the run leaves from.
+    {
+      kind: "static",
+      x: -400,
+      y: 100,
+      rot: 0,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 800, h: 40 } },
+      ],
+    },
+    // The far side, whose left face (x = 300) is the trunk the branch grows out
+    // of.
+    {
+      kind: "static",
+      x: 700,
+      y: 100,
+      rot: 0,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 800, h: 40 } },
+      ],
+    },
+    // The pit floor, far enough down that the branch's whole travel clears it.
+    {
+      kind: "static",
+      x: 150,
+      y: 400,
+      rot: 0,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 340, h: 40 } },
+      ],
+    },
+    // The branch: free end at x = 1.1 m over the pit, bearing at the far wall's
+    // face.
+    {
+      kind: "rigid",
+      x: 205,
+      y: 121,
+      rot: 0,
+      color: "#7a5a3a",
+      pivot: true,
+      pivotX: 95,
+      pivotY: 0,
+      pivotFreq: 1.25,
+      pivotDamping: 0.2,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 190, h: 24 } },
+      ],
+    },
+  ],
+};
+
+export const TEST_BRANCH: LevelSpec = { data: BRANCH_DATA };
+
 // Vines to swing on (see `level/vines.ts`): a chasm with two hanging from
 // branches over it, a third long enough to pool on the far ledge, and a fourth
 // SPANNING between the second and third branches - attached at both ends, with
