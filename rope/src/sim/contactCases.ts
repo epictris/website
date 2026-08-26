@@ -2957,6 +2957,106 @@ function caseBallSparks(): ContactResult {
     slam.slide === 0,
   );
 
+  // (f) Wound up tight against hook-proof steel, which is the one rig here
+  // where the spin the ball CARRIES and the spin it REALISES are different
+  // numbers.
+  //
+  // A ball whose chain is wound out has nowhere left to turn: `unwindOverLength`
+  // walks its rotation back to where the frame started it, every frame, for as
+  // long as the player keeps aiming. The aim goes on commanding 37.5 rad/s
+  // regardless - the steering overwrites `angularVelocity` outright and no
+  // contact can spend it - so the ball sits in one place at one angle with a
+  // rim speed of 4.5 m/s on the books. Read off the commanded spin, its contact
+  // slips at 5.76 m/s and grinds two or three particles a frame forever, which
+  // is `session-313f`: a stationary ball welded to a wall throwing a permanent
+  // stream of sparks. Read off the rotation the frame actually realised, it is
+  // silent, and the pair below is what says which one is being read.
+  //
+  // The rig is a wedge rather than a wall press so that the surface under the
+  // ball is the hook-proof floor while the thing it is wound against is
+  // ordinary steel: hook-proof is the flag that refuses a hook, so the post the
+  // chain is anchored to cannot be the steel the sparks are struck off.
+  const wound = ((): { slide: number; contactFrames: number; span: number; command: number } => {
+    const level = new BallLevel(
+      scaleLevelData(
+        {
+          player: { x: 0, y: 0, radius: 8 },
+          bodies: [
+            {
+              kind: "static", x: 0, y: 60, rot: 0,
+              shape: { kind: "rect", w: 4000, h: 40 },
+              friction: 1, impermeable: true,
+            },
+            // Ordinary steel, so the hook can take it: a post to wind against.
+            {
+              kind: "static", x: 90, y: -10, rot: 0,
+              shape: { kind: "rect", w: 20, h: 100 },
+              friction: 1,
+            },
+          ],
+        } as RawLevelData,
+        1,
+      ),
+    );
+    const ballId = level.ball.id;
+    const sparks = new SparkSystem();
+    let prev = emptyFrameInput();
+    let slide = 0;
+    let contactFrames = 0;
+    let command = 0;
+    const rotations: number[] = [];
+    // The aim the ball is steered by, once the chain is anchored: a fixed 2.5
+    // rad ahead of the loop, recomputed against the loop each frame so the error
+    // the steering reads - and therefore the spin it commands - never decays.
+    const AIM_ERROR = 2.5;
+    for (let f = 1; f <= 400; f++) {
+      const at = level.ball.globalPosition;
+      const input: FrameInput = { ...emptyFrameInput(), mouseWorldPosition: at };
+      if (f >= 30) {
+        // Thrown at the post's lower corner so the chain anchors low and the
+        // winding hauls the ball ALONG the floor rather than up off it.
+        input.mouseWorldPosition =
+          f < 60
+            ? new Vec2(0.78, 0.36)
+            : at.add(level.ball.loopDirection.rotated(AIM_ERROR).mul(5));
+        input.fire = button(true, prev.fire);
+      }
+      prev = input;
+      const aimError = wrapAngle(
+        input.mouseWorldPosition.sub(at).angle() - level.ball.loopDirection.angle(),
+      );
+      level.physicsProcess(input, DT);
+      const before = sparks.slideParticles;
+      sparks.ingest(level.sparkEvents.filter((e) => e.source === ballId));
+      sparks.advance(DT);
+      // The last quarter of the run: by then the chain is wound out and the ball
+      // has stopped moving, which is the state the clause is about.
+      if (f <= 300) continue;
+      slide += sparks.slideParticles - before;
+      command = Math.max(command, Math.abs(aimError) * BallPlayer.AIM_TURN_GAIN);
+      rotations.push(level.ball.globalRotation);
+      if (level.sparkEvents.some((e) => e.source === ballId)) contactFrames++;
+    }
+    return { slide, contactFrames, span: rotationSpan(rotations), command };
+  })();
+  details.push(
+    `wound: ${wound.contactFrames} of 100 contact frames, commanded ${wound.command.toFixed(1)} rad/s, ` +
+      `turned ${wound.span.toFixed(4)} rad, slide=${wound.slide}`,
+  );
+  check(
+    `wound: the aim really is commanding a spin (${wound.command.toFixed(1)} rad/s)`,
+    wound.command > 20,
+  );
+  check(
+    `wound: which the chain refuses outright (${wound.span.toFixed(4)} rad turned)`,
+    wound.span < 1e-3,
+  );
+  check(
+    `wound: on hook-proof steel the whole time (${wound.contactFrames} frames)`,
+    wound.contactFrames === 100,
+  );
+  check(`wound: and therefore silent (${wound.slide})`, wound.slide === 0);
+
   return ok(
     "ball-sparks — the ball strikes hook-proof steel, grinds it when it slides, and is silent rolling",
     passed,

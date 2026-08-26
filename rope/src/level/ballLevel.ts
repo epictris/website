@@ -104,6 +104,9 @@ export class BallLevel {
   // same touch resolves against the first rather than doubling it (see
   // `reportSpark`). Cleared with `sparkEvents`.
   private sparkEventIndex = new Map<PhysicsBody2D, { at: number; arrival: boolean }>();
+  // The BALL's spark event for this frame, pending the spin term the frame turns
+  // out to have realised (see `settleBallSparkSpin`). Cleared with `sparkEvents`.
+  private ballSparkSpin: { at: number; lever: Vec2; commanded: number } | null = null;
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -280,6 +283,7 @@ export class BallLevel {
     this.frame++;
     this.sparkEvents.length = 0;
     this.sparkEventIndex.clear();
+    this.ballSparkSpin = null;
     Debug.clear();
     PhysTrace.frame = this.frame;
     PhaseTrace.begin(this.frame, this.world);
@@ -910,6 +914,7 @@ export class BallLevel {
       this.chainCreditOverBound = null;
     }
     this.endWasFixed = endFixed;
+    this.settleBallSparkSpin(ballRotationAtFrameStart, delta);
 
     // The slack chain's visual drape, stepped against the frame's FINAL
     // transforms — after the chain phase, the push-out and the stall lease, so
@@ -919,6 +924,39 @@ export class BallLevel {
     this.ball.chainSlack?.step(this.bodies, delta);
 
     this.cameraPosition = this.ball.globalPosition;
+  }
+
+  // Rewrite the ball's spark event with the spin the frame actually REALISED,
+  // in place of the one it carried into the contact solve.
+  //
+  // A spin a later phase refuses is not a spin: the chain's unwind walks the
+  // ball's rotation back to where the frame started it (`Rope.unwindOverLength`)
+  // when the chain is wound tight with nowhere left to be hauled, so a ball held
+  // against hook-proof steel on a wound-up chain is COMMANDED 25 rad/s by the
+  // aim, turns exactly 0 rad, and never moves. `collectContactSparks` runs
+  // before that phase and read the command, which put a permanent 3.0 m/s of
+  // slip on a contact whose point, pose and velocity were bit-identical frame
+  // after frame - a stream of sparks off a stationary ball (`session-313f`,
+  // f255 onward: rot=18.8522 unchanged with vt=3.005 every frame).
+  //
+  // Only the SPIN half is settled here, and only for the ball. The linear half
+  // stays the pre-solve arrival on purpose - the contact solve cancels the
+  // approach the sparks are struck by, which is the whole reason that half is
+  // sampled early (see `collectContactSparks`) - and nothing rolls a body's
+  // POSITION back the way the unwind rolls its rotation. Nothing else turns the
+  // ball either: `World.integrate` is the only writer of `globalRotation` in the
+  // solve, so on every frame no rollback touches, the realised spin equals the
+  // commanded one to the bit and this rewrites the event to itself.
+  private settleBallSparkSpin(rotationAtFrameStart: number, delta: number): void {
+    const pending = this.ballSparkSpin;
+    if (pending === null || delta <= 0) return;
+    const realised = (this.ball.globalRotation - rotationAtFrameStart) / delta;
+    const correction = realised - pending.commanded;
+    if (correction === 0) return;
+    const event = this.sparkEvents[pending.at];
+    if (event === undefined) return;
+    const perp = new Vec2(-pending.lever.y, pending.lever.x);
+    this.sparkEvents[pending.at] = { ...event, vel: event.vel.add(perp.mul(correction)) };
   }
 
   // The touches the SOLVER reports: a hook it is holding against a hook-proof
@@ -1009,6 +1047,16 @@ export class BallLevel {
           : steel.velocityAtPoint(c.point);
       const vel = arrival.sub(other.velocityAtPoint(c.point));
       this.reportSpark(steel, { source: steel.id, point: c.point, normal, vel });
+      // The ball's spin term is provisional until the frame ends - see
+      // `settleBallSparkSpin`. Recorded after the report so the index is the one
+      // the event actually landed at, and overwritten by each further ball
+      // contact for the same reason `reportSpark` keeps the latest.
+      if (steel === this.ball) {
+        const held = this.sparkEventIndex.get(this.ball);
+        if (held !== undefined) {
+          this.ballSparkSpin = { at: held.at, lever: r, commanded: ballSpin };
+        }
+      }
     }
   }
 }
