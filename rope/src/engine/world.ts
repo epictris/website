@@ -848,6 +848,10 @@ export class World {
               2 * s.zeta * s.omega * body.angularVelocity;
           }
           if (alpha !== 0) body.angularVelocity += alpha * dt;
+          // Recorded for the rope's credit bound (see
+          // `RigidBody2D.pivotFrameAccelDw`); zero for a plain pivot, so the
+          // guarded-to-nothing promise above holds for it here too.
+          body.pivotFrameAccelDw = alpha * dt;
         } else {
           // A spring body is pulled back toward its anchor by a damped
           // harmonic oscillator per axis, folded into the same semi-implicit

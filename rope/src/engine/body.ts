@@ -743,6 +743,15 @@ export class RigidBody2D extends PhysicsBody2D {
   // which is what a torsion spring does. Null for a free-spinning pivot and
   // for every other body; recorded replays predate the field.
   pivotSpring: { restAngle: number; omega: number; zeta: number } | null = null;
+  // The Δw the integrate step's own restoring dynamics - the torsion spring
+  // and an off-centre bearing's gravity torque - applied to this pivot THIS
+  // frame (rad/s, signed; zero for a plain centre-of-mass pivot). Written by
+  // `World.integrate`, read by `Rope.boundRotationCredit`: the solve's
+  // rotation-credit top-up must never refund velocity the body's own
+  // dynamics just removed, or a hanging load position-marches the branch at
+  // a constant rate with the spring's bite handed back every frame
+  // (session-333f).
+  pivotFrameAccelDw = 0;
   // Spring mounting: the body is held at its authored position by a two-axis
   // spring-damper rather than bolted to it (see `LevelBodyData.springFreqX`).
   // It sags under its own weight, sags further under a load - a hanging

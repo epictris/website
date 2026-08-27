@@ -13,6 +13,7 @@ import {
   RigidBody2D,
 } from "../engine/body";
 import { isExposedCorner } from "../engine/shapes";
+import { GRAVITY } from "../engine/world";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
@@ -103,6 +104,9 @@ interface DynamicBody {
   body: PhysicsBody2D;
   inertia: number;
   mass: number;
+  // The body's linear velocity as the credit pass reads it — what the
+  // impulse-pair bound in `boundRotationCredit` measures "paid" against.
+  velocity: Vec2;
   addVelocity(v: Vec2): void;
   addRotation(r: number): void;
 }
@@ -638,6 +642,7 @@ export class Rope {
     // begun rewriting them.
     const creditBound = this.creditBound(delta);
 
+
     const correctionImpulse = this.resolveLengthConstraint();
     if (correctionImpulse !== null) {
       // Friction impulse may push the rope past its max length; re-solve.
@@ -648,8 +653,17 @@ export class Rope {
       // per-body `pullDirection` calls this replaces each regenerated the
       // identical path objects from scratch - the other half of session-230f's
       // 20 ms frames.
-      const pullDirs = this.pullDirections();
+      const { dirs: pullDirs, pivotArms, pivotContacts } = this.pullDirections();
 
+      // Two passes, compute-then-apply, so a PIVOT body's rotation credit can
+      // be bounded by the reaction to the momentum this pass actually REMOVED
+      // from the other bodies (see `boundRotationCredit`). Nothing a credit
+      // writes feeds another body's credit — every credit is Δposition over Δt
+      // against pre-positions, clamped by precomputed bounds — so splitting
+      // the loop is bit-identical for every body the pair bound never touches.
+      const pending: { dyn: DynamicBody; vel: Vec2; rot: number; body: PhysicsBody2D }[] = [];
+      let paidImpulse = 0;
+      let maxReceding = 0;
       for (const body of moved) {
         const dynamicBody = this.getDynamicBodyState(body);
         if (dynamicBody) {
@@ -657,25 +671,72 @@ export class Rope {
           // error that a wrap appearing or vanishing put there is corrected in
           // position but earns no velocity. Bounded by `creditBound`: the share
           // the bodies are no longer moving to earn does not either.
-          dynamicBody.addVelocity(
-            Rope.clampCreditAlong(
-              pullDirs.get(body) ?? null,
-              body.globalPosition
-                .sub(prePositions.get(body)!)
-                .div(delta)
-                .mul(this.topologyCreditScale),
-              creditBound,
-            ),
+          const vel = Rope.clampCreditAlong(
+            pullDirs.get(body) ?? null,
+            body.globalPosition
+              .sub(prePositions.get(body)!)
+              .div(delta)
+              .mul(this.topologyCreditScale),
+            creditBound,
           );
-          dynamicBody.addRotation(
-            Rope.boundRotationCredit(
-              body,
-              ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale,
-            ),
-          );
-          // (Godot pushed the mutated transform back into the physics server here;
-          // in this engine the body transform is already authoritative.)
+          const rot =
+            ((body.globalRotation - preRotations.get(body)!) / delta) * this.topologyCreditScale;
+          pending.push({ dyn: dynamicBody, vel, rot, body });
+          // What this pass PAID: the share of a body's credit that removed its
+          // own recession along the pull — a braking impulse, real momentum the
+          // constraint took off the body. Credit past cancelling the recession
+          // is the solve GRANTING inward speed (the winch's haul), which is
+          // exactly the credit the whirl ratchet was fed by, so it pays the
+          // pivot nothing. A pivot's own mass reads Infinity and is excluded by
+          // the same guard that keeps 0·Infinity out of the sum.
+          const dir = pullDirs.get(body);
+          if (dir && Number.isFinite(dynamicBody.mass)) {
+            // Less gravity's own per-frame bite along the recession: a body
+            // merely HANGING recedes by exactly that every frame and the solve
+            // removes it every frame, and crediting the pivot for it is the
+            // static weight arriving as a velocity trickle - ~0.13 rad/s a
+            // frame into a frictionless bearing, which is session-136f's whip
+            // by another door. The static load reaches a sprung anchor as the
+            // position solve's displacement and `applyHangLoad`'s force, both
+            // of which a spring answers with a settled droop.
+            const bite = Math.max(0, -GRAVITY.dot(dir)) * delta;
+            const receding = Math.max(0, -dynamicBody.velocity.dot(dir) - bite);
+            if (receding >= Rope.PAIR_SNAP_MIN_RECESSION) {
+              paidImpulse += Mathf.clamp(vel.dot(dir), 0, receding) * dynamicBody.mass;
+              maxReceding = Math.max(maxReceding, receding);
+            }
+          }
         }
+      }
+      for (const p of pending) {
+        p.dyn.addVelocity(p.vel);
+        const arm = pivotArms.get(p.body);
+        let reactionDw = 0;
+        if (
+          arm !== undefined &&
+          arm > 1e-9 &&
+          Number.isFinite(p.dyn.inertia) &&
+          p.dyn.inertia > 0 &&
+          paidImpulse > 0
+        ) {
+          // The pairing is INELASTIC at velocity level too: the pivot's contact
+          // may be spun up along its pull direction until it matches the rate
+          // the payer was receding at, never past it — that is where a real
+          // arrest converges, and the cap is what keeps the whirl's per-cycle
+          // recessions from ACCUMULATING in the bearing across cycles (the tip
+          // there already co-rotates near the ball's speed, so the match
+          // allowance reads near zero every pass).
+          const pairDw = (paidImpulse * arm) / p.dyn.inertia;
+          const dir = pullDirs.get(p.body);
+          const contact = pivotContacts.get(p.body);
+          const tipAlong =
+            dir && contact ? Rope.velocityAt(p.body, contact).dot(dir) : 0;
+          const matchDw = Math.max(0, maxReceding - tipAlong) / arm;
+          reactionDw = Math.min(pairDw, matchDw);
+        }
+        p.dyn.addRotation(Rope.boundRotationCredit(p.body, p.rot, reactionDw));
+        // (Godot pushed the mutated transform back into the physics server here;
+        // in this engine the body transform is already authoritative.)
       }
     }
 
@@ -741,6 +802,20 @@ export class Rope {
     return Math.max(openingRate + this.retractedSinceCredit / delta + extraInward, 0);
   }
 
+  // The impulse-pair allowance is for a SNAP, and a snap is FAST: only a body
+  // receding above this rate pays the pivot its reaction. The two regimes it
+  // separates were both measured. A hard radial catch arrives at 6-10 m/s of
+  // recession (session-209f, the yank-catch rig); the whirl's churn - the
+  // orbit's little per-cycle yanks, re-fed by the winch's own credit - runs at
+  // 0.8-1.6 m/s, and a body merely hanging recedes by gravity's bite, 0.16.
+  // Below the bar a recession pays nothing, so the whirl's bearing never
+  // receives the seed spin the runaway bootstraps from and the orbit stays at
+  // its governed baseline; discriminators derived from the aim instead were
+  // tried and both read wrong (realized winding is ZERO in a whirl - the bar
+  // co-rotates, so the chain never coils - and the steering snaps the ball's
+  // spin to 47 rad/s in an ordinary catch as the ball passes its aim point).
+  private static readonly PAIR_SNAP_MIN_RECESSION = 2.5;
+
   // The rotation credit for a PIVOT body may only top its spin up to the rate
   // the solve's own position correction sustained this pass, never past it.
   //
@@ -769,11 +844,57 @@ export class Rope {
   // bound (`creditBound`'s angular image, tried and reverted) it cannot chase
   // the runaway it exists to stop. Non-pivot bodies keep the add-form to the
   // bit.
-  private static boundRotationCredit(body: PhysicsBody2D, credit: number): number {
+  //
+  // Saturation alone starves a HARD RADIAL YANK, and `reactionDw` is the other
+  // half of the statement. A ball falling onto a chain anchored to a sprung
+  // pivot spins the bar to the drive rate in the first frames of the arrest,
+  // and from then on every frame's Δθ/dt sits under the spin already earned:
+  // the credit clamps to zero while the ball goes on paying real momentum
+  // through the same constraint - 0.4-1.1 m/s a frame with the bar credited
+  // nothing, Newton's third law severed, 83% of a 2.76 kJ arrival destroyed
+  // against an inelastic-jerk ceiling of 28% (session-209f f66-70, felt as the
+  // branch giving no backlash at the bottom of the arc). So the pivot may
+  // ALWAYS receive up to the reaction of the impulse the pass actually paid
+  // the other bodies (`reactionDw` = ΣJ·arm/I, computed in the credit loop) -
+  // that is momentum pairing, and it cannot mint: the payer measurably lost
+  // what the pivot gains, and paid impulse counts only the BRAKING share of a
+  // body's credit, so the whirl - whose orbit was hauled inward, never braked
+  // - still pays nothing and the ratchet stays dead. Both allowances cap at
+  // the position-backed credit itself: the solve's own correction remains the
+  // most rotation a pass may be worth. Where two pivots share one path each is
+  // offered the whole paid pool - a loose cap, but a CAP: the position solve's
+  // effective-mass split is what actually apportions the correction between
+  // them, and `cli spring` yank-catch is the detector on the arithmetic.
+  //
+  // And the top-up may never REFUND what the body's own dynamics just removed
+  // (`RigidBody2D.pivotFrameAccelDw`). A ball hanging still from a sprung
+  // branch generates a small position correction every frame - gravity's own
+  // bite, split by effective mass - and the top-up read the spring's per-frame
+  // deceleration of the branch as headroom: the spring bit 0.077 rad/s off,
+  // the credit handed 0.078 back, and the branch position-marched DOWN at the
+  // constant rate of the split, linear, with no bounce, straight past a torque
+  // balance its spring already out-pulled two to one (session-333f, 0.14
+  // rad/s of creep). Subtracting the restoring share leaves the spring's
+  // bite in force: the march stalls a hair past the true balance (~2ζ·c/ω of
+  // offset), and the approach is the spring's own damped oscillation - the
+  // linear spring's interaction, locked to a rotation path. Strictly tighter
+  // than the bare saturation, so nothing the whirl governor holds is loosened.
+  private static boundRotationCredit(
+    body: PhysicsBody2D,
+    credit: number,
+    reactionDw = 0,
+  ): number {
     if (!(body instanceof RigidBody2D) || !body.pivot || credit === 0) return credit;
     const dir = Math.sign(credit);
     const alongCredit = body.angularVelocity * dir;
-    return dir * Mathf.clamp(Math.abs(credit) - Math.max(alongCredit, 0), 0, Math.abs(credit));
+    const restoring = Math.max(0, -body.pivotFrameAccelDw * dir);
+    const saturation = Mathf.clamp(
+      Math.abs(credit) - Math.max(alongCredit, 0) - restoring,
+      0,
+      Math.abs(credit),
+    );
+    const paired = Math.min(Math.abs(credit), reactionDw);
+    return dir * Math.max(saturation, paired);
   }
 
   // Spend the bound: strip whatever inward speed a credit carries past what the
@@ -812,11 +933,28 @@ export class Rope {
   // wrap, first valid of each kind wins - it just walks the path once instead
   // of once per body, which is what a solve pass crediting the whole path
   // needs (see the credit loop in `solvePass`).
-  private pullDirections(): Map<PhysicsBody2D, Vec2> {
+  private pullDirections(): {
+    dirs: Map<PhysicsBody2D, Vec2>;
+    // A PIVOT body's torque arm about its bearing and the contact the rope
+    // acts through, for the impulse-pair bound in `boundRotationCredit` —
+    // collected in the same walk so the credit loop costs one path
+    // regeneration, not two (session-230f).
+    pivotArms: Map<PhysicsBody2D, number>;
+    pivotContacts: Map<PhysicsBody2D, Vec2>;
+  } {
     const dirs = new Map<PhysicsBody2D, Vec2>();
     const fallbacks = new Map<PhysicsBody2D, Vec2>();
+    const pivotArms = new Map<PhysicsBody2D, number>();
+    const pivotContacts = new Map<PhysicsBody2D, Vec2>();
     for (const pathObject of this.generatePathObjects()) {
       const body = pathObject.body;
+      if (body instanceof RigidBody2D && body.pivot) {
+        const arm = Math.abs(this.calculateTorqueArm(pathObject));
+        if (arm > (pivotArms.get(body) ?? 0)) {
+          pivotArms.set(body, arm);
+          pivotContacts.set(body, Rope.contactPointOf(pathObject));
+        }
+      }
       if (dirs.has(body)) continue;
       const dir = pathObject.resolveCorrectionDir();
       if (dir.lengthSquared() < 0.0001) continue;
@@ -829,7 +967,7 @@ export class Rope {
     for (const [body, dir] of fallbacks) {
       if (!dirs.has(body)) dirs.set(body, dir);
     }
-    return dirs;
+    return { dirs, pivotArms, pivotContacts };
   }
 
   private static contactPointOf(pathObject: PathObject): Vec2 {
@@ -1637,6 +1775,7 @@ export class Rope {
           body,
           inertia: body.inertia,
           mass: Infinity,
+          velocity: body.linearVelocity,
           addVelocity: () => {},
           addRotation: (r) => {
             body.angularVelocity += r;
@@ -1656,6 +1795,7 @@ export class Rope {
           body,
           inertia: Infinity,
           mass: body.mass,
+          velocity: body.linearVelocity,
           addVelocity: (v) => {
             body.linearVelocity = body.linearVelocity.add(v);
           },
@@ -1666,6 +1806,7 @@ export class Rope {
         body,
         inertia: body.inertia,
         mass: body.mass,
+        velocity: body.linearVelocity,
         addVelocity: (v) => {
           body.linearVelocity = body.linearVelocity.add(v);
         },
@@ -1679,6 +1820,7 @@ export class Rope {
         body,
         inertia: body.inertia,
         mass: body.mass,
+        velocity: body.velocity,
         addVelocity: (v) => {
           body.velocity = body.velocity.add(v);
         },

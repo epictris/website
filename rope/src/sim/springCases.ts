@@ -1679,6 +1679,377 @@ function caseWhirlAnchor(): SpringResult {
   );
 }
 
+// yank-catch: a hard radial catch on a sprung pivot must hand the branch the
+// yank's momentum, not destroy it.
+//
+// The scenario is session-209f: the ball falls from height, its hook anchors
+// to a passable sprung bar on the way down, the ball falls on through and the
+// chain snaps taut a full length below - a pure radial arrest. The physical
+// ceiling on what an inextensible chain may destroy there is the inelastic
+// jerk between the ball and the bar's effective mass at the anchor
+// (0.5·mu·v_rel², mu the reduced mass) - everything past that is momentum the
+// tension took off the ball and never delivered to the bar. That is exactly
+// what `Rope.boundRotationCredit`'s saturation form did: the first frames of
+// the arrest legitimately spin the bar to the drive rate, and every frame
+// after, the correction's Δθ/dt sits under the spin already earned, so the
+// bar's velocity credit clamps to zero while the ball goes on paying real
+// momentum through the same constraint (session-209f f66-70: the ball loses
+// 0.4-1.1 m/s a frame, the bar is credited 0.0000, 83% of 2.76 kJ gone).
+// The backlash the spring owes the player is then built from the remnant,
+// which reads as the ball and branch barely moving at the bottom of the arc.
+// hang-settle: a ball hanging from a sprung pivot behaves like the SPRING
+// implementation, locked to a rotation path - a forced, damped oscillator that
+// settles at the torque balance.
+//
+// What it must not be is what session-333f recorded: the position solve
+// marching the branch down at the constant rate of the effective-mass split of
+// the ball's per-frame gravity bite, with `boundRotationCredit`'s top-up
+// refunding every frame exactly the angular velocity the torsion spring had
+// just removed - a linear crawl, no bounce, straight PAST the true torque
+// equilibrium (263 N·m of spring against 133 N·m of ball weight, still
+// creeping). The linear spring under the same chain load reaches its closed
+// form (`chain-load`); the pivot must reach its own: I·w²·θ* = m·g·armX(θ*).
+function caseHangSettle(): SpringResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // The yank-catch bar - balanced seesaw (bearing at the centre of mass, so
+  // the bar's own weight is torque-free and the balance below is the ball's
+  // alone) - but the ball starts BELOW it and hooks gently upward.
+  const data: RawLevelData = {
+    player: { x: 110, y: -290, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 0,
+        y: -400,
+        rot: 0,
+        passable: true,
+        pivot: true,
+        pivotFreq: 0.5,
+        pivotDamping: 0.1,
+        objects: [
+          { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 300, h: 24 } },
+        ],
+      },
+    ],
+  };
+  const level = new BallLevel(data);
+  const bar = level.world.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+  )!;
+  const ball = level.ball;
+  let prev = emptyFrameInput();
+  const feed = (aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+
+  const aim = new Vec2(ball.globalPosition.x, bar.globalPosition.y);
+  const rots: number[] = [];
+  let anchoredAt = -1;
+  let tautFrames = 0;
+  for (let f = 0; f < 900; f++) {
+    feed(aim);
+    if (anchoredAt < 0 && ball.chain?.end.contact.obj === bar) anchoredAt = f;
+    if (
+      ball.chain &&
+      ball.chain.getCurrentLength() >= ball.chain.constraintLength - 0.01
+    ) {
+      tautFrames++;
+    }
+    rots.push(bar.globalRotation);
+  }
+  check(`the chain anchored to the bar (f${anchoredAt}) and hung taut (${tautFrames} frames)`, anchoredAt >= 0 && tautFrames > 700);
+
+  // The torque balance, solved on the measured rig: I·w²·θ = m·g·armX(θ),
+  // with the anchor's local frame read off the built chain end.
+  const s = bar.pivotSpring!;
+  const anchorLocal = ball.chain!.end.contact.globalPosition
+    .sub(bar.globalPosition)
+    .rotated(-bar.globalRotation);
+  const armX = (theta: number): number =>
+    anchorLocal.x * Math.cos(theta) - anchorLocal.y * Math.sin(theta);
+  let lo = 0;
+  let hi = Math.PI / 2;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const spring = bar.inertia * s.omega * s.omega * (mid - s.restAngle);
+    if (spring < ball.mass * 9.8 * armX(mid)) lo = mid;
+    else hi = mid;
+  }
+  const eq = (lo + hi) / 2;
+
+  const tail = rots.slice(800);
+  const settle = tail.reduce((a, b) => a + b, 0) / tail.length;
+  const peak = Math.max(...rots);
+  check(
+    `it settles at the torque balance (settled ${settle.toFixed(3)} rad, balance ${eq.toFixed(3)}, tol 0.06)`,
+    Math.abs(settle - eq) <= 0.06,
+  );
+  check(
+    `the approach is an underdamped bounce, not a crawl (peak ${peak.toFixed(3)} overshoots the settle by ${(peak - settle).toFixed(3)}, need 0.02)`,
+    peak - settle >= 0.02,
+  );
+  // The ring-down is the authored damping's own (zeta 0.1 decays slowly);
+  // what must be true is that it DECAYS - a pumped or marched branch does not.
+  const amp = (from: number, to: number): number => {
+    const w = rots.slice(from, to);
+    return Math.max(...w) - Math.min(...w);
+  };
+  check(
+    `and the ring decays (amplitude ${amp(700, 900).toFixed(3)} late against ${amp(150, 350).toFixed(3)} early, need under half)`,
+    amp(700, 900) < 0.5 * amp(150, 350),
+  );
+
+  // Phase 2 - session-333f's regime, which is a GEOMETRY: a light bar hung
+  // steeply, the ball hanging below its tip, so the chain runs nearly parallel
+  // to the hinge-anchor line. The constraint's torque arm is then small while
+  // the anchor's travel per radian stays long, which is the pair that makes
+  // the position solve's march both fast (the pivot's 1/arm rotation factor)
+  // and self-sustaining (the descending tip chases the ball, so the ball's
+  // own credit is starved and it descends with it). The recorded branch
+  // crawled at ~0.14 rad/s, linear, straight past a balance its spring
+  // already out-pulled two to one, because `boundRotationCredit`'s top-up
+  // refunded each frame exactly the angular velocity the torsion spring had
+  // just removed.
+  const makeSteep = (playerPx: { x: number; y: number }): BallLevel =>
+    new BallLevel({
+      player: { x: playerPx.x, y: playerPx.y, radius: 8 },
+      bodies: [
+        {
+          kind: "rigid",
+          x: 0,
+          y: -400,
+          rot: 1.35,
+          passable: true,
+          pivot: true,
+          pivotX: -100,
+          pivotY: 0,
+          pivotFreq: 0.5,
+          pivotDamping: 0.1,
+          objects: [
+            { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 200, h: 10 } },
+          ],
+        },
+      ],
+    } as RawLevelData);
+  const probe = makeSteep({ x: 500, y: -500 });
+  const probeBar = probe.world.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+  )!;
+  // The tip, read off the spawned (settled) pose: the far end of the bar from
+  // its hinge origin, 2 m along its own +x.
+  const tip = probeBar.globalPosition.add(new Vec2(2, 0).rotated(probeBar.globalRotation));
+  const data2: RawLevelData = {
+    player: { x: tip.x * 100, y: (tip.y + 1.2) * 100, radius: 8 },
+    bodies: [],
+  };
+  const level2 = makeSteep(data2.player as { x: number; y: number });
+  const bar2 = level2.world.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+  )!;
+  const ball2 = level2.ball;
+  prev = emptyFrameInput();
+  const feed2 = (aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level2.physicsProcess(input, DT);
+  };
+  const aim2 = tip;
+  const rots2: number[] = [];
+  for (let f = 0; f < 900; f++) {
+    feed2(aim2);
+    rots2.push(bar2.globalRotation);
+  }
+  check(`the near-hinge chain anchored to the bar`, ball2.chain?.end.contact.obj === bar2);
+  const s2 = bar2.pivotSpring!;
+  const anchorLocal2 = ball2.chain!.end.contact.globalPosition
+    .sub(bar2.globalPosition)
+    .rotated(-bar2.globalRotation);
+  const armX2 = (theta: number): number =>
+    anchorLocal2.x * Math.cos(theta) - anchorLocal2.y * Math.sin(theta);
+  lo = 0;
+  hi = Math.PI / 2;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const spring = bar2.inertia * s2.omega * s2.omega * (mid - s2.restAngle);
+    if (spring < ball2.mass * 9.8 * armX2(mid)) lo = mid;
+    else hi = mid;
+  }
+  const eq2 = (lo + hi) / 2;
+  const tail2 = rots2.slice(800);
+  const settle2 = tail2.reduce((a, b) => a + b, 0) / tail2.length;
+  check(
+    `a near-hinge hang still settles at ITS balance instead of marching past it (settled ${settle2.toFixed(3)} rad, balance ${eq2.toFixed(3)}, tol 0.08)`,
+    Math.abs(settle2 - eq2) <= 0.08,
+  );
+  // A forced oscillator OVERSHOOTS on the way in (damping 0.1); the position
+  // solve's crawl is monotone by construction - this is the felt half of
+  // session-333f ("no bounce"), asserted directly.
+  // Against the FINAL value, not the tail mean: a monotone ramp's peak is its
+  // last sample, which beats the mean of the window it is still climbing
+  // through - a false overshoot.
+  const peak2 = Math.max(...rots2);
+  check(
+    `the approach bounces rather than crawling (peak ${peak2.toFixed(3)} overshoots the final ${rots2[899]!.toFixed(3)} by ${(peak2 - rots2[899]!).toFixed(3)}, need 0.02)`,
+    peak2 - rots2[899]! >= 0.02,
+  );
+  check(
+    `and holds there (moved ${Math.abs(rots2[899]! - rots2[599]!).toFixed(4)} rad over the last 300 frames, tol 0.015)`,
+    Math.abs(rots2[899]! - rots2[599]!) <= 0.015,
+  );
+
+  return ok("hang-settle — a hung ball is a forced oscillator on the sprung pivot, settling at the torque balance", passed, details);
+}
+
+function caseYankCatch(): SpringResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // A balanced seesaw bar (bearing at the centre of mass, so the spawn pose is
+  // exactly the authored pose and the geometry below is knowable), sprung at
+  // 0.5 Hz - session-209f's branch tuning - and passable, so the falling ball
+  // drops straight through and the arrest is radial.
+  const data: RawLevelData = {
+    // Radius 8 is the game ball: x1.5 BALL_RADIUS_SCALE -> 0.12 m -> 52 kg.
+    player: { x: 110, y: -570, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 0,
+        y: -400,
+        rot: 0,
+        passable: true,
+        pivot: true,
+        pivotFreq: 0.5,
+        pivotDamping: 0.1,
+        objects: [
+          { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 300, h: 24 } },
+        ],
+      },
+    ],
+  };
+  const level = new BallLevel(data);
+  // The bar is passable, so it is deliberately NOT in `level.bodies` (that is
+  // the wrap list, which is exactly the solid bodies) - find it in the world.
+  const bar = level.world.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b.pivotSpring !== null,
+  )!;
+  const ball = level.ball;
+  let prev = emptyFrameInput();
+  const feed = (fire: boolean, aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(fire, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+
+  // Fire straight down at the bar and let the whole thing run. The yank is
+  // found by its own signature - the largest single-frame speed loss while
+  // anchored below the bar - so the assertions do not depend on frame numbers.
+  const aim = new Vec2(ball.globalPosition.x, bar.globalPosition.y);
+  interface Sample {
+    e: number;
+    speed: number;
+    vel: Vec2;
+    ballPos: Vec2;
+    barW: number;
+    anchor: Vec2 | null;
+  }
+  const samples: Sample[] = [];
+  for (let f = 0; f < 300; f++) {
+    feed(true, aim);
+    const anchored = ball.chain?.end.contact.obj === bar;
+    samples.push({
+      e: mechanicalEnergy(level.world),
+      speed: ball.linearVelocity.length(),
+      vel: ball.linearVelocity,
+      ballPos: ball.globalPosition,
+      barW: bar.angularVelocity,
+      anchor: anchored ? ball.chain!.end.contact.globalPosition : null,
+    });
+  }
+  // The FIRST arrest, not the largest: the bar goes on winding under the hung
+  // ball for the rest of the run, and a later slip-and-recatch can out-drop
+  // the arrival yank this case is about.
+  let yank = -1;
+  for (let i = 1; i < samples.length; i++) {
+    const s = samples[i]!;
+    if (!s.anchor || s.ballPos.y <= s.anchor.y) continue;
+    if (samples[i - 1]!.speed > 4 && samples[i - 1]!.speed - s.speed > 0.5) {
+      yank = i;
+      break;
+    }
+  }
+  check(`the chain anchored and snapped taut below the bar (yank @${yank})`, yank > 0);
+  if (yank <= 0) return ok("yank-catch — a radial catch pays the sprung pivot its momentum", passed, details);
+
+  // The physical books at the frame before the arrest bit.
+  const pre = samples[yank - 1]!;
+  const r = pre.anchor!.sub(bar.globalPosition);
+  const chainDir = pre.anchor!.sub(pre.ballPos).normalized(); // ball -> anchor
+  const tipVel = new Vec2(-r.y, r.x).mul(pre.barW);
+  const vRel = tipVel.sub(pre.vel).dot(chainDir); // receding speed along the chain
+  const armT = Math.abs(r.cross(chainDir));
+  const mEff = bar.inertia / (armT * armT);
+  const mu = (ball.mass * mEff) / (ball.mass + mEff);
+  const idealLoss = 0.5 * mu * vRel * vRel;
+  check(`the arrest is a real yank (v_rel ${vRel.toFixed(1)} m/s, need 5)`, vRel > 5);
+
+  // Energy: the arrest may cost the inelastic jerk between the two masses and
+  // the window's damping, and no more. The saturation starve read 2.9-3.2x
+  // the ideal loss here; honest momentum pairing sits within the margin.
+  const settled = samples[Math.min(yank + 15, samples.length - 1)]!;
+  const loss = pre.e - settled.e;
+  check(
+    // The window necessarily includes a quarter-second of the coupled
+    // post-arrest solve (the ball bouncing on the sprung bar), whose own drain
+    // is real and not this case's subject - the 1.75x margin is what that
+    // measures as with the pairing in (803 J here against the 511 J ideal),
+    // against 1093 J with the pairing ablated. Narrower windows shrink the
+    // ablation gap faster than the margin: the starve is a BLEED, per frame
+    // for the length of the arrest tail, and it needs the tail in view.
+    `the arrest destroys no more than the inelastic jerk (lost ${loss.toFixed(0)} J, arriving ${pre.speed.toFixed(1)} m/s x ${ball.mass.toFixed(0)} kg, mEff ${mEff.toFixed(0)} kg, ideal ${idealLoss.toFixed(0)} J, bar 1.75x + 30)`,
+    loss <= 1.75 * idealLoss + 30,
+  );
+
+  // Momentum: the bar must actually receive the yank - its peak spin in the
+  // arrest window has to reach most of the paired-impulse answer
+  // mu·v_rel·arm/I on top of what it carried in.
+  const dwIdeal = (mu * vRel * armT) / bar.inertia;
+  let dwPeak = 0;
+  for (let i = yank; i < Math.min(yank + 15, samples.length); i++) {
+    dwPeak = Math.max(dwPeak, Math.abs(samples[i]!.barW - pre.barW));
+  }
+  check(
+    `the bar receives the yank (peak Δw ${dwPeak.toFixed(2)} rad/s of ideal ${dwIdeal.toFixed(2)}, floor 0.7x)`,
+    dwPeak >= 0.7 * dwIdeal,
+  );
+
+  return ok("yank-catch — a radial catch pays the sprung pivot its momentum", passed, details);
+}
+
 export function runSpringCases(): SpringResult[] {
   return [
     caseDroop(),
@@ -1699,5 +2070,7 @@ export function runSpringCases(): SpringResult[] {
     caseSpawnAtRest(),
     caseWinchLoad(),
     caseWhirlAnchor(),
+    caseYankCatch(),
+    caseHangSettle(),
   ];
 }

@@ -656,12 +656,31 @@ export class BallLevel {
       // own direction cannot pump (it is the constant force the spring's rest
       // pose already answers), and a frame where a contact carries the ball
       // has nothing for the chain to hand over.
-      if (spinShare > 0 && this.ball.chain) {
+      // A TORSION-SPRUNG holder carries the hanging ball's FULL weight as this
+      // force on every hanging frame, not only the winch era's rollback share:
+      // its rotation credit no longer refunds the spring's bite (see
+      // `Rope.boundRotationCredit` and `RigidBody2D.pivotFrameAccelDw`), so
+      // the solve's credits cannot stand in for the static load any more -
+      // without this the branch hovers ABOVE its torque balance (the spring
+      // lifting against a weight it never feels), and with it the balance,
+      // the droop and the damped bounce are the spring's own arithmetic. The
+      // linear spring body keeps the rollback-share semantics unchanged: its
+      // credits are not restoring-guarded and still carry the load, and a
+      // second full weight would double it (`chain-load`'s closed form is the
+      // detector). Gravity's constant direction cannot pump the hinge and a
+      // frame where a contact carries the ball hands nothing over - the
+      // session-1010f gates, unchanged.
+      if (this.ball.chain && endFixed) {
         const holder = this.ball.chain.end.contact.obj;
+        const share =
+          holder instanceof RigidBody2D && holder.pivotSpring !== null
+            ? 1
+            : spinShare;
         if (
+          share > 0 &&
           holder instanceof RigidBody2D &&
-          (holder.pivotSpring !== null || holder.spring !== null) &&
-          haulAtSolve.has(holder)
+          (holder.pivotSpring !== null ||
+            (holder.spring !== null && haulAtSolve.has(holder)))
         ) {
           const anchor = this.ball.chain.end.contact.globalPosition;
           const hanging =
@@ -671,7 +690,7 @@ export class BallLevel {
             );
           if (hanging) {
             holder.applyImpulse(
-              GRAVITY.mul(this.ball.mass * spinShare * delta),
+              GRAVITY.mul(this.ball.mass * share * delta),
               anchor.sub(holder.globalPosition),
             );
           }
