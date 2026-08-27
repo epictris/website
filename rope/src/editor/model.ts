@@ -514,6 +514,16 @@ export interface EdVine {
   // real third state, because a vine that never asked for stiffness builds no
   // bend constraints at all and is written to the file without the field.
   stiffness: number | null;
+  // The direction the vine leaves its anchor along, radians - 0 is +x,
+  // positive clockwise on screen; null = straight down. Read only with
+  // stiffness above zero, where the anchor clamp holds it: it is what makes a
+  // stiff vine a BRANCH (see `VineData.angle`). Authored by the +Vine drag's
+  // own direction, and ignored on a span.
+  angle: number | null;
+  // Fraction of each link's velocity lost per frame, 0..1; null = the
+  // builder's default (see `VineData.damping`). A springy branch authors a
+  // small number here so its elastic return is not eaten.
+  damping: number | null;
   // Hex cord colour; null = the renderer's own vine colours.
   color: string | null;
 }
@@ -1287,6 +1297,8 @@ function lightItem(
       spacing: v.spacing ?? null,
       density: v.density ?? null,
       stiffness: v.stiffness ?? null,
+      angle: v.angle ?? null,
+      damping: v.damping ?? null,
       color: v.color ?? null,
     });
   }
@@ -1663,6 +1675,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(v.spacing !== null ? { spacing: v.spacing } : {}),
       ...(v.density !== null ? { density: v.density } : {}),
       ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
+      ...(v.angle !== null ? { angle: v.angle } : {}),
+      ...(v.damping !== null ? { damping: v.damping } : {}),
       ...(v.color !== null ? { color: v.color } : {}),
     });
   }
@@ -2633,21 +2647,35 @@ export function vineAnchor2World(model: EdModel, v: EdVine): Vec2 | null {
 const VINE_REST_SEGMENTS = 24;
 
 // The vine's rest pose as the EDITOR draws it: straight down from the anchor by
-// its authored length, or - with a second anchor - the catenary that length
-// rests in between the two.
+// its authored length - or out along its authored angle for a stiff BRANCH,
+// which is the pose the clamp holds it to - or, with a second anchor, the
+// catenary that length rests in between the two.
 //
 // That is the rest pose and nothing more. Where a vine actually hangs is a
 // runtime answer - it drapes over whatever is under it, and the player drags it
 // about - and drawing a guess at that would be a drawing of something the level
 // does not contain, which is the same rule the editor draws a chain straight by.
 // The catenary is not a guess: it is where a span authored over empty ground
-// rests, and it is the pose `buildVines` spawns the links in.
+// rests, and it is the pose `buildVines` spawns the links in. A branch's ray is
+// the same statement - it is the spawn pose, and the droop below it is the
+// runtime's answer.
+//
+// The angle gate mirrors `buildOne`'s exactly: read only on a hanging vine
+// with stiffness above zero, so what is drawn is what will be built.
 export function vineRestPath(model: EdModel, v: EdVine): Vec2[] | null {
   const top = vineAnchorWorld(model, v);
   if (!top) return null;
   const end = vineAnchor2World(model, v);
-  if (!end) return [top, top.add(new Vec2(0, v.length))];
+  if (!end) return [top, top.add(vineRestDir(v).mul(v.length))];
   return catenaryPolyline(top, end, v.length, VINE_REST_SEGMENTS);
+}
+
+// The direction a hanging vine leaves its anchor along: straight down, unless
+// it is a stiff branch with an authored angle (the same gate `buildOne` reads
+// the field through).
+export function vineRestDir(v: EdVine): Vec2 {
+  const branch = v.anchor2 === null && (v.stiffness ?? 0) > 0 && v.angle !== null;
+  return branch ? new Vec2(Math.cos(v.angle!), Math.sin(v.angle!)) : new Vec2(0, 1);
 }
 
 // Distance from a world point to that rest pose, for picking.

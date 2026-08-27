@@ -85,6 +85,8 @@ function hall(opts: {
   spacing?: number;
   density?: number;
   stiffness?: number;
+  angle?: number;
+  damping?: number;
   floorY?: number;
   playerX?: number;
   playerY?: number;
@@ -125,6 +127,8 @@ function hall(opts: {
               ...(opts.spacing === undefined ? {} : { spacing: opts.spacing }),
               ...(opts.density === undefined ? {} : { density: opts.density }),
               ...(opts.stiffness === undefined ? {} : { stiffness: opts.stiffness }),
+              ...(opts.angle === undefined ? {} : { angle: opts.angle }),
+              ...(opts.damping === undefined ? {} : { damping: opts.damping }),
             },
           ],
         }),
@@ -695,7 +699,16 @@ function caseFormat(): VineResult {
       },
     ],
     vines: [
-      { anchor: 7, length: 250, spacing: 12, density: 8, stiffness: 0.4, color: "#446622" },
+      {
+        anchor: 7,
+        length: 250,
+        spacing: 12,
+        density: 8,
+        stiffness: 0.4,
+        angle: -0.25,
+        damping: 0.005,
+        color: "#446622",
+      },
     ],
   };
 
@@ -710,8 +723,14 @@ function caseFormat(): VineResult {
   );
   check(`px -> m: density ${mv?.density} kg/m crosses unchanged`, mv?.density === 8);
   // A fraction, like the density a per-metre figure: neither is in the file's
-  // pixels, and a scaled stiffness would make a pole out of a cord.
+  // pixels, and a scaled stiffness would make a pole out of a cord. The angle
+  // (a direction) and the damping (a fraction per frame) cross for the same
+  // reason - a scaled angle re-aims every branch in the level.
   check(`px -> m: stiffness ${mv?.stiffness} crosses unchanged`, mv?.stiffness === 0.4);
+  check(
+    `px -> m: angle ${mv?.angle} and damping ${mv?.damping} cross unchanged`,
+    mv?.angle === -0.25 && mv?.damping === 0.005,
+  );
 
   // ...and back, which is the trip that catches a field the scaler copies in one
   // direction only.
@@ -727,12 +746,15 @@ function caseFormat(): VineResult {
   const anchorObj = saved.bodies[0]?.objects.find((o) => o.type === "anchor");
   check(
     `editor: saved back as anchor ${sv?.anchor}, length ${sv?.length}, spacing ${sv?.spacing}, ` +
-      `density ${sv?.density}, stiffness ${sv?.stiffness}, colour ${sv?.color}`,
+      `density ${sv?.density}, stiffness ${sv?.stiffness}, angle ${sv?.angle}, ` +
+      `damping ${sv?.damping}, colour ${sv?.color}`,
     sv !== undefined &&
       sv.length === 250 &&
       sv.spacing === 12 &&
       sv.density === 8 &&
       sv.stiffness === 0.4 &&
+      sv.angle === -0.25 &&
+      sv.damping === 0.005 &&
       sv.color === "#446622" &&
       anchorObj?.type === "anchor" &&
       sv.anchor === anchorObj.id,
@@ -745,10 +767,12 @@ function caseFormat(): VineResult {
     modelFromDisk({ ...authored, vines: [{ anchor: 7, length: 250 }] }),
   ).vines?.[0];
   check(
-    `editor: an unauthored spacing, density, stiffness and colour stay absent`,
+    `editor: an unauthored spacing, density, stiffness, angle, damping and colour stay absent`,
     bare?.spacing === undefined &&
       bare?.density === undefined &&
       bare?.stiffness === undefined &&
+      bare?.angle === undefined &&
+      bare?.damping === undefined &&
       bare?.color === undefined,
   );
 
@@ -1489,6 +1513,337 @@ function caseStiffness(): VineResult {
 }
 
 // ---------------------------------------------------------------------------
+// branch: a stiff vine held out along an authored ANGLE is a springy branch.
+//
+// The claims nothing else can make: the angle is read exactly through the
+// builder's gate (with stiffness, on a hanging vine - and NOWHERE else); the
+// branch arrives asleep at its drooped rest, near the authored ray; it bends
+// under a hanging player and SPRINGS BACK to that rest when let go, which is
+// the whole mechanic; the authored damping is what sets how long the recoil
+// lives; and the ring conserves mechanical energy ONLY with the bends' elastic
+// term in the sum - the ablation that keeps `mechanicalEnergy`'s vine term
+// load-bearing.
+// ---------------------------------------------------------------------------
+
+// Degrees between the anchor-to-tip line and the vine's own rest direction.
+function branchLean(vine: Vine): number {
+  const a = vine.anchorContact.globalPosition;
+  const tip = vine.links[vine.links.length - 1]!.globalPosition;
+  const d = tip.sub(a);
+  const off = wrapAngle(Math.atan2(d.y, d.x) - Math.atan2(vine.restDir.y, vine.restDir.x));
+  return (off * 180) / Math.PI;
+}
+
+function caseBranch(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // A horizontal bough: angle 0 is +x, straight out from under the ceiling
+  // anchor. The floor is dropped well away so nothing the player does on it is
+  // part of the story.
+  const bough = (opts: { stiffness?: number; damping?: number } = {}): Rig =>
+    new Rig(
+      hall({
+        vineLength: 300,
+        angle: 0,
+        stiffness: opts.stiffness ?? 0.75,
+        damping: opts.damping ?? 0.005,
+        floorY: 900,
+      }),
+    );
+
+  // The gate, in both directions. With stiffness the angle is the rest
+  // direction; without it there is nothing to hold a direction and the field
+  // is not read at all - the links spawn straight down and the vine is the
+  // rope it always was.
+  const branch = bough();
+  check(
+    `an angled stiff vine is built along its angle (restDir ${branch.vine.restDir.x.toFixed(2)},${branch.vine.restDir.y.toFixed(2)})`,
+    Math.abs(branch.vine.restDir.x - 1) < 1e-9 && Math.abs(branch.vine.restDir.y) < 1e-9,
+  );
+  const limp = new Rig(hall({ vineLength: 300, angle: 0, floorY: 900 }));
+  const limpTip = limp.vine.links[limp.vine.links.length - 1]!.globalPosition;
+  const limpAnchor = limp.vine.anchorContact.globalPosition;
+  check(
+    `...and the same angle with no stiffness is ignored: the vine hangs down ` +
+      `(tip ${(limpTip.x - limpAnchor.x).toFixed(2)},${(limpTip.y - limpAnchor.y).toFixed(2)} of the anchor)`,
+    Math.abs(limpTip.x - limpAnchor.x) < 0.05 && limpTip.y - limpAnchor.y > 2.9,
+  );
+
+  // Asleep on arrival, at a droop that shrinks as the stiffness rises: the
+  // settle ran at build, and what it settled to is the bends' force balance
+  // with gravity rather than the authored ray or the hanged rope.
+  check(`the branch arrives asleep (settled at build)`, branch.vine.asleep);
+  const droopAt = (stiffness: number): number => {
+    const rig = bough({ stiffness });
+    return Math.abs(branchLean(rig.vine));
+  };
+  const droopSoft = droopAt(0.5);
+  const droopMid = droopAt(0.75);
+  const droopStiff = droopAt(0.9);
+  check(
+    `its droop off the authored ray falls as stiffness rises: ` +
+      `${droopSoft.toFixed(1)} deg at 0.5, ${droopMid.toFixed(1)} at 0.75, ${droopStiff.toFixed(1)} at 0.9`,
+    droopSoft > droopMid && droopMid > droopStiff && droopStiff < 5 && droopMid < 15,
+  );
+
+  // The mechanic: a player hanging off the tip bends it well below its rest,
+  // and letting go springs it back to that rest - not to hanging, and not to
+  // wherever it was left.
+  const rig = bough();
+  rig.step(30);
+  const restLean = branchLean(rig.vine);
+  const aim = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
+  grab(rig, aim, 20);
+  let worstLean = 0;
+  rig.step(300, { fire: true, aim }, () => {
+    worstLean = Math.max(worstLean, Math.abs(branchLean(rig.vine) - restLean));
+  });
+  const heldLean = Math.abs(branchLean(rig.vine) - restLean);
+  rig.step(600);
+  const afterLean = Math.abs(branchLean(rig.vine) - restLean);
+  check(
+    `a player hanging on the tip bends it ${heldLean.toFixed(0)} deg off rest (bar 10)`,
+    heldLean > 10,
+  );
+  check(
+    `and letting go springs it back to ${afterLean.toFixed(1)} deg off rest (bar 5)`,
+    afterLean < 5,
+  );
+
+  // The damping field is what sets how long a disturbance lives. It is
+  // measured on a plucked HANGING vine, where the authored damping is the only
+  // dissipation there is; on a stiff branch the bend solve adds a floor of its
+  // own (~2% a frame - the sweep crushing link-scale modes far above the
+  // step's Nyquist), so a branch's free ring dies at the solver's pace at any
+  // authored number and the field reads there as tone rather than duration.
+  const swingSpeed = (damping: number): number => {
+    const r = new Rig(hall({ vineLength: 300, damping, floorY: 900 }));
+    r.step(30);
+    const vine = r.vine;
+    vine.asleep = false;
+    for (let i = 0; i < vine.links.length; i++) {
+      const link = vine.links[i]!;
+      link.asleep = false;
+      link.linearVelocity = new Vec2((2 * (i + 1)) / vine.links.length, 0);
+    }
+    r.step(120);
+    return vine.links[vine.links.length - 1]!.linearVelocity.length();
+  };
+  const lively = swingSpeed(0.002);
+  const dead = swingSpeed(0.2);
+  check(
+    `two seconds after a pluck the 0.002-damped vine still swings at ${lively.toFixed(2)} m/s ` +
+      `where the 0.2-damped one is at ${dead.toFixed(3)} (must be 5x apart)`,
+    lively > dead * 5 && lively > 0.1,
+  );
+
+  // The ring is honest, and only with the bends' elastic term in the sum. Over
+  // an unforced ring-down, total mechanical energy with the term may never
+  // rise; without it the bend potential masquerades as energy appearing every
+  // time the branch passes through straight - which is the ablation that keeps
+  // the `mechanicalEnergy` vine term load-bearing.
+  const er = bough({ damping: 0.002 });
+  er.step(30);
+  const tip = er.vine.links[er.vine.links.length - 1]!.globalPosition;
+  grab(er, tip, 20);
+  er.step(200, { fire: true, aim: tip });
+  er.step(10);
+  let baseWith = -1;
+  let baseWithout = -1;
+  let gainWith = 0;
+  let gainWithout = 0;
+  er.step(400, {}, () => {
+    const withTerm = mechanicalEnergy(er.level.world, er.level.vines);
+    const withoutTerm = mechanicalEnergy(er.level.world);
+    if (baseWith < 0) {
+      baseWith = withTerm;
+      baseWithout = withoutTerm;
+      return;
+    }
+    gainWith = Math.max(gainWith, withTerm - baseWith);
+    gainWithout = Math.max(gainWithout, withoutTerm - baseWithout);
+    baseWithout = Math.min(baseWithout, withoutTerm);
+  });
+  check(
+    `the unforced ring gains ${gainWith.toFixed(2)} J with the elastic term in the sum (bar 5)`,
+    gainWith < 5,
+  );
+  check(
+    `...and reads a spurious ${gainWithout.toFixed(1)} J gain with it ablated (must be over the bar)`,
+    gainWithout > 5,
+  );
+
+  // A span ignores the angle: its ends are pinned and its rest is its
+  // catenary, so the field must not leak a clamp in.
+  const span = new Rig({
+    ...hall({ vineLength: 400, extra: [
+      {
+        kind: "static",
+        x: 300,
+        y: -500,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 40 } },
+          { type: "anchor", id: 9, x: 0, y: 20 },
+        ],
+      },
+    ] }),
+    vines: [{ anchor: 1, anchor2: 9, length: 400, stiffness: 0.75, angle: -Math.PI / 2 }],
+  });
+  check(
+    `a span authoring an angle ignores it (restDir ${span.vine.restDir.x.toFixed(0)},${span.vine.restDir.y.toFixed(0)}, no clamp to aim)`,
+    span.vine.restDir.x === 0 && span.vine.restDir.y === 1,
+  );
+
+  return ok("branch — an angled stiff vine droops, springs back, and rings at its authored damping", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// branch-fling: the mechanic the branch exists for, measured.
+//
+// A ball drops onto a chain hooked near the branch's tip and is arrested by
+// it - the hard radial yank, `session-209f`'s shape. Against a STATIC anchor
+// that arrest is an inelastic jerk and the drop's energy is simply destroyed:
+// the ball ends dangling, dead. Against a branch the same yank bends the
+// bough, and the bough gives it BACK - the ball is thrown back up through
+// real arcs. So the same drop, run against both anchors, is the statement:
+// the branch must return measurably more of the arrest than the static block
+// does (the fling), and never more than the drop brought in (a constraint may
+// not mint).
+//
+// Ball mechanical energy is measured about the anchor height, so the two rigs
+// share a zero, and the return is (highest the ball's energy climbs back
+// after the arrest's low point) - (that low point).
+// ---------------------------------------------------------------------------
+function caseBranchFling(): VineResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // Both rigs: a catch point at (3, -4.8) and the ball spawned just above and
+  // beside it, so the fired chain anchors short and the ball falls PAST the
+  // catch point onto it - a radial arrest. The branch rig grows the catch
+  // point as a bough from an anchor at (0, -4.8); the static rig is a small
+  // block in the same place, offset enough that the falling ball clears it.
+  const scene = (branch: boolean): RawLevelData => ({
+    player: { x: 335, y: -540, radius: 12 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 1200,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 4000, h: 40 } }],
+      },
+      {
+        kind: "static",
+        x: 0,
+        y: -500,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 40 } },
+          { type: "anchor", id: 1, x: 0, y: 20 },
+        ],
+      },
+      ...(branch
+        ? []
+        : [
+            {
+              kind: "static",
+              x: 300,
+              y: -480,
+              rot: 0,
+              objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 20 } }],
+            } satisfies LevelBodyData,
+          ]),
+    ],
+    ...(branch
+      ? { vines: [{ anchor: 1, length: 300, angle: 0, stiffness: 0.75, damping: 0.005 }] }
+      : {}),
+  });
+
+  // Run one rig: fire at the catch point, drop onto the chain with the aim
+  // released (the steering is a kinematic energy source, and this measurement
+  // is about the constraint), and read the ball's mechanical energy about the
+  // anchor height through the arrest and the throw after it.
+  const run = (
+    branch: boolean,
+  ): { caught: boolean; start: number; low: number; rebound: number; peak: number } => {
+    const level = new BallLevel(scene(branch));
+    const target = new Vec2(3, -4.8);
+    let prev = emptyFrameInput();
+    const feed = (fire: boolean, aim: Vec2): void => {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(fire, prev.fire),
+        mouseWorldPosition: aim,
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+    };
+    const energy = (): number => {
+      const b = level.ball;
+      return (
+        0.5 * b.mass * b.linearVelocity.lengthSquared() +
+        b.mass * 9.8 * (-4.8 - b.globalPosition.y)
+      );
+    };
+    for (let f = 0; f < 5; f++) feed(false, target);
+    let start = -1;
+    let low = Infinity;
+    let rebound = -Infinity;
+    let peak = -Infinity;
+    let anchoredAt = -1;
+    for (let f = 0; f < 300; f++) {
+      // Aim at the ball's own position once anchored - "not aiming" - so the
+      // drop is passive.
+      feed(true, anchoredAt >= 0 ? level.ball.globalPosition : target);
+      const end = level.ball.chain?.end.contact.obj;
+      const anchored = end instanceof VineLink || end instanceof StaticBody2D;
+      if (anchoredAt < 0 && anchored) {
+        anchoredAt = f;
+        start = energy();
+      }
+      if (anchoredAt < 0 || f <= anchoredAt) continue;
+      const e = energy();
+      peak = Math.max(peak, e);
+      // The arrest's low point is inside the first 45 frames; the throw back
+      // up is whatever the ball climbs to after it.
+      if (f <= anchoredAt + 45) low = Math.min(low, e);
+      else rebound = Math.max(rebound, e);
+    }
+    return { caught: anchoredAt >= 0, start, low, rebound, peak };
+  };
+
+  const b = run(true);
+  const s = run(false);
+  check(`both rigs caught their anchor (branch ${b.caught}, static ${s.caught})`, b.caught && s.caught);
+  const bReturn = b.rebound - b.low;
+  const sReturn = s.rebound - s.low;
+  check(
+    `the bough throws the ball back up ${bReturn.toFixed(0)} J of the arrest where the static ` +
+      `block returns ${sReturn.toFixed(0)} J (drop brought ${b.start.toFixed(0)} J; need branch ` +
+      `>= static + 300)`,
+    bReturn >= sReturn + 300,
+  );
+  check(
+    `and mints nothing: the ball never exceeds the drop's own energy ` +
+      `(peak ${b.peak.toFixed(0)} J against the ${b.start.toFixed(0)} it brought, tolerance 20)`,
+    b.peak <= b.start + 20,
+  );
+
+  return ok("branch-fling — the bough returns the arrest a static anchor destroys", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // span: a vine attached at BOTH ends rests in the catenary its length implies.
 //
 // The claims nothing else can make: the second anchor really holds (the last
@@ -1799,6 +2154,8 @@ export function runVineCases(): VineResult[] {
     caseFormat(),
     caseWeight(),
     caseStiffness(),
+    caseBranch(),
+    caseBranchFling(),
     caseLinkContacts(),
     caseRest(),
     caseScenery(),

@@ -250,6 +250,26 @@ export class VineBend implements SceneConstraint {
     return 1;
   }
 
+  // The elastic potential this joint is storing, in joules: a compliant
+  // constraint is a spring, `E = C²/(2·α)`. It is what a bent branch is ABOUT
+  // to spend as motion, so `mechanicalEnergy` must carry it or the spring-back
+  // reads as an unforced gain - the same statement the spring body's
+  // `0.5·m·w²·d²` term makes (see `sim/trace.ts`).
+  //
+  // The curvature in it is the FORCE-CONSISTENT one, `α̃·λ` - the deformation
+  // implied by the force the solver actually applied this frame - and not the
+  // measured `curvature()`. The two agree at convergence, and only one of them
+  // survives not being there: at a branch's stiffness the compliance is 1e-8
+  // m/N, so `C²/2α` reads a MILLIMETRE of sweep residual as kilojoules
+  // (measured: 3.7 kJ on a branch hanging at rest, swinging by thousands over
+  // a ring the true energy of is tens of joules). The realized force is
+  // bounded by what the bodies' inertia let the solver take, so the estimate
+  // is smooth where the geometry is noise.
+  get elasticEnergy(): number {
+    const c = this.alphaTilde * this.lambda;
+    return (c * c) / (2 * this.compliance);
+  }
+
   eachBody(fn: (body: RigidBody2D) => void): void {
     if (this.a.link) fn(this.a.link);
     if (this.b.link) fn(this.b.link);

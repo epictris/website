@@ -1283,7 +1283,7 @@ export function drawEditor(
   // the pointer is, and whether releasing there would attach.
   selectedVineIds: ReadonlySet<number> = new Set<number>(),
   vineDraft:
-    | { kind: "hang"; from: Vec2; length: number; valid: boolean }
+    | { kind: "hang"; from: Vec2; to: Vec2; valid: boolean }
     | { kind: "attach"; from: Vec2; to: Vec2; valid: boolean }
     | null = null,
   // How much of the scene this canvas is responsible for drawing.
@@ -1701,11 +1701,7 @@ export function drawEditor(
     if (!vineDraft.valid) ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.beginPath();
     ctx.moveTo(vineDraft.from.x, vineDraft.from.y);
-    if (vineDraft.kind === "hang") {
-      ctx.lineTo(vineDraft.from.x, vineDraft.from.y + vineDraft.length);
-    } else {
-      ctx.lineTo(vineDraft.to.x, vineDraft.to.y);
-    }
+    ctx.lineTo(vineDraft.to.x, vineDraft.to.y);
     ctx.stroke();
     ctx.setLineDash([]);
   }
