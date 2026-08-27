@@ -202,42 +202,6 @@ const VINE_LRA_GIVE = 0.005;
 // `level/vineBend.ts`).
 export const DEFAULT_VINE_STIFFNESS = 0;
 
-// What the editor's +Vine drag authors when it is pulled out at an ANGLE - a
-// springy branch, in one gesture. 0.6 stiffness is the middle of the measured
-// "springy branch" band (see `level/vineBend.ts`'s table: 0.5 deflects 25 deg
-// under a swinging player, 0.75 is a sapling), and the damping is far under
-// the vine default because the branch's elastic return IS the mechanic - at
-// the default 2% a frame the spring-back is eaten before it can throw anyone.
-// Editor defaults rather than builder ones: they are written into the file, so
-// what a level plays as is what it says.
-export const BRANCH_DEFAULT_STIFFNESS = 0.6;
-export const BRANCH_DEFAULT_DAMPING = 0.005;
-
-// Fraction of each link's velocity lost per frame when a vine does not say
-// (`VineData.damping`), and the one number here that is not about the solver.
-//
-// Nothing else damps a link. A pair chain is a PBD POSITION constraint - it
-// moves bodies and credits them the velocity it moved them by - and a link
-// hanging in free air touches nothing, so `contactDamp` (which is a contact
-// term) never reaches it. A vine therefore has no dissipation at all: once
-// excited it rings for ever, and the ringing is FED, because the sweep's own
-// tolerance lets the vine lengthen by a fraction of a millimetre a frame and
-// that potential energy has nowhere to go but into motion. Measured on the ball
-// arena's own vines, left completely alone: the tip was still moving at 0.33 m/s
-// after 900 frames and at 0.65 m/s after 3000, with total energy flat - a vine
-// that visibly never stops wobbling, and the thing that put the `energy-gained`
-// invariant into a permanent argument with itself on any level carrying one.
-//
-// A real vine is heavily damped - air, and its own internal friction - so the
-// default is honest as well as necessary: losing 2% a frame (keeping 0.98,
-// `contactDamp`'s own historical figure) takes a disturbance to a tenth in
-// about two seconds, and costs the player's swing almost nothing, the link
-// being 3.75 kg against their 70. A branch authored to fling the player wants
-// far less - the elastic return IS the mechanic, and this default eats it -
-// and what less costs is how long the branch wobbles after the player lets
-// go, which is also how long it stays awake.
-export const DEFAULT_VINE_DAMPING = 0.02;
-
 // What a renderer needs of a vine: where the cord runs this frame, and what
 // colour it is. It is an interface rather than the `Vine` itself because the
 // EDITOR draws vines too and has no links to read - its scene is built by
@@ -253,6 +217,27 @@ export interface VineCord {
   // renderer's transform sync is written to avoid.
   path(alpha: number, out: Vec2[]): void;
 }
+
+// Per-frame velocity kept by a vine link, and the one number here that is not
+// about the solver.
+//
+// Nothing else damps a link. A pair chain is a PBD POSITION constraint - it
+// moves bodies and credits them the velocity it moved them by - and a link
+// hanging in free air touches nothing, so `contactDamp` (which is a contact
+// term) never reaches it. A vine therefore has no dissipation at all: once
+// excited it rings for ever, and the ringing is FED, because the sweep's own
+// tolerance lets the vine lengthen by a fraction of a millimetre a frame and
+// that potential energy has nowhere to go but into motion. Measured on the ball
+// arena's own vines, left completely alone: the tip was still moving at 0.33 m/s
+// after 900 frames and at 0.65 m/s after 3000, with total energy flat - a vine
+// that visibly never stops wobbling, and the thing that put the `energy-gained`
+// invariant into a permanent argument with itself on any level carrying one.
+//
+// A real vine is heavily damped - air, and its own internal friction - so this
+// is honest as well as necessary. 0.98 a frame is `contactDamp`'s own historical
+// figure and takes a disturbance to a tenth in about two seconds. It costs the
+// player's swing almost nothing, the link being 3.75 kg against their 70.
+const LINK_DAMPING = 0.98;
 
 // How far a link may have MOVED, net, over the window below, and still count as
 // settled.
@@ -321,8 +306,8 @@ export function stepVines(vines: readonly Vine[]): void {
     let worst = 0;
     for (let i = 0; i < vine.links.length; i++) {
       const link = vine.links[i]!;
-      link.linearVelocity = link.linearVelocity.mul(vine.dampingKeep);
-      link.angularVelocity *= vine.dampingKeep;
+      link.linearVelocity = link.linearVelocity.mul(LINK_DAMPING);
+      link.angularVelocity *= LINK_DAMPING;
       worst = Math.max(worst, link.globalPosition.distanceTo(vine.sleepMark[i]!));
     }
     // Clearly moving: start the window again from where it is now.
@@ -348,16 +333,6 @@ export function stepVines(vines: readonly Vine[]): void {
       link.asleep = true;
     }
   }
-}
-
-// The elastic potential every bend of these vines is currently storing, in
-// joules (see `VineBend.elasticEnergy`): what a deflected branch pays back as
-// motion when it is let go, and therefore part of the level's mechanical
-// energy (`mechanicalEnergy` takes it through this).
-export function vineElasticEnergy(vines: readonly Vine[]): number {
-  let total = 0;
-  for (const vine of vines) for (const bend of vine.bends) total += bend.elasticEnergy;
-  return total;
 }
 
 // The chain set to sweep this frame: the level's authored chains, every AWAKE
@@ -427,15 +402,6 @@ export interface Vine extends VineCord {
   readonly bends: VineBend[];
   // 0 = a rope, 1 = a pole. As built, so already clamped to that range.
   readonly stiffness: number;
-  // The direction the vine leaves its anchor along, a world unit vector as
-  // built: straight down for every vine that does not author an `angle`, and
-  // the authored direction for a stiff BRANCH (see `VineData.angle`). What the
-  // anchor clamp holds the vine to, and what the spawn lays the links along.
-  readonly restDir: Vec2;
-  // Fraction of each link's velocity KEPT per frame - `1 - VineData.damping`,
-  // clamped at build. The default eats 2% a frame; a springy branch authors
-  // less, and rings for longer because of it.
-  readonly dampingKeep: number;
   // Anchor-to-first-link, then each adjacent pair. These go into the level's
   // `sceneChains`, which is what buys the whole existing chain phase - the
   // residual-gated alternating sweep, static depenetration with the funded
@@ -496,14 +462,9 @@ export function buildVines(world: World, data: LevelData, built: BuiltBodies): V
   return vines;
 }
 
-// Frames of build-time settling before a vine is left to finish live. A
-// free-hanging vine sleeps in ~30 frames and a catenary span in under 300;
-// the far end of the budget is a BRANCH, which spawns on its authored ray,
-// rings down to its droop at its own (deliberately low) damping, and at the
-// default 0.005 needs ~600 frames to fall under the sleep bar. The loop
-// leaves at the first frame everything is asleep, so only the vine that
-// needs the tail pays for it, once, at build.
-const SETTLE_AT_BUILD_CAP = 1200;
+// Frames of build-time settling before a vine is left to finish live. Ample:
+// a free-hanging vine sleeps in ~30 frames and a catenary span in under 300.
+const SETTLE_AT_BUILD_CAP = 300;
 
 // Run the eligible vines' settle AT BUILD, to the same fixed point the
 // level's first live frames used to carry them to - the vine arrives already
@@ -608,35 +569,17 @@ function buildOne(
   // negative compliance is a solver that pushes the vine further from straight
   // the harder it is bent.
   const stiffness = Math.min(1, Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS));
-  // ...and so is the damping, whose out-of-range failure is worse: a keep
-  // factor over 1 is a vine that pumps itself.
-  const dampingKeep = 1 - Math.min(1, Math.max(0, v.damping ?? DEFAULT_VINE_DAMPING));
 
-  // The vine's rest direction: straight down unless it is a stiff BRANCH with
-  // an authored `angle`, which is the one case something exists to HOLD a
-  // direction - a limp vine authored sideways would flop to hanging, never
-  // settle and never sleep, so the field is read only with stiffness behind it
-  // (see `VineData.angle`). A span's ends are pinned and its rest is its
-  // catenary, so the angle means nothing there either. Handed to
-  // `buildVineBends` as a world vector for the clamp to put in the anchor
-  // body's own frame.
-  const branchAngle = !anchor2Point && stiffness > 0 ? v.angle : undefined;
-  const restDir =
-    branchAngle !== undefined
-      ? new Vec2(Math.cos(branchAngle), Math.sin(branchAngle))
-      : new Vec2(0, 1);
-
-  // Where the links spawn. A hanging vine goes straight out its full length
-  // along its rest direction - there is nothing for it to lie on, a link
-  // colliding with nothing - and a spanning one spawns ON its resting
-  // catenary, which is the pose the solver would settle it into.
+  // Where the links spawn. A hanging vine goes straight down its full length -
+  // there is nothing for it to lie on, a link colliding with nothing - and a
+  // spanning one spawns ON its resting catenary, which is the pose the solver
+  // would settle it into: either way a vine at rest is at rest on frame one,
+  // with nothing for the first frames to correct.
   let spawnAt: (i: number) => Vec2;
-  // Whether the spawn pose is the vine's own REST pose. A straight-down
-  // hanging vine's always is; a BRANCH's is not quite - its rest is the
-  // bends' force balance with gravity, a droop below the authored ray, which
-  // has no closed form - and a span's is the catenary unless it is stiff. A
-  // spawn that is not rest settles to rest, at build where that is exact
-  // (see `settleAtBuild` below) and live otherwise.
+  // Whether the spawn pose is the vine's own REST pose: a hanging vine's
+  // always is now, a span's is the catenary it spawns on - unless it is stiff,
+  // in which case the rest pose is the bends' force balance with the chains
+  // and NOT the catenary (see `buildVineBends`).
   let spawnIsRest: boolean;
   if (anchor2Point) {
     const arcs: number[] = [];
@@ -645,8 +588,8 @@ function buildOne(
     spawnAt = (i) => rest[i]!;
     spawnIsRest = stiffness === 0;
   } else {
-    spawnAt = (i) => anchorPoint.add(restDir.mul(spacing * (i + 1)));
-    spawnIsRest = branchAngle === undefined;
+    spawnAt = (i) => anchorPoint.add(new Vec2(0, spacing * (i + 1)));
+    spawnIsRest = true;
   }
 
   const links: VineLink[] = [];
@@ -729,36 +672,34 @@ function buildOne(
     // this is the standard answer to it. Hanging vines only: a taut span has
     // zero slack anywhere by construction, sits ON every LRA's rest length,
     // and rang at 0.27 m/s for ever when this was tried there.
-    //
-    // And not on a BRANCH, whose links live near full extension by design: a
-    // near-straight branch sits within its LRAs' give of their rest lengths,
-    // every overshoot through straight snaps taut against them, and a rope
-    // inequality's snap is inelastic - which ate the recoil the branch exists
-    // for (probe: tip 1.2 m/s to 0.07 in 60 frames at damping 0.002, on
-    // nothing but the sweep). The bends are what bound a branch's reach.
-    if (branchAngle === undefined) {
-      for (let i = 1; i < links.length; i++) {
-        chains.push(
-          new VineAnchor(
-            anchorContact,
-            new RopeContact(links[i]!, Vec2.ZERO),
-            (spacing + VINE_LRA_GIVE) * (i + 1),
-          ),
-        );
-      }
+    for (let i = 1; i < links.length; i++) {
+      chains.push(
+        new VineAnchor(
+          anchorContact,
+          new RopeContact(links[i]!, Vec2.ZERO),
+          (spacing + VINE_LRA_GIVE) * (i + 1),
+        ),
+      );
     }
   }
 
+  // The vine's rest direction: straight down, that being the only pose a
+  // hanging vine has - it has no authored direction, and its links are spawned
+  // down the same axis. It is what the stiffness CLAMPS a hanging vine to,
+  // handed over as a world vector for `buildVineBends` to put in the anchor
+  // body's own frame. A span builds no clamp - its ends are pinned - so this is
+  // unused there (see `buildVineBends`).
+  const restDir = new Vec2(0, 1);
+
   // Whether this vine's settle may run AT BUILD instead of over the level's
   // first visible frames (see `settleVinesAtBuild`): its spawn pose is its own
-  // rest pose - or it is a BRANCH, whose spawn is the authored ray and whose
-  // rest is the droop a few dozen frames below it - and every link is clear of
-  // every area. A link a current or water would keep stirring is not going to
-  // rest where it spawned, and such a vine settles live exactly as it always
-  // did. Scenery no longer matters: a link collides with nothing, so the
-  // geometry around it cannot touch the settle either at build or live.
+  // rest pose, and every link is clear of every area - a link a current or
+  // water would keep stirring is not going to rest where it spawned, and such
+  // a vine settles live exactly as it always did. Scenery no longer matters: a
+  // link collides with nothing, so the geometry around it cannot touch the
+  // settle either at build or live.
   const settleAtBuild =
-    (spawnIsRest || branchAngle !== undefined) &&
+    spawnIsRest &&
     links.every((link) =>
       world.areas.every((area) => bodyOverlapCircle(area, link.globalPosition, radius) === null),
     );
@@ -770,8 +711,6 @@ function buildOne(
     chains,
     bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing, anchor2Contact),
     stiffness,
-    restDir,
-    dampingKeep,
     spacing,
     color,
     lra: null,

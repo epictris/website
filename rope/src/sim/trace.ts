@@ -22,7 +22,6 @@ import type { Rope } from "../classes/rope";
 import type { ContactConstraint, World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
-import { vineElasticEnergy, type Vine } from "../level/vines";
 import type { RawLevelData } from "../level/levelFormat";
 
 // Bit order for the held-action mask in a serialized frame.
@@ -686,10 +685,7 @@ export class RollMonitor {
 // angular) plus gravitational potential, with y measured downward so height is
 // -y. Statics and movers are excluded because their motion is scripted, which is
 // exactly the thing that would make this quantity meaningless.
-//
-// `vines` is the level's vine list, for the bend elastic term below - a caller
-// measuring a world with no stiff vines in it may omit it.
-export function mechanicalEnergy(world: World, vines: readonly Vine[] = []): number {
+export function mechanicalEnergy(world: World): number {
   let total = 0;
   for (const body of world.bodies) {
     if (body.removed || !(body instanceof RigidBody2D)) continue;
@@ -730,12 +726,6 @@ export function mechanicalEnergy(world: World, vines: readonly Vine[] = []): num
       total += 0.5 * body.inertia * s.omega * s.omega * d * d;
     }
   }
-  // A stiff vine's bends store elastic potential exactly as a spring body
-  // does, distributed over its joints: without the term a deflected branch
-  // springing back reads as kinetic plus gravitational energy out of nowhere.
-  // The bends' damping only ever removes energy, so the monitor's one-sided
-  // bound stays valid with the term in.
-  total += vineElasticEnergy(vines);
   return total;
 }
 
@@ -789,7 +779,7 @@ export class EnergyMonitor {
       return null;
     }
 
-    const energy = mechanicalEnergy(level.world, level.vines);
+    const energy = mechanicalEnergy(level.world);
     const kinetic = kineticEnergy(level.world);
     this.peakKinetic = Math.max(this.peakKinetic, kinetic);
     if (this.baseline === null) {

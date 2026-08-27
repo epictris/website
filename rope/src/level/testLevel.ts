@@ -120,18 +120,25 @@ const SPRING_DATA: RawLevelData = {
 
 export const TEST_SPRING: LevelSpec = { data: SPRING_DATA };
 
-// A springy BRANCH to swing on (see `VineData.angle`): the spring level's
-// chasm again, with a bough grown out of the far wall's face - a stiff,
-// lightly damped vine held out along its authored angle. Hook it anywhere,
-// swing, and the bend stores what the swing puts in and gives it back: time
-// the release against the spring-back and the bough throws you.
+// A BRANCH to hang off (see `LevelBodyData.pivotX` / `pivotFreq`): the spring
+// level's chasm again, with the leaf replaced by a bough hinged where it meets
+// the far wall. Where the leaf TRANSLATES on its spring, the branch ROTATES
+// about its bearing - grab the free end and the whole thing swings down about
+// the trunk, then springs back up to its authored angle when you let go.
 //
-// The numbers, against the vine tables (`level/vineBend.ts`,
-// `DEFAULT_VINE_DENSITY`): 2 m at stiffness 0.7 is the springy-branch band -
-// a hanging 70 kg player bends the tip tens of centimetres over the pit and
-// the droop under its own 50 kg is a few degrees - and damping 0.005 is well
-// under the vine default, so the recoil that IS the mechanic is not eaten
-// (see `BRANCH_DEFAULT_DAMPING`).
+// The branch is 1.9 x 0.24 m of oak at the default 20 cm thickness, 63.8 kg,
+// hinged at its right end (pivotX = +95 px), so the centre of mass sits
+// d = 0.95 m out from the bearing and I about the bearing is
+// I_com + m·d² ≈ 77 kg·m². At 1.25 Hz the closed forms
+// (`I·w²·Δθ = τ·cos θ`) give:
+//
+//   its own weight   m·g·d = 594 N·m    ≈  7° of droop, the tip down ~23 cm
+//   a player on the tip adds 1303 N·m   ≈ 21° in all, the tip down ~69 cm
+//
+// so the swing is felt in tens of centimetres over the pit, exactly the range
+// the leaf's numbers were chosen for, and the free end still crosses the
+// run-off arrival height at x = 1.1 m. Damping 0.2 leaves a few visible
+// swings on the spring back.
 const BRANCH_DATA: RawLevelData = {
   player: { x: -300, y: 20, radius: 8 },
   bodies: [
@@ -154,12 +161,9 @@ const BRANCH_DATA: RawLevelData = {
       rot: 0,
       objects: [
         { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 800, h: 40 } },
-        // The bolt at the middle of the wall's face, so the bough reaches
-        // back over the pit at the height the run-off arrives at.
-        { type: "anchor", id: 1, x: -400, y: 0 },
       ],
     },
-    // The pit floor, far enough down that a missed grab is a fall.
+    // The pit floor, far enough down that the branch's whole travel clears it.
     {
       kind: "static",
       x: 150,
@@ -169,15 +173,22 @@ const BRANCH_DATA: RawLevelData = {
         { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 340, h: 40 } },
       ],
     },
-  ],
-  vines: [
+    // The branch: free end at x = 1.1 m over the pit, bearing at the far wall's
+    // face.
     {
-      anchor: 1,
-      length: 200,
-      angle: Math.PI,
-      stiffness: 0.7,
-      damping: 0.005,
+      kind: "rigid",
+      x: 205,
+      y: 121,
+      rot: 0,
       color: "#7a5a3a",
+      pivot: true,
+      pivotX: 95,
+      pivotY: 0,
+      pivotFreq: 1.25,
+      pivotDamping: 0.2,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 190, h: 24 } },
+      ],
     },
   ],
 };

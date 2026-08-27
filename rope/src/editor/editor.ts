@@ -172,9 +172,6 @@ import { EditorGizmo, type GizmoAxes, type GizmoHandlers, type GizmoMode } from 
 import { World } from "../engine/world";
 import { buildLevelBodies, DEFAULT_SPRING_DAMPING, MAX_SPRING_FREQ } from "../level/buildBodies";
 import {
-  BRANCH_DEFAULT_DAMPING,
-  BRANCH_DEFAULT_STIFFNESS,
-  DEFAULT_VINE_DAMPING,
   DEFAULT_VINE_DENSITY,
   DEFAULT_VINE_SPACING,
   vineTargetSpacing,
@@ -343,11 +340,9 @@ type Drag =
   // different body are one gesture.
   | { mode: "chainEnd"; chain: EdChain; end: "a" | "b"; cursor: Vec2 }
   // Pulling a new vine out of a body: the anchor is fixed in `from`'s local
-  // frame, and the drag's DIRECTION is authored along with its length -
-  // straight down is the ordinary hanging vine, and any other direction makes
-  // a springy BRANCH (an angled, stiff, lightly damped vine - see `addVine`) and the drag sets the LENGTH rather than reaching for a second body,
+  // frame and the drag sets the LENGTH rather than reaching for a second body,
   // which is the whole of the difference between a vine and a chain.
-  | { mode: "vineDraw"; from: EdItem; local: Vec2; cursor: Vec2 }
+  | { mode: "vineDraw"; from: EdItem; local: Vec2; length: number }
   // Dragging a placed vine's free end, which is the same edit by hand - or,
   // with SHIFT held over a body, carrying that end toward a second anchor:
   // releasing there attaches the vine at both ends and makes it a span.
@@ -1524,7 +1519,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     "Click out a camera path: the route the camera rides, in the direction it is drawn. Enter or double-click finishes it, Esc drops it. The camera targets a point `lookahead` further along than the player, and lets go if they stray more than `range` from it.";
   toolBtns.chain.title = "Drag from one body to another to string a chain between them";
   toolBtns.vine.title =
-    "Press on a body and drag DOWN to hang a vine from it - or drag out at an ANGLE to grow a springy branch (stiff, lightly damped, held out along the drag). Shift-drag its end handle onto another body to span between the two. The player passes through either and the hook grabs anywhere along the length.";
+    "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
@@ -3757,7 +3752,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. With stiffness, an ANGLE makes it a springy branch: held out along that direction, drooping under weight and springing back - lower the damping and the recoil can throw a swinging player. On a span the ends are pinned, the angle is ignored and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire.";
+      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire.";
     g.appendChild(hint);
 
     numField(
@@ -3942,58 +3937,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         placeholder: `${DEFAULT_VINE_STIFFNESS}`,
         onEmpty: () => {
           for (const vine of vines) vine.stiffness = null;
-        },
-      },
-    );
-
-    // The direction a stiff vine is held out along - what makes it a BRANCH.
-    // Degrees on screen, radians in the file, like every other angle here;
-    // blank is straight down, and the field only means anything with stiffness
-    // behind it and no second anchor (the builder's own gate, see
-    // `VineData.angle`).
-    numField(
-      g,
-      "angle °",
-      () => {
-        const first = vines[0]!.angle;
-        return vines.every((v) => v.angle === first)
-          ? first !== null
-            ? (first * 180) / Math.PI
-            : NaN
-          : null;
-      },
-      (v) => {
-        for (const vine of vines) vine.angle = (v * Math.PI) / 180;
-      },
-      15,
-      vines.length > 1,
-      {
-        placeholder: "down",
-        onEmpty: () => {
-          for (const vine of vines) vine.angle = null;
-        },
-      },
-    );
-
-    // Velocity lost per frame, 0..1. Blank is the vine default (2% a frame);
-    // a branch wants far less, or its spring-back is eaten before it can
-    // throw anyone (see `VineData.damping`).
-    numField(
-      g,
-      "damping",
-      () => {
-        const first = vines[0]!.damping;
-        return vines.every((v) => v.damping === first) ? (first ?? NaN) : null;
-      },
-      (v) => {
-        for (const vine of vines) vine.damping = Math.min(1, Math.max(0, v));
-      },
-      0.005,
-      vines.length > 1,
-      {
-        placeholder: `${DEFAULT_VINE_DAMPING}`,
-        onEmpty: () => {
-          for (const vine of vines) vine.damping = null;
         },
       },
     );
@@ -5083,13 +5026,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // Hang a vine from a body. The anchor is a real anchor object like a chain's,
   // so the vine rides its body through every move, rotate and resize with no
   // second copy of the point to keep in step.
-  // `angle` null is the ordinary hanging vine; an angle makes the one-gesture
-  // BRANCH - the same vine held out along the drag by an authored stiffness,
-  // with the damping taken down so the spring-back survives (see
-  // `BRANCH_DEFAULT_STIFFNESS`). The stiffness and damping are ordinary fields
-  // after that: the panel turns a branch back into a rope, or a rope into a
-  // branch, by editing them.
-  function addVine(from: EdItem, local: Vec2, length: number, angle: number | null): void {
+  function addVine(from: EdItem, local: Vec2, length: number): void {
     if (!chainable(from)) return;
     if (length < MIN_VINE_LENGTH) return;
     beginAction();
@@ -5102,9 +5039,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       length,
       spacing: null,
       density: null,
-      stiffness: angle !== null ? BRANCH_DEFAULT_STIFFNESS : null,
-      angle,
-      damping: angle !== null ? BRANCH_DEFAULT_DAMPING : null,
+      stiffness: null,
       color: null,
     };
     model.vines.push(vine);
@@ -6109,7 +6044,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drawTool === "vine") {
       const from = topmostAt(world, (b) => chainable(b));
       if (from) {
-        drag = { mode: "vineDraw", from, local: nearestSurfaceLocal(from, world), cursor: world };
+        drag = { mode: "vineDraw", from, local: nearestSurfaceLocal(from, world), length: 0 };
       }
       return;
     }
@@ -6795,11 +6730,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         drag.cursor = world;
         break;
       case "vineDraw":
-        // Any direction: the drag's length is the vine's, and its DIRECTION
-        // decides what is being drawn - straight down (within the snap step)
-        // is the ordinary hanging vine, anything else a springy branch held
-        // out along the drag (resolved at release, see `vineDraftGeometry`).
-        drag.cursor = world;
+        // Downward only: a vine hangs, so what the drag measures is how far
+        // BELOW the anchor the pointer has got. Dragging up is a vine of no
+        // length, which the draft draws as refused.
+        drag.length = Math.max(0, world.y - toWorld(drag.from, drag.local).y);
         break;
       case "vineLength": {
         const top = vineAnchorWorld(model, drag.vine);
@@ -6810,19 +6744,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // drag started with, since dragging sideways toward an anchor is not a
         // statement about length.
         drag.attach = e.shiftKey ? (topmostAt(world, (b) => chainable(b)) ?? null) : null;
-        if (drag.attach) {
-          drag.vine.length = drag.startLength;
-        } else if (drag.vine.angle !== null && (drag.vine.stiffness ?? 0) > 0) {
-          // A BRANCH's tip re-aims and re-lengths in one gesture, the way an
-          // arrow's endpoint does: the tip is where the pointer is.
-          const delta = world.sub(top);
-          drag.vine.length = Math.max(MIN_VINE_LENGTH, snap(delta.length()));
-          if (delta.lengthSquared() > 1e-12) {
-            drag.vine.angle = snapAngle(Math.atan2(delta.y, delta.x));
-          }
-        } else {
-          drag.vine.length = Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
-        }
+        drag.vine.length = drag.attach
+          ? drag.startLength
+          : Math.max(MIN_VINE_LENGTH, snap(world.y - top.y));
         markDirty();
         refreshFields();
         break;
@@ -6976,8 +6900,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (drag.mode === "vineDraw") {
       // A vine that was never dragged out is not a vine, so the gesture is
       // abandoned rather than dropping a one-link stub on the wall.
-      const g = vineDraftGeometry(drag);
-      addVine(drag.from, drag.local, g.length, g.angle);
+      addVine(drag.from, drag.local, snap(drag.length));
     }
     // The two Shift gestures on a vine's end, resolved at release: a hanging
     // vine's tip carried onto a body attaches there and becomes a span, and a
@@ -7149,43 +7072,19 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return { from, to: drag.cursor, valid };
   }
 
-  // What the current +Vine drag would build: its length, and the authored
-  // angle - null for a drag within half a snap step of straight down, which is
-  // the ordinary hanging vine. One function for the draft and the release, so
-  // what is drawn while dragging cannot disagree with what a release builds.
-  function vineDraftGeometry(d: { from: EdItem; local: Vec2; cursor: Vec2 }): {
-    top: Vec2;
-    length: number;
-    angle: number | null;
-  } {
-    const top = toWorld(d.from, d.local);
-    const delta = d.cursor.sub(top);
-    const length = snap(delta.length());
-    if (length < MIN_VINE_LENGTH) return { top, length, angle: null };
-    const a = snapAngle(Math.atan2(delta.y, delta.x));
-    // Down within half the 15° snap step is DOWN, snap or no snap: nobody
-    // drags a hanging vine out at 3° and means a branch.
-    const off = a - Math.PI / 2;
-    const offDown = Math.abs(Math.atan2(Math.sin(off), Math.cos(off)));
-    return { top, length, angle: offDown < Math.PI / 24 ? null : a };
-  }
-
   // The vine being pulled out - or a tip being Shift-carried toward a second
   // anchor - as the renderer wants it: where it starts, where the gesture has
   // got, and whether releasing here would build (or attach) anything.
   function vineDraftView():
-    | { kind: "hang"; from: Vec2; to: Vec2; valid: boolean }
+    | { kind: "hang"; from: Vec2; length: number; valid: boolean }
     | { kind: "attach"; from: Vec2; to: Vec2; valid: boolean }
     | null {
     if (drag?.mode === "vineDraw") {
-      const g = vineDraftGeometry(drag);
-      const dir =
-        g.angle !== null ? new Vec2(Math.cos(g.angle), Math.sin(g.angle)) : new Vec2(0, 1);
       return {
         kind: "hang",
-        from: g.top,
-        to: g.top.add(dir.mul(g.length)),
-        valid: g.length >= MIN_VINE_LENGTH,
+        from: toWorld(drag.from, drag.local),
+        length: drag.length,
+        valid: drag.length >= MIN_VINE_LENGTH,
       };
     }
     if (drag?.mode === "vineLength" && drag.attach) {

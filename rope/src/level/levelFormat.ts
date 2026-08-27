@@ -878,28 +878,6 @@ export interface VineData {
   // either way the span resists kinking where it is grabbed (see
   // `level/vineBend.ts`).
   stiffness?: number;
-  // The direction the vine LEAVES its anchor along, in radians - 0 is +x
-  // (right), positive turns clockwise on screen, and absent is straight down,
-  // which is the only direction a vine had before this existed. With
-  // `stiffness` this is what makes a vine a BRANCH: the anchor clamp holds the
-  // first links out along this direction, the bends hold the rest straight
-  // behind them, and the whole thing droops under gravity to the force balance
-  // and springs back through it - a bough off a trunk rather than a rope off a
-  // ceiling. Without stiffness there is nothing to hold the direction - the
-  // vine would simply flop to hanging, never settle, and never sleep - so the
-  // field is read only when `stiffness` is authored above zero.
-  //
-  // An angle, not a length, so `scaleLevelData` leaves it alone. Ignored on a
-  // span (`anchor2`), whose ends are pinned and which rests in its catenary.
-  angle?: number;
-  // Fraction of each link's velocity lost per frame, 0..1. Absent = the
-  // damping every vine has always had (see `LINK_DAMPING`, 0.02/frame), which
-  // takes a disturbance to a tenth in about two seconds. A springy branch
-  // wants much less - the elastic return is the mechanic, and the default
-  // eats it - and what a low number costs is how long the branch rings after
-  // the player lets go. Clamped at load; not a length, so it crosses
-  // `scaleLevelData` unchanged.
-  damping?: number;
   // Optional appearance. Absent = the renderer's own vine colours.
   color?: string;
 }
@@ -2205,11 +2183,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // one number on a vine that is not in the file's pixels.
     ...(v.density !== undefined ? { density: v.density } : {}),
     // A fraction, like the density a per-metre one: neither is in the file's
-    // pixels, so both cross the conversion unchanged - and so do the angle (a
-    // direction) and the damping (a fraction per frame).
+    // pixels, so both cross the conversion unchanged.
     ...(v.stiffness !== undefined ? { stiffness: v.stiffness } : {}),
-    ...(v.angle !== undefined ? { angle: v.angle } : {}),
-    ...(v.damping !== undefined ? { damping: v.damping } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
   return {

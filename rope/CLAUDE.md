@@ -3470,36 +3470,14 @@ until something moves it - which is what separates it from a chain, whose sag
 would be a drawing of something the level does not contain and which therefore
 still stays on the editor's 2D canvas.
 
-### Branches
-
-A **springy branch is a stiff vine with an authored rest direction** (`VineData.angle`, radians, 0 = +x; plus `VineData.damping`, the per-frame velocity loss every vine now carries, default 0.02), and deliberately NOT a new mechanism: the anchor clamp already encodes a rest direction as a ghost point on the anchor body (it was always straight down), the multigrid bends already are a distributed torsion spring about it, and every link is an ordinary finite-mass rigid body - so the chain couples to a branch through the plain constraint solve, Newton's third law by construction, with none of the credit machinery an infinite-mass sprung pivot needed.
-This replaced the torsion-sprung pivot branch as the tree-branch mechanic for exactly that reason.
-
-The gate is load-bearing and read identically in three places (`buildOne`, `vineRestDir`, the format doc): the angle means something only on a HANGING vine with `stiffness > 0` - limp, nothing holds a direction (the vine would flop and never sleep), and on a span the ends are pinned and the rest is the catenary.
-A branch spawns on its authored ray and settles AT BUILD to its drooped force balance (there is no closed form for a multigrid XPBD chain under gravity, so `settleVinesAtBuild` runs the real per-frame step; the cap is 1200 frames because a lightly damped branch needs ~600 to fall under the sleep bar).
-Branches build NO per-link LRAs: their links live near full extension by design, and the bends are what bound a branch's reach.
-
-Numbers worth knowing before authoring one: stiffness 0.6-0.8 is the springy-branch band (the `vineBend.ts` table), `BRANCH_DEFAULT_STIFFNESS`/`BRANCH_DEFAULT_DAMPING` (0.6 / 0.005) are what the editor's angled drag writes, and the default density's 75 kg on a 3 m bough out-masses the ball, which is what makes the yank transfer (the old material-tricks lesson, now a slider).
-Damping on a STIFF branch reads as tone rather than duration - the bend solve drains a ringing branch at ~2% a frame regardless (link-scale modes far above the step's Nyquist; the sweep crushes them), so the free wobble dies in a second or two at any authored number - while on a limp vine the authored damping is the only dissipation there is.
-What the drain does NOT eat is the mechanic: the recoil delivered through a taut chain during the stroke.
-`branch-fling` is that, measured - a radial drop arrest onto a chain hooked at the tip, against a static-anchor control: the bough throws the ball back up ~1300 J of an arrest the block flatly destroys, and never above what the drop brought in.
-
-The bends' elastic potential is in `mechanicalEnergy` (via `vineElasticEnergy`), or the spring-back reads as an unforced gain - and the term is computed from the FORCE-CONSISTENT curvature `α̃·λ`, never the measured one: at branch stiffness the compliance is ~1e-8 m/N, so raw `C²/2α` reads a millimetre of sweep residual as kilojoules (measured: 3.7 kJ on a branch at rest).
-The `branch` case carries the ablation both ways.
-
 ### Authoring
 
 `VineData` names an ANCHOR OBJECT by id and carries a length, exactly as
 `ChainData` names its two - which body it hangs from is a question about where
 the anchor lives. `+ Vine` in the editor is the chain tool's press followed by a
-drag that pulls the length out - DOWN for the ordinary hanging vine, and out at
-any other ANGLE for a one-gesture branch (the drag's direction is the authored
-angle, with branch-default stiffness and damping written in; within half a snap
-step of straight down means down). A branch's end handle re-aims and re-lengths
-in one drag, the way an arrow endpoint does; the panel carries the length, the spacing
+drag DOWN that pulls the length out; the panel carries the length, the spacing
 (blank = the default), a live link count, the density, the stiffness (blank = 0,
-a rope, with what it reads as beside it), the angle (blank = down), the damping
-(blank = the default) and the colour, and the vine is listed
+a rope, with what it reads as beside it) and the colour, and the vine is listed
 under `Vines (N)` beside the chains.
 A **span** is authored from a hanging vine: **Shift-drag its end handle onto a body** to attach a second anchor there (the panel gains a live `slack` readout), drag that end handle to re-anchor it as a chain end is re-anchored, and **Shift-drop it over empty space** to detach back to a hanging vine of the same length.
 The editor draws a span at its resting catenary, on the canvas and in the 3D scene both, through the same `catenaryPolyline` the builder spawns from.
