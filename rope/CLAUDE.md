@@ -844,6 +844,25 @@ A sweep that *begins* inside the piece returns `t = 0` (see "rest resolution whe
 There the surface answers for itself (`nearestSurfacePoint`), exactly as `probeContact` has it answer for the same reason.
 `cli contacts` `hook-seam` is the detector, and it asserts the seam from **both build orders** - an answer that depends on which body was listed first is not an answer - that the anchor lands on the face rather than a radius inside it, and that a hook-proof surface genuinely reached *first* still deflects, which is what stops the fix collapsing to "attach always wins".
 
+**Reach is what the player is shown.** An attach is forgiven exactly one hook radius past the chain's length (`deployLimit`'s `attachAllowance`) - the hook's own body, and no range beyond it - so the tip stopping at `CHAIN_MAX_LENGTH` in plain sight is the reach a throw actually has, and the chain anchors at the length it reached (up to `CHAIN_MAX_LENGTH + 2 * hook radius`, since the anchor is then placed a radius further, on the surface the rim touched).
+
+That forgiveness used to be `ATTACH_SNAP_TOLERANCE` (0.2 m), and it made the reach dishonest.
+The constant is the attach callback's **snap backstop** - introduced sized for the ~1 px of solver slop a dangling tip carries when it finally lands, with 20x headroom - and it was later handed to the flight sweep as range without being re-picked for that job.
+The result was a chain that stopped at 1.8 m in front of the player and attached at 2.0: in `session-366f` seven throws inside 4 degrees of aim at a wall 1.95-2.01 m out caught four times and missed three, with the sticking ones anchoring further out than the failing ones had reached, and nothing on screen to predict it by.
+The backstop keeps the 0.2 m, because what it rejects is an anchor **no throw could reach** - one offered by `probeContact` or by the solver's own contacts - and the longest path a deploy can now anchor at is ~1.84 m against that 2.0 m gate.
+It was not always slack: while the flight was forgiven 0.2 m too, the anchor's extra radius put the path a few millimetres over the gate and the chain was dropped on the anchoring frame - eight of the last fourteen throws in `session-1355f`, which reads from the game as the chain **retracting itself while the deploy button is still held**.
+
+The band, whatever its width, is swept **at the chain-out event**, inside `BallHook.convertAtChainOut`, before the tip is seated (`attachInSnapBand`).
+Tying it to the event rather than to a frame is not a detail: the flight sweep caps its motion at `attachOutT`, so it only ever covers the band on a step that *starts* at or past full stretch, and every earlier step reaches a single `CONTACT_SLOP` past its own end.
+Getting such a step needs the step before it to land a hair *short* of full stretch so the conversion declines, but `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, so every straight throw from a stationary player arrives at chain-out precisely on a frame boundary and a few ULP of accumulated rounding in the span decided whether the throw was forgiven at all.
+`session-1017f` is 17 throws at one target with the wall inside the band of the day: 8 stuck, 9 dangled, the two sets interleaved across the whole 0.4 degree spread of aim, the same wall span appearing in both (`session-234f` is the same tie over 3 throws).
+An epsilon cannot fix a genuine tie - it only moves which throws are unlucky - so the band moved to the conversion, where a flight lasting a whole number of frames stops being a special case.
+The flight sweep's rules carry over unchanged: an attach wins a tie, and a hook-proof piece between the chain-out point and the attachable surface blocks the attach without bouncing, because it is the chain and not that surface that ended the flight.
+`cli contacts` `hook-snap-band` is the detector.
+It seeds the last flight step at a span of 1.6005 - chain-out at `t = 0.9975`, inside the step and past the 1.8105 the sweep's own reach covers - rather than flying a whole throw, because a natural throw can only express the tie itself; a ceiling 15 mm past full stretch must anchor, one 21 mm past must not, and the anchored path must stay inside `CHAIN_MAX_LENGTH + 2 * hook radius` with the chain never dropped.
+The `chain-out` case carries the other half at throw scale: a ceiling a hook radius past full stretch anchors, one 50 mm past does not.
+Level scenarios authored against the old 0.2 m reach had to move their targets ~20 cm closer to stay in range (`ball-hang-at-rest`, `ball-wind-up`, `ball-winch-hung-anchor`).
+
 At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it

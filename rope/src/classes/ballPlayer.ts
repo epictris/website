@@ -733,6 +733,22 @@ export class BallPlayer extends RigidBody2D {
       // one-frame lurch (session-116f: a 0.9 m/s kick off a resting ball).
       this.chain.syncWraps(this.sceneBodies);
       const len = this.chain.getCurrentLength();
+      // The tolerance here is a SNAP backstop, not a range: it is sized for the
+      // ~1 px of solver slop a dangling tip carries when it finally lands (see
+      // the constant), and what it rejects is an anchor no throw could have
+      // reached — one offered by `probeContact` or by the solver's own
+      // contacts — because that is what would drag the ball to a too-far
+      // anchor. A throw cannot reach it: the flight budget stops an attach one
+      // hook radius past full stretch (see `deployLimit`), so the longest path
+      // a deploy can anchor at is ~1.84 m against this 2.0 m gate.
+      //
+      // It was not always slack: while the flight was ALSO forgiven 0.2 m, the
+      // sweep would accept a hit whose anchor — placed on the surface, a radius
+      // past the centre the sweep had budgeted — landed a few millimetres over
+      // this same 2.0 m, and the chain was then dropped on the anchoring frame.
+      // Eight of the last fourteen throws in `session-1355f` did that, which
+      // reads from the game as the chain retracting itself while the deploy
+      // button is still held.
       if (len > BallPlayer.CHAIN_MAX_LENGTH + BallPlayer.ATTACH_SNAP_TOLERANCE) {
         // Attached far beyond the chain's absolute length — snap instead of
         // letting the solver yank the ball toward a too-far anchor.
@@ -766,9 +782,27 @@ export class BallPlayer extends RigidBody2D {
     // is left of CHAIN_MAX_LENGTH beyond the wrapped path's last fixed point,
     // and running out mid-step converts it into the dangling tip there and
     // then — at the sub-frame point the chain snapped taut, before it can
-    // reach (and bounce off, session-339f) anything the chain forbids. An
-    // attach alone may still land `ATTACH_SNAP_TOLERANCE` further, which is
-    // the attach callback's standing forgiveness rule handed to the sweep.
+    // reach (and bounce off, session-339f) anything the chain forbids.
+    //
+    // An ATTACH is allowed one hook radius further, and no more: the reach the
+    // player is shown is where the tip stops, so that is the reach an attach
+    // gets. The extra radius is the hook's own body — the sweep is a swept
+    // circle, so a surface the hook's rim would touch at full stretch is
+    // already inside `allowance`, and the radius on top is the width of the
+    // manacle drawn at the end of the chain, not a range bonus.
+    //
+    // It used to be `ATTACH_SNAP_TOLERANCE` (0.2 m), which is the attach
+    // callback's snap backstop below — a number sized for ~1 px of solver
+    // slop on a dangling tip (see the constant) that was handed to the sweep
+    // as flight forgiveness and never re-picked for the job. It made the reach
+    // dishonest: the tip always stops at CHAIN_MAX_LENGTH, while an attach
+    // reached 0.2 m further, so a wall a hand's breadth past the chain's real
+    // length caught roughly half the throws aimed at it and the eye had
+    // nothing to predict it by (`session-366f`: seven throws inside 4° of aim
+    // at a wall 1.95-2.01 m out on a 1.8 m chain, four stuck, three did not,
+    // and the sticking ones anchored further out than the failing ones had
+    // reached).
+    //
     // The budget exists only while this hook is the deploying one: once it is
     // the tip, the rope solver owns its length.
     hook.deployLimit = () => {
@@ -778,7 +812,7 @@ export class BallPlayer extends RigidBody2D {
       const prev = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
       const base = chain.getCurrentLength() - prev.distanceTo(hook.globalPosition);
       const allowance = BallPlayer.CHAIN_MAX_LENGTH - base;
-      return { prev, allowance, attachAllowance: allowance + BallPlayer.ATTACH_SNAP_TOLERANCE };
+      return { prev, allowance, attachAllowance: allowance + hook.radius };
     };
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
   }

@@ -28,6 +28,7 @@ import {
   type CollisionObject2D,
 } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
+import { PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
@@ -1547,15 +1548,22 @@ function caseChainOut(): ContactResult {
   // consumes the hook body.
   const near = throwUp(-0.1, false);
   const anchors = near.attached && near.hookGone;
-  // An attachable ceiling INSIDE the snap-tolerance band past full stretch
-  // still anchors too — that forgiveness (`ATTACH_SNAP_TOLERANCE`, anchor at
-  // the as-reached length) is standing behaviour the chain-out cap must not
-  // eat, and only the attach gets it: the same distance in hook-proof is the
-  // `stopped` case above.
-  const tolBand = throwUp(0.05, false);
+  // An attachable ceiling a hook radius past full stretch still anchors: that
+  // is the whole of an attach's forgiveness (see `deployLimit`), the hook's own
+  // body and no range beyond it, and the chain-out cap must not eat it.
+  const tolBand = throwUp(0.01, false);
   const forgiving = tolBand.attached && tolBand.hookGone;
+  // And 50 mm past full stretch does NOT anchor, though the same ceiling one
+  // decimetre nearer does. This is the honest-reach half, and it is what the
+  // player is owed: the tip stops at CHAIN_MAX_LENGTH in plain sight, so a
+  // surface visibly past that is out of range for an attach as well.
+  // `ATTACH_SNAP_TOLERANCE` used to buy 0.2 m here, four times this distance,
+  // and made a wall the chain cannot reach catch about half the throws aimed
+  // at it (`session-366f`).
+  const tooFar = throwUp(0.05, false);
+  const honest = !tooFar.attached;
 
-  const passed = stopped && dead && bounced && anchors && forgiving;
+  const passed = stopped && dead && bounced && anchors && forgiving && honest;
   return ok("chain-out — the flight ends where the chain runs out, not a phase later", passed, [
     `${stopped ? "ok  " : "BAD "} wall 50mm past full stretch: max span ${(past.maxSpan * 1000).toFixed(1)}mm` +
       ` (want <=${(REACH * 1000 + 5).toFixed(0)}mm, never reaches the wall)`,
@@ -1563,7 +1571,105 @@ function caseChainOut(): ContactResult {
       ` on the chain-out frame (want <0.1)`,
     `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (span ${(proofNear.maxSpan * 1000).toFixed(1)}mm)`,
     `${anchors ? "ok  " : "BAD "} attachable ceiling inside reach still anchors${near.attached ? "" : " — TURNED AWAY"}`,
-    `${forgiving ? "ok  " : "BAD "} attachable ceiling in the snap-tolerance band still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${forgiving ? "ok  " : "BAD "} attachable ceiling a hook radius past full stretch still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${honest ? "ok  " : "BAD "} attachable ceiling 50mm past full stretch does NOT anchor${tooFar.attached ? " — REACHED PAST THE VISIBLE END" : ""}`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// hook-snap-band — an attach gets its tolerance wherever the chain runs out.
+//
+// An attach may land one hook radius past full stretch (`BallPlayer.deployLimit`
+// — the hook's own body, and no range beyond it). That band used to be swept
+// only on a step that BEGAN at or past full stretch, because that is the only
+// step whose motion the sweep caps at `attachOutT` rather than at one
+// `CONTACT_SLOP` past its end. Reaching such a step needs the step before it to
+// stop a hair SHORT of full stretch, so the chain-out conversion declines — but
+// `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, so a straight
+// throw from a stationary player arrives at chain-out precisely on a frame
+// boundary and a few ULP of accumulated rounding in the span decided whether the
+// throw was forgiven at all. `session-1017f` is 17 throws at one target with the
+// wall inside the band of the day: 8 stuck, 9 dangled, the two sets interleaved
+// across the whole 0.4 degrees of aim, and the same wall span appearing in both
+// (`session-234f` is the same tie over 3 throws). An epsilon cannot fix a
+// genuine tie - it only moves which throws are unlucky - so the band is swept at
+// the chain-out EVENT, inside `convertAtChainOut`, before the tip is seated.
+//
+// The rig seeds the last flight step rather than flying the whole throw, because
+// the property is about WHERE in a step the chain runs out and the natural throw
+// can only express the tie itself: from a span of 1.6005 the chain-out lands at
+// t = 0.9975, inside this step and past everything the sweep's own reach covers
+// (1.6005 + 1.05 steps = 1.8105). The ball is frozen (`gravityScale = 0`) so the
+// span is the geometry and not a falling rim.
+// ---------------------------------------------------------------------------
+function caseHookSnapBand(): ContactResult {
+  const REACH = BallPlayer.CHAIN_MAX_LENGTH;
+  const HOOK_R = 2 * PX;
+  // Where the last flight step starts: near enough to full stretch that the
+  // chain runs out inside it, far enough that the sweep's own reach stops short
+  // of the band (see the header).
+  const SEED = 1.6005;
+
+  // `gap` is how far past full stretch the ceiling's face stands, measured the
+  // way the throw is budgeted: to the hook's centre at contact.
+  const throwAt = (gap: number): { attached: boolean; chainKept: boolean; path: number; t: number } => {
+    const world = new World();
+    const ball = new BallPlayer(0.12);
+    ball.globalPosition = new Vec2(0, 0);
+    ball.gravityScale = 0;
+    ball.spawnBody = (b) => world.add(b);
+    world.add(ball);
+    const rim = ball.globalPosition.add(new Vec2(0, -0.12));
+    const ceiling = new StaticBody2D();
+    ceiling.globalPosition = new Vec2(0, rim.y - REACH - gap - HOOK_R - 0.5);
+    ceiling.setShape(rectShape(4, 1));
+    world.add(ceiling);
+
+    const input = emptyFrameInput();
+    // Aim point at the ball's centre means "not aiming": the loop faces up.
+    input.mouseWorldPosition = ball.globalPosition;
+    input.fire = { held: true, pressed: true, released: false };
+    ball.resolveInput(input);
+    ball.sceneBodies = world.bodies;
+    const hook = world.bodies.find((b): b is BallHook => b instanceof BallHook);
+    if (!hook) return { attached: false, chainKept: false, path: Number.NaN, t: Number.NaN };
+    hook.globalPosition = rim.add(new Vec2(0, -SEED));
+    hook.linearVelocity = new Vec2(0, -BallPlayer.HOOK_SPEED);
+    const limit = hook.deployLimit?.() ?? null;
+    const t = limit
+      ? BallHook.chainOutTime(hook.globalPosition, hook.linearVelocity.mul(DT), limit.prev, limit.allowance)
+      : Number.NaN;
+    hook.physicsStep(DT);
+    const chain = ball.chain;
+    return {
+      attached: chain !== null && !(chain.end.contact.obj instanceof BallHook),
+      chainKept: chain !== null,
+      path: chain ? chain.getCurrentLength() : Number.NaN,
+      t,
+    };
+  };
+
+  const inBand = throwAt(0.015);
+  const past = throwAt(0.021);
+  // The chain runs out inside the seeded step, which is the whole point of the
+  // rig: a step that BEGINS at chain-out is the case that always worked.
+  const midStep = inBand.t > 0.9 && inBand.t <= 1;
+  const forgiven = inBand.attached;
+  // ...and not a millimetre more than the hook's own body.
+  const honest = !past.attached && past.chainKept;
+  // The anchor is placed on the surface, one radius past the centre the sweep
+  // budgeted, so the path may reach REACH + 2 * HOOK_R — and must not trip the
+  // attach callback's snap backstop, which drops the whole chain (`session-1355f`
+  // read from the game as the chain retracting itself while deploy was held).
+  const bounded = inBand.chainKept && inBand.path <= REACH + 2 * HOOK_R + 1e-6;
+
+  const passed = midStep && forgiven && honest && bounded;
+  return ok("hook-snap-band — an attach gets its tolerance wherever the chain runs out", passed, [
+    `${midStep ? "ok  " : "BAD "} chain runs out at t=${inBand.t.toFixed(4)} of the seeded step (want 0.9-1.0)`,
+    `${forgiven ? "ok  " : "BAD "} ceiling 15mm past full stretch anchors${inBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${honest ? "ok  " : "BAD "} ceiling 21mm past full stretch does not${past.attached ? " — REACHED PAST THE HOOK'S OWN BODY" : ""}`,
+    `${bounded ? "ok  " : "BAD "} anchored path ${(inBand.path * 1000).toFixed(1)}mm, chain kept` +
+      ` (want <=${((REACH + 2 * HOOK_R) * 1000).toFixed(0)}mm and never dropped)`,
   ]);
 }
 
@@ -3716,6 +3822,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainHungJam(sims));
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());
+  results.push(caseHookSnapBand());
   results.push(caseChainAttachKeepsLength());
   results.push(caseHookRest());
   results.push(caseChainOutVsSolver());
