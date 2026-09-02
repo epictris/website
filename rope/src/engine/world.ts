@@ -268,6 +268,78 @@ const CIRCLE_PAIR_FEATURE = -2;
 // and what load it re-earns on return it re-earns through the ramp.
 const PAIR_LOAD_GRACE = 5;
 
+// A sustained load is a press, and a press POINTS somewhere.
+//
+// Held as one number per body pair it does not, and a body is not one surface:
+// the level's terrain is a single authored outline, so the floor the ball has
+// been rolling along for hundreds of frames and the 40 cm step in front of it
+// are the same body PAIR. The floor's matured 25 N·s funded the step's face -
+// which carries 24% of the ball's weight - at the full `mu` of 3.8, and the ball
+// ratcheted up the step, 3.3 of its own radii, in 24 frames (`session-373f`
+// f318-f344): 44 N·s spent where the face's own press funds 7.8, with the "a
+// spinning ball cannot climb a wall" guard leaking through the one door it had
+// left. So a pair remembers its load per direction, and a contact draws only
+// what its own surface carries.
+//
+// Two normals closer than this are ONE press rather than two, and merging by
+// proximity is what a fixed grid of directions cannot do: a grid has seams, and
+// a seam is a place where one press is remembered as two that ramp
+// independently and never follow each other down. That is not hypothetical at
+// 16 bins - `atan2` puts (-1, -0) and (-1, +0) at opposite ends of the turn, so
+// a plain vertical wall straddles the seam and its two halves fund each other,
+// which read as `ball-roll-wall` climbing 21 cm instead of 5.
+const PRESS_SAME_DIRECTION = Math.cos(Math.PI / 8);
+
+// How many distinct presses a pair remembers. A press is 22.5 degrees wide, so
+// what needs more than a handful is a body a ball is rolling around the outside
+// of, where the oldest and smallest is the one worth forgetting.
+const PRESS_DIRECTIONS_MAX = 8;
+
+// One direction of a body pair's sustained load: the surface normal it was last
+// renewed along, what it carries (N·s), and how many consecutive frames nothing
+// has renewed it.
+interface SustainedPress {
+  dir: Vec2;
+  s: number;
+  missing: number;
+}
+
+// The remembered press this normal renews, or -1 for a direction the pair is not
+// holding one in. The CLOSEST within the merge angle rather than the first,
+// since two presses can both be inside it and only one of them is this surface.
+function pressIndex(presses: readonly SustainedPress[], normal: Vec2): number {
+  let best = -1;
+  let bestDot = PRESS_SAME_DIRECTION;
+  for (let i = 0; i < presses.length; i++) {
+    const d = presses[i]!.dir.dot(normal);
+    if (d > bestDot) {
+      bestDot = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+// The sustained load THIS surface carries: the press it renews, and no other.
+//
+// A press the pair sustains somewhere else funds nothing here, and resolving it
+// onto this normal by its cosine is the tempting near-miss - it is what a single
+// force resolved onto a surface would do, and the ball's weight is not that. The
+// floor under a ball carries the whole of its weight; the step in front of it
+// carries none, and crediting the face a quarter of the floor's load because the
+// two are 76 degrees apart still funds it at three times its own press
+// (`ball-step-ledge` climbs 17 cm against its two-body twin's 9).
+//
+// The cosine that remains is within the merge angle, where it is at worst 0.924
+// and the ramp tops it back up: a ball rolling from one face of an authored
+// polyline to the next keeps its floor, which is what a grid of directions could
+// not give it.
+function sustainedAlong(presses: readonly SustainedPress[] | undefined, normal: Vec2): number {
+  if (presses === undefined) return 0;
+  const at = pressIndex(presses, normal);
+  return at < 0 ? 0 : Math.max(0, presses[at]!.s * presses[at]!.dir.dot(normal));
+}
+
 // A constraint with everything the iteration loop needs precomputed. Positions
 // do not change during a velocity solve, so the lever arms, the effective masses
 // and the restitution target are all constant across the iterations.
@@ -323,13 +395,20 @@ interface SolverContact {
   // anchor is carried by exactly that press (`ball-ground-wind-up`). An impact
   // is gone before the ramp can chase it, whichever way it pointed.
   readonly rampBite: number;
-  // The BODY PAIR's sustained load entering this frame (`World.pairLoad`,
-  // N·s), frozen at build so the cap and the `spin-overdrive` detector read
-  // the same number regardless of where the iterations left Pn mid-solve. The
-  // pair and not the feature, because a compound body's touching shape changes
-  // while the press persists: the wound-up ball's loop meets the wall once per
-  // revolution, and per-feature continuity would read a steady press as a
-  // stream of impacts.
+  // How much of the BODY PAIR's sustained load THIS SURFACE carries, entering
+  // this frame (`World.pairLoad` through `sustainedAlong`, N·s), frozen at
+  // build so the cap and the `spin-overdrive` detector read the same number
+  // regardless of where the iterations left Pn mid-solve.
+  //
+  // The pair and not the feature, because a compound body's touching shape
+  // changes while the press persists: the wound-up ball's loop meets the wall
+  // once per revolution, and per-feature continuity would read a steady press
+  // as a stream of impacts. But a pair alone is not enough either, because a
+  // press has a DIRECTION and a body has many faces - the level's terrain is
+  // one body, so a floor and the step in it are one pair, and the floor's load
+  // funded a climb up a face carrying none of it (`session-373f`; see
+  // `PRESS_SAME_DIRECTION`). So the load is remembered per direction, and this
+  // is the one that THIS normal renews rather than the best the pair holds.
   readonly sustained: number;
   // True when the kinematically spun body on this contact is held by an
   // anchored chain - that regime keeps legacy traction, so the ramp is off.
@@ -1371,20 +1450,28 @@ export class World {
   spinDriveOverspend = 0;
   spinDriveDetail: string | null = null;
 
-  // Each body pair's SUSTAINED load (N·s), keyed `aId:bId`, with how many
-  // consecutive frames the pair has currently been absent. The load a spin may
-  // buy traction from: it climbs by at most `rampBite` per carried frame and
-  // follows the pair's actual normal impulse down instantly, so a load
-  // qualifies by PERSISTING - gravity on a floor, a crate's weight, any press
-  // renewed frame after frame - while an impact's Pn is many frames of load in
-  // one and decays before the ramp can chase it. Direction-blind on purpose,
-  // and per pair with a short absence grace, because a held press is not a
-  // held constraint SET: a compound body's touching shape rotates and the set
-  // flickers while the press persists. A ball grinding on a wall reads ~0 here
-  // for ever - between its own micro-bounces nothing presses it in - which is
-  // what stopped maturity-by-contact-age treating the grind as a load and
-  // funding a 78 cm wall climb out of it (`session-422f-wall` f373).
-  private pairLoad = new Map<string, { s: number; missing: number }>();
+  // Each body pair's SUSTAINED load (N·s), keyed `aId:bId`, held per DIRECTION
+  // of press (`PRESS_SAME_DIRECTION`) with how many consecutive frames each has
+  // gone un-renewed. The load a spin may buy traction from: it climbs by
+  // at most `rampBite` per carried frame and follows the pair's actual normal
+  // impulse down instantly, so a load qualifies by PERSISTING - gravity on a
+  // floor, a crate's weight, any press renewed frame after frame - while an
+  // impact's Pn is many frames of load in one and decays before the ramp can
+  // chase it. Per pair rather than per feature, with a short absence grace,
+  // because a held press is not a held constraint SET: a compound body's
+  // touching shape rotates and the set flickers while the press persists.
+  //
+  // The RAMP is direction-blind (`rampBite`) and what it climbs is not: what
+  // qualifies a load is that it persists rather than where it points - a taut
+  // chain pressing the ball into a wall is as real as gravity pressing it into
+  // a floor - but a press it renews along one normal is not a press along
+  // another, and a body is not one surface. A ball grinding on a wall reads ~0
+  // here for ever - between its own micro-bounces nothing presses it in - which
+  // is what stopped maturity-by-contact-age treating the grind as a load and
+  // funding a 78 cm wall climb out of it (`session-422f-wall` f373); holding it
+  // per direction is what makes that true when the wall and the floor under it
+  // are pieces of one body (`session-373f`).
+  private pairLoad = new Map<string, SustainedPress[]>();
 
   collectContacts(): ContactConstraint[] {
     const out: ContactConstraint[] = [];
@@ -1605,9 +1692,12 @@ export class World {
     const prevLoads = this.pairLoad;
     if (constraints.length === 0) {
       // No contacts at all: every pair is absent, so its grace elapses here.
-      const kept = new Map<string, { s: number; missing: number }>();
-      for (const [key, e] of prevLoads) {
-        if (e.missing < PAIR_LOAD_GRACE) kept.set(key, { s: e.s, missing: e.missing + 1 });
+      const kept = new Map<string, SustainedPress[]>();
+      for (const [key, prev] of prevLoads) {
+        const presses = prev
+          .filter((e) => e.missing < PAIR_LOAD_GRACE)
+          .map((e) => ({ dir: e.dir, s: e.s, missing: e.missing + 1 }));
+        if (presses.length > 0) kept.set(key, presses);
       }
       this.pairLoad = kept;
       return;
@@ -1716,7 +1806,7 @@ export class World {
             Math.max(c.a.gravityScale, bRigid ? bRigid.gravityScale : 0) *
             dt) /
           invEffN,
-        sustained: prevLoads.get(`${c.a.id}:${c.b.id}`)?.s ?? 0,
+        sustained: sustainedAlong(prevLoads.get(`${c.a.id}:${c.b.id}`), c.normal),
         tethered,
         key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
       });
@@ -1757,18 +1847,46 @@ export class World {
     }
 
     // The pairs' sustained loads for next frame: ramp-limited on the way up,
-    // the pair's own (largest-contact) normal impulse on the way down, grace
-    // for pairs the set dropped this frame.
-    const loads = new Map<string, { s: number; missing: number }>();
+    // the direction's own (largest-contact) normal impulse on the way down,
+    // grace for the directions the set dropped this frame.
+    //
+    // A press renewed here is stored along the contact's OWN normal, carrying
+    // whatever `sustainedAlong` let it start from - so a load only ever charges
+    // the direction that earned it, and a face meeting the ball for the first
+    // time begins from the projection of whatever else the pair holds rather
+    // than from the whole of it.
+    const loads = new Map<string, SustainedPress[]>();
     for (const s of solved) {
       const pairKey = `${s.c.a.id}:${s.c.b.id}`;
-      const held = loads.get(pairKey);
+      let presses = loads.get(pairKey);
+      if (presses === undefined) loads.set(pairKey, (presses = []));
       const ceiling = Math.min(s.c.normalImpulse, s.sustained + s.rampBite);
-      if (!held || ceiling > held.s) loads.set(pairKey, { s: ceiling, missing: 0 });
+      const at = pressIndex(presses, s.c.normal);
+      // `loads` holds only what THIS frame renewed, so a press a contact renews
+      // is written outright rather than compared against the frame before -
+      // which is what makes a load follow its own surface's real impulse down
+      // instantly. Among several contacts on one press, the largest is the load.
+      if (at < 0) presses.push({ dir: s.c.normal, s: ceiling, missing: 0 });
+      else if (ceiling > presses[at]!.s) presses[at] = { dir: s.c.normal, s: ceiling, missing: 0 };
     }
-    for (const [key, e] of prevLoads) {
-      if (!loads.has(key) && e.missing < PAIR_LOAD_GRACE) {
-        loads.set(key, { s: e.s, missing: e.missing + 1 });
+    // Grace for the presses the constraint set dropped this frame, and only for
+    // those: a direction this frame renewed has already had its say.
+    for (const [key, prev] of prevLoads) {
+      let presses = loads.get(key);
+      for (const e of prev) {
+        if (e.missing >= PAIR_LOAD_GRACE) continue;
+        if (presses !== undefined && pressIndex(presses, e.dir) >= 0) continue;
+        if (presses === undefined) loads.set(key, (presses = []));
+        presses.push({ dir: e.dir, s: e.s, missing: e.missing + 1 });
+      }
+    }
+    // Forget the smallest first: a pair holding more presses than this is a body
+    // being rolled around the outside of, where the weakest funds nothing anyway.
+    for (const presses of loads.values()) {
+      while (presses.length > PRESS_DIRECTIONS_MAX) {
+        let weakest = 0;
+        for (let i = 1; i < presses.length; i++) if (presses[i]!.s < presses[weakest]!.s) weakest = i;
+        presses.splice(weakest, 1);
       }
     }
     this.pairLoad = loads;
@@ -1921,9 +2039,13 @@ export class World {
     // of weight per carried frame, and follows the pair's real load down
     // instantly - so a grind against a wall, where nothing presses between the
     // ball's own bounces, funds nothing however long it lasts
-    // (`session-422f-wall`). The linear share of the slip is real momentum and
-    // keeps the full cone via `linearNeed`; an anchored chain keeps the whole
-    // regime legacy (see `constraintTethered`).
+    // (`session-422f-wall`). It is the load along THIS surface's normal, since
+    // a body is many faces and a press points somewhere: the floor a ball has
+    // been rolling on for hundreds of frames is a piece of the same body as the
+    // step in front of it, and it funded the climb up that step in full
+    // (`session-373f`, see `PRESS_SAME_DIRECTION`). The linear share of the slip
+    // is real momentum and keeps the full cone via `linearNeed`; an anchored
+    // chain keeps the whole regime legacy (see `constraintTethered`).
     let conePos = cone;
     let coneNeg = cone;
     if (s.spinSlip !== 0 && !s.tethered) {
