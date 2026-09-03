@@ -140,7 +140,7 @@ export class BallHook extends RigidBody2D {
   // centre and the anchor on the surface).
   get radius(): number {
     const shape = this.primaryShape().shape;
-    return shape.kind === "circle" ? shape.radius : 2 * PX;
+    return shape.kind === "circle" ? shape.radius : MANACLE_DISC;
   }
 
   // The throw is over — the hook falls from here on. Idempotent, and safe to

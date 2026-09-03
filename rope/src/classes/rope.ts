@@ -189,6 +189,11 @@ export class Rope {
   // tell a block being *re-earned* from a block getting worse. Re-earning the
   // 8 mm the release just handed back is the mechanism working, not a stall.
   private leaseAtFrameStart = 0;
+  // How far geometry actually pushed the rope's own body this frame, summed
+  // over the caller's push-outs — or `null` where the caller does not measure
+  // it, which is every caller but `BallLevel` and means "unbounded", exactly as
+  // this behaved before. See `noteGeometryPush` and `absorbBlockedLength`.
+  private geometryPush: number | null = null;
   // Did geometry refuse the chain's correction on the frame just gone? Set by
   // the caller that can see it (`BallLevel`, from the push-out that follows its
   // solve); false for callers with nothing to report, which is every rope whose
@@ -389,6 +394,7 @@ export class Rope {
   beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
+    this.geometryPush = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
       this.blockedSlack = Mathf.max(this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta, 0);
@@ -401,6 +407,20 @@ export class Rope {
   // *next* `beginFrame` reads — see `blockedLastFrame`.
   noteBlockedByGeometry(blocked: boolean): void {
     this.blockedLastFrame = blocked;
+  }
+
+  // How far a push-out moved this rope's own body, reported by the caller that
+  // performed it. Additive over a frame (the ball controller pushes out three
+  // times) and reset by `beginFrame`; a rope whose caller never reports one is
+  // left unbounded, which is what every caller but `BallLevel` does.
+  //
+  // It is the SIZE of the refusal, and `absorbBlockedLength` needs it because
+  // the existence of a push-out is not evidence of how much was refused. A
+  // translation of the body by `d` can lengthen the rope's path by at most `d`
+  // (the coil rides the body, so only the free span moves), which makes this an
+  // exact bound rather than a tuned one.
+  noteGeometryPush(distance: number): void {
+    this.geometryPush = (this.geometryPush ?? 0) + Mathf.max(distance, 0);
   }
 
   // What that caller last reported. Read by the `rope-lease-held` invariant,
@@ -1029,14 +1049,34 @@ export class Rope {
   // long as it is held. Only a lease that has to grow past where the frame began
   // is the constraint being pushed out further than it already was, which is
   // what `rope-stalling` watches for.
+  // And it may not raise the lease by more than geometry actually PUSHED, where
+  // the caller measures that (`noteGeometryPush`). The existence of a push-out
+  // is not evidence of its size, and this half used to read it as though it
+  // were: the whole over-length was charged to the surface on the strength of
+  // any contact at all, however shallow. A ball whirled round a sprung bar it is
+  // anchored to grazes that bar at a few hundredths of a millimetre, frame after
+  // frame, which was enough to open the gate - and then the lease ratcheted, 3 cm
+  // of fresh path a frame, because a looser constraint buys a longer path which
+  // is measured as a bigger block. 1.69 m of chain reached a 2.19 m path and
+  // slung the ball at 30 m/s (`cli spring` `whirl-anchor`, sprung/tip). Bounded
+  // by the push, a graze buys a graze's worth: the over-length stands, and next
+  // frame's solve corrects it like any other length error.
+  //
+  // The bound is against the lease at FRAME START rather than its running value,
+  // so it says the same thing however many times a frame this is called, and so
+  // a block being re-earned after the release is not charged twice.
   absorbBlockedLength(): void {
     const settledLength = this.calculateRopePathLength();
     const blocked = Mathf.max(settledLength - this.maxRopeLength, 0);
+    const granted =
+      this.geometryPush === null
+        ? blocked
+        : Mathf.min(blocked, this.leaseAtFrameStart + this.geometryPush);
     this.stalledLength += Mathf.max(
-      blocked - Mathf.max(this.blockedSlack, this.leaseAtFrameStart),
+      granted - Mathf.max(this.blockedSlack, this.leaseAtFrameStart),
       0,
     );
-    this.blockedSlack = Mathf.max(this.blockedSlack, blocked);
+    this.blockedSlack = Mathf.max(this.blockedSlack, granted);
   }
 
   private regenerateSpans(): RopePath[] {

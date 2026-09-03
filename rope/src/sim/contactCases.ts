@@ -32,6 +32,7 @@ import { PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
+import { MANACLE_DISC } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -1476,6 +1477,31 @@ function caseHookBlockedAttaches(): ContactResult {
 // ---------------------------------------------------------------------------
 function caseChainOut(): ContactResult {
   const REACH = BallPlayer.CHAIN_MAX_LENGTH; // rim to hook centre, straight up
+  // The manacle's own disc, which is the whole of an attach's forgiveness
+  // (`deployLimit`) and the seat a bounce leaves the hook's centre at. Derived
+  // rather than written down: this case is ABOUT the reach the hook's body
+  // buys, so a literal here is a second opinion on the cuff's size that goes
+  // stale the moment the drawn manacle changes (it did — 20 mm to 53.5 mm, and
+  // every gap below was picked against the old figure).
+  const HOOK_R = MANACLE_DISC;
+  // `throwUp`'s gap is to the FACE, and an attach is budgeted to the hook's
+  // CENTRE, so the two halves of this case are measured a radius apart and it
+  // matters which is which:
+  //
+  //   BOUNCE  — the rim touches the face, so a hook-proof wall is out of the
+  //             flight's way once it stands one radius past full stretch.
+  //   ATTACH  — the centre may reach one radius past full stretch and the
+  //             anchor is then placed a radius further still, ON the face, so
+  //             an attachable face is in range out to TWO radii (which is
+  //             exactly the `CHAIN_MAX_LENGTH + 2 * hook radius` the anchored
+  //             path is bounded by).
+  //
+  // Both were written as literals against a 20 mm cuff (50 mm cleared both
+  // bands); at 53.5 mm the same 50 mm is inside both, so the wall was bounced
+  // off before chain-out and the "out of range" ceiling was legitimately caught.
+  const BOUNCE_CLEAR = HOOK_R + 0.03;
+  const FACE_BAND = 2 * HOOK_R;
+  const ATTACH_CLEAR = FACE_BAND + 0.03;
 
   // Throw straight up at a ceiling slab whose underside sits `faceGap` beyond
   // (positive) or short of (negative) the chain's full stretch.
@@ -1534,45 +1560,57 @@ function caseChainOut(): ContactResult {
     return { maxSpan, jerkSpeed, attached, hookGone };
   };
 
-  // A hook-proof wall 50 mm past full stretch: the chain runs out first, so
-  // the wall is never reached and the jerk leaves (next to) nothing.
-  const past = throwUp(0.05, true);
+  // A hook-proof wall past everything the hook's own body can touch: the chain
+  // runs out first, so the wall is never reached and the jerk leaves (next to)
+  // nothing. It has to clear the CUFF and not just the chain — placed inside a
+  // radius of full stretch the rim reaches the wall a hair BEFORE chain-out,
+  // which is a legitimate bounce and not this case at all (it is what the 50 mm
+  // this was written at became when the manacle grew to 53.5 mm: the throw
+  // bounced at 1.7965 m, never converted, and the jerk was never measured).
+  const past = throwUp(BOUNCE_CLEAR, true);
   const stopped = !past.attached && past.maxSpan < REACH + 0.005;
   const dead = past.jerkSpeed < 0.1;
   // The same wall short of full stretch: the cap must not eat a real bounce —
   // the hook reaches the face (span well past the bounce seat) and deflects.
-  // The bounce seats the hook's centre one 20 mm radius off the face.
+  // The bounce seats the hook's centre one manacle radius off the face, so the
+  // span it reaches is the face's own distance less that radius.
   const proofNear = throwUp(-0.1, true);
-  const bounced = !proofNear.attached && proofNear.maxSpan > REACH - 0.1 - 0.03;
+  const bounced = !proofNear.attached && proofNear.maxSpan > REACH - 0.1 - HOOK_R - 0.01;
   // An attachable ceiling short of full stretch still anchors, and the attach
   // consumes the hook body.
   const near = throwUp(-0.1, false);
   const anchors = near.attached && near.hookGone;
-  // An attachable ceiling a hook radius past full stretch still anchors: that
-  // is the whole of an attach's forgiveness (see `deployLimit`), the hook's own
-  // body and no range beyond it, and the chain-out cap must not eat it.
-  const tolBand = throwUp(0.01, false);
+  // An attachable ceiling whose face stands just inside the band still anchors:
+  // that is the whole of an attach's forgiveness (see `deployLimit`), the
+  // hook's own body and no range beyond it, and the chain-out cap must not eat
+  // it. Just inside rather than exactly at the edge, since the edge itself is a
+  // tie the contact arithmetic decides.
+  const tolBand = throwUp(FACE_BAND - 0.005, false);
   const forgiving = tolBand.attached && tolBand.hookGone;
-  // And 50 mm past full stretch does NOT anchor, though the same ceiling one
-  // decimetre nearer does. This is the honest-reach half, and it is what the
+  // And past the band it does NOT anchor, though the same ceiling a few
+  // centimetres nearer does. This is the honest-reach half, and it is what the
   // player is owed: the tip stops at CHAIN_MAX_LENGTH in plain sight, so a
-  // surface visibly past that is out of range for an attach as well.
-  // `ATTACH_SNAP_TOLERANCE` used to buy 0.2 m here, four times this distance,
+  // surface visibly past that plus the manacle drawn on the end of it is out of
+  // range for an attach as well.
+  // `ATTACH_SNAP_TOLERANCE` used to buy 0.2 m here, several times this distance,
   // and made a wall the chain cannot reach catch about half the throws aimed
   // at it (`session-366f`).
-  const tooFar = throwUp(0.05, false);
+  const tooFar = throwUp(ATTACH_CLEAR, false);
   const honest = !tooFar.attached;
 
+  const mm = (m: number): string => (m * 1000).toFixed(0);
   const passed = stopped && dead && bounced && anchors && forgiving && honest;
   return ok("chain-out — the flight ends where the chain runs out, not a phase later", passed, [
-    `${stopped ? "ok  " : "BAD "} wall 50mm past full stretch: max span ${(past.maxSpan * 1000).toFixed(1)}mm` +
+    `${stopped ? "ok  " : "BAD "} wall ${mm(BOUNCE_CLEAR)}mm past full stretch: max span ${(past.maxSpan * 1000).toFixed(1)}mm` +
       ` (want <=${(REACH * 1000 + 5).toFixed(0)}mm, never reaches the wall)`,
     `${dead ? "ok  " : "BAD "} jerk leaves ${Number.isNaN(past.jerkSpeed) ? "no conversion" : `${past.jerkSpeed.toFixed(3)} m/s`}` +
       ` on the chain-out frame (want <0.1)`,
-    `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (span ${(proofNear.maxSpan * 1000).toFixed(1)}mm)`,
+    `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (span ${(proofNear.maxSpan * 1000).toFixed(1)}mm,` +
+      ` want >${mm(REACH - 0.1 - HOOK_R - 0.01)}mm)`,
     `${anchors ? "ok  " : "BAD "} attachable ceiling inside reach still anchors${near.attached ? "" : " — TURNED AWAY"}`,
-    `${forgiving ? "ok  " : "BAD "} attachable ceiling a hook radius past full stretch still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
-    `${honest ? "ok  " : "BAD "} attachable ceiling 50mm past full stretch does NOT anchor${tooFar.attached ? " — REACHED PAST THE VISIBLE END" : ""}`,
+    `${forgiving ? "ok  " : "BAD "} attachable ceiling ${mm(FACE_BAND - 0.005)}mm past full stretch (inside the ${mm(FACE_BAND)}mm face band)` +
+      ` still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${honest ? "ok  " : "BAD "} attachable ceiling ${mm(ATTACH_CLEAR)}mm past full stretch does NOT anchor${tooFar.attached ? " — REACHED PAST THE VISIBLE END" : ""}`,
   ]);
 }
 
@@ -1604,7 +1642,14 @@ function caseChainOut(): ContactResult {
 // ---------------------------------------------------------------------------
 function caseHookSnapBand(): ContactResult {
   const REACH = BallPlayer.CHAIN_MAX_LENGTH;
-  const HOOK_R = 2 * PX;
+  // The manacle's own disc — the width of the band being tested — read from the
+  // cuff rather than written down, since a literal here is a second opinion on
+  // the hook's size and the two have already come apart once.
+  const HOOK_R = MANACLE_DISC;
+  // The two placements: a hair inside the band, and a hair outside it. Both are
+  // measured from the band's own edge so they cannot drift away from it.
+  const IN = HOOK_R - 0.005;
+  const OUT = HOOK_R + 0.001;
   // Where the last flight step starts: near enough to full stretch that the
   // chain runs out inside it, far enough that the sweep's own reach stops short
   // of the band (see the header).
@@ -1649,8 +1694,8 @@ function caseHookSnapBand(): ContactResult {
     };
   };
 
-  const inBand = throwAt(0.015);
-  const past = throwAt(0.021);
+  const inBand = throwAt(IN);
+  const past = throwAt(OUT);
   // The chain runs out inside the seeded step, which is the whole point of the
   // rig: a step that BEGINS at chain-out is the case that always worked.
   const midStep = inBand.t > 0.9 && inBand.t <= 1;
@@ -1666,8 +1711,8 @@ function caseHookSnapBand(): ContactResult {
   const passed = midStep && forgiven && honest && bounded;
   return ok("hook-snap-band — an attach gets its tolerance wherever the chain runs out", passed, [
     `${midStep ? "ok  " : "BAD "} chain runs out at t=${inBand.t.toFixed(4)} of the seeded step (want 0.9-1.0)`,
-    `${forgiven ? "ok  " : "BAD "} ceiling 15mm past full stretch anchors${inBand.attached ? "" : " — STOPPED SHORT"}`,
-    `${honest ? "ok  " : "BAD "} ceiling 21mm past full stretch does not${past.attached ? " — REACHED PAST THE HOOK'S OWN BODY" : ""}`,
+    `${forgiven ? "ok  " : "BAD "} ceiling ${(IN * 1000).toFixed(0)}mm past full stretch anchors (inside the ${(HOOK_R * 1000).toFixed(0)}mm cuff)${inBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${honest ? "ok  " : "BAD "} ceiling ${(OUT * 1000).toFixed(0)}mm past full stretch does not${past.attached ? " — REACHED PAST THE HOOK'S OWN BODY" : ""}`,
     `${bounded ? "ok  " : "BAD "} anchored path ${(inBand.path * 1000).toFixed(1)}mm, chain kept` +
       ` (want <=${((REACH + 2 * HOOK_R) * 1000).toFixed(0)}mm and never dropped)`,
   ]);
@@ -1785,9 +1830,10 @@ function caseHookRest(): ContactResult {
 
     const hook = new BallHook();
     // A radius plus a few mm above the surface at the slab's centre, so the
-    // hook settles rather than arriving with half a metre of fall.
+    // hook settles rather than arriving with half a metre of fall — or, written
+    // as a literal, starting the cuff a couple of centimetres INSIDE the slab.
     const up = new Vec2(0, -1).rotated(angle);
-    hook.globalPosition = slab.globalPosition.add(up.mul(0.5 + 0.02 + 0.005));
+    hook.globalPosition = slab.globalPosition.add(up.mul(0.5 + hook.radius + 0.005));
     hook.endFlight();
     world.add(hook);
 
@@ -1854,6 +1900,9 @@ function caseChainOutVsSolver(): ContactResult {
   // slab whose face (normal 30 deg off the chain, pointing back at the hook)
   // passes through that point; `slat` adds the grazing pre-chain-out slat.
   const N30 = new Vec2(0.5, Math.sqrt(3) / 2);
+  // Every distance in this rig is measured from the hook's RIM, so the cuff's
+  // own radius sets where the fan starts and how deep the slat's graze is.
+  const HOOK_R = MANACLE_DISC;
   const throwFall = (
     faceQ: Vec2 | null,
     slatAt: Vec2 | null,
@@ -1875,8 +1924,10 @@ function caseChainOutVsSolver(): ContactResult {
     }
     if (slatAt) {
       // A thin slat converging on the throw line at ~3 deg, its face passing
-      // 15 mm left of the line at `slatAt` — the rising hook\'s rim grazes it
-      // by 5 mm, which is the session-2504f bounce.
+      // through `slatAt` — placed a hook radius less 5 mm off the line by the
+      // caller, so the rising hook\'s rim grazes it by 5 mm whatever the cuff
+      // measures. That is the session-2504f bounce. The 0.02 here is the slat's
+      // own half-width and nothing to do with the hook.
       const slat = new StaticBody2D();
       slat.globalRotation = 0.05;
       const n = new Vec2(Math.cos(0.05), Math.sin(0.05));
@@ -1916,7 +1967,7 @@ function caseChainOutVsSolver(): ContactResult {
           maxVx = Math.abs(hook.linearVelocity.x);
         }
         if (faceQ) {
-          const gap = hook.globalPosition.sub(faceQ).dot(N30) - 0.02;
+          const gap = hook.globalPosition.sub(faceQ).dot(N30) - HOOK_R;
           if (gap < minFaceGap) minFaceGap = gap;
         }
       }
@@ -1931,11 +1982,15 @@ function caseChainOutVsSolver(): ContactResult {
   const baseDead = !base.attached && base.convSpeed < 0.1 && base.convPos !== null;
   const P = base.convPos ?? new Vec2(0, -2);
 
-  // Along-path gaps past the chain-out point. The hook's 20 mm radius reaches
-  // an oblique 30 deg plane 23.1 mm (r / cos 30) before the plane crosses the
-  // path, so anything under that is a face the chain genuinely lets the hook
-  // touch — a legit bounce, not this case. The fan starts just past it.
-  const GAPS = [0.026, 0.029, 0.032, 0.035, 0.038];
+  // Along-path gaps past the chain-out point. The hook's rim reaches an oblique
+  // 30 deg plane `r / cos 30` before the plane crosses the path, so anything
+  // under that is a face the chain genuinely lets the hook touch — a legit
+  // bounce, not this case. The fan starts just past it and steps out in 3 mm,
+  // derived from the cuff rather than written down: at 20 mm that reach was
+  // 23.1 mm and the fan ran 26..38 mm, and every one of those numbers moved
+  // when the manacle became 53.5 mm.
+  const RIM_REACH = HOOK_R / Math.cos(Math.PI / 6);
+  const GAPS = [0, 1, 2, 3, 4].map((i) => RIM_REACH + 0.003 + 0.003 * i);
   let worst = 0;
   let contested = 0;
   let anyAttached = false;
@@ -1956,7 +2011,10 @@ function caseChainOutVsSolver(): ContactResult {
   // the face normal has a rightward component), which brings the contact
   // ~10 mm closer along the path than the open-throw fan sees — so this face
   // sits further out, past even the drifted flight's reach.
-  const slatRun = throwFall(new Vec2(P.x, P.y - 0.05), new Vec2(-0.015, P.y + 0.35));
+  const slatRun = throwFall(
+    new Vec2(P.x, P.y - (RIM_REACH + 0.027)),
+    new Vec2(-(HOOK_R - 0.005), P.y + 0.35),
+  );
   const grazed = slatRun.maxVx > 0.3;
   const slatDead = !slatRun.attached && slatRun.convSpeed < 1.2;
 
@@ -2691,10 +2749,14 @@ function caseHookSparks(): ContactResult {
   // (b) A shallow throw skimming a hook-proof floor: the case that arrives
   // almost entirely TANGENTIALLY, so a burst gated on the normal component
   // alone scores it as no arrival at all and the whole shower is drag.
-  // 0.104 sits mid-way through the angle window (0.100..0.108) whose first
-  // touch leaves no rebound: a shade shallower or steeper and the arrival's
-  // normal component lofts the hook clear of the face for a few frames, which
-  // the no-silent-frame clause below would count as a gap in the drag.
+  // 0.104 is the angle whose first touch leaves no rebound, which is what the
+  // no-silent-frame clause below needs: a hook lofted clear of the face for a
+  // few frames reads as a gap in the drag. It used to be a knife edge - a
+  // window of 0.100..0.108, and a shade either way lofted the 20 mm hook - and
+  // the 53.5 mm cuff is blunt enough that it no longer is: measured, every
+  // angle from 0.090 to 0.125 arrives with no rebound at all. Left where it is
+  // because the number is not what changed; if the manacle ever shrinks again,
+  // re-measure that window before trusting it.
   const graze = throwAt(scene(true), new Vec2(1, 0.104), 90);
   details.push(
     `graze: contact f${graze.first}-${graze.last} (${graze.perFrame.length} frames, ` +
@@ -2806,15 +2868,25 @@ function caseHookSparks(): ContactResult {
     // bound rather than an equality, since the fractional carry rounds.
     check(`drag: past the ramp it grinds at the full rate (${perMetre.toFixed(1)}/m)`, perMetre > 28);
     check(`drag: over a real distance, not a few frames (${lateDist.toFixed(1)} m)`, lateDist > 10);
-    // The other end of the same claim, and the one a strike is judged by: the
-    // ramp itself is quiet, or a glancing strike is charged a grinder's worth
-    // of stream on top of the burst it has already thrown.
     // The other end of the same claim, and the one that says the ramp is doing
-    // anything at all: the GRAZE throw above is a three-frame strike over the
-    // same kind of face, and it must be charged a small fraction of what this
-    // drag is. Stated as the ratio between the two rather than as a bar on
-    // either, since either alone is a tuning value and the SEPARATION is the
-    // behaviour. Without the ramp both run at the full rate and it is 1.
+    // anything at all: the GRAZE throw above is a brief skim over the same kind
+    // of face - the hook rides the floor for a handful of frames and then stops
+    // dead - and it must be charged a fraction of what this drag is. Stated as
+    // the ratio between the two rather than as a bar on either, since either
+    // alone is a tuning value and the SEPARATION is the behaviour. Without the
+    // ramp both run at the full rate and it is 1.
+    //
+    // TWO, and not the 3 this was written at, because the ramp is LINEAR in
+    // contact frames: a strike lasting N frames is charged `mean(1..N) / RAMP`
+    // of the full rate, so the ratio it earns is `2 * RAMP / (N + 1)` - 3.2x
+    // for a 4-frame skim, 2.3x for a 6-frame one, and 1.8x for the longest
+    // strike the ramp covers at all. A bar of 3 is therefore not a statement
+    // about the ramp, it is a statement that this rig's skim lasts 4 frames:
+    // the cuff growing from 20 mm to 53.5 mm made the hook ride the floor 6
+    // frames instead of 4 and the case went red at 12.4/m, with the ramp
+    // working exactly as designed. 2 is what the mechanism actually guarantees
+    // for any strike, and the ablation is still red against it - delete the
+    // ramp and both ends run at 30/m for a ratio of 1.
     const strikePerMetre = graze.slidDistance > 0 ? graze.slideParticles / graze.slidDistance : 0;
     details.push(
       `strike vs drag: ${graze.slideParticles} particles over ${graze.slidDistance.toFixed(2)} m ` +
@@ -2823,7 +2895,7 @@ function caseHookSparks(): ContactResult {
     check(
       `strike vs drag: a strike is charged a fraction of a grind ` +
         `(${strikePerMetre.toFixed(1)}/m against ${perMetre.toFixed(1)}/m)`,
-      strikePerMetre > 0 && perMetre > 3 * strikePerMetre,
+      strikePerMetre > 0 && perMetre > 2 * strikePerMetre,
     );
     check(
       `drag: the ramp itself is quiet (${throughRamp} over ${SLIDE_RAMP_STEPS} frames)`,
@@ -3078,11 +3150,29 @@ function caseBallSparks(): ContactResult {
   // stream of sparks. Read off the rotation the frame actually realised, it is
   // silent, and the pair below is what says which one is being read.
   //
-  // The rig is a wedge rather than a wall press so that the surface under the
-  // ball is the hook-proof floor while the thing it is wound against is
-  // ordinary steel: hook-proof is the flag that refuses a hook, so the post the
-  // chain is anchored to cannot be the steel the sparks are struck off.
+  // The steel the ball is wound against has to be the steel it is GROUND
+  // against, and the post is both because hook-proof is per SHAPE: the stub at
+  // its foot is ordinary steel, so the chain can take it, and everything from
+  // the ball's own resting height upward is hook-proof, which is the face the
+  // wound-up ball ends pressed into.
+  //
+  // It was the floor, on the argument that a wedge keeps the two apart - and
+  // that only ever worked by a few millimetres. A ball hauled up its own chain
+  // does not stay on the ground: the winch pulls it into the post and then
+  // rides it UP the post's face, to `anchor.y - sqrt(free² - r²)`, and the
+  // anchor can never be lower than one manacle radius off the floor (below that
+  // the throw is a hook flying into the floor). At a 20 mm cuff that left the
+  // ball 39 mm up, with its 35 mm lug still grazing the ground; at 53.5 mm it
+  // is 53 mm up and touching nothing at all, so the case went red reporting no
+  // hook-proof contact - the CONTROL failing, with the clause it guards (the
+  // silence) as true as it ever was. Moving the post, the aim or the wind-up
+  // does not reach it: every variant ends wedged against the post, in the air.
   const wound = ((): { slide: number; contactFrames: number; span: number; command: number } => {
+    // The ball's resting centre: floor face (0.40 m) less its own radius. The
+    // seam sits here because the two things the post is are split by it - a
+    // throw must clear the floor, so the anchor is always BELOW it, and a ball
+    // riding up the face is always above it.
+    const SEAM = 28;
     const level = new BallLevel(
       scaleLevelData(
         {
@@ -3093,11 +3183,18 @@ function caseBallSparks(): ContactResult {
               shape: { kind: "rect", w: 4000, h: 40 },
               friction: 1, impermeable: true,
             },
-            // Ordinary steel, so the hook can take it: a post to wind against.
+            // The post's foot: ordinary steel, so the hook can take it.
             {
-              kind: "static", x: 90, y: -10, rot: 0,
-              shape: { kind: "rect", w: 20, h: 100 },
-              friction: 1,
+              kind: "static", x: 90, y: (SEAM + 40) / 2, rot: 0,
+              shape: { kind: "rect", w: 20, h: 40 - SEAM },
+              friction: 1, group: "post",
+            },
+            // ...and its shaft, hook-proof: the face the wind-up presses the
+            // ball into, and the steel these sparks would be struck off.
+            {
+              kind: "static", x: 90, y: (SEAM - 60) / 2, rot: 0,
+              shape: { kind: "rect", w: 20, h: SEAM + 60 },
+              friction: 1, group: "post", impermeable: true,
             },
           ],
         } as RawLevelData,

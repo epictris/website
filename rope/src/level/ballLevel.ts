@@ -396,7 +396,14 @@ export class BallLevel {
     // resolves a circle against one shape at a time, so a ball wedged between
     // two of them keeps a residual that only this simultaneous two-normal solve
     // clears — 3.3 cm of it in session-726f, with no chain out at all.
+    // How far the geometry moved the ball, kept because it is the SIZE of what
+    // geometry refused this frame and the blocked-length lease may not exceed it
+    // (see `Rope.noteGeometryPush`). This leading push-out is part of that sum:
+    // it is the frame's first statement that a surface would not let the ball be
+    // where the last chain solve put it.
+    const pushOutBefore = this.ball.globalPosition;
     this.world.depenetrateRigid(this.ball);
+    const leadingPush = this.ball.globalPosition.distanceTo(pushOutBefore);
     // Position-only, so this phase never shows a velocity of its own; it is
     // marked so that what follows is measured from a ball already clear of the
     // scenery, which is the whole point of the ordering.
@@ -436,6 +443,10 @@ export class BallLevel {
       const sceneBefore =
         solveChains.length > 0 ? snapshotChainBodies(solveChains, this.ball) : [];
       this.ball.chain.beginFrame(delta);
+      // Opens the frame's geometry-push account (see `Rope.noteGeometryPush`),
+      // so from here the lease is bounded by what surfaces actually pushed
+      // rather than merely by whether any of them touched.
+      this.ball.chain.noteGeometryPush(leadingPush);
       this.ball.chain.syncWraps(this.bodies);
       const spinLength =
         Math.abs(this.ball.globalRotation - ballRotationAtFrameStart) *
@@ -716,7 +727,9 @@ export class BallLevel {
       // update the rope does for itself (Δposition over Δt), just taken over
       // where the frame really ends — so the ball can never bank speed for a
       // move that was undone, and there is nothing left to refund.
+      const solvePushBefore = this.ball.globalPosition;
       const pushedOutOf = this.world.depenetrateRigid(this.ball);
+      this.ball.chain.noteGeometryPush(this.ball.globalPosition.distanceTo(solvePushBefore));
       // Whatever length the frame still owes after that, take it out of the
       // ball's spin before anything else sees it. Winding chain onto the ball is
       // meant to work, and while the solve can pay for it by hauling the ball
@@ -765,7 +778,9 @@ export class BallLevel {
       // carries its mounting loop out on the rim, so a rotation can swing that
       // into geometry the push-out had already cleared. Clear it again; the
       // velocity below is derived after both, so neither costs anything.
+      const unwindPushBefore = this.ball.globalPosition;
       pushedOutOf.push(...this.world.depenetrateRigid(this.ball));
+      this.ball.chain.noteGeometryPush(this.ball.globalPosition.distanceTo(unwindPushBefore));
       // Discounted the same way the solve discounts its own credit: a length
       // error a wrap node appearing put there is corrected in position but earns
       // no velocity (see Rope.topologyCreditScale).
