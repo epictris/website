@@ -21,7 +21,8 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
+import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "../render/chainMetrics";
+import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
@@ -124,6 +125,16 @@ export class ChainLayer {
         ball.chainSlack?.pathLoopToAnchor(alpha) ??
         chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
       if (loopToAnchor.length >= 2) {
+        // The manacle at the far end - the flying hook, the dangling tip, or the
+        // anchor. Centred on the chain's own end node, which free IS the hook
+        // body and anchored is the point it bit, so the cuff sits half in and
+        // half out of the geometry. Facing the chain while it hangs from it,
+        // frozen on the surface's normal once it is clamped. See the 2D
+        // renderer, whose placement this mirrors.
+        const at = loopToAnchor[loopToAnchor.length - 1]!;
+        const chainDir = chainEndFacing(loopToAnchor, ball.renderLoopDirection(alpha));
+        const dir = ball.manacleFacing(alpha) ?? chainDir;
+
         // Anchor first, ball last: the links then stay put in the world as the
         // chain reels and are consumed INTO the ball, rather than the whole
         // chain compressing toward the anchor (see chainMetrics.ts).
@@ -132,16 +143,15 @@ export class ChainLayer {
           this.path.push(loopToAnchor[i]!);
         }
         this.path.push(ball.renderPosition(alpha));
+        // The links stop ON THE RIM, on whichever side the chain runs: the touch
+        // point of a chain laid over a ring, which slides round the ring as the
+        // ball swings.
+        trimPathStart(this.path, MANACLE_RADIUS);
+        this.path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
         this.tint.set(DEFAULT_CHAIN_COLOR);
         this.lay(this.path);
 
-        // The manacle at the far end - the flying hook, the dangling tip, or the
-        // anchor - with its housing facing the span it hangs from.
-        const tip = loopToAnchor[loopToAnchor.length - 1]!;
-        const prev = loopToAnchor[loopToAnchor.length - 2]!;
-        const dir =
-          tip.distanceTo(prev) > 1e-5 ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
-        this.manacle.position.set(tip.x, threeY(tip.y), 0);
+        this.manacle.position.set(at.x, threeY(at.y), 0);
         this.manacle.rotation.z = Math.atan2(threeY(dir.y), dir.x);
         this.manacle.visible = true;
       }
@@ -193,43 +203,51 @@ export class ChainLayer {
 
 const FORWARD = new THREE.Vector3(0, 0, 1);
 
-// The chain's far end as an iron manacle: a cuff band, a lock housing on the
-// chain side, a hinge pin opposite. Built rather than authored, because it is
-// four primitives and a GLTF for it would be an asset to keep in step with a
-// shape nobody is going to redesign. +x points toward the chain, matching the
-// 2D renderer's `drawManacle`.
+// The chain's far end as an iron manacle: two jaws pinned together at the hinge,
+// where the chain is shackled, and shut on each other under the lock opposite
+// it. Built rather than authored, because it is four primitives and a GLTF for
+// it would be an asset to keep in step with a shape nobody is going to redesign.
+// +x points toward the chain, matching the 2D renderer's `drawManacle`.
+//
+// Drawn shut always, for the reason `drawManacle` gives - the drawn shape has to
+// BE the disc the sim collides as - and what makes it a manacle rather than a
+// ring is fitted INWARD and through the depth for the same reason: nothing may
+// stand outside `MANACLE_DISC`, and nothing at all stands proud of the hinge
+// side, which the chain's first link is laid across.
 function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
   const g = new THREE.Group();
   // The same forged iron the links are, at the same scale: the manacle is the
   // end of the chain rather than a different object bolted to it.
   const iron = forgedMetal(FORGED_SMALL);
-  const R = 4.5 * PX; // the same cuff radius the 2D manacle is drawn at
+  const R = MANACLE_RADIUS;
+  const BAR = MANACLE_BAND / 2; // the bar's radius, so the cuff's outer edge is the disc
 
-  const band = new THREE.TorusGeometry(R, R * 0.18, 8, 20);
-  owned.push(band);
-  const cuff = new THREE.Mesh(band, iron);
-  cuff.castShadow = true;
-  g.add(cuff);
+  const cuff = new THREE.TorusGeometry(R, BAR, 8, 28);
+  owned.push(cuff);
+  const ring = new THREE.Mesh(cuff, iron);
+  ring.castShadow = true;
+  g.add(ring);
 
-  const housing = new THREE.BoxGeometry(R * 0.75, R * 0.9, R * 0.6);
-  owned.push(housing);
-  const lock = new THREE.Mesh(housing, iron);
-  lock.position.set(R, 0, 0);
+  // No knuckle at the hinge, for the reason `drawManacle` gives: the chain's own
+  // first link is laid across that arc, so nothing may stand proud of it there.
+
+  // Lock over the mouth, holding the two jaw tips shut. Set inward off the
+  // band's outer edge, as in 2D.
+  const lockGeo = new THREE.BoxGeometry(2.6 * PX, 2.8 * PX, BAR * 2.6);
+  owned.push(lockGeo);
+  const lock = new THREE.Mesh(lockGeo, iron);
+  lock.position.set(-R - BAR + 1.6 * PX, 0, 0);
   lock.castShadow = true;
   g.add(lock);
 
-  const pinGeo = new THREE.SphereGeometry(R * 0.24, 10, 8);
-  owned.push(pinGeo);
-  const pin = new THREE.Mesh(pinGeo, iron);
-  pin.position.set(-R, 0, 0);
-  g.add(pin);
-
-  const clevisGeo = new THREE.TorusGeometry(R * 0.32, R * 0.12, 6, 12);
-  owned.push(clevisGeo);
-  const clevis = new THREE.Mesh(clevisGeo, iron);
-  clevis.position.set(R * 1.6, 0, 0);
-  clevis.rotation.x = Math.PI / 2;
-  g.add(clevis);
+  // Rivets through the jaws, halfway round each.
+  const rivetGeo = new THREE.SphereGeometry(0.5 * PX, 8, 6);
+  owned.push(rivetGeo);
+  for (const sy of [-1, 1]) {
+    const rivet = new THREE.Mesh(rivetGeo, iron);
+    rivet.position.set(0, sy * R, BAR * 0.8);
+    g.add(rivet);
+  }
 
   return g;
 }

@@ -32,6 +32,7 @@ import { levelFromRecording } from "./sim/replay";
 import { inputDeserializer, type Recording } from "./sim/trace";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH } from "./render/viewport";
+import { Vec2 } from "./engine/vec2";
 
 interface ShotLogEntry {
   level: string;
@@ -94,8 +95,22 @@ if (frames.length === 0) {
 }
 
 const isBall = level instanceof BallLevel;
+// `at=X,Y` pins the camera on a fixed world point (metres) instead of letting it
+// follow the avatar. The game's camera frames the avatar, which is exactly wrong
+// for photographing something the avatar is swinging AWAY from - an anchor two
+// metres off is off the side of the frame at any zoom worth inspecting it at.
+const pinned = ((): Vec2 | null => {
+  const raw = q.get("at");
+  if (raw === null) return null;
+  const [x, y] = raw.split(",").map(Number);
+  if (x === undefined || y === undefined || !Number.isFinite(x) || !Number.isFinite(y)) {
+    console.error(`at=${raw} is not an X,Y pair in metres; following the avatar`);
+    return null;
+  }
+  return new Vec2(x, y);
+})();
 const camera: Camera = {
-  position: level.cameraRenderPosition(1),
+  position: pinned ?? level.cameraRenderPosition(1),
   zoom: Number(q.get("zoom") ?? (isBall ? BALL_ZOOM : GRAPPLE_ZOOM)),
   viewportWidth: VIEW_WIDTH,
   viewportHeight: VIEW_HEIGHT,
@@ -153,7 +168,7 @@ reportErrors();
 // frame is drawn at the sim state exactly, never interpolated, so two grabs of
 // the same frame are the same image.
 function drawFrame(frame: number): void {
-  camera.position = level.cameraRenderPosition(1);
+  camera.position = pinned ?? level.cameraRenderPosition(1);
   if (scene3d) {
     // Freeze the wall clock, and advance it with the SIM from the first frame
     // drawn. The flicker and the water are the parts of the 3D scene driven by

@@ -28,6 +28,7 @@ import { bodySweepCircle, circleOverlap } from "../engine/collision";
 import { CONTACT_SLOP } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
+import { MANACLE_DISC } from "../lib/manacle";
 
 // What a swept circle met along a path: how far along it (`t`, in units of the
 // swept motion), the piece struck and the contact normal there.
@@ -79,12 +80,31 @@ export class BallHook extends RigidBody2D {
   constructor() {
     super();
     this.name = "BallHook";
-    this.setShape(circleShape(2 * PX));
+    // The manacle itself: the cuff's own disc, so the shape the sim rests,
+    // bounces and anchors is the shape that is drawn. It used to collide as a
+    // 3 cm circle under a 13 cm drawn cuff, and every millimetre of difference
+    // had to be papered over in the renderers - the cuff sank into whatever the
+    // tip was lying on, and the clearance had to be worked out from the resting
+    // surface's normal to hide it.
+    this.setShape(circleShape(MANACLE_DISC));
+    // Solid, but not rope geometry - the same opt-out the ball's mounting loop
+    // takes. The chain ENDS on this cuff, so a span reaching it is inside it by
+    // construction, and the wrap machinery reads that as the chain having caught
+    // on the scene: every throw ended on the frame it was fired. It cost nothing
+    // while the chain end was a circle a chain-width wide.
+    this.primaryShape().wrappable = false;
     // Steel, like the chain it ends: a 4 cm head is ~0.26 kg, a two-hundredth
     // of the cast-iron ball throwing it. That ratio is what makes the throw a
     // throw - the hook is what the ball flicks out and reels back, not a second
     // weight the chain has to swing.
-    this.mass = ShapeGeometry.computeMass(this.primaryShape(), Density.STEEL);
+    //
+    // Weighed as that head and not as the disc it collides as: a cuff is a ring
+    // of bar stock, mostly air, and a solid 15 cm steel disc would be 5 kg -
+    // twenty times the hook, and a wrecking ball on the end of its own chain.
+    this.mass = ShapeGeometry.computeMass(
+      { globalPosition: Vec2.ZERO, globalRotation: 0, shape: circleShape(2 * PX) },
+      Density.STEEL,
+    );
     this.inertia =
       ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass) *
       BallHook.ROLL_RESISTANCE;

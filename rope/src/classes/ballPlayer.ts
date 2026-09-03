@@ -12,6 +12,7 @@ import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
 import { circleShape, nearestShapeIndex } from "../engine/shapes";
+import { outwardDirection } from "../engine/collision";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
@@ -19,6 +20,7 @@ import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
 import { BallHook } from "./ballHook";
+import { MANACLE_DISC } from "../lib/manacle";
 
 export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
@@ -91,6 +93,15 @@ export class BallPlayer extends RigidBody2D {
   // dangling tip weight — the chain stays deployed at max length until reeled
   // or released.
   chainTip: BallHook | null = null;
+  // Which way the manacle faces, in the ANCHOR BODY's frame. A clamped manacle
+  // is bolted to what it bit: it does not turn at all for as long as it holds,
+  // however the chain swings around it afterwards - and it turns with the thing
+  // it is bolted to, which a world-frame direction would not do on a windmill or
+  // a moving platform. Purely what the renderers draw (the sim never reads it),
+  // but it belongs to the attachment, so it is stored and cleared with it. Read
+  // through `manacleFacing`.
+  private anchorFacingLocal: Vec2 | null = null;
+  private anchorBody: PhysicsBody2D | null = null;
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
   // Scene bodies for the current frame, set by BallLevel before hooks step, so
   // the hook's attach callback can regenerate the chain's wrap path (the hook
@@ -551,6 +562,25 @@ export class BallPlayer extends RigidBody2D {
     return this.chain !== null && this.hookInFlight === null;
   }
 
+  // Which way an ANCHORED manacle faces - the way its hinge points, out of the
+  // surface it bit - or null while the chain end is still a free body, when the
+  // cuff simply faces the chain it hangs from.
+  //
+  // It is the surface's own outward normal, so a cuff clamped to a given face
+  // always presents the same half of itself: bitten at the arrival angle
+  // instead, the lock housing landed wherever the throw happened to come from,
+  // which for half of all throws is the half buried in the wall.
+  //
+  // Frozen from there. A clamped manacle does not turn as the ball swings around
+  // it - it is bolted to what it bit - so the chain's touch point slides round
+  // the rim instead (see `chainEndFacing`). It turns only with the body itself.
+  manacleFacing(alpha: number): Vec2 | null {
+    const local = this.anchorFacingLocal;
+    if (local === null) return null;
+    const body = this.anchorBody;
+    return body === null ? local : local.rotated(body.renderRotation(alpha));
+  }
+
   // The chain deploys from a fixed material point on the rim — the "loop",
   // at the top of the ball when unrotated. Aiming rotates the ball so the
   // loop faces the aim direction; the shot always leaves through the loop.
@@ -687,7 +717,12 @@ export class BallPlayer extends RigidBody2D {
   private shoot(): void {
     // The shot leaves through the loop, wherever the ball is facing.
     const dir = this.loopDirection;
-    const muzzle = this.globalPosition.add(dir.mul(this.radius));
+    // Clear of the ball's own rim by the manacle's radius: the hook collides as
+    // the whole cuff, so a muzzle on the rim spawns it half inside the ball -
+    // and the chain's first span, from the loop to the cuff, then lies wholly
+    // within the cuff's own disc, which the wrap resolvers read as the chain
+    // having snagged and which ended every throw on the frame it was fired.
+    const muzzle = this.globalPosition.add(dir.mul(this.radius + MANACLE_DISC));
     const hook = new BallHook();
     hook.globalPosition = muzzle;
     // Launch speed along the loop direction.
@@ -698,6 +733,18 @@ export class BallPlayer extends RigidBody2D {
 
     // Chain origin on the ball's edge, in the ball's local frame — it rotates
     // with the ball.
+    //
+    // The chain ends on the cuff's CENTRE, which is the point the cuff will be
+    // clamped around when it bites and is where the renderers draw the model
+    // centred. The physics end and the middle of the manacle are the same point
+    // at every moment of the throw, so nothing about the chain's length or its
+    // anchor changes as the flight becomes an attachment; the drawing lays the
+    // last link on the rim from here (see `chainEndFacing`), which is a drawing
+    // matter and not the sim's.
+    //
+    // The last span therefore ends inside the hook's own collision disc, which
+    // the wrap resolvers would read as the chain having snagged on the scene -
+    // that is what `wrappable = false` on the hook's shape is for.
     this.chain = new Rope(
       new RopeContact(this, dir.mul(this.radius)),
       new RopeContact(hook, Vec2.ZERO),
@@ -711,6 +758,8 @@ export class BallPlayer extends RigidBody2D {
     hook.registerAttachmentCallback((body, point) => {
       this.hookInFlight = null;
       this.chainTip = null;
+      this.anchorFacingLocal = null;
+      this.anchorBody = null;
       if (!this.chain) return;
       // Hook-proof surface: the chain is lost. `BallHook` deflects off one
       // rather than attaching, so this is a backstop - but it is asked of the
@@ -718,7 +767,8 @@ export class BallPlayer extends RigidBody2D {
       // one face and attachable on the next and a body-level answer would be
       // wrong for whichever face it is not about.
       const shapes = body.getShapes();
-      if (shapes[nearestShapeIndex(shapes, point)]?.impermeable) {
+      const piece = shapes[nearestShapeIndex(shapes, point)];
+      if (piece?.impermeable) {
         this.releaseChain();
         return;
       }
@@ -733,6 +783,15 @@ export class BallPlayer extends RigidBody2D {
       // one-frame lurch (session-116f: a 0.9 m/s kick off a resting ball).
       this.chain.syncWraps(this.sceneBodies);
       const len = this.chain.getCurrentLength();
+      // The manacle clamps shut around the bite point - half in the geometry and
+      // half out of it - with its hinge pointing straight out of the face it
+      // caught, and stays exactly so for as long as it holds. See
+      // `manacleFacing` for why the surface answers for the facing rather than
+      // the throw that arrived at it.
+      this.anchorBody = body;
+      this.anchorFacingLocal = (
+        piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition)
+      ).rotated(-body.globalRotation);
       // The tolerance here is a SNAP backstop, not a range: it is sized for the
       // ~1 px of solver slop a dangling tip carries when it finally lands (see
       // the constant), and what it rejects is an anchor no throw could have
@@ -826,6 +885,8 @@ export class BallPlayer extends RigidBody2D {
     if (this.chainTip) this.chainTip.world?.remove(this.chainTip);
     this.hookInFlight = null;
     this.chainTip = null;
+    this.anchorFacingLocal = null;
+    this.anchorBody = null;
     this.chain = null;
     this.chainSlack = null;
   }

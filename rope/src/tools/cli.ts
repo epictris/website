@@ -16,7 +16,7 @@
 //                                      [--out t.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
 //   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--3d]
-//                                      [--out f.png] [--allow-errors]
+//                                      [--at X,Y] [--out f.png] [--allow-errors]
 //   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
@@ -673,6 +673,9 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json` +
       (range ? `&frames=${range[1]}..${range[2]}&every=${o.every ?? 1}` : `&frame=${frame}`) +
       (zoom ? `&zoom=${zoom}` : "") +
+      // `--at X,Y` pins the camera on a world point instead of the avatar, which
+      // is the only way to photograph something the avatar has swung away from.
+      (o.at ? `&at=${encodeURIComponent(o.at)}` : "") +
       // `--3d` grabs the frame through the WebGL renderer instead of the 2D one.
       // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
       // grab is otherwise identical and the two can be diffed against each other.
@@ -1429,7 +1432,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--at X,Y] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":

@@ -28,7 +28,8 @@ import type { SceneChain } from "../level/chains";
 import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
+import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "./chainMetrics";
+import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
@@ -707,37 +708,87 @@ function drawSceneChains(
   }
 }
 
-// The chain's far end — the "hook" — drawn as an iron manacle: a thick steel
-// cuff band with a lock housing on the chain side, a hinge pin opposite, and a
-// clevis link joining it to the chain. `dir` points from the cuff toward the
-// chain, so the housing always faces the span it hangs from.
-function drawManacle(ctx: CanvasRenderingContext2D, center: Vec2, dir: Vec2): void {
-  const R = 4.5 * PX; // cuff band radius
+// The chain's far end - the "hook" - drawn as an iron manacle: two jaws pinned
+// together at the HINGE and shut on each other at the LOCK opposite it. `dir`
+// points out of the hinge: at the chain while the cuff hangs free, and out of the
+// surface it bit once it is clamped (see `BallPlayer.manacleFacing`).
+//
+// The jaws are drawn shut always. They used to gape while the manacle was
+// unattached, which read well and cost the one thing that matters more: a swung
+// jaw stands a third of a radius outside the ring, so the drawn shape and the
+// disc the sim collides as could not be the same shape, and every difference
+// between the two had to be papered over somewhere (see lib/manacle).
+//
+// What makes it a manacle rather than a ring is therefore drawn INWARD: the lock
+// is a block on the inside of the mouth, and the two jaws stop short of each
+// other at either end - at the mouth and at the hinge - so the two pieces read
+// as two. Nothing may stand outside `MANACLE_DISC`, and nothing stands proud of
+// the band on the hinge side at all: the chain is laid over that arc.
+function drawManacle(
+  ctx: CanvasRenderingContext2D,
+  center: Vec2,
+  dir: Vec2,
+  buried: boolean,
+): void {
+  const R = MANACLE_RADIUS;
+  const BAND = MANACLE_BAND; // bar stock the cuff is forged from
+  const GAP = 0.16; // radians of daylight at the mouth, under the lock
   ctx.save();
   ctx.translate(center.x, center.y);
-  ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points toward the chain
-  // Cuff band: thick steel ring.
-  ctx.lineWidth = 1.6 * PX;
+  ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points along `dir`
+  // A clamped cuff is centred ON the surface it bit, so half of it is inside
+  // that surface and only the half on the +x side of the bite is above ground.
+  // The terrain is already drawn by the time the chain is, so without this the
+  // buried half is painted back over the wall and the cuff reads as a ring stuck
+  // ON the surface rather than one clamped THROUGH it.
+  if (buried) {
+    ctx.beginPath();
+    ctx.rect(0, -R - BAND, R + BAND, (R + BAND) * 2);
+    ctx.clip();
+  }
+  const cap = ctx.lineCap;
+  ctx.lineCap = "butt";
+
+  // The two jaws: matching arcs from the hinge (+x) round either side to the
+  // lock (-x), stopping short of each other only at the MOUTH, under the lock.
+  // Closed at the hinge, because that is where they are pinned and because the
+  // chain's own first link is laid across that arc - daylight there reads as a
+  // ring the chain is about to fall out of.
+  ctx.lineWidth = BAND;
   ctx.strokeStyle = MANACLE;
   ctx.beginPath();
-  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.arc(0, 0, R, 0, Math.PI - GAP);
   ctx.stroke();
-  // Hinge pin on the far side (opposite the chain).
-  ctx.fillStyle = MANACLE_DARK;
   ctx.beginPath();
-  ctx.arc(-R, 0, 1.1 * PX, 0, Math.PI * 2);
+  // A hair past the hinge, so the two butt caps overlap instead of leaving a
+  // seam down the middle of a joint that is meant to be solid.
+  ctx.arc(0, 0, R, Math.PI + GAP, Math.PI * 2 + 0.03);
+  ctx.stroke();
+
+  // Lock: the housing over the mouth, holding the two jaw tips shut, with its
+  // keyhole. Set inward off the band's outer edge so its corners stay inside the
+  // collision disc.
+  ctx.fillStyle = MANACLE_DARK;
+  ctx.fillRect(-R - BAND / 2 + 0.3 * PX, -1.4 * PX, 2.6 * PX, 2.8 * PX);
+  ctx.fillStyle = MANACLE;
+  ctx.beginPath();
+  ctx.arc(-R + 0.7 * PX, 0, 0.45 * PX, 0, Math.PI * 2);
   ctx.fill();
-  // Lock housing where the chain meets the cuff (chain side, +x).
+
+  // Rivets through the jaws, halfway round each.
   ctx.fillStyle = MANACLE_DARK;
-  ctx.fillRect(R - 1.2 * PX, -2 * PX, 3.4 * PX, 4 * PX);
-  ctx.lineWidth = 0.7 * PX;
-  ctx.strokeStyle = MANACLE;
-  ctx.strokeRect(R - 1.2 * PX, -2 * PX, 3.4 * PX, 4 * PX);
-  // Clevis link joining the housing to the chain.
-  ctx.lineWidth = 1.2 * PX;
-  ctx.beginPath();
-  ctx.arc(R + 2.6 * PX, 0, 1.4 * PX, 0, Math.PI * 2);
-  ctx.stroke();
+  for (const sy of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(0, sy * R, 0.45 * PX, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // No knuckle at the hinge. The two jaws are pinned there and the arcs stop
+  // short of each other to say so, but a barrel drawn over the joint reads as a
+  // knob on the rim, and the chain's own first link is laid across exactly that
+  // spot - so the one thing the chain must appear to run freely over was the one
+  // thing standing proud of it.
+  ctx.lineCap = cap;
   ctx.restore();
 }
 
@@ -859,16 +910,37 @@ export function renderBall(
       ball.chainSlack?.pathLoopToAnchor(alpha) ??
       chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
     // Manacle at the chain's far end (flying hook, dangling tip, or anchor).
-    // Orient its housing toward the previous chain node.
-    const tip = loopToAnchor[loopToAnchor.length - 1]!;
-    const prev = loopToAnchor[loopToAnchor.length - 2] ?? tip;
-    const dir =
-      tip.distanceTo(prev) > 1e-3 * PX ? tip.directionTo(prev) : ball.renderLoopDirection(alpha);
+    //
+    // Centred on the chain's own end node, always. Free, that node IS the hook
+    // body - the hook collides as the whole cuff and the rope ends at its centre
+    // - and anchored it is the point the cuff bit, which the sim puts on the
+    // geometry itself, so the cuff reads as clamped half in and half out of it.
+    // Placing the cuff a radius back along the CHAIN instead was a guess about a
+    // body whose pose was in hand, and it drifted off that body as the hook
+    // turned: a manacle resting on the ground was drawn a whole radius below the
+    // disc that was doing the resting (session-150f).
+    const at = loopToAnchor[loopToAnchor.length - 1]!;
+    // Where the chain runs, and which way the cuff faces - the same thing while
+    // the cuff is free to hang from the chain, and no longer the same thing once
+    // it is clamped: a bolted cuff keeps the facing it bit with and the chain
+    // travels round its rim instead.
+    const chainDir = chainEndFacing(loopToAnchor, ball.renderLoopDirection(alpha));
+    // A facing at all means the cuff is CLAMPED (a free one, flying or dangling,
+    // has none), which is also when half of it is inside what it bit.
+    const clamped = ball.manacleFacing(alpha);
+    const dir = clamped ?? chainDir;
     // Walk anchor → … → loop → ball centre: reverse to start at the anchor,
     // then extend past the loop into the covered centre at the ball end.
     const path = [...loopToAnchor.reverse(), ball.renderPosition(alpha)];
+    // The links stop ON THE RIM, on whichever side the chain runs - the touch
+    // point of a chain laid over a ring, which slides round the ring as the ball
+    // swings, and which is the only part of the join that moves once the cuff is
+    // clamped. Run to the end node instead and the links are drawn straight
+    // through the middle of the cuff.
+    trimPathStart(path, MANACLE_RADIUS);
+    path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
     drawChainPolyline(ctx, path);
-    drawManacle(ctx, tip, dir);
+    drawManacle(ctx, at, dir, clamped !== null);
   }
   if (!overlayOnly) {
     drawBody(ctx, ball, alpha);
