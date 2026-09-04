@@ -474,7 +474,7 @@ export function settleChainBodies(
       s.body.globalPosition.sub(s.position).div(delta).mul(credit),
     );
     const gravityStep = GRAVITY.mul(s.body.gravityScale * delta);
-    for (const normal of pushedOutOf) {
+    for (const { normal } of pushedOutOf) {
       const into = s.body.linearVelocity.dot(normal);
       const funded = Math.max(
         Math.min(s.velocity.dot(normal), 0),

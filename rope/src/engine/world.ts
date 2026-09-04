@@ -112,6 +112,33 @@ const VELOCITY_ITERATIONS = 20;
 // is the one — has to look at least this far, or the solver silently wins the
 // races it loses by less than a centimetre (`session-593f`).
 export const CONTACT_SLOP = 0.01;
+
+// One surface a depenetration pass pushed a body out of: the outward normal it
+// moved the body along, and the body that surface belongs to. A caller that
+// derives velocity from the frame (the ball's chain phase) needs BOTH - the
+// normal to know which motion the surface refused, and the owner to know what
+// that surface was itself doing: a static wall stands still, while a rigid body
+// the ball is pushed out of may be moving away from it or into it, and refusing
+// or crediting the ball against a surface it is not actually meeting is how a
+// ball stopped dead against a body running from it and how a ball riding its
+// own hauled anchor was paid for that body's motion (session-324f).
+export interface PushOut {
+  readonly normal: Vec2;
+  // How deep the body stood in that surface before the push, in metres - the
+  // distance it was moved by, along `normal`. Float noise is a depth too: a
+  // body the previous push left at exactly zero depth re-measures at 1e-17 on
+  // one machine and clear on another, and a caller that reads a push-out as
+  // a refusal (the ball's stall lease, its into-surface refusal) must not let
+  // that decide anything. See `BallLevel.PUSH_OUT_MIN_DEPTH`.
+  readonly depth: number;
+  readonly other: PhysicsBody2D;
+}
+
+interface Depenetration {
+  readonly normal: Vec2;
+  readonly depth: number;
+  readonly other: PhysicsBody2D;
+}
 // Approach speed (m/s) below which a contact earns no bounce at all.
 //
 // Without it, any restitution above zero makes resting contacts micro-bounce for
@@ -1238,8 +1265,8 @@ export class World {
     body: RigidBody2D,
     iterations = 2,
     accept: ((other: PhysicsBody2D) => boolean) | null = null,
-  ): Vec2[] {
-    const pushedOutOf: Vec2[] = [];
+  ): PushOut[] {
+    const pushedOutOf: PushOut[] = [];
     if (body.removed || !body.hasShape()) return pushedOutOf;
     // A sleeping body was pushed clear before it went to sleep and nothing has
     // moved since (see `VineLink.asleep`).
@@ -1290,7 +1317,10 @@ export class World {
         } else {
           body.globalPosition = body.globalPosition.add(b.normal.mul(b.depth));
         }
-        pushedOutOf.push(a.normal, b.normal);
+        pushedOutOf.push(
+          { normal: a.normal, depth: a.depth, other: a.other },
+          { normal: b.normal, depth: b.depth, other: b.other },
+        );
       } else if (b && c <= -0.98) {
         // A true crush: two near-opposite faces, whose simultaneous solve has no
         // finite answer (the denominator explodes as c → -1). The two demands are
@@ -1313,11 +1343,14 @@ export class World {
         // Held by both, so both are surfaces this frame drove the body out of -
         // callers deriving velocity from the frame (see BallLevel) must refuse
         // themselves credit for driving into either.
-        pushedOutOf.push(a.normal, b.normal);
+        pushedOutOf.push(
+          { normal: a.normal, depth: a.depth, other: a.other },
+          { normal: b.normal, depth: b.depth, other: b.other },
+        );
       } else {
         // A single overlap: push out of it.
         body.globalPosition = body.globalPosition.add(a.normal.mul(a.depth));
-        pushedOutOf.push(a.normal);
+        pushedOutOf.push({ normal: a.normal, depth: a.depth, other: a.other });
       }
     }
     return pushedOutOf;
@@ -1330,15 +1363,16 @@ export class World {
   private gatherDepenetration(
     body: RigidBody2D,
     accept: ((other: PhysicsBody2D) => boolean) | null = null,
-  ): [{ normal: Vec2; depth: number } | null, { normal: Vec2; depth: number } | null] {
-    let a: { normal: Vec2; depth: number } | null = null;
-    let b: { normal: Vec2; depth: number } | null = null;
+  ): [Depenetration | null, Depenetration | null] {
+    let a: Depenetration | null = null;
+    let b: Depenetration | null = null;
     // A `passable` body is blocked by nothing, statics included - the one place
     // it goes further than `isSolid`, which keeps a vine link resting on the
     // ground it drapes across. Answering with no overlaps is what stops the
     // scenery a leaf hangs in front of shoving the leaf out of itself.
     if (body.passable) return [null, null];
-    const consider = (ov: { normal: Vec2; depth: number }): void => {
+    const consider = (overlap: { normal: Vec2; depth: number }, other: PhysicsBody2D): void => {
+      const ov: Depenetration = { normal: overlap.normal, depth: overlap.depth, other };
       if (!a || ov.depth > a.depth) {
         b = a;
         a = ov;
@@ -1383,11 +1417,11 @@ export class World {
           if (Math.abs(bc.y - oshape.globalPosition.y) > be.y + oe.y) continue;
           if (bshape.shape.kind === "circle") {
             const ov = circleOverlap(bc, bshape.shape.radius, oshape);
-            if (ov) consider(ov);
+            if (ov) consider(ov, other);
           } else {
             // A vertex shape contributes its manifold points, same as the
             // dynamic solver reads them.
-            for (const ct of shapeContacts(bshape, oshape)) consider(ct);
+            for (const ct of shapeContacts(bshape, oshape)) consider(ct, other);
           }
         }
       }

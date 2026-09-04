@@ -37,6 +37,14 @@ export class BallPlayer extends RigidBody2D {
   // Proportional gain steering the loop toward the aim direction (1/s).
   // Stable at 1/60 while gain*dt < 1.
   static readonly AIM_TURN_GAIN = 15;
+  // The direction (+1/-1, 0 for none) of a turn the chain refused in full on
+  // the last frame that asked for one, latched by `BallLevel` after the
+  // unwind and read by the aim steering (see `resolveInput`). Cleared by a
+  // demand in the other direction, or by the chain going.
+  windStall = 0;
+  // Spool rate (m per radian) below which turning does not wind chain and the
+  // stall has nothing to limit.
+  static readonly STALL_MIN_SPOOL = 0.001;
   // Coulomb coefficient for ground contact. Friction that DRIVES the ball
   // (the steered spin gripping the ground) always applies in full, so aiming
   // kicks and crawls the ball at any speed. Friction that would BRAKE the
@@ -612,7 +620,7 @@ export class BallPlayer extends RigidBody2D {
     );
   }
 
-  resolveInput(input: FrameInput): void {
+  resolveInput(input: FrameInput, delta = 1 / 60): void {
     // Aim steering: rotate the ball so the loop faces the aim point — also
     // with the chain out (winding it around the ball). An aim point at the
     // ball's centre means "not aiming" (stick released — see BallInputSource),
@@ -646,14 +654,45 @@ export class BallPlayer extends RigidBody2D {
       this.globalRotation += wrapAngle(toAim.angle() - this.loopDirection.angle());
     }
     if (aiming) {
-      const delta = wrapAngle(toAim.angle() - this.loopDirection.angle());
-      this.angularVelocity = delta * BallPlayer.AIM_TURN_GAIN;
+      const angleError = wrapAngle(toAim.angle() - this.loopDirection.angle());
+      const demand = angleError * BallPlayer.AIM_TURN_GAIN;
+      // Stalled: the chain refunded the whole of a turn in this direction and
+      // nothing has changed since (see `windStall`), so the loop may turn only
+      // as far as the chain's OWN length allows - the slack between the path
+      // and `maxRopeLength`, with no lease counted - which for a ball wound
+      // all the way up to its anchor is nothing at all. The steering is
+      // kinematic and knows nothing about the chain, and a chain wound tight
+      // refunds the whole turn every frame (`Rope.unwindOverLength`): the
+      // loop never reaches the aim, the error never shrinks, and the same
+      // 40 rad/s was written again next frame, forever. Every phase that runs
+      // BEFORE the refund saw that spin as real: the contact solve read the
+      // mounting loop, 14 cm out on the rim, as a hammer swinging at 5.5 m/s
+      // with infinite inertia behind it, and hit the 12.6 kg weight the ball
+      // rested against with 35-41 N·s a frame, 3 m/s per blow - the ball
+      // thrown off its anchor and hauled back by the chain, over and over
+      // (`session-154f` f77-82). A decaying memory of the refused spin was
+      // tried first and converges to demanding HALF the command every frame
+      // (m = D - m): the hammer at half strength. The stall clears the moment
+      // the player aims the other way, because paying chain out is always
+      // allowed, and the allowance grows by itself as the anchor recedes.
+      let allowed = demand;
+      if (this.chain && this.windStall !== 0 && Math.sign(demand) === this.windStall) {
+        const spool = Math.abs(this.chain.lengthPerRadian(this));
+        const slack = Math.max(0, this.chain.maxRopeLength - this.chain.getCurrentLength());
+        if (spool > BallPlayer.STALL_MIN_SPOOL) {
+          allowed = this.windStall * Math.min(Math.abs(demand), slack / spool / delta);
+        }
+      } else {
+        this.windStall = 0;
+      }
+      this.angularVelocity = allowed;
     }
 
     // Hold-to-keep: press shoots, release lets go (matches the grapple
     // controller's fire semantics).
     if (input.fire.pressed && !this.chain) this.shoot();
     if (input.fire.released) this.releaseChain();
+    if (!this.chain) this.windStall = 0;
   }
 
   // Called after the hook has flown this frame. Two triggers convert the

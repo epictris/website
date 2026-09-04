@@ -360,6 +360,43 @@ const SPIN_OVERDRIVE_TOLERANCE = 1;
 // clears the top of that by nearly threefold while still catching session-360f's
 // 2.17 by more than three.
 const CHAIN_CREDIT_BOUND_TOLERANCE = 0.6;
+// How many consecutive frames the chain phase may hand the ball speed OUT of a
+// surface it pushed the ball out of (`BallLevel.chainPushCreditFrames`, counted
+// above `BallLevel.PUSH_CREDIT_SPEED`) before it is a pump.
+//
+// A push-out is the answer to a haul the geometry refused, and against static
+// geometry it can never leave the ball further out than it began. Against a
+// rigid body it could: hauled by the ball's own chain, the body moved INTO the
+// ball, and a push-out that then moved the ball alone credited the ball for the
+// body's share of the motion while the body kept its own credit for it - the
+// pair leaving together, 0.3 to 2.3 m/s a frame, until a ball and its 12.6 kg
+// anchor were doing 19 m/s (`session-324f` f252-270). The chain phase now
+// clears that overlap as a pair (`BallLevel.separateBallFromPathBodies`), and
+// this is the statement that it stays cleared.
+//
+// A bar on the SIZE would not do: the unwind turning the ball's mounting loop
+// into the scenery is cleared and credited in one frame at up to 2.2 m/s across
+// the corpus (`session-234f` f79), and the pump's per-frame credit sat under
+// that. What distinguishes a pump is that it is re-earned for as long as its
+// cause lasts - 18 consecutive frames on `session-324f`, 11 on `session-307f`
+// - where the corpus never strings more than 2 together. Six is the bar.
+const CHAIN_PUSH_CREDIT_FRAMES = 6;
+// How far over its constraint length the anchored chain may measure before the
+// rope is not being enforced at all - the launch class, a wrap path appearing
+// at full size in one frame (`session-1474f`: half a metre of length error,
+// 96 m/s).
+//
+// It is not a statement about a ball crushed against its own point-blank
+// anchor, and that regime measures far above what a bar for the launch class
+// would suggest: a ball pinned between the floor and a slab it is chained to
+// at 5 cm, spun under the aim, escapes along the slab faster than a correction
+// aimed mostly INTO the slab can haul it back, the stall lease trails the
+// escape by the push-out it is bounded to, and the chain measures 14-17 cm over
+// for frames at a time with a STATIC slab and nothing else in the frame. Every
+// crush session in the corpus (`477f`, `726f`, `1426f`, all against rigid
+// slabs) sat under 5 cm only while those slabs were being pumped toward the
+// ball (see `CHAIN_PUSH_CREDIT_FRAMES`); cleared as a pair they measure 6-10.
+const CHAIN_OVER_LENGTH_TOLERANCE = 0.25;
 // How much longer than the length it anchored at the ball's chain may get.
 // Nothing pays chain out once it is anchored, so the only source of growth is
 // `Rope.absorbBlockedLength` letting the constraint sit where geometry is
@@ -759,8 +796,19 @@ export class EnergyMonitor {
     // spin it writes, and a ball whose loop already faces the cursor is handed
     // essentially none. `kinematicRotation` is the sim's own record of having
     // overwritten the spin this frame.
+    //
+    // Read from the spin the aim WROTE this frame (`BallLevel.aimSpin`) as well
+    // as from what the ball ended the frame with, because the two differ by
+    // exactly the chain's refusal: a ball wound tight against its anchor has
+    // its whole turn refused by the unwind every frame and ends every frame at
+    // zero, while the winch has been paid that turn's worth of chain. Read at
+    // the end alone, a ball shoving its 294 kg anchor along the floor at a
+    // steady 1 m/s² under a held aim was an unforced gain (`session-726f`
+    // f430-500).
     const steering =
-      level.ball.kinematicRotation && Math.abs(level.ball.angularVelocity) > STEERING_SPIN;
+      level.ball.kinematicRotation &&
+      (Math.abs(level.ball.angularVelocity) > STEERING_SPIN ||
+        Math.abs(level.aimSpin) > STEERING_SPIN);
     // A trampoline pays out of a spring nothing in the scene stores, so a frame
     // one fired is a frame energy legitimately entered the level - the same
     // statement `FORCED_ACTIONS` makes about the winch, and made by the sim
@@ -912,9 +960,18 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         `than the constraint was opening at`,
     });
   }
+  if (level.chainPushCreditFrames > CHAIN_PUSH_CREDIT_FRAMES) {
+    out.push({
+      frame,
+      kind: "rope-push-credit",
+      detail:
+        `chain phase has handed the ball speed out of a surface it pushed the ball out of ` +
+        `for ${level.chainPushCreditFrames} frames running (${level.chainPushOutCredit.toFixed(2)} m/s this frame)`,
+    });
+  }
   if (b.chain) {
     const len = b.chain.getCurrentLength();
-    if (b.chainAnchored && len > b.chain.constraintLength + 0.05) {
+    if (b.chainAnchored && len > b.chain.constraintLength + CHAIN_OVER_LENGTH_TOLERANCE) {
       out.push({
         frame,
         kind: "rope-over-length",

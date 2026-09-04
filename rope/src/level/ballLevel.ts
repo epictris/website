@@ -8,7 +8,8 @@ import { RigidBody2D, VineLink, type CollisionObject2D, type PhysicsBody2D } fro
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
-import { GRAVITY, World } from "../engine/world";
+import { GRAVITY, World, type PushOut } from "../engine/world";
+import { circleOverlap } from "../engine/collision";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import type { FrameInput } from "../input/frameInput";
@@ -165,8 +166,66 @@ export class BallLevel {
   // the chain then billed it 2.1 m/s for the same descent, and the ball left the
   // ground at three times the speed it landed at.
   chainCreditOverBound: number | null = null;
+  // How much speed the chain phase handed the ball OUT of a surface the phase
+  // pushed it out of, in m/s: the phase's realised velocity change, taken along
+  // each of this frame's push-out normals, at its largest. Zero on a frame with
+  // no push-out, or no anchored chain.
+  //
+  // A push-out is an answer to a haul the geometry refused, and against static
+  // geometry it can never leave the ball further out than it began: the ball is
+  // hauled in by `h`, overlaps by `h` less whatever gap it had, and is pushed
+  // back by exactly that. What CAN leave it further out is the other body of
+  // the pair moving into the ball inside the phase - hauled there by the ball's
+  // own chain, which is the ball's own tension moving the thing it rests
+  // against - and a push-out that then moves the ball alone converts that
+  // body's share of the correction into speed the ball never earned, with the
+  // body keeping its own credit for the same motion. The pair leaves together
+  // (`session-324f`: 0.3 to 2.3 m/s of it a frame, the ball and its 12.6 kg
+  // anchor from 1 to 19 m/s in 18 frames). `rope-push-credit` is the
+  // invariant.
+  chainPushOutCredit = 0;
+  // Consecutive frames on which `chainPushOutCredit` stood above
+  // `PUSH_CREDIT_SPEED`. A one-frame push-out credit is a flick - the unwind
+  // turning the mounting loop into the scenery, cleared and credited once - and
+  // the corpus carries those at up to 2 m/s. A pump is re-earned every frame
+  // for as long as its cause lasts: 18 consecutive frames on `session-324f`,
+  // 11 on `session-307f`, against a corpus that never strings 3 together.
+  chainPushCreditFrames = 0;
+  // The spin the aim steering wrote onto the ball this frame, in rad/s, and zero
+  // on a frame it did not steer. Read by the energy monitor, which must know
+  // whether the player is a source this frame: the ball's angular velocity at
+  // the END of the frame does not say, because a wound-tight chain's unwind
+  // refuses the whole turn and leaves it at exactly zero while the winch has
+  // been fed the whole turn's worth of chain (`session-726f` f430-500, a ball
+  // shoving its anchor along the floor at a steady 1 m/s² under a held aim,
+  // read as an unforced gain).
+  aimSpin = 0;
   private endWasFixed = false;
 
+  // Push-out credit above which a frame counts toward `chainPushCreditFrames`.
+  // Gravity's own step is 0.16 m/s and the corpus's sustained noise sits under
+  // that; the pump ran at 0.3 to 2.3.
+  static readonly PUSH_CREDIT_SPEED = 0.2;
+  // Passes of the ball-against-path-body pair separation, per body (see
+  // `separateBallFromPathBodies`). Two, as `World.depenetrateRigid` iterates:
+  // a rotation that clears one point can seat another.
+  static readonly PAIR_SEPARATION_PASSES = 2;
+  // Overlap below which a push-out is a pair touching, not a surface refusing
+  // anything: nothing is separated for it and nothing downstream hears of it.
+  // The leading push-out leaves the ball at exactly zero depth against what it
+  // rests on, and "exactly" is float arithmetic: the same pair re-measures
+  // 1e-17 m deep on one machine and clear on another. Read as a refusal, that
+  // noise held the stall lease for a frame (`Rope.noteBlockedByGeometry`) that
+  // the other machine released, 8.3 mm of chain the two then disagreed on for
+  // good; read by the into-surface refusal, it stripped 1.1 m/s the other
+  // machine kept. Every bundle recorded in the browser after the pair
+  // separation landed replayed as DIVERGED headlessly (`session-154f` f89-90,
+  // `session-345f` f196). A micron is a thousand times the noise and a
+  // thousandth of anything a solve hauls.
+  static readonly PUSH_OUT_MIN_DEPTH = 1e-6;
+  // Share of the aim's turn the unwind must give back for the turn to count
+  // as refused outright (see `BallPlayer.windStall`).
+  static readonly STALL_REFUND_SHARE = 0.9;
   // Length below which a stall is float noise rather than a blocked correction.
   static readonly STALL_EPSILON = 0.001;
   // Lease below which there is nothing worth calling a surplus: the release
@@ -302,10 +361,11 @@ export class BallLevel {
     // further (see Rope.unwindOverLength).
     const ballRotationAtFrameStart = this.ball.globalRotation;
 
-    this.ball.resolveInput(input);
+    this.ball.resolveInput(input, delta);
     // The aim steering overwrites the ball's angular velocity outright, so it is
     // a phase in its own right - a spin that appears here is the player's, and
     // one that appears in `unwind` is the chain refusing it.
+    this.aimSpin = this.ball.kinematicRotation ? this.ball.angularVelocity : 0;
     PhaseTrace.mark("aim", this.world);
     this.bodies = this.bodies.filter((b) => !b.removed);
     // The hook's attach callback (fired inside the step below) needs the scene
@@ -628,6 +688,12 @@ export class BallLevel {
         );
       }
       PhaseTrace.mark("rope-solve", this.world);
+      // The solve has just moved the ball and the bodies on its path TOGETHER,
+      // and where the ball rests against one of them it has moved the two into
+      // each other. That overlap is cleared here, as the pair it is, before
+      // anything else reads the positions (see `separateBallFromPathBodies`).
+      const pushedOutOf: PushOut[] = this.separateBallFromPathBodies(delta);
+      PhaseTrace.mark("pair-push-out", this.world);
       for (const [body, before] of haulAtSolve) {
         body.globalPosition = body.globalPosition.sub(
           body.globalPosition.sub(before.position).mul(spinShare),
@@ -785,7 +851,7 @@ export class BallLevel {
       // where the frame really ends — so the ball can never bank speed for a
       // move that was undone, and there is nothing left to refund.
       const solvePushBefore = this.ball.globalPosition;
-      const pushedOutOf = this.world.depenetrateRigid(this.ball);
+      pushedOutOf.push(...this.world.depenetrateRigid(this.ball).filter(BallLevel.realPush));
       this.ball.chain.noteGeometryPush(this.ball.globalPosition.distanceTo(solvePushBefore));
       // Whatever length the frame still owes after that, take it out of the
       // ball's spin before anything else sees it. Winding chain onto the ball is
@@ -817,6 +883,7 @@ export class BallLevel {
         // and see `Rope.unwindOverLength`). Zero on every other frame, so
         // nothing without a vine in it changes at all.
         const lengthBeforeUnwind = this.ball.chain.getCurrentLength();
+        const rotationBeforeUnwind = this.ball.globalRotation;
         this.ball.chain.unwindOverLength(
           this.ball,
           ballRotationAtFrameStart,
@@ -829,6 +896,16 @@ export class BallLevel {
           0,
           lengthBeforeUnwind - this.ball.chain.getCurrentLength(),
         );
+        // A turn the chain refunded (nearly) whole is one the steering may
+        // not write again until something changes (`BallPlayer.windStall`).
+        // Nearly, because a partial refund is a wind-up in progress - the
+        // ball riding around the body it is hauled against - and only a turn
+        // that bought nothing is a stall.
+        const asked = Math.abs(this.aimSpin) * delta;
+        const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
+        if (asked > 0 && refunded >= BallLevel.STALL_REFUND_SHARE * asked) {
+          this.ball.windStall = Math.sign(this.aimSpin);
+        }
       }
       PhaseTrace.mark("unwind", this.world);
       // The unwind just turned the ball, and the ball is not only a circle — it
@@ -836,7 +913,7 @@ export class BallLevel {
       // into geometry the push-out had already cleared. Clear it again; the
       // velocity below is derived after both, so neither costs anything.
       const unwindPushBefore = this.ball.globalPosition;
-      pushedOutOf.push(...this.world.depenetrateRigid(this.ball));
+      pushedOutOf.push(...this.world.depenetrateRigid(this.ball).filter(BallLevel.realPush));
       this.ball.chain.noteGeometryPush(this.ball.globalPosition.distanceTo(unwindPushBefore));
       // Discounted the same way the solve discounts its own credit: a length
       // error a wrap node appearing put there is corrected in position but earns
@@ -934,15 +1011,30 @@ export class BallLevel {
       // nothing either way, because gravity there points out of the surface and
       // both bounds are zero — which is what keeps the wall and ceiling cases
       // (`session-537f`) as they were.
+      //
+      // And measured against the SURFACE, not against the world. A static wall
+      // stands still and the two read the same, but the surface here is as
+      // often a rigid body - the anchor the ball is wound up to - and a body
+      // has a velocity of its own along the normal it pushed the ball out
+      // along. "Into" is the closing rate between the two, and a ball may keep
+      // whatever keeps pace with a surface that is moving away from it: read
+      // in world terms, a ball hauled after an anchor that had just been
+      // knocked off at 4.8 m/s was stripped of the whole of its 4.2 m/s toward
+      // it in one frame, every frame, while the solve went on dragging it after
+      // the anchor in position - stopped dead in velocity, towed in position,
+      // its momentum simply gone (`session-307f` f192-194).
       const gravityStep = GRAVITY.mul(this.ball.gravityScale * delta);
-      for (const normal of pushedOutOf) {
-        const into = this.ball.linearVelocity.dot(normal);
+      const surfaceSpeed = (p: PushOut): number =>
+        p.other instanceof RigidBody2D ? p.other.linearVelocity.dot(p.normal) : 0;
+      for (const p of pushedOutOf) {
+        const surface = surfaceSpeed(p);
+        const into = this.ball.linearVelocity.dot(p.normal) - surface;
         const funded = Math.max(
-          Math.min(velocityBeforeChain.dot(normal), 0),
-          Math.min(gravityStep.dot(normal), 0),
+          Math.min(velocityBeforeChain.dot(p.normal) - surface, 0),
+          Math.min(gravityStep.dot(p.normal), 0),
         );
         if (into < funded) {
-          this.ball.linearVelocity = this.ball.linearVelocity.sub(normal.mul(into - funded));
+          this.ball.linearVelocity = this.ball.linearVelocity.sub(p.normal.mul(into - funded));
         }
       }
       // Cancelling the component the geometry has already refused (session-537f:
@@ -991,6 +1083,22 @@ export class BallLevel {
         pull === null
           ? null
           : this.ball.linearVelocity.sub(velocityBeforeChain).dot(pull) - chainBound;
+      // And what it handed the ball out of the surfaces it pushed it out of
+      // (see the field): how much faster the ball is LEAVING each of them, along
+      // its push-out normal and relative to the surface's own motion, than it
+      // was when the phase began. A refusal reads zero here - it removes speed
+      // into the surface, and a ball that arrived moving into one leaves at
+      // rest against it - so this is the credit alone.
+      let pushOutCredit = 0;
+      for (const p of pushedOutOf) {
+        const surface = surfaceSpeed(p);
+        const leaving = Math.max(this.ball.linearVelocity.dot(p.normal) - surface, 0);
+        const arrived = Math.max(velocityBeforeChain.dot(p.normal) - surface, 0);
+        pushOutCredit = Math.max(pushOutCredit, leaving - arrived);
+      }
+      this.chainPushOutCredit = pushOutCredit;
+      this.chainPushCreditFrames =
+        pushOutCredit > BallLevel.PUSH_CREDIT_SPEED ? this.chainPushCreditFrames + 1 : 0;
       const gain = this.ball.linearVelocity.length() - speedBefore;
       this.anchorKickSpeedGain = anchoredThisFrame ? gain : null;
       this.chainSolveSpeedGain = gain;
@@ -1003,6 +1111,8 @@ export class BallLevel {
       this.chainLeaseHeldFrames = 0;
       this.chainWinchSpeedBudget = 0;
       this.chainCreditOverBound = null;
+      this.chainPushOutCredit = 0;
+      this.chainPushCreditFrames = 0;
     }
     this.endWasFixed = endFixed;
     this.settleBallSparkSpin(ballRotationAtFrameStart, delta);
@@ -1038,6 +1148,125 @@ export class BallLevel {
   // ball either: `World.integrate` is the only writer of `globalRotation` in the
   // solve, so on every frame no rollback touches, the realised spin equals the
   // commanded one to the bit and this rewrites the event to itself.
+
+  // Clear any overlap between the ball and a rigid body on its chain's path as
+  // the PAIR it is: the two pushed apart along the contact normal, split by
+  // effective mass with the body's rotation about the contact in the split,
+  // and the body debited the velocity for its share - the PBD velocity update
+  // for the move, exactly as the ball is credited for its own over the phase.
+  // Returns what it pushed the ball out of, for the same books every other
+  // push-out feeds (the into-surface refusal, the stall lease, the invariants).
+  //
+  // The length solve moves EVERY body on the path, split by effective mass, so
+  // where the ball rests against the body it is anchored to the solve moves the
+  // two into each other - and against a light anchor most of the closing is
+  // the anchor's: 80% of it, for a 12.6 kg weight under the 52 kg ball. Cleared
+  // by a push-out that moves the ball ALONE, the anchor keeps its position
+  // inside where the ball was and the velocity the solve credited it for
+  // getting there, while the ball, whose books are taken over the phase, is
+  // credited the push-out as speed OUT of the anchor: the two leave together,
+  // 0.3 to 2.3 m/s of fresh speed a frame, the ball and its anchor from 1 to
+  // 19 m/s in eighteen frames with the stall lease paying out 3 cm of chain a
+  // frame to cover the separation (`session-324f` f252-270, the pair flung
+  // across the level on winding up into a hung weight). The spin-share
+  // rollback cannot reach it: what it rolls back is the kinematic spin's share
+  // of the correction, and this over-length is the pair's own motion.
+  //
+  // Cleared as a pair, each body is pushed back by the share it was hauled in
+  // by - the same effective-mass ratio the solve split the haul by - so a ball
+  // wound all the way up to a hanging weight sits at the weight's edge with
+  // neither of them credited a thing, which is the statement that the chain's
+  // tension on the weight and the contact's reaction to it are one force seen
+  // from its two ends. Rotation is in the split because the anchor point is on
+  // the body's rim: a light body hauled by a corner is turned into the ball as
+  // much as it is dragged, and a translation-only push leaves that turn and
+  // its credit standing, which is the pivot whip by another door.
+  //
+  // Only the bodies on the path, because only those did the solve move: the
+  // ball hauled into anything else was hauled there alone, and the one-sided
+  // push-out that follows is the right answer for a one-sided haul. The winch
+  // pass after the rollback hauls the ball alone by construction (the anchor
+  // held still for it), so its overlap is left to that same one-sided push-out
+  // rather than being split here - pushing the anchor away by a share of a
+  // haul the kinematic spin paid for would hand the spin the anchor's momentum.
+  //
+  // Holding the body still for the solve instead - immovable, as the winch
+  // pass holds it - was tried first and is too coarse: it also stops the chain
+  // resisting the body's ROTATION while the ball rides it, so a hung weight
+  // turning under a wound-tight ball carried 11 cm of length error the solve
+  // was forbidden to correct, then took all of it in one frame as a 28 rad/s
+  // whip the instant the contact broke (`session-268f` f124-132).
+  // A push-out deep enough to be a surface's answer rather than float noise
+  // (see `PUSH_OUT_MIN_DEPTH`).
+  private static realPush(p: PushOut): boolean {
+    return p.depth > BallLevel.PUSH_OUT_MIN_DEPTH;
+  }
+
+  private separateBallFromPathBodies(delta: number): PushOut[] {
+    const out: PushOut[] = [];
+    const chain = this.ball.chain;
+    if (!chain) return out;
+    const partners: RigidBody2D[] = [];
+    for (const node of chain.path()) {
+      const obj = node.contact.obj;
+      // Not the chain's own dangling hook: until it lands it is the chain's far
+      // end, not a body the ball is resting against, and a quarter-kilo body
+      // "separated" from the ball by effective mass is a hook flung clear of the
+      // floor it was about to anchor on (`attach-keeps-length` went red on it).
+      if (obj instanceof BallHook) continue;
+      if (obj instanceof RigidBody2D && obj !== this.ball && obj.isSolid && !partners.includes(obj)) {
+        partners.push(obj);
+      }
+    }
+    const ballShapes = this.ball.getShapes();
+    for (const body of partners) {
+      for (let pass = 0; pass < BallLevel.PAIR_SEPARATION_PASSES; pass++) {
+        let deepest: { normal: Vec2; depth: number; point: Vec2 } | null = null;
+        for (const ballShape of ballShapes) {
+          if (ballShape.shape.kind !== "circle") continue;
+          const centre = ballShape.globalPosition;
+          const radius = ballShape.shape.radius;
+          for (const shape of body.getShapes()) {
+            const overlap = circleOverlap(centre, radius, shape);
+            if (
+              overlap &&
+              overlap.depth > BallLevel.PUSH_OUT_MIN_DEPTH &&
+              (deepest === null || overlap.depth > deepest.depth)
+            ) {
+              // Where the ball's circle meets the body's surface: the circle's
+              // deepest point, brought back out by the depth.
+              deepest = {
+                normal: overlap.normal,
+                depth: overlap.depth,
+                point: centre.sub(overlap.normal.mul(radius - overlap.depth)),
+              };
+            }
+          }
+        }
+        if (deepest === null) break;
+        // Out of the body, toward the ball - `circleOverlap`'s orientation, and
+        // the one every `PushOut` carries.
+        const normal = deepest.normal;
+        const arm = deepest.point.sub(body.globalPosition).cross(normal);
+        const effectiveInverseMass =
+          this.ball.inverseMass + body.inverseMass + arm * arm * body.inverseInertia;
+        if (effectiveInverseMass <= 0) break;
+        const correction = deepest.depth / effectiveInverseMass;
+        const ballMove = normal.mul(correction * this.ball.inverseMass);
+        const bodyMove = normal.mul(-correction * body.inverseMass);
+        const bodyTurn = -arm * correction * body.inverseInertia;
+        this.ball.globalPosition = this.ball.globalPosition.add(ballMove);
+        body.globalPosition = body.globalPosition.add(bodyMove);
+        body.globalRotation += bodyTurn;
+        body.linearVelocity = body.linearVelocity.add(bodyMove.div(delta));
+        body.angularVelocity += bodyTurn / delta;
+        chain.noteGeometryPush(ballMove.length());
+        out.push({ normal, depth: deepest.depth, other: body });
+      }
+    }
+    return out;
+  }
+
   private settleBallSparkSpin(rotationAtFrameStart: number, delta: number): void {
     const pending = this.ballSparkSpin;
     if (pending === null || delta <= 0) return;

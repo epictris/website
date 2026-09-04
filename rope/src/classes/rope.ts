@@ -1750,17 +1750,53 @@ export class Rope {
 
   private resolveLengthConstraint(): number | null {
     let cumulativeCorrectionImpulse = 0;
+    let error = this.calculateRopePathLength() - this.constraintLength;
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
+      // An iteration may only shorten the path. The correction is a step along
+      // the FIRST span's direction sized by the whole error, and on a chain
+      // coiled tight onto its ball that direction is not the path's gradient:
+      // the step overshoots, the next span flips the direction, and each
+      // iteration lands longer than the last while turning the anchor the same
+      // way every time. Ten of those spun a 12.6 kg weight fourteen turns in
+      // one frame, wrapped the chain around it into a 3.8 m path, and the
+      // winch hauled the ball 1.2 m after it: a 93 m/s launch out of a 27 cm
+      // error (`session-239f` f192, replayed). Undone and stopped, the error
+      // stands as over-length for the unwind and the stall lease, which is
+      // what a correction geometry will not let through has always been.
+      const before = this.snapshotPathBodies();
       const correctionImpulse = this.correctShapePositionAndRotation();
-      if (correctionImpulse !== null) {
-        cumulativeCorrectionImpulse += correctionImpulse;
-      } else if (iteration === 0) {
-        return null;
-      } else {
+      if (correctionImpulse === null) {
+        if (iteration === 0) return null;
         break;
       }
+      const after = this.calculateRopePathLength() - this.constraintLength;
+      if (after > error) {
+        this.restorePathBodies(before);
+        break;
+      }
+      error = after;
+      cumulativeCorrectionImpulse += correctionImpulse;
     }
     return cumulativeCorrectionImpulse;
+  }
+
+  private snapshotPathBodies(): { body: PhysicsBody2D; position: Vec2; rotation: number }[] {
+    const out: { body: PhysicsBody2D; position: Vec2; rotation: number }[] = [];
+    for (const node of this.path()) {
+      const body = node.contact.obj;
+      if (!(body instanceof PhysicsBody2D) || out.some((o) => o.body === body)) continue;
+      out.push({ body, position: body.globalPosition, rotation: body.globalRotation });
+    }
+    return out;
+  }
+
+  private restorePathBodies(
+    snapshot: readonly { body: PhysicsBody2D; position: Vec2; rotation: number }[],
+  ): void {
+    for (const s of snapshot) {
+      s.body.globalPosition = s.position;
+      s.body.globalRotation = s.rotation;
+    }
   }
 
   // Perpendicular lever from the body's centre of rotation to the correction
