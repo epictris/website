@@ -22,7 +22,17 @@ export interface RecordedRun {
   result: PlaytestResult;
 }
 
-export function recordScript(script: PlaytestScript, git?: string): RecordedRun {
+// The tree the run was made on, as `Recording` carries it. Passed in rather than
+// computed here: this file is imported by the browser-safe half of the tooling,
+// and reading the filesystem to find out is the CLI's job (see
+// `src/sim/treeStamp.ts`).
+export interface RecordStamp {
+  git: string;
+  dirty: boolean;
+  srcHash: string;
+}
+
+export function recordScript(script: PlaytestScript, stamp?: RecordStamp): RecordedRun {
   const spec = scriptSpec(script);
   const result = runScript(script);
   return {
@@ -36,7 +46,7 @@ export function recordScript(script: PlaytestScript, git?: string): RecordedRun 
       frames: result.serializedFrames,
       digests: result.digests,
       worldDigests: result.worldDigests,
-      ...(git ? { git } : {}),
+      ...(stamp ? { git: stamp.git, dirty: stamp.dirty, srcHash: stamp.srcHash } : {}),
     },
     result,
   };

@@ -60,7 +60,7 @@ import { PhysTrace } from "../engine/physTrace";
 // costs that worktree nothing.
 import type { PhaseRecord } from "../engine/phaseTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
-import { recordScript } from "../sim/record";
+import { recordScript, type RecordStamp } from "../sim/record";
 import {
   DIVERGENCE_TOLERANCE,
   divergenceSummary,
@@ -70,6 +70,7 @@ import {
 import { frameView, type BodyView, type FrameView } from "../sim/query";
 import { notable, scanRecording } from "../sim/scan";
 import { compareFrame, diffCompareFrames, type CompareFrame } from "../sim/compare";
+import { treeStamp, type TreeStamp } from "../sim/treeStamp";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
 import { RigidBody2D } from "../engine/body";
@@ -253,6 +254,7 @@ function cmdReplay(file: string): void {
   const rec = loadRecording(file);
   const r = replayRecording(rec);
   console.log(`[replay] ${file} — level=${r.level} frames=${r.framesRun}${rec.git ? ` recorded@${rec.git}` : ""}`);
+  printTreeStamp(rec);
   console.log("  " + divergenceLine(r));
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
@@ -276,6 +278,7 @@ function cmdDump(file: string, o: Record<string, string>): void {
   const to = Number(o.to ?? r.digests.length);
   const every = Number(o.every ?? 4);
   console.log(`[dump] ${file} — level=${r.level} frames=${r.framesRun} (current physics)`);
+  printTreeStamp(rec);
   console.log("  " + divergenceLine(r));
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
@@ -346,6 +349,7 @@ async function cmdDiverge(file: string, o: Record<string, string>): Promise<void
       `${rec.git ? ` recorded@${rec.git}` : ""} tolerance=${tolerance.toExponential(1)}` +
       (bodyFilter === null ? "" : ` body=${bodyFilter}`),
   );
+  printTreeStamp(rec);
 
   if (!rec.worldDigests?.length) {
     // The honest answer, not a green one: without world digests there is nothing
@@ -512,6 +516,7 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   }
 
   console.log(`[continue] ${file} — level=${rec.level} from=f${from} hold=${holdNames.join("+") || "-"} frames=${frames}`);
+  printTreeStamp(rec);
   for (let i = 0; i < frames; i++) {
     const pos = ball ? ball.ball.globalPosition : (level as Level).player.globalPosition;
     const aimAt = aim ? new Vec2(aim[0]!, aim[1]!) : pos;
@@ -611,6 +616,7 @@ function cmdFork(file: string, o: Record<string, string>): void {
   const outPrefix = o.out ?? `${file.replace(/\.json$/, "")}.fork`;
 
   console.log(`[fork] ${file}${rec.git ? ` recorded@${rec.git}` : ""} — forkAt=f${forkAt} window=${window}`);
+  printTreeStamp(rec);
   for (let i = 0; i < post; i++) {
     level.physicsProcess(de(rec.frames[i]!), 1 / 60);
     const n = i + 1;
@@ -648,7 +654,10 @@ function cmdQuery(file: string, o: Record<string, string>): void {
   const bodyFilter = o.body === undefined ? null : Number(o.body);
   const json = o.json !== undefined;
   const last = Math.min(to, total);
-  if (!json) console.log(`[query] ${file} — level=${rec.level} frames=${total} (current physics)`);
+  if (!json) {
+    console.log(`[query] ${file} — level=${rec.level} frames=${total} (current physics)`);
+    printTreeStamp(rec);
+  }
 
   for (let i = 0; i < last; i++) {
     level.physicsProcess(de(rec.frames[i]!), 1 / 60);
@@ -729,6 +738,7 @@ async function cmdTrace(file: string, o: Record<string, string>): Promise<void> 
     `[trace] ${file} — level=${rec.level} f${from}..${to}` +
       (watch ? ` body=${[...watch].join(",")}` : " (all bodies)"),
   );
+  printTreeStamp(rec);
   const records = await collectPhaseTrace(rec, from, to, watch);
 
   if (o.out) {
@@ -844,7 +854,7 @@ function cmdRecord(first: string, o: Record<string, string>, extra: string[]): v
   const levelOverride = positional[0] ? first : o.level;
   const script = JSON.parse(readFileSync(scriptFile, "utf8")) as PlaytestScript;
   if (levelOverride) script.level = levelOverride;
-  const { recording, result } = recordScript(script, treeIdentity());
+  const { recording, result } = recordScript(script, recordStamp());
   const out = o.out ?? `${scriptFile.replace(/\.json$/, "")}.bundle.json`;
   writeFileSync(out, JSON.stringify(recording));
   console.log(
@@ -1070,6 +1080,56 @@ function git(args: string[], cwd = ROPE_DIR): string {
   return r.stdout.trim();
 }
 
+// The stamp for THIS working tree, computed the way the dev server computes the
+// one it stamps bundles with (see `src/sim/treeStamp.ts`). Cached: it walks the
+// source tree, and a command that replays several bundles asks once.
+let cachedStamp: TreeStamp | null = null;
+
+function hereStamp(): TreeStamp {
+  cachedStamp ??= treeStamp(ROPE_DIR, (args) => {
+    const r = spawnSync("git", args, { cwd: ROPE_DIR, encoding: "utf8" });
+    return r.status === 0 ? r.stdout : null;
+  });
+  return cachedStamp;
+}
+
+// Whether the tree this command is running on is the tree the bundle was
+// recorded on, said out loud on every replaying command's header.
+//
+// A bundle whose tree does not match is evidence about a DIFFERENT tree, and
+// nothing else in the output says so: the numbers are perfectly real, they are
+// simply about code that is not in front of you. Two "still broken" recordings
+// on 2026-09-04 were of a revert that had already landed.
+//
+// A bundle from before the stamp existed carries no `srcHash` and gets the
+// honest answer - unknown - rather than a green one.
+function treeStampLine(rec: Recording): string {
+  const here = hereStamp();
+  if (!rec.srcHash) {
+    return `tree: unknown (bundle predates the source stamp${rec.git ? `, recorded@${rec.git}` : ""})`;
+  }
+  const hereName = `${here.srcHash} @${here.commit}${here.dirty ? " dirty" : ""}`;
+  if (rec.srcHash === here.srcHash) return `tree: match (${hereName})`;
+  return (
+    `tree: MISMATCH (bundle ${rec.srcHash}${rec.git ? ` @${rec.git}` : ""}` +
+    `${rec.dirty ? " dirty" : ""}, here ${hereName})` +
+    ` — this bundle is evidence about a different tree`
+  );
+}
+
+function printTreeStamp(rec: Recording): void {
+  console.log("  " + treeStampLine(rec));
+}
+
+// The stamp a bundle written by this tree carries. `git` keeps `treeIdentity`'s
+// spelling - the commit plus a hash of the uncommitted diff - because it is what
+// a human reads and what the corpus listing has always shown; `srcHash` is what
+// a replay compares against.
+function recordStamp(): RecordStamp {
+  const here = hereStamp();
+  return { git: treeIdentity(), dirty: here.dirty, srcHash: here.srcHash };
+}
+
 // A tree's identity: the commit, plus a hash of the uncommitted diff when there
 // is one. Two runs that print the same identity ran the same code, which is the
 // claim a "no difference" result depends on and never used to make.
@@ -1248,6 +1308,7 @@ function cmdSettle(file: string, o: Record<string, string>): void {
   // correct relative to the recording: releasing a held deploy is a real event
   // and must happen exactly once, on the first continued frame.
   console.log(`[settle] ${file} — from f${from}, ${frames} frames of zero input`);
+  printTreeStamp(rec);
   console.log(`    frame   KE(J)      max|v|    max|w|`);
   let peakAfterSettled = 0;
   const violations: Violation[] = [];
@@ -1357,6 +1418,7 @@ function cmdScan(fileOrAll: string, o: Record<string, string>): void {
     process.exit(0);
   }
   console.log(`[scan] ${fileOrAll} — level=${scan.level} frames=${scan.frames} (current physics)`);
+  printTreeStamp(rec);
   for (const b of scan.bodies) {
     console.log(`  body#${b.id} ${b.name} (${b.type})`);
     console.log(
@@ -1409,6 +1471,7 @@ function cmdChainpath(file: string, o: Record<string, string>): void {
   const to = Number(o.to ?? rec.frames.length);
   const every = Number(o.every ?? 1);
   console.log(`[chainpath] ${file} — ${rec.frames.length} frames (current physics, px)`);
+  printTreeStamp(rec);
   for (let i = 0; i < rec.frames.length; i++) {
     level.physicsProcess(de(rec.frames[i]!), 1 / 60);
     const n = i + 1;
@@ -1509,7 +1572,8 @@ function cmdRestamp(dirs: string[], write: boolean): void {
     for (const f of files) found.push({ dir, file: f });
   }
   if (found.length === 0) fail(`no bundles in ${dirs.join(", ")}`);
-  const git = treeIdentity();
+  const stamp = recordStamp();
+  const git = stamp.git;
   // A dirty tree is stamped as dirty, which is the point: the stamp says what
   // produced these numbers, and "some uncommitted working tree" is not a
   // revision anyone can go back to. It is a warning rather than a refusal -
@@ -1546,6 +1610,11 @@ function cmdRestamp(dirs: string[], write: boolean): void {
     const next: Recording = {
       ...rec,
       digests: r.digests,
+      // The stamp says which tree PRODUCED these numbers, so a re-stamp has to
+      // move it: the digests below are this tree's answer, whatever the tree the
+      // inputs were recorded on.
+      dirty: stamp.dirty,
+      srcHash: stamp.srcHash,
       // Only where the bundle already carried them: a recording made before
       // world digests existed is replayed against the avatar alone, and giving
       // it a full-world baseline here would be inventing a comparison its own

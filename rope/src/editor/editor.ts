@@ -192,6 +192,14 @@ import {
   type WorldDigest,
 } from "../sim/trace";
 import type { EnvironmentData, LevelData, SceneObjectData } from "../level/levelFormat";
+// The tree this page was served from, not the commit the dev server booted at
+// (see src/sim/treeStamp.ts). Aliased because `commit` and `dirty` are ordinary
+// words in an editor that autosaves.
+import {
+  commit as treeCommit,
+  dirty as treeDirty,
+  srcHash as treeSrcHash,
+} from "virtual:tree-stamp";
 import {
   DEFAULT_LIGHT_COLOR,
   DEFAULT_LIGHT_RANGE,
@@ -1414,7 +1422,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (!testData || recFrames.length === 0) return;
     const rec: Recording = {
       level: currentName ?? "editor",
-      git: __GIT_COMMIT__,
+      git: treeCommit,
+      dirty: treeDirty,
+      srcHash: treeSrcHash,
       controller: testController,
       data: testData,
       frames: recFrames.slice(),

@@ -52,7 +52,19 @@ export interface Recording {
   // same cadence as `digests`: bundles recorded before it existed replay exactly
   // as they always did, and new ones are compared on every body.
   worldDigests?: WorldDigest[];
+  // The tree the bundle was recorded on (see `src/sim/treeStamp.ts`): the short
+  // commit, whether the working tree differed from it, and a hash over the
+  // SOURCE the app was actually built from.
+  //
+  // `git` alone was a statement about when the dev server started, not about
+  // what it was serving: seven bundles said `f0ed27a` on 2026-09-04 while the
+  // served tree changed hourly, and two "still broken" recordings turned out to
+  // be of code that had already been reverted. `srcHash` moves the moment an
+  // edit does, so a replaying command can say whether the tree under it is the
+  // tree that recorded this.
   git?: string;
+  dirty?: boolean;
+  srcHash?: string;
   // Self-contained bundles (e.g. exported from the level editor, whose level
   // isn't in the registry) embed their geometry + controller here. When
   // present, replay builds from `data` instead of looking `level` up.

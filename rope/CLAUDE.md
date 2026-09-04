@@ -179,7 +179,8 @@ bun run dev        # http://localhost:3100
 
 Controls (match the Godot input map): **R/T** move · **Space** jump · **left-click** fire
 hook · **right-click** retract-tug · **C** retract · **S** extend · **1/2** spawn circles ·
-**P** download a replayable session bundle ·
+**P** download a replayable session bundle (stamped with the TREE it was
+recorded on - see below) ·
 Gamepad (standard mapping, merged with keyboard/mouse): **left stick/dpad** move ·
 **A** jump · **right stick** aim (rendered crosshair) · **RT** fire · **LT** retract-tug ·
 **RB/LB** retract/extend · **X/Y** spawn circles ·
@@ -188,6 +189,22 @@ dashed grab-radius circle = grabbable now, hollow red = candidate rotated out of
 grey X = seam-occluded, face ticks colored by floor/wall/ceiling classification) and an
 arrow for the surface normal the player is currently touching (grounded/wall surface, or
 both ledge faces while hanging/climbing), colored by the same classification.
+
+A downloaded bundle carries the identity of the **source that was served**, not
+the last commit before the dev server started: `git` (short commit), `dirty`, and
+`srcHash`, a hash over the contents of every file under `src/` and `levels/`
+(`src/sim/treeStamp.ts`, served to the page as `virtual:tree-stamp` and
+recomputed whenever the watcher sees a change).
+`__GIT_COMMIT__` was `git rev-parse` evaluated once at Vite config load, which is
+a statement about when the server was *started*: on 2026-09-04 seven bundles all
+said `f0ed27a` while the served tree changed hourly, and two "still broken"
+recordings turned out to be of code that had already been reverted - found by
+rebuilding variants in a worktree, which is an afternoon spent learning what the
+bundle should have said itself.
+Every replaying CLI command prints `tree: match`, `tree: MISMATCH (bundle …,
+here …)` or `tree: unknown` (a bundle from before the stamp) on its header.
+The committed corpus is *expected* to read MISMATCH: those bundles are
+deliberately historical, and `cli bundles` therefore does not repeat it per row.
 
 `?render=2d` / `?render=3d` picks the renderer (see **3D rendering**): the ball
 level plays in 3D by default and the grapple levels stay 2D, and `?render=2d` is
@@ -1026,6 +1043,7 @@ bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
 bun run src/tools/cli.ts diverge session.json # WHERE a replay first leaves its recording: frame, field, phase
+#   every replaying command above prints `tree: match` / `tree: MISMATCH` for the bundle's source stamp
 bun run src/tools/cli.ts bundles              # replay playtests/regressions/ + playtests/bundles/
 bun run src/tools/cli.ts scan session.json    # anomaly sweep: spikes, embedding, drift, flicker, stalls
 bun run src/tools/cli.ts scan --all           # the same over the whole corpus, printing only what is notable
@@ -1560,6 +1578,10 @@ Each one exists because its absence cost a real debugging day.
 - **New physics state ships with detectors.**
   A change that adds simulated state (a new body kind, constraint, or solver path) must extend the digests and invariants to cover that state in the same change, before playtesting.
   Both polygon launch bugs (`1474f`, `284f`) escaped to manual play because the detectors lagged the feature.
+- **A bundle whose tree does not match is evidence about a different tree.**
+  Every replaying command prints `tree: match` or `tree: MISMATCH` against the bundle's `srcHash` (see **Running**).
+  A MISMATCH does not make the numbers wrong; it makes them numbers about code that is not in front of you, which is worse, because they read exactly like numbers about code that is.
+  Two "still broken" recordings on 2026-09-04 were of a revert that had already landed.
 - **Edit source with the Edit tool, never scripted string replacement.**
   A `str.replace` that matches nothing silently no-ops and reports success; a real edit with a stale anchor errors.
   The same rule for baselines: compare against a git rev (`cli compare --ref`), never a `git stash` round-trip - an empty stash silently compares a tree against itself, which is why the command now prints both sides' tree identity and refuses an identical pair outright.

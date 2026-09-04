@@ -9,15 +9,57 @@ import {
 } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
+import { treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 
-// Short commit the app was built/served from — stamped into exported replay
-// bundles (Recording.git) so a bundle self-reports which physics recorded it.
-function gitCommit(): string {
-  try {
-    return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
-  } catch {
-    return "unknown";
-  }
+// The identity of the SOURCE this server is serving, exposed to the app as
+// `virtual:tree-stamp` and stamped into every exported bundle.
+//
+// It replaces a `define` of `git rev-parse --short HEAD` evaluated once at
+// config load, which is a statement about when the server was STARTED: a server
+// up since 08:02 stamped every bundle for the rest of the day with a commit two
+// behind HEAD and said nothing at all about the uncommitted edits that were
+// actually live. See `src/sim/treeStamp.ts`.
+const TREE_STAMP_ID = "virtual:tree-stamp";
+const TREE_STAMP_RESOLVED = "\0" + TREE_STAMP_ID;
+
+function treeStampPlugin(): Plugin {
+  const root = import.meta.dirname;
+  const git = (args: string[]): string | null => {
+    try {
+      return execSync(`git ${args.join(" ")}`, { cwd: root, encoding: "utf8" });
+    } catch {
+      return null;
+    }
+  };
+  // Recomputed lazily rather than on every watcher event: hashing the tree is
+  // cheap but not free, and a burst of saves would otherwise pay for each one.
+  let cached: TreeStamp | null = null;
+
+  return {
+    name: "tree-stamp",
+    resolveId(id) {
+      return id === TREE_STAMP_ID ? TREE_STAMP_RESOLVED : null;
+    },
+    load(id) {
+      if (id !== TREE_STAMP_RESOLVED) return null;
+      cached ??= treeStamp(root, git);
+      return (
+        `export const commit = ${JSON.stringify(cached.commit)};\n` +
+        `export const dirty = ${JSON.stringify(cached.dirty)};\n` +
+        `export const srcHash = ${JSON.stringify(cached.srcHash)};\n`
+      );
+    },
+    handleHotUpdate(ctx) {
+      // Any source change makes the stamp stale. Invalidating the module is what
+      // makes the next full page load pick the new one up; HMR does not
+      // propagate through it, and it does not need to - a bundle is stamped when
+      // it is downloaded, and the page that downloads it was loaded after the
+      // edit or it is not testing the edit.
+      cached = null;
+      const mod = ctx.server.moduleGraph.getModuleById(TREE_STAMP_RESOLVED);
+      if (mod) ctx.server.moduleGraph.invalidateModule(mod);
+    },
+  };
 }
 
 // Dev-only REST API backing the level editor's save/load-from-disk. Levels live
@@ -122,7 +164,6 @@ function editorRoute(): Plugin {
 
 export default defineConfig({
   server: { port: 3100 },
-  define: { __GIT_COMMIT__: JSON.stringify(gitCommit()) },
   build: {
     target: "esnext",
     rollupOptions: {
@@ -130,7 +171,18 @@ export default defineConfig({
         main: join(import.meta.dirname, "index.html"),
         editor: join(import.meta.dirname, "editor.html"),
       },
+      output: {
+        // Rollup names a shared chunk after one arbitrary module inside it, and
+        // the arbitrary one it picked became `virtual:tree-stamp` — a three-line
+        // module lending its name to the 880 kB the two pages have in common,
+        // which is a lie anyone reading a bundle-size listing has to unpick.
+        // Named for what it is instead.
+        chunkFileNames: (chunk) =>
+          chunk.isEntry || !chunk.name.startsWith("_virtual")
+            ? "assets/[name]-[hash].js"
+            : "assets/shared-[hash].js",
+      },
     },
   },
-  plugins: [levelApi(), editorRoute()],
+  plugins: [treeStampPlugin(), levelApi(), editorRoute()],
 });

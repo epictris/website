@@ -29,6 +29,9 @@ import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
 import { inputDeserializer } from "./sim/trace";
 import { levelFromRecording } from "./sim/replay";
+// The tree this page was served from, not the commit the dev server booted at
+// (see src/sim/treeStamp.ts).
+import { commit, dirty, srcHash } from "virtual:tree-stamp";
 
 const STEP = 1 / 60;
 // One real-time step plus at most one step of catch-up per rendered frame, and
@@ -188,7 +191,9 @@ const recWorldDigests: WorldDigest[] = [];
 function downloadRecording(): void {
   const rec: Recording = {
     level: levelId,
-    git: __GIT_COMMIT__,
+    git: commit,
+    dirty,
+    srcHash,
     frames: recFrames.slice(),
     digests: recDigests.slice(),
     worldDigests: recWorldDigests.slice(),
