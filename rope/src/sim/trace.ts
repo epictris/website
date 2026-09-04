@@ -23,6 +23,7 @@ import type { ContactConstraint, World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { RawLevelData } from "../level/levelFormat";
+import type { SelfReplayVerdict } from "./selfReplay";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -65,6 +66,11 @@ export interface Recording {
   git?: string;
   dirty?: boolean;
   srcHash?: string;
+  // Whether this bundle reproduced on the machine that recorded it, checked at
+  // the download before the file left the browser (see `sim/selfReplay.ts`).
+  // Absent on bundles recorded before the check existed, and on any producer
+  // that does not run it.
+  selfReplay?: SelfReplayVerdict;
   // Self-contained bundles (e.g. exported from the level editor, whose level
   // isn't in the registry) embed their geometry + controller here. When
   // present, replay builds from `data` instead of looking `level` up.

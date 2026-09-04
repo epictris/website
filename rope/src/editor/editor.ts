@@ -195,6 +195,8 @@ import type { EnvironmentData, LevelData, SceneObjectData } from "../level/level
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts). Aliased because `commit` and `dirty` are ordinary
 // words in an editor that autosaves.
+import { selfReplayLine, verifySelfReplay } from "../sim/selfReplay";
+import { showToast } from "../render/toast";
 import {
   commit as treeCommit,
   dirty as treeDirty,
@@ -1431,6 +1433,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       digests: recDigests.slice(),
       worldDigests: recWorldDigests.slice(),
     };
+    // The same check the game's P-download runs: a bundle that does not
+    // reproduce on the machine that made it is a determinism finding, and this
+    // is the last place anyone can be told so (see sim/selfReplay.ts).
+    rec.selfReplay = verifySelfReplay(rec);
+    showToast(
+      `session-${recFrames.length}f.json\n${selfReplayLine(rec.selfReplay)}`,
+      rec.selfReplay.identical ? "ok" : "warn",
+    );
     const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

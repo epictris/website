@@ -29,6 +29,8 @@ import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
 import { inputDeserializer } from "./sim/trace";
 import { levelFromRecording } from "./sim/replay";
+import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
+import { showToast } from "./render/toast";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
 import { commit, dirty, srcHash } from "virtual:tree-stamp";
@@ -198,6 +200,16 @@ function downloadRecording(): void {
     digests: recDigests.slice(),
     worldDigests: recWorldDigests.slice(),
   };
+  // Before the file leaves: does this bundle reproduce HERE? The browser and bun
+  // once disagreed on a 1e-17 m overlap and nothing in this path could know it,
+  // so the disagreement surfaced hours later on someone else's machine and read
+  // as a physics bug (see sim/selfReplay.ts). Run synchronously - a 1000-frame
+  // ball session re-simulates in well under a second - and reported either way.
+  rec.selfReplay = verifySelfReplay(rec);
+  showToast(
+    `session-${recFrames.length}f.json\n${selfReplayLine(rec.selfReplay)}`,
+    rec.selfReplay.identical ? "ok" : "warn",
+  );
   const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

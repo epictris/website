@@ -56,6 +56,35 @@ self-consistent (a recorded input trace replays bit-for-bit — see `cli selftes
 bit-compatible with the C# original (float64 vs float32, reimplemented physics). Class and
 method names track the C# sources closely to keep the two diffable.
 
+**Every bundle carries its own self-replay verdict.**
+Before a P-download leaves the browser (and the editor's ▶ Test download too),
+the page builds a second level from the bundle's own data, re-simulates the
+recorded inputs through it, compares the two field by field with the same
+`firstDivergence` the CLI uses, and writes the result into the bundle as
+`selfReplay` - shown in the download toast and printed on `cli replay`'s header.
+A 415-frame ball session checks in **292 ms** in Chromium, paid synchronously on
+the download.
+A false verdict is a **determinism finding**, and it outranks anything the replay
+that follows it says: a recording that does not reproduce where it was *made*
+cannot be evidence about physics anywhere else.
+
+What it can and cannot see is worth stating exactly, because the two runs it
+compares are both in the browser:
+- It **catches** the live-run-against-re-simulation class - a dropped or
+  duplicated frame, a variable `dt` leaking into the sim, the live input source
+  and the deserializer disagreeing, live state the rebuild does not reproduce.
+  None of that was checked anywhere before.
+- It **cannot** catch a browser-against-bun disagreement, which is what the
+  2026-09-04 knife-edge was (a 1e-17 m overlap read as a push-out on one engine
+  and as clear on the other). Two runs in the same float environment agree about
+  a 1e-17 m overlap by construction. Verified: with `PUSH_OUT_MIN_DEPTH` set back
+  to 0, a browser recording still downloads `identical: true`.
+  **`cli diverge` on a fresh browser bundle is what covers that**, and it is the
+  reason the process rule below says to record one against every physics change.
+`cli selftest` holds the detector to both halves: a clean bundle must verify
+`identical`, and a bundle with one recorded digest value nudged by 1e-3 must come
+back false naming `chain.blockedSlack` at exactly that frame.
+
 Godot idioms that were collapsed in the port:
 - `Vector2` value-type semantics → **immutable** `Vec2` (every op returns a new vector).
 - `PhysicsServer2D.BodySetState(Transform/…)` in `Rope` → no-op; the TS `RigidBody2D`
@@ -1614,6 +1643,9 @@ finally released it.
 Rules distilled from the sessions this loop was built in.
 Each one exists because its absence cost a real debugging day.
 
+- **Record a browser bundle against every physics change, and run `cli diverge` on it.**
+  Headless validation alone shipped two defects on 2026-09-04 that a single fresh recording would have caught the same hour: the browser/bun determinism knife-edge, and the loop hammer the hold-then-pair redesign left standing.
+  The bundle's own `selfReplay` verdict covers the live-vs-re-simulation class but *cannot* see a browser-vs-bun difference (see **Determinism & correspondence**); replaying the fresh bundle here is what does.
 - **No fix before a measured cause.**
   State the root cause with a number from a replay, probe, or trace before editing the solver.
   A theory that fits the code is not a diagnosis: the rope-refund bug survived four sessions because a plausible neighbour (missing rigid-rigid friction) was fixed instead of the measured energy source (`session-394f`/`458f`/`431f`/`726f`).

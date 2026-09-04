@@ -82,6 +82,7 @@ import {
   type MetricKey,
 } from "../sim/metrics";
 import { treeStamp, type TreeStamp } from "../sim/treeStamp";
+import { selfReplayLine, verifySelfReplay } from "../sim/selfReplay";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
 import { RigidBody2D } from "../engine/body";
@@ -266,6 +267,7 @@ function cmdReplay(file: string): void {
   const r = replayRecording(rec);
   console.log(`[replay] ${file} — level=${r.level} frames=${r.framesRun}${rec.git ? ` recorded@${rec.git}` : ""}`);
   printTreeStamp(rec);
+  printSelfReplay(rec);
   console.log("  " + divergenceLine(r));
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
@@ -1132,6 +1134,21 @@ function printTreeStamp(rec: Recording): void {
   console.log("  " + treeStampLine(rec));
 }
 
+// The bundle's own verdict on itself, from the machine that recorded it (see
+// `sim/selfReplay.ts`). A false verdict is worth more than anything this replay
+// is about to say: a recording that does not reproduce where it was MADE cannot
+// be evidence about physics anywhere else.
+function printSelfReplay(rec: Recording): void {
+  if (!rec.selfReplay) return;
+  console.log("  " + selfReplayLine(rec.selfReplay));
+  if (!rec.selfReplay.identical) {
+    console.log(
+      "    this bundle did not reproduce on the machine that recorded it — " +
+        "that is a determinism finding, not a physics one",
+    );
+  }
+}
+
 // The stamp a bundle written by this tree carries. `git` keeps `treeIdentity`'s
 // spelling - the commit plus a hash of the uncommitted diff - because it is what
 // a human reads and what the corpus listing has always shown; `srcHash` is what
@@ -1936,8 +1953,35 @@ function cmdSelftest(): void {
   );
   if (c.violations[0]) console.log(`  first: f${c.violations[0].frame} ${c.violations[0].kind}`);
 
-  console.log(ok && ballOk ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
-  process.exit(ok && ballOk ? 0 : 1);
+  // The self-replay verdict the browser stamps into every bundle it downloads
+  // (see `sim/selfReplay.ts`), checked both ways round. A detector nobody has
+  // seen go red is a detector nobody knows works, and this one's whole job is to
+  // go red on a bundle that does not reproduce.
+  const verdict = verifySelfReplay(ballRun.recording);
+  // Perturb ONE recorded value by a hair over the tolerance and demand the
+  // verdict names it. A bundle that has been tampered with is the only way to
+  // manufacture a non-reproducing recording on a deterministic engine.
+  const tampered: Recording = {
+    ...ballRun.recording,
+    worldDigests: ballRun.recording.worldDigests?.map((wd, i) =>
+      i === 100 ? { ...wd, chain: wd.chain ? { ...wd.chain, blockedSlack: wd.chain.blockedSlack + 1e-3 } : null } : wd,
+    ),
+  };
+  const tamperedVerdict = verifySelfReplay(tampered);
+  const selfReplayOk =
+    verdict.identical &&
+    !tamperedVerdict.identical &&
+    tamperedVerdict.firstDivergence?.frame === 101 &&
+    tamperedVerdict.firstDivergence?.field === "chain.blockedSlack";
+  console.log(
+    `[selftest] self-replay: clean=${verdict.identical} (${verdict.ms} ms), ` +
+      `tampered=${tamperedVerdict.identical} ` +
+      `@f${tamperedVerdict.firstDivergence?.frame ?? "-"} ${tamperedVerdict.firstDivergence?.field ?? "-"}`,
+  );
+
+  const allOk = ok && ballOk && selfReplayOk;
+  console.log(allOk ? "RESULT: DETERMINISTIC" : "RESULT: NON-DETERMINISTIC / UNHEALTHY");
+  process.exit(allOk ? 0 : 1);
 }
 
 // A ball & chain session with everything the controller does in it: a deploy, an
