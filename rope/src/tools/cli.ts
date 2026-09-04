@@ -1,5 +1,6 @@
 // Headless CLI for replay/playtest tooling. Run with bun:
 //   bun run src/tools/cli.ts play      playtests/retract.json
+//   bun run src/tools/cli.ts diverge   bundle.json [--body ID] [--tolerance T]
 //   bun run src/tools/cli.ts replay    bundle.json
 //   bun run src/tools/cli.ts dump      bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts query     bundle.json [--frame N | --from A --to B]
@@ -53,9 +54,19 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Level } from "../level/level";
 import { PhysTrace } from "../engine/physTrace";
+// Type-only, and that matters: the VALUE import below is dynamic because `cli
+// compare` copies this tooling into a worktree of an OLD revision whose engine
+// has never heard of `phaseTrace`. A type import is erased before it runs, so it
+// costs that worktree nothing.
+import type { PhaseRecord } from "../engine/phaseTrace";
 import { runScript, type PlaytestScript } from "../sim/playtest";
 import { recordScript } from "../sim/record";
-import { replayRecording, levelFromRecording } from "../sim/replay";
+import {
+  DIVERGENCE_TOLERANCE,
+  divergenceSummary,
+  levelFromRecording,
+  replayRecording,
+} from "../sim/replay";
 import { frameView, type BodyView, type FrameView } from "../sim/query";
 import { notable, scanRecording } from "../sim/scan";
 import { compareFrame, diffCompareFrames, type CompareFrame } from "../sim/compare";
@@ -79,8 +90,10 @@ import {
   StuckDetector,
   type ChainDigest,
   type Digest,
+  type DigestFieldDelta,
   type Recording,
   type Violation,
+  type WorldDigest,
 } from "../sim/trace";
 
 const [, , cmd, arg, ...rest] = process.argv;
@@ -243,6 +256,10 @@ function cmdReplay(file: string): void {
   console.log("  " + divergenceLine(r));
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
+  // The first DIFFERENCE, which is not the same thing as the first drift: it is
+  // usually earlier and usually on a field no distance can see (`cli diverge`).
+  const firstDiff = divergenceSummary(r.divergences);
+  if (firstDiff) console.log("  " + firstDiff + "  — `cli diverge` for the field list and the phase");
   printViolations(r.violations);
   // exit 0 healthy, 2 diverged-but-healthy (fix working), 3 invariant violated.
   const code = r.violations.length > 0 ? 3 : r.divergedAtFrame !== null ? 2 : 0;
@@ -262,6 +279,8 @@ function cmdDump(file: string, o: Record<string, string>): void {
   console.log("  " + divergenceLine(r));
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
+  const firstDiff = divergenceSummary(r.divergences);
+  if (firstDiff) console.log("  " + firstDiff);
   for (let i = from - 1; i < Math.min(to, r.digests.length); i += every) {
     // The avatar is build index 0 in both drivers (`Level` and `BallLevel` add
     // it before any scene geometry), so its strongest contact rides the digest
@@ -301,6 +320,143 @@ function chainDigestLine(c: ChainDigest): string {
       anchorBody: c.anchorBody ?? null,
     })
   );
+}
+
+// ---- cli diverge -----------------------------------------------------------
+// Where a bundle's replay first leaves its recording, on which field, by how
+// much, and in which phase of that frame.
+//
+// `cli replay` answers "drifted @f98 (maxDrift=257px)", which is a statement
+// about the avatar's POSITION several frames after the fact. On 2026-09-04 the
+// actual first difference in `session-154f` was `chain.blockedSlack` at f90 -
+// exactly one lease instalment, 8.33 mm, eight frames earlier and not a body at
+// all - and finding it took three throwaway scripts. This is that comparison,
+// standing.
+async function cmdDiverge(file: string, o: Record<string, string>): Promise<void> {
+  const rec = loadRecording(file);
+  const tolerance = Number(o.tolerance ?? DIVERGENCE_TOLERANCE);
+  const bodyFilter = o.body === undefined ? null : Number(o.body);
+  const r = replayRecording(rec, {
+    divergenceTolerance: tolerance,
+    divergenceField:
+      bodyFilter === null ? undefined : (name) => name.startsWith(`body#${bodyFilter}.`),
+  });
+  console.log(
+    `[diverge] ${file} — level=${r.level} frames=${r.framesRun}` +
+      `${rec.git ? ` recorded@${rec.git}` : ""} tolerance=${tolerance.toExponential(1)}` +
+      (bodyFilter === null ? "" : ` body=${bodyFilter}`),
+  );
+
+  if (!rec.worldDigests?.length) {
+    // The honest answer, not a green one: without world digests there is nothing
+    // to compare but the avatar, and a chain-phase or scenery difference is
+    // simply outside what this bundle recorded.
+    console.log("  no worldDigests in this bundle — comparing the AVATAR digest only");
+    const first = firstAvatarDifference(rec, r.digests, tolerance);
+    if (!first) {
+      console.log("  avatar digest: no difference");
+      process.exit(0);
+    }
+    console.log(`  first difference @f${first.frame}`);
+    printDeltas(first.fields);
+    process.exit(1);
+  }
+
+  if (r.divergences.length === 0) {
+    console.log(`  no divergence: every field of every frame within ${tolerance.toExponential(1)}`);
+    process.exit(0);
+  }
+
+  const first = r.divergences[0]!;
+  console.log(`  first difference @f${first.frame}`);
+  printDeltas(first.fields);
+  // The five frames after it, whether or not they differ: one lease instalment
+  // that is repaid next frame and one that is re-earned every frame look
+  // identical at the frame they appear on, and only these tell them apart.
+  for (const d of r.divergences.slice(1)) {
+    console.log(`  f${d.frame}${d.fields.length === 0 ? "  (back in agreement)" : ""}`);
+    printDeltas(d.fields);
+  }
+
+  // Which phase WROTE the difference. The frame before it as well as the frame
+  // itself, because a phase that leaves two runs in different states does so at
+  // the END of its frame and the difference is only READ at the start of the
+  // next one.
+  const bodies = bodiesNamedBy(first.fields, r.worldDigests[first.frame - 1] ?? null);
+  console.log(
+    `  phase trace f${Math.max(1, first.frame - 1)}..${first.frame} ` +
+      `body=${[...bodies].join(",") || "all"}`,
+  );
+  const records = await collectPhaseTrace(
+    rec,
+    Math.max(1, first.frame - 1),
+    first.frame,
+    bodies.size > 0 ? bodies : null,
+  );
+  printPhaseRecords(records, "    ");
+  process.exit(1);
+}
+
+function printDeltas(fields: DigestFieldDelta[]): void {
+  const sorted = [...fields].sort((a, b) => b.delta - a.delta);
+  for (const f of sorted) {
+    const num = (v: number | null): string => (v === null ? "-" : v.toExponential(6));
+    console.log(
+      `    ${f.name.padEnd(24)} recorded=${num(f.recorded).padStart(14)} ` +
+        `replayed=${num(f.replayed).padStart(14)} Δ=${f.delta.toExponential(3)}`,
+    );
+  }
+}
+
+// The bodies a phase trace should watch: the ones the differing fields name,
+// plus the two the CHAIN's fields belong to - the avatar that carries it and the
+// body its far end sits on. A chain field is written by a phase acting on those,
+// and watching neither of them is watching nothing.
+function bodiesNamedBy(fields: DigestFieldDelta[], world: WorldDigest | null): Set<number> {
+  const out = new Set<number>();
+  let chainDiffered = false;
+  for (const f of fields) {
+    const m = /^body#(\d+)/.exec(f.name);
+    if (m) out.add(Number(m[1]));
+    else if (f.name.startsWith("chain")) chainDiffered = true;
+  }
+  if (chainDiffered) {
+    out.add(0);
+    const anchor = world?.chain?.anchorBody;
+    if (anchor != null) out.add(anchor);
+  }
+  return out;
+}
+
+// The avatar-only fallback, for a bundle recorded before world digests existed.
+// The same shape of answer over the seven fields such a bundle does carry.
+function firstAvatarDifference(
+  rec: Recording,
+  replayed: Digest[],
+  tolerance: number,
+): { frame: number; fields: DigestFieldDelta[] } | null {
+  const fields = ["px", "py", "rot", "vx", "vy", "ropeLen", "maxRope"] as const;
+  for (let i = 0; i < replayed.length; i++) {
+    const a = rec.digests?.[i];
+    const b = replayed[i];
+    if (!a || !b) continue;
+    const out: DigestFieldDelta[] = [];
+    if (a.state !== b.state) {
+      out.push({ name: "state", recorded: null, replayed: null, delta: Infinity });
+    }
+    for (const f of fields) {
+      const x = a[f];
+      const y = b[f];
+      if (x === null || y === null) {
+        if (x !== y) out.push({ name: f, recorded: x, replayed: y, delta: Infinity });
+        continue;
+      }
+      const delta = Math.abs(y - x);
+      if (!(delta <= tolerance)) out.push({ name: f, recorded: x, replayed: y, delta });
+    }
+    if (out.length > 0) return { frame: i + 1, fields: out };
+  }
+  return null;
 }
 
 // Replay a bundle up to --from, then take over with --hold input fed through
@@ -563,25 +719,46 @@ function printFrameView(view: FrameView, bodies: BodyView[]): void {
 // re-earns 1.2 m/s sideways every frame and the chain solve removes it" is a
 // thing you read rather than a thing you instrument for.
 async function cmdTrace(file: string, o: Record<string, string>): Promise<void> {
-  // Imported here rather than at the top of the file on purpose: `cli compare`
-  // copies this tooling into a worktree of an OLD revision, whose engine has
-  // never heard of `phaseTrace`, and a static import would break every command
-  // in the file there - including the one compare actually runs.
-  const { PhaseTrace } = await import("../engine/phaseTrace");
   const rec = loadRecording(file);
-  const level = levelFromRecording(rec);
-  const de = inputDeserializer();
   const total = rec.frames.length;
   const from = Number(o.from ?? 1);
   const to = Math.min(Number(o.to ?? total), total);
   const watch = o.body === undefined ? null : new Set(o.body.split(",").map(Number));
 
-  PhaseTrace.reset();
-  PhaseTrace.watch = watch;
   console.log(
     `[trace] ${file} — level=${rec.level} f${from}..${to}` +
       (watch ? ` body=${[...watch].join(",")}` : " (all bodies)"),
   );
+  const records = await collectPhaseTrace(rec, from, to, watch);
+
+  if (o.out) {
+    writeFileSync(o.out, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    console.log(`  ${records.length} records → ${o.out}`);
+  }
+
+  printPhaseRecords(records);
+  process.exit(0);
+}
+
+// Replay a bundle with `PhaseTrace` armed over `[from, to]` and hand back the
+// records. Shared with `cli diverge`, which traces the frame a divergence first
+// appeared on: which phase WROTE the difference is the next question after
+// which field carries it, and answering it by re-running `cli trace` by hand is
+// exactly the step this tooling exists to remove.
+async function collectPhaseTrace(
+  rec: Recording,
+  from: number,
+  to: number,
+  watch: Set<number> | null,
+): Promise<PhaseRecord[]> {
+  // Imported here rather than at the top of the file on purpose: see the type
+  // import above. An old worktree must be able to run every other command in
+  // this file, and a static import would break all of them.
+  const { PhaseTrace } = await import("../engine/phaseTrace");
+  const level = levelFromRecording(rec);
+  const de = inputDeserializer();
+  PhaseTrace.reset();
+  PhaseTrace.watch = watch;
   for (let i = 0; i < to; i++) {
     // Tracing only over the window keeps the record list to the frames asked
     // for; the frames before it still have to be simulated to get there.
@@ -589,17 +766,15 @@ async function cmdTrace(file: string, o: Record<string, string>): Promise<void> 
     level.physicsProcess(de(rec.frames[i]!), 1 / 60);
   }
   PhaseTrace.enabled = false;
+  return PhaseTrace.records.slice();
+}
 
-  if (o.out) {
-    writeFileSync(o.out, PhaseTrace.records.map((r) => JSON.stringify(r)).join("\n") + "\n");
-    console.log(`  ${PhaseTrace.records.length} records → ${o.out}`);
-  }
-
+function printPhaseRecords(records: PhaseRecord[], indent = "  "): void {
   let frame = -1;
-  for (const r of PhaseTrace.records) {
+  for (const r of records) {
     if (r.f !== frame) {
       frame = r.f;
-      console.log(`  f${String(frame).padStart(4)}`);
+      console.log(`${indent}f${String(frame).padStart(4)}`);
     }
     if (r.t === "phase") {
       // Position in MILLIMETRES, and only when the phase actually moved the
@@ -612,20 +787,19 @@ async function cmdTrace(file: string, o: Record<string, string>): Promise<void> 
           ` Δrot=${r.drot.toFixed(5).padStart(8)}`
         : "";
       console.log(
-        `    ${r.phase.padEnd(20)} body#${String(r.body).padStart(2)} ${r.name.padEnd(12)} ` +
+        `${indent}  ${r.phase.padEnd(20)} body#${String(r.body).padStart(2)} ${r.name.padEnd(12)} ` +
           `Δv=(${r.dvx.toFixed(4).padStart(9)},${r.dvy.toFixed(4).padStart(9)}) ` +
           `Δw=${r.dw.toFixed(4).padStart(9)}  → v=(${r.vx.toFixed(3)},${r.vy.toFixed(3)}) w=${r.w.toFixed(3)}` +
           pos,
       );
-    } else {
+    } else if (r.t === "contact") {
       console.log(
-        `    ${"contact".padEnd(20)} ${r.aName}#${r.a} vs ${r.bName}#${r.b} ` +
+        `${indent}  ${"contact".padEnd(20)} ${r.aName}#${r.a} vs ${r.bName}#${r.b} ` +
           `Pn=${r.pn.toFixed(5)} Pt=${r.pt.toFixed(5)}${r.slipping ? " (slipping)" : ""} ` +
           `n=(${r.nx.toFixed(2)},${r.ny.toFixed(2)}) at (${r.px.toFixed(3)},${r.py.toFixed(3)})`,
       );
     }
   }
-  process.exit(0);
 }
 
 // Run a playtest script and write a real bundle: level snapshot, input frames,
@@ -1471,6 +1645,10 @@ switch (cmd) {
   case "play":
     if (!arg) fail("usage: cli play <script.json>");
     cmdPlay(arg);
+    break;
+  case "diverge":
+    if (!arg) fail("usage: cli diverge <bundle.json> [--body ID] [--tolerance T]");
+    await cmdDiverge(arg, opts(rest));
     break;
   case "replay":
     if (!arg) fail("usage: cli replay <bundle.json>");

@@ -19,13 +19,44 @@ import {
   StuckDetector,
   worldDigest,
   worldDigestBall,
+  worldDigestDeltas,
   worldDigestDrift,
   worldDigestsEqual,
+  type DigestFieldDelta,
   type Digest,
   type Recording,
   type Violation,
   type WorldDigest,
 } from "./trace";
+
+// One frame on which the replay's world digest differs from the recording's, and
+// every field that carries the difference.
+export interface Divergence {
+  frame: number; // 1-based, as every other frame number in this tooling is
+  fields: DigestFieldDelta[];
+}
+
+// The noise floor bit-exactness uses. A replay of a bundle recorded by the SAME
+// engine is bit-exact or it is a determinism bug, so anything above zero is a
+// real difference; the default is a hair above zero rather than zero itself so a
+// last-bit difference in a quantity of order 1 does not fill the report.
+export const DIVERGENCE_TOLERANCE = 1e-9;
+
+// How many frames past the first divergence to keep. Five, because the question
+// a first difference immediately raises is whether it GROWS: one lease
+// instalment that is repaid next frame and one that is re-earned every frame
+// look identical at the frame they appear on.
+const DIVERGENCE_FRAMES = 6;
+
+export interface ReplayOptions {
+  // Absolute tolerance for the per-field divergence report (see `divergences`).
+  divergenceTolerance?: number;
+  // Which fields the report is allowed to consider, by name (`body#3.px`,
+  // `chain.blockedSlack`). Restricting it moves the FIRST divergence too, which
+  // is the point: asking where body#3 first differs and being answered about
+  // body#0 is not an answer.
+  divergenceField?: (name: string) => boolean;
+}
 
 export interface ReplayResult {
   level: string;
@@ -55,6 +86,17 @@ export interface ReplayResult {
   worldBitDivergedAtFrame: number | null;
   worldMaxDrift: number;
   worldMaxDriftName: string | null;
+  // The first frame whose world digest differs from the recording field by
+  // field, and the five after it. Empty when the bundle carries no
+  // `worldDigests`, and empty when nothing differs.
+  //
+  // This is a different question from `worldDivergedAtFrame`, which asks how far
+  // apart two runs are and therefore cannot see a difference that is not a
+  // distance: the first difference between the browser and bun on 2026-09-04 was
+  // `chain.blockedSlack` at f90 - one lease instalment, 8.33 mm - and the tools
+  // reported `drifted @f98` on the avatar, eight frames late and on the wrong
+  // quantity.
+  divergences: Divergence[];
 }
 
 // Reconstruct the level a recording plays on. Self-contained bundles
@@ -69,7 +111,9 @@ export function levelFromRecording(rec: Recording): Level | BallLevel {
   return spec.controller === "ball" ? new BallLevel(spec.data) : new Level(spec.data, spec.init);
 }
 
-export function replayRecording(rec: Recording): ReplayResult {
+export function replayRecording(rec: Recording, options: ReplayOptions = {}): ReplayResult {
+  const tolerance = options.divergenceTolerance ?? DIVERGENCE_TOLERANCE;
+  const fieldFilter = options.divergenceField;
   const level = levelFromRecording(rec);
   const deserialize = inputDeserializer();
   const digests: Digest[] = [];
@@ -91,6 +135,7 @@ export function replayRecording(rec: Recording): ReplayResult {
   let worldBitDivergedAtFrame: number | null = null;
   let worldMaxDrift = 0;
   let worldMaxDriftName: string | null = null;
+  const divergences: Divergence[] = [];
 
   for (let i = 0; i < rec.frames.length; i++) {
     const input = deserialize(rec.frames[i]!);
@@ -134,6 +179,20 @@ export function replayRecording(rec: Recording): ReplayResult {
         worldDivergedAtFrame = i + 1;
         worldDivergedName = w.name;
       }
+      // Collected on the first differing frame and the five after it, whether or
+      // not anything differs on those five: "it appeared once and was repaid" and
+      // "it is re-earned every frame" are the two answers, and only the frames
+      // after the first can tell them apart.
+      if (divergences.length < DIVERGENCE_FRAMES) {
+        const all = worldDigestDeltas(wd, expectedWorld, tolerance);
+        const fields = fieldFilter ? all.filter((f) => fieldFilter(f.name)) : all;
+        // Collecting starts at the first frame that differs and then runs
+        // whether or not the frames after it differ: a frame back in agreement
+        // is exactly as much of an answer as one that has got worse.
+        if (fields.length > 0 || divergences.length > 0) {
+          divergences.push({ frame: i + 1, fields });
+        }
+      }
     }
   }
 
@@ -153,5 +212,32 @@ export function replayRecording(rec: Recording): ReplayResult {
     worldBitDivergedAtFrame,
     worldMaxDrift,
     worldMaxDriftName,
+    divergences,
   };
+}
+
+// Where a bundle's replay first leaves its recording, field by field, or null if
+// it never does (and null for a bundle carrying no `worldDigests`, which has
+// nothing to be compared against).
+//
+// The first command to reach for on a bundle that does not replay: `cli replay`
+// answers "it drifted", which is a statement about the avatar's position several
+// frames after the fact, and every debugging session that started there spent
+// its first hour finding the frame, the quantity and the phase by hand.
+export function firstDivergence(
+  rec: Recording,
+  tolerance = DIVERGENCE_TOLERANCE,
+): Divergence | null {
+  return replayRecording(rec, { divergenceTolerance: tolerance }).divergences[0] ?? null;
+}
+
+// The first difference as one line, for the header `cli replay` and `cli dump`
+// print. Null when there is nothing to say.
+export function divergenceSummary(divergences: Divergence[]): string | null {
+  const first = divergences[0];
+  if (!first) return null;
+  const worst = [...first.fields].sort((a, b) => b.delta - a.delta)[0];
+  if (!worst) return null;
+  return `first difference @f${first.frame} ${worst.name} ${worst.delta.toExponential(3)}` +
+    (first.fields.length > 1 ? ` (+${first.fields.length - 1} more field(s))` : "");
 }

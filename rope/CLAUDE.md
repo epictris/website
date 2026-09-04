@@ -1025,6 +1025,7 @@ bun run src/tools/cli.ts assets               # prop + texture budget, stale byt
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
+bun run src/tools/cli.ts diverge session.json # WHERE a replay first leaves its recording: frame, field, phase
 bun run src/tools/cli.ts bundles              # replay playtests/regressions/ + playtests/bundles/
 bun run src/tools/cli.ts scan session.json    # anomaly sweep: spikes, embedding, drift, flicker, stalls
 bun run src/tools/cli.ts scan --all           # the same over the whole corpus, printing only what is notable
@@ -1255,6 +1256,27 @@ launches, mover misbehavior):
    show up as violations at the frames where it was felt. If it doesn't,
    the invariants have a blind spot: fix the detector first, then the bug.
    A fix is only "done" when the bundle that reported it goes green.
+2a. **A bundle that does not replay is a determinism finding first.**
+   `cli diverge bundle.json` says where the replay first leaves the recording:
+   the frame, every field of every body and of the chain that differs, sorted by
+   magnitude, the five frames after it (so a difference that is *repaid* reads
+   differently from one that is *re-earned*), and a phase trace of that frame and
+   the one before it on the bodies that differed.
+   Run it before anything else on a bundle `cli replay` calls DIVERGED.
+   `cli replay` answers "drifted @f98 (maxDrift=257px)", which is a statement
+   about the avatar's POSITION several frames after the fact and cannot see a
+   difference that is not a distance.
+   With the pair-push-out knife-edge re-introduced locally, `cli replay` reports
+   the ball drifting at f300 by 1.18 px; `cli diverge` reports
+   `chain.pushCredit` at f227, 1.06e-7 m/s, seventy-three frames earlier and on a
+   quantity no body ever moved by - which is the frame the two machines actually
+   parted company on.
+   On 2026-09-04 the same question took three throwaway scripts to answer, and
+   the first divergence was attributed to the wrong body once on the way.
+   `--body ID` narrows the whole report (including which frame counts as first)
+   to one body; `--tolerance T` moves the noise floor off its 1e-9 default.
+   A bundle carrying no `worldDigests` is told so and falls back to the avatar
+   digest, which is all such a bundle recorded.
 2b. **Sweep before choosing where to look.** `cli scan bundle.json` (or
    `cli scan --all` over the corpus) reports, per body, the top single-frame
    `|Δv|` and `|Δω|` spikes, the deepest embedding and when it peaked,
