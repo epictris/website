@@ -42,6 +42,15 @@ export class BallPlayer extends RigidBody2D {
   // unwind and read by the aim steering (see `resolveInput`). Cleared by a
   // demand in the other direction, or by the chain going.
   windStall = 0;
+  // Whether the ball was still resting against a body on its chain's path at
+  // the end of the last frame, kept by `BallLevel`. A stall is a turn refused
+  // by that contact, so it holds only while the contact does: a ball whose
+  // anchor is a hand's width away turns and rides around it as it always did,
+  // and a single refused frame on the way there does not freeze it for good.
+  // Without this a ball anchored point-blank to the weight, five centimetres
+  // clear of it, had its rotation frozen through a 166 degree sweep of the aim
+  // (`session-142f` f73-116).
+  windStallHeld = false;
   // Spool rate (m per radian) below which turning does not wind chain and the
   // stall has nothing to limit.
   static readonly STALL_MIN_SPOOL = 0.001;
@@ -676,7 +685,12 @@ export class BallPlayer extends RigidBody2D {
       // the player aims the other way, because paying chain out is always
       // allowed, and the allowance grows by itself as the anchor recedes.
       let allowed = demand;
-      if (this.chain && this.windStall !== 0 && Math.sign(demand) === this.windStall) {
+      if (
+        this.chain &&
+        this.windStall !== 0 &&
+        this.windStallHeld &&
+        Math.sign(demand) === this.windStall
+      ) {
         const spool = Math.abs(this.chain.lengthPerRadian(this));
         const slack = Math.max(0, this.chain.maxRopeLength - this.chain.getCurrentLength());
         if (spool > BallPlayer.STALL_MIN_SPOOL) {
@@ -692,7 +706,7 @@ export class BallPlayer extends RigidBody2D {
     // controller's fire semantics).
     if (input.fire.pressed && !this.chain) this.shoot();
     if (input.fire.released) this.releaseChain();
-    if (!this.chain) this.windStall = 0;
+    if (!this.chain || !this.windStallHeld) this.windStall = 0;
   }
 
   // Called after the hook has flown this frame. Two triggers convert the

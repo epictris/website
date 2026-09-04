@@ -901,9 +901,22 @@ export class BallLevel {
         // Nearly, because a partial refund is a wind-up in progress - the
         // ball riding around the body it is hauled against - and only a turn
         // that bought nothing is a stall.
+        // And only where a body on the path is what refused it: the stall is
+        // the contact's, and it lasts exactly as long as the contact does
+        // (`BallPlayer.windStallHeld`, cleared by the steering when it drops).
         const asked = Math.abs(this.aimSpin) * delta;
         const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
-        if (asked > 0 && refunded >= BallLevel.STALL_REFUND_SHARE * asked) {
+        const path = this.ball.chain.path();
+        this.ball.windStallHeld = this.world.frameContacts.some((c) => {
+          if (c.a !== this.ball && c.b !== this.ball) return false;
+          const other = c.a === this.ball ? c.b : c.a;
+          return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
+        });
+        if (
+          asked > 0 &&
+          this.ball.windStallHeld &&
+          refunded >= BallLevel.STALL_REFUND_SHARE * asked
+        ) {
           this.ball.windStall = Math.sign(this.aimSpin);
         }
       }

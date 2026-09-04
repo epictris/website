@@ -1751,6 +1751,16 @@ export class Rope {
   private resolveLengthConstraint(): number | null {
     let cumulativeCorrectionImpulse = 0;
     let error = this.calculateRopePathLength() - this.constraintLength;
+    // The step is sized by the WHOLE error, and on a chain coiled tight onto
+    // its ball most of that error is coil, which no translation can remove:
+    // the free span from the coil to the anchor is millimetres long, the step
+    // is decimetres, and the ball is carried straight past its anchor into a
+    // longer path than it left (124 mm of error to 262 in one iteration,
+    // `session-154f` f86-88). Undone outright the constraint is simply
+    // abandoned for the frame and the pair drifts apart; halved until it
+    // shortens, the translation takes the span's worth and leaves the coil's
+    // worth to the unwind, which is whose it is.
+    let relaxation = 1;
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       // An iteration may only shorten the path. The correction is a step along
       // the FIRST span's direction sized by the whole error, and on a chain
@@ -1764,7 +1774,7 @@ export class Rope {
       // stands as over-length for the unwind and the stall lease, which is
       // what a correction geometry will not let through has always been.
       const before = this.snapshotPathBodies();
-      const correctionImpulse = this.correctShapePositionAndRotation();
+      const correctionImpulse = this.correctShapePositionAndRotation(relaxation);
       if (correctionImpulse === null) {
         if (iteration === 0) return null;
         break;
@@ -1772,13 +1782,19 @@ export class Rope {
       const after = this.calculateRopePathLength() - this.constraintLength;
       if (after > error) {
         this.restorePathBodies(before);
-        break;
+        relaxation *= 0.5;
+        if (relaxation < Rope.MIN_RELAXATION) break;
+        continue;
       }
       error = after;
       cumulativeCorrectionImpulse += correctionImpulse;
     }
     return cumulativeCorrectionImpulse;
   }
+
+  // Smallest share of a correction step worth trying before the solve gives
+  // the frame up: six halvings, a sixty-fourth of the error.
+  private static readonly MIN_RELAXATION = 1 / 64;
 
   private snapshotPathBodies(): { body: PhysicsBody2D; position: Vec2; rotation: number }[] {
     const out: { body: PhysicsBody2D; position: Vec2; rotation: number }[] = [];
@@ -1941,7 +1957,7 @@ export class Rope {
     return null;
   }
 
-  private correctShapePositionAndRotation(): number | null {
+  private correctShapePositionAndRotation(relaxationFactor = 1): number | null {
     const currentLength = this.calculateRopePathLength();
     if (currentLength <= this.constraintLength) return null;
 
@@ -1963,7 +1979,6 @@ export class Rope {
       }
     }
 
-    const relaxationFactor = 1;
     if (totalEffectiveInverseInertia < 1e-6) return 0;
     const scaledCorrectionImpulse = (lengthError * relaxationFactor) / totalEffectiveInverseInertia;
 
