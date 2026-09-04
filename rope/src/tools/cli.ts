@@ -9,6 +9,7 @@
 //                                      [--aim X,Y] [--frames M] [--every K]
 //                                      [--trace out.jsonl]
 //   bun run src/tools/cli.ts record    [<level>] script.json [--out session.json]
+//   bun run src/tools/cli.ts ab        <bundle|dir>... [--ref REV] [--metrics a,b] [--json]
 //   bun run src/tools/cli.ts compare   bundle.json --frame N --ref <rev> [--frames M]
 //                                      [--json]
 //   bun run src/tools/cli.ts settle    bundle.json [--from N] [--frames M] [--every K]
@@ -43,6 +44,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -50,7 +52,7 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Level } from "../level/level";
 import { PhysTrace } from "../engine/physTrace";
@@ -70,6 +72,13 @@ import {
 import { frameView, type BodyView, type FrameView } from "../sim/query";
 import { notable, scanRecording } from "../sim/scan";
 import { compareFrame, diffCompareFrames, type CompareFrame } from "../sim/compare";
+import {
+  bundleMetrics,
+  METRIC_COLUMNS,
+  metricValue,
+  type BundleMetrics,
+  type MetricKey,
+} from "../sim/metrics";
 import { treeStamp, type TreeStamp } from "../sim/treeStamp";
 import { renderFrameSVG } from "../sim/svgFrame";
 import { BallLevel } from "../level/ballLevel";
@@ -1252,6 +1261,180 @@ function cmdCompare(file: string, o: Record<string, string>): void {
   process.exit(0);
 }
 
+// ---- cli ab -----------------------------------------------------------------
+// The metric table over a corpus, on this tree and optionally on a reference
+// revision.
+//
+// `cli compare` answers one frame of one bundle and the suite answers pass/fail,
+// so "is the corpus better or worse after this change" had no standing tool:
+// every candidate fix on 2026-09-04 was judged by a scratch scanner replaying
+// ten bundles for peak speed, push-credit run and worst over-length, re-run with
+// env-var toggles to produce the before column. This is that scanner with the
+// toggles replaced by a git revision.
+function cmdAb(first: string, o: Record<string, string>, extra: string[]): void {
+  const targets = positionals([first, ...extra]).flatMap(expandBundleArg);
+  if (targets.length === 0) fail("cli ab: no bundles found in the given paths");
+  const wanted = metricKeysFrom(o.metrics);
+  const json = o.json !== undefined;
+
+  const now = targets.map((f) => bundleMetrics(loadRecording(f), basename(f)));
+  if (!o.ref) {
+    if (json) {
+      console.log(JSON.stringify({ now: hereStamp().srcHash, metrics: now }));
+      process.exit(0);
+    }
+    console.log(`[ab] ${targets.length} bundle(s) on this tree (${hereStamp().srcHash})`);
+    printMetricTable(now, null, wanted);
+    process.exit(0);
+  }
+
+  const ref = runAbEmitAtRef(o.ref, targets);
+  if (json) {
+    console.log(JSON.stringify({ now: hereStamp().srcHash, ref: o.ref, metrics: now, refMetrics: ref }));
+    process.exit(0);
+  }
+  console.log(`[ab] ${targets.length} bundle(s): now (${hereStamp().srcHash}) | ref (${o.ref})`);
+  printMetricTable(now, ref, wanted);
+  process.exit(0);
+}
+
+// A path is either a bundle or a directory of them, and a directory is the
+// ordinary case: the corpus is the unit a physics decision is made over.
+function expandBundleArg(path: string): string[] {
+  try {
+    if (statSync(path).isDirectory()) {
+      return readdirSync(path).filter(isBundleFile).sort().map((f) => join(path, f));
+    }
+  } catch {
+    fail(`cannot read ${path}`);
+  }
+  return [path];
+}
+
+function metricKeysFrom(list: string | undefined): MetricKey[] {
+  const all = METRIC_COLUMNS.map((c) => c.key);
+  if (!list || list === "true") return all;
+  const asked = list.split(",").filter(Boolean);
+  const bad = asked.filter((k) => !all.includes(k as MetricKey));
+  if (bad.length > 0) fail(`unknown metric(s): ${bad.join(", ")} (have: ${all.join(", ")})`);
+  return asked as MetricKey[];
+}
+
+// Old physics, new tooling, in a detached worktree — the same trick `cli
+// compare` uses and under the same caveat: it holds only while the tooling
+// touches stable physics interfaces. `sim/metrics.ts` is written to that rule,
+// reading every driver field through a present-and-finite check so a revision
+// that has never heard of one prints `n/a` for that metric instead of failing
+// the table.
+function runAbEmitAtRef(rev: string, bundles: string[]): Map<string, BundleMetrics> {
+  const repo = git(["rev-parse", "--show-toplevel"]);
+  const ropeRel = relative(repo, ROPE_DIR);
+  const refCommit = git(["rev-parse", "--short", rev]);
+  const worktree = mkdtempSync(join(tmpdir(), "rope-ab-"));
+  const out = new Map<string, BundleMetrics>();
+  try {
+    git(["worktree", "add", "--quiet", "--detach", worktree, refCommit], repo);
+    const wtRope = join(worktree, ropeRel);
+    rmSync(join(wtRope, "src", "tools"), { recursive: true, force: true });
+    rmSync(join(wtRope, "src", "sim"), { recursive: true, force: true });
+    cpSync(join(ROPE_DIR, "src", "tools"), join(wtRope, "src", "tools"), { recursive: true });
+    cpSync(join(ROPE_DIR, "src", "sim"), join(wtRope, "src", "sim"), { recursive: true });
+    if (!existsSync(join(wtRope, "node_modules"))) {
+      symlinkSync(join(ROPE_DIR, "node_modules"), join(wtRope, "node_modules"));
+    }
+    // One process for the whole corpus, not one per bundle: 82 bun startups is
+    // most of the wall clock in a corpus-wide A/B, and the emitter has nothing
+    // per-bundle to set up.
+    const r = spawnSync(
+      "bun",
+      ["run", join("src", "tools", "cli.ts"), "ab-emit", ...bundles.map((b) => resolve(b))],
+      { cwd: wtRope, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (r.status !== 0) {
+      // A tree that cannot run the emitter at all is an error, not an empty
+      // column: a missing row reads as a bundle that was fine there.
+      console.error(r.stderr.trim().split("\n").slice(-5).join("\n"));
+      fail(`ab-emit failed at ${refCommit} (exit ${r.status})`, 1);
+    }
+    for (const line of r.stdout.split("\n").filter(Boolean)) {
+      const m = JSON.parse(line) as BundleMetrics;
+      out.set(m.bundle, m);
+    }
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: repo });
+  }
+  return out;
+}
+
+// The half of `cli ab` that runs inside each side's tree: one JSON object per
+// bundle, one per line. Never called by hand.
+function cmdAbEmit(files: string[]): void {
+  for (const f of files) {
+    console.log(JSON.stringify(bundleMetrics(loadRecording(f), basename(f))));
+  }
+  process.exit(0);
+}
+
+// One value's width. A paired cell is two of these plus the separator, and the
+// header is padded to whatever a cell in that column actually occupies — a
+// header that does not sit over its column is the one formatting bug that makes
+// a table actively misleading.
+const METRIC_VALUE_WIDTH = 10;
+
+function formatMetric(m: BundleMetrics | undefined, key: MetricKey, digits: number): string {
+  if (!m) return "—";
+  const v = metricValue(m, key);
+  // `n/a` and `0` are different answers: one is "this tree cannot express the
+  // metric", the other is "it scored zero". Collapsing them is how an A/B
+  // against a revision that predates a field reads as a clean sweep.
+  return v === null ? "n/a" : v.toFixed(digits);
+}
+
+function printMetricTable(
+  now: BundleMetrics[],
+  ref: Map<string, BundleMetrics> | null,
+  keys: MetricKey[],
+): void {
+  const cols = METRIC_COLUMNS.filter((c) => keys.includes(c.key));
+  const nameWidth = Math.max(12, ...now.map((m) => m.bundle.length));
+  const cellWidth = ref ? METRIC_VALUE_WIDTH * 2 + 1 : METRIC_VALUE_WIDTH;
+  const cell = (a: string, b: string | null): string =>
+    b === null
+      ? a.padStart(METRIC_VALUE_WIDTH)
+      : `${a.padStart(METRIC_VALUE_WIDTH)}|${b.padStart(METRIC_VALUE_WIDTH)}`;
+
+  const head = cols
+    .map((c) => `${c.label}${c.unit ? `(${c.unit})` : ""}`.padStart(cellWidth))
+    .join(" ");
+  console.log(`  ${"bundle".padEnd(nameWidth)} ${head}${ref ? "   [now|ref]" : ""}`);
+
+  const row = (label: string, pick: (c: (typeof cols)[number]) => string): void => {
+    console.log(`  ${label.padEnd(nameWidth)} ${cols.map(pick).join(" ")}`);
+  };
+  for (const m of now) {
+    row(m.bundle, (c) =>
+      cell(
+        formatMetric(m, c.key, c.digits),
+        ref ? formatMetric(ref.get(m.bundle), c.key, c.digits) : null,
+      ),
+    );
+  }
+  // The maxima row is what a corpus-wide claim is actually made on: a change is
+  // judged by the WORST bundle it leaves behind, not by the average one.
+  const worst = (side: BundleMetrics[], key: MetricKey, digits: number): string => {
+    let out: number | null = null;
+    for (const m of side) {
+      const v = metricValue(m, key);
+      if (v !== null) out = out === null ? v : Math.max(out, v);
+    }
+    return out === null ? "n/a" : out.toFixed(digits);
+  };
+  const refSide = ref ? [...ref.values()] : [];
+  row("WORST", (c) =>
+    cell(worst(now, c.key, c.digits), ref ? worst(refSide, c.key, c.digits) : null),
+  );
+}
+
 function readCompareFrames(file: string): CompareFrame[] {
   return readFileSync(file, "utf8")
     .split("\n")
@@ -1776,6 +1959,14 @@ switch (cmd) {
   case "record":
     if (!arg) fail("usage: cli record [<level>] <script.json> [--out session.json]");
     cmdRecord(arg, opts(rest), rest);
+    break;
+  case "ab":
+    if (!arg) fail("usage: cli ab <bundle|dir>... [--ref REV] [--metrics a,b] [--json]");
+    cmdAb(arg, opts(rest), rest);
+    break;
+  case "ab-emit":
+    if (!arg) fail("usage: cli ab-emit <bundle>...");
+    cmdAbEmit(positionals([arg, ...rest]));
     break;
   case "compare":
     if (!arg) fail("usage: cli compare <bundle.json> --frame N --ref <rev> [--frames M] [--json]");

@@ -1060,7 +1060,9 @@ bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
 bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
-bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B this tree against a revision
+bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B this tree against a revision, one frame
+bun run src/tools/cli.ts ab      playtests/regressions --ref HEAD~1    # ...the metric table over a whole corpus
+bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the same metrics on this tree alone
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
@@ -1442,6 +1444,31 @@ launches, mover misbehavior):
    trees are named as such. The shell script this replaces did exactly that twice
    in one day - an empty `git stash` and a wrong cwd - and both times reported
    "no difference", which reads as a verified fix.
+5b. **Present the A/B as a `cli ab` table.** `cli compare` answers one frame of
+   one bundle, which is the right question once you know where to look and the
+   wrong one for "is the corpus better or worse after this change".
+   `cli ab <bundle|dir>... [--ref REV]` replays each bundle on this tree and, with
+   `--ref`, on that revision in a detached worktree, and prints one row per bundle
+   with a final `WORST` row - because a change is judged by the worst bundle it
+   leaves behind, not the average one.
+   The columns are the numbers every physics decision on 2026-09-04 was actually
+   made on: `peakV`, `peakAnchorV` (the body the chain's far end sits on - the
+   half of a two-body interaction no avatar-shaped tool could see), `maxLease`,
+   `worstOverLength`, `pushRun` (the longest run of push-out credit, which is what
+   distinguishes a pump from a flick), `maxSolveKick`, `energyGain`, `violations`
+   and `divergedAt`.
+   Each was read off a scratch scanner that was rewritten and thrown away, and
+   re-run with env-var toggles to produce the before column; the toggles are a git
+   revision now.
+   `session-324f --ref 93405ae` prints `peakV 4.76 | 19.80`, `anchorV 5.85 | 20.24`
+   and `lease 0.040 | 0.608` - the anchor pump in three columns.
+   A metric the reference revision cannot express prints **`n/a`, never `0`**:
+   `pushRun` reads `n/a` at `93405ae` because `chainPushCreditFrames` did not exist
+   yet, and printing zero there would say the old tree swept a metric it cannot
+   even measure.
+   The whole 82-bundle corpus A/Bs in about 33 s (one emitter process per side,
+   not one per bundle); `--metrics a,b,c` narrows the table and `--json` is the
+   machine form.
 
 Key invariant — the **`input-frozen` stuck detector** (`src/sim/trace.ts`):
 held direction for 45 frames with a mobile body nearby must produce ≥0.25 m of
@@ -1606,7 +1633,7 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
 - **Perceptual quality has no oracle.**
   Whether a rotation or settle looks convincing is judged only by a human or a render; corpus numbers stayed green through three re-reports of unconvincing rotation.
 - **Recorded bundles cannot confirm fixes.**
-  After a physics change the recorded tail legitimately diverges, so only `cli compare` or a scripted scenario shows a fix landed.
+  After a physics change the recorded tail legitimately diverges, so only `cli compare`, `cli ab --ref` or a scripted scenario shows a fix landed.
 - **The A/B cannot reach far back.**
   `cli compare` runs current tooling against old physics, which works only while the tooling's imports exist in that revision: it breaks at anything older than `bodyOverlapCircle` and `World.collectContacts`, which is exactly where several of the historical defects live.
   Re-introducing such a defect locally is then the only way to prove a detector catches it.

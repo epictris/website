@@ -993,6 +993,11 @@ export class EnergyMonitor {
   private span = 0;
   private peakKinetic = 0;
   private bodyCount = 0;
+  // The largest gain it has ever reported, in joules. The violation carries the
+  // number in its prose, and a metric table cannot parse prose (see the note at
+  // the top of `sim/query.ts`): a number that has been through `toExponential`
+  // is a number no caller can use.
+  worstGain = 0;
 
   // Call once per frame after physicsProcess, with the frame's input. Returns a
   // violation the first frame an unforced span gains energy, then re-arms.
@@ -1049,6 +1054,7 @@ export class EnergyMonitor {
     const tolerance = floor + ENERGY_REL_TOLERANCE * this.peakKinetic;
     if (energy <= this.baseline + tolerance) return null;
     const gain = energy - this.baseline;
+    this.worstGain = Math.max(this.worstGain, gain);
     const span = this.span;
     this.baseline = null;
     this.span = 0;
