@@ -14,7 +14,7 @@
 //   bun run src/tools/cli.ts settle    bundle.json [--from N] [--frames M] [--every K]
 //   bun run src/tools/cli.ts scan      bundle.json | --all   [--top K] [--json]
 //   bun run src/tools/cli.ts trace     bundle.json [--from A] [--to B] [--body ID]
-//                                      [--out t.jsonl]
+//                                      [--solve] [--out t.jsonl]
 //   bun run src/tools/cli.ts render    bundle.json [--frame N] [--out file.svg]
 //   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--3d]
 //                                      [--at X,Y] [--out f.png] [--allow-errors]
@@ -393,7 +393,7 @@ async function cmdDiverge(file: string, o: Record<string, string>): Promise<void
     first.frame,
     bodies.size > 0 ? bodies : null,
   );
-  printPhaseRecords(records, "    ");
+  printPhaseRecords(records, "    ", o.solve !== undefined);
   process.exit(1);
 }
 
@@ -736,7 +736,7 @@ async function cmdTrace(file: string, o: Record<string, string>): Promise<void> 
     console.log(`  ${records.length} records → ${o.out}`);
   }
 
-  printPhaseRecords(records);
+  printPhaseRecords(records, "  ", o.solve !== undefined);
   process.exit(0);
 }
 
@@ -769,9 +769,13 @@ async function collectPhaseTrace(
   return PhaseTrace.records.slice();
 }
 
-function printPhaseRecords(records: PhaseRecord[], indent = "  "): void {
+// `solve` shows the length solve's iterations, which are noisy (ten a frame, per
+// pass) and off by default; `unwind` records are always printed, being one a
+// frame at most and the answer to "why is this chain still over its length".
+function printPhaseRecords(records: PhaseRecord[], indent = "  ", showSolve = false): void {
   let frame = -1;
   for (const r of records) {
+    if (r.t === "solve" && !showSolve) continue;
     if (r.f !== frame) {
       frame = r.f;
       console.log(`${indent}f${String(frame).padStart(4)}`);
@@ -797,6 +801,32 @@ function printPhaseRecords(records: PhaseRecord[], indent = "  "): void {
         `${indent}  ${"contact".padEnd(20)} ${r.aName}#${r.a} vs ${r.bName}#${r.b} ` +
           `Pn=${r.pn.toFixed(5)} Pt=${r.pt.toFixed(5)}${r.slipping ? " (slipping)" : ""} ` +
           `n=(${r.nx.toFixed(2)},${r.ny.toFixed(2)}) at (${r.px.toFixed(3)},${r.py.toFixed(3)})`,
+      );
+    } else if (r.t === "solve") {
+      // Errors in MILLIMETRES: a solve argues over centimetres and a diverging
+      // one over a couple of them, and at metre precision 271 mm reads as 0.271.
+      // `undone` is the monotone guard; a run of them is the solve giving up.
+      const dirs = r.bodies
+        .map(
+          (b) =>
+            `#${b.id} ma=${b.ma.toFixed(3)} arm=${b.arm.toFixed(4)} ` +
+            `1/m=${b.invMass.toExponential(2)} arm²/I=${b.invInertiaArm.toExponential(2)} ` +
+            `dir=(${b.dirX.toFixed(3)},${b.dirY.toFixed(3)})`,
+        )
+        .join("  ");
+      console.log(
+        `${indent}  ${`solve:${r.pass}`.padEnd(20)} it=${String(r.iteration).padStart(2)} ` +
+          `err ${(r.errorBefore * 1000).toFixed(3).padStart(9)} → ` +
+          `${(r.errorAfter * 1000).toFixed(3).padStart(9)}mm` +
+          `${r.undone ? "  UNDONE" : "        "}  ${dirs}`,
+      );
+    } else {
+      // The unwind's search: how much of its window it spent, and what it left
+      // standing for the stall lease to answer for.
+      console.log(
+        `${indent}  ${"unwind".padEnd(20)} window=${r.window.toFixed(5)} used=${r.used.toFixed(5)} ` +
+          `(${r.window > 0 ? ((100 * r.used) / r.window).toFixed(0) : "0"}%) ` +
+          `residual=${(r.residual * 1000).toFixed(3)}mm spool=${r.spool.toFixed(5)}m/rad`,
       );
     }
   }

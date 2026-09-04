@@ -31,6 +31,7 @@ import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/t
 import { PathEnd, PathObject, PathStart, PathWrap } from "../lib/pathObject";
 import { Player } from "./player";
 import { Hook } from "./hook";
+import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
 
 // Pass-through geometry (a `passable` body, a vine link): the rope may be *pinned* to
 // it — that is what the hook is for — but it may never bend around it. Every
@@ -194,6 +195,10 @@ export class Rope {
   // it, which is every caller but `BallLevel` and means "unbounded", exactly as
   // this behaved before. See `noteGeometryPush` and `absorbBlockedLength`.
   private geometryPushAccum: number | null = null;
+  // Trace-only scratch: the per-body terms the last correction step computed,
+  // so `resolveLengthConstraint` can emit them beside the error it measured.
+  // Filled only while `PhaseTrace.enabled`, read by nothing in the sim.
+  private solveTerms: SolveBodyTerm[] = [];
   // Did geometry refuse the chain's correction on the frame just gone? Set by
   // the caller that can see it (`BallLevel`, from the push-out that follows its
   // solve); false for callers with nothing to report, which is every rope whose
@@ -573,6 +578,21 @@ export class Rope {
     }
 
     body.globalRotation = bestRotation;
+    // What the search did with the window it was given: a third of the window
+    // unused with centimetres of residual over-length standing is a stalled
+    // search rather than a chain that will not unwind (`session-477f`), and it
+    // was found with a temporary print. The spool rate is taken at the rotation
+    // the search settled on, which is where the body already is - `regenerateSpans`
+    // is cached against the global transform epoch, so asking costs nothing and
+    // changes nothing.
+    if (PhaseTrace.enabled) {
+      PhaseTrace.unwind(
+        highRotation - lowRotation,
+        Math.abs(bestRotation - startRotation),
+        bestExcess,
+        this.lengthPerRadian(body),
+      );
+    }
     // Mirror the solve: a rotation the rope imposed is also a change in how fast
     // the body is turning. Without it a ball held against a wound-up chain is
     // spun forward by its own angular velocity every frame and rotated back out
@@ -1752,7 +1772,7 @@ export class Rope {
   solveLengthHolding(held: ReadonlySet<CollisionObject2D>): void {
     this.held = held;
     try {
-      this.resolveLengthConstraint();
+      PhaseTrace.inPass("winch", () => this.resolveLengthConstraint());
     } finally {
       this.held = null;
     }
@@ -1790,7 +1810,14 @@ export class Rope {
         break;
       }
       const after = this.calculateRopePathLength() - this.constraintLength;
-      if (after > error) {
+      const undone = after > error;
+      // One record per iteration, before the guard acts on it: what the
+      // iteration was handed, what it left, whether it stood, and the per-body
+      // terms that decided where the correction went. A diverging solve is ten
+      // of these with the error climbing and `dirX` alternating (`session-239f`
+      // f192), and it was visible only through a temporary print until now.
+      PhaseTrace.solve(iteration, error, after, undone, this.solveTerms);
+      if (undone) {
         this.restorePathBodies(before);
         relaxation *= 0.5;
         if (relaxation < Rope.MIN_RELAXATION) break;
@@ -1991,6 +2018,7 @@ export class Rope {
 
     if (totalEffectiveInverseInertia < 1e-6) return 0;
     const scaledCorrectionImpulse = (lengthError * relaxationFactor) / totalEffectiveInverseInertia;
+    if (PhaseTrace.enabled) this.solveTerms = [];
 
     for (const pathObject of dynamicPathObjects) {
       const dynamicBody = this.getDynamicBodyState(pathObject.body);
@@ -2004,6 +2032,17 @@ export class Rope {
         1 / dynamicBody.mass + (torqueArm * torqueArm) / dynamicBody.inertia;
       const totalCorrectionMagnitude =
         scaledCorrectionImpulse * mechanicalAdvantage * inverseEffectiveMass;
+      if (PhaseTrace.enabled) {
+        this.solveTerms.push({
+          id: pathObject.body.buildIndex,
+          ma: mechanicalAdvantage,
+          arm: torqueArm,
+          invMass: 1 / dynamicBody.mass,
+          invInertiaArm: (torqueArm * torqueArm) / dynamicBody.inertia,
+          dirX: correctionDir.x,
+          dirY: correctionDir.y,
+        });
+      }
 
       const torqueSquared = torqueArm * torqueArm;
       if (torqueSquared > 0) {

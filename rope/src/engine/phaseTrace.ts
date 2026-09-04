@@ -68,7 +68,64 @@ export interface ContactImpulse {
   slipping: boolean;
 }
 
-export type PhaseRecord = PhaseDelta | ContactImpulse;
+// ---- inside the length solve ------------------------------------------------
+// `PhaseDelta` says the rope solve moved the ball 27 cm; it cannot say that it
+// took ten iterations to do it, that the error grew on every one of them, and
+// that the correction direction flipped sign each time. That is a DIVERGING
+// solve, and it is the launch class: `session-239f` f192 spun a 12.6 kg weight
+// fourteen turns in one frame and hauled the ball 1.2 m after it, out of a 27 cm
+// error, and the only way anyone saw it was a temporary console.log inside
+// `correctShapePositionAndRotation`.
+//
+// The unwind is the same story from the other end: a third of its window unused
+// with 2 to 10 cm of residual over-length left standing (`session-477f`) is a
+// stalled search, and it read as a chain that simply refused to unwind.
+
+export interface SolveBodyTerm {
+  id: number; // build index
+  // Mechanical advantage: how much of the path's length this body's motion buys.
+  ma: number;
+  // Torque arm the correction acts on, metres.
+  arm: number;
+  // The two halves of the effective inverse mass, `1/m` and `arm²/I`, kept apart
+  // because which of them dominates is the difference between a correction that
+  // translates a body and one that spins it.
+  invMass: number;
+  invInertiaArm: number;
+  // Unit direction the correction pushed this body along. The sign flipping
+  // between iterations is the diverging solve's signature.
+  dirX: number;
+  dirY: number;
+}
+
+export interface SolveIteration {
+  t: "solve";
+  f: number;
+  // Which solve ran: the rope's own pass, the winch's held-body pass
+  // (`Rope.solveLengthHolding`), or a pass of the coupled scene sweep.
+  pass: "length" | "winch" | "sweep";
+  iteration: number;
+  // Length error (path minus constraint, metres) before and after this
+  // iteration. `errorAfter > errorBefore` is the iteration making things worse.
+  errorBefore: number;
+  errorAfter: number;
+  // The monotone guard restored the bodies and halved the step: this iteration
+  // did not happen, and the error stands for the unwind and the stall lease.
+  undone: boolean;
+  bodies: SolveBodyTerm[];
+}
+
+export interface UnwindRecord {
+  t: "unwind";
+  f: number;
+  window: number; // rad the unwind was allowed to walk back over
+  used: number; // rad it actually walked back
+  residual: number; // over-length left standing, metres (negative = under)
+  spool: number; // lengthPerRadian at the rotation it settled on, m/rad
+  edgeTried: boolean; // reserved for a future edge/bisection fallback
+}
+
+export type PhaseRecord = PhaseDelta | ContactImpulse | SolveIteration | UnwindRecord;
 
 interface Snapshot {
   vx: number;
@@ -102,6 +159,11 @@ function stateOf(body: PhysicsBody2D): Snapshot | null {
 export const PhaseTrace = {
   enabled: false,
   frame: 0,
+  // Which solve the `SolveIteration` records coming in belong to. The rope
+  // itself does not know - `solvePass` is called by the frame, by the winch and
+  // by the coupled scene sweep alike - so the caller that does says so, and it
+  // is trace-only state that nothing in the sim reads.
+  pass: "length" as SolveIteration["pass"],
   // Build indices to watch, or null for every body that can carry a velocity.
   watch: null as Set<number> | null,
   records: [] as PhaseRecord[],
@@ -172,6 +234,54 @@ export const PhaseTrace = {
         rot: v.rot,
       });
     }
+  },
+
+  // Run `body` with `pass` set, and put it back afterwards. A no-op that still
+  // runs the body when tracing is off, so the sim takes the same path either way.
+  inPass<T>(pass: SolveIteration["pass"], body: () => T): T {
+    const prev = this.pass;
+    this.pass = pass;
+    try {
+      return body();
+    } finally {
+      this.pass = prev;
+    }
+  },
+
+  // One iteration of a length solve: what it was handed, what it left, and the
+  // per-body terms that decided where the correction went.
+  solve(
+    iteration: number,
+    errorBefore: number,
+    errorAfter: number,
+    undone: boolean,
+    bodies: SolveBodyTerm[],
+  ): void {
+    if (!this.enabled) return;
+    this.records.push({
+      f: this.frame,
+      t: "solve",
+      pass: this.pass,
+      iteration,
+      errorBefore,
+      errorAfter,
+      undone,
+      bodies: bodies.slice(),
+    });
+  },
+
+  // What the unwind's search did with the window it was given.
+  unwind(window: number, used: number, residual: number, spool: number): void {
+    if (!this.enabled) return;
+    this.records.push({
+      f: this.frame,
+      t: "unwind",
+      window,
+      used,
+      residual,
+      spool,
+      edgeTried: false,
+    });
   },
 
   // One record per solved contact touching a watched body: what the contact

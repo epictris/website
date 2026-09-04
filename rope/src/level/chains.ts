@@ -32,6 +32,7 @@ import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact } from "../lib/ropeContact";
+import { PhaseTrace } from "../engine/phaseTrace";
 import { localPlacement, worldPlacement, type BuiltBodies } from "./buildBodies";
 import {
   isAnchorObject,
@@ -646,6 +647,23 @@ function coupledRoots(
 // whichever components it reaches. Only a rig that will not converge pays the
 // cap, and only that rig.
 export function sweepChains(
+  chains: readonly SceneConstraint[],
+  extra: CoupledRope | null,
+  delta: number,
+): void {
+  // Every length solve inside this sweep is the SWEEP's, not the frame's own
+  // rope pass, and a `cli trace --solve` reader has to be able to tell them
+  // apart: the sweep leaves its ropes inside `CHAIN_TOLERANCE` rather than at
+  // zero, so an iteration ending short means something different here.
+  PhaseTrace.pass = "sweep";
+  try {
+    sweepChainsInner(chains, extra, delta);
+  } finally {
+    PhaseTrace.pass = "length";
+  }
+}
+
+function sweepChainsInner(
   chains: readonly SceneConstraint[],
   extra: CoupledRope | null,
   delta: number,

@@ -1031,6 +1031,7 @@ bun run src/tools/cli.ts scan session.json    # anomaly sweep: spikes, embedding
 bun run src/tools/cli.ts scan --all           # the same over the whole corpus, printing only what is notable
 bun run src/tools/cli.ts query session.json --frame 314 [--json]  # the full sim state at a frame
 bun run src/tools/cli.ts trace session.json --from 450 --to 460 --body 0  # per-phase Δv attribution
+bun run src/tools/cli.ts trace session.json --from 192 --to 192 --solve    # ...plus every length-solve iteration
 bun run src/tools/cli.ts settle session.json --from 500 --frames 600      # continue with zero input, must rest
 bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input table
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
@@ -1315,6 +1316,28 @@ launches, mover misbehavior):
    it out along an inclined normal and 0.6 mm of that is sideways, every frame" is
    read straight off the `depenetrate` line. Without it, a body crossing the level
    at 1e-8 m/s is a scan flag with nowhere to go next.
+3c. **Open the solve.** `--solve` adds one line per length-solve **iteration**:
+   the pass it belongs to (`length` for the frame's own rope pass, `winch` for
+   `Rope.solveLengthHolding`, `sweep` for a pass of the coupled scene sweep,
+   which leaves its ropes inside `CHAIN_TOLERANCE` rather than at zero), the
+   length error in millimetres before and after, whether the monotone guard
+   `UNDONE` it, and per body the mechanical advantage, torque arm, the two halves
+   of the effective inverse mass (`1/m` and `arm²/I`) and the correction
+   direction.
+   A **diverging** solve is what that is for: error climbing iteration on
+   iteration while `dir` flips sign, which spun a 12.6 kg weight fourteen turns in
+   one frame and launched the ball at 93 m/s out of a 27 cm error (`session-239f`
+   f192) and was visible only through a temporary `console.log` inside
+   `correctShapePositionAndRotation`.
+   The **unwind** gets one record a frame and is printed always, `--solve` or not:
+   the window it was allowed, the fraction of it used, the residual over-length it
+   left standing, and the spool rate at the rotation it settled on.
+   A tenth of the window spent with 27.7 mm still over (`session-477f` around
+   f215) is a **stalled search**, and it reads as a chain that simply refuses to
+   unwind until you can see that number.
+   Nothing here writes to the sim: replaying the whole of `239f`, `477f` and
+   `154f` with `PhaseTrace` armed reproduces the untraced run bit for bit, and it
+   has to - a trace that moves the thing it measures is not evidence.
 4. **Inspect.** `cli continue bundle.json --from F --hold left --frames 120
    --trace t.jsonl` replays to frame F, then takes over with scripted held
    input (fed through the input deserializer so pressed/released edges are
