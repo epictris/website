@@ -1,6 +1,17 @@
 # Plan: debug tooling improvements
 
-> **Status: proposed.**
+> **Status: implemented (2026-09-04).**
+> All seven phases landed, one commit each, `bun run test` green at every commit.
+> Three acceptance criteria could not be met as written, and each is recorded where it belongs rather than quietly dropped:
+> - Phase 1/2/3's acceptance frames on `session-154f`, `session-324f` and `session-239f` are unreachable, because those bundles were recorded before the fixes they document and now diverge from their own recordings far earlier than the named frames. The mechanisms were verified instead on frames that exist: the wound-tight hammer reads `aimSpin=-41.282 refund=0.6692 push=86.06mm` off `session-154f` f81; the diverging solve and the stalled unwind were reproduced with the monotone guard disabled and on `session-477f` around f215 (`window=0.16056 used=0.01557 residual=27.655mm`).
+> - Phase 4's `pushRun 0 | 18` reads `0 | n/a` at `93405ae`: `chainPushCreditFrames` postdates that revision, and `n/a` is the behaviour the phase itself specifies for a metric the reference tree cannot express. `peakV 4.76 | 19.80` is exact.
+> - Phase 7's premise is wrong and this is the finding, not a shortfall: a self-replay cannot see the browser/bun knife-edge, because both of its runs are in the browser. Verified with `PUSH_OUT_MIN_DEPTH` back at 0. See **Determinism & correspondence** in `CLAUDE.md` for what it does cover and what covers the rest.
+>
+> The tooling found a bug on its first day: `playtests/rigs/light-box-anchor.json` is red - the `session-324f` anchor pump against a 1 kg free box, `pushRun 9` against a bar of 6, ball and anchor to 37 m/s. Undiagnosed on purpose; see **What the verification suite cannot see**.
+>
+> Original proposal follows.
+>
+> **Was: proposed.**
 > Distilled from the 2026-09-04 session that root-caused the wound-tight anchor pump (`session-324f`), the loop hammer (`session-154f`), the diverging length solve (`session-239f`) and the browser/headless determinism knife-edge, and from a review of where that session leaked time.
 > Every phase names the moment in that session it would have shortened, the acceptance test that proves it, and the `CLAUDE.md` entry it must update before it counts as done.
 
