@@ -24,6 +24,8 @@ import { shapeContacts } from "../engine/manifold";
 import { shapeVertices, type Shape } from "../engine/shapes";
 import type { World } from "../engine/world";
 import { RopeWrap } from "../lib/ropeContact";
+import { Hook } from "../classes/hook";
+import { BallHook } from "../classes/ballHook";
 import { WrapDirection } from "../lib/types";
 import { BallLevel } from "../level/ballLevel";
 import type { Level } from "../level/level";
@@ -88,6 +90,17 @@ export interface ChainView {
   // it is the level driver that counts, see BallLevel.chainStallFrames).
   stallRun: number;
   anchored: boolean;
+  // What the chain phase DECIDED this frame, as `ChainDigest` carries it (see
+  // sim/trace.ts, which explains why each is here). Zero for the grapple rope,
+  // which is steered by nothing and whose caller measures no push-out.
+  aimSpin: number;
+  unwindRefund: number;
+  geometryPush: number;
+  winchBudget: number;
+  pushCredit: number;
+  // Build index of the body the far end sits on, null while it is still a hook
+  // in flight.
+  anchorBody: number | null;
 }
 
 export interface AvatarView {
@@ -164,7 +177,28 @@ export function deepestEmbedding(world: World, body: PhysicsBody2D, skin = 0): E
   return worst;
 }
 
-function chainView(rope: Rope | null, anchored: boolean, stallRun: number): ChainView | null {
+// The chain phase's own decisions, which are the level driver's and not the
+// rope's; zeroed for a driver that makes none (see `ChainPhaseView`).
+interface ChainPhaseView {
+  aimSpin: number;
+  unwindRefund: number;
+  winchBudget: number;
+  pushCredit: number;
+}
+
+const NO_CHAIN_PHASE: ChainPhaseView = {
+  aimSpin: 0,
+  unwindRefund: 0,
+  winchBudget: 0,
+  pushCredit: 0,
+};
+
+function chainView(
+  rope: Rope | null,
+  anchored: boolean,
+  stallRun: number,
+  phase: ChainPhaseView,
+): ChainView | null {
   if (!rope) return null;
   return {
     nodes: rope.path().map((n) => {
@@ -191,7 +225,20 @@ function chainView(rope: Rope | null, anchored: boolean, stallRun: number): Chai
     stalledLength: rope.stalledLength,
     stallRun,
     anchored,
+    aimSpin: phase.aimSpin,
+    unwindRefund: phase.unwindRefund,
+    geometryPush: rope.geometryPush ?? 0,
+    winchBudget: phase.winchBudget,
+    pushCredit: phase.pushCredit,
+    anchorBody: anchorBodyOf(rope),
   };
+}
+
+// The body the rope's far end sits on, or null while that end is a hook still in
+// flight — which is not a body in the scene this view describes.
+function anchorBodyOf(rope: Rope): number | null {
+  const obj = rope.end.contact.obj;
+  return obj instanceof Hook || obj instanceof BallHook ? null : obj.buildIndex;
 }
 
 function bodyViews(world: World): BodyView[] {
@@ -246,7 +293,12 @@ export function frameView(level: Level | BallLevel): FrameView {
         state: b.chainAnchored ? "BallAnchored" : b.chain ? "BallFiring" : "Ball",
         supportBody: supportOf(level.world, b),
       },
-      chain: chainView(b.chain, b.chainAnchored, level.chainStallFrames),
+      chain: chainView(b.chain, b.chainAnchored, level.chainStallFrames, {
+        aimSpin: level.aimSpin,
+        unwindRefund: level.chainUnwindRefund,
+        winchBudget: level.chainWinchSpeedBudget,
+        pushCredit: level.chainPushOutCredit,
+      }),
       bodies: bodyViews(level.world),
     };
   }
@@ -267,7 +319,7 @@ export function frameView(level: Level | BallLevel): FrameView {
         ? state.supportBody.name || state.supportBody.constructor.name
         : null,
     },
-    chain: chainView(p.rope, p.rope !== null, 0),
+    chain: chainView(p.rope, p.rope !== null, 0, NO_CHAIN_PHASE),
     bodies: bodyViews(level.world),
   };
 }

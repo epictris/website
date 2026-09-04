@@ -77,6 +77,7 @@ import {
   inputDeserializer,
   kineticEnergy,
   StuckDetector,
+  type ChainDigest,
   type Digest,
   type Recording,
   type Violation,
@@ -143,6 +144,29 @@ function digestRow(d: Digest, held: string): string {
     `px=${d.px.toFixed(1).padStart(8)} py=${d.py.toFixed(1).padStart(8)} ` +
     `vx=${d.vx.toFixed(1).padStart(7)} vy=${d.vy.toFixed(1).padStart(7)} ` +
     `${d.state.padEnd(15)} ${held}`
+  );
+}
+
+// The chain phase's decisions as one line, shared by `cli query` and `cli dump`
+// so the two never drift into describing the same frame differently.
+//
+// `aimSpin`/`refund` are the pair that make a wound-tight frame readable at all:
+// a chain that refuses the whole turn leaves the ball's angular velocity at
+// exactly zero, so "the steering asked for 38 rad/s and got 0.63 rad of it
+// back" is a sentence no other column can say.
+function chainPhaseLine(c: {
+  aimSpin: number;
+  unwindRefund: number;
+  geometryPush: number;
+  winchBudget: number;
+  pushCredit: number;
+  anchorBody: number | null;
+}): string {
+  return (
+    `aimSpin=${c.aimSpin.toFixed(3).padStart(8)} refund=${c.unwindRefund.toFixed(4).padStart(7)} ` +
+    `push=${(c.geometryPush * 1000).toFixed(2).padStart(7)}mm ` +
+    `winch=${c.winchBudget.toFixed(3).padStart(7)} credit=${c.pushCredit.toFixed(3).padStart(7)} ` +
+    `anchor=${c.anchorBody === null ? "hook" : `body#${c.anchorBody}`}`
   );
 }
 
@@ -239,10 +263,44 @@ function cmdDump(file: string, o: Record<string, string>): void {
   const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
   if (world) console.log("  " + world);
   for (let i = from - 1; i < Math.min(to, r.digests.length); i += every) {
-    console.log("  " + digestRow(r.digests[i]!, heldActions(rec.frames[i]?.h ?? 0)));
+    // The avatar is build index 0 in both drivers (`Level` and `BallLevel` add
+    // it before any scene geometry), so its strongest contact rides the digest
+    // row it belongs to: "was it touching, and how hard" is asked of every frame
+    // a dump is read for, and the pose alone cannot say.
+    const avatar = r.worldDigests[i]?.bodies.find((b) => b.id === 0);
+    console.log(
+      "  " +
+        digestRow(r.digests[i]!, heldActions(rec.frames[i]?.h ?? 0)) +
+        (avatar?.contactWith != null
+          ? ` touch=body#${avatar.contactWith} Pn=${(avatar.contactPn ?? 0).toFixed(2)}`
+          : ""),
+    );
+    // The chain phase's own columns under the digest row, on the frames that
+    // have a chain at all: this is the hammer, the pump and the stall read
+    // straight off a bundle rather than re-derived by re-simulating it.
+    const chain = r.worldDigests[i]?.chain;
+    if (chain) console.log("        " + chainDigestLine(chain));
   }
   printViolations(r.violations);
   process.exit(0);
+}
+
+// The `ChainDigest` half of a dump row. Same quantities as `chainPhaseLine`,
+// plus the lease and the stall, which the digest carries and `cli query`'s chain
+// line prints separately.
+function chainDigestLine(c: ChainDigest): string {
+  return (
+    `slack=${c.blockedSlack.toFixed(4).padStart(7)} ` +
+    `stalled=${(c.stalled ?? 0).toFixed(4).padStart(7)} ` +
+    chainPhaseLine({
+      aimSpin: c.aimSpin ?? 0,
+      unwindRefund: c.unwindRefund ?? 0,
+      geometryPush: c.geometryPush ?? 0,
+      winchBudget: c.winchBudget ?? 0,
+      pushCredit: c.pushCredit ?? 0,
+      anchorBody: c.anchorBody ?? null,
+    })
+  );
 }
 
 // Replay a bundle up to --from, then take over with --hold input fed through
@@ -470,6 +528,9 @@ function printFrameView(view: FrameView, bodies: BodyView[]): void {
         `slack=${c.blockedSlack.toFixed(4)} stalled=${c.stalledLength.toFixed(4)} ` +
         `stallRun=${c.stallRun} ${c.anchored ? "anchored" : "deploying"}`,
     );
+    // What the chain PHASE decided, on its own line: the commanded spin and the
+    // refund that hides it are the pair no other view carries (see ChainDigest).
+    console.log("        " + chainPhaseLine(c));
     for (const n of c.nodes) {
       console.log(
         `          node ${n.span.padEnd(10)} (${n.px.toFixed(3)},${n.py.toFixed(3)}) ` +

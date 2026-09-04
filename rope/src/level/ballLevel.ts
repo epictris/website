@@ -200,6 +200,18 @@ export class BallLevel {
   // shoving its anchor along the floor at a steady 1 m/s² under a held aim,
   // read as an unforced gain).
   aimSpin = 0;
+  // Radians the unwind gave back this frame: the ball's rotation before
+  // `Rope.unwindOverLength` less its rotation after (see the assignment in
+  // `physicsProcess`). Zero on a frame with no anchored chain, and zero on one
+  // whose turn the chain let stand.
+  //
+  // It is the other half of `aimSpin`, and neither is legible without it. A
+  // wound-tight chain refuses the whole commanded turn, so the ball's angular
+  // velocity at frame end reads zero on exactly the frames that matter: the
+  // steering asked for 38 rad/s, the unwind handed all of it back, and every
+  // digest there was showed a ball sitting perfectly still (`session-154f`,
+  // `session-477f`, `session-726f`).
+  chainUnwindRefund = 0;
   private endWasFixed = false;
 
   // Push-out credit above which a frame counts toward `chainPushCreditFrames`.
@@ -360,6 +372,9 @@ export class BallLevel {
     // the chain's unwind correction may walk its rotation back to, and no
     // further (see Rope.unwindOverLength).
     const ballRotationAtFrameStart = this.ball.globalRotation;
+    // A frame's refund is the frame's; a frame whose unwind does not run
+    // refunded nothing rather than whatever the last one did.
+    this.chainUnwindRefund = 0;
 
     this.ball.resolveInput(input, delta);
     // The aim steering overwrites the ball's angular velocity outright, so it is
@@ -906,6 +921,7 @@ export class BallLevel {
         // (`BallPlayer.windStallHeld`, cleared by the steering when it drops).
         const asked = Math.abs(this.aimSpin) * delta;
         const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
+        this.chainUnwindRefund = refunded;
         const path = this.ball.chain.path();
         this.ball.windStallHeld = this.world.frameContacts.some((c) => {
           if (c.a !== this.ball && c.b !== this.ball) return false;

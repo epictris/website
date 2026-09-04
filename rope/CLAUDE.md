@@ -1185,6 +1185,42 @@ the whole scene.
 `cli selftest` demands bit-exactness on all of it, for a grapple script *and* for
 a ball script recorded headlessly through `cli record`.
 
+The digest also carries what the chain phase **decided**, not only what the chain
+measured, because a chain-phase bug was not readable from a bundle at all
+without re-simulating it.
+Each field answers one question that was asked by hand on 2026-09-04:
+
+| Field | The question it answers |
+|-------|-------------------------|
+| `chain.aimSpin` | What did the steering command this frame? (`BallLevel.aimSpin`) |
+| `chain.unwindRefund` | How much of that turn did the unwind hand straight back? (`BallLevel.chainUnwindRefund`) |
+| `chain.stalled` | How much length did the winch stall have to let out? (`Rope.stalledLength`) |
+| `chain.geometryPush` | How far did the frame's push-outs move the ball - the SIZE of the refusal? (`Rope.geometryPush`) |
+| `chain.winchBudget` | How much speed did the frame's own winding entitle the solve to? |
+| `chain.pushCredit` | How much speed did the phase hand the ball out of a surface it pushed it out of? |
+| `chain.anchorBody` | Which body is the far end on - the OTHER half of a two-body interaction? |
+| `body.contactWith` / `body.contactPn` | Was this body touching, and how hard? (strongest of `World.frameContacts`) |
+
+`aimSpin` and `unwindRefund` are the pair that make a wound-tight frame legible
+at all.
+A chain wound tight refuses the whole commanded turn, so the ball's angular
+velocity at frame *end* reads exactly zero on precisely the frames that matter,
+and every digest there was showed a ball sitting perfectly still while the
+steering was writing 41 rad/s at it and the winch was being fed the whole turn's
+worth of chain (`session-154f`, `session-477f`, `session-726f`).
+`anchorBody` is there because a two-body interaction was diagnosed from one
+body's digest and the first divergence was attributed to the wrong body once: the
+ball's digest cannot say anything about the 12.6 kg weight it is hauling against
+unless something points at it.
+
+All of them are **optional** on the wire and every reader treats a missing one as
+*not recorded* rather than as zero: a bundle from before a field existed has no
+opinion about it, and measuring a replay against an invented zero would report a
+divergence its recording never made.
+`cli dump` prints them under each digest row (plus the avatar's strongest contact
+on the row itself) and `cli query` prints them on the chain's own line, so both
+are read off the bundle rather than re-derived.
+
 ### What a mechanic test is for
 
 `playtests/ball-*.json` asserts the mechanics themselves - winding, the winch,

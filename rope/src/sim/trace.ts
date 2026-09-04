@@ -97,13 +97,61 @@ export interface BodyDigest {
   vx: number;
   vy: number;
   w: number; // angular velocity, rad/s (0 for the grapple avatar, which has none)
+  // The strongest contact this body carried this frame, from `World.frameContacts`
+  // — the build index of whatever it was pressed against, and that contact's
+  // accumulated normal impulse (N·s). Optional because bundles recorded before
+  // they existed do not carry them; see the note on the chain fields below.
+  //
+  // "Was it touching, and how hard" was asked of every frame inspected on
+  // 2026-09-04 and answered by re-simulating each time. A pose says a body is
+  // 1e-17 m from a slab; only the impulse says whether the slab is holding it up.
+  contactWith?: number | null;
+  contactPn?: number;
 }
 
+// What the chain phase DECIDED this frame, not only what the chain measured.
+//
+// The first four are the measurement and always were. The rest are the decision,
+// and without them a chain-phase bug is not readable from a bundle at all: the
+// ball's angular velocity at frame end reads zero on exactly the frames that
+// matter, because a wound-tight unwind refunds the aim's whole turn, so the
+// commanded spin was invisible to every digest there was. The lease grant, the
+// unwind's refund and the geometry push per frame are the three numbers that
+// explained `session-154f`, `session-477f` and `session-324f`.
+//
+// Every added field is optional, and every reader treats a missing one as "not
+// recorded" rather than as zero: a bundle from before they existed has no
+// opinion about them, and comparing against an invented zero would report a
+// divergence the recording never made. `Recording.worldDigests` itself is
+// optional for the same reason.
 export interface ChainDigest {
   nodes: number;
   pathLen: number;
   maxRope: number;
   blockedSlack: number;
+  // rad/s the steering wrote this frame (`BallLevel.aimSpin`). Zero for the
+  // grapple rope, which has no steering.
+  aimSpin?: number;
+  // rad the unwind gave back (`BallLevel.chainUnwindRefund`). `aimSpin` less
+  // this is the turn the frame actually kept.
+  unwindRefund?: number;
+  // Metres the winch stall had to let out this frame (`Rope.stalledLength`).
+  stalled?: number;
+  // Metres the frame's push-outs moved the rope's own body (`Rope.geometryPush`),
+  // and 0 where the caller does not measure it — the SIZE of the refusal that
+  // bounds the lease.
+  geometryPush?: number;
+  // m/s the frame's own winding entitles the solve to
+  // (`BallLevel.chainWinchSpeedBudget`).
+  winchBudget?: number;
+  // m/s the chain phase handed the ball out of a surface it pushed it out of
+  // (`BallLevel.chainPushOutCredit`). Re-earned every frame is the pump.
+  pushCredit?: number;
+  // Build index of the body the chain's far end sits on, or null while the end
+  // is still the hook in flight. A two-body interaction diagnosed from one
+  // body's digest is how the first divergence was attributed to the wrong body
+  // on 2026-09-04; this is the pointer at the other one.
+  anchorBody?: number | null;
 }
 
 export interface WorldDigest {
@@ -112,11 +160,51 @@ export interface WorldDigest {
   chain: ChainDigest | null;
 }
 
-function worldDigestOf(frame: number, world: World, rope: Rope | null): WorldDigest {
+// What the level driver decided about its chain this frame. Passed in rather
+// than read off the rope, because it is the DRIVER's: the aim's spin, the
+// unwind's refund, the winch's budget and the push-out credit are all
+// `BallLevel` state, and the rope itself has never heard of any of them. Null
+// for a driver with no chain phase — the grapple avatar's rope, which is
+// steered by nothing and whose caller measures no push-out.
+interface ChainPhaseState {
+  aimSpin: number;
+  unwindRefund: number;
+  winchBudget: number;
+  pushCredit: number;
+}
+
+// The strongest contact a body carried this frame: the one with the largest
+// accumulated normal impulse. `frameContacts` orients every constraint out of
+// `b` toward `a`, so the "other" body is simply whichever end is not this one.
+function strongestContact(
+  contacts: readonly ContactConstraint[],
+  body: PhysicsBody2D,
+): { with: number | null; pn: number } {
+  let best: ContactConstraint | null = null;
+  for (const c of contacts) {
+    if (c.a !== body && c.b !== body) continue;
+    if (best === null || Math.abs(c.normalImpulse) > Math.abs(best.normalImpulse)) best = c;
+  }
+  if (!best) return { with: null, pn: 0 };
+  const other = best.a === body ? best.b : best.a;
+  // Statics carry a build index too (`World.add` stamps every body it appends),
+  // so naming one by it is strictly more use than a sentinel would be: "held up
+  // by body#34" and "held up by the floor" are the same kind of answer.
+  return { with: other.buildIndex, pn: best.normalImpulse };
+}
+
+function worldDigestOf(
+  frame: number,
+  world: World,
+  rope: Rope | null,
+  phase: ChainPhaseState | null,
+): WorldDigest {
   const bodies: BodyDigest[] = [];
+  const contacts = world.frameContacts;
   for (const body of world.bodies) {
     if (body.removed) continue;
     if (body instanceof RigidBody2D) {
+      const contact = strongestContact(contacts, body);
       bodies.push({
         id: body.buildIndex,
         px: body.globalPosition.x,
@@ -125,8 +213,13 @@ function worldDigestOf(frame: number, world: World, rope: Rope | null): WorldDig
         vx: body.linearVelocity.x,
         vy: body.linearVelocity.y,
         w: body.angularVelocity,
+        contactWith: contact.with,
+        contactPn: contact.pn,
       });
     } else if (body instanceof CharacterBody2D) {
+      // A CharacterBody2D is swept rather than solved, so it appears in no
+      // contact constraint at all: its "was it touching" question is answered by
+      // `Digest.state` and the physics trace, not here.
       bodies.push({
         id: body.buildIndex,
         px: body.globalPosition.x,
@@ -135,6 +228,8 @@ function worldDigestOf(frame: number, world: World, rope: Rope | null): WorldDig
         vx: body.velocity.x,
         vy: body.velocity.y,
         w: 0,
+        contactWith: null,
+        contactPn: 0,
       });
     }
   }
@@ -147,17 +242,38 @@ function worldDigestOf(frame: number, world: World, rope: Rope | null): WorldDig
           pathLen: rope.getCurrentLength(),
           maxRope: rope.maxRopeLength,
           blockedSlack: rope.blockedSlack,
+          aimSpin: phase?.aimSpin ?? 0,
+          unwindRefund: phase?.unwindRefund ?? 0,
+          stalled: rope.stalledLength,
+          geometryPush: rope.geometryPush ?? 0,
+          winchBudget: phase?.winchBudget ?? 0,
+          pushCredit: phase?.pushCredit ?? 0,
+          anchorBody: anchorBodyOf(rope),
         }
       : null,
   };
 }
 
+// The build index of the body the rope's far end sits on, or null while that end
+// is a hook still in flight — which is not a body in the scene the digest
+// describes, and reading its index would name a body nobody anchored to.
+function anchorBodyOf(rope: Rope): number | null {
+  const obj = rope.end.contact.obj;
+  if (obj instanceof Hook || obj instanceof BallHook) return null;
+  return obj.buildIndex;
+}
+
 export function worldDigest(level: Level): WorldDigest {
-  return worldDigestOf(level.frame, level.world, level.player.rope);
+  return worldDigestOf(level.frame, level.world, level.player.rope, null);
 }
 
 export function worldDigestBall(level: BallLevel): WorldDigest {
-  return worldDigestOf(level.frame, level.world, level.ball.chain);
+  return worldDigestOf(level.frame, level.world, level.ball.chain, {
+    aimSpin: level.aimSpin,
+    unwindRefund: level.chainUnwindRefund,
+    winchBudget: level.chainWinchSpeedBudget,
+    pushCredit: level.chainPushOutCredit,
+  });
 }
 
 // Worst behavioural difference between two full-world digests, and the name of
@@ -196,35 +312,115 @@ export function worldDigestDrift(a: WorldDigest, b: WorldDigest): WorldDrift {
   return worst;
 }
 
+// ---- field-level comparison -------------------------------------------------
+// `worldDigestDrift` answers "how far apart", which is the right question for a
+// regression and the wrong one for a divergence: on 2026-09-04 the replay's
+// first difference from every fresh browser recording was `chain.blockedSlack`
+// at f90, one lease instalment of 8.33 mm, eight frames before any body had
+// moved a visible distance — and the tooling said `drifted @f98` on the avatar.
+// Finding the frame, the quantity and the phase took three throwaway scripts.
+//
+// So this compares every field of every body and of the chain, names each one,
+// and says by how much. It is the whole of `cli diverge` and the summary line
+// `cli replay` now carries.
+
+export interface DigestFieldDelta {
+  // `body#0.px`, `chain.blockedSlack`, `body#34.contactPn`.
+  name: string;
+  recorded: number | null;
+  replayed: number | null;
+  // Absolute difference, or Infinity where the two are not the same KIND of
+  // thing: a body present in one run only, a chain deployed in one only, a
+  // different contact partner, a different wrap topology. Those are different
+  // scenes rather than drifted ones.
+  delta: number;
+}
+
+// Numeric fields compared on every body, in the order they are reported before
+// sorting by magnitude.
+const BODY_FIELDS = ["px", "py", "rot", "vx", "vy", "w", "contactPn"] as const;
+// ...and on the chain. `anchorBody` and `contactWith` are identities rather than
+// quantities and are compared separately.
+const CHAIN_FIELDS = [
+  "pathLen",
+  "maxRope",
+  "blockedSlack",
+  "aimSpin",
+  "unwindRefund",
+  "stalled",
+  "geometryPush",
+  "winchBudget",
+  "pushCredit",
+] as const;
+
+// A field the RECORDING does not carry is not compared. A bundle from before a
+// field existed has no opinion about it, and measuring the replay against an
+// invented zero would report a divergence its recording never made.
+function compareNumber(
+  out: DigestFieldDelta[],
+  name: string,
+  recorded: number | undefined,
+  replayed: number | undefined,
+  tolerance: number,
+): void {
+  if (recorded === undefined || replayed === undefined) return;
+  const delta = Math.abs(replayed - recorded);
+  // Written as `!(delta <= tolerance)` so a NaN on either side reports rather
+  // than compares equal, which `delta > tolerance` would not do.
+  if (!(delta <= tolerance)) out.push({ name, recorded, replayed, delta });
+}
+
+function compareIdentity(
+  out: DigestFieldDelta[],
+  name: string,
+  recorded: number | null | undefined,
+  replayed: number | null | undefined,
+): void {
+  if (recorded === undefined || replayed === undefined) return;
+  if (recorded === replayed) return;
+  out.push({ name, recorded, replayed, delta: Infinity });
+}
+
+// Every field of `replayed` that differs from `recorded` by more than
+// `tolerance`, unsorted. The default tolerance is the noise floor bit-exactness
+// uses: zero.
+export function worldDigestDeltas(
+  replayed: WorldDigest,
+  recorded: WorldDigest,
+  tolerance = 0,
+): DigestFieldDelta[] {
+  const out: DigestFieldDelta[] = [];
+  const byId = new Map(recorded.bodies.map((e) => [e.id, e]));
+  for (const r of replayed.bodies) {
+    const o = byId.get(r.id);
+    if (!o) {
+      out.push({ name: `body#${r.id}`, recorded: null, replayed: r.id, delta: Infinity });
+      continue;
+    }
+    byId.delete(r.id);
+    for (const f of BODY_FIELDS) compareNumber(out, `body#${r.id}.${f}`, o[f], r[f], tolerance);
+    compareIdentity(out, `body#${r.id}.contactWith`, o.contactWith, r.contactWith);
+  }
+  for (const o of byId.values()) {
+    out.push({ name: `body#${o.id}`, recorded: o.id, replayed: null, delta: Infinity });
+  }
+  if ((replayed.chain === null) !== (recorded.chain === null)) {
+    out.push({ name: "chain", recorded: null, replayed: null, delta: Infinity });
+  } else if (replayed.chain && recorded.chain) {
+    // The node count is a topology, not a length: one more wrap is a different
+    // path, however close the two measure.
+    compareIdentity(out, "chain.nodes", recorded.chain.nodes, replayed.chain.nodes);
+    for (const f of CHAIN_FIELDS) {
+      compareNumber(out, `chain.${f}`, recorded.chain[f], replayed.chain[f], tolerance);
+    }
+    compareIdentity(out, "chain.anchorBody", recorded.chain.anchorBody, replayed.chain.anchorBody);
+  }
+  return out;
+}
+
 export function worldDigestsEqual(a: WorldDigest, b: WorldDigest): boolean {
   if (a.bodies.length !== b.bodies.length) return false;
-  for (let i = 0; i < a.bodies.length; i++) {
-    const x = a.bodies[i]!;
-    const y = b.bodies[i]!;
-    if (
-      x.id !== y.id ||
-      x.px !== y.px ||
-      x.py !== y.py ||
-      x.rot !== y.rot ||
-      x.vx !== y.vx ||
-      x.vy !== y.vy ||
-      x.w !== y.w
-    ) {
-      return false;
-    }
-  }
-  if ((a.chain === null) !== (b.chain === null)) return false;
-  if (a.chain && b.chain) {
-    if (
-      a.chain.nodes !== b.chain.nodes ||
-      a.chain.pathLen !== b.chain.pathLen ||
-      a.chain.maxRope !== b.chain.maxRope ||
-      a.chain.blockedSlack !== b.chain.blockedSlack
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return worldDigestDeltas(a, b, 0).length === 0;
 }
 
 export function serializeInput(input: FrameInput): SerializedFrame {

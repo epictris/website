@@ -193,7 +193,7 @@ export class Rope {
   // over the caller's push-outs — or `null` where the caller does not measure
   // it, which is every caller but `BallLevel` and means "unbounded", exactly as
   // this behaved before. See `noteGeometryPush` and `absorbBlockedLength`.
-  private geometryPush: number | null = null;
+  private geometryPushAccum: number | null = null;
   // Did geometry refuse the chain's correction on the frame just gone? Set by
   // the caller that can see it (`BallLevel`, from the push-out that follows its
   // solve); false for callers with nothing to report, which is every rope whose
@@ -394,7 +394,7 @@ export class Rope {
   beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
-    this.geometryPush = null;
+    this.geometryPushAccum = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
       this.blockedSlack = Mathf.max(this.blockedSlack - Rope.SLACK_RELEASE_RATE * delta, 0);
@@ -420,13 +420,23 @@ export class Rope {
   // (the coil rides the body, so only the free span moves), which makes this an
   // exact bound rather than a tuned one.
   noteGeometryPush(distance: number): void {
-    this.geometryPush = (this.geometryPush ?? 0) + Mathf.max(distance, 0);
+    this.geometryPushAccum = (this.geometryPushAccum ?? 0) + Mathf.max(distance, 0);
   }
 
   // What that caller last reported. Read by the `rope-lease-held` invariant,
   // which is the statement that a lease nothing is blocking has to be repaid.
   get blockedByGeometry(): boolean {
     return this.blockedLastFrame;
+  }
+
+  // The SIZE of this frame's refusal, for the tooling: how far the caller's
+  // push-outs moved this rope's own body, or null where the caller does not
+  // measure it. `blockedByGeometry` answers whether geometry said no; this
+  // answers by how much, which is the number the wound-tight anchor pump is
+  // read on — 20 to 40 mm a frame beside a lease growing by the same
+  // (`session-324f` f252-270).
+  get geometryPush(): number | null {
+    return this.geometryPushAccum;
   }
 
   // Wrap detection for a still-deploying ball chain. While the hook is in
@@ -1069,9 +1079,9 @@ export class Rope {
     const settledLength = this.calculateRopePathLength();
     const blocked = Mathf.max(settledLength - this.maxRopeLength, 0);
     const granted =
-      this.geometryPush === null
+      this.geometryPushAccum === null
         ? blocked
-        : Mathf.min(blocked, this.leaseAtFrameStart + this.geometryPush);
+        : Mathf.min(blocked, this.leaseAtFrameStart + this.geometryPushAccum);
     this.stalledLength += Mathf.max(
       granted - Mathf.max(this.blockedSlack, this.leaseAtFrameStart),
       0,
