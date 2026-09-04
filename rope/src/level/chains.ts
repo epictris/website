@@ -264,6 +264,32 @@ const MAX_CHAIN_SWEEPS = 64;
 // that will not converge.
 const MAX_COUPLED_SWEEPS = 48;
 
+// Consecutive sweeps that buy nothing before a coupled set is called stalled
+// and the loop leaves early. See the stall gate in `sweepOneSet`.
+//
+// Four, against a measured two. A Gauss-Seidel pass over a coupled set is not
+// monotonic, so the bar has to clear the longest run of sweeps a set that IS
+// still converging can spend giving ground: over the whole of `cli vines` that
+// is 23226 single sweeps, 89 pairs and no run of three, and over every playtest
+// it is one. The pathological run this exists to cut short has no length at all
+// - `session-231f` f88 reproduces its own answer to the last bit for 46 sweeps -
+// so the gap between the two is what the threshold sits in, and doubling the
+// observed worst costs a coiled chain one extra sweep of the 48 it was spending.
+const STALLED_SWEEPS = 4;
+
+// Metres of progress a sweep must make to count as having made any. A bare
+// `<` is a branch on a float comparison, and two thirds of the sweeps this
+// gate sees leave the residual bit-identical while a further sixth improve it
+// by amounts reaching down to 2.220e-16 m - one ULP on a quantity of order 1,
+// which is the width the browser and bun disagree by. Read as progress, a
+// knife-edge like that costs the loop a whole extra sweep on one engine and
+// not the other, which is `PUSH_OUT_MIN_DEPTH`'s lesson arriving in a new
+// place: a threshold anything real sits far above is what stops float noise
+// deciding a branch. A picometre is ten thousand times the noise it rejects
+// and a billionth of `CHAIN_TOLERANCE`, so nothing a sweep does on purpose
+// can fall under it.
+const SWEEP_PROGRESS_EPSILON = 1e-12;
+
 // One frame of every scene chain, as ONE system rather than as a list of
 // independent ropes.
 //
@@ -703,6 +729,11 @@ function sweepOneSet(
   delta: number,
 ): void {
   const cap = extra ? MAX_COUPLED_SWEEPS : MAX_CHAIN_SWEEPS;
+  // What the previous sweep left, so this one can be asked whether it achieved
+  // anything (see the stall gate below).
+  let prevDisturbed = Infinity;
+  let prevWorstSet = Infinity;
+  let stalled = 0;
   for (let sweep = 0; sweep < cap; sweep++) {
     if (sweep % 2 === 0) {
       for (let i = 0; i < chains.length; i++) chains[i]!.solve(delta);
@@ -761,6 +792,33 @@ function sweepOneSet(
         extra.rope.solvePass(extra.bodies, delta);
       }
       if (disturbed <= CHAIN_TOLERANCE && worstSet <= 0) break;
+      // ...and it leaves on a stall as well, because the gate above asks for
+      // something a sweep cannot always deliver. A chain coiled onto its own
+      // ball carries most of its over-length as coil, and no translation
+      // removes coil (see `Rope.resolveLengthConstraint`): rolling with the
+      // hook deployed and unattached wound 2.4 turns onto the ball, left the
+      // free span 14 mm long against 28 mm of error, and the sweep then
+      // reproduced its own answer to the last bit for 46 sweeps while the
+      // frame ran 48 ms (`session-231f` f88). The cap is meant as the bound on
+      // a rig that will not converge, but paying it in full is only right when
+      // the sweeps are still buying something.
+      //
+      // A RUN of such sweeps rather than one, because a Gauss-Seidel pass over
+      // a set is not monotonic: one sweep that gives ground can be the one
+      // before the sweep that takes it back, and a held vine is exactly the
+      // coupled arrangement where that happens - `cli vines` spends 89 pairs of
+      // them and `grab-hang` is red on a bar of two, ending 4.8 mm over its
+      // length against the millimetre it holds the player to. See
+      // `STALLED_SWEEPS` for where the bar sits and what it was measured
+      // against. Improvement in EITHER quantity counts, since with `settleSet`
+      // the loop is waiting on both.
+      const improved =
+        disturbed < prevDisturbed - SWEEP_PROGRESS_EPSILON ||
+        worstSet < prevWorstSet - SWEEP_PROGRESS_EPSILON;
+      prevDisturbed = disturbed;
+      prevWorstSet = worstSet;
+      if (improved) stalled = 0;
+      else if (++stalled >= STALLED_SWEEPS) break;
       continue;
     }
     // Measured after the sweep, so a set that is already satisfied still pays

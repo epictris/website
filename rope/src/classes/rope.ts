@@ -318,10 +318,23 @@ export class Rope {
   private spanCacheEpoch = -1;
   private pathObjectCache: PathObject[] | null = null;
   private pathObjectCacheEpoch = -1;
+  // The leading coil run's measurement (see `leadingCoilRun`). Alone among the
+  // caches here it is NOT keyed on the transform epoch, and does not need to be:
+  // a coil run's nodes all ride ONE circle on ONE body and are stored in that
+  // body's frame, so every span in it is an arc whose angle no rigid motion of
+  // the body can change. Only the node list can, and every write to it - the two
+  // in-place ones included - passes through `markPathChanged`.
+  //
+  // That difference is the whole value of it. The solve moves bodies on every
+  // relaxation iteration, so the epoch-keyed caches are thrown away a thousand
+  // times over in a frame the ball is rolling with its chain wound on, while
+  // this one stands for the frame.
+  private coilRunCache: { nodes: number; length: number } | null = null;
 
   private markPathChanged(): void {
     this.spanCache = null;
     this.pathObjectCache = null;
+    this.coilRunCache = null;
   }
 
   // Wires hook attachment callbacks; called on construction and after snapshot restore.
@@ -1736,11 +1749,64 @@ export class Rope {
     return radius * swept;
   }
 
-  private calculateRopePathLength(): number {
-    let cumulativeLength = 0;
-    for (const span of this.regenerateSpans()) {
-      cumulativeLength += this.spanLength(span.from, span.to);
+  // The run of wrap nodes at the START of the path riding the start
+  // attachment's own circle - the coil `syncCoil` winds on and spools off -
+  // and what it measures. Zero of both when the rope does not start on a
+  // circle, or starts on one with nothing wound onto it.
+  //
+  // This is the same collapse `generatePathObjects` already performs: a run of
+  // coil nodes on one circle is ONE wrap to the solver, and the intermediate
+  // nodes exist to carry the drawn chain round the rim (see `syncCoil`). The
+  // length measure is the last reader that was still walking all of them, and
+  // it is the one called thousands of times a frame - the ball rolling with
+  // 2.4 turns wound on measured a 63-node path 2363 times on one frame of
+  // `session-231f`, 61 of those nodes coil.
+  private leadingCoilRun(): { nodes: number; length: number } {
+    const cached = this.coilRunCache;
+    if (cached) return cached;
+    const wraps = this.wraps_;
+    const obj = this.start_.contact.obj;
+    const shapeIndex = this.start_.contact.shapeIndex;
+    let nodes = 0;
+    // By shape and not just by body, for the reason `spanLength` and
+    // `generatePathObjects` both give: two nodes on two pieces of one compound
+    // body are two wraps, not a coil.
+    if (this.start_.contact.shape.shape.kind === "circle") {
+      while (
+        nodes < wraps.length &&
+        wraps[nodes]!.contact.obj === obj &&
+        wraps[nodes]!.contact.shapeIndex === shapeIndex
+      ) {
+        nodes++;
+      }
     }
+    // Summed in path order, so a cache built at this pose is bit-for-bit the
+    // sum the walk below would have produced.
+    let length = 0;
+    let previous: RopeNode = this.start_;
+    for (let i = 0; i < nodes; i++) {
+      length += this.spanLength(previous, wraps[i]!);
+      previous = wraps[i]!;
+    }
+    const run = { nodes, length };
+    this.coilRunCache = run;
+    return run;
+  }
+
+  private calculateRopePathLength(): number {
+    // The coil run from its own cache, then the rest of the path span by span.
+    // Walked directly rather than over `regenerateSpans` so that measuring a
+    // length costs no `RopePath`/`Segment` allocation: those are built for the
+    // Jacobian, which needs the chord geometry, and a length sum does not.
+    const coil = this.leadingCoilRun();
+    let cumulativeLength = coil.length;
+    const wraps = this.wraps_;
+    let previous: RopeNode = coil.nodes > 0 ? wraps[coil.nodes - 1]! : this.start_;
+    for (let i = coil.nodes; i < wraps.length; i++) {
+      cumulativeLength += this.spanLength(previous, wraps[i]!);
+      previous = wraps[i]!;
+    }
+    cumulativeLength += this.spanLength(previous, this.end_);
     if (this.start.contact.obj instanceof Player) {
       cumulativeLength -= this.start.contact.obj.radialCoMOffset;
     }
