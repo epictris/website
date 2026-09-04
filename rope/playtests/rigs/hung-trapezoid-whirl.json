@@ -1,0 +1,18 @@
+{
+  "name": "rig-hung-trapezoid-whirl",
+  "spawn": { "x": 0, "y": 0 },
+  "fireAt": { "x": 0, "y": -1.73 },
+  "windUp": { "until": "riding", "period": 24 },
+  "drive": { "kind": "whirl", "period": 24, "frames": 300 },
+  "data": {
+    "player": { "x": 0, "y": 0, "radius": 8 },
+    "bodies": [
+      { "kind": "static", "x": 0, "y": 48, "rot": 0, "shape": { "kind": "rect", "w": 800, "h": 40 }, "friction": 1.0 },
+      { "kind": "static", "x": 0, "y": -368, "rot": 0, "shape": { "kind": "rect", "w": 400, "h": 40 }, "friction": 1.0 },
+      { "kind": "rigid", "x": 0, "y": -173, "rot": 0, "shape": { "kind": "rect", "w": 60, "h": 30 }, "friction": 1.0, "thickness": 1.2 }
+    ],
+    "chains": [
+      { "a": { "body": 1, "x": 0, "y": -348 }, "b": { "body": 2, "x": 0, "y": -188 } }
+    ]
+  }
+}

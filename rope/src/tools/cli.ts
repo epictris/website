@@ -9,6 +9,7 @@
 //                                      [--aim X,Y] [--frames M] [--every K]
 //                                      [--trace out.jsonl]
 //   bun run src/tools/cli.ts record    [<level>] script.json [--out session.json]
+//   bun run src/tools/cli.ts rig       spec.json [--series] [--save playtests/foo.json]
 //   bun run src/tools/cli.ts ab        <bundle|dir>... [--ref REV] [--metrics a,b] [--json]
 //   bun run src/tools/cli.ts compare   bundle.json --frame N --ref <rev> [--frames M]
 //                                      [--json]
@@ -72,6 +73,7 @@ import {
 import { frameView, type BodyView, type FrameView } from "../sim/query";
 import { notable, scanRecording } from "../sim/scan";
 import { compareFrame, diffCompareFrames, type CompareFrame } from "../sim/compare";
+import { runRig, type RigSpec } from "../sim/rig";
 import {
   bundleMetrics,
   METRIC_COLUMNS,
@@ -1261,6 +1263,53 @@ function cmdCompare(file: string, o: Record<string, string>): void {
   process.exit(0);
 }
 
+// ---- cli rig ----------------------------------------------------------------
+// A headless scenario from a spec file: build the arena, fire, wind up, drive
+// the aim, print the metric row and (with `--save`) leave an ordinary playtest
+// behind. See `sim/rig.ts` for why.
+function cmdRig(file: string, o: Record<string, string>): void {
+  const spec = JSON.parse(readFileSync(file, "utf8")) as RigSpec;
+  const r = runRig(spec);
+  console.log(
+    `[rig] ${file} — ${r.script.level} ${r.script.frames} frames ` +
+      `(wind-up ${r.windUpFrames}f, drive ${r.spec.drive.kind} ${r.spec.drive.frames}f)`,
+  );
+  printMetricTable([r.metrics], null, METRIC_COLUMNS.map((c) => c.key));
+  for (const a of r.playtest.assertResults) console.log(`  ${a.ok ? "PASS" : "FAIL"}  ${a.description}`);
+  printViolations(r.playtest.violations);
+
+  if (o.series !== undefined) {
+    const every = Number(o.every ?? 10);
+    console.log(
+      `  ${"frame".padStart(6)} ${"ballV".padStart(8)} ${"anchorV".padStart(8)} ` +
+        `${"lease".padStart(8)} ${"overLen".padStart(8)} ${"credit".padStart(8)} ` +
+        `${"aimSpin".padStart(8)} ${"nodes".padStart(6)}`,
+    );
+    for (const s of r.series) {
+      if (s.frame % every !== 0) continue;
+      console.log(
+        `  ${String(s.frame).padStart(6)} ${s.ballSpeed.toFixed(3).padStart(8)} ` +
+          `${(s.anchorSpeed?.toFixed(3) ?? "-").padStart(8)} ${s.lease.toFixed(4).padStart(8)} ` +
+          `${s.overLength.toFixed(4).padStart(8)} ${s.pushCredit.toFixed(3).padStart(8)} ` +
+          `${s.aimSpin.toFixed(2).padStart(8)} ${String(s.nodes).padStart(6)}`,
+      );
+    }
+  }
+
+  if (o.save) {
+    // The expansion, not a summary of it: what is written is exactly what ran,
+    // so `cli play` on the saved file re-runs this rig. Asserts go in by hand
+    // afterwards - a rig measures, and only a person can say what the bound is.
+    writeFileSync(o.save, JSON.stringify(r.script, null, 2) + "\n");
+    console.log(`  saved playtest → ${o.save} (add asserts by hand, then \`cli play\`)`);
+  }
+  if (o.bundle) {
+    writeFileSync(o.bundle, JSON.stringify(r.recording));
+    console.log(`  saved bundle   → ${o.bundle}`);
+  }
+  process.exit(r.playtest.violations.length === 0 ? 0 : 1);
+}
+
 // ---- cli ab -----------------------------------------------------------------
 // The metric table over a corpus, on this tree and optionally on a reference
 // revision.
@@ -1959,6 +2008,10 @@ switch (cmd) {
   case "record":
     if (!arg) fail("usage: cli record [<level>] <script.json> [--out session.json]");
     cmdRecord(arg, opts(rest), rest);
+    break;
+  case "rig":
+    if (!arg) fail("usage: cli rig <spec.json> [--series [--every K]] [--save out.json] [--bundle out.bundle.json]");
+    cmdRig(arg, opts(rest));
     break;
   case "ab":
     if (!arg) fail("usage: cli ab <bundle|dir>... [--ref REV] [--metrics a,b] [--json]");

@@ -1062,6 +1062,7 @@ bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain 
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame
 bun run src/tools/cli.ts compare session.json --frame 979 --ref <rev>   # A/B this tree against a revision, one frame
 bun run src/tools/cli.ts ab      playtests/regressions --ref HEAD~1    # ...the metric table over a whole corpus
+bun run src/tools/cli.ts rig     playtests/rigs/ceiling-hold.json [--series] [--save f.json]  # a scenario as data
 bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the same metrics on this tree alone
 ```
 
@@ -1257,6 +1258,36 @@ They are the mandatory success criteria for any physics A/B.
 `travelX=0.0000` (the `session-314f` regression, a ball spinning at 20 rad/s
 sitting still on a rigid floor) and green at HEAD at 6.8 m, while its static-floor
 twin passes on both sides.
+
+**A new scenario starts as a rig spec and is committed as a playtest.**
+`playtests/rigs/*.json` are `RigSpec`s (`sim/rig.ts`): an arena, a point to fire
+at, an optional wind-up and one aim pattern - ten lines of data for what used to
+be thirty to sixty lines of identical wiring per scenario, written five times on
+2026-09-04 and thrown away the same day.
+`cli rig spec.json` builds the arena, fires, winds up, drives the aim and prints
+the `cli ab` metric row; `--series` prints the per-frame ball speed, anchor
+speed, lease, over-length, push credit, aim spin and node count; `--save`
+writes the expansion as an ordinary playtest and `--bundle` writes a real
+bundle, so a rig that finds something is immediately a repro every other command
+here can read.
+`windUp: { until: "riding" }` whirls until the ball is riding the body its chain
+ends on, resolved by a probe run rather than by a guessed frame count - and read
+straight out of the world digest's `chain.anchorBody` and `body.contactWith`,
+which is the question those fields were added for.
+There is one execution path: `runRig` runs the same expansion `--save` writes, so
+a saved rig cannot behave differently from the rig that produced it.
+`playtests/rigs/ceiling-hold.json` is 14 lines and expands to a 274-line playtest
+that `cli play` runs green; the hand-written equivalent
+(`playtests/ball-ceiling-hold.json`) is 821 lines, 110 of its aim ranges spelling
+out "circle the aim once every 24 frames".
+The five shipped rigs are the five from that session: the hung trapezoid on a
+1.6 m chain (`hung-trapezoid-whirl`), the steady ceiling hold (`ceiling-hold`),
+the static and rigid crush slabs (`crush-static-slab`, `crush-rigid-slab`) and
+the free box on the floor (`light-box-anchor`).
+A rig is an **instrument, not a test**: `bun run test` does not run them (the
+runner's playtest glob is not recursive), and a rig that comes back red is a
+finding to chase rather than a build to fix. `light-box-anchor` is red today -
+see **What the verification suite cannot see**.
 
 ## Debugging physics issues
 
@@ -1634,6 +1665,12 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
   Whether a rotation or settle looks convincing is judged only by a human or a render; corpus numbers stayed green through three re-reports of unconvincing rotation.
 - **Recorded bundles cannot confirm fixes.**
   After a physics change the recorded tail legitimately diverges, so only `cli compare`, `cli ab --ref` or a scripted scenario shows a fix landed.
+- **A pump against a LIGHT free anchor is still reachable, and nothing in the suite runs the rig that finds it.**
+  `cli rig playtests/rigs/light-box-anchor.json` - a 1 kg free box on the floor, chained point-blank, the aim whirling at 24 frames a revolution - drives ball and anchor together from 0.5 m/s to 37 m/s, with `pushRun 9` against a bar of 6, `maxSolveKick 20.5 m/s` against a bar of 4 and 198 `rope-over-length` violations from f63.
+  It is the `session-324f` anchor-pump signature (the pair leaving together, credit re-earned every frame) against a body far lighter than the 12.6 kg hung weight that pump was found and fixed on.
+  It survives the whole mass range tested: 5 kg still gives `pushRun 7` and 12.9 m/s.
+  Found by the rig tooling on the day it landed, and **not diagnosed** - it needs a measured cause before anything is edited (see **Debugging discipline**).
+  Nothing gates it: rigs are instruments and `bun run test` does not run them.
 - **The A/B cannot reach far back.**
   `cli compare` runs current tooling against old physics, which works only while the tooling's imports exist in that revision: it breaks at anything older than `bodyOverlapCircle` and `World.collectContacts`, which is exactly where several of the historical defects live.
   Re-introducing such a defect locally is then the only way to prove a detector catches it.

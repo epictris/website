@@ -1,0 +1,53 @@
+{
+  "name": "rig-light-box-anchor",
+  "spawn": {
+    "x": 0,
+    "y": 1.9
+  },
+  "fireAt": {
+    "x": 1.15,
+    "y": 1.87
+  },
+  "windUp": {
+    "until": 0
+  },
+  "drive": {
+    "kind": "whirl",
+    "period": 24,
+    "frames": 400
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 190,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 250,
+        "rot": 0,
+        "shape": {
+          "kind": "rect",
+          "w": 4000,
+          "h": 100
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "rigid",
+        "x": 120,
+        "y": 185,
+        "rot": 0,
+        "shape": {
+          "kind": "rect",
+          "w": 40,
+          "h": 30
+        },
+        "friction": 1.0,
+        "thickness": 1.2
+      }
+    ]
+  }
+}

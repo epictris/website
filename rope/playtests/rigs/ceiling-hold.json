@@ -1,0 +1,14 @@
+{
+  "name": "rig-ceiling-hold",
+  "spawn": { "x": 0, "y": 0 },
+  "fireAt": { "x": 0, "y": -0.6 },
+  "windUp": { "until": "riding", "period": 24 },
+  "drive": { "kind": "hold", "deg": 0, "frames": 400 },
+  "data": {
+    "player": { "x": 0, "y": 0, "radius": 8 },
+    "bodies": [
+      { "kind": "static", "x": 0, "y": -55, "rot": 0, "shape": { "kind": "rect", "w": 600, "h": 50 }, "friction": 1.0 },
+      { "kind": "static", "x": 0, "y": 250, "rot": 0, "shape": { "kind": "rect", "w": 4000, "h": 100 }, "friction": 1.0 }
+    ]
+  }
+}
