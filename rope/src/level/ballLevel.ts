@@ -517,26 +517,49 @@ export class BallLevel {
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
       //
-      // Off everything the SCENE's own constraints do not hold, though, and that
+      // Off everything a CONVERGED coupled set does not hold, though, and that
       // exclusion is the whole of what makes this coherent with the coupled
       // sweep. The premise above is that the far end keeps whatever it was
-      // given, which is true of a free body and false of one a scene chain
-      // holds: there the sweep has already decided how the correction is shared
-      // between the ball and the anchor, converged the set to `CHAIN_TOLERANCE`,
-      // and closed its own books over the displacement it left (see
-      // `settleChainBodies`). Rolling such a body back does not un-export the
-      // spin - it re-breaks a constraint the sweep had just satisfied, and the
-      // over-length that reappears is charged to the ball's rotation a second
-      // time by the unwind below.
+      // given, which is true of a free body and false of one a set the sweep
+      // has actually settled holds: there the sweep has already decided how the
+      // correction is shared between the ball and the anchor, converged the set
+      // to `CHAIN_TOLERANCE`, and closed its own books over the displacement it
+      // left (see `settleChainBodies`). Rolling such a body back does not
+      // un-export the spin - it re-breaks a constraint the sweep had just
+      // satisfied, and the over-length that reappears is charged to the ball's
+      // rotation a second time by the unwind below.
       //
-      // On a vine that is every frame and the whole of the aim. A vine link is
-      // ~0.05 kg against the ball's 52, so a PBD length correction lands almost
-      // entirely on the LINK; the rollback then put 14 mm of it back, the unwind
-      // saw 14 mm the frame's own turn was worth 10 of, and walked back 100% of
-      // the player's aim rotation - for 59 frames at a time, with the cursor
-      // 90 degrees off the loop and the ball simply not turning (`session-1260f`).
+      // Converged is the operative word, and it is `CoupledRope.settleSet` -
+      // the sweep's own statement about which set it holds to a tolerance
+      // (`sweepChains`). It is TRUE while a vine is held and false otherwise,
+      // and the difference is measured rather than assumed: an ordinary scene
+      // set is gated on the coupling's residual alone and is left over its own
+      // tolerance on 1616 frames of 1618, so there is no apportionment there to
+      // be coherent with - only whatever 64 sweeps happened to reach. Excluded
+      // on that strength, a chain-hung anchor kept the whole of a rotation the
+      // unwind then refused in full: the aim wound 0.55 rad a frame onto a ball
+      // whose net turn was exactly zero, and the anchor was hauled and PAID for
+      // the winding every frame of it, both of them accelerating together from
+      // 3 to 25 m/s over 35 frames with the chain leased out from 1.18 m to
+      // 1.80 (`session-215f`, the ball wound up into a body suspended on a
+      // chain and flung across the level). That is `session-265f`'s failure
+      // exactly - the anchor fed a share of the spin every frame and keeping
+      // it - reappearing wherever the anchor happens to hang off a chain, and
+      // `cli contacts` `hung-anchor` is the detector: the same weight bolted to
+      // the ceiling and hung from it, whipped with identical inputs, 1.6 m/s
+      // against 8.5.
+      //
+      // On a VINE the exclusion is every frame and the whole of the aim, and it
+      // stays. A vine link is ~0.05 kg against the ball's 52, so a PBD length
+      // correction lands almost entirely on the LINK; the rollback put 14 mm of
+      // it back, the unwind saw 14 mm the frame's own turn was worth 10 of, and
+      // walked back 100% of the player's aim rotation - for 59 frames at a
+      // time, with the cursor 90 degrees off the loop and the ball simply not
+      // turning (`session-1260f`).
       // The lease absorbed the difference meanwhile, so the chain grew 26 mm of
-      // surplus while it happened.
+      // surplus while it happened. `cli vines` `ball-steer` is that detector,
+      // and it reads the exclusion's worth directly: 5.7 degrees of loop lag
+      // with the vine excluded, 10.6 without.
       //
       // A SPRUNG body is rolled back like every other - and then handed the
       // LOAD it is still carrying as an explicit force (below, after the
@@ -575,7 +598,7 @@ export class BallLevel {
           if (
             body instanceof RigidBody2D &&
             body !== this.ball &&
-            !solveChains.some((c) => c.holds(body))
+            (this.heldVine === null || !solveChains.some((c) => c.holds(body)))
           ) {
             haulAtSolve.set(body, {
               position: body.globalPosition,

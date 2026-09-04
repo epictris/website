@@ -2437,6 +2437,159 @@ function caseChainOrder(): ContactResult {
 // push-out is what that wants and it belongs with the ball's own phase, which
 // has the identical hole; until then `energy-gained` still fires on a hard jam.
 // ---------------------------------------------------------------------------
+// hung-anchor - a chain-hung anchor cannot be wound into a slingshot.
+//
+// `cli spring`'s `whirl-anchor` made this statement about a pivot, and a body a
+// scene chain holds up is the other free mounting: it orbits the point it hangs
+// from as freely as a bar turns on its bearing. The winch's governor leaked
+// through it the same way, by a different hole. The spin-share rollback - what
+// takes the kinematic aim's share of the chain solve back off the anchor, on the
+// grounds that the unwind is about to refuse that rotation anyway - skipped
+// every body a scene constraint held. The reason it did is sound where it
+// applies: for a set the coupled sweep has CONVERGED, the sweep has already
+// apportioned the correction between the ball and the anchor, and rolling one
+// end of that back re-breaks a constraint the sweep had just satisfied. But an
+// ordinary scene set is NOT converged - it is gated on the coupling's residual
+// alone and left over its own tolerance on 1616 frames of 1618 - so there was
+// no apportionment there to be coherent with, and the exclusion simply handed
+// the anchor the spin (see the rollback in `BallLevel`'s chain phase).
+//
+// A ball wound up into a hanging weight was therefore hauling that weight, and
+// paying it, for winding that never happened: 0.55 rad of aim a frame onto a
+// ball whose net turn was exactly zero, the anchor credited for the whole of it
+// every frame, and the two of them accelerating together from 3 to 25 m/s over
+// 35 frames while the stall lease let the chain out from 1.18 m to 1.80
+// (`session-215f`, reported as being flung across the level on winding up into a
+// body suspended on a chain). It is `session-265f` - the anchor fed a share of
+// the spin every frame and keeping it - wearing the one mounting that fix did
+// not cover, and it replays HEALTHY: the energy monitor disarms on any frame the
+// aim is turning the ball, which is every frame of this.
+//
+// The control is the same weight bolted to the ceiling rather than hung from it,
+// whipped with identical inputs, so the mounting is the only difference between
+// the two legs and a bar the hung leg fails and the static leg passes is a
+// statement about the mounting rather than about the rig.
+// ---------------------------------------------------------------------------
+function caseHungAnchor(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // A half-metre weight a metre above the ball's head, hung from the ceiling on
+  // 5.3 m of chain: long enough that the weight is free to orbit anywhere the
+  // ball's own 1.8 m chain can whirl it, which is the bearing this is about, and
+  // that neither of them ever reaches the ceiling itself.
+  const build = (hung: boolean): BallLevel =>
+    new BallLevel({
+      player: { x: 0, y: -10, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: -760,
+          rot: 0,
+          friction: 1,
+          objects: [
+            { type: "collision", shape: { kind: "rect", w: 800, h: 40 } },
+            { type: "anchor", id: 1, x: 0, y: 20 },
+          ],
+        },
+        {
+          kind: hung ? "rigid" : "static",
+          x: 0,
+          y: -160,
+          rot: 0,
+          friction: 1,
+          objects: [
+            { type: "collision", shape: { kind: "circle", r: 50 } },
+            { type: "anchor", id: 2, x: 0, y: -50 },
+          ],
+        },
+      ],
+      chains: hung ? [{ a: 1, b: 2 }] : [],
+    } as RawLevelData);
+
+  const run = (hung: boolean): { maxV: number; maxWeightV: number; grew: number } => {
+    const level = build(hung);
+    const weight = level.bodies.find(
+      (b): b is RigidBody2D => b !== level.ball && b instanceof RigidBody2D,
+    );
+    let prev = emptyFrameInput();
+    const feed = (aim: Vec2): void => {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(true, prev.fire),
+        mouseWorldPosition: aim,
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+    };
+    // Fire straight up at the weight and hold the aim there: the wind-up hauls
+    // the ball up its own chain until it is riding the thing it is anchored to,
+    // which is the state `session-215f` was whirled out of.
+    for (let f = 0; f < 240; f++) feed(new Vec2(0, -1.6));
+    check(
+      `${hung ? "hung  " : "static"}: the chain is anchored to the weight`,
+      level.ball.chain !== null && !(level.ball.chain.end.contact.obj instanceof BallHook),
+    );
+    // Whipped in circles at a hand's pace, as `whirl-anchor` whips its bar: a
+    // full turn every 0.8 s, which is the rate `session-215f` was played at.
+    const start = level.ball.loopDirection.angle();
+    const anchoredAt = level.ball.chain?.maxRopeLength ?? 0;
+    let maxV = 0;
+    let maxWeightV = 0;
+    let grew = 0;
+    for (let f = 0; f < 600; f++) {
+      const angle = start + (f / 48) * Math.PI * 2;
+      feed(level.ball.globalPosition.add(new Vec2(Math.cos(angle), Math.sin(angle)).mul(2)));
+      maxV = Math.max(maxV, level.ball.linearVelocity.length());
+      if (weight) maxWeightV = Math.max(maxWeightV, weight.linearVelocity.length());
+      if (level.ball.chain) {
+        grew = Math.max(grew, level.ball.chain.maxRopeLength - anchoredAt);
+      }
+    }
+    check(
+      `${hung ? "hung  " : "static"}: still anchored after 10 s of whipping`,
+      level.ball.chain !== null && !(level.ball.chain.end.contact.obj instanceof BallHook),
+    );
+    return { maxV, maxWeightV, grew };
+  };
+
+  // The governed control. 1.6 m/s measured, whichever way the rollback goes:
+  // a static anchor is not a body the rollback can reach, so anything moving
+  // here means the rig has changed rather than the mounting.
+  const ctl = run(false);
+  check(`static control is governed (peak ${ctl.maxV.toFixed(1)} m/s, bar 4)`, ctl.maxV < 4);
+  // The hung leg. 2.0 m/s and 1.9 with the rollback reaching it, 8.5 and 9.6
+  // without: the bars sit between the two regimes. The rig is deliberately
+  // milder than `session-215f`'s 25 m/s - a short chain wound onto a weight the
+  // ball can ride, rather than that level's long swing - because what is being
+  // asserted is that the anchor is not fed the spin at all, and the pump shows
+  // up in the first second either way.
+  const hung = run(true);
+  check(`the ball is never slung (peak ${hung.maxV.toFixed(1)} m/s, bar 5)`, hung.maxV < 5);
+  check(
+    `the weight is never dragged off (peak ${hung.maxWeightV.toFixed(1)} m/s, bar 5)`,
+    hung.maxWeightV < 5,
+  );
+  // The degenerate way the two above could pass: a ball that is not slung
+  // because its chain paid out and left it dangling. `maxRopeLength` is the
+  // length the chain actually HAS, and the stall lease is a lease against it
+  // rather than a payment into it (`Rope.blockedSlack`) - a ball wound tight
+  // onto its anchor leases 45 cm here, holds it while the block lasts and hands
+  // it back, and the length underneath never moves.
+  check(
+    `the chain never grows (${(hung.grew * 100).toFixed(1)}cm past its anchored length, bar 1)`,
+    hung.grew < 0.01,
+  );
+
+  return ok("hung-anchor - a chain-hung anchor cannot be wound into a slingshot", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 function caseChainHungJam(sims: Sim[]): ContactResult {
   const sim = new Sim("chain-hung-jam", 30);
   sims.push(sim);
@@ -3917,6 +4070,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseTrampoline());
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
+  results.push(caseHungAnchor());
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());
   results.push(caseHookSnapBand());
