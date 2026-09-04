@@ -4,7 +4,7 @@
 // recorded replays bit-for-bit.
 
 import { Vec2 } from "../engine/vec2";
-import { RigidBody2D, VineLink, type PhysicsBody2D } from "../engine/body";
+import { RigidBody2D, VineLink, type CollisionObject2D, type PhysicsBody2D } from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
@@ -517,49 +517,44 @@ export class BallLevel {
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
       //
-      // Off everything a CONVERGED coupled set does not hold, though, and that
-      // exclusion is the whole of what makes this coherent with the coupled
-      // sweep. The premise above is that the far end keeps whatever it was
-      // given, which is true of a free body and false of one a set the sweep
-      // has actually settled holds: there the sweep has already decided how the
-      // correction is shared between the ball and the anchor, converged the set
-      // to `CHAIN_TOLERANCE`, and closed its own books over the displacement it
-      // left (see `settleChainBodies`). Rolling such a body back does not
-      // un-export the spin - it re-breaks a constraint the sweep had just
-      // satisfied, and the over-length that reappears is charged to the ball's
-      // rotation a second time by the unwind below.
+      // Off EVERY body but the ball, with no exception, and what the frame
+      // then does with the length that rollback re-creates is the whole of the
+      // difficulty. Rolling a body back re-breaks a constraint the solve had
+      // just satisfied, and the over-length that reappears has to be answered
+      // by somebody: by the ball's rotation through the unwind below, or by the
+      // ball's POSITION through the winch pass that follows this loop.
       //
-      // Converged is the operative word, and it is `CoupledRope.settleSet` -
-      // the sweep's own statement about which set it holds to a tolerance
-      // (`sweepChains`). It is TRUE while a vine is held and false otherwise,
-      // and the difference is measured rather than assumed: an ordinary scene
-      // set is gated on the coupling's residual alone and is left over its own
-      // tolerance on 1616 frames of 1618, so there is no apportionment there to
-      // be coherent with - only whatever 64 sweeps happened to reach. Excluded
-      // on that strength, a chain-hung anchor kept the whole of a rotation the
-      // unwind then refused in full: the aim wound 0.55 rad a frame onto a ball
-      // whose net turn was exactly zero, and the anchor was hauled and PAID for
-      // the winding every frame of it, both of them accelerating together from
-      // 3 to 25 m/s over 35 frames with the chain leased out from 1.18 m to
-      // 1.80 (`session-215f`, the ball wound up into a body suspended on a
-      // chain and flung across the level). That is `session-265f`'s failure
-      // exactly - the anchor fed a share of the spin every frame and keeping
-      // it - reappearing wherever the anchor happens to hang off a chain, and
-      // `cli contacts` `hung-anchor` is the detector: the same weight bolted to
-      // the ceiling and hung from it, whipped with identical inputs, 1.6 m/s
-      // against 8.5.
+      // Which of the two is right turns on whether the body is one a coupled
+      // constraint holds. A free body, a pivot or a sprung mount is answered by
+      // the unwind: the re-break is the winch's governor, it is what hands the
+      // unwind the length to refuse, and weakening it is what ran away on
+      // `session-136f`'s sprung log and on `whirl-anchor`'s bar. A body a scene
+      // chain or a vine joint holds is answered by the winch: there the
+      // correction was split by effective inverse mass against an anchor that is
+      // usually LIGHTER than the 52 kg ball, so the unwind would be refusing
+      // most of the player's aim rather than the spin's own excess.
       //
-      // On a VINE the exclusion is every frame and the whole of the aim, and it
-      // stays. A vine link is ~0.05 kg against the ball's 52, so a PBD length
-      // correction lands almost entirely on the LINK; the rollback put 14 mm of
-      // it back, the unwind saw 14 mm the frame's own turn was worth 10 of, and
-      // walked back 100% of the player's aim rotation - for 59 frames at a
-      // time, with the cursor 90 degrees off the loop and the ball simply not
-      // turning (`session-1260f`).
-      // The lease absorbed the difference meanwhile, so the chain grew 26 mm of
-      // surplus while it happened. `cli vines` `ball-steer` is that detector,
-      // and it reads the exclusion's worth directly: 5.7 degrees of loop lag
-      // with the vine excluded, 10.6 without.
+      // That distinction used to be drawn by excluding constraint-held bodies
+      // from the rollback altogether, and both halves of that were wrong.
+      // Excluded, the anchor kept the whole of a rotation the unwind then
+      // refused in full: the aim wound 0.55 rad a frame onto a ball whose net
+      // turn was exactly zero, the anchor was hauled and PAID for the winding
+      // every frame of it, and the pair accelerated together from 3 to 25 m/s
+      // over 35 frames with the chain leased out from 1.18 m to 1.80
+      // (`session-215f`, the ball wound up into a body suspended on a chain and
+      // flung across the level - `session-265f`'s failure exactly, wearing the
+      // one mounting that fix did not cover). Rolled back with the length simply
+      // dropped, the ball kept only its 19% share and the wind-up would not
+      // start at all (`session-190f`). Paid by the winch, both are right, and
+      // the vine keeps its aim without needing an exclusion of its own: a link
+      // is ~0.05 kg against the ball's 52, which is the same arithmetic taken
+      // to its limit (`session-1260f`, 100% of the aim walked back for 59
+      // frames at a time with the cursor 90 degrees off the loop).
+      //
+      // `cli contacts` `hung-anchor` is the slingshot detector - the same weight
+      // bolted to the ceiling and hung from it, whipped with identical inputs,
+      // 1.6 m/s against 8.5 - and `cli vines` `ball-steer` is the aim detector,
+      // 5.8 degrees of loop lag against a 45 degree bar.
       //
       // A SPRUNG body is rolled back like every other - and then handed the
       // LOAD it is still carrying as an explicit force (below, after the
@@ -595,11 +590,7 @@ export class BallLevel {
       >();
       if (spinShare > 0) {
         for (const body of this.bodies) {
-          if (
-            body instanceof RigidBody2D &&
-            body !== this.ball &&
-            (this.heldVine === null || !solveChains.some((c) => c.holds(body)))
-          ) {
+          if (body instanceof RigidBody2D && body !== this.ball) {
             haulAtSolve.set(body, {
               position: body.globalPosition,
               velocity: body.linearVelocity,
@@ -646,6 +637,49 @@ export class BallLevel {
         );
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
+      }
+      // The rollback has taken the spin's share off the anchor, and the length
+      // that share was paying for is still OWED. The winch is what pays it, and
+      // the winch hauls the BALL - so the same constraint is solved once more
+      // with every other body on the path held immovable
+      // (`Rope.solveLengthHolding`). Nothing here is a new entitlement: it is
+      // the length the ordinary solve already measured, put where the rollback
+      // says it belongs instead of being dropped on the floor.
+      //
+      // Dropped, what the ball keeps is its own inverse-mass share of the
+      // correction, and against a light anchor that is almost nothing: a 12.6 kg
+      // anchor leaves the 52 kg ball 19% of it, the unwind refuses the other 81%
+      // out of the frame's rotation, and the wind-up cannot start. The cursor
+      // was circled twice right round the ball over 65 frames and the ball
+      // gained no wraps at all (`session-190f`, reported as the ball's rotation
+      // being fixed in place while it was being wrapped up its chain). It is the
+      // same arithmetic that made `session-1260f`'s 0.05 kg vine link refuse
+      // 100% of the aim, and the reason the rollback used to skip a body a scene
+      // constraint holds - an exclusion this replaces, since the length is now
+      // paid rather than merely un-exported.
+      //
+      // Forgiving the unwind that length instead is the other tempting answer
+      // and it is worse: the re-break is the winch's GOVERNOR, and un-governed
+      // the same wind-up slings the ball at 31 m/s (measured, on the light hung
+      // weight `cli contacts` `hung-anchor` whirls).
+      //
+      // Owed only where a coupled constraint holds the anchor, and that gate is
+      // load-bearing rather than cautious. A PIVOT or a SPRING mount is held by
+      // its own mounting, not by the sweep, and there the re-break is exactly
+      // what `pivotSpinDebt` and the unwind are written to charge back: paying
+      // it by hauling the ball instead re-feeds the orbit the whirl governor
+      // exists to starve, and `cli spring` `whirl-anchor` goes from 8.6 m/s to
+      // 27.3 with the gate removed.
+      const winchOwed = [...haulAtSolve.keys()].some(
+        (b) => !b.pivot && b.spring === null && solveChains.some((c) => c.holds(b)),
+      );
+      if (spinShare > 0 && winchOwed) {
+        const heldForWinch = new Set<CollisionObject2D>();
+        for (const node of this.ball.chain.path()) {
+          const obj = node.contact.obj;
+          if (obj !== this.ball) heldForWinch.add(obj);
+        }
+        if (heldForWinch.size > 0) this.ball.chain.solveLengthHolding(heldForWinch);
       }
       // Length the solve paid by rotating a PIVOT body, and which the rollback
       // kept, is length the ball's spin still owes (the unwind below is handed

@@ -1720,6 +1720,34 @@ export class Rope {
     return cumulativeLength;
   }
 
+  // Bodies the current pass must treat as immovable. Null outside a winch pass,
+  // which is every pass every other caller makes.
+  private held: ReadonlySet<CollisionObject2D> | null = null;
+
+  // Enforce the length with `held` immovable, so the whole correction lands on
+  // whatever is left free.
+  //
+  // This is the winch, stated as a solve. Winding chain onto the ball's own rim
+  // shortens the free path, and the way that is paid for is by hauling the BALL
+  // towards its anchor - never by hauling the anchor, which is a kinematic spin
+  // driving a body that has to keep what it is given (`session-265f`). The
+  // ordinary solve cannot say that: it splits every correction by effective
+  // inverse mass, so an anchor lighter than the ball takes most of it, and
+  // `BallLevel`'s rollback then takes that share back off the anchor and leaves
+  // the length unpaid. Held, the same solve puts all of it where the winch was
+  // always supposed to put it.
+  //
+  // Position only, like every other length correction: the caller pays the
+  // velocity for it, over the displacement the phase actually ends on.
+  solveLengthHolding(held: ReadonlySet<CollisionObject2D>): void {
+    this.held = held;
+    try {
+      this.resolveLengthConstraint();
+    } finally {
+      this.held = null;
+    }
+  }
+
   private resolveLengthConstraint(): number | null {
     let cumulativeCorrectionImpulse = 0;
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
@@ -1801,6 +1829,11 @@ export class Rope {
   }
 
   private getDynamicBodyState(body: PhysicsBody2D): DynamicBody | null {
+    // Held for a winch pass: the caller has declared this body immovable for
+    // the duration, and "immovable" already has a vocabulary here - it is what
+    // a `StaticBody2D` is, and `null` is how the solve is told so. See
+    // `solveLengthHolding`.
+    if (this.held !== null && this.held.has(body)) return null;
     if (body instanceof RigidBody2D) {
       // A PIVOT body cannot translate, and the solve is told so in its own
       // vocabulary: infinite mass. `1 / mass` reads 0, so the linear share of
