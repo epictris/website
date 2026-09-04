@@ -184,9 +184,12 @@ import {
   digest,
   digestBall,
   serializeInput,
+  worldDigest,
+  worldDigestBall,
   type Digest,
   type Recording,
   type SerializedFrame,
+  type WorldDigest,
 } from "../sim/trace";
 import type { EnvironmentData, LevelData, SceneObjectData } from "../level/levelFormat";
 import {
@@ -1344,6 +1347,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   let testData: LevelData | null = null;
   const recFrames: SerializedFrame[] = [];
   const recDigests: Digest[] = [];
+  // Every body that can move, at the same cadence as `recDigests` (see
+  // `WorldDigest`), as `main.ts` records. A test-mode bundle without it can say
+  // where the AVATAR first left the recording and nothing about what the body
+  // it was anchored to was doing, which is the wrong half of a chain bug.
+  const recWorldDigests: WorldDigest[] = [];
 
   // `spawn` (world metres) overrides the level's own spawn marker for this run
   // only — the model is untouched, so a spot-check from the cursor never edits
@@ -1367,6 +1375,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testData = pixelData;
     recFrames.length = 0;
     recDigests.length = 0;
+    recWorldDigests.length = 0;
     // The camera controller owns the zoom from here (base framing × the active
     // region's viewportScale), and re-derives it every frame, so a resize
     // mid-test needs no separate handling.
@@ -1410,6 +1419,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       data: testData,
       frames: recFrames.slice(),
       digests: recDigests.slice(),
+      worldDigests: recWorldDigests.slice(),
     };
     const blob = new Blob([JSON.stringify(rec)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -7118,6 +7128,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         recFrames.push(serializeInput(fi));
         recDigests.push(
           testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
+        );
+        recWorldDigests.push(
+          testLevel instanceof BallLevel ? worldDigestBall(testLevel) : worldDigest(testLevel),
         );
         accumulator -= STEP;
         steps++;
