@@ -337,6 +337,12 @@ export interface EdItem {
   // among the properties `syncBodyProps` leaves alone - a compound wall with
   // one attachable ledge among hook-proof faces is what it is for.
   impermeable: boolean;
+  // Rope geometry or not (see `CollisionObjectData.wrappable`): false and every
+  // chain and rope passes straight through this piece, nothing wraps or winds
+  // on it, and a chain cannot be tied to it. Per SHAPE like `impermeable`, and
+  // the case it exists for is one body of two pieces - a wheel whose rim the
+  // player turns and whose hub winds the chain.
+  wrappable: boolean;
   // What the shape is made of, and how thick it is through z - the dimension
   // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
   // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
@@ -533,6 +539,11 @@ export interface EdChain {
   id: number;
   a: number;
   b: number;
+  // WRAP POINTS: the item ids of the anchors the chain is routed over, in order
+  // from `a` to `b` (see `ChainData.via`). Each is an anchor item exactly as the
+  // two ends are - an object in its body, riding it - so the chain's whole
+  // route is objects and this list is only the order they come in.
+  via: number[];
   // Metres. Null = exactly taut between the two anchors, re-derived at load, so
   // a chain dragged out between two bodies stays taut as they are moved.
   length: number | null;
@@ -1028,6 +1039,7 @@ function fromLevelData(data: LevelData): EdModel {
           rot: w.rot,
           shape: edShape(o.shape),
           impermeable: o.impermeable === true,
+          wrappable: o.wrappable !== false,
           material: materialName(o.material),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
           visual: defaultVisual(),
@@ -1049,6 +1061,7 @@ function fromLevelData(data: LevelData): EdModel {
           // than a small one it can.
           shape: o.shape ? edShape(o.shape) : { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
           impermeable: false,
+          wrappable: true,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
           // Its own fill, which decoration carries rather than taking the
@@ -1072,6 +1085,7 @@ function fromLevelData(data: LevelData): EdModel {
           // click has to land on, and it is the same one a dressing gets.
           shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
           impermeable: false,
+          wrappable: true,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
           visual: defaultVisual(),
@@ -1115,6 +1129,7 @@ function fromLevelData(data: LevelData): EdModel {
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
+    wrappable: true,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1197,6 +1212,7 @@ function fromLevelData(data: LevelData): EdModel {
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
+    wrappable: true,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1276,6 +1292,7 @@ function lightItem(
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
+    wrappable: true,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1333,6 +1350,7 @@ function lightItem(
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
+    wrappable: true,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1377,10 +1395,19 @@ function lightItem(
     const a = itemOfAnchor.get(c.a);
     const b = itemOfAnchor.get(c.b);
     if (!a || !b) continue;
+    // A wrap point naming an anchor the file does not contain is skipped and the
+    // chain kept - as the loader does (`buildOne`), and as a vine keeps hanging
+    // when its second anchor is gone.
+    const via: number[] = [];
+    for (const id of c.via ?? []) {
+      const item = itemOfAnchor.get(id);
+      if (item) via.push(item.id);
+    }
     chains.push({
       id: newBodyId(),
       a: a.id,
       b: b.id,
+      via,
       length: c.length ?? null,
       color: c.color ?? null,
     });
@@ -1653,6 +1680,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           shape: shapeOf(i),
           // Absent means "an ordinary surface", so only a hook-proof one says so.
           ...(i.impermeable ? { impermeable: true } : {}),
+          // Absent means rope geometry, so only a piece the rope ignores says so.
+          ...(i.wrappable ? {} : { wrappable: false }),
           // Written only when the piece is something other than the default
           // 20 cm of oak, so every level authored before materials stays
           // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
@@ -1807,12 +1836,20 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // which the loader would drop anyway.
     if (a?.object !== "anchor" || b?.object !== "anchor") continue;
     if (bodyOfItem.get(a.id) === bodyOfItem.get(b.id)) continue;
+    // Wrap points whose anchor has gone are dropped from the route rather than
+    // dropping the chain; a chain with its two ends is still a chain.
+    const via: number[] = [];
+    for (const id of c.via) {
+      const v = model.items.find((i) => i.id === id);
+      if (v?.object === "anchor") via.push(v.anchorId);
+    }
     chains.push({
       a: a.anchorId,
       b: b.anchorId,
       // Omitted = taut between the anchors, which the loader re-derives.
       ...(c.length !== null ? { length: c.length } : {}),
       ...(c.color !== null ? { color: c.color } : {}),
+      ...(via.length > 0 ? { via } : {}),
     });
   }
 
@@ -2829,7 +2866,7 @@ export function syncMatchedOutlines(model: EdModel, sigs: Map<number, string>): 
 // --- chains -----------------------------------------------------------------
 
 export function cloneChain(c: EdChain): EdChain {
-  return { ...c };
+  return { ...c, via: [...c.via] };
 }
 
 // A world point pushed onto the item's own surface, returned in the item's local
@@ -2843,6 +2880,27 @@ export function nearestSurfaceLocal(item: EdItem, world: Vec2): Vec2 {
   const local = toLocal(item, world);
   if (item.shape.kind === "circle") return nearestOnCircle(item.shape.r, local);
   return nearestOnOutline(localVertices(item), local);
+}
+
+// A world point pushed onto the item's nearest CORNER (or, on a circle, its
+// rim), in the item's local frame - where a chain WRAP POINT goes. A corner
+// rather than the nearest surface point because a corner is what a rope bends
+// around: the loader lands a wrap point on one whatever the file says
+// (`snapToCorner` in level/chains.ts), so the editor shows the route the level
+// will actually have rather than one the loader quietly moves.
+export function nearestCornerLocal(item: EdItem, world: Vec2): Vec2 {
+  const local = toLocal(item, world);
+  if (item.shape.kind === "circle") return nearestOnCircle(item.shape.r, local);
+  let best = local;
+  let bestSq = Infinity;
+  for (const v of localVertices(item)) {
+    const d = v.sub(local).lengthSquared();
+    if (d < bestSq) {
+      bestSq = d;
+      best = v;
+    }
+  }
+  return best;
 }
 
 // Where a chain end currently sits in the world, or null if its anchor is gone.
@@ -2868,18 +2926,58 @@ export function chainEnds(model: EdModel, c: EdChain): { a: Vec2; b: Vec2 } | nu
   return a && b ? { a, b } : null;
 }
 
+// The chain's wrap points as items, in route order. One whose anchor item has
+// gone is simply not in the route (see `pruneChains`, which also drops it from
+// the list; between a deletion and the prune this is what keeps the route
+// drawable).
+export function chainViaItems(model: EdModel, c: EdChain): EdItem[] {
+  const out: EdItem[] = [];
+  for (const id of c.via) {
+    const item = anchorItem(model, id);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+// The whole route in the world - end, wrap points, end - or null if either end
+// is gone. What the canvas draws and what a click on the chain is tested
+// against: a chain with wrap points IS its polyline, since a span between two
+// wrap nodes is straight and the solver renders exactly this.
+export function chainPath(model: EdModel, c: EdChain): Vec2[] | null {
+  const ends = chainEnds(model, c);
+  if (!ends) return null;
+  return [ends.a, ...chainViaItems(model, c).map((i) => i.pos), ends.b];
+}
+
 // Distance from a world point to the chain's straight span, for picking. The
 // editor draws a chain straight - how it drapes and what it wraps is a runtime
 // answer the solver gives, and drawing a guess at it would be a drawing of
 // something that is not the level.
 export function distanceToChain(model: EdModel, c: EdChain, world: Vec2): number {
-  const ends = chainEnds(model, c);
-  if (!ends) return Infinity;
-  const d = ends.b.sub(ends.a);
-  const len2 = d.lengthSquared();
-  if (len2 < 1e-12) return world.distanceTo(ends.a);
-  const t = Math.min(1, Math.max(0, world.sub(ends.a).dot(d) / len2));
-  return world.distanceTo(ends.a.add(d.mul(t)));
+  return nearestChainSpan(model, c, world)?.distance ?? Infinity;
+}
+
+// The span of the chain's route nearest a world point: its index (0 = the span
+// leaving end `a`) and how far the point is from it. What a press on the chain
+// resolves to, and - for a wrap point pulled out of the chain - where in the
+// route the new point goes.
+export function nearestChainSpan(
+  model: EdModel,
+  c: EdChain,
+  world: Vec2,
+): { index: number; distance: number } | null {
+  const path = chainPath(model, c);
+  if (!path) return null;
+  let best: { index: number; distance: number } | null = null;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i]!;
+    const d = path[i + 1]!.sub(a);
+    const len2 = d.lengthSquared();
+    const t = len2 < 1e-12 ? 0 : Math.min(1, Math.max(0, world.sub(a).dot(d) / len2));
+    const distance = world.distanceTo(a.add(d.mul(t)));
+    if (!best || distance < best.distance) best = { index: i, distance };
+  }
+  return best;
 }
 
 // --- vines ------------------------------------------------------------------
@@ -2965,6 +3063,7 @@ export function emptyModel(): EdModel {
         bounce: DEFAULT_BOUNCE,
         launch: DEFAULT_LAUNCH,
         impermeable: false,
+        wrappable: true,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,
         visual: defaultVisual(),

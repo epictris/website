@@ -46,6 +46,10 @@ import {
   anchorItem,
   chainEnds,
   chainEndWorld,
+  chainPath,
+  chainViaItems,
+  nearestChainSpan,
+  nearestCornerLocal,
   vineAnchorWorld,
   vineAnchor2World,
   vineRestPath,
@@ -257,8 +261,13 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
 // Decoration is excluded for the plainer reason that it builds no body at all:
 // a chain tied to one would have nothing to constrain, and the loader drops it.
+// ...and a piece the rope passes through (`wrappable` off) cannot hold a chain
+// either: the loader lands an anchor authored on one on the nearest piece the
+// rope CAN hold (`tieablePieces` in level/chains.ts), so the editor offers only
+// what the level will actually build - which for a wheel is its hub, not its
+// rim.
 const chainable = (b: EdItem): boolean =>
-  b.object === "collision" && CHAINABLE_KINDS.includes(b.kind);
+  b.object === "collision" && CHAINABLE_KINDS.includes(b.kind) && b.wrappable;
 
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
@@ -369,6 +378,15 @@ type Drag =
   // on whatever body it is dropped on, so moving a chain end and moving it to a
   // different body are one gesture.
   | { mode: "chainEnd"; chain: EdChain; end: "a" | "b"; cursor: Vec2 }
+  // Moving one of a chain's WRAP POINTS (`EdChain.via`): the same act as
+  // re-anchoring an end, landing on the nearest corner of whatever body it is
+  // dropped on, since a wrap point is a corner the chain bends around.
+  | { mode: "chainVia"; chain: EdChain; index: number; cursor: Vec2 }
+  // Pulling a NEW wrap point out of a chain's span (Shift-drag on a selected
+  // chain): `index` is the span it was pulled from, so the point lands in the
+  // route between that span's two ends. The route follows the pointer until it
+  // is dropped on a body, and is abandoned over nothing.
+  | { mode: "chainWrapOut"; chain: EdChain; index: number; cursor: Vec2 }
   // Pulling a new vine out of a body: the anchor is fixed in `from`'s local
   // frame and the drag sets the LENGTH rather than reaching for a second body,
   // which is the whole of the difference between a vine and a chain.
@@ -1986,7 +2004,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const c of model.chains) {
       const row = el("div", "ed-out-row obj chain");
       const label = el("span", "ed-out-label");
-      label.textContent = `${endLabel(c.a)} ↔ ${endLabel(c.b)}`;
+      // The route: end, wrap points, end, each by the body it is on.
+      label.textContent = [c.a, ...c.via, c.b].map(endLabel).join(" ↔ ");
       row.append(el("span", "ed-out-twist"), label);
       if (c.length !== null) {
         const len = el("span", "ed-out-count");
@@ -2565,6 +2584,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "The hook is destroyed (grapple) or deflected (ball) on this surface instead of anchoring — drawn with a dashed steel edge. It stays solid: you can stand on it and the rope still wraps its corners. Per shape, so one piece of a compound body can be the only place a hook will catch.";
+    g.appendChild(hint);
+  }
+
+  // Rope geometry or not (see `CollisionObjectData.wrappable`). Per shape and
+  // not collapsed onto the body, exactly as hook-proof is, because the case it
+  // exists for is two pieces of ONE body that answer differently: a wheel whose
+  // rim the player rolls and whose hub winds the chain.
+  function addWrappableField(g: HTMLElement, items: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = items.every((b) => !b.wrappable);
+    box.indeterminate = !box.checked && items.some((b) => !b.wrappable);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) b.wrappable = !box.checked;
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "chain-through";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Chains and ropes pass straight through this piece: nothing wraps its corners or winds onto it, and a chain cannot be tied to it - drawn with a dotted edge. It stays solid for everything else. Per shape, so a wheel's hub can wind a chain while the rim it is welded to is ignored.";
     g.appendChild(hint);
   }
 
@@ -3757,6 +3801,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
     ) {
       addImpermeableField(g, bodies);
+      addWrappableField(g, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
     // nothing - its extrusion depth is `visual.depth` instead.
@@ -4018,13 +4063,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it.";
+      "Strung between two bodies and solved every frame: a rigid body on either end hangs and swings from it, a static one just holds. Drag an end handle to move or re-anchor it. Shift-drag the chain itself to pull a wrap point out of it and drop it on a corner the chain should bend around - a beam, a pulley - and drag a wrap point's handle to move it. One wrap point per piece is enough: a circle gets its two tangent points and a beam its corners from that one. The chain winds onto its A end when that body turns.";
     g.appendChild(hint);
 
     const planeHint = el("div", "ed-hint");
     planeHint.textContent =
-      "Scenery: drawn behind the level, and solved against nothing but its own two bodies, so it passes through the geometry, the player and the hook.";
+      "Scenery: drawn behind the level, and solved against nothing but its own two bodies and the bodies its wrap points are on, so it passes through everything else - the geometry, the player and the hook.";
     g.appendChild(planeHint);
+
+    if (chains.length === 1) addWrapPointRows(g, chains[0]!);
 
     // Slack is what a chain is for, so the length is authored in scene pixels
     // like every other length. Blank = exactly taut between the two anchors,
@@ -4093,6 +4140,85 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     g.appendChild(row);
     inspector.appendChild(g);
+  }
+
+  // The chain's wrap points, one row each in route order - which body each is
+  // on, by its outliner number, and a way to take it out of the route again -
+  // and a button that adds one without the drag: at the midpoint of the
+  // chain's longest span, on the nearest corner of whatever chainable piece is
+  // closest, for a route whose spans are too short or too buried to Shift-drag.
+  function addWrapPointRows(g: HTMLElement, c: EdChain): void {
+    const runs = bodyRuns(model.items.filter((i) => i.layer === "scene"));
+    const indexOfBody = new Map<number, number>();
+    runs.forEach((members, i) => indexOfBody.set(members[0]!.bodyId, i));
+    const vias = chainViaItems(model, c);
+    vias.forEach((v, i) => {
+      const row = el("div", "ed-row");
+      const label = el("span", "ed-hint");
+      const at = indexOfBody.get(v.bodyId);
+      label.textContent = `wrap ${i + 1} · body ${at === undefined ? "?" : at}`;
+      row.append(
+        label,
+        button("×", () => {
+          beginAction();
+          c.via = c.via.filter((id) => id !== v.id);
+          // The anchor it was is now named by nothing, and an anchor nothing
+          // names is wreckage rather than something an author placed.
+          pruneAnchors();
+          markDirty();
+          rebuildInspector();
+        }),
+      );
+      g.appendChild(row);
+    });
+    const row = el("div", "ed-row");
+    row.appendChild(button("+ Wrap point", () => addWrapPointAuto(c)));
+    g.appendChild(row);
+  }
+
+  // Put a wrap point on `host` at (the corner nearest) `world`, in the route
+  // after span `index` - between the two points that span ran between.
+  function addWrapPoint(c: EdChain, index: number, host: EdItem, world: Vec2): void {
+    if (!chainable(host)) return;
+    beginAction();
+    const v = newAnchorOn(host, world, nearestCornerLocal);
+    model.items.push(v);
+    const via = [...c.via];
+    via.splice(Math.max(0, Math.min(index, via.length)), 0, v.id);
+    c.via = via;
+    markDirty();
+    rebuildInspector();
+  }
+
+  // The button's version of the drag: the longest span's midpoint, on the
+  // piece under it, or failing that on the chainable piece whose nearest corner
+  // is closest - which is where a wrap point pulled out there would land.
+  function addWrapPointAuto(c: EdChain): void {
+    const path = chainPath(model, c);
+    if (!path) return;
+    let index = 0;
+    let longest = -1;
+    for (let i = 0; i < path.length - 1; i++) {
+      const l = path[i + 1]!.distanceTo(path[i]!);
+      if (l > longest) {
+        longest = l;
+        index = i;
+      }
+    }
+    const mid = path[index]!.add(path[index + 1]!).mul(0.5);
+    let host = topmostAt(mid, (b) => chainable(b));
+    if (!host) {
+      let bestD = Infinity;
+      for (const it of model.items) {
+        if (!chainable(it)) continue;
+        const d = toWorld(it, nearestCornerLocal(it, mid)).distanceTo(mid);
+        if (d < bestD) {
+          bestD = d;
+          host = it;
+        }
+      }
+    }
+    if (host) addWrapPoint(c, index, host, mid);
   }
 
   // Vine panel. A vine has no placement of its own either - its one point is on
@@ -4835,14 +4961,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           : `${anchors.length} anchors selected`,
       ),
     );
-    const held = model.chains.filter((c) =>
-      anchors.some((a) => c.a === a.id || c.b === a.id),
-    );
+    const tied = model.chains.filter((c) => anchors.some((a) => c.a === a.id || c.b === a.id));
+    const routed = model.chains.filter((c) => anchors.some((a) => c.via.includes(a.id)));
+    const held = tied.length + routed.filter((c) => !tied.includes(c)).length;
     const hint = el("div", "ed-hint");
     hint.textContent =
       anchors.length === 1
-        ? `A chain's tie point on this body. It is an object IN the body, so it rides it: moving or turning the body moves the anchor, and the chain follows without anything being re-derived. ${held.length === 1 ? "One chain" : `${held.length} chains`} tied here.`
-        : "Chain tie points. Each is an object in its body and rides it; the chains follow.";
+        ? `${tied.length ? "A chain's tie point on this body" : "A chain's wrap point on this body - a corner the chain bends around"}. It is an object IN the body, so it rides it: moving or turning the body moves the anchor, and the chain follows without anything being re-derived. ${held === 1 ? "One chain" : `${held} chains`} ${tied.length ? "tied here" : "routed over it"}.`
+        : "Chain tie and wrap points. Each is an object in its body and rides it; the chains follow.";
     g.appendChild(hint);
 
     const num = groupNum(g, anchors);
@@ -5261,7 +5387,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const a = idOf.get(c.a);
       const b = idOf.get(c.b);
       if (a === undefined || b === undefined) continue;
-      out.push({ ...cloneChain(c), id: newBodyId(), a, b });
+      // A wrap point whose anchor was not copied is dropped from the copy's
+      // route rather than pointed at the original, as a vine's second anchor is.
+      const via: number[] = [];
+      for (const id of c.via) {
+        const v = idOf.get(id);
+        if (v !== undefined) via.push(v);
+      }
+      out.push({ ...cloneChain(c), id: newBodyId(), a, b, via });
     }
     return out;
   }
@@ -5425,16 +5558,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // surface. It joins the host's BODY, which is the whole point of the anchor
   // being an object: it rides the body from then on, with nothing to keep in
   // step and no re-derivation at load.
-  function newAnchorOn(host: EdItem, world: Vec2): EdItem {
+  //
+  // `snap` is where on the host it lands: the surface for a chain END, which
+  // is what bolting a chain to a body means (and an anchor in a body's interior
+  // leaves the chain's span starting inside it, which the wrap generator
+  // resolves as a self-intersection - see `nearestSurfaceLocal`); a CORNER for
+  // a wrap point, since a corner is what a chain bends around.
+  function newAnchorOn(
+    host: EdItem,
+    world: Vec2,
+    snap: (host: EdItem, world: Vec2) => Vec2 = nearestSurfaceLocal,
+  ): EdItem {
     return {
       ...host,
       id: newBodyId(),
       object: "anchor",
-      // Snapped to the surface, because that is what bolting a chain to a body
-      // means - and because an anchor in a body's interior leaves the chain's
-      // span starting inside it, which the wrap generator resolves as a
-      // self-intersection (see `nearestSurfaceLocal`).
-      pos: toWorld(host, nearestSurfaceLocal(host, world)),
+      pos: toWorld(host, snap(host, world)),
       rot: host.rot,
       shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
       visual: defaultVisual(),
@@ -5468,6 +5607,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       id: newBodyId(),
       a: a.id,
       b: b.id,
+      via: [],
       length: null, // taut as drawn
       color: null,
     };
@@ -5539,6 +5679,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function pruneChains(): void {
     const live = new Set(model.items.filter((i) => i.object === "anchor").map((i) => i.id));
     model.chains = model.chains.filter((c) => live.has(c.a) && live.has(c.b));
+    // A chain outlives a WRAP POINT the way a vine outlives its second anchor:
+    // the route loses the point and the chain keeps its ends.
+    for (const c of model.chains) {
+      if (c.via.some((id) => !live.has(id))) c.via = c.via.filter((id) => live.has(id));
+    }
     model.vines = model.vines.filter((v) => live.has(v.anchor));
     for (const v of model.vines) {
       if (v.anchor2 !== null && !live.has(v.anchor2)) v.anchor2 = null;
@@ -5548,8 +5693,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // The shape an anchor slides along: the first collision object in its body,
   // which is what a chain is bolted to. A body with none cannot hold a chain at
   // all (`chainable`), so this is null only for a body taken apart under it.
-  const anchorHost = (a: EdItem): EdItem | null =>
-    bodyMembers(model.items, a.bodyId).find((m) => m.object === "collision") ?? null;
+  //
+  // The first piece the rope can hold, where the body has one (a wheel's hub
+  // rather than its rim - see `chainable`), else its first piece at all.
+  const anchorHost = (a: EdItem): EdItem | null => {
+    const members = bodyMembers(model.items, a.bodyId);
+    return (
+      members.find((m) => m.object === "collision" && m.wrappable) ??
+      members.find((m) => m.object === "collision") ??
+      null
+    );
+  };
 
   // ...and the mirror of it: an anchor no chain names has nothing to be. They
   // are created only by stringing a chain, so one left behind is the wreckage of
@@ -5559,6 +5713,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const c of model.chains) {
       used.add(c.a);
       used.add(c.b);
+      for (const id of c.via) used.add(id);
     }
     for (const v of model.vines) {
       used.add(v.anchor);
@@ -5613,6 +5768,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       launch: DEFAULT_LAUNCH,
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
+      wrappable: true,
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
@@ -6329,6 +6485,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             return { mode: "chainEnd", chain: chains[0]!, end, cursor: p };
           }
         }
+        // ...and by its wrap points, each a handle of the same kind.
+        for (let i = 0; i < ends.via.length; i++) {
+          const p = ends.via[i]!;
+          if (scr.distanceTo(p) <= HANDLE_HIT_PX) {
+            return { mode: "chainVia", chain: chains[0]!, index: i, cursor: p };
+          }
+        }
       }
       return null;
     }
@@ -6759,6 +6922,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // picking it first would swallow every click near an anchor.
     const chain = topmostChainAt(world);
     if (chain) {
+      // Shift-drag on the chain that is already selected pulls a new WRAP POINT
+      // out of the span under the pointer (see `chainWrapOut`); a plain press
+      // selects, as on anything else.
+      if (e.shiftKey && selectedChainIds.has(chain.id)) {
+        const span = nearestChainSpan(model, chain, world);
+        drag = { mode: "chainWrapOut", chain, index: span?.index ?? 0, cursor: world };
+        return;
+      }
       setChainSelection([chain.id]);
       drag = null;
       return;
@@ -7381,6 +7552,27 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         refreshFields();
         break;
       }
+      case "chainVia": {
+        drag.cursor = world;
+        const anchor = anchorItem(model, drag.chain.via[drag.index] ?? -1);
+        if (!anchor) break;
+        // Any body under the pointer, an end's own included - a chain may well
+        // bend over the far corner of the beam it is bolted to. Over nothing it
+        // stays on the body it has. It lands on a CORNER, since that is what a
+        // wrap point is (see `nearestCornerLocal`).
+        const host = topmostAt(world, (b) => chainable(b)) ?? anchorHost(anchor);
+        if (!host) break;
+        anchor.bodyId = host.bodyId;
+        anchor.rot = host.rot;
+        anchor.pos = toWorld(host, nearestCornerLocal(host, world));
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "chainWrapOut": {
+        drag.cursor = world;
+        break;
+      }
     }
   });
 
@@ -7488,6 +7680,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // simply abandoned, rather than leaving one end in mid-air.
       const to = topmostAt(drag.cursor, (b) => chainable(b));
       if (to) addChain(drag.from, toWorld(drag.from, drag.local), to, drag.cursor);
+    }
+    if (drag.mode === "chainWrapOut") {
+      // A wrap point lands only on a body: released over empty space the
+      // gesture is abandoned and the chain is exactly as it was.
+      const to = topmostAt(drag.cursor, (b) => chainable(b));
+      if (to) addWrapPoint(drag.chain, drag.index, to, drag.cursor);
     }
     drag = null;
     applyToolCursor();
@@ -7642,6 +7840,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       to.id !== drag.from.id &&
       !(drag.from.bodyId !== null && to.bodyId === drag.from.bodyId);
     return { from, to: drag.cursor, valid };
+  }
+
+  // A wrap point being pulled out of a chain, as the renderer wants it: the
+  // whole route with the new point in the span it came from - already on the
+  // corner it would land on, where there is a body under the pointer - and
+  // whether releasing there would land it at all.
+  function wrapDraftView(): { path: Vec2[]; valid: boolean } | null {
+    if (!drag || drag.mode !== "chainWrapOut") return null;
+    const path = chainPath(model, drag.chain);
+    if (!path) return null;
+    const to = topmostAt(drag.cursor, (b) => chainable(b));
+    const at = to ? toWorld(to, nearestCornerLocal(to, drag.cursor)) : drag.cursor;
+    path.splice(drag.index + 1, 0, at);
+    return { path, valid: to !== null };
   }
 
   // The vine being pulled out - or a tip being Shift-carried toward a second
@@ -7842,6 +8054,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         selectedBodyIds,
         selectedVerts,
         currentSettleGhosts(),
+        wrapDraftView(),
       );
     }
     requestAnimationFrame(frame);

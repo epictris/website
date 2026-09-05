@@ -47,8 +47,8 @@ import {
   type LevelBodyData,
   type RawLevelData,
 } from "../level/levelFormat";
-import { SceneChain, stepSceneChains } from "../level/chains";
-import { RopeContact } from "../lib/ropeContact";
+import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
+import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { BallLevel } from "../level/ballLevel";
 import { slideSparkDirection, SLIDE_RAMP_STEPS, SparkSystem } from "../render/sparks";
@@ -2437,6 +2437,213 @@ function caseChainOrder(): ContactResult {
 // push-out is what that wants and it belongs with the ball's own phase, which
 // has the identical hole; until then `energy-gained` still fires on a hard jam.
 // ---------------------------------------------------------------------------
+// chain-wrap-point - a chain routed over authored wrap points, and a piece the
+// rope ignores.
+//
+// The manual crane: a pivot WHEEL of two pieces in one body - a rim the player
+// rolls, marked chain-through (`wrappable: false`), and a hub the chain winds
+// on - a static beam with a wrap point at its near top corner, and a box hung
+// from the far side. The chain's route is authored, not found: as the crow
+// flies from hub to box it is nowhere near the beam, so the scan could never
+// produce it (`ChainData.via`), and the one authored corner is completed round
+// the beam's top by the loader (`authoredWrap`).
+//
+// What is asserted is what the level author sees. The route builds as hub,
+// both top corners, box, in that order, and the wheel's rim is on it nowhere.
+// The box HANGS - a chain over a beam holds a load, where a straight chain to
+// the hub would have let it swing under the wheel - and hangs plumb under the
+// far corner. Winding the hub hauls it up by hub radius times angle, the
+// gearing the crane exists for, and the chain stays over the beam and within
+// tolerance throughout. And the piece flag: an anchor authored on the
+// chain-through rim is re-tied to the hub by the loader, while a rope solved
+// AGAINST the wheel wraps the rim when it is rope geometry and passes straight
+// through it when it is not - the one statement `wrappable` makes, checked
+// through the same scan the ball's chain uses. A wrap point naming an anchor
+// the level does not have is skipped and the chain keeps its ends.
+// ---------------------------------------------------------------------------
+function caseChainWrapPoint(): ContactResult {
+  const R = 1;
+  const r = 0.25;
+  const level = (rimWrappable: boolean, via: number[]): RawLevelData => ({
+    player: { x: -300, y: -50, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        pivot: true,
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            shape: { kind: "circle", r: R / PX },
+            ...(rimWrappable ? {} : { wrappable: false }),
+          },
+          { type: "collision", shape: { kind: "circle", r: r / PX }, material: "stone" },
+          // Authored at the top of the RIM: the loader re-ties it to the hub.
+          { type: "anchor", id: 1, x: 0, y: -R / PX },
+        ],
+      },
+      {
+        kind: "static",
+        x: 300,
+        y: -300,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 40, h: 20 } },
+          // The near top corner of the beam, where the chain goes over.
+          { type: "anchor", id: 2, x: -20, y: -10 },
+        ],
+      },
+      {
+        kind: "rigid",
+        x: 320,
+        y: 100,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 60 }, material: "stone" },
+          { type: "anchor", id: 3, x: 0, y: -30 },
+        ],
+      },
+      { kind: "static", x: 0, y: 600, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 2000, h: 40 } }] },
+    ],
+    chains: [{ a: 1, b: 3, via }],
+  });
+
+  const build = (rimWrappable: boolean, via: number[]) => {
+    const data = scaleLevelData(level(rimWrappable, via), PX);
+    const world = new World();
+    const built = buildLevelBodies(world, data, () => {});
+    const chains = buildSceneChains(data, built);
+    return {
+      world,
+      chain: chains[0]!,
+      wheel: built.bodies[0]!.body as RigidBody2D,
+      box: built.bodies[2]!.body as RigidBody2D,
+    };
+  };
+
+  const rig = build(false, [2]);
+  const pathOf = () =>
+    rig.chain.rope.path().map((n) => ({
+      body: n.contact.obj,
+      shape: n.contact.shapeIndex,
+      at: n.contact.globalPosition,
+    }));
+  const p0 = pathOf();
+  const near = (a: Vec2, x: number, y: number) => a.distanceTo(new Vec2(x, y)) < 1e-6;
+  const routed =
+    p0.length === 4 &&
+    p0[0]!.body === rig.wheel &&
+    p0[0]!.shape === 1 &&
+    near(p0[0]!.at, 0, -r) &&
+    near(p0[1]!.at, 2.8, -3.1) &&
+    near(p0[2]!.at, 3.2, -3.1) &&
+    p0[3]!.body === rig.box;
+  const rimFlag = !rig.wheel.getShapes()[0]!.wrappable && rig.wheel.getShapes()[1]!.wrappable;
+
+  // Wind the hub kinematically: the wheel is held at the commanded spin either
+  // side of the integrate, so what the box does is the chain's doing alone.
+  let onRim = false;
+  let worstOver = 0;
+  let offBeam = false;
+  const run = (frames: number, spin: number) => {
+    for (let i = 0; i < frames; i++) {
+      rig.wheel.angularVelocity = spin;
+      rig.world.integrate(DT);
+      rig.wheel.angularVelocity = spin;
+      stepSceneChains([rig.chain], rig.world, DT);
+      const path = pathOf();
+      if (path.some((n) => n.body === rig.wheel && n.shape === 0)) onRim = true;
+      if (!path.some((n) => n.body !== rig.wheel && n.body !== rig.box)) offBeam = true;
+      worstOver = Math.max(worstOver, rig.chain.rope.overLength);
+    }
+  };
+  const y0 = rig.box.globalPosition.y;
+  run(60, 0);
+  const hangs = Math.abs(rig.box.globalPosition.y - y0) < 0.02 && Math.abs(rig.box.globalPosition.x - 3.2) < 0.02;
+  const turn = 4;
+  run(120, -2);
+  const hauled = y0 - rig.box.globalPosition.y;
+  const gearing = Math.abs(hauled - r * turn) < 0.05;
+  run(120, 2);
+  const lowered = Math.abs(rig.box.globalPosition.y - y0) < 0.05;
+  const taut = worstOver <= CHAIN_TOLERANCE;
+
+  // The flag, through the scan: the same wheel with a chain solved AGAINST it,
+  // laid straight through the rim from a post on the far side to the box. (Not
+  // from the hub: a chain that STARTS inside the rim leaves it without bending,
+  // so there is no wrap for the scan to find either way - which is the whole
+  // reason the crane's rim has to be chain-through.)
+  const through = (rimWrappable: boolean): boolean => {
+    const w = build(rimWrappable, []);
+    const post = new StaticBody2D();
+    post.globalPosition = new Vec2(-3, 0.5);
+    post.setShape(rectShape(0.2, 0.2));
+    w.world.add(post);
+    const a = new Vec2(-2.9, 0.5);
+    const b = new Vec2(3.2, 0.7);
+    const chain = new SceneChain(RopeContact.at(post, a), RopeContact.at(w.box, b), 8, null, [w.wheel]);
+    chain.beginFrame(DT);
+    chain.solve(DT);
+    return !chain.rope.path().some((n) => n.contact.obj === w.wheel && n.contact.shapeIndex === 0);
+  };
+  const ignored = through(false);
+  const wrapped = !through(true);
+
+  const dead = build(false, [7, 2]);
+  const skipped = dead.chain.rope.path().length === 4;
+
+  // A run of wrap points on ONE piece is one wrap of it: a pulley ringed with
+  // seven points (an author being thorough) builds as two tangent nodes, both
+  // over the top of it and turning the same way, with the chain leaving for
+  // the load off the far side rather than doubling back under the pulley
+  // (session-110f).
+  const pulleyLevel = level(false, []);
+  pulleyLevel.bodies[1] = {
+    kind: "static",
+    x: 300,
+    y: -300,
+    rot: 0,
+    objects: [
+      { type: "collision", shape: { kind: "circle", r: 10 } },
+      ...[16, 15, 12, 10, 11, 13, 14].map((id, k) => {
+        const a = Math.PI * (1.05 - (k / 6) * 1.1);
+        return { type: "anchor" as const, id, x: 10 * Math.cos(a), y: -10 * Math.sin(a) };
+      }),
+    ],
+  };
+  pulleyLevel.chains = [{ a: 1, b: 3, via: [16, 15, 12, 10, 11, 13, 14] }];
+  const pulleyData = scaleLevelData(pulleyLevel, PX);
+  const pulleyWorld = new World();
+  const pulleyBuilt = buildLevelBodies(pulleyWorld, pulleyData, () => {});
+  const pulleyChain = buildSceneChains(pulleyData, pulleyBuilt)[0]!;
+  const pulley = pulleyBuilt.bodies[1]!.body!;
+  const onPulley = pulleyChain.rope.path().filter((n) => n.contact.obj === pulley);
+  const ringed =
+    pulleyChain.rope.path().length === 4 &&
+    onPulley.length === 2 &&
+    onPulley.every((n) => n.contact.globalPosition.y < -3) &&
+    onPulley[0]!.contact.globalPosition.x < onPulley[1]!.contact.globalPosition.x &&
+    (onPulley[0] as RopeWrap).wrapDir === (onPulley[1] as RopeWrap).wrapDir;
+
+  const passed = routed && rimFlag && hangs && gearing && lowered && taut && !onRim && !offBeam && ignored && wrapped && skipped && ringed;
+  return ok("chain-wrap-point — a chain routed over an authored corner holds, hauls by the hub's gearing, and ignores a chain-through piece", passed, [
+    `${routed ? "ok  " : "BAD "} route builds hub → (2.8,-3.1) → (3.2,-3.1) → box, ${p0.length} nodes`,
+    `${rimFlag ? "ok  " : "BAD "} rim reads chain-through, hub reads rope geometry`,
+    `${hangs ? "ok  " : "BAD "} box hangs plumb under the far corner at rest (x ${rig.box.globalPosition.x.toFixed(3)})`,
+    `${gearing ? "ok  " : "BAD "} ${turn} rad of hub hauls ${(hauled * 1000).toFixed(0)}mm (want ${(r * turn * 1000).toFixed(0)}mm)`,
+    `${lowered ? "ok  " : "BAD "} unwinding lowers it back (${((rig.box.globalPosition.y - y0) * 1000).toFixed(0)}mm off)`,
+    `${taut ? "ok  " : "BAD "} worst over-length ${(worstOver * 1000).toFixed(2)}mm (want ≤${CHAIN_TOLERANCE * 1000}mm)`,
+    `${!onRim ? "ok  " : "BAD "} the rim is never on the chain's path`,
+    `${!offBeam ? "ok  " : "BAD "} the chain stays over the beam throughout`,
+    `${ignored ? "ok  " : "BAD "} a rope solved against the wheel passes through a chain-through rim`,
+    `${wrapped ? "ok  " : "BAD "} ...and wraps a rim that is rope geometry`,
+    `${skipped ? "ok  " : "BAD "} a wrap point naming a missing anchor is skipped, chain kept (${dead.chain.rope.path().length} nodes)`,
+    `${ringed ? "ok  " : "BAD "} seven wrap points round a pulley build as one wrap over its top (${onPulley.map((n) => `(${n.contact.globalPosition.x.toFixed(2)},${n.contact.globalPosition.y.toFixed(2)})`).join(" ")})`,
+  ]);
+}
+
 // hung-anchor - a chain-hung anchor cannot be wound into a slingshot.
 //
 // `cli spring`'s `whirl-anchor` made this statement about a pivot, and a body a
@@ -4070,6 +4277,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseTrampoline());
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
+  results.push(caseChainWrapPoint());
   results.push(caseHungAnchor());
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());

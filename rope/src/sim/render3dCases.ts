@@ -2328,10 +2328,93 @@ function chainAnchors(): CaseResult[] {
   ];
 }
 
+// A chain's WRAP POINTS (`ChainData.via`) and a piece's `wrappable` flag are
+// both content the format has to carry unchanged: through the pixel-to-metre
+// scale every load applies, and through the editor, where a wrap point is an
+// anchor item like the ends and the flag is a per-piece checkbox. Neither
+// failing is loud - a dropped `via` is a chain that hangs straight, a dropped
+// flag is a rim the chain suddenly winds onto.
+function chainWrapPoints(): CaseResult[] {
+  const raw: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        pivot: true,
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "circle", r: 100 }, wrappable: false },
+          { type: "collision", shape: { kind: "circle", r: 25 } },
+          { type: "anchor", id: 1, x: 0, y: -25 },
+        ],
+      },
+      {
+        kind: "static",
+        x: 300,
+        y: -300,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 40, h: 20 } },
+          { type: "anchor", id: 2, x: -20, y: -10 },
+        ],
+      },
+      {
+        kind: "rigid",
+        x: 320,
+        y: 100,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 60 } },
+          { type: "anchor", id: 3, x: 0, y: -30 },
+        ],
+      },
+    ],
+    chains: [{ a: 1, b: 3, via: [2] }],
+  };
+  const scaled = scaleLevelData(raw, 0.01);
+  const viaScaled = JSON.stringify(scaled.chains?.[0]?.via) === "[2]";
+  const rim = scaled.bodies[0]!.objects[0]!;
+  const flagScaled = rim.type === "collision" && rim.wrappable === false;
+
+  const round = modelToDisk(modelFromDisk(raw));
+  const rc = round.chains?.[0];
+  const viaKept =
+    round.chains?.length === 1 &&
+    rc !== undefined &&
+    typeof rc.a === "number" &&
+    Array.isArray(rc.via) &&
+    rc.via.length === 1 &&
+    round.bodies.flatMap((b) => b.objects.filter(isAnchorObject)).some((o) => o.id === rc.via![0]) &&
+    round.bodies[1]!.objects.some((o) => isAnchorObject(o) && o.id === rc.via![0]);
+  const roundRim = round.bodies[0]!.objects[0]!;
+  const roundHub = round.bodies[0]!.objects[1]!;
+  const flagKept =
+    roundRim.type === "collision" &&
+    roundRim.wrappable === false &&
+    roundHub.type === "collision" &&
+    roundHub.wrappable === undefined;
+
+  return [
+    {
+      name: "chains: a wrap point and a chain-through flag survive the scale every load applies",
+      pass: viaScaled && flagScaled,
+      detail: viaScaled && flagScaled ? "via [2], rim wrappable: false" : JSON.stringify({ via: scaled.chains?.[0]?.via, rim }),
+    },
+    {
+      name: "chains: ...and the editor round trip, the wrap point as an anchor on the beam",
+      pass: viaKept && flagKept,
+      detail: viaKept && flagKept ? "1 chain, via on body 1, rim flagged, hub not" : JSON.stringify({ chain: rc, rim: roundRim, hub: roundHub }),
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...renderNeedsGeometry(),
     ...chainAnchors(),
+    ...chainWrapPoints(),
     ...cameraCorrespondence(),
     ...blendStability(),
     ...orbitView(),

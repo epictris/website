@@ -20,7 +20,9 @@ export class CollisionShape2D implements ShapeTransform {
   // one piece of geometry the chain is already threaded through.
   //
   // A property of the shape rather than of the body, because a compound body
-  // can legitimately be both at once — which is exactly the ball's case.
+  // can legitimately be both at once — which is exactly the ball's case, and
+  // a level's too: `CollisionObjectData.wrappable` authors it per piece, for
+  // the wheel whose rim is turned and whose hub winds the chain.
   wrappable = true;
 
   // Is this surface hook-proof? A hook that reaches it is destroyed (the grapple

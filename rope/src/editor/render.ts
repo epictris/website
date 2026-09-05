@@ -15,6 +15,8 @@ import {
   pathDataOf,
   CAMERA_REGION_COLOR,
   chainEnds,
+  chainPath,
+  chainViaItems,
   vineRestPath,
   ED_LAYERS,
   bodyBounds,
@@ -382,16 +384,20 @@ function pathHandlePoints(
   return out;
 }
 
-// Screen positions of a chain's two anchor handles, or null if either body it
-// was tied to has gone.
+// Screen positions of a chain's two anchor handles and of its wrap points'
+// handles (in route order), or null if either body it was tied to has gone.
 export function computeChainHandles(
   cam: Camera,
   model: EdModel,
   chain: EdChain,
-): { a: Vec2; b: Vec2 } | null {
+): { a: Vec2; b: Vec2; via: Vec2[] } | null {
   const ends = chainEnds(model, chain);
   if (!ends) return null;
-  return { a: worldToScreen(cam, ends.a), b: worldToScreen(cam, ends.b) };
+  return {
+    a: worldToScreen(cam, ends.a),
+    b: worldToScreen(cam, ends.b),
+    via: chainViaItems(model, chain).map((i) => worldToScreen(cam, i.pos)),
+  };
 }
 
 // Screen positions of a vine's two draggable handles: the anchor it hangs from,
@@ -1512,6 +1518,10 @@ export function drawEditor(
   // are visible while the authored pose is what is being edited. Cached by the
   // caller per model revision - the list is a full level build.
   settleGhosts: readonly SettleGhost[] = [],
+  // A wrap point being pulled out of a chain (see `chainWrapOut` in
+  // editor.ts): the whole route with the new point in it, and whether it is
+  // over a body it could land on.
+  wrapDraft: { path: readonly Vec2[]; valid: boolean } | null = null,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -1650,6 +1660,12 @@ export function drawEditor(
         ctx.strokeStyle = IMPERMEABLE_EDGE;
         ctx.lineWidth = worldLine * 2;
         ctx.setLineDash([5 * PX, 3 * PX]);
+      } else if (!m.wrappable) {
+        // Chain-through: dotted, as a piece the rope passes through - the mark
+        // hook-only bodies wear, which are passed through by everything.
+        ctx.strokeStyle = body.color;
+        ctx.lineWidth = worldLine;
+        ctx.setLineDash([PX, 2 * PX]);
       } else {
         ctx.strokeStyle = body.color;
         ctx.lineWidth = worldLine;
@@ -1718,8 +1734,9 @@ export function drawEditor(
       ctx.setLineDash([5 * PX, 3 * PX]);
       ctx.stroke();
       ctx.setLineDash([]);
-    } else if (body.passable) {
+    } else if (body.passable || !body.wrappable) {
       // Hook-only: dotted edge, as in game — nothing about it reads as solid.
+      // Chain-through wears the same mark: a piece the rope passes through.
       ctx.strokeStyle = body.color;
       ctx.lineWidth = worldLine;
       ctx.setLineDash([PX, 2 * PX]);
@@ -1809,16 +1826,21 @@ export function drawEditor(
   // drawing a guessed sag here would be a drawing of something the level does
   // not contain.
   if (visibleLayers.has("scene")) {
+    const traceRoute = (path: readonly Vec2[]): void => {
+      ctx.beginPath();
+      ctx.moveTo(path[0]!.x, path[0]!.y);
+      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i]!.x, path[i]!.y);
+    };
     for (const c of model.chains) {
-      const ends = chainEnds(model, c);
-      if (!ends) continue;
+      // The route: end, wrap points, end. Straight between them, which is what
+      // the solver's spans are.
+      const path = chainPath(model, c);
+      if (!path) continue;
       const selected = selectedChainIds.has(c.id);
       if (selected) {
         ctx.strokeStyle = SELECT;
         ctx.lineWidth = worldLine * 5;
-        ctx.beginPath();
-        ctx.moveTo(ends.a.x, ends.a.y);
-        ctx.lineTo(ends.b.x, ends.b.y);
+        traceRoute(path);
         ctx.stroke();
       }
       const color = c.color ?? CHAIN_DEFAULT_COLOR;
@@ -1829,19 +1851,37 @@ export function drawEditor(
       // through it, the player and the hook (see `SceneChain`). The anchor rings
       // stay solid - those are still real, editable points.
       ctx.setLineDash([7 * worldLine, 5 * worldLine]);
-      ctx.beginPath();
-      ctx.moveTo(ends.a.x, ends.a.y);
-      ctx.lineTo(ends.b.x, ends.b.y);
+      traceRoute(path);
       ctx.stroke();
       ctx.setLineDash([]);
       // A ring at each anchor: the chain is pinned to a point on a body, and the
       // point is what an author places, so it has to be findable under the fill.
+      // A wrap point is a HOLLOW ring - the chain bends around it rather than
+      // being tied to it, and the two must read differently at a glance.
       ctx.fillStyle = color;
-      for (const p of [ends.a, ends.b]) {
+      for (const p of [path[0]!, path[path.length - 1]!]) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.lineWidth = worldLine * 1.5;
+      for (let i = 1; i < path.length - 1; i++) {
+        const p = path[i]!;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, CHAIN_ANCHOR_R_PX * worldLine, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    // A wrap point being pulled out: the route as it would be, dashed as a
+    // chain is while it is over a body it can land on, and dotted in the
+    // selection colour while it has nowhere to land.
+    if (wrapDraft) {
+      ctx.strokeStyle = wrapDraft.valid ? CHAIN_DEFAULT_COLOR : SELECT;
+      ctx.lineWidth = worldLine * 2;
+      ctx.setLineDash(wrapDraft.valid ? [7 * worldLine, 5 * worldLine] : [3 * worldLine, 3 * worldLine]);
+      traceRoute(wrapDraft.path);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
 

@@ -14,24 +14,42 @@
 // docs/game-design.md.)
 //
 // A chain is scenery, and scenery is all it is: it is solved against nothing but
-// the two bodies it is tied to, so it hangs and swings and hauls those two and
-// passes through everything else, and it is drawn behind the level's geometry to
-// say so. There was briefly a second, "foreground" kind that the whole scene was
-// solved against - the avatar and its hook could push into it and be held by it -
-// and it was dropped: it bought little that a body does not already buy, and it
-// paid for that by making every chain a thing the player might silently snag on.
+// the two bodies it is tied to and the bodies its WRAP POINTS name, so it hangs
+// and swings and hauls those two and passes through everything else, and it is
+// drawn behind the level's geometry to say so. There was briefly a second,
+// "foreground" kind that the whole scene was solved against - the avatar and its
+// hook could push into it and be held by it - and it was dropped: it bought
+// little that a body does not already buy, and it paid for that by making every
+// chain a thing the player might silently snag on.
+//
+// A wrap point (`ChainData.via`) is the opt-in: an authored anchor the chain is
+// routed OVER, which at load becomes an ordinary wrap node on the corner of the
+// piece it sits on, and puts that piece's body in the set this chain's spans
+// are solved against. From then on it is the same wrap the ball's chain finds
+// by scanning - regenerated as the bodies move, culled if the chain ever pulls
+// straight past it - which is what a chain over a beam or a pulley does. The
+// authoring exists because the scan cannot find it: a chain hung from a hub up
+// over a beam and down to a load is, as a straight line, nowhere near the beam.
 
 import { Vec2 } from "../engine/vec2";
+import { PX } from "../engine/units";
 import {
+  PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
   type CollisionObject2D,
-  type PhysicsBody2D,
+  type CollisionShape2D,
 } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
 import { GRAVITY, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
-import { RopeContact } from "../lib/ropeContact";
+import { RopeContact, RopeWrap } from "../lib/ropeContact";
+import { Segment } from "../lib/segment";
+import { ShapeGeometry } from "../lib/shapeGeometry";
+import { Intersections } from "../lib/intersections";
+import { RopeGeneration } from "../lib/ropeGeneration";
+import { Calc } from "../lib/calc";
+import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/types";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { localPlacement, worldPlacement, type BuiltBodies } from "./buildBodies";
 import {
@@ -121,14 +139,21 @@ export class SceneChain implements SceneConstraint {
   // per sweep for the privilege of doing nothing.
   private lastSolveWasIdentity = false;
 
+  // `length` null = the path length as built, through `wraps` - "taut as
+  // authored" for a chain routed over its wrap points as much as for one
+  // strung straight. `wraps` are the initial wrap nodes (a chain's authored
+  // wrap points, see `buildOne`); every body they sit on must be in
+  // `wrapBodies`, or the scan that re-resolves them each frame would never
+  // re-find a corner the chain slid off.
   constructor(
     a: RopeContact,
     b: RopeContact,
-    length: number,
+    length: number | null,
     color: string | null,
     wrapBodies: PhysicsBody2D[] = NOTHING,
+    wraps: RopeWrap[] = [],
   ) {
-    this.rope = new Rope(a, b, null, length);
+    this.rope = new Rope(a, b, wraps, length);
     this.color = color;
     this.wrapBodies = wrapBodies;
     this.watchBodies = [a.obj, b.obj, ...wrapBodies];
@@ -838,10 +863,142 @@ function sweepOneSet(
 // generator resolves that as a self-intersection, winding the chain around its
 // own anchor (see `nearestOnOutline`). It is applied at load rather than trusted
 // from the file so a hand-edited level cannot author the degenerate case.
+// The pieces of a body a chain may be tied to or routed over: the wrappable
+// ones. An unwrappable piece (`CollisionObjectData.wrappable: false`) is solid
+// scenery the rope passes straight through, so an anchor authored on it lands on
+// the nearest piece the rope CAN hold instead - the hub inside a wheel's rim, on
+// the body that is the two of them welded together. Every piece, for a body
+// with no wrappable one: a chain tied there is what was authored, and the rope
+// simply never bends around it.
+function tieablePieces(obj: CollisionObject2D): { shape: CollisionShape2D; index: number }[] {
+  const all = obj.getShapes().map((shape, index) => ({ shape, index }));
+  const wrappable = all.filter((p) => p.shape.wrappable);
+  return wrappable.length > 0 ? wrappable : all;
+}
+
+// A chain END: the nearest point of the nearest tieable piece's surface, and
+// which piece that is.
 export function snapToSurface(obj: CollisionObject2D, world: Vec2): Vec2 {
-  const shapes = obj.getShapes();
-  const s = shapes[nearestShapeIndex(shapes, world)];
-  return s ? nearestSurfacePoint(s, world) : world;
+  return tieToSurface(obj, world).point;
+}
+
+function tieToSurface(
+  obj: CollisionObject2D,
+  world: Vec2,
+): { point: Vec2; shapeIndex: number } {
+  const pieces = tieablePieces(obj);
+  const p = pieces[nearestShapeIndex(pieces.map((q) => q.shape), world)];
+  if (!p) return { point: world, shapeIndex: 0 };
+  return { point: nearestSurfacePoint(p.shape, world), shapeIndex: p.index };
+}
+
+// The wrap nodes a run of authored wrap points on one piece stands for,
+// between the route's previous point and its next.
+//
+// A wrap node is a statement with a DIRECTION: the rope turns that way at it,
+// and `cullDetachedNodes` lets it go the frame the rope stops turning that
+// way. So the direction is read off the bend the authored route makes around
+// the piece - clockwise on screen or counter - which is also what the scan's
+// own chord-against-centre test comes to whenever a chord actually crosses a
+// piece; it is only for a route the scan could never have produced (a chain
+// that is nowhere near the beam it hangs over, as the crow flies) that the two
+// differ, and there the bend is the one that is true of the chain.
+//
+// ONE direction per run, read at the run's middle between the points either
+// side of the whole run, never per point. Read per point, a ring of seven
+// points around a pulley gave each its direction from the bend between its
+// two rim neighbours, which is next to no bend at all, and the last of them -
+// between a rim neighbour and the far-off hub - came out the mirror of the
+// other six: its exit tangent was then taken on the pulley's far side, and the
+// chain went over the top, back under, and off to the hub (session-110f).
+//
+// One corner is not always a state the rope can hold. A chain hung over the
+// near corner of a beam whose far side the load hangs down is, as one node,
+// a chain that turns over the corner and dives back through the beam: the
+// self-intersection resolver correctly refuses to continue a wrap whose next
+// span circulates the other way, and the scan excludes the span's own shape, so
+// nothing would ever mend it. That state is reachable in play only by HISTORY
+// (the rope's end carried over the beam), and this is the history: from the
+// authored corner, walk the piece's vertices in the bend's direction, adding
+// each, until the span on to the next point no longer cuts the piece. A circle
+// has no corners to walk and its wrap is two tangent points instead - where
+// the rope from the previous point first touches it and where it leaves for
+// the next - exactly the pair the scan and the resolver build between them.
+function authoredWrap(
+  obj: PhysicsBody2D,
+  ties: readonly { point: Vec2; shapeIndex: number }[],
+  prev: Vec2,
+  next: Vec2,
+): RopeWrap[] {
+  const shapeIndex = ties[0]!.shapeIndex;
+  const shape = obj.getShapes()[shapeIndex] ?? obj.primaryShape();
+  // The run's middle: on a circle the rim point in the mean direction of its
+  // points, which is where the chain crosses the piece; on a polygon its first
+  // corner, which is where the walk below starts.
+  const mean = ties.reduce((m, t) => m.add(t.point), Vec2.ZERO).div(ties.length);
+  const middle = shape.shape.kind === "circle" ? nearestSurfacePoint(shape, mean) : ties[0]!.point;
+  const bend = middle.sub(prev).cross(next.sub(middle));
+  const wrapDir = bend >= 0 ? WrapDirection.Clockwise : WrapDirection.CounterClockwise;
+  const node = (point: Vec2) =>
+    new RopeWrap(new RopeContact(obj, point.sub(obj.globalPosition), shapeIndex), wrapDir);
+
+  if (shape.shape.kind === "circle") {
+    const radius = shape.shape.radius;
+    const centre = shape.globalPosition;
+    const tangent = (from: Vec2, dir: GenerationDirection): Vec2 =>
+      from.distanceTo(centre) > radius
+        ? RopeGeneration.calculateCircleTangentPoint(shape, wrapDir, from, dir)
+        : middle;
+    const entry = tangent(prev, GenerationDirection.Forward);
+    const exit = tangent(next, GenerationDirection.Reversed);
+    return entry.distanceTo(exit) < PX ? [node(entry)] : [node(entry), node(exit)];
+  }
+
+  const corners = ShapeGeometry.getGlobalCorners(shape);
+  const n = corners.length;
+  let i = 0;
+  for (let k = 1; k < n; k++) {
+    if (corners[k]!.distanceSquaredTo(middle) < corners[i]!.distanceSquaredTo(middle)) i = k;
+  }
+  const out = [node(corners[i]!)];
+  for (let steps = 0; steps < n; steps++) {
+    const span = new Segment(corners[i]!, next);
+    if (Intersections.intersectsSegment(shape, span) !== IntersectionStatus.Overlap) break;
+    i = Calc.mod(i + (wrapDir as number), n);
+    out.push(node(corners[i]!));
+  }
+  return out;
+}
+
+// A chain WRAP POINT: the corner of the nearest tieable piece nearest the
+// authored point - or, on a circle, the rim point - and which piece that is. A
+// corner and not a face point, because a corner is what a rope bends around:
+// a wrap node on the middle of a face is a node the rope hangs from with no
+// geometry under the bend, which the detachment pass keeps for as long as the
+// chain happens to bend there and which no scan would ever have produced. On a
+// circle any rim point serves - the self-intersection resolvers slide a circle
+// wrap to its tangent point every frame.
+export function snapToCorner(
+  obj: CollisionObject2D,
+  world: Vec2,
+): { point: Vec2; shapeIndex: number } {
+  const pieces = tieablePieces(obj);
+  let best: { point: Vec2; shapeIndex: number } | null = null;
+  let bestSq = Infinity;
+  for (const { shape, index } of pieces) {
+    const candidates =
+      shape.shape.kind === "circle"
+        ? [nearestSurfacePoint(shape, world)]
+        : ShapeGeometry.getGlobalCorners(shape);
+    for (const c of candidates) {
+      const d = c.sub(world).lengthSquared();
+      if (d < bestSq) {
+        bestSq = d;
+        best = { point: c, shapeIndex: index };
+      }
+    }
+  }
+  return best ?? { point: world, shapeIndex: 0 };
 }
 
 // Build every chain in `data` (metres) against the bodies `buildLevelBodies`
@@ -923,18 +1080,68 @@ function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | 
   // through. The surface snap that follows is unchanged: an anchor left in a
   // body's interior leaves the chain's span starting INSIDE that body, and the
   // wrap generator resolves that as a self-intersection.
-  const worldA = snapToSurface(objA, anchorWorldPoint(siteA));
-  const worldB = snapToSurface(objB, anchorWorldPoint(siteB));
+  const tieA = tieToSurface(objA, anchorWorldPoint(siteA));
+  const tieB = tieToSurface(objB, anchorWorldPoint(siteB));
+  // The contact names the piece of the body it lands on, which is what the wrap
+  // resolvers walk when the chain has to bend around it.
+  const contact = (obj: CollisionObject2D, tie: { point: Vec2; shapeIndex: number }) =>
+    new RopeContact(obj, tie.point.sub(obj.globalPosition), tie.shapeIndex);
+  const start = contact(objA, tieA);
+  const end = contact(objB, tieB);
+
+  // The wrap points, in order from `a` to `b`. Each is an anchor on a body
+  // that builds; one that is not there, or is on a body that does not build,
+  // is skipped rather than dropping the chain - a chain with its two ends is
+  // still a chain, as a vine with a dead second anchor is still a vine.
+  const vias: { obj: PhysicsBody2D; tie: { point: Vec2; shapeIndex: number } }[] = [];
+  for (const id of c.via ?? []) {
+    const site = anchors.get(id);
+    const obj = site?.built.body;
+    // A wrap point is on a body a rope can bend around, which an area is not.
+    if (!site || !(obj instanceof PhysicsBody2D)) continue;
+    vias.push({ obj, tie: snapToCorner(obj, anchorWorldPoint(site)) });
+  }
+  // Consecutive wrap points on ONE piece are one wrap of it - a pulley an
+  // author ringed with seven points is still a chain going over a pulley once
+  // - and each run becomes the wrap nodes the scan would have left had the
+  // chain been dragged over that piece (see `authoredWrap`). The run's
+  // neighbours are the authored points either side of it.
+  const runs: { obj: PhysicsBody2D; ties: { point: Vec2; shapeIndex: number }[] }[] = [];
+  for (const v of vias) {
+    const last = runs[runs.length - 1];
+    if (last && last.obj === v.obj && last.ties[0]!.shapeIndex === v.tie.shapeIndex) {
+      last.ties.push(v.tie);
+    } else {
+      runs.push({ obj: v.obj, ties: [v.tie] });
+    }
+  }
+  const wraps: RopeWrap[] = [];
+  runs.forEach((run, i) => {
+    const prev = i === 0 ? tieA.point : runs[i - 1]!.ties[runs[i - 1]!.ties.length - 1]!.point;
+    const next = i === runs.length - 1 ? tieB.point : runs[i + 1]!.ties[0]!.point;
+    for (const w of authoredWrap(run.obj, run.ties, prev, next)) wraps.push(w);
+  });
+  // ...and its body joins the set this chain is solved against, once each,
+  // so the corner is re-found as the bodies move and a sibling corner of the
+  // same body catches the chain the way it would catch the ball's.
+  const wrapBodies: PhysicsBody2D[] = [];
+  for (const v of vias) if (!wrapBodies.includes(v.obj)) wrapBodies.push(v.obj);
+
   // Absent length = exactly taut as authored, which is what dragging a chain out
-  // between two bodies in the editor means - measured between the anchors as
-  // they actually land, so "taut" is taut.
-  const length = c.length ?? worldA.distanceTo(worldB);
-  // `RopeContact.at`: the anchor names the piece of the body it lands on, which
-  // is what the wrap resolvers walk when the chain has to bend around it.
+  // between two bodies in the editor means - measured along the path as the
+  // anchors and wrap points actually land, so "taut" is taut. A chain with no
+  // wrap points measures the plain distance between its two world points, and
+  // must: the rope's own measure reads the same two points back through their
+  // bodies' frames, two rotations of float noise away, and every recording
+  // that predates wrap points replays bit-for-bit against the direct one.
+  const length =
+    c.length ?? (wraps.length > 0 ? null : tieA.point.distanceTo(tieB.point));
   return new SceneChain(
-    RopeContact.at(objA, worldA),
-    RopeContact.at(objB, worldB),
+    start,
+    end,
     length,
     c.color ?? null,
+    wrapBodies.length > 0 ? wrapBodies : NOTHING,
+    wraps,
   );
 }

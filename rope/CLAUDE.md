@@ -2259,6 +2259,7 @@ What a chain is **not** is collision geometry: nothing stands on it and another 
 Both would need the chain to be a body per link, which is a different mechanism.
 
 A chain is **scenery**: drawn behind the level's geometry at 55% alpha, and solved against **nothing** - `SceneChain.physicsStep` hands the rope an empty candidate list, so it hangs, swings and hauls its own two bodies and passes through everything else.
+The one opt-in is a **wrap point** (below), which puts the body it sits on into that list and nothing else.
 The editor draws it dashed and `cli render` dashes it too, so a snapshot never reads a chain lying across a body as a chain caught on it.
 
 There was briefly a second, `foreground` plane - in the play space, drawn over the geometry and solved against the whole scene, so the span wrapped corners and the avatar and its hook could be caught by it - and it was **removed**.
@@ -2356,6 +2357,33 @@ Links are laid by **one continuous arc length** measured from the anchor end (`d
 A link straddles a wrap node rather than the run restarting there, which is both what a chain of rigid links does over a corner and the only form that survives a coil: `Rope` re-samples rope wound onto the ball every 0.25 rad, a node every ~3.1 mm on the rim and **shorter than one 3.8 mm link**, so laying links span by span floored every coil step to `floor(3.1 / 3.8)` = zero links.
 The entire wound-on part of the chain drew as blank space, one node at a time as the ball turned - read from the game as the chain's nodes being deleted where they lay on the player (`session-1467f`).
 The sim was correct throughout and every invariant, replay and bundle passed; see the frame grabber in the debugging steps.
+
+#### Wrap points
+
+A chain may be **routed over** geometry: `ChainData.via` is an ordered list of anchor ids the chain passes over on its way from `a` to `b`, and each of those is an ordinary anchor object on a body, exactly as the two ends are.
+That is the whole of the format: a wrap point is a point that belongs to a body and rides it, and the chain is still the only thing in a level that is a relation.
+It exists because the scan cannot find such a route - a chain hung from a hub, up over a beam and down to a load is, as a straight line from hub to load, nowhere near the beam - and a level author has to be able to say it.
+
+At load (`buildOne` in `level/chains.ts`) each wrap point becomes an **ordinary `RopeWrap`** handed to the `Rope` constructor, and its body joins the chain's wrap-candidate list, so from then on it is exactly the wrap the ball's chain finds by scanning: re-resolved as the bodies move, slid along a circle to its tangent point, and **let go** by `cullDetachedNodes` the moment the chain pulls straight past it, which is what a chain over a beam does.
+There is deliberately no pinned node kind: the same machinery, with the route seeded rather than discovered.
+Three things about the seeding are load-bearing.
+The point is snapped to the **nearest corner** of its piece (`snapToCorner`; the rim, for a circle), because a corner is what a rope bends around - a node on the middle of a face is one the rope hangs from with nothing under the bend.
+The wrap **direction is the bend the authored route makes there** (`authoredWrap`), clockwise on screen or counter, because that is the statement a wrap node makes and the one the detachment pass holds it to; the scan's own chord-against-centre test agrees whenever a chord actually crosses a piece, and differs precisely on the routes the scan could not produce - read from the chord, the beam wrap was culled on frame one and the load fell.
+It is one direction per **run** of consecutive wrap points on one piece, read at the run's middle between the points either side of the whole run, never per point: a pulley ringed with seven points gave each its direction from the near-zero bend between its rim neighbours, the last came out mirrored, and its exit tangent landed on the pulley's far side - the chain went over the top, back under, and off to the hub (`session-110f`).
+One wrap point per piece is therefore enough, and a run is collapsed to one wrap of that piece.
+And a single corner is completed **round the piece**: a chain over the near top corner of a beam whose far side the load hangs down is, as one node, a chain that turns over the corner and dives back through the beam, which the self-intersection resolver correctly refuses to continue (the next span circulates the other way) and the scan excludes (the span's own shape), so the loader walks the vertices in the bend's direction until the span on to the next point clears the piece.
+That state is reachable in play only by history - the rope's end carried over the beam - and the walk is the history.
+A wrap point naming an anchor that is not there, or one on a body that builds nothing, is skipped and the chain keeps its ends, as a vine keeps hanging when its second anchor is gone.
+`length` absent is still "taut as authored", now measured along the route.
+
+The chain **winds onto its `a` end**: the coil (`syncCoil`) is a property of the rope's start, so the drum of a winch must be the first body the chain was dragged from.
+
+In the editor a wrap point is drawn as a **hollow ring** on the chain's route where an end is a filled one, and the chain is the polyline through them.
+**Shift-drag** a selected chain to pull a new wrap point out of the span under the pointer and drop it on a body (over nothing the gesture is abandoned); its handle drags like an end's and lands on the nearest corner of whatever it is dropped on, an end's own body included; the chain panel lists them in route order with a `×` each and a `+ Wrap point` button for a route too short to drag from.
+Deleting a wrap point's body drops it from the route and keeps the chain (`pruneChains`); a copy that did not take the body along drops it the same way; `pruneAnchors` counts a wrap point as used.
+
+`cli contacts` `chain-wrap-point` is the crane: a two-piece pivot wheel (chain-through rim, winding hub), a beam with one authored corner, a stone box - the route builds as hub, both top corners, box; the box hangs plumb under the far corner; 4 rad of hub hauls it up by hub radius × angle; unwinding lowers it; the rim is never on the path; and a dead wrap point is skipped.
+`cli render3d` checks `via` and `wrappable` through the scale every load applies and through the editor round trip.
 
 Levels save/load to `rope/levels/*.json` in the **on-disk pixel `LevelData` format**
 (same as generated `levelData.ts`), through a **dev-only REST API** (`GET/PUT/DELETE
@@ -3096,6 +3124,16 @@ A migration a caller can forget is one that is missing wherever the next caller 
 
 `cli contacts` `impermeable-shape` is the detector, and it asserts both hooks against one compound body: the hook-proof piece turns each away, its sibling anchors each, a hook-proof **rigid** body deflects the ball's hook, and the retired kind still loads hook-proof.
 Both hooks, because they reach a surface by different means - a raycast that destroys, a sweep/probe that deflects - and a fix applied to one of them alone is exactly the class of bug the shape-versus-body rule exists to stop.
+
+### Chain-through pieces
+
+**`wrappable`** is the other per-shape rope flag, and the mirror of hook-proof: `CollisionObjectData.wrappable: false` (absent = true) sets `CollisionShape2D.wrappable` off, which the engine already had for the ball's mounting loop - **solid, but not rope geometry**.
+Every rope path honours it in one place each: `wrappableSurfaces` drops the piece from the scan, the self-intersection resolvers decline it, `syncCoil` will not wind onto it, and a chain end authored on it is re-tied to the nearest piece of the body the rope *can* hold (`tieablePieces`).
+The avatar stands on it, bodies collide with it and the hook still bites it.
+
+The case it exists for is the **treadwheel crane**: a wheel whose rim the player rolls and whose hub winds the chain, which must be one body so they turn together, with a chain that leaves the hub straight through the rim.
+A rope that starts inside a piece has no consistent wrap of it in any case - the straight span leaves the rim without bending, so there is nothing for the scan to hold - which is why the flag is per shape and not something the solver could infer.
+The editor authors it as a `chain-through` checkbox beside `hook-proof` and draws the piece with the dotted edge a hook-only body wears; `chainable` refuses it as a chain host, and `anchorHost` prefers a wrappable sibling, so a chain dropped on the wheel lands on its hub.
 
 ## The slack chain drape
 

@@ -239,6 +239,19 @@ export interface CollisionObjectData extends ObjectPlacement {
   // hook-proof faces is precisely what it is for, and which surface the hook
   // reached is a question about a shape rather than about a body.
   impermeable?: boolean;
+  // Rope geometry, or not: `false` and every rope and chain passes straight
+  // through this piece - nothing wraps its corners, nothing winds onto it, and
+  // a chain tied to a sibling piece runs through it as if it were not there.
+  // It stays solid for everything else: the avatar stands on it, bodies collide
+  // with it, the hook still bites it. Absent = true, which is every piece
+  // authored before the flag.
+  //
+  // Per OBJECT for the reason `impermeable` is, and the case it exists for is
+  // one body of two pieces: a wheel whose rim the player turns and whose hub
+  // winds a chain. They must be ONE body so they turn together, the chain must
+  // wind on the hub and not the rim, and only the piece can say which is which
+  // (`CollisionShape2D.wrappable`).
+  wrappable?: boolean;
   // What this piece is made of and how thick it is through z - the dimension the
   // 2D view cannot show. Together they are the piece's mass: its area times
   // `thickness` times the material's density (`MATERIALS` in
@@ -973,12 +986,27 @@ export interface ChainData {
   // naming an anchor that is not there, or one in a body that builds nothing.
   a: number;
   b: number;
-  // Chain length. Absent = the distance between the two anchor points as
-  // authored, i.e. a chain that starts exactly taut.
+  // Chain length. Absent = the length of the path as authored - the distance
+  // between the two anchor points, by way of the wrap points - i.e. a chain
+  // that starts exactly taut.
   length?: number;
   // Optional appearance. Absent = the renderer's own chain colours (the same
   // forged-iron links the ball & chain hangs on).
   color?: string;
+  // WRAP POINTS, in order from `a` to `b`: anchor ids the chain is routed over.
+  // Each is an anchor object on a body exactly as the two ends are, and at load
+  // it becomes a wrap node on the nearest corner (or rim point) of the piece it
+  // sits on, with that piece's body joining the set the chain's spans are
+  // solved against - so a chain hung over a beam or a pulley bends around it,
+  // slides along it as the bodies move, and lets go if it is ever pulled
+  // straight past it, as the ball's chain would. Nothing else is: a chain still
+  // passes through every body it names no point on (see `SceneChain`).
+  //
+  // Anchor ids rather than a point of their own for the reason the ends are:
+  // the point belongs to the body it is on and rides it. One naming an anchor
+  // that is not there, or one on a body that builds nothing, is skipped and the
+  // chain keeps its ends. Absent = no wrap points.
+  via?: number[];
 }
 
 // The retired form, as every level on disk still carries it: a body INDEX and a
@@ -2209,6 +2237,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...placed,
       shape: scaleShape(o.shape, factor),
       ...(o.impermeable !== undefined ? { impermeable: o.impermeable } : {}),
+      ...(o.wrappable !== undefined ? { wrappable: o.wrappable } : {}),
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),
@@ -2403,6 +2432,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     b: c.b,
     ...(c.length !== undefined ? { length: c.length * factor } : {}),
     ...(c.color !== undefined ? { color: c.color } : {}),
+    ...(c.via !== undefined ? { via: [...c.via] } : {}),
   }));
   // A vine's LENGTH and its link SPACING are both lengths; its anchor id and its
   // colour are not. The anchor point itself is an object on its body and scales
