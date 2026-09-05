@@ -1252,6 +1252,28 @@ export interface CameraPathVert {
   inY?: number;
   outX?: number;
   outY?: number;
+  // KEYS: per-node values of the path's target-shaping fields, so the framing
+  // can change along the route - a tighter view through a corridor, a longer
+  // lead down a drop. A node that carries one is a keyframe for THAT field
+  // only; a node that carries none is transparent to it. Between two keyed
+  // nodes the value is smoothstepped by arc length, before the first and past
+  // the last it holds, and a field no node keys at all is the path-level
+  // field, exactly as before keys existed (see `pathParamsAt`).
+  //
+  // On the nodes rather than at authored arc lengths because a node is what
+  // the editor picks, drags, inserts, deletes and reverses, and a key that
+  // rides its node survives every one of those; a key at `s = 12.3` names a
+  // different place the moment any node before it moves. Putting a key
+  // mid-edge is one gesture, since inserting a node changes the curve by
+  // nothing.
+  //
+  // Same units and meaning as the path-level field of the same name; the
+  // lengths are pixels on disk like everything else here.
+  viewportScale?: number;
+  lookaheadX?: number;
+  lookaheadY?: number;
+  lookaheadBufferX?: number;
+  lookaheadBufferY?: number;
 }
 
 export interface CameraPathData {
@@ -2290,9 +2312,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       x: p.x * factor,
       y: p.y * factor,
       rot: p.rot,
-      // A node's point and both its handles are lengths; nothing else about one
-      // is. Absent handles stay absent, which is what keeps a plain polyline
-      // byte-identical through the conversion.
+      // A node's point, both its handles and its lead keys are lengths; its
+      // view key is not. Absent fields stay absent, which is what keeps a
+      // plain polyline byte-identical through the conversion.
       verts: p.verts.map((v) => ({
         x: v.x * factor,
         y: v.y * factor,
@@ -2300,6 +2322,15 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
         ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
         ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+        ...(v.viewportScale !== undefined ? { viewportScale: v.viewportScale } : {}),
+        ...(v.lookaheadX !== undefined ? { lookaheadX: v.lookaheadX * factor } : {}),
+        ...(v.lookaheadY !== undefined ? { lookaheadY: v.lookaheadY * factor } : {}),
+        ...(v.lookaheadBufferX !== undefined
+          ? { lookaheadBufferX: v.lookaheadBufferX * factor }
+          : {}),
+        ...(v.lookaheadBufferY !== undefined
+          ? { lookaheadBufferY: v.lookaheadBufferY * factor }
+          : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a

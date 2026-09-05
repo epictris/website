@@ -26,15 +26,17 @@ import {
   pathRelease,
   cameraRuleTarget,
   activeCameraRule,
+  pathParamsAt,
   type CameraRule,
 } from "../render/cameraController";
 import type { CameraPathData, CameraRegionData, RawLevelData } from "../level/levelFormat";
 import { scaleLevelData } from "../level/levelFormat";
-import { modelFromDisk, modelToDisk } from "../editor/model";
+import { modelFromDisk, modelToDisk, reversePathVerts } from "../editor/model";
 import {
   buildPolylineIndex,
   cubicAt,
   flattenPath,
+  flattenPathNodes,
   pathNodesOf,
   type PathNode,
   pointAtArcLength,
@@ -154,6 +156,7 @@ function ride(
   edgeClamp = true,
 ): {
   pos: Vec2;
+  zoom: number;
   rule: CameraRule | null;
   s: number;
   leadS: number;
@@ -165,8 +168,21 @@ function ride(
   return walk.map((p) => {
     ctl.update(cam, DT, p, rules, BASE_ZOOM);
     const held = ctl.held;
-    return { pos: cam.position, rule: held.rule, s: held.s, leadS: held.leadS, edge: held.edge };
+    return {
+      pos: cam.position,
+      zoom: cam.zoom,
+      rule: held.rule,
+      s: held.s,
+      leadS: held.leadS,
+      edge: held.edge,
+    };
   });
+}
+
+// The sum of a ride's frame-to-frame zoom travel over its last second: zero
+// when the zoom has come to rest, and not when something is still pumping it.
+function zoomTravel(out: readonly { zoom: number }[]): number {
+  return out.slice(-60).reduce((a, o, i, arr) => (i ? a + Math.abs(o.zoom - arr[i - 1]!.zoom) : 0), 0);
 }
 
 export function runCameraCases(): CameraResult[] {
@@ -1279,6 +1295,225 @@ export function runCameraCases(): CameraResult[] {
       if (last.length !== 2 || !last.includes("x") || !last.includes("y")) {
         bad.push(`a corner wrote ${last.join(",")}`);
       }
+      return bad;
+    }),
+
+    // --- keys ---------------------------------------------------------------
+    //
+    // A node may key the path's target-shaping fields (see `CameraPathVert`),
+    // so the framing changes along the route. The claims: a key sits at its
+    // node's arc length however curved the edge into it; the interpolation
+    // holds at the ends, smoothsteps between and is transparent to an unkeyed
+    // node; and the keys are read at the committed lead origin, so a swing
+    // across a change moves nothing.
+
+    run("keys-sit-at-node-arc-lengths", () => {
+      // A bowed edge is longer than its chord, so a key placed by node INDEX
+      // and one placed by arc length are different places; the index records
+      // the arc length and the point there is the node.
+      const nodes: PathNode[] = [
+        { p: V(0, 0), in: V(0, 0), out: V(2, -3) },
+        { p: V(6, 0), in: V(-2, -3), out: V(0, 0) },
+        { p: V(10, 0), in: V(0, 0), out: V(0, 0) },
+      ];
+      const flat = flattenPathNodes(nodes);
+      const ix = buildPolylineIndex(flat.points, V(0, 0), 0, flat.nodeAt);
+      const at1 = pointAtArcLength(ix, ix.nodeS[1]!);
+      const at2 = pointAtArcLength(ix, ix.nodeS[2]!);
+      return [
+        { label: "node count", got: ix.nodeS.length, want: 3 },
+        { label: "first node at s = 0", got: ix.nodeS[0]!, want: 0 },
+        { label: "the curved edge is longer than its chord", got: ix.nodeS[1]! > 6.5 ? 1 : 0, want: 1 },
+        { label: "node 1 x", got: at1.x, want: 6, tol: 1e-6 },
+        { label: "node 1 y", got: at1.y, want: 0, tol: 1e-6 },
+        { label: "node 2 x", got: at2.x, want: 10, tol: 1e-6 },
+        { label: "last node at the total", got: ix.nodeS[2]!, want: ix.total, tol: 1e-9 },
+      ];
+    }),
+
+    run("keys-interpolate-along-the-route", () => {
+      // Nodes at s = 0, 4, 10. The view is keyed at the last two, the x lead at
+      // the first and last, the y lead nowhere: each field has its own keys,
+      // and a node that keys nothing for a field is not on that field's track.
+      const path: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0, lookaheadX: 1 },
+          { x: 4, y: 0, viewportScale: 2 },
+          { x: 10, y: 0, viewportScale: 4, lookaheadX: 3 },
+        ],
+      };
+      const rule = buildCameraRules([], [path])[0]!;
+      if (rule.kind !== "path") return [{ label: "rule kind", got: 0, want: 1 }];
+      const at = (s: number) => pathParamsAt(rule, s);
+      const ss = (t: number) => t * t * (3 - 2 * t);
+      return [
+        // Held before the first key and past the last.
+        { label: "view before its first key", got: at(0).viewportScale, want: 2 },
+        { label: "view at its first key", got: at(4).viewportScale, want: 2 },
+        { label: "view at its last key", got: at(10).viewportScale, want: 4 },
+        { label: "view past the end", got: at(12).viewportScale, want: 4 },
+        // Geometric between: 2 -> 4 passes through sqrt(8) at the midpoint.
+        { label: "view halfway is geometric", got: at(7).viewportScale, want: Math.sqrt(8), tol: 1e-9 },
+        // Smoothstepped by arc length, linearly for a length.
+        { label: "x lead a fifth of the way", got: at(2).lookaheadX, want: 1 + 2 * ss(0.2), tol: 1e-9 },
+        // The middle node keys the view and not the lead, so the lead's track
+        // runs straight past it: no plateau, no kink, no restart.
+        { label: "x lead is transparent to the unkeyed node", got: at(4).lookaheadX, want: 1 + 2 * ss(0.4), tol: 1e-9 },
+        // A field nothing keys is the path-level one, everywhere.
+        { label: "y lead is the path's", got: at(4).lookaheadY, want: 2.5 },
+        { label: "y lead is the path's at the end", got: at(10).lookaheadY, want: 2.5 },
+        // ...and one the path does not author either is the format's default.
+        { label: "lead buffer is the default", got: at(4).lookaheadBufferX, want: 1 },
+      ];
+    }),
+
+    run("keys-without-keys-are-the-path", () => {
+      // The half every level on disk stands on: a path with no keys reads
+      // exactly its own fields at every arc length.
+      const rule = buildCameraRules([], [{ ...RIDE, viewportScale: 1.5 }])[0]!;
+      if (rule.kind !== "path") return [{ label: "rule kind", got: 0, want: 1 }];
+      return [0, 3, 10, 40].flatMap((s) => [
+        { label: `view at ${s}`, got: pathParamsAt(rule, s).viewportScale, want: 1.5 },
+        { label: `x lead at ${s}`, got: pathParamsAt(rule, s).lookaheadX, want: 2.5 },
+      ]);
+    }),
+
+    run("keys-zoom-with-the-route", () => {
+      // The view keyed 1 at the start and 4 at the end, ridden end to end: the
+      // camera zooms from the base to a quarter of it, and past the end holds
+      // the last key (the projection clamps, and the key holds anyway).
+      const path: CameraPathData = {
+        ...RIDE,
+        // No deadband, so the lead origin IS the projection and the zoom at a
+        // standstill is the key's exactly; `keys-are-read-at-the-lead-origin`
+        // is where the band's own effect is asserted.
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+        verts: [
+          { x: 0, y: 0, viewportScale: 1 },
+          { x: 10, y: 0, viewportScale: 4 },
+        ],
+      };
+      const rules = buildCameraRules([], [path]);
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 120; i++) walk.push(new Vec2(0, 0));
+      for (let i = 0; i < 300; i++) walk.push(new Vec2((10 * i) / 300, 0));
+      for (let i = 0; i < 180; i++) walk.push(new Vec2(10, 0));
+      // Past the end but inside the corridor, so the path keeps its grip.
+      for (let i = 0; i < 180; i++) walk.push(new Vec2(10.5, 0));
+      const out = ride(rules, walk);
+      return [
+        { label: "zoom at the start", got: out[119]!.zoom, want: BASE_ZOOM, tol: 1e-4 },
+        { label: "zoom at the end", got: out[599]!.zoom, want: BASE_ZOOM / 4, tol: 1e-4 },
+        { label: "zoom past the end", got: out[779]!.zoom, want: BASE_ZOOM / 4, tol: 1e-4 },
+        // Monotone on the way: a zoom that overshoots or wobbles between two
+        // keys is a kink in the interpolation.
+        {
+          label: "zoom never rises on the way out",
+          got: out.slice(120, 600).some((o, i, arr) => i > 0 && o.zoom > arr[i - 1]!.zoom + 1e-12) ? 1 : 0,
+          want: 0,
+        },
+      ];
+    }),
+
+    run("keys-are-read-at-the-lead-origin", () => {
+      // A swing back and forth across a zoom gradient. Read at the raw
+      // projection the zoom would pump every half-swing; read at the committed
+      // lead origin, which the lookahead buffer holds still, it comes to rest.
+      const keyed: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0, viewportScale: 1 },
+          { x: 10, y: 0, viewportScale: 4 },
+        ],
+      };
+      const walk: Vec2[] = [];
+      for (let i = 0; i < 300; i++) walk.push(new Vec2(5 + 0.4 * Math.sin(i / 4), 0));
+      const held = ride(buildCameraRules([], [{ ...keyed, lookaheadBufferX: 1, lookaheadBufferY: 1 }]), walk);
+      const loose = ride(buildCameraRules([], [{ ...keyed, lookaheadBufferX: 0, lookaheadBufferY: 0 }]), walk);
+      return [
+        { label: "the zoom really is on a gradient", got: held[0]!.zoom !== held[299]!.zoom || loose[0]!.zoom !== loose[299]!.zoom ? 1 : 0, want: 1 },
+        { label: "zoom travel with the band", got: zoomTravel(held), want: 0, tol: 1e-6 },
+        { label: "zoom travel without it", got: zoomTravel(loose) > 1e-3 ? 1 : 0, want: 1 },
+      ];
+    }),
+
+    run("format-scales-path-keys", () => {
+      // A node's lead keys are lengths and scale at the gate; its view key is a
+      // ratio and does not.
+      const raw: RawLevelData = {
+        player: { x: 0, y: 0, radius: 20 },
+        bodies: [],
+        cameraPaths: [
+          {
+            x: 0,
+            y: 0,
+            rot: 0,
+            verts: [
+              { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55 },
+              { x: 100, y: 0 },
+            ],
+          },
+        ],
+      };
+      const v = scaleLevelData(raw, 0.01).cameraPaths![0]!.verts;
+      return [
+        { label: "view", got: v[0]!.viewportScale ?? NaN, want: 2 },
+        { label: "x lead", got: v[0]!.lookaheadX ?? NaN, want: 2.5 },
+        { label: "y lead buffer", got: v[0]!.lookaheadBufferY ?? NaN, want: 0.55 },
+        { label: "absent stays absent", got: v[0]!.lookaheadY === undefined && v[1]!.viewportScale === undefined ? 1 : 0, want: 1 },
+      ];
+    }),
+
+    runFacts("editor-key-round-trip", () => {
+      // A keyed node survives the editor's own trip field for field, an unkeyed
+      // one still writes its two coordinates and no more, and Reverse carries
+      // each node's keys with the node.
+      const authored: RawLevelData = {
+        player: { x: 0, y: 0, radius: 20 },
+        bodies: [],
+        cameraPaths: [
+          {
+            x: 0,
+            y: 0,
+            rot: 0,
+            verts: [
+              { x: -300, y: 0, viewportScale: 1.5, lookaheadX: 120 },
+              { x: 0, y: 0 },
+              { x: 300, y: 0, lookaheadY: 90, lookaheadBufferX: 40, lookaheadBufferY: 30 },
+            ],
+          },
+        ],
+      };
+      const KEYS = ["viewportScale", "lookaheadX", "lookaheadY", "lookaheadBufferX", "lookaheadBufferY"] as const;
+      const bad: string[] = [];
+      const want = authored.cameraPaths![0]!;
+      const compare = (out: CameraPathData, order: number[], label: string): void => {
+        order.forEach((from, i) => {
+          for (const k of KEYS) {
+            const a = out.verts[i]?.[k];
+            const b = want.verts[from]![k];
+            if (a === undefined && b === undefined) continue;
+            if (Math.abs((a ?? NaN) - (b ?? NaN)) > 1e-6) {
+              bad.push(`${label}: vert ${i} ${k}: ${String(a)} != ${String(b)}`);
+            }
+          }
+        });
+      };
+      const model = modelFromDisk(authored);
+      const out = modelToDisk(model).cameraPaths?.[0];
+      if (!out) return ["the path did not survive the round trip at all"];
+      compare(out, [0, 1, 2], "round trip");
+      const plain = Object.keys(out.verts[1] ?? {});
+      if (plain.length !== 2 || !plain.includes("x") || !plain.includes("y")) {
+        bad.push(`an unkeyed node wrote ${plain.join(",")}`);
+      }
+      const item = model.items.find((i) => i.shape.kind === "path");
+      if (!item || !reversePathVerts(item)) return [...bad, "could not reverse the path"];
+      const rev = modelToDisk(model).cameraPaths?.[0];
+      if (!rev) return [...bad, "the reversed path did not survive"];
+      compare(rev, [2, 1, 0], "reversed");
       return bad;
     }),
   ];

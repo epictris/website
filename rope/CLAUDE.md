@@ -2542,6 +2542,31 @@ Dragging mirrors the opposite handle in direction and length (a smooth node); Al
 Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gains a grip and changes shape by nothing; splitting the chord would straighten it the moment it was subdivided.
 `Smooth` writes the Catmull-Rom tangent at every node (a third of the chord between its neighbours) and `Sharpen` zeroes them all.
 
+#### Keys
+
+A node may **key** the path's target-shaping fields - `viewportScale`, `lookaheadX/Y` and `lookaheadBufferX/Y`, as optionals on `CameraPathVert` - so the framing changes along the route: a tighter view through a corridor, a longer lead down a drop.
+A node that carries a value is a keyframe for THAT field only, and a node that carries none is transparent to it.
+Per field, `pathParamsAt` holds the first key's value before it and the last key's after it, smoothsteps between two by arc length (flat at each key, for the same reason the falloff band is smoothstepped: a kink in the target is a step in the camera's velocity), and interpolates the view scale geometrically like every other zoom blend here.
+A field no node keys at all is the path-level field, exactly as before keys existed, so every level on disk is unchanged and `keys-without-keys-are-the-path` says so.
+
+Keys live **on the nodes, not at authored arc lengths**, because a node is what the editor picks, drags, inserts, deletes and reverses, and a key that rides its node survives every one of those - a key at `s = 12.3` would name a different place the moment any node before it moved.
+Putting a key mid-edge is one gesture, since inserting a node is a de Casteljau split that changes the curve by nothing and the new node keys nothing.
+A node's arc length is only known once the curve into it is flattened, so `flattenPathNodes` reports where each node landed and the `PolylineIndex` carries `nodeS`; `buildCameraRules` lays each field's keys out along it once, as the rule's `keys` tracks.
+
+Every keyed field is read at the **committed lead origin** (`pathLeadS`), not at the raw projection.
+The lead origin sits still inside the lookahead deadband while a swing runs back and forth under it, so a swing across a zoom gradient moves the zoom by nothing - read at the projection it would pump every half-swing, which no easing fixes because the target itself is rocking.
+`keys-are-read-at-the-lead-origin` asserts the pair: the same swing across a keyed gradient with the band leaves the zoom at rest, and without it does not.
+Nothing new is needed for hand-offs: a rule change or a branch jump already runs the target through the frozen-delta blend, zoom ratio included.
+
+The grip fields - range, falloff, buffer - are deliberately **not** keyable yet.
+They decide acquisition and release, so they would be read at the projection rather than the lead origin, and they would drag the corridor drawing with them: the editor and overlay draw exactly the corridor the controller tests, and a corridor whose ellipse varies along the route is a sweep rather than the fixed-axis Minkowski sum drawn today.
+
+In the editor a keyed node wears a **diamond** on the route, selected or not, so where the framing changes can be seen without clicking through every node; the debug overlay draws the same mark.
+Picking nodes on a selected path opens a **node sub-panel** under the path's own fields, carrying the five keyable fields for the picked nodes: blank is no key, and the placeholder is the value the node has anyway - the path's own when nothing keys the field, the interpolation's when other nodes do, computed through the same rule the game builds (`pathDataOf`) - so typing a key starts from what it is replacing.
+Once a field is keyed anywhere on the path its path-level field is shown inert, reading `keyed`, with the keyed nodes in its tooltip, since its value is read nowhere and a live dial there would be connected to nothing.
+Keys are a third per-node array on the editor's path shape (`keys`, beside `handles`), kept one per vert by `setPathVerts` and carried through deletion, insertion and `Reverse` by the same indices as the tangents; parallel rather than folded into the handle record so `Smooth` and `Sharpen`, which rebuild every handle, cannot drop a key by rebuilding it.
+`cli camera` asserts the key at a curved node's arc length, the interpolation shape, the zoom riding a keyed route end to end, the format scaling the length keys and not the view key, and the editor round trip with a reversal.
+
 #### The corridor is an ellipse too
 
 `rangeX` / `rangeY` are how far off the route the player may be while the path still narrates it, and `falloffX` / `falloffY` grow it into the band below - each pair the semi-axes of an ellipse around the route, so the corridor, the band and the release are all **screen-shaped**.

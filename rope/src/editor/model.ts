@@ -31,6 +31,7 @@ import {
   projectOntoPolyline,
   type PathNode,
 } from "../render/cameraPath";
+import { PATH_KEY_FIELDS, type PathKeyField } from "../render/cameraController";
 import { DECOR_Z } from "../level/decor";
 import { catenaryPolyline } from "../level/catenary";
 import { buildMovePath, type MovePath } from "../level/movers";
@@ -167,11 +168,36 @@ export type EdObject = "collision" | "geometry" | "light" | "anchor";
 // points and nothing else, and `localVertices` is what hands them over.
 // Both handles zero is a corner, which is what every vert of a freshly drawn
 // path is.
+//
+// `keys` are the nodes' keyframes (see `CameraPathVert`), a third parallel
+// array kept ONE PER VERT by the same writer: a node's keys are the node's
+// exactly as its tangents are, and every renumbering - a deletion, an
+// insertion, a reversal - carries them by the same indices. Parallel rather
+// than folded into the handle record so `Smooth` and `Sharpen`, which rebuild
+// every handle from the geometry, cannot drop a key by rebuilding it.
 export type EdShape =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: Vec2[] }
-  | { kind: "path"; verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[] };
+  | { kind: "path"; verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[]; keys: EdPathKey[] };
+
+// One node's keyframes: null = this node does not key that field. Metres for
+// the lengths, as everything in the model is.
+export type EdPathKey = Record<PathKeyField, number | null>;
+
+export const NO_KEY = (): EdPathKey => ({
+  viewportScale: null,
+  lookaheadX: null,
+  lookaheadY: null,
+  lookaheadBufferX: null,
+  lookaheadBufferY: null,
+});
+
+// Does this node key anything at all? What the editor and the overlay draw a
+// diamond for.
+export function isKeyed(k: EdPathKey | undefined): boolean {
+  return k !== undefined && PATH_KEY_FIELDS.some((f) => k[f] !== null);
+}
 
 // Camera-layer properties (see CameraRegionData for the semantics). `lockX/Y`
 // null = that axis follows the avatar; `blend` and `buffer` null = the
@@ -445,7 +471,12 @@ export function cloneShape(s: EdShape): EdShape {
   // writer, but an undo snapshot sharing the ARRAY would be rewritten by the
   // very edit it exists to undo.
   if (s.kind === "path") {
-    return { kind: "path", verts: [...s.verts], handles: s.handles.map((h) => ({ ...h })) };
+    return {
+      kind: "path",
+      verts: [...s.verts],
+      handles: s.handles.map((h) => ({ ...h })),
+      keys: s.keys.map((k) => ({ ...k })),
+    };
   }
   return { ...s };
 }
@@ -1156,6 +1187,11 @@ function fromLevelData(data: LevelData): EdModel {
         in: new Vec2(v.inX ?? 0, v.inY ?? 0),
         out: new Vec2(v.outX ?? 0, v.outY ?? 0),
       })),
+      keys: c.verts.map((v) => {
+        const k = NO_KEY();
+        for (const f of PATH_KEY_FIELDS) if (v[f] !== undefined) k[f] = v[f]!;
+        return k;
+      }),
     },
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
@@ -1401,6 +1437,52 @@ function lightItem(
 // which item wrote it. It is an out-parameter rather than a second return value
 // so the save path - which wants the data and nothing else - is unchanged, and
 // nothing about the file depends on whether it was passed.
+// A camera path as the game reads it, in metres - what `toLevelData` writes
+// and what the inspector builds a rule from to show a node's EFFECTIVE value.
+// One mapping, so the two cannot disagree about what a key means.
+export function pathDataOf(i: EdItem): CameraPathData {
+  return {
+    x: i.pos.x,
+    y: i.pos.y,
+    rot: i.rot,
+    // A zero handle is written as nothing at all, so a path of plain corners
+    // saves exactly the four keys it always did.
+    // ...and a node's keys are written only where it has them, for the same
+    // reason: an unkeyed node is the two keys it always was.
+    verts: pathNodes(i).map((n, j) => {
+      const key = i.shape.kind === "path" ? i.shape.keys[j] : undefined;
+      const keyed: Partial<Record<PathKeyField, number>> = {};
+      if (key) for (const f of PATH_KEY_FIELDS) if (key[f] !== null) keyed[f] = key[f]!;
+      return {
+        x: n.p.x,
+        y: n.p.y,
+        ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
+        ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
+        ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
+        ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
+        ...keyed,
+      };
+    }),
+    // Omit anything left at its default, so a saved path carries only what
+    // was actually authored - the same rule the region block follows, and
+    // what keeps a re-save byte-stable.
+    ...(i.cam.rangeX !== null ? { rangeX: i.cam.rangeX } : {}),
+    ...(i.cam.rangeY !== null ? { rangeY: i.cam.rangeY } : {}),
+    ...(i.cam.falloffX !== null ? { falloffX: i.cam.falloffX } : {}),
+    ...(i.cam.falloffY !== null ? { falloffY: i.cam.falloffY } : {}),
+    ...(i.cam.lookaheadX !== null ? { lookaheadX: i.cam.lookaheadX } : {}),
+    ...(i.cam.lookaheadY !== null ? { lookaheadY: i.cam.lookaheadY } : {}),
+    ...(i.cam.lookaheadBufferX !== null ? { lookaheadBufferX: i.cam.lookaheadBufferX } : {}),
+    ...(i.cam.lookaheadBufferY !== null ? { lookaheadBufferY: i.cam.lookaheadBufferY } : {}),
+    ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE
+      ? { viewportScale: i.cam.viewportScale }
+      : {}),
+    ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
+    ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+    ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
+  };
+}
+
 export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number>): LevelData {
   // A camera PATH has no ShapeData form at all - an open polyline is not one of
   // the three shapes - so it never reaches here: the camera layer is split by
@@ -1413,38 +1495,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
 
   const cameraPaths: CameraPathData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind === "path")
-    .map((i) => ({
-      x: i.pos.x,
-      y: i.pos.y,
-      rot: i.rot,
-      // A zero handle is written as nothing at all, so a path of plain corners
-      // saves exactly the four keys it always did.
-      verts: pathNodes(i).map((n) => ({
-        x: n.p.x,
-        y: n.p.y,
-        ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
-        ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
-        ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
-        ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
-      })),
-      // Omit anything left at its default, so a saved path carries only what
-      // was actually authored - the same rule the region block follows, and
-      // what keeps a re-save byte-stable.
-      ...(i.cam.rangeX !== null ? { rangeX: i.cam.rangeX } : {}),
-      ...(i.cam.rangeY !== null ? { rangeY: i.cam.rangeY } : {}),
-      ...(i.cam.falloffX !== null ? { falloffX: i.cam.falloffX } : {}),
-      ...(i.cam.falloffY !== null ? { falloffY: i.cam.falloffY } : {}),
-      ...(i.cam.lookaheadX !== null ? { lookaheadX: i.cam.lookaheadX } : {}),
-      ...(i.cam.lookaheadY !== null ? { lookaheadY: i.cam.lookaheadY } : {}),
-      ...(i.cam.lookaheadBufferX !== null ? { lookaheadBufferX: i.cam.lookaheadBufferX } : {}),
-      ...(i.cam.lookaheadBufferY !== null ? { lookaheadBufferY: i.cam.lookaheadBufferY } : {}),
-      ...(i.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE
-        ? { viewportScale: i.cam.viewportScale }
-        : {}),
-      ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
-      ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
-      ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
-    }));
+    .map(pathDataOf);
 
   const cameraRegions: CameraRegionData[] = model.items
     .filter((i) => i.layer === "camera" && i.shape.kind !== "path")
@@ -1905,21 +1956,30 @@ export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
 //
 // There is deliberately no simplicity or convexity rule: a path may cross
 // itself, that being exactly what a switchback is.
+//
+// `handles` and `keys` are read by the SAME index as `verts`, and both default
+// to the item's own - so a caller that only renumbers the points (a deletion,
+// an insertion) passes the arrays it renumbered the same way, and a caller
+// that only moves them (a drag, a resize) passes nothing and keeps both.
 export function setPathVerts(
   item: EdItem,
   verts: readonly Vec2[],
   handles?: readonly { in: Vec2; out: Vec2 }[],
+  keys?: readonly EdPathKey[],
 ): boolean {
   if (item.shape.kind !== "path") return false;
   const src = handles ?? item.shape.handles;
+  const srcK = keys ?? item.shape.keys;
   const kept: Vec2[] = [];
   const keptH: { in: Vec2; out: Vec2 }[] = [];
+  const keptK: EdPathKey[] = [];
   for (let i = 0; i < verts.length; i++) {
     const v = verts[i]!;
     const last = kept[kept.length - 1];
     if (last && last.distanceTo(v) < 1e-9) continue;
     kept.push(v);
     keptH.push(src[i] ? { in: src[i]!.in, out: src[i]!.out } : ZERO_HANDLE());
+    keptK.push(srcK[i] ? { ...srcK[i]! } : NO_KEY());
   }
   if (kept.length < 2) return false;
   // Re-centred on the point AVERAGE. The handles are offsets from their own
@@ -1928,6 +1988,7 @@ export function setPathVerts(
   const c = kept.reduce((a, b) => a.add(b), Vec2.ZERO).div(kept.length);
   item.shape.verts = kept.map((v) => v.sub(c));
   item.shape.handles = keptH;
+  item.shape.keys = keptK;
   item.pos = item.pos.add(c.rotated(item.rot));
   return true;
 }
@@ -1964,6 +2025,8 @@ export function reversePathVerts(item: EdItem): boolean {
   // and `out` the next, and reversing the order swaps which is which. Reversing
   // the array alone would turn every smooth node into a mirrored kink.
   item.shape.handles = [...item.shape.handles].reverse().map((h) => ({ in: h.out, out: h.in }));
+  // A key is the node's, and goes where the node goes.
+  item.shape.keys = [...item.shape.keys].reverse();
   return true;
 }
 

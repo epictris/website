@@ -11,6 +11,7 @@ import { fillAnchor, fillForceArea, fillKillZone, fillWaterArea } from "../rende
 import { hexToRgba } from "../render/color";
 import {
   arrowEnds,
+  isKeyed,
   CAMERA_REGION_COLOR,
   chainEnds,
   vineRestPath,
@@ -56,7 +57,7 @@ import {
   type Margin,
   type Outline,
 } from "../render/shapePath";
-import { REGION_EXIT_MARGIN } from "../render/cameraController";
+import { REGION_EXIT_MARGIN, type PathKeyField } from "../render/cameraController";
 import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 
 const PLAYER = "#65bddb";
@@ -119,6 +120,10 @@ export const BODY_MEMBER = "#4f9dff";
 const MOVER_MARK = "#e0a548";
 
 export const HANDLE_SIZE_PX = 8; // drawn square side
+// Half-diagonal of a keyed path node's diamond, in screen pixels: past the
+// vertex square's corners (half its side is 4) by enough to read as a
+// different glyph rather than a misdrawn one.
+const PATH_KEY_DIAMOND_PX = 7;
 export const HANDLE_HIT_PX = 9; // pointer pick radius
 const ROT_OFFSET_PX = 26; // rotate handle distance beyond the top edge
 const DEPTH_OFFSET_PX = 26; // depth handle distance beyond the right edge
@@ -787,15 +792,29 @@ export function cameraRegionLabel(r: EdItem): string {
     const fallX = r.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
     const fallY = r.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
     if (fallX > 0 || fallY > 0) parts.push(`falloff ${px(fallX)},${px(fallY)}`);
+    // A keyed field's path-level value is read nowhere, so it is not quoted
+    // as if it were; the keys are on the nodes, and the label says how many.
+    const nodeKeys = r.shape.keys;
+    const keyed = (f: PathKeyField): boolean => nodeKeys.some((k) => k[f] !== null);
+    const leadKeyed = keyed("lookaheadX") || keyed("lookaheadY");
+    const bufKeyed = keyed("lookaheadBufferX") || keyed("lookaheadBufferY");
     parts.push(
-      `lead ${px(r.cam.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X)},` +
-        `${px(r.cam.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y)}` +
-        ` ±${px(r.cam.lookaheadBufferX ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_X)},` +
-        `${px(r.cam.lookaheadBufferY ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_Y)}`,
+      `lead ${
+        leadKeyed
+          ? "keyed"
+          : `${px(r.cam.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X)},${px(r.cam.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y)}`
+      } ±${
+        bufKeyed
+          ? "keyed"
+          : `${px(r.cam.lookaheadBufferX ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_X)},${px(r.cam.lookaheadBufferY ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_Y)}`
+      }`,
     );
-    if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
+    if (keyed("viewportScale")) parts.push("view keyed");
+    else if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
       parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
     }
+    const keys = nodeKeys.filter(isKeyed).length;
+    if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
     if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
     if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
@@ -922,7 +941,25 @@ function drawCameraPath(
   ctx.lineWidth = worldLine * 2.5;
   ctx.stroke();
 
+  // A KEYED node wears a diamond, selected or not, so where the framing changes
+  // along the route can be seen without clicking through every node. Larger
+  // than the vertex square drawn over it when the path is selected, so it
+  // still shows around the square's edges.
   ctx.fillStyle = stroke;
+  shape.keys.forEach((k, i) => {
+    const p = shape.verts[i];
+    if (!p || !isKeyed(k)) return;
+    const w = toWorld(item, p);
+    const r = worldLine * PATH_KEY_DIAMOND_PX;
+    ctx.beginPath();
+    ctx.moveTo(w.x, w.y - r);
+    ctx.lineTo(w.x + r, w.y);
+    ctx.lineTo(w.x, w.y + r);
+    ctx.lineTo(w.x - r, w.y);
+    ctx.closePath();
+    ctx.fill();
+  });
+
   let carried = PATH_ARROW_SPACING / 2;
   for (let i = 0; i + 1 < world.length; i++) {
     const a = world[i]!;

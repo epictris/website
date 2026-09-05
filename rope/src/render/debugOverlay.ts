@@ -20,6 +20,8 @@ import {
   activeCameraRule,
   pathBandAxes,
   pathLookahead,
+  pathParamsAt,
+  PATH_KEY_FIELDS,
   pathRangeAxes,
   type HeldCamera,
   pathReleaseAxes,
@@ -289,6 +291,16 @@ function drawCameraPath(
     drawPathArrow(ctx, ix.verts.length ? pointAtArcLength(ix, s) : Vec2.ZERO, pointAtArcLength(ix, Math.min(ix.total, s + 0.05)));
   }
 
+  // A keyed node is drawn as a diamond on the route, as the editor draws it: a
+  // zoom or a lead that changes along the route has no on-screen cause
+  // otherwise, and this is the layer that exists to show causes.
+  rule.path.verts.forEach((v, i) => {
+    if (!PATH_KEY_FIELDS.some((k) => v[k] !== undefined)) return;
+    const s = ix.nodeS[i];
+    if (s === undefined) return;
+    drawKeyDiamond(ctx, pointAtArcLength(ix, s), MARKER_RADIUS * 1.6);
+  });
+
   if (!active) return;
 
   // The far edge of the falloff band, and then the release boundary in the
@@ -330,7 +342,8 @@ function drawCameraPath(
   const ahead = pointAtArcLength(ix, from + 0.05).sub(
     pointAtArcLength(ix, Math.max(0, from - 0.05)),
   );
-  const lead = pointAtArcLength(ix, from + pathLookahead(rule.path, ahead));
+  // ...and with the lead the route keys THERE, since the lead is keyable.
+  const lead = pointAtArcLength(ix, from + pathLookahead(pathParamsAt(rule, from), ahead));
   ctx.beginPath();
   ctx.moveTo(at.x, at.y);
   ctx.lineTo(lead.x, lead.y);
@@ -368,6 +381,18 @@ function drawPathArrow(ctx: CanvasRenderingContext2D, at: Vec2, ahead: Vec2): vo
   ctx.moveTo(tip.x, tip.y);
   ctx.lineTo(back.x + side.x, back.y + side.y);
   ctx.lineTo(back.x - side.x, back.y - side.y);
+  ctx.closePath();
+  ctx.fillStyle = CAMERA_REGION;
+  ctx.fill();
+}
+
+// A filled diamond of half-diagonal `r` at `at`: the mark of a keyed node.
+function drawKeyDiamond(ctx: CanvasRenderingContext2D, at: Vec2, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(at.x, at.y - r);
+  ctx.lineTo(at.x + r, at.y);
+  ctx.lineTo(at.x, at.y + r);
+  ctx.lineTo(at.x - r, at.y);
   ctx.closePath();
   ctx.fillStyle = CAMERA_REGION;
   ctx.fill();

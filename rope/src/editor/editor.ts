@@ -10,6 +10,9 @@ import {
   CAMERA_BLEND_TIME,
   CameraController,
   REGION_EXIT_MARGIN,
+  buildCameraRules,
+  pathParamsAt,
+  type PathKeyField,
 } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
@@ -106,6 +109,8 @@ import {
   smoothPathNodes,
   setPathVerts,
   ZERO_HANDLE,
+  NO_KEY,
+  pathDataOf,
   setPolyVerts,
   scaleShape,
   syncBodyProps,
@@ -2240,7 +2245,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       get: (b: EdItem) => number,
       set: (b: EdItem, v: number) => void,
       step?: number,
-      opts?: { placeholder?: string; onEmpty?: () => void },
+      opts?: { placeholder?: string; onEmpty?: () => void; disabled?: boolean },
     ): HTMLInputElement =>
       numField(
         g,
@@ -4473,6 +4478,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const num = groupNum(g, paths);
     addTransformFields(g, num, paths);
 
+    // The nodes of these paths that KEY a field (see `CameraPathVert`). A keyed
+    // field's path-level value is read nowhere - the keys hold at both ends of
+    // the route - so its field below is shown inert, reading `keyed`, with the
+    // nodes that have taken it over in its tooltip (the input is too narrow to
+    // list them), rather than being a dial connected to nothing.
+    const keyedAt = (key: PathKeyField): string | null => {
+      const nodes: string[] = [];
+      for (const p of paths) {
+        if (p.shape.kind !== "path") continue;
+        p.shape.keys.forEach((k, i) => {
+          if (k[key] !== null) nodes.push(paths.length > 1 ? `#${p.id}:${i}` : String(i));
+        });
+      }
+      return nodes.length ? `keyed at node${nodes.length === 1 ? "" : "s"} ${nodes.join(", ")}` : null;
+    };
     // Every per-axis pair below is two numbers for the one reason: the frame is
     // 16:9, so there is far less screen above and below the player than there
     // is either side of them. Each pair is read as the semi-axes of an ellipse -
@@ -4485,12 +4505,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       key: "rangeX" | "rangeY" | "falloffX" | "falloffY" | "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",
       fallback: number,
     ): void => {
-      num(label, (b) => (b.cam[key] ?? NaN) * M2PX, (b, v) => (b.cam[key] = Math.max(0, v * PX)), 10, {
-        placeholder: String(Math.round(fallback * M2PX)),
-        onEmpty: () => {
-          for (const b of paths) b.cam[key] = null;
+      const keyed =
+        key === "lookaheadX" || key === "lookaheadY" || key === "lookaheadBufferX" || key === "lookaheadBufferY"
+          ? keyedAt(key)
+          : null;
+      const input = num(
+        label,
+        (b) => (keyed ? NaN : (b.cam[key] ?? NaN) * M2PX),
+        (b, v) => (b.cam[key] = Math.max(0, v * PX)),
+        10,
+        {
+          placeholder: keyed ? "keyed" : String(Math.round(fallback * M2PX)),
+          disabled: keyed !== null,
+          onEmpty: () => {
+            for (const b of paths) b.cam[key] = null;
+          },
         },
-      });
+      );
+      if (keyed) input.title = keyed;
     };
     // How far off the route the player may be while the path still narrates it.
     axisField("range x", "rangeX", DEFAULT_PATH_RANGE_X);
@@ -4511,12 +4543,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     axisField("lead buf x", "lookaheadBufferX", DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
     axisField("lead buf y", "lookaheadBufferY", DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
     // How much world is on screen: 2 = twice as much (zoomed out).
-    num(
+    const viewKeyed = keyedAt("viewportScale");
+    const viewInput = num(
       "view ×",
-      (b) => b.cam.viewportScale,
+      (b) => (viewKeyed ? NaN : b.cam.viewportScale),
       (b, v) => (b.cam.viewportScale = Math.min(10, Math.max(0.1, v))),
       0.1,
+      viewKeyed ? { placeholder: "keyed", disabled: true } : {},
     );
+    if (viewKeyed) viewInput.title = viewKeyed;
     num(
       "blend s",
       (b) => b.cam.blend ?? NaN,
@@ -4578,8 +4613,73 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     g.appendChild(row);
 
+    // The picked nodes' KEYS, when the path is open for vertex editing and
+    // some are picked. Under the path's own fields because a key is one of
+    // those fields said at one place on the route.
+    const sole = paths.length === 1 ? paths[0]! : null;
+    if (sole && sole.shape.kind === "path" && vertexEditTarget() === sole) {
+      const picked = selectedVertIndices(sole);
+      if (picked.length) buildPathNodeKeys(g, sole, picked);
+    }
+
     addActionsRow(g);
     inspector.appendChild(g);
+  }
+
+  // The keyframe fields of a path's picked nodes (see `CameraPathVert`). Each
+  // is the path-level field of the same name said at THIS node: blank is no
+  // key, and the placeholder is the value the node has anyway - the path's own
+  // when nothing keys the field, the interpolation's when other nodes do - so
+  // typing a key starts from what it is replacing.
+  function buildPathNodeKeys(g: HTMLElement, item: EdItem, picked: number[]): void {
+    if (item.shape.kind !== "path") return;
+    const shape = item.shape;
+    g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Keys: the path's view and lead, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. Keys are read where the lead is measured from, so a swing across a change does not pump the camera. Blank drops the key.";
+    g.appendChild(hint);
+
+    // What each picked node is effectively at, through the SAME rule the game
+    // builds - so the placeholder is the number the camera would use there.
+    const rule = buildCameraRules([], [pathDataOf(item)])[0];
+    const effective = (f: PathKeyField): number[] =>
+      rule?.kind === "path"
+        ? picked.map((i) => pathParamsAt(rule, rule.index.nodeS[i] ?? 0)[f])
+        : [];
+    const field = (label: string, f: PathKeyField, toShown: number, step: number): void => {
+      const eff = effective(f).map((v) => v * toShown);
+      const agreed =
+        eff.length && eff.every((v) => Math.abs(v - eff[0]!) < 1e-9) ? fmt(eff[0]!) : "mixed";
+      numField(
+        g,
+        label,
+        () => {
+          const vals = picked.map((i) => shape.keys[i]?.[f] ?? null);
+          const first = vals[0] ?? null;
+          return first !== null && vals.every((v) => v === first) ? first * toShown : null;
+        },
+        (v) => {
+          for (const i of picked) {
+            const k = (shape.keys[i] ??= NO_KEY());
+            k[f] = f === "viewportScale" ? Math.min(10, Math.max(0.1, v)) : Math.max(0, v / toShown);
+          }
+        },
+        step,
+        picked.length > 1,
+        {
+          placeholder: agreed,
+          onEmpty: () => {
+            for (const i of picked) if (shape.keys[i]) shape.keys[i]![f] = null;
+          },
+        },
+      );
+    };
+    field("view ×", "viewportScale", 1, 0.1);
+    field("lead x", "lookaheadX", M2PX, 10);
+    field("lead y", "lookaheadY", M2PX, 10);
+    field("lead buf x", "lookaheadBufferX", M2PX, 10);
+    field("lead buf y", "lookaheadBufferY", M2PX, 10);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in
@@ -5584,6 +5684,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           kind: "path",
           verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],
           handles: [ZERO_HANDLE(), ZERO_HANDLE()],
+          keys: [NO_KEY(), NO_KEY()],
         },
       };
     }
@@ -5724,6 +5825,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       kind: "path",
       verts: pts.map((p) => p.clone()),
       handles: pts.map(() => ZERO_HANDLE()),
+      keys: pts.map(() => NO_KEY()),
     };
     if (!setPathVerts(item, pts)) {
       updateTitle();
@@ -5758,6 +5860,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
             item,
             rest,
             item.shape.handles.filter((_, i) => !doomed.has(i)),
+            item.shape.keys.filter((_, i) => !doomed.has(i)),
           )
         : setPolyVerts(item, rest);
     // A refusal leaves the shape exactly as it was - a removal can turn a simple
@@ -6233,7 +6336,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           beginAction();
           const rest = shape.verts.filter((_, j) => j !== i);
           const restH = shape.handles.filter((_, j) => j !== i);
-          if (setPathVerts(s, rest, restH)) {
+          const restK = shape.keys.filter((_, j) => j !== i);
+          if (setPathVerts(s, rest, restH, restK)) {
             // Every index past the removed one has shifted, so the set names
             // corners nobody picked; it goes rather than being renumbered,
             // since a removal is the end of the gesture that made it.
@@ -6275,9 +6379,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         handles[i] = { in: handles[i]!.in, out: m1.sub(a.p) };
         handles[i + 1] = { in: m3.sub(b.p), out: handles[i + 1]!.out };
         handles.splice(i + 1, 0, { in: n1.sub(mid), out: n2.sub(mid) });
+        // The new node keys nothing: an unkeyed node is transparent to the
+        // interpolation, so the split changes the framing along the route by
+        // exactly as much as it changes the curve - nothing.
+        const keys = shape.keys.map((k) => ({ ...k }));
+        keys.splice(i + 1, 0, NO_KEY());
         beginAction();
         dragPushed = true;
-        if (!setPathVerts(s, verts, handles)) return null;
+        if (!setPathVerts(s, verts, handles, keys)) return null;
         markDirty();
         // The inserted vertex becomes the selection: it is the one the gesture
         // is about, and every index past it has just shifted, so carrying the

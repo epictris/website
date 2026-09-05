@@ -66,8 +66,22 @@ export function pathNodesOf(
 // endpoint, so a path of corners flattens to exactly its own nodes and every
 // polyline path is bit-identical to what it was before handles existed.
 export function flattenPath(nodes: readonly PathNode[]): Vec2[] {
-  if (nodes.length === 0) return [];
+  return flattenPathNodes(nodes).points;
+}
+
+// The same flattening, also answering WHERE each authored node landed in the
+// polyline - `nodeAt[i]` is the index of node i's own point in `points`. A
+// node's keys (see `CameraPathVert`) are read off at its arc length, and the
+// arc length of a node is only known once the curve into it is flattened; a
+// key looked up by node index alone would sit at the wrong `s` on any curved
+// edge.
+export function flattenPathNodes(nodes: readonly PathNode[]): {
+  points: Vec2[];
+  nodeAt: number[];
+} {
+  if (nodes.length === 0) return { points: [], nodeAt: [] };
   const out: Vec2[] = [nodes[0]!.p];
+  const nodeAt: number[] = [0];
   for (let i = 0; i + 1 < nodes.length; i++) {
     const a = nodes[i]!;
     const b = nodes[i + 1]!;
@@ -75,13 +89,16 @@ export function flattenPath(nodes: readonly PathNode[]): Vec2[] {
     const c2 = b.p.add(b.in);
     if (a.out.lengthSquared() === 0 && b.in.lengthSquared() === 0) {
       out.push(b.p);
+      nodeAt.push(out.length - 1);
       continue;
     }
     const control = a.p.distanceTo(c1) + c1.distanceTo(c2) + c2.distanceTo(b.p);
     const n = Math.min(MAX_SAMPLES_PER_EDGE, Math.max(2, Math.ceil(control / PATH_FLATTEN_STEP)));
     for (let k = 1; k <= n; k++) out.push(cubicAt(a.p, c1, c2, b.p, k / n));
+    // The last sample is t = 1, which is exactly the node.
+    nodeAt.push(out.length - 1);
   }
-  return out;
+  return { points: out, nodeAt };
 }
 
 // De Casteljau, written out: a cubic at parameter t.
@@ -100,19 +117,30 @@ export interface PolylineIndex {
   // cum[i] = arc length from verts[0] to verts[i]. Same length as `verts`.
   cum: number[];
   total: number;
+  // nodeS[i] = arc length of the i-th AUTHORED node, when the polyline came
+  // from `flattenPathNodes` and the caller said so; empty when it did not.
+  // It is what a node's keys are placed at along the route.
+  nodeS: number[];
 }
 
 export function buildPolylineIndex(
   verts: readonly Vec2[],
   origin: Vec2 = Vec2.ZERO,
   rot = 0,
+  // Index into `verts` of each authored node (see `flattenPathNodes`).
+  nodeAt: readonly number[] = [],
 ): PolylineIndex {
   const world = verts.map((v) => v.rotated(rot).add(origin));
   const cum: number[] = world.length ? [0] : [];
   for (let i = 1; i < world.length; i++) {
     cum.push(cum[i - 1]! + world[i]!.distanceTo(world[i - 1]!));
   }
-  return { verts: world, cum, total: cum.length ? cum[cum.length - 1]! : 0 };
+  return {
+    verts: world,
+    cum,
+    total: cum.length ? cum[cum.length - 1]! : 0,
+    nodeS: nodeAt.map((i) => cum[i] ?? 0),
+  };
 }
 
 // The world point at arc length `s`, clamped to [0, total]. Clamping is the

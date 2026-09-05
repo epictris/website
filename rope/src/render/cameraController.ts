@@ -49,7 +49,7 @@ import {
 import type { Camera } from "./camera";
 import {
   buildPolylineIndex,
-  flattenPath,
+  flattenPathNodes,
   pathNodesOf,
   pointAtArcLength,
   projectOntoPolyline,
@@ -175,9 +175,13 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0):
 // nothing mutates a path at runtime. Everything downstream - the projection, the
 // arc length, the lookahead, the corridor - rides that polyline and knows
 // nothing about the Bézier handles that produced it.
+//
+// A path's `keys` are its nodes' keyframes (see `CameraPathVert`) laid out by
+// arc length, one track per keyed field - built once alongside the index,
+// since a node's `s` is only known once the curve into it is flattened.
 export type CameraRule =
   | { kind: "region"; region: CameraRegionData }
-  | { kind: "path"; path: CameraPathData; index: PolylineIndex };
+  | { kind: "path"; path: CameraPathData; index: PolylineIndex; keys: PathKeyTracks };
 
 // The level's rule set, in the order the tie-break reads: regions in author
 // order, then paths in author order.
@@ -192,16 +196,106 @@ export function buildCameraRules(
 ): CameraRule[] {
   return [
     ...regions.map((region): CameraRule => ({ kind: "region", region })),
-    ...paths.map((path): CameraRule => ({
-      kind: "path",
-      path,
-      index: buildPolylineIndex(
-        flattenPath(pathNodesOf(path.verts)),
-        new Vec2(path.x, path.y),
-        path.rot,
-      ),
-    })),
+    ...paths.map((path): CameraRule => {
+      const flat = flattenPathNodes(pathNodesOf(path.verts));
+      const index = buildPolylineIndex(flat.points, new Vec2(path.x, path.y), path.rot, flat.nodeAt);
+      return { kind: "path", path, index, keys: pathKeyTracks(path, index) };
+    }),
   ];
+}
+
+// --- keys -------------------------------------------------------------------
+//
+// The fields a node may key (see `CameraPathVert`): everything that shapes the
+// path's TARGET - how much world is on screen, how far ahead the camera looks
+// and how much slack that lead is measured with. Not the range, falloff or
+// buffer: those shape the GRIP, are tested at the projection rather than at
+// the lead origin, and would drag the corridor drawing with them (a corridor
+// whose ellipse varies along the route is a sweep, not the fixed-axis
+// Minkowski sum the editor and overlay draw today).
+export const PATH_KEY_FIELDS = [
+  "viewportScale",
+  "lookaheadX",
+  "lookaheadY",
+  "lookaheadBufferX",
+  "lookaheadBufferY",
+] as const;
+export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
+
+// The keyable fields RESOLVED at one place on the route: every one a number,
+// with the path-level field and then the format's default already folded in.
+// Everything downstream of the keys reads one of these rather than a
+// `CameraPathData`, which is what makes "the lead at this `s`" one lookup.
+export type PathParams = Record<PathKeyField, number>;
+
+// One field's keys in arc-length order. Empty = no node keys it.
+export type PathKeyTracks = Record<PathKeyField, { s: number; v: number }[]>;
+
+const PATH_PARAM_DEFAULTS: PathParams = {
+  viewportScale: DEFAULT_VIEWPORT_SCALE,
+  lookaheadX: DEFAULT_PATH_LOOKAHEAD_X,
+  lookaheadY: DEFAULT_PATH_LOOKAHEAD_Y,
+  lookaheadBufferX: DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
+  lookaheadBufferY: DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
+};
+
+// The path-level values: what every field is with no keys at all, and what a
+// path authored before keys existed is everywhere along its length.
+export function pathParamsOf(p: CameraPathData): PathParams {
+  const out = { ...PATH_PARAM_DEFAULTS };
+  for (const k of PATH_KEY_FIELDS) if (p[k] !== undefined) out[k] = p[k]!;
+  return out;
+}
+
+// Each field's keys, read off the nodes and placed at the nodes' arc lengths.
+// An index built without node positions (a bare polyline) keys nothing.
+export function pathKeyTracks(p: CameraPathData, index: PolylineIndex): PathKeyTracks {
+  const tracks = {} as PathKeyTracks;
+  for (const k of PATH_KEY_FIELDS) {
+    const track: { s: number; v: number }[] = [];
+    p.verts.forEach((v, i) => {
+      const s = index.nodeS[i];
+      if (v[k] !== undefined && s !== undefined) track.push({ s, v: v[k]! });
+    });
+    tracks[k] = track;
+  }
+  return tracks;
+}
+
+// The keyable fields resolved at arc length `s`.
+//
+// Per field: no keys is the path-level value; before the first key it holds
+// that key, past the last it holds that one, and between two it is
+// smoothstepped by arc length - flat at each key, so the value has no kink
+// where a node sits, for the same reason the falloff band is smoothstepped: a
+// kink in the target is a step in the camera's velocity. The view scale
+// interpolates GEOMETRICALLY like every other zoom blend here (1 -> 4 passes
+// through 2), and the lengths linearly.
+//
+// Two keys at the same arc length (coincident nodes) take the later one.
+export function pathParamsAt(rule: CameraRule & { kind: "path" }, s: number): PathParams {
+  const base = pathParamsOf(rule.path);
+  for (const k of PATH_KEY_FIELDS) {
+    const track = rule.keys[k];
+    if (track.length === 0) continue;
+    if (s <= track[0]!.s) {
+      base[k] = track[0]!.v;
+      continue;
+    }
+    const last = track[track.length - 1]!;
+    if (s >= last.s) {
+      base[k] = last.v;
+      continue;
+    }
+    let i = 0;
+    while (track[i + 1]!.s <= s) i++;
+    const a = track[i]!;
+    const b = track[i + 1]!;
+    const span = b.s - a.s;
+    const t = span > 0 ? smoothstep((s - a.s) / span) : 1;
+    base[k] = k === "viewportScale" ? lerpZoom(a.v, b.v, t) : a.v + (b.v - a.v) * t;
+  }
+  return base;
 }
 
 function rulePriority(r: CameraRule): number {
@@ -232,21 +326,17 @@ function ellipseReach(ax: number, ay: number, dir: Vec2): number {
 }
 
 // How far along the path the camera leads, for a route heading in `dir`.
-export function pathLookahead(p: CameraPathData, dir: Vec2): number {
-  return ellipseReach(
-    p.lookaheadX ?? DEFAULT_PATH_LOOKAHEAD_X,
-    p.lookaheadY ?? DEFAULT_PATH_LOOKAHEAD_Y,
-    dir,
-  );
+export function pathLookahead(p: PathParams, dir: Vec2): number {
+  return ellipseReach(p.lookaheadX, p.lookaheadY, dir);
 }
 
 // The width of the lead's deadband, for a route heading in `dir` - the same
 // ellipse, so a band authored for a corridor is not most of the vertical screen
 // in a shaft. Both axes zero means no band at all, which `ellipseReach`'s floor
 // would otherwise turn into a micron of one.
-export function pathLookaheadBuffer(p: CameraPathData, dir: Vec2): number {
-  const bx = Math.max(0, p.lookaheadBufferX ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_X);
-  const by = Math.max(0, p.lookaheadBufferY ?? DEFAULT_PATH_LOOKAHEAD_BUFFER_Y);
+export function pathLookaheadBuffer(p: PathParams, dir: Vec2): number {
+  const bx = Math.max(0, p.lookaheadBufferX);
+  const by = Math.max(0, p.lookaheadBufferY);
   if (bx === 0 && by === 0) return 0;
   return ellipseReach(bx, by, dir);
 }
@@ -471,8 +561,14 @@ export function cameraRuleTarget(
     // pointAtArcLength clamps, which is the correct degenerate behaviour:
     // near the end of the path the camera comes to rest centred on that end
     // rather than staring past it.
-    const pathPos = pointAtArcLength(rule.index, s + pathLeadAlong(rule, s));
-    const pathZoom = baseZoom / Math.max(0.01, rule.path.viewportScale ?? DEFAULT_VIEWPORT_SCALE);
+    // Every keyed field is read at `s` - the committed lead origin, which sits
+    // still inside the lookahead deadband while a swing runs back and forth
+    // under it. Read at the raw projection instead, a swing across a zoom
+    // gradient would pump the zoom every half-swing; read here, the buffer
+    // absorbs it exactly as it absorbs the lead.
+    const params = pathParamsAt(rule, s);
+    const pathPos = pointAtArcLength(rule.index, s + pathLeadAlong(rule, s, params));
+    const pathZoom = baseZoom / Math.max(0.01, params.viewportScale);
     // Through the falloff band the target is interpolated toward the NULL
     // rule's - the plain follow at the base zoom - so lookahead, viewport
     // scale and everything else the path asks for fade together, and at the
@@ -508,11 +604,19 @@ export function cameraRuleTarget(
 // about the displacement. One refinement is enough - the correction is second
 // order in the curvature - and it is deterministic, unlike iterating to a
 // tolerance.
-function pathLeadAlong(rule: CameraRule & { kind: "path" }, s: number): number {
+//
+// `params` are the path's fields at `s` (see `pathParamsAt`): the lead is a
+// keyable field, so it is whatever the route says it is where the lead is
+// measured from.
+function pathLeadAlong(
+  rule: CameraRule & { kind: "path" },
+  s: number,
+  params: PathParams = pathParamsAt(rule, s),
+): number {
   const here = pointAtArcLength(rule.index, s);
-  const first = pathLookahead(rule.path, tangentAt(rule.index, s));
+  const first = pathLookahead(params, tangentAt(rule.index, s));
   const chord = pointAtArcLength(rule.index, s + first).sub(here);
-  return pathLookahead(rule.path, chord.lengthSquared() > 0 ? chord : tangentAt(rule.index, s));
+  return pathLookahead(params, chord.lengthSquared() > 0 ? chord : tangentAt(rule.index, s));
 }
 
 // The polyline's direction at `s`, from a short chord across it. A chord rather
@@ -752,8 +856,12 @@ export class CameraController {
               this.pathLeadS,
               // Measured where the BAND currently sits, not where the avatar
               // is: the band is the thing being sized, and on a bend the two
-              // are different directions.
-              pathLookaheadBuffer(next.path, tangentAt(next.index, this.pathLeadS)),
+              // are different directions. Its width is keyable, so it is read
+              // there too.
+              pathLookaheadBuffer(
+                pathParamsAt(next, this.pathLeadS),
+                tangentAt(next.index, this.pathLeadS),
+              ),
             )
           : s;
 
