@@ -5988,6 +5988,33 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       .map(cloneChain);
     clipboardVines = model.vines.filter((v) => copied.has(v.anchor)).map(cloneVine);
   }
+  // The body a paste JOINS, or null for a paste that brings bodies of its own.
+  //
+  // It is the rule `newDrawnItem` follows, one gesture along: with a body
+  // selected the thing being pasted is a part of it - the collision box under a
+  // mesh copied off another wall, a second shape for a compound one, the light
+  // a lamp throws - and giving it a body of its own would mean pasting it,
+  // selecting both and merging, every single time.
+  //
+  // Both sides have to be able to share one. The selected body is refused on the
+  // same terms merging refuses it (an area is single-shape wherever it is used),
+  // and so is the clipboard - a copied camera region or note is not a piece of
+  // anything and keeps the body of its own that `cloneBodies` mints.
+  //
+  // ...and the clipboard has to BE one body. A copy spanning several is an
+  // assembly rather than a part: folding it into one would collapse the chains
+  // and vine spans between its pieces, which need two bodies to hold on to and
+  // are dropped at load when they have one (see `addChain`). That pastes as it
+  // always did, and Ctrl+G is there to merge it afterwards on purpose.
+  function pasteHostBody(): number | null {
+    const host = soleBodyId();
+    if (host === null) return null;
+    if (!bodyMembers(model.items, host).every(canShareBody)) return null;
+    if (!clipboard.every(canShareBody)) return null;
+    if (!clipboard.every((i) => i.bodyId === clipboard[0]!.bodyId)) return null;
+    return host;
+  }
+
   function pasteClipboard(): void {
     if (!clipboard.length) return;
     // Pasted items keep the layer they were copied from — a camera region can't
@@ -6001,13 +6028,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
     // Land the group's top-left corner on the grid, as a move does.
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
+    const host = pasteHostBody();
     beginAction();
     const copy = cloneBodies(clipboard, delta);
+    // Into the selected body rather than the fresh one `cloneBodies` minted for
+    // the copy. Placement is untouched: the paste still lands under the cursor,
+    // and what joining a body changes is what it is PART of.
+    if (host !== null) for (const it of copy.items) it.bodyId = host;
     addAndSelect(
       copy.items,
       cloneChainsWithin(clipboardChains, copy.idOf),
       cloneVinesWithin(clipboardVines, copy.idOf),
     );
+    // A body has one kind, one fill, one friction: a shape pasted into an
+    // existing body takes them rather than bringing the copy's and disagreeing
+    // with its new siblings about what the body is - the same courtesy a drawn
+    // one gets. The host's own lead comes first in `model.items`, so it is the
+    // body that wins, not the arrival.
+    if (host !== null) syncBodyProps(bodyMembers(model.items, host));
   }
 
   // --- disk -----------------------------------------------------------------
