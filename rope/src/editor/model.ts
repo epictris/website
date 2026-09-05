@@ -33,6 +33,7 @@ import {
 } from "../render/cameraPath";
 import { DECOR_Z } from "../level/decor";
 import { catenaryPolyline } from "../level/catenary";
+import { buildMovePath, type MovePath } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
 import { World } from "../engine/world";
 import { RigidBody2D } from "../engine/body";
@@ -54,6 +55,8 @@ import {
   NOTE_ARROW_THICKNESS,
   scaleLevelData,
   type BodyKind,
+  type MoveEase,
+  movePeakFactor,
   type CameraPathData,
   type CameraRegionData,
   type ChainData,
@@ -65,6 +68,7 @@ import {
   type GeometryObjectData,
   type LightObjectData,
   type SceneObjectData,
+  hasBearing,
   isCollisionObject,
   isAnchorObject,
   isGeometryObject,
@@ -352,6 +356,32 @@ export interface EdItem {
   springFreqX: number;
   springFreqY: number;
   springDamping: number;
+  // Static bodies only: the kinematic pendulum (see `LevelBodyData.swingAmp`).
+  // Half-amplitude in RADIANS like every angle the model holds (the inspector
+  // shows degrees, as it does for `rot`), period in seconds, phase in cycles.
+  // An amplitude or a period of 0 is a body that does not swing, which is how
+  // "absent" is spelled in a model whose fields are always present - the same
+  // convention `springFreqX` follows. Its bearing is `pivotAt`, shared with the
+  // rigid pivot because it is the same point.
+  swingAmp: number;
+  swingPeriod: number;
+  swingPhase: number;
+  // Static bodies only: the route the body travels (see
+  // `LevelBodyData.movePath`), as the waypoints AFTER the first - the body's own
+  // frame origin is waypoint zero, which is what makes the route ride the body
+  // through every gesture that moves or turns it, exactly as `pivotAt` does.
+  // Frame-local for the same reason and held the same way: replaced rather than
+  // mutated, since `syncBodyProps` hands one array to every member of a body.
+  movePath: Vec2[];
+  moveClosed: boolean;
+  // ...and how it is travelled: the average speed in METRES per second (the
+  // inspector shows the file's px/s, as it does for every other length), the
+  // phase in cycles, and the ease. A speed of 0 or an empty route is a body that
+  // stands still, which is how "absent" is spelled in a model whose fields are
+  // always present.
+  moveSpeed: number;
+  movePhase: number;
+  moveEase: MoveEase;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -902,13 +932,25 @@ function fromLevelData(data: LevelData): EdModel {
     // point re-measured, which is what the save's re-origining already does to
     // every object placement.
     const pivotAt = (() => {
-      if (b.pivot !== true || (b.pivotX === undefined && b.pivotY === undefined)) return null;
+      // Read for either mounting that HAS a bearing - a rigid `pivot` or a
+      // swinging static (see `LevelBodyData.pivotX`) - since the two mean the
+      // same point and the model holds one field for it.
+      if (!hasBearing(b) || (b.pivotX === undefined && b.pivotY === undefined)) return null;
       const first = b.objects[0];
       if (!first) return null;
       const frame = worldPlacement(b, first);
       const bearing = worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 });
       return bearing.pos.sub(frame.pos).rotated(-frame.rot);
     })();
+    // ...and the route, carried into the same frame and for the same reason: a
+    // waypoint is a point in the body, so it is measured against the frame the
+    // model holds the body in rather than the one the file wrote.
+    const routeIn = (b.movePath ?? []).map((p) => {
+      const first = b.objects[0];
+      if (!first) return new Vec2(p.x, p.y);
+      const frame = worldPlacement(b, first);
+      return worldPlacement(b, p).pos.sub(frame.pos).rotated(-frame.rot);
+    });
     const base = {
       layer: "scene" as const,
       bodyId,
@@ -929,6 +971,14 @@ function fromLevelData(data: LevelData): EdModel {
       springFreqX: b.springFreqX ?? 0,
       springFreqY: b.springFreqY ?? 0,
       springDamping: b.springDamping ?? DEFAULT_SPRING_DAMPING,
+      swingAmp: b.swingAmp ?? 0,
+      swingPeriod: b.swingPeriod ?? 0,
+      swingPhase: b.swingPhase ?? 0,
+      movePath: routeIn,
+      moveClosed: b.moveClosed === true,
+      moveSpeed: b.moveSpeed ?? 0,
+      movePhase: b.movePhase ?? 0,
+      moveEase: b.moveEase ?? "linear",
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
@@ -1051,6 +1101,14 @@ function fromLevelData(data: LevelData): EdModel {
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
+    swingAmp: 0,
+    swingPeriod: 0,
+    swingPhase: 0,
+    movePath: [],
+    moveClosed: false,
+    moveSpeed: 0,
+    movePhase: 0,
+    moveEase: "linear",
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
@@ -1120,6 +1178,14 @@ function fromLevelData(data: LevelData): EdModel {
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
+    swingAmp: 0,
+    swingPeriod: 0,
+    swingPhase: 0,
+    movePath: [],
+    moveClosed: false,
+    moveSpeed: 0,
+    movePhase: 0,
+    moveEase: "linear",
     cam: {
       // A path IS the position rule, so it has no offset and no lock to compose
       // with (see "Explicitly out of scope" in plans/camera-tracking.md).
@@ -1191,6 +1257,14 @@ function lightItem(
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
+    swingAmp: 0,
+    swingPeriod: 0,
+    swingPhase: 0,
+    movePath: [],
+    moveClosed: false,
+    moveSpeed: 0,
+    movePhase: 0,
+    moveEase: "linear",
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
@@ -1240,6 +1314,14 @@ function lightItem(
     springFreqX: 0,
     springFreqY: 0,
     springDamping: DEFAULT_SPRING_DAMPING,
+    swingAmp: 0,
+    swingPeriod: 0,
+    swingPhase: 0,
+    movePath: [],
+    moveClosed: false,
+    moveSpeed: 0,
+    movePhase: 0,
+    moveEase: "linear",
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
@@ -1440,6 +1522,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   const bodies: LevelBodyData[] = runs.map((run) => {
     const origin = bodyFrameOf(model, run[0]!.bodyId);
     const lead = run.find((i) => i.object === "collision") ?? run[0]!;
+    // Whether this body is a pendulum, asked once because three fields below
+    // turn on it - the trio itself, and the bearing it shares with the pivot.
+    const swingsHere =
+      lead.kind === "static" && lead.swingAmp !== 0 && lead.swingPeriod > 0;
+    // ...and whether it travels, the same question for the route's own fields.
+    const movesHere = lead.kind === "static" && lead.movePath.length > 0 && lead.moveSpeed > 0;
     const cos = Math.cos(-origin.rot);
     const sin = Math.sin(-origin.rot);
     const localOf = (i: { pos: Vec2; rot: number }): { x?: number; y?: number; rot?: number } => {
@@ -1582,21 +1670,54 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // for every kind that builds a body - a static one is the retired
             // `anchor` kind, a rigid one is the leaf it could not express.
             ...(lead.passable ? { passable: true } : {}),
-            // A bearing means something only on a rigid body, and only when
-            // set - an absent field is the free body every old level has. Its
-            // authored point is already in the frame this body is being
-            // written in (`pivotAt` is frame-local, and `origin` above IS
-            // `bodyFrameOf`), so it goes out as it stands; the torsion spring
-            // rides with a real frequency only, damping alongside it, exactly
-            // as the linear spring's fields do below.
+            // The bearing MOUNTING, and only when set - an absent field is the
+            // free body every old level has. The torsion spring rides with a
+            // real frequency only, damping alongside it, exactly as the linear
+            // spring's fields do below; the bearing POINT is written below, for
+            // both of the mountings that have one.
             ...(lead.kind === "rigid" && lead.pivot
               ? {
                   pivot: true,
-                  ...(lead.pivotAt ? { pivotX: lead.pivotAt.x, pivotY: lead.pivotAt.y } : {}),
                   ...(lead.pivotFreq > 0
                     ? { pivotFreq: lead.pivotFreq, pivotDamping: lead.pivotDamping }
                     : {}),
                 }
+              : {}),
+            // The kinematic pendulum, on a static body and only where it
+            // actually swings (see `LevelBodyData.swingAmp`) - an absent trio is
+            // the plain static every level authored before the fields has. The
+            // phase rides only when it is not the zero every level means by
+            // saying nothing, which is what keeps such a body byte-stable.
+            ...(swingsHere
+              ? {
+                  swingAmp: lead.swingAmp,
+                  swingPeriod: lead.swingPeriod,
+                  ...(lead.swingPhase ? { swingPhase: lead.swingPhase } : {}),
+                }
+              : {}),
+            // The route, on a static body and only where it is actually
+            // travelled (see `LevelBodyData.movePath`). Its waypoints are
+            // already in the frame this body is being written in, exactly as the
+            // bearing's point is, so they go out as they stand; the closure, the
+            // phase and the ease ride only when they are not the defaults every
+            // level means by saying nothing.
+            ...(movesHere
+              ? {
+                  movePath: lead.movePath.map((p) => ({ x: p.x, y: p.y })),
+                  moveSpeed: lead.moveSpeed,
+                  ...(lead.moveClosed ? { moveClosed: true } : {}),
+                  ...(lead.movePhase ? { movePhase: lead.movePhase } : {}),
+                  ...(lead.moveEase !== "linear" ? { moveEase: lead.moveEase } : {}),
+                }
+              : {}),
+            // The BEARING, written for whichever of the two mountings has one.
+            // Its authored point is already in the frame this body is being
+            // written in (`pivotAt` is frame-local, and `origin` above IS
+            // `bodyFrameOf`), so it goes out as it stands.
+            ...((lead.kind === "rigid" && lead.pivot) || swingsHere
+              ? lead.pivotAt
+                ? { pivotX: lead.pivotAt.x, pivotY: lead.pivotAt.y }
+                : {}
               : {}),
             // A spring means something only on a rigid body that is not on a
             // bearing, and only when a frequency is actually set - a body with
@@ -2456,7 +2577,96 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.springFreqX = lead.springFreqX;
     m.springFreqY = lead.springFreqY;
     m.springDamping = lead.springDamping;
+    m.swingAmp = lead.swingAmp;
+    m.swingPeriod = lead.swingPeriod;
+    m.swingPhase = lead.swingPhase;
+    m.movePath = lead.movePath;
+    m.moveClosed = lead.moveClosed;
+    m.moveSpeed = lead.moveSpeed;
+    m.movePhase = lead.movePhase;
+    m.moveEase = lead.moveEase;
   }
+}
+
+// --- scripted motion --------------------------------------------------------
+
+// A body's authored route, as the travelled thing (see `MovePath`): its
+// waypoints resolved into the body's frame with the frame's own origin
+// prepended, which is waypoint zero. The editor's side of what
+// `buildBodies.authoredMover` does at load, so the canvas, the panel's trip
+// readout and the sim cannot each measure a route their own way.
+export function routeOf(model: EdModel, item: EdItem): MovePath {
+  const frame = bodyFrameOf(model, item.bodyId);
+  return buildMovePath(
+    item.movePath.map((p) => p.rotated(frame.rot)),
+    item.moveClosed,
+  );
+}
+
+// ...and the same route in WORLD points, which is what the canvas draws and what
+// a waypoint handle is placed at. Waypoint zero is the body's frame origin,
+// which is why moving the body moves the whole route with it.
+export function routeWorldPoints(model: EdModel, item: EdItem): Vec2[] {
+  const frame = bodyFrameOf(model, item.bodyId);
+  return [frame.pos, ...item.movePath.map((p) => frame.pos.add(p.rotated(frame.rot)))];
+}
+
+// The fastest any point of a mover's surface crosses a frame, in metres - the
+// one number a mover can get wrong with nothing else saying so (see
+// `MoverScript`: past about 2 cm the character sweep resolves against a surface
+// that has already crossed the avatar).
+//
+// Derived rather than measured, so the panel can show it live while the fields
+// are being typed into: a pendulum's fastest point is `amp · 2π/period` times the
+// distance from its bearing to its farthest corner, and a route's is its average
+// speed times what the ease peaks at. A body carrying both is charged for the
+// sum, which is the bound rather than the exact answer - the two peaks need not
+// fall on the same frame - and a bound is the right side to be wrong on here.
+export function peakSurfaceSpeed(model: EdModel, item: EdItem): number {
+  let peak = 0;
+  if (item.swingAmp !== 0 && item.swingPeriod > 0) {
+    const frame = bodyFrameOf(model, item.bodyId);
+    const bearing = item.pivotAt
+      ? frame.pos.add(item.pivotAt.rotated(frame.rot))
+      : bodyCentroid(bodyMembers(model.items, item.bodyId));
+    let reach = 0;
+    for (const m of bodyMembers(model.items, item.bodyId)) {
+      if (m.object !== "collision") continue;
+      for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(bearing).length());
+    }
+    peak += Math.abs(item.swingAmp) * ((2 * Math.PI) / item.swingPeriod) * reach;
+  }
+  if (item.movePath.length > 0 && item.moveSpeed > 0) {
+    peak += item.moveSpeed * movePeakFactor(item.moveEase, item.moveClosed);
+  }
+  return peak / 60;
+}
+
+// Every point of a shape a rider can meet, in world metres: the corners of a
+// rect or a polygon, and for a circle its centre alone with the radius left to
+// the caller (nothing that carries a route or a bearing is one, and a circle
+// spun about its own centre sweeps no new ground anyway).
+//
+// The exact corners rather than the half-diagonal added to the centre, because
+// the two disagree by a third on an arm-and-plank pendulum - and the looser
+// answer would have the panel calling a level too fast that `cli movers`
+// `levels`, which measures the same points, passes.
+function shapeCorners(item: EdItem): Vec2[] {
+  const s = item.shape;
+  const local =
+    s.kind === "rect"
+      ? [
+          new Vec2(-s.w / 2, -s.h / 2),
+          new Vec2(s.w / 2, -s.h / 2),
+          new Vec2(s.w / 2, s.h / 2),
+          new Vec2(-s.w / 2, s.h / 2),
+        ]
+      : s.kind === "circle"
+        ? [new Vec2(s.r, 0), new Vec2(-s.r, 0), new Vec2(0, s.r), new Vec2(0, -s.r)]
+        : s.kind === "poly" || s.kind === "path"
+          ? s.verts
+          : [Vec2.ZERO];
+  return local.map((v) => item.pos.add(v.rotated(item.rot)));
 }
 
 // --- matched outlines -------------------------------------------------------
@@ -2708,6 +2918,14 @@ export function emptyModel(): EdModel {
         springFreqX: 0,
         springFreqY: 0,
         springDamping: DEFAULT_SPRING_DAMPING,
+        swingAmp: 0,
+        swingPeriod: 0,
+        swingPhase: 0,
+        movePath: [],
+        moveClosed: false,
+        moveSpeed: 0,
+        movePhase: 0,
+        moveEase: "linear",
         cam: defaultCamera(),
         light: defaultLight(),
         note: defaultNote(),

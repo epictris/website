@@ -394,3 +394,220 @@ const TRAMPOLINE_DATA: RawLevelData = {
 };
 
 export const TEST_TRAMPOLINE: LevelSpec = { data: TRAMPOLINE_DATA, controller: "ball" };
+
+// Kinematic pendulums to ride (see `LevelBodyData.swingAmp`): a chasm crossed by
+// two swings, each a plank on the end of a 2.5 m arm, swinging on the same 9 s
+// beat three eighths of a cycle apart.
+//
+// The pair is the mechanic, and the phase offset is the whole of why there are
+// two. One swing is a moving platform with a sine on it; two out of phase are a
+// RHYTHM, and crossing is a matter of leaving on the right beat rather than of
+// walking. The offset is authored as 0.375 - three eighths of the cycle - which
+// is the reason the field is in cycles rather than in radians: it puts the far
+// swing coming back through the middle as the near one arrives at its far end.
+//
+// The layout, in metres. The lip is at x = 0 and the far ledge starts at x =
+// 5.24. Each plank hangs 2.62 m from its bearing and sweeps ±30°, so it travels
+// ±1.31 m about the point it hangs from: the first, bolted at x = 1.31, sweeps 0
+// to 2.62 and takes the player off the lip; the second, at x = 3.93, sweeps 2.62
+// to 5.24 and puts them on the ledge. The planks are 2 m wide, so the two are
+// over one another for a good part of every beat.
+//
+// Height is the timing. A plank is level with the lip at the bottom of its arc
+// and stands 35 cm above it at either end, tilting 30° as it goes - so it is
+// catchable for the part of the swing where it is both level and near, and a
+// player who leaves late arrives on a plank that is already climbing.
+//
+// WHY IT IS SLOW, since that is the first thing to want to change: a mover has
+// to keep its contact speed under about 2 cm a frame (see `MoverScript`), and a
+// pendulum's fastest point is its far corner, `amp · 2π/period · radius`. At
+// 30°, a 2.8 m corner radius and a 9 s beat that is 1.02 m/s - 1.7 cm a frame,
+// inside the rule with a little to spare. Shortening the beat or lengthening the
+// arm buys travel at exactly that number's expense, and `cli movers` `levels` is
+// what says so when it is spent.
+//
+// Nothing in the level can disturb either of them, which is what a rhythm has to
+// mean: a player landing heavily on one, hooking it and hanging off it, or
+// shoving a boulder onto it changes the beat by nothing. What the swing does
+// carry is its own motion - the plank hands its rider `v + w x r` at the contact
+// like any other mover, so stepping off one at the end of its arc is a throw.
+const SWING_DATA: RawLevelData = {
+  // On the lip, which is where the crossing is judged from: both swings are in
+  // frame from here, so the rhythm is visible before it has to be timed.
+  player: { x: -100, y: 20, radius: 8 },
+  bodies: [
+    // The left approach, ending at x = 0 - the lip the crossing leaves from.
+    {
+      kind: "static",
+      x: -500,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The far ledge, starting where the second swing reaches.
+    {
+      kind: "static",
+      x: 1024,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The pit floor, far enough down that a miss is a fall rather than a stumble
+    // and that neither plank's arc reaches it.
+    {
+      kind: "static",
+      x: 262,
+      y: 800,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 800, h: 40 } }],
+    },
+    // The first swing. The body's authored origin IS its bearing, which is what
+    // `pivotX`/`pivotY` of 0 says - without them the bearing would be the centre
+    // of mass, somewhere down the arm, and the plank would wag rather than swing.
+    {
+      kind: "static",
+      x: 131,
+      y: -170,
+      rot: 0,
+      color: "#7a5a3a",
+      pivotX: 0,
+      pivotY: 0,
+      swingAmp: 0.5236,
+      swingPeriod: 9,
+      objects: [
+        { type: "collision", x: 0, y: 125, rot: 0, shape: { kind: "rect", w: 16, h: 250 } },
+        { type: "collision", x: 0, y: 262, rot: 0, shape: { kind: "rect", w: 200, h: 24 } },
+      ],
+    },
+    // ...and the second, three eighths of a cycle behind it.
+    {
+      kind: "static",
+      x: 393,
+      y: -170,
+      rot: 0,
+      color: "#7a5a3a",
+      pivotX: 0,
+      pivotY: 0,
+      swingAmp: 0.5236,
+      swingPeriod: 9,
+      swingPhase: 0.375,
+      objects: [
+        { type: "collision", x: 0, y: 125, rot: 0, shape: { kind: "rect", w: 16, h: 250 } },
+        { type: "collision", x: 0, y: 262, rot: 0, shape: { kind: "rect", w: 200, h: 24 } },
+      ],
+    },
+  ],
+};
+
+export const TEST_SWING: LevelSpec = { data: SWING_DATA };
+
+// Bodies that travel a route (see `LevelBodyData.movePath`): the three shapes a
+// route comes in, side by side, so what each authored field does is a thing you
+// can stand on.
+//
+//   - a LIFT up a shaft, an open route eased with `sine` - it comes to a stop at
+//     both ends and turns round smoothly, which is what a lift does and what
+//     stops a rider being thrown off at the top;
+//   - a TROLLEY going round a closed rectangle at a constant speed, one way for
+//     ever, which is what `moveClosed` means;
+//   - a SHUTTLE across the gap eased with `easeOut` - it leaves the near side at
+//     full speed and settles into the far one, so the two ends of the same trip
+//     feel different, which is the reason there is a pair of one-sided eases
+//     rather than one.
+//
+// Speeds are picked against the same contact-speed rule the swings are (see
+// `SWING_DATA`), and the ease is half of that arithmetic: `moveSpeed` is the
+// AVERAGE over a traverse, and the peak is that times 1 under `linear`, π/2
+// under `sine` and 2 under either one-sided ease. So the lift's 0.6 m/s peaks at
+// 0.94, the shuttle's 0.5 at 1.0, and the trolley runs flat at 0.5 - 1.6, 1.7
+// and 0.8 cm a frame.
+const LIFT_DATA: RawLevelData = {
+  // At the right-hand end of the left ledge, which frames the shuttle and the
+  // trolley at once; the lift is a walk to the left.
+  player: { x: -400, y: 20, radius: 8 },
+  bodies: [
+    // The ground, in two ledges with the shuttle's 4 m gap between them. Their
+    // top face is at y = 80, which every deck below is placed flush with: a
+    // platform you have to step UP onto is a platform whose timing is about the
+    // step rather than about the platform.
+    {
+      kind: "static",
+      x: -700,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    {
+      kind: "static",
+      x: 700,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The pit under the gap.
+    {
+      kind: "static",
+      x: 0,
+      y: 700,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 800, h: 40 } }],
+    },
+    // The lift: 5 m up the shaft off the left end of the ledge and back, easing
+    // out of both ends. Its deck sits flush against the ledge's left edge at the
+    // bottom and against the landing below at the top, so both ends of the trip
+    // are a step across rather than a step up.
+    {
+      kind: "static",
+      x: -1320,
+      y: 92,
+      rot: 0,
+      color: "#5a6a7a",
+      movePath: [{ x: 0, y: -500 }],
+      moveSpeed: 60,
+      moveEase: "sine",
+      objects: [{ type: "collision", shape: { kind: "rect", w: 240, h: 24 } }],
+    },
+    // ...and the landing it arrives at, whose top face is the lift deck's at the
+    // top of its travel.
+    {
+      kind: "static",
+      x: -1720,
+      y: -400,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 560, h: 40 } }],
+    },
+    // The trolley: round a 4 m x 2 m rectangle, one way, for ever, well above
+    // the ground it crosses. Its route is authored right, up, left, so the leg
+    // home is the one down the left-hand side.
+    {
+      kind: "static",
+      x: 200,
+      y: -300,
+      rot: 0,
+      color: "#7a5a3a",
+      movePath: [
+        { x: 400, y: 0 },
+        { x: 400, y: -200 },
+        { x: 0, y: -200 },
+      ],
+      moveClosed: true,
+      moveSpeed: 50,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+    },
+    // The shuttle: a 2 m deck ferrying across the 4 m gap, bridging one lip at
+    // each end of its trip, leaving hard and settling in.
+    {
+      kind: "static",
+      x: -100,
+      y: 92,
+      rot: 0,
+      color: "#5a6a7a",
+      movePath: [{ x: 200, y: 0 }],
+      moveSpeed: 50,
+      moveEase: "easeOut",
+      objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+    },
+  ],
+};
+
+export const TEST_LIFT: LevelSpec = { data: LIFT_DATA };

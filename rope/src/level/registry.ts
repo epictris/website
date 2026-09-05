@@ -6,6 +6,8 @@ import { LEVEL_2 } from "./levelData";
 import { addSlidingPlatform, addWindmill } from "./movers";
 import {
   TEST_BRANCH,
+  TEST_LIFT,
+  TEST_SWING,
   TEST_MOVERS,
   TEST_SPRING,
   TEST_TRAMPOLINE,
@@ -44,13 +46,18 @@ export const LEVELS: Record<string, LevelSpec> = {
   // A branch on a sprung bearing to swing down and be sprung back by
   // (see `TEST_BRANCH`).
   TEST_BRANCH,
+  // Two kinematic pendulums to time a crossing against (see `TEST_SWING`).
+  TEST_SWING,
+  // A lift, a trolley on a loop and an eased shuttle (see `TEST_LIFT`).
+  TEST_LIFT,
   // Hanging vines over a chasm, to swing across and to see drape and pool
   // (see `TEST_VINES`).
   TEST_VINES,
   // Trampolines to be thrown by, driven with the ball (see `TEST_TRAMPOLINE`).
   TEST_TRAMPOLINE,
-  // Ball & chain controller in its own authored arena (no movers — the ball
-  // level driver has no mover support yet).
+  // Ball & chain controller in its own authored arena. Any mover in it is one
+  // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
+  // the ball driver takes no `init` hook.
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },

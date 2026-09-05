@@ -25,6 +25,7 @@ import {
   type RawLevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
+import type { MoverScript } from "./movers";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
   buildSceneChains,
@@ -42,10 +43,10 @@ import {
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import { PX } from "../engine/units";
 
-// Scripted-mover update: sets the body's transform for the given sim time.
-// Deterministic — must be a pure function of time (frame * dt). Keep contact
-// speeds under ~2 px/frame so movers can't trip the embed invariant.
-export type MoverScript = (body: AnimatableBody2D, time: number) => void;
+// The scripted-mover contract lives with the scripts (`level/movers.ts`), and is
+// re-exported here because a mover is the LEVEL's - a caller writing an `init`
+// hook reaches for it beside `Level`.
+export type { MoverScript };
 
 // A registry entry: static geometry plus an optional init hook that adds
 // scripted movers (hand-written levels only — levelData.ts stays generated).
@@ -121,6 +122,11 @@ export class Level {
 
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
+    // The pendulums the FILE authored (see `LevelBodyData.swingAmp`), which are
+    // already in the world and in the wrap list above - so they are pushed
+    // straight onto the list rather than going through `addMover`, which is the
+    // door a hand-written `init` hook spawns one through.
+    this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
     this.vines = buildVines(this.world, data, built);
     // The links go in the rope's candidate list like every other body. They are

@@ -18,6 +18,7 @@ import {
   bodyBounds,
   bodyCentroid,
   bodyFrameOf,
+  routeWorldPoints,
   bodyMembers,
   halfExtents,
   isArrowNote,
@@ -109,6 +110,13 @@ const GROUP_MARK = "#7fd6a8";
 // says the opposite: these are what the selected body is made of, shown so the
 // body's extent is visible without the pieces being picked.
 export const BODY_MEMBER = "#4f9dff";
+
+// Scripted motion - a pendulum's arc, a platform's route. A colour of its own
+// because it is neither geometry nor a handle: it is what the level DOES with a
+// body, drawn over the level and grabbable only on the body that is selected. A
+// warm amber against the group marks' green and the members' blue, so a canvas
+// carrying all three still says which is which.
+const MOVER_MARK = "#e0a548";
 
 export const HANDLE_SIZE_PX = 8; // drawn square side
 export const HANDLE_HIT_PX = 9; // pointer pick radius
@@ -1218,6 +1226,151 @@ function drawGroupMarks(
   }
 }
 
+// A scripted mover's motion, which is the one thing about a level that is
+// invisible on a still canvas: a swinging body and a plain wall are the same
+// picture, and so are a platform and the lift it is about to become.
+//
+// Two marks, one per motion (see `LevelBodyData.swingAmp` and `movePath`):
+//
+//   - a PENDULUM gets a ring at its bearing, and the arc its body sweeps drawn
+//     through the point of it that reaches furthest - which is the part a player
+//     actually meets, and the part an author is placing when they pick an
+//     amplitude;
+//   - a TRAVELLING body gets its route as a polyline with a square at every
+//     waypoint, an arrow along the first leg saying which way it sets off, and a
+//     ring at the closing leg's midpoint when it is a loop.
+//
+// Drawn for every mover rather than only for the selected one - what a level
+// does while it is running is a fact about the level, and hunting for it one
+// click at a time is how a rhythm gets authored twice. The SELECTED body's
+// waypoints are drawn as grabbable handles on top, in the selection colour, so
+// what can be dragged is what looks draggable.
+function drawMoverMarks(
+  ctx: CanvasRenderingContext2D,
+  model: EdModel,
+  visible: readonly EdItem[],
+  all: readonly EdItem[],
+  selectedBodyIds: ReadonlySet<number>,
+  worldLine: number,
+): void {
+  const bodies = new Set<number>();
+  for (const b of visible) bodies.add(b.bodyId);
+  for (const id of bodies) {
+    const members = bodyMembers(all, id);
+    const lead = members.find((m) => m.object === "collision");
+    if (!lead || lead.kind !== "static") continue;
+    const frame = bodyFrameOf(model, id);
+    const picked = selectedBodyIds.has(id);
+
+    if (lead.swingAmp !== 0 && lead.swingPeriod > 0) {
+      const bearing = lead.pivotAt
+        ? frame.pos.add(lead.pivotAt.rotated(frame.rot))
+        : bodyCentroid(members);
+      // The arc is drawn at the radius of whatever reaches furthest from the
+      // bearing, which is the swept edge rather than a circle round the middle,
+      // and centred on where the body actually HANGS - the direction from the
+      // bearing to its centre of mass. Straight down is only that direction for
+      // a body drawn hanging, and a level may perfectly well author one at an
+      // angle.
+      let reach = 0;
+      for (const m of members) {
+        if (m.object === "collision") reach = Math.max(reach, m.pos.sub(bearing).length());
+      }
+      const hang = bodyCentroid(members).sub(bearing);
+      ctx.strokeStyle = MOVER_MARK;
+      ctx.lineWidth = worldLine * 1.5;
+      const ar = 6 * worldLine;
+      ctx.beginPath();
+      ctx.arc(bearing.x, bearing.y, ar, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(bearing.x, bearing.y, ar / 3, 0, Math.PI * 2);
+      ctx.fillStyle = MOVER_MARK;
+      ctx.fill();
+      if (reach > 0) {
+        const rest = hang.length() > 1e-9 ? Math.atan2(hang.y, hang.x) : Math.PI / 2;
+        ctx.setLineDash([4 * PX, 4 * PX]);
+        ctx.lineWidth = worldLine;
+        ctx.beginPath();
+        ctx.arc(bearing.x, bearing.y, reach, rest - lead.swingAmp, rest + lead.swingAmp);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    if (lead.movePath.length === 0) continue;
+    const pts = routeWorldPoints(model, lead);
+    ctx.strokeStyle = MOVER_MARK;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.setLineDash([6 * PX, 4 * PX]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0]!.x, pts[0]!.y);
+    for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+    if (lead.moveClosed) ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Which way it sets off, on the first leg - the only thing that separates a
+    // lap from the same lap the other way round.
+    const dir = pts[1]!.sub(pts[0]!);
+    if (dir.length() > 1e-9) {
+      const at = pts[0]!.add(dir.mul(0.5));
+      const n = dir.normalized();
+      const t = new Vec2(-n.y, n.x);
+      const a = 5 * worldLine;
+      ctx.beginPath();
+      ctx.moveTo(at.x + n.x * a, at.y + n.y * a);
+      ctx.lineTo(at.x - n.x * a + t.x * a * 0.7, at.y - n.y * a + t.y * a * 0.7);
+      ctx.lineTo(at.x - n.x * a - t.x * a * 0.7, at.y - n.y * a - t.y * a * 0.7);
+      ctx.closePath();
+      ctx.fillStyle = MOVER_MARK;
+      ctx.fill();
+    }
+
+    // The waypoints. Zero is the body itself and is drawn as a ring rather than
+    // as a square, because it is the one point of the route that is not dragged
+    // on its own - moving the body moves it, which is what makes the route ride
+    // the thing it belongs to.
+    const r = 4 * worldLine;
+    ctx.lineWidth = worldLine * 1.5;
+    ctx.strokeStyle = picked ? HANDLE : MOVER_MARK;
+    ctx.beginPath();
+    ctx.arc(pts[0]!.x, pts[0]!.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    for (const p of pts.slice(1)) {
+      ctx.beginPath();
+      ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
+      if (picked) {
+        ctx.fillStyle = HANDLE_FILL;
+        ctx.fill();
+      }
+      ctx.stroke();
+    }
+    // ...and the midpoints, which insert one. Only on the selected body: they
+    // are an affordance rather than information, and drawn on every mover in the
+    // level they would be a second row of dots nobody may click.
+    if (!picked) continue;
+    ctx.strokeStyle = HANDLE;
+    ctx.lineWidth = worldLine;
+    for (const m of routeMidpoints(pts, lead.moveClosed)) {
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, r * 0.6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+}
+
+// The midpoint of every leg a waypoint can be inserted into - the legs between
+// consecutive waypoints, plus the closing leg home on a loop. Exported because
+// the press handler picks the same points the canvas drew, and two lists of them
+// would be two answers to "what is under the pointer".
+export function routeMidpoints(pts: readonly Vec2[], closed: boolean): Vec2[] {
+  const mids: Vec2[] = [];
+  for (let i = 1; i < pts.length; i++) mids.push(pts[i - 1]!.add(pts[i]!).mul(0.5));
+  if (closed && pts.length > 1) mids.push(pts[pts.length - 1]!.add(pts[0]!).mul(0.5));
+  return mids;
+}
+
 // The objects of the selected BODY, outlined where they are - which is the only
 // thing on the canvas that says what a body is made of while none of its objects
 // is selected.
@@ -1577,6 +1730,9 @@ export function drawEditor(
   // put whatever is hidden, since it is the shapes' centre of mass alone.
   const markable = [...(visibleLayers.has("scene") ? geometry : []), ...decor];
   drawGroupMarks(ctx, model, markable, model.items, selectedIds, worldLine);
+
+  // ...and how the level DRIVES a body: a pendulum's arc and a platform's route.
+  drawMoverMarks(ctx, model, markable, model.items, selectedBodyIds, worldLine);
 
   // Where a sprung body actually rests, as a dashed outline of its collision
   // shapes at the settled pose. The authored outline stays what is drawn and

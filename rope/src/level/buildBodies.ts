@@ -12,6 +12,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
+  AnimatableBody2D,
   ForceArea,
   PhysicsBody2D,
   RigidBody2D,
@@ -31,6 +32,9 @@ import {
 import { KillZone } from "../classes/killZone";
 import {
   collides,
+  isMover,
+  moves,
+  swings,
   isCollisionObject,
   DEFAULT_BODY_COLOR,
   DEFAULT_BODY_OPACITY,
@@ -43,6 +47,13 @@ import {
   type ObjectPlacement,
   type ShapeData,
 } from "./levelFormat";
+import {
+  buildMovePath,
+  composeMovers,
+  moveScript,
+  swingScript,
+  type MoverScript,
+} from "./movers";
 import type { CollisionObject2D } from "../engine/body";
 
 // An authored shape as the ENGINE primitives it is made of, each with the
@@ -216,6 +227,12 @@ export interface BuiltBodies {
   // bodies rather than into a flat entry list, so a chain names a body and
   // there is nothing left to collapse.
   bodies: BuiltBody[];
+  // The scripted movers the FILE authored: one per swinging body (see
+  // `LevelBodyData.swingAmp`), with its script already closed over the pose it
+  // was built at. Handed back rather than registered, because the mover list is
+  // the level driver's - `Level` and `BallLevel` each own the loop that steps it
+  // - and the builder has no level to add one to.
+  movers: Array<{ body: AnimatableBody2D; script: MoverScript }>;
 }
 
 // The level as built, from the renderers' point of view: the metre-scaled data
@@ -345,11 +362,24 @@ function setCompoundInertia(rb: RigidBody2D, pieces: Piece[]): void {
 // build only, before anything queries the body: the per-shape caches never see
 // the old frame (see `CollisionShape2D.isVertexExposed`).
 function reoriginTo(rb: RigidBody2D, point: Vec2): Vec2 {
-  const comLocal = rb.globalPosition.sub(point).rotated(-rb.globalRotation);
-  for (const s of rb.getShapes()) s.localOffset = s.localOffset.add(comLocal);
+  const comLocal = reoriginShapes(rb, point);
   rb.inertia += rb.mass * comLocal.lengthSquared();
-  rb.globalPosition = point;
   return comLocal;
+}
+
+// The half of that which is only about WHERE THE ORIGIN IS, shared with the
+// kinematic pendulum (`swings`), whose bearing is the same statement about the
+// same geometry and which has no inertia for the parallel-axis term to stack on.
+// Every piece keeps its world placement (the local offsets absorb the shift) and
+// the return value is the old origin in the body's new local frame.
+//
+// Build only, before anything queries the body: the per-shape exposure caches
+// must never see the old frame (see `CollisionShape2D.isVertexExposed`).
+function reoriginShapes(body: CollisionObject2D, point: Vec2): Vec2 {
+  const oldLocal = body.globalPosition.sub(point).rotated(-body.globalRotation);
+  for (const s of body.getShapes()) s.localOffset = s.localOffset.add(oldLocal);
+  body.globalPosition = point;
+  return oldLocal;
 }
 
 // A sprung body SPAWNS at its rest pose rather than at the authored one, so a
@@ -418,6 +448,43 @@ export function settledPivotAngle(rb: RigidBody2D): number {
   return (lo + hi) / 2;
 }
 
+// The authored motion of a mover, as the one script that drives it: the route it
+// travels and the swing it hangs at, composed (see `composeMovers`). Null for a
+// body that authored neither, which `isMover` has already excluded - it is
+// asked again here rather than assumed, so the two cannot drift apart.
+//
+// Both are measured from the pose the body was BUILT at: the route's waypoint
+// zero is the body's own origin and the swing's rest angle is the angle it was
+// mounted at, which is the same statement `RigidBody2D.pivotSpring.restAngle`
+// makes. So a mover at time zero stands exactly where the file drew it, phase
+// permitting, and every offset is honest about what it is measured from.
+function authoredMover(b: LevelBodyData, body: AnimatableBody2D): MoverScript | null {
+  const scripts: MoverScript[] = [];
+  if (moves(b)) {
+    // The waypoints are in the body's authored frame, so they turn with it -
+    // `worldPlacement` is the same composition every other placement in a body
+    // goes through, and the authored origin is subtracted back off because a
+    // route is a list of OFFSETS from waypoint zero rather than of positions.
+    const origin = new Vec2(b.x, b.y);
+    const offsets = (b.movePath ?? []).map((p) => worldPlacement(b, p).pos.sub(origin));
+    scripts.push(
+      moveScript(
+        body.globalPosition,
+        buildMovePath(offsets, b.moveClosed === true),
+        b.moveSpeed ?? 0,
+        b.movePhase ?? 0,
+        b.moveEase ?? "linear",
+      ),
+    );
+  }
+  if (swings(b)) {
+    scripts.push(
+      swingScript(body.globalRotation, b.swingAmp ?? 0, b.swingPeriod ?? 0, b.swingPhase ?? 0),
+    );
+  }
+  return composeMovers(scripts);
+}
+
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
 // the avatar enters a killzone.
 export function buildLevelBodies(
@@ -427,6 +494,7 @@ export function buildLevelBodies(
 ): BuiltBodies {
   const wrapBodies: PhysicsBody2D[] = [];
   const bodies: BuiltBody[] = [];
+  const movers: BuiltBodies["movers"] = [];
 
   for (const b of data.bodies) {
     if (!collides(b)) {
@@ -451,12 +519,27 @@ export function buildLevelBodies(
     // settled body rather than standing where it was drawn (see
     // `applyRestPose`).
     if (built instanceof RigidBody2D) applyRestPose(built);
+    // A pendulum's script and its FRAME-ZERO POSE, for the same reason and in
+    // the same place: the phase offset turns the body before anything looks at
+    // it, so a vine hung on it, a chain bolted to it and the editor's own scene
+    // all see the level as it will actually stand - and, like the rest pose, it
+    // comes after the authored frame above is captured (see `applyRestPose`).
+    //
+    // The rest angle the script sines about is the angle the body was BUILT at,
+    // which is the statement the torsion spring's `restAngle` already makes.
+    if (built instanceof AnimatableBody2D) {
+      const script = authoredMover(b, built);
+      if (script) {
+        script(built, 0);
+        movers.push({ body: built, script });
+      }
+    }
     // Wrappable geometry is exactly the solid bodies: areas are not
     // PhysicsBody2D at all, and a `passable` body reports `isSolid` false.
     if (built instanceof PhysicsBody2D && built.isSolid) wrapBodies.push(built);
   }
 
-  return { wrapBodies, bodies };
+  return { wrapBodies, bodies, movers };
 }
 
 function buildOne(
@@ -567,9 +650,28 @@ function buildOne(
 
   // Hook-proof is not a kind any more - it is a flag `mountPieces` puts on the
   // shapes themselves, so an ordinary static carries it (see `Piece`).
-  const sb = new StaticBody2D();
+  //
+  // ...and neither is MOVING (see `LevelBodyData.swingAmp` for the pendulum and
+  // `movePath` for the travelling body, which may both be on one). A static that
+  // moves is an `AnimatableBody2D`: infinite mass, so nothing in the level
+  // disturbs it, with the per-frame contact velocities that let the avatar ride
+  // it. It is still a static in every other respect - it collides, it is
+  // wrapped, it may be hook-proof or hook-only - which is why these compose with
+  // the kind instead of replacing it.
+  const sb = isMover(b) ? new AnimatableBody2D() : new StaticBody2D();
   mountPieces(sb, pieces);
   applyStyle(sb, b);
+  // Mount it ON its bearing (see `LevelBodyData.pivotX`), the way an authored
+  // pivot re-origins a rigid body onto its own. With the origin at the hinge the
+  // motion is a rotation and nothing else, so the mover writes one field - and
+  // `velocityAtPoint` measures `r` from `globalPosition`, which is now the
+  // bearing, so a rider inherits the right `v + w x r` at every point of the
+  // body with nothing in the contact path knowing there is a pendulum here.
+  // Absent, the bearing is the centre of mass `mountPieces` just placed the
+  // origin at, which is a body that spins on the spot.
+  if (swings(b) && (b.pivotX !== undefined || b.pivotY !== undefined)) {
+    reoriginShapes(sb, worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 }).pos);
+  }
   // ...and hook-only is not a kind any more either: a static that nothing but
   // the hook can find is what the retired `anchor` kind was, and as a flag it
   // composes with `rigid` as well (see `LevelBodyData.passable`).

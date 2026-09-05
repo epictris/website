@@ -78,6 +78,45 @@
 // kind on the way through would be a field that forgets.
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water";
 
+// How a moving body spends a traverse of an OPEN route (see
+// `LevelBodyData.moveEase`). The trip takes the same time under all of them -
+// an ease redistributes it - so `moveSpeed` stays the average whichever is
+// picked.
+//
+// What separates them is what happens AT THE ENDS, where the body turns round.
+// A traverse's return leg is the outward one mirrored in time, so the speed the
+// body arrives at an end with is the speed it leaves at: an ease whose rate
+// falls to zero there turns round smoothly and one that does not reverses
+// outright, which is a step in velocity and reads as a jolt (and is thrown at
+// whatever is riding it, contact velocities being real here).
+//
+//   linear   constant speed, a hard reversal at both ends - a machine
+//   sine     eases out of both ends and turns round smoothly - a lift, a swing
+//   easeIn   leaves gently and hits the far end at full speed - a lunge out
+//   easeOut  leaves at full speed and settles into the far end - an arrival
+//
+// `easeIn` and `easeOut` are the same curve mirrored, and the pair is offered
+// rather than one of them because the ROUTE has a near end and a far end: which
+// of the two turns hard is the thing being chosen.
+export type MoveEase = "linear" | "sine" | "easeIn" | "easeOut";
+
+// The same four as a list, for the editor's picker - so a new one is offered by
+// existing rather than by being added to a second place.
+export const MOVE_EASES: readonly MoveEase[] = ["linear", "sine", "easeIn", "easeOut"];
+
+// The fastest a body travelling at an average `moveSpeed` actually goes, as a
+// multiple of it. It is what a `linear` route runs at flat, and an ease trades
+// the middle of the trip against the ends: `sine` peaks in the middle at π/2,
+// and either one-sided ease spends the whole trip accelerating or decelerating
+// and so peaks at twice the average. The number the editor's surface-speed
+// readout is built on, and the reason it is here rather than in that readout.
+export function movePeakFactor(ease: MoveEase, closed: boolean): number {
+  if (closed) return 1;
+  if (ease === "sine") return Math.PI / 2;
+  if (ease === "easeIn" || ease === "easeOut") return 2;
+  return 1;
+}
+
 // The retired kind, as levels on disk (and the generated `levelData.ts`) still
 // carry it. `normalizeLevelData` folds it into `static` + `impermeable: true`
 // at load, so nothing past that line ever sees it.
@@ -669,14 +708,21 @@ export interface LevelBodyData {
   // that to say one thing. Absent = an ordinary free rigid body, which is what
   // every level authored before the field contains.
   pivot?: boolean;
-  // Pivot bodies only: where the bearing sits, in the body's own authored
-  // frame - the frame its objects are placed in. Absent = the centre of mass,
-  // which is what every pivot authored before the fields means and the one
-  // point gravity is torque-free about. Authored, the body swings about that
-  // point the way a branch swings about the trunk it grows from, and gravity's
-  // torque about it is real: an unbalanced body falls to hang from its
-  // bearing rather than staying where it was drawn, unless the torsion spring
-  // below holds it up. Both are lengths, so both scale.
+  // THE BEARING: where the body turns about, in the body's own authored frame -
+  // the frame its objects are placed in. Absent = the centre of mass, which is
+  // what every pivot authored before the fields means and the one point gravity
+  // is torque-free about. Authored, the body swings about that point the way a
+  // branch swings about the trunk it grows from. Both are lengths, so both
+  // scale.
+  //
+  // Read by the two mountings that HAVE a bearing, and it is deliberately the
+  // one pair of fields rather than a pair each: a pivot body's bearing and a
+  // swinging body's are the same statement about the same geometry, and the
+  // only difference is what turns the body about it. On a `pivot` rigid the
+  // torque is real - gravity's about the bearing is what makes an unbalanced
+  // body fall to hang from it, unless the torsion spring below holds it up. On
+  // a `swing` static nothing has a torque at all; the sine below is the whole
+  // of the motion (see `swingAmp`).
   pivotX?: number;
   pivotY?: number;
   // Pivot bodies only: a torsion return spring about the bearing, so the body
@@ -732,6 +778,101 @@ export interface LevelBodyData {
   springFreqX?: number;
   springFreqY?: number;
   springDamping?: number;
+  // Static bodies only: a KINEMATIC PENDULUM. The body turns about its bearing
+  // (`pivotX`/`pivotY`) on a fixed sine and does so for ever - a swinging log
+  // over a chasm, a censer, a wrecking ball, a blade the level times a crossing
+  // against.
+  //
+  //   rot(t) = rot + swingAmp · sin(2π · (t / swingPeriod + swingPhase))
+  //
+  // Not a physical pendulum, and that is the point of it being a separate
+  // mechanic rather than a preset for `pivot`. A `pivot` rigid IS the physical
+  // one: gravity swings it, the player's weight on the end of it changes the
+  // swing, a chain hauls it round and it eventually comes to hang. This one is
+  // driven, so nothing in the level can disturb it - the player rides it, hooks
+  // it, is swatted by it and shoves it in vain. It is a moving piece of the
+  // LEVEL rather than a body under the level's physics, which is exactly what
+  // `AnimatableBody2D` is, and what a rhythm the author is timing a jump
+  // against has to be.
+  //
+  // `swingAmp` is the half-amplitude in RADIANS, like `rot` which it is measured
+  // from: the body sweeps rot ± swingAmp, so π/6 is a 60° arc. Signed only in
+  // the sense that a negative one starts the sweep the other way, which
+  // `swingPhase` says better. `swingPeriod` is the seconds of one full there-
+  // and-back cycle. `swingPhase` is the offset into that cycle in CYCLES rather
+  // than radians, 0..1: a row of pendulums authored at 0, 0.25, 0.5, 0.75 is
+  // the interleaved rhythm an author wants a quarter turn of the phrase to
+  // mean, without anybody dividing by 2π. Absent or a zero amplitude or period
+  // = a plain static body, which is every static authored before these fields.
+  //
+  // None of the three is a length. The amplitude and the phase are angles (one
+  // in radians, one in cycles) and the period is a time, so all three cross
+  // `scaleLevelData` untouched - the split `pivotFreq` and `drag` already make.
+  //
+  // Time is the sim's own (`frame · dt`), so the motion is a pure function of
+  // the frame number: a replay lands the body in the same place on the same
+  // frame, which is the rule every mover script keeps (see `MoverScript`).
+  //
+  // What BOUNDS the pair is the contact speed rather than taste: a mover's
+  // surface has to cross well under about 2 cm a frame or the character sweep
+  // resolves against a surface that has already crossed the avatar, and a
+  // pendulum's fastest point is `swingAmp · 2π/swingPeriod · radius` - so a
+  // rideable swing is a slow, heavy one, and shortening the beat or lengthening
+  // the arm buys travel at exactly that number's expense. The editor's mover
+  // panel reads it out live and `cli movers` `levels` measures it on every mover
+  // the registry ships.
+  swingAmp?: number;
+  swingPeriod?: number;
+  swingPhase?: number;
+  // Static bodies only: a body that TRAVELS AN AUTHORED PATH - a lift, a
+  // shuttling platform, a trolley going round and round a loop. The same kind
+  // of mover the pendulum is and driven the same way: nothing in the level can
+  // disturb it, it carries whatever rides it, and where it is on a given frame
+  // is a pure function of the frame number.
+  //
+  // `movePath` is the route as a polyline in the body's own authored frame, and
+  // THE AUTHORED POSITION IS THE FIRST WAYPOINT - so this list is the rest of
+  // them, a plain shuttle is one entry, and a body with an empty or absent list
+  // is a body that stands where it was drawn. Measured from the authored origin
+  // rather than in world coordinates so the route rides its body: turning the
+  // body turns the path, and moving it in the editor carries the path along
+  // with no gesture knowing the field exists. They are lengths and scale.
+  //
+  // `moveClosed` says the route is connected at both ends: the last waypoint
+  // runs back to the first and the body goes ROUND it in one direction for
+  // ever, where an open path is travelled THERE AND BACK. A flag rather than a
+  // repeated final waypoint, because the two would then have to agree to the
+  // float - and it is the same statement a collision polygon makes by being a
+  // loop rather than by restating its first vertex at the end.
+  //
+  // `moveSpeed` is how fast the body travels, in pixels/s on disk and metres/s
+  // once scaled - a SPEED and not a duration, so that lengthening a route makes
+  // the trip longer rather than the platform faster, which is what an author
+  // means by "this lift moves at half a metre a second". Under an ease it is
+  // the AVERAGE over a traverse (the ease redistributes the same trip time, so
+  // `sine` peaks at π/2 of it); under `linear` it is simply the speed. 0 or
+  // absent = a body that does not move, which is every static authored before
+  // these fields.
+  //
+  // `movePhase` is where in the trip the body starts, in CYCLES like the
+  // pendulum's and for the same reason - a row of lifts at 0, 0.25, 0.5, 0.75
+  // is the interleaving an author means. A cycle is one lap of a closed route
+  // and one THERE-AND-BACK of an open one, so 0.5 on an open path is the far
+  // end, which is the useful half to be able to name.
+  //
+  // `moveEase` shapes the speed within a traverse and is for the OPEN path (see
+  // `MoveEase`): a closed route has no ends to ease at, and easing round a lap
+  // would be a body that slows down at an arbitrary point of a loop with
+  // nothing there. Absent = `linear`.
+  //
+  // A body may swing AND move, and the two compose exactly: the path writes
+  // where the body is and the pendulum writes which way it is turned, so a
+  // bearing on a moving body is a pendulum hung from a travelling cart.
+  movePath?: { x: number; y: number }[];
+  moveClosed?: boolean;
+  moveSpeed?: number;
+  movePhase?: number;
+  moveEase?: MoveEase;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -761,6 +902,52 @@ export function isAnchorObject(o: SceneObjectData): o is AnchorObjectData {
 // editor rather than being spelled out per call site.
 export function collides(b: LevelBodyData): boolean {
   return b.objects.some(isCollisionObject);
+}
+
+// ...and does it swing (see `LevelBodyData.swingAmp`)? The same sort of
+// predicate and here for the same reason: the builder, the editor's inspector,
+// its canvas and its outliner all have to agree about which bodies are
+// pendulums, and a body that is one is built as a different ENGINE class - so a
+// second opinion is a level that plays as something other than what it is drawn
+// as.
+//
+// Static only, because a pendulum is driven rather than simulated and `rigid` is
+// the kind that says the opposite. A rigid body wanting to swing about a bearing
+// has `pivot`, which is the physical version of this and composes with nothing
+// here. Areas are excluded by the same clause: the mover list holds bodies, and
+// a `ForceArea` is not one.
+//
+// An amplitude or a period of zero is a body that would stand exactly still,
+// which is the plain static it is easier to build - so "swinging" means both are
+// authored and neither is zero, and every static authored before these fields
+// answers false with nothing to read.
+export function swings(b: LevelBodyData): boolean {
+  return b.kind === "static" && (b.swingAmp ?? 0) !== 0 && (b.swingPeriod ?? 0) > 0;
+}
+
+// ...and does it travel a route (see `LevelBodyData.movePath`)? A waypoint and a
+// speed are both needed for there to be a journey: a route with no speed is a
+// body standing at its first waypoint, and a speed with no route is a body with
+// nowhere to take it, and either alone is the plain static that is cheaper to
+// build.
+export function moves(b: LevelBodyData): boolean {
+  return b.kind === "static" && (b.movePath?.length ?? 0) > 0 && (b.moveSpeed ?? 0) > 0;
+}
+
+// Is this body a scripted mover at all - either of the two ways a level can
+// author one? The predicate the BUILD branches on, since both kinds are the same
+// engine class and compose on one body.
+export function isMover(b: LevelBodyData): boolean {
+  return swings(b) || moves(b);
+}
+
+// Does this body turn about a bearing at all - `pivotX`/`pivotY`? The two
+// mountings that have one are the rigid `pivot` and the swinging static, and
+// they share the one pair of fields because it is the one point (see
+// `LevelBodyData.pivotX`). Asked here so the loader, the save and the editor's
+// canvas cannot each decide for themselves which bodies have a bearing to read.
+export function hasBearing(b: LevelBodyData): boolean {
+  return (b.kind === "rigid" && b.pivot === true) || swings(b);
 }
 
 // A chain strung between two bodies: the same wrap-point rope the grapple and
@@ -2236,6 +2423,24 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.springFreqX !== undefined ? { springFreqX: b.springFreqX } : {}),
       ...(b.springFreqY !== undefined ? { springFreqY: b.springFreqY } : {}),
       ...(b.springDamping !== undefined ? { springDamping: b.springDamping } : {}),
+      // Two angles and a time (see `LevelBodyData.swingAmp`): not one of them is
+      // a length, so the pendulum crosses the conversion whole. It is the same
+      // rule the torsion spring's frequency follows, and it matters more here -
+      // an amplitude scaled by 100 is a body that spins rather than swings.
+      ...(b.swingAmp !== undefined ? { swingAmp: b.swingAmp } : {}),
+      ...(b.swingPeriod !== undefined ? { swingPeriod: b.swingPeriod } : {}),
+      ...(b.swingPhase !== undefined ? { swingPhase: b.swingPhase } : {}),
+      // The route is a list of POINTS, so every one of them is a length; the
+      // speed is a length per second and converts with them. What does not is
+      // the phase (cycles), the ease (a name) and the closure (a fact about the
+      // polyline) - the same split the pendulum's fields make above.
+      ...(b.movePath !== undefined
+        ? { movePath: b.movePath.map((p) => ({ x: p.x * factor, y: p.y * factor })) }
+        : {}),
+      ...(b.moveClosed !== undefined ? { moveClosed: b.moveClosed } : {}),
+      ...(b.moveSpeed !== undefined ? { moveSpeed: b.moveSpeed * factor } : {}),
+      ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
+      ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

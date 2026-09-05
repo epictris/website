@@ -1,8 +1,9 @@
 setup:
     cd app && bun install
 
-run:
-    bun run --cwd app dev
+# Run a subproject's dev server: just run [app|rope|pool]
+run PROJECT="app":
+    bun run --cwd {{PROJECT}} dev
 
 check:
     cd app && bun run typecheck && bun run lint

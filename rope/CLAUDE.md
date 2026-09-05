@@ -241,6 +241,9 @@ the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill),
+`TEST_SWING` and `TEST_LIFT` are the AUTHORED ones (two pendulums to time a
+crossing against, and a lift, a looping trolley and an eased shuttle - see
+**Scripted movers**),
 and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 **Spring bodies**); `TEST_VINES` hangs three vines over a chasm to swing across
 (see **Vines**).
@@ -1064,6 +1067,7 @@ bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corn
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
+bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
@@ -1096,7 +1100,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
-`spring`, `vines`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
@@ -1893,6 +1897,8 @@ The kind picker covers `static`, `rigid`, `killzone`, `force`, `water`; the **ho
 checkbox is per shape, so one piece of a compound body can be the only place a hook will catch,
 and it stays on the object panel for that reason (see **Hook-proof surfaces**).
 The **hook-only** checkbox beside it is per BODY and offered on `static` and `rigid` alike: it is what the retired `anchor` kind became, and as a flag it also says the thing a kind could not - a leaf on a sprung stem that falls, sags when it is grabbed and stops nothing (see **Hook-only bodies**).
+A `static` body's panel also carries its **scripted motion** - a swing angle and a beat make it a pendulum about its bearing, and a route drawn on the canvas makes it a platform (see **Scripted movers**), with a live `cm/frame` readout of how fast its surface crosses a frame, which is the one number a mover can get wrong with nothing else saying so.
+The route is shaped on the canvas rather than in the panel: an amber dashed polyline with a square at every waypoint, dragged to move one, its midpoint handles clicked to insert one and Alt+click to remove one, and the body itself is waypoint zero - so moving the body carries the whole route with it, which is what makes the waypoints frame-local in the model (the same argument `pivotAt` makes).
 Body fields read and write the body's **collision lead** - the object its record is written from -
 and `syncBodyProps` pushes the values to the rest. Going through all the members instead put a
 `mixed` in the opacity field of a body whose decoration is deliberately a different opacity from
@@ -3813,6 +3819,85 @@ end - two chained swings across an 8 m chasm - and
 (It was recorded against the rigid-vine physics, so it legitimately diverges a
 few pixels mid-run now; the invariants are the pass signal, per the usual
 bundle semantics.)
+
+## Scripted movers
+
+A static body may be driven by the LEVEL rather than by the solver: an
+`AnimatableBody2D`, infinite mass, carrying the per-frame contact velocities
+everything that rides it inherits.
+Two motions are authorable and they compose on one body.
+
+A **pendulum** (`LevelBodyData.swingAmp` / `swingPeriod` / `swingPhase`) turns
+about its bearing on a sine: `rot(t) = rot + amp · sin(2π · (t/period + phase))`.
+A **traveller** (`movePath` / `moveClosed` / `moveSpeed` / `movePhase` /
+`moveEase`) follows an authored polyline - there and back along an open route,
+round and round a closed one.
+
+The point of them being driven rather than simulated is **authority**, and it is
+the whole reason this is not a preset for `pivot`.
+A `pivot` rigid body IS the physical pendulum: gravity swings it, a player
+hanging off the end changes the swing, a chain hauls it round and it eventually
+comes to hang.
+This one cannot be disturbed at all - the player rides it, hooks it, is swatted
+by it and shoves it in vain - which is what a rhythm an author is timing a jump
+against has to be.
+It is a moving piece of the level rather than a body under the level's physics,
+which is exactly what `AnimatableBody2D` already was.
+
+Four things are structural rather than incidental:
+
+- **The bearing is the body's ORIGIN.** `buildBodies` re-origins a swinging body
+  onto its authored `pivotX`/`pivotY` (`reoriginShapes`, the half of `reoriginTo`
+  that is only about where the origin is), so the mover writes one field and
+  `velocityAtPoint` measures `r` from the hinge - a rider inherits the right
+  `v + ω × r` with nothing in the contact path knowing there is a pendulum here.
+  It is the same pair of fields the rigid pivot uses, because it is the same
+  point; `hasBearing` is the one predicate that says which bodies have one.
+- **Every phase is in CYCLES.** A row of pendulums at 0, 0.25, 0.5, 0.75 is the
+  interleaving an author means, and nobody divides by 2π to write it. A cycle is
+  one lap of a closed route and one THERE-AND-BACK of an open one, so 0.5 is half
+  way round a loop and the far end of a shuttle.
+- **A route is authored as a SPEED, not a duration.** Re-drawing a route then
+  makes the trip longer rather than the platform faster, which is what an author
+  means by "this lift moves at half a metre a second". Under an ease it is the
+  average over a traverse; the peak is `movePeakFactor` times it - 1 for
+  `linear`, π/2 for `sine`, 2 for either one-sided ease.
+- **The ease is about the ENDS.** A traverse's return leg is the outward one
+  mirrored in time, so an ease whose rate falls to zero at an end turns round
+  smoothly there and one that does not reverses outright - a step in velocity,
+  thrown at whatever is riding the platform. `sine` tapers at both, `easeIn` and
+  `easeOut` at one each (which of the two ends turns hard is the thing being
+  chosen), `linear` at neither. A closed route has no ends and ignores it.
+
+**The constraint an author actually works inside is the contact speed.**
+A mover's surface has to cross well under about 2 cm a frame or the character
+sweep resolves against a surface that has already crossed the avatar.
+A pendulum's fastest point is `amp × 2π/period × radius`, so that number bounds a
+swing hard: a rideable one is a slow, heavy one, and shortening the beat or
+lengthening the arm buys travel at exactly its expense.
+The editor's mover panel shows it live as a `cm/frame` readout, and `cli movers`
+`levels` measures it on every mover the registry ships.
+
+`cli movers` (`src/sim/moverCases.ts`) is the coverage, and it exists for the
+reason `cli vines` does: a mover reaches no digest and no invariant, so a build
+that quietly stopped reading a field renders a level that looks identical, plays
+differently and violates nothing.
+Beside the arithmetic (the arc, the beat, the route's legs and laps, the ease's
+end rates, both phases) it asserts the four claims that make a mover a mover: the
+pose is a pure function of the frame, a lead boulder dropped on one changes its
+path by **nothing**, a box resting on one is carried by it, and every authored
+field survives the format's `px -> m -> px` and the editor's own round trip.
+
+Authored in the editor's body panel (a swing angle and a beat, or a route drawn
+on the canvas: drag a waypoint, click a midpoint to insert one, Alt+click to
+remove one, with the body itself as waypoint zero so the route rides it).
+`TEST_SWING` and `TEST_LIFT` are the worked levels.
+`level/movers.ts` holds the motion - `swingAngleAt`, `buildMovePath`,
+`pointAlong`, `easeFraction`, `moveDistanceAt` - shared by the build, the editor's
+canvas and the cases, so what is drawn and what is played cannot disagree.
+The hand-written `addSlidingPlatform` / `addWindmill` builders are still there for
+a level's `init` hook; a file-authored mover needs none, which is why the BALL
+arena can have one at all (the ball driver takes no `init`).
 
 ## Pivot bodies
 

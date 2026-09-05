@@ -34,6 +34,8 @@ import {
   DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
+  MOVE_EASES,
+  type MoveEase,
 } from "../level/levelFormat";
 import {
   arrowEnds,
@@ -120,6 +122,9 @@ import {
   type EdShape,
   type EdLayer,
   type EdModel,
+  peakSurfaceSpeed,
+  routeOf,
+  routeWorldPoints,
 } from "./model";
 import {
   computeChainHandles,
@@ -136,6 +141,7 @@ import {
   HANDLE_HIT_PX,
   lightPickRadius,
   depthOf,
+  routeMidpoints,
 } from "./render";
 import {
   DEFAULT_MATERIAL,
@@ -337,6 +343,12 @@ type Drag =
   // writing the opposite handle as the negation of this one; Alt breaks it, so a
   // deliberate cusp is a modifier away rather than unauthorable.
   | { mode: "pathHandle"; body: EdItem; index: number; side: "in" | "out"; mirror: boolean }
+  // One waypoint of a body's route follows the pointer (see
+  // `LevelBodyData.movePath`). `lead` is the body's collision lead, which is
+  // where the route is held, and `index` counts the AUTHORED waypoints - so 0 is
+  // the first one after the body itself, which is waypoint zero and is moved by
+  // moving the body.
+  | { mode: "moveWaypoint"; lead: EdItem; index: number }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
   // A whole compound body turns about its centre of mass - the point its built
@@ -2745,6 +2757,307 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
+  // SCRIPTED MOTION, static bodies only: the pendulum on a bearing
+  // (`LevelBodyData.swingAmp`) and the body that travels a route (`movePath`).
+  // Both on one panel because they are the same kind of thing - a static the
+  // LEVEL drives rather than one the solver owns - and because they compose on
+  // one body, which is a pendulum hung from a travelling cart.
+  //
+  // A static rather than a rigid, and the panel says which by simply not being
+  // offered elsewhere: a `rigid` body wanting to turn about a bearing has
+  // `pivot`, which is the PHYSICAL pendulum - gravity swings it, a load on the
+  // end changes the swing, and it eventually comes to hang. This one is driven,
+  // so nothing in the level can disturb it, which is what a rhythm an author is
+  // timing a jump against has to be.
+  function addMoverFields(g: HTMLElement, leads: EdItem[]): void {
+    // A body's route and its speed readout are the BODY's, not a collision
+    // object's, so what decides whether they can be shown is how many bodies are
+    // selected rather than how many leads there are - a compound body has
+    // several leads and exactly one route. (`numField`'s `mixable` is the other
+    // question and stays per lead: it only picks the placeholder.)
+    const bodyIds = new Set(leads.map((b) => b.bodyId));
+    const one = bodyIds.size === 1 ? leads[0]! : null;
+    const swinging = (b: EdItem): boolean => b.swingAmp !== 0 && b.swingPeriod > 0;
+    const travelling = (b: EdItem): boolean => b.movePath.length > 0 && b.moveSpeed > 0;
+    const anySwing = leads.some(swinging);
+    const anyRoute = leads.some((b) => b.movePath.length > 0);
+
+    // Degrees, like every other angle the inspector shows - the model and the
+    // file hold radians (see `LevelBodyData.swingAmp`).
+    numField(
+      g,
+      "swing °",
+      () => {
+        const v = shared(leads, (b) => b.swingAmp);
+        return v === null ? null : (v * 180) / Math.PI;
+      },
+      (v) => {
+        for (const b of leads) b.swingAmp = (Math.min(180, Math.max(-180, v)) * Math.PI) / 180;
+        syncEditedBodies(leads);
+        // The bearing fields and the speed readout below both turn on whether
+        // this is a pendulum at all, so a value typed in has to rebuild the
+        // panel rather than only revalue it.
+        if (leads.some(swinging) !== anySwing) rebuildInspector();
+      },
+      1,
+      leads.length > 1,
+      { placeholder: "still" },
+    );
+    numField(
+      g,
+      "swing s",
+      () => shared(leads, (b) => b.swingPeriod),
+      (v) => {
+        for (const b of leads) b.swingPeriod = Math.max(0, v);
+        syncEditedBodies(leads);
+        if (leads.some(swinging) !== anySwing) rebuildInspector();
+      },
+      0.5,
+      leads.length > 1,
+      { placeholder: "still" },
+    );
+    if (anySwing) {
+      // In CYCLES, which is the whole point of the field: a row of pendulums at
+      // 0, 0.25, 0.5 is the interleaving an author means, and nobody has to
+      // divide by 2π to write it.
+      numField(
+        g,
+        "swing phase",
+        () => shared(leads, (b) => b.swingPhase),
+        (v) => {
+          for (const b of leads) b.swingPhase = v;
+          syncEditedBodies(leads);
+        },
+        0.125,
+        leads.length > 1,
+      );
+      addBearingFields(g, leads);
+    }
+
+    // The route. A speed rather than a duration (see `LevelBodyData.moveSpeed`),
+    // in the file's px/s like every other length, so re-drawing a route makes
+    // the trip longer rather than the platform faster.
+    numField(
+      g,
+      "speed",
+      () => shared(leads, (b) => b.moveSpeed * M2PX),
+      (v) => {
+        for (const b of leads) b.moveSpeed = Math.max(0, v) * PX;
+        syncEditedBodies(leads);
+        refreshFields();
+      },
+      10,
+      leads.length > 1,
+      { placeholder: anyRoute ? "still" : "draw a route first", disabled: !anyRoute },
+    );
+    if (anyRoute) {
+      numField(
+        g,
+        "move phase",
+        () => shared(leads, (b) => b.movePhase),
+        (v) => {
+          for (const b of leads) b.movePhase = v;
+          syncEditedBodies(leads);
+        },
+        0.125,
+        leads.length > 1,
+      );
+      // The loop switch, which is the one thing that decides what a route MEANS:
+      // connected at both ends it is gone round in one direction for ever, and
+      // open it is travelled there and back. The ease belongs to the open case
+      // alone - a lap has no ends to ease at - so ticking this disables it
+      // rather than leaving a control that says nothing.
+      const loopBox = document.createElement("input");
+      loopBox.type = "checkbox";
+      loopBox.checked = leads.every((b) => b.moveClosed);
+      loopBox.indeterminate = !loopBox.checked && leads.some((b) => b.moveClosed);
+      loopBox.addEventListener("change", () => {
+        beginAction();
+        for (const b of leads) b.moveClosed = loopBox.checked;
+        syncEditedBodies(leads);
+        markDirty();
+        rebuildInspector();
+      });
+      const loopWrap = el("label", "ed-field");
+      loopWrap.textContent = "loop";
+      loopWrap.appendChild(loopBox);
+      g.appendChild(loopWrap);
+
+      const easeWrap = el("label", "ed-field");
+      easeWrap.textContent = "ease";
+      const easeSel = document.createElement("select");
+      easeSel.className = "ed-select";
+      easeSel.disabled = leads.some((b) => b.moveClosed);
+      const sharedEase = leads.every((b) => b.moveEase === leads[0]!.moveEase)
+        ? leads[0]!.moveEase
+        : null;
+      if (!sharedEase) {
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = "mixed";
+        easeSel.appendChild(o);
+      }
+      for (const k of MOVE_EASES) {
+        const o = document.createElement("option");
+        o.value = k;
+        o.textContent = k;
+        easeSel.appendChild(o);
+      }
+      easeSel.value = sharedEase ?? "";
+      easeSel.addEventListener("change", () => {
+        if (!easeSel.value) return;
+        beginAction();
+        for (const b of leads) b.moveEase = easeSel.value as MoveEase;
+        syncEditedBodies(leads);
+        markDirty();
+        refreshFields();
+      });
+      easeWrap.appendChild(easeSel);
+      g.appendChild(easeWrap);
+
+      // What the route IS, since the canvas draws it but nothing on the panel
+      // otherwise says how long the trip is - which is the number a speed has to
+      // be picked against.
+      const trip = (): string => {
+        if (!one) return "mixed";
+        const path = routeOf(model, one);
+        const lead = one;
+        const secs = lead.moveSpeed > 0 ? path.total / lead.moveSpeed : 0;
+        const legs = `${lead.movePath.length + 1} waypoints, ${(path.total * M2PX).toFixed(0)} px`;
+        return secs > 0 ? `${legs}, ${secs.toFixed(1)} s` : legs;
+      };
+      const trow = el("label", "ed-field");
+      trow.textContent = one?.moveClosed ? "lap" : "trip";
+      const tval = document.createElement("span");
+      tval.textContent = trip();
+      trow.appendChild(tval);
+      g.appendChild(trow);
+      readouts.push({ el: tval, get: trip });
+    }
+
+    // The gesture that STARTS a route, which the canvas cannot offer: an empty
+    // route has no waypoint to drag and no leg to insert into, so there is
+    // nothing on screen to press. Past the first one the canvas is where a route
+    // is shaped - drag a waypoint, click a midpoint to add one, Alt+click to
+    // remove one - and this row goes on offering the append because reaching the
+    // far end of a long route by halving legs is miserable.
+    if (one) {
+      const lead = one;
+      const row = el("div", "ed-row");
+      row.appendChild(
+        button(lead.movePath.length ? "+ waypoint" : "draw a route", () => {
+          beginAction();
+          // A metre on from wherever the route currently ends, along the leg it
+          // arrived by - so appending twice draws a straight run rather than
+          // stacking two waypoints on one point.
+          const pts = routeWorldPoints(model, lead);
+          const last = pts[pts.length - 1]!;
+          const prev = pts.length > 1 ? pts[pts.length - 2]! : last.sub(new Vec2(1, 0));
+          const dir = last.sub(prev);
+          const step = dir.length() > 1e-9 ? dir.normalized() : new Vec2(1, 0);
+          const frame = bodyFrameOf(model, lead.bodyId);
+          lead.movePath = [...lead.movePath, last.add(step).sub(frame.pos).rotated(-frame.rot)];
+          // A route with no speed never moves, so the first waypoint brings one
+          // rather than leaving a body that has a route and stands still.
+          if (lead.moveSpeed <= 0) lead.moveSpeed = 0.5;
+          syncEditedBodies([lead]);
+          markDirty();
+          rebuildInspector();
+        }),
+      );
+      if (lead.movePath.length) {
+        row.appendChild(
+          button("clear route", () => {
+            beginAction();
+            lead.movePath = [];
+            syncEditedBodies([lead]);
+            markDirty();
+            rebuildInspector();
+          }),
+        );
+      }
+      g.appendChild(row);
+    }
+
+    // The one number a mover can get WRONG without anything saying so: how fast
+    // its surface crosses a frame. Past about 2 cm the character sweep resolves
+    // against a surface that has already crossed the avatar (see `MoverScript`),
+    // and the failure is a player shoved through geometry in one corner of one
+    // level. Derived from the authored fields rather than measured, so it is
+    // live while the fields are being typed into.
+    if (anySwing || leads.some(travelling)) {
+      const speed = (): string => {
+        if (!one) return "mixed";
+        const cm = peakSurfaceSpeed(model, one) * 100;
+        return `${cm.toFixed(2)} cm/frame${cm > 2 ? " - TOO FAST" : ""}`;
+      };
+      const srow = el("label", "ed-field");
+      srow.textContent = "surface";
+      const sval = document.createElement("span");
+      sval.textContent = speed();
+      srow.appendChild(sval);
+      g.appendChild(srow);
+      readouts.push({ el: sval, get: speed });
+    }
+
+    const hint = el("div", "ed-hint");
+    hint.textContent = anySwing || anyRoute
+      ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a waypoint to move it, the small handles between them to add one, Alt+click to remove one; the body itself is the first waypoint. Keep the surface speed under 2 cm/frame."
+      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a route drawn on the canvas makes it a platform, travelled there and back, or round and round if it is looped. Nothing in the level can disturb either, which is what lets a jump be timed against it.";
+    g.appendChild(hint);
+  }
+
+  // The bearing a pendulum turns about, which is the rigid pivot's own pair of
+  // fields (`LevelBodyData.pivotX`) because it is the same point - so the two
+  // panels offer it through one function rather than each writing its own idea
+  // of what "blank means the centre of mass" is.
+  function addBearingFields(g: HTMLElement, leads: EdItem[]): void {
+    const comLocalOf = (lead: EdItem): Vec2 => {
+      const members = bodyMembers(model.items, lead.bodyId).filter((m) => m.object === "collision");
+      let mass = 0;
+      let acc = Vec2.ZERO;
+      for (const m of members) {
+        const kg = shapeMass(m);
+        mass += kg;
+        acc = acc.add(m.pos.mul(kg));
+      }
+      const world = mass > 0 ? acc.div(mass) : (members[0]?.pos ?? Vec2.ZERO);
+      const f = bodyFrameOf(model, lead.bodyId);
+      return world.sub(f.pos).rotated(-f.rot);
+    };
+    const at = (b: EdItem): Vec2 => b.pivotAt ?? comLocalOf(b);
+    const setAt =
+      (mut: (cur: Vec2, v: number) => Vec2) =>
+      (v: number): void => {
+        for (const b of leads) b.pivotAt = mut(at(b), v);
+        syncEditedBodies(leads);
+        refreshFields();
+      };
+    const clearAt = (): void => {
+      for (const b of leads) b.pivotAt = null;
+      syncEditedBodies(leads);
+      refreshFields();
+    };
+    numField(
+      g,
+      "pivot x",
+      () => shared(leads, (b) => at(b).x),
+      setAt((c, v) => new Vec2(v, c.y)),
+      0.1,
+      leads.length > 1,
+      { onEmpty: clearAt, placeholder: "centre of mass" },
+    );
+    numField(
+      g,
+      "pivot y",
+      () => shared(leads, (b) => at(b).y),
+      setAt((c, v) => new Vec2(c.x, v)),
+      0.1,
+      leads.length > 1,
+      { onEmpty: clearAt, placeholder: "centre of mass" },
+    );
+  }
+
   // Spring mounting, rigid bodies only (see `LevelBodyData.springFreqX`): held
   // at the authored position by a two-axis spring-damper, so the body sags
   // under load and springs back. Beside the pivot checkbox because the two are
@@ -3603,6 +3916,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (leads.every((b) => b.kind === "rigid")) {
         addPivotField(g, leads);
         addSpringFields(g, leads);
+      }
+      // ...and the two motions a static may carry, which are the same shape of
+      // thing one kind along: a body the LEVEL drives rather than the solver.
+      if (leads.every((b) => b.kind === "static")) {
+        addMoverFields(g, leads);
       }
     }
     // ...and the fill, which only a body written from a collision lead has: a
@@ -5215,6 +5533,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       springFreqX: 0,
       springFreqY: 0,
       springDamping: DEFAULT_SPRING_DAMPING,
+      swingAmp: 0,
+      swingPeriod: 0,
+      swingPhase: 0,
+      movePath: [],
+      moveClosed: false,
+      moveSpeed: 0,
+      movePhase: 0,
+      moveEase: "linear" as const,
       // A fresh region is a no-op until a framing field is authored.
       cam: defaultCamera(),
       light: defaultLight(),
@@ -5766,7 +6092,57 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // distinguishable from "no handle here": falling through to the body pick
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
+  // The item a selected body's route is held on: its collision lead, and only
+  // when it actually has a route. One place, so the press handler, the panel and
+  // the canvas cannot disagree about which item carries the waypoints.
+  function routeLead(): EdItem | null {
+    const id = [...selectedBodyIds][0];
+    if (id === undefined) return null;
+    const lead = bodyMembers(model.items, id).find((m) => m.object === "collision");
+    return lead && lead.kind === "static" && lead.movePath.length > 0 ? lead : null;
+  }
+
   function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
+    // A selected body's ROUTE, first: its waypoints sit over the geometry that
+    // carries them, so a press on one has to mean the waypoint rather than the
+    // body under it. Only while exactly one body is selected, since a route
+    // belongs to a body and two of them have two.
+    const routeBody = selectedBodyIds.size === 1 ? routeLead() : null;
+    if (routeBody) {
+      const pts = routeWorldPoints(model, routeBody);
+      // Waypoint zero is skipped: it is the body itself, and dragging it would
+      // be a second, quieter way of moving the body that left every other
+      // waypoint behind.
+      for (let i = 1; i < pts.length; i++) {
+        if (worldToScreen(camera, pts[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
+        if (alt) {
+          // Alt removes it, the same gesture that removes a polygon's corner.
+          beginAction();
+          routeBody.movePath = routeBody.movePath.filter((_, j) => j !== i - 1);
+          syncEditedBodies([routeBody]);
+          markDirty();
+          rebuildInspector();
+          return "consumed";
+        }
+        return { mode: "moveWaypoint", lead: routeBody, index: i - 1 };
+      }
+      // ...and the midpoints, which insert a waypoint and drag it in the same
+      // gesture - the polygon's edge handles, one mechanic along.
+      const mids = routeMidpoints(pts, routeBody.moveClosed);
+      for (let i = 0; i < mids.length; i++) {
+        if (worldToScreen(camera, mids[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
+        beginAction();
+        const frame = bodyFrameOf(model, routeBody.bodyId);
+        const local = mids[i]!.sub(frame.pos).rotated(-frame.rot);
+        const next = [...routeBody.movePath];
+        next.splice(i, 0, local);
+        routeBody.movePath = next;
+        syncEditedBodies([routeBody]);
+        markDirty();
+        rebuildInspector();
+        return { mode: "moveWaypoint", lead: routeBody, index: i };
+      }
+    }
     // A selected vine is edited by its two handles and nothing else: the anchor
     // it hangs from, which is where it is, and its free end, which is how long
     // it is. The tip is tested first, so the two cannot fight over a press on a
@@ -6617,6 +6993,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         markDirty();
         refreshFields();
         break;
+      case "moveWaypoint": {
+        // Written into the BODY's frame, which is where a route is held: the
+        // waypoints ride the body through every gesture that moves or turns it,
+        // and a world position would have to be re-derived by each of them.
+        const frame = bodyFrameOf(model, drag.lead.bodyId);
+        const local = snapVec(world).sub(frame.pos).rotated(-frame.rot);
+        const next = [...drag.lead.movePath];
+        next[drag.index] = local;
+        drag.lead.movePath = next;
+        syncEditedBodies([drag.lead]);
+        markDirty();
+        refreshFields();
+        break;
+      }
       case "arrowEnd": {
         const p = snapVec(world);
         if (drag.movingIsHead) setArrowEnds(drag.body, drag.fixed, p);

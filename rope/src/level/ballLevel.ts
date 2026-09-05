@@ -4,7 +4,13 @@
 // recorded replays bit-for-bit.
 
 import { Vec2 } from "../engine/vec2";
-import { RigidBody2D, VineLink, type CollisionObject2D, type PhysicsBody2D } from "../engine/body";
+import {
+  AnimatableBody2D,
+  RigidBody2D,
+  VineLink,
+  type CollisionObject2D,
+  type PhysicsBody2D,
+} from "../engine/body";
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
@@ -21,6 +27,7 @@ import {
   type RawLevelData,
 } from "./levelFormat";
 import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
+import type { MoverScript } from "./movers";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
   buildVines,
@@ -88,6 +95,11 @@ export class BallLevel {
   // `updateVineLoads`) and read by both halves of the chain phase, so the set
   // they solve is the same set.
   private heldVine: Vine | null = null;
+  // The pendulums the file authored (see `LevelBodyData.swingAmp`), stepped at
+  // the top of every frame. The ball driver has no `init` hook and therefore no
+  // hand-written movers, so unlike `Level.movers` this list is exactly what the
+  // level FILE asked for.
+  readonly movers: Array<{ body: AnimatableBody2D; script: MoverScript }> = [];
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -262,6 +274,7 @@ export class BallLevel {
 
     const built = buildLevelBodies(this.world, data, () => this.onReset?.());
     this.bodies.push(...built.wrapBodies);
+    this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
     this.vines = buildVines(this.world, data, built);
     for (const vine of this.vines) this.bodies.push(...vine.links);
@@ -366,6 +379,17 @@ export class BallLevel {
     if (input.jump.pressed) {
       this.onReset?.();
       return;
+    }
+
+    // Scripted movers run first, exactly as they do in `Level`: the ball, the
+    // chain and the contact solve all have to see current-frame transforms with
+    // the matching per-frame contact velocities, or a body riding a pendulum
+    // inherits last frame's motion from it.
+    const time = this.frame * delta;
+    for (const m of this.movers) {
+      m.body.beginMove();
+      m.script(m.body, time);
+      m.body.commitMove(delta);
     }
 
     // Where the ball was facing before anything this frame turned it — the floor

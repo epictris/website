@@ -13,6 +13,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
+  AnimatableBody2D,
   Area2D,
   CharacterBody2D,
   RigidBody2D,
@@ -248,10 +249,19 @@ function bodyViews(world: World): BodyView[] {
     if (body.removed || !body.hasShape()) continue;
     const rigid = body instanceof RigidBody2D ? body : null;
     const character = body instanceof CharacterBody2D ? body : null;
-    // Statics are listed too: their geometry is what everything else is measured
-    // against, and a scripted mover's pose is a legitimate question. They simply
-    // carry no velocity.
-    const vel = rigid ? rigid.linearVelocity : character ? character.velocity : Vec2.ZERO;
+    // A scripted mover carries the per-frame contact velocities it derives from
+    // its own transform delta (`AnimatableBody2D.commitMove`), and they are the
+    // whole of what a rider inherits - so a body that is visibly crossing the
+    // level reading `vel=(0,0)` here is the one question this view most needs to
+    // answer about it. Plain statics are listed too and genuinely carry none.
+    const mover = body instanceof AnimatableBody2D ? body : null;
+    const vel = rigid
+      ? rigid.linearVelocity
+      : mover
+        ? mover.linearVelocity
+        : character
+          ? character.velocity
+          : Vec2.ZERO;
     const stickAnchor = rigid ? rigid.stickAnchorWorld() : null;
     out.push({
       id: bodyId(body, i),
@@ -262,7 +272,7 @@ function bodyViews(world: World): BodyView[] {
       rot: body.globalRotation,
       vx: vel.x,
       vy: vel.y,
-      w: rigid ? rigid.angularVelocity : 0,
+      w: rigid ? rigid.angularVelocity : mover ? mover.angularVelocity : 0,
       speed: vel.length(),
       mass: rigid ? rigid.mass : null,
       kinematicRotation: rigid ? rigid.kinematicRotation : false,

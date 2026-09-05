@@ -31,6 +31,7 @@
 //   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts spring
+//   bun run src/tools/cli.ts movers
 //   bun run src/tools/cli.ts vines
 //   bun run src/tools/cli.ts render3d
 //   bun run src/tools/cli.ts camera
@@ -2125,6 +2126,9 @@ switch (cmd) {
   case "spring":
     void cmdSpring();
     break;
+  case "movers":
+    void cmdMovers();
+    break;
   case "vines":
     void cmdVines();
     break;
@@ -2139,7 +2143,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2226,6 +2230,29 @@ async function cmdSpring(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[spring] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Scripted-mover cases (src/sim/moverCases.ts). Pure physics like `spring`, and
+// separate from it for the same reason: what a mover does has a CLOSED FORM -
+// the pendulum is a sine about its bearing, the travelling body is a distance
+// along its route - so these assert arithmetic an author reasons about while
+// timing a jump, plus the four claims that make a mover a mover (it cannot be
+// disturbed, it carries its rider, it is a pure function of the frame, and every
+// authored field is actually read).
+async function cmdMovers(): Promise<void> {
+  // Dynamic for the same reason as `cli contacts`: the case file reaches into
+  // engine internals an old revision does not have, and `cli compare` runs this
+  // very file inside a worktree of one.
+  const { runMoverCases } = await import("../sim/moverCases");
+  const results = runMoverCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[movers] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

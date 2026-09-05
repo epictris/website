@@ -312,12 +312,36 @@ Every shape is either:
 - **Static** — transform is fixed for the level's lifetime. Its surface normals
   never change. A given face is permanently a floor, a wall, or a ceiling.
 - **Mobile** — transform can change over time. Covers both scripted
-  rects/polygons (moving platform, windmill) **and** circles (pushed/dragged by
-  physics). A face that was a floor can rotate/shift into being a wall (or vice
-  versa) from one frame to the next.
+  rects/polygons (moving platform, windmill, pendulum, lift) **and** circles
+  (pushed/dragged by physics). A face that was a floor can rotate/shift into
+  being a wall (or vice versa) from one frame to the next.
 
 Static vs mobile is a property the character controller must be able to query
 per shape.
+
+### Scripted movers
+
+A **scripted mover** is a mobile body whose transform the LEVEL writes rather
+than the solver: `AnimatableBody2D`, infinite mass, with the per-frame contact
+velocities the controller inherits from.
+It is the third thing a body can be, beside static and physics-driven, and the
+distinction it exists for is *authority*: a pendulum on a `pivot` rigid body is a
+physical pendulum that a landing changes, and a scripted one is a rhythm that
+nothing in the level can argue with - which is what a jump timed against it has
+to be.
+
+A level authors two of them (see `LevelBodyData.swingAmp` and `movePath`): a body
+that **swings** about a bearing on a sine, and a body that **travels** an
+authored route, there and back or round a closed loop, at an authored speed and
+under an authored ease. Both compose on one body, and both are pure functions of
+the frame number, so a recorded replay lands them where they were.
+
+The constraint an author works inside is the **contact speed**: a mover's surface
+must cross well under about 2 cm a frame, or the character sweep resolves against
+a surface that has already crossed the avatar. That bounds a swing far more than
+it looks - a pendulum's fastest point is `amplitude × 2π/period × radius`, so a
+rideable swing is a slow, heavy one - and it is what `cli movers` `levels`
+measures on every mover the registry ships.
 
 ## Surface reclassification (character controller)
 
