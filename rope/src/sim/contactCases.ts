@@ -2797,6 +2797,116 @@ function caseHungAnchor(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// point-blank-turn - a ball anchored point-blank, its chain leaving it
+// radially, still turns to follow the aim while it rests against the anchor.
+//
+// The wind-stall latch (`BallPlayer.windStall`) fires when the unwind refunds
+// the whole of the aim's turn while the ball rests against a body on its path,
+// and the unwind refunds whatever of its window the STANDING over-length asks
+// for - which for a ball pressed against its anchor is millimetres of push-out
+// every frame, nothing to do with the spin. A chain leaving the ball radially
+// winds almost nothing per radian, so a tiny ask there (the aim resting near
+// the loop) was refunded 100% by geometry, latched the stall, and the steering
+// was dead through a 200 degree sweep of the aim (`session-287f` f181-245).
+// The latch now asks for a spool at rim scale (`STALL_LATCH_SPOOL_SHARE`): a
+// turn that winds nothing is not a wind-up the chain can refuse.
+//
+// The rig is the recording's: a heavy pivot disc, the ball touching its side
+// and throwing point-blank into it, the aim then held ON the anchor so the loop
+// tracks the chain and the chain leaves the ball radially (asserted, as the
+// rig's precondition), then the aim resting a hair ahead of the loop before
+// sweeping half a turn. The ball must not latch on the rest and must follow
+// the sweep. The wound-tight endgame the latch DOES exist for is `ball-sparks`
+// `wound`, and this same rig reaches it too: once the sweep has wound the
+// chain to its length the spool is the rim's and the stall latches, as it
+// should.
+function casePointBlankTurn(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // An 80 cm steel disc on a centre bearing; the ball spawns touching its
+  // right-hand side, level with the axle.
+  const level = new BallLevel({
+    player: { x: 92, y: -300, radius: 12 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 0,
+        y: -300,
+        rot: 0,
+        friction: 1,
+        pivot: true,
+        objects: [{ type: "collision", material: "steel", shape: { kind: "circle", r: 80 } }],
+      },
+    ],
+  } as RawLevelData);
+  const disc = level.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b !== level.ball,
+  )!;
+  let prev = emptyFrameInput();
+  const feed = (aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  const anchored = (): boolean => level.ball.chain?.end.contact.obj === disc;
+  // Point-blank into the disc's lower side, then hold the aim on the anchor
+  // while the catch settles: the ball ends resting against the face just
+  // below its anchor with the loop pointing at it.
+  for (let f = 0; f < 60; f++) {
+    feed(anchored() ? level.ball.chain!.end.contact.globalPosition : new Vec2(0.7, -3.25));
+  }
+  check("the chain is anchored to the disc", anchored());
+  const touching = level.world.frameContacts.some(
+    (c) => (c.a === level.ball && c.b === disc) || (c.a === disc && c.b === level.ball),
+  );
+  check("and the ball rests against the disc", touching);
+
+  // The aim a hair ahead of the loop for eight frames - the ask the
+  // recording's latch fired on - with the spool read on the first of them,
+  // which is the frame the latch used to fire on.
+  const start = level.ball.loopDirection.angle();
+  const dir = -1;
+  let spool = Infinity;
+  for (let f = 0; f < 8; f++) {
+    const a = start + dir * 0.02;
+    feed(level.ball.globalPosition.add(new Vec2(Math.cos(a), Math.sin(a)).mul(2)));
+    if (f === 0 && level.ball.chain) {
+      spool = Math.abs(level.ball.chain.lengthPerRadian(level.ball));
+    }
+  }
+  const rim = level.ball.radius;
+  check(
+    `the chain leaves the ball radially (spool ${(spool / rim).toFixed(2)} of the rim on the first rest frame, under 0.15)`,
+    spool < 0.15 * rim,
+  );
+  check(`resting the aim near the loop did not latch the stall (${level.ball.windStall})`, level.ball.windStall === 0);
+
+  // Then swept half a turn onward over 90 frames: the ball must follow.
+  const rotations: number[] = [];
+  for (let f = 0; f < 90; f++) {
+    const a = start + dir * (0.02 + (Math.PI * f) / 90);
+    feed(level.ball.globalPosition.add(new Vec2(Math.cos(a), Math.sin(a)).mul(2)));
+    rotations.push(level.ball.globalRotation);
+  }
+  const turned = rotationSpan(rotations);
+  check(
+    `the ball follows the sweep (turned ${turned.toFixed(2)} rad of a ${Math.PI.toFixed(2)} rad sweep, floor 1.0)`,
+    turned >= 1.0,
+  );
+
+  return ok("point-blank-turn - a radially anchored ball still turns against its anchor", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 function caseChainHungJam(sims: Sim[]): ContactResult {
   const sim = new Sim("chain-hung-jam", 30);
   sims.push(sim);
@@ -4269,6 +4379,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseImpermeableShape());
   results.push(caseHookSparks());
   results.push(caseBallSparks());
+  results.push(casePointBlankTurn());
   results.push(caseHookSeam());
   results.push(casePassableBody());
   results.push(caseDecorGroup());

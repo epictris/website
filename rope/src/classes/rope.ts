@@ -975,6 +975,23 @@ export class Rope {
     return credit.sub(dir.mul(inward - bound));
   }
 
+  // Where the rope's load lands on the body it ENDS on: the point at which the
+  // last free span meets that body. For a chain tied to a surface that is the
+  // anchor itself; for a chain that has come round the holder it is the tangent
+  // point the free span leaves from, which is where the tension actually acts -
+  // a rope wound on a pulley pulls at the rim beside it, not at the knot on the
+  // far side. The same point `calculateTorqueArm` measures the end body's lever
+  // from, so a load applied here turns the holder the way the solve does.
+  // Null while the path is empty of spans (a rope with no end body to load).
+  endLoadPoint(): Vec2 | null {
+    for (const pathObject of this.generatePathObjects()) {
+      if (pathObject instanceof PathEnd) {
+        return pathObject.selfWrap ? pathObject.selfWrap.previous.end : pathObject.previous.end;
+      }
+    }
+    return null;
+  }
+
   // The direction the length solve hauls `body`, or null for a body the path
   // does not hold. An attachment in preference to a wrap: a body the rope both
   // ends on and bends around is hauled from its attachment, and the wrap's

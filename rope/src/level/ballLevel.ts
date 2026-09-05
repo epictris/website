@@ -808,13 +808,76 @@ export class BallLevel {
         const lengthChange = this.ball.chain.lengthPerRadian(body) * keptRotation;
         if (lengthChange < 0) pivotSpinDebt -= lengthChange;
       }
-      // The load the rollback just removed from a SPRUNG anchor, re-applied as
-      // the bounded force it really is (see the comment above `haulAtSolve`):
-      // the ball's weight, straight down at the anchor point, scaled by the
-      // share the rollback removed - `applyHangLoad`'s statement, made about
-      // the chain. A constant force is what a spring answers with a damped,
+      // What the spin's share of the solve took back off everything but the ball
+      // (session-265f). Zero on a frame with no aim spin.
+      PhaseTrace.mark("spin-rollback", this.world);
+      // Settled after the rollback and not before it, so the displacement the
+      // credit is taken over is the one the phase actually ends on - a rollback
+      // run afterwards would undo part of the move while the credit for it
+      // stayed, which is the whole failure this exists to prevent.
+      if (sceneBefore.length > 0) {
+        settleChainBodies(solveChains, sceneBefore, this.world, delta);
+      }
+      // Position for the scene's chain-held bodies, and the velocity they are
+      // owed for it - the ball's own share of this phase is `chain-velocity`.
+      PhaseTrace.mark("chain-settle", this.world);
+      // The load the rollback just removed from the anchor, re-applied as the
+      // bounded force it really is (see the comment above `haulAtSolve`): the
+      // ball's weight, straight down at the anchor point, scaled by the share
+      // the rollback removed - `applyHangLoad`'s statement, made about the
+      // chain. A constant force is what a spring answers with a damped,
       // settled droop; a velocity credit is what it answers with a whip
       // (session-136f).
+      //
+      // Every PIVOT holder, plain or sprung, and the linear spring. The
+      // rollback's premise - that the winding has no force behind it - is
+      // about the winch's haul, and the ball's weight hangs on the anchor
+      // whether or not the ball is winding. Once the ball is rising under the
+      // previous frame's winch credit its own motion closes the constraint,
+      // the whole of the frame's over-length is the winding's, `spinShare`
+      // reads 1 and the rollback strips the anchor's entire share - the
+      // weight with it. So a wind-up UNLOADED its anchor, and the harder the
+      // player wound the less the anchor felt: a pulley disc the ball had spun
+      // to 2.4 rad/s by hanging off it slowed to a stop and reversed as the
+      // ball wound up its chain, driven only by its counterweight
+      // (`session-106f`, a plain pivot with no path for the weight at all -
+      // its rotation credit saturates, see `Rope.boundRotationCredit`). What
+      // it should have felt is a chain hauling 52 kg upwards, which is a
+      // tension of at least the weight. The haul's own acceleration is
+      // deliberately NOT paired onto the anchor: the winch is kinematic and
+      // unbounded, and exporting it is the slingshot `session-215f` and
+      // `whirl-anchor` are about. The weight is the bounded statement, exactly
+      // as it is for a spring.
+      //
+      // A FREE rigid holder is deliberately still left out, and the omission
+      // is measured rather than cautious. The same wind-up unloads it the same
+      // way - `session-126f`'s ceiling-hung wheel slows and reverses exactly
+      // as the disc did - but a steady force is a stand-in only for a body
+      // that answers it with a bounded state: a bearing takes the torque, a
+      // spring droops. A free body answers with acceleration, and the impulse
+      // model has no same-frame tension to resist it: handed the ball's weight
+      // at the wrap's tangent, `session-324f`'s 12.6 kg hung weight was spun
+      // by up to 7 rad/s a FRAME, fought back by its hanger chain the frame
+      // after, and the jitter read 85 J of unforced gain against a 47 J bar;
+      // and `session-611f`'s 430 kg floor polygon was tipped by it into a
+      // wound-tight pose whose unwind stalls 25 cm over length. The honest
+      // answer for a free holder is the coupled solve itself keeping the
+      // load's share of the correction - which is the rollback's own
+      // machinery - not a second force. `cli spring` `winch-anchor-load-hung`
+      // is the red-on-purpose record of that half.
+      //
+      // Scaled by the rollback share, so a frame with no winding hands over
+      // nothing: there the anchor's share of the correction stands and its
+      // credit already carries the load (a free body's Δθ/dt is the effective-
+      // mass split, m·g·r/(I + m·r²), measured to the digit on session-106f's
+      // disc), and a second full weight would double it - `chain-load`'s
+      // closed form is the detector for the linear spring, whose semantics
+      // this generalises. A TORSION-SPRUNG holder is the exception and carries
+      // the FULL weight on every hanging frame: its rotation credit no longer
+      // refunds the spring's bite (see `Rope.boundRotationCredit` and
+      // `RigidBody2D.pivotFrameAccelDw`), so its credits cannot stand in for
+      // the static load at all - without this the branch hovers ABOVE its
+      // torque balance, lifting against a weight it never feels.
       //
       // It is applied ONLY while the chain is what carries the ball: the ball
       // hanging below the anchor, with no loaded contact under it. Both gates
@@ -829,20 +892,16 @@ export class BallLevel {
       // own direction cannot pump (it is the constant force the spring's rest
       // pose already answers), and a frame where a contact carries the ball
       // has nothing for the chain to hand over.
-      // A TORSION-SPRUNG holder carries the hanging ball's FULL weight as this
-      // force on every hanging frame, not only the winch era's rollback share:
-      // its rotation credit no longer refunds the spring's bite (see
-      // `Rope.boundRotationCredit` and `RigidBody2D.pivotFrameAccelDw`), so
-      // the solve's credits cannot stand in for the static load any more -
-      // without this the branch hovers ABOVE its torque balance (the spring
-      // lifting against a weight it never feels), and with it the balance,
-      // the droop and the damped bounce are the spring's own arithmetic. The
-      // linear spring body keeps the rollback-share semantics unchanged: its
-      // credits are not restoring-guarded and still carry the load, and a
-      // second full weight would double it (`chain-load`'s closed form is the
-      // detector). Gravity's constant direction cannot pump the hinge and a
-      // frame where a contact carries the ball hands nothing over - the
-      // session-1010f gates, unchanged.
+      //
+      // And applied AFTER `settleChainBodies`, which is not a detail. The
+      // settle SETS a scene-chain-held body's velocity - the phase's snapshot
+      // plus the displacement that survived the rollback, over dt - and so
+      // discards every impulse laid on such a body earlier in the phase.
+      // `session-106f`'s disc carries its counterweight on a scene chain, and
+      // with this impulse applied before the settle it was measured arriving
+      // at +0.075 rad/s a frame (m·g·r/I on the disc) and being removed to
+      // the last digit in the same frame. A holder no scene chain holds is
+      // untouched by the settle, so its frame is bit-identical either side.
       if (this.ball.chain && endFixed) {
         const holder = this.ball.chain.end.contact.obj;
         const share =
@@ -853,9 +912,13 @@ export class BallLevel {
           share > 0 &&
           holder instanceof RigidBody2D &&
           (holder.pivotSpring !== null ||
-            (holder.spring !== null && haulAtSolve.has(holder)))
+            (haulAtSolve.has(holder) && (holder.pivot || holder.spring !== null)))
         ) {
-          const anchor = this.ball.chain.end.contact.globalPosition;
+          // At the point the chain LEAVES the holder, not the knot: a chain that
+          // has come round its holder pulls at the tangent beside it (see
+          // `Rope.endLoadPoint`), and a weight hung on the far side's knot turns
+          // the holder the wrong way once the wrap passes a half turn.
+          const anchor = this.ball.chain.endLoadPoint() ?? this.ball.chain.end.contact.globalPosition;
           const hanging =
             this.ball.globalPosition.y > anchor.y &&
             !this.world.frameContacts.some(
@@ -869,19 +932,8 @@ export class BallLevel {
           }
         }
       }
-      // What the spin's share of the solve took back off everything but the ball
-      // (session-265f). Zero on a frame with no aim spin.
-      PhaseTrace.mark("spin-rollback", this.world);
-      // Settled after the rollback and not before it, so the displacement the
-      // credit is taken over is the one the phase actually ends on - a rollback
-      // run afterwards would undo part of the move while the credit for it
-      // stayed, which is the whole failure this exists to prevent.
-      if (sceneBefore.length > 0) {
-        settleChainBodies(solveChains, sceneBefore, this.world, delta);
-      }
-      // Position for the scene's chain-held bodies, and the velocity they are
-      // owed for it - the ball's own share of this phase is `chain-velocity`.
-      PhaseTrace.mark("chain-settle", this.world);
+      // The hanging ball's weight, handed to whatever holds the chain's far end.
+      PhaseTrace.mark("hang-load", this.world);
       // A rope correction is still free to shove the ball into something on its
       // way; push out again so the frame does not *end* inside the scenery, and
       // then set the chain phase's velocity contribution to the displacement it
@@ -943,6 +995,27 @@ export class BallLevel {
         // And only where a body on the path is what refused it: the stall is
         // the contact's, and it lasts exactly as long as the contact does
         // (`BallPlayer.windStallHeld`, cleared by the steering when it drops).
+        //
+        // And only where turning WINDS. The unwind refunds whatever of its
+        // window the standing over-length asks for, and that over-length is
+        // rarely the spin's own: a ball resting against its anchor body
+        // carries millimetres of it from the push-out every frame. So a ball
+        // anchored point-blank with the chain leaving it RADIALLY - a spool of
+        // 2.6 mm/rad, turning winds nothing - had a 0.5 rad/s ask refunded
+        // whole by 3.5 mm of push-out that had nothing to do with it, and read
+        // in radians the refund was 100% (`session-287f` f181). Latched on
+        // that, the steering was dead for a 200 degree sweep of the aim while
+        // the ball sat against a pulley disc: a rotation frozen by a refusal
+        // that refused nothing, because there was nothing to refuse.
+        // The stall is a statement about a chain WOUND onto the rim - the
+        // hammer is 40 rad/s winding 6 cm a frame (`session-154f`), and the
+        // wound-tight endgame it also holds is `session-611f`'s: a coil that
+        // has taken the whole chain, the unwind's search failing for 35 frames
+        // with 19 cm standing, and a 3 rad/s ask refunded whole at a spool of
+        // 52 mm/rad the one thing that stopped the ball winding further. What
+        // separates the two is the spool, not the size of the refund (2.7 mm
+        // there, and it MUST latch), so the latch asks for a spool at rim
+        // scale: `BallPlayer.STALL_LATCH_SPOOL_SHARE` of the ball's radius.
         const asked = Math.abs(this.aimSpin) * delta;
         const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
         this.chainUnwindRefund = refunded;
@@ -955,7 +1028,9 @@ export class BallLevel {
         if (
           asked > 0 &&
           this.ball.windStallHeld &&
-          refunded >= BallLevel.STALL_REFUND_SHARE * asked
+          refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
+          Math.abs(this.ball.chain.lengthPerRadian(this.ball)) >=
+            BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
         ) {
           this.ball.windStall = Math.sign(this.aimSpin);
         }

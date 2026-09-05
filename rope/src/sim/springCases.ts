@@ -40,7 +40,7 @@ import { PX as PX_FACTOR } from "../engine/units";
 import { modelFromDisk, modelToDisk, settledGhosts } from "../editor/model";
 import { BallLevel } from "../level/ballLevel";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
-import type { RawLevelData } from "../level/levelFormat";
+import type { LevelBodyData, RawLevelData, SceneObjectData } from "../level/levelFormat";
 
 const DT = 1 / 60;
 const G = GRAVITY.y;
@@ -49,10 +49,19 @@ export interface SpringResult {
   name: string;
   passed: boolean;
   details: string[];
+  // Red on purpose: a gap the suite knows about and has not closed. The runner
+  // counts it as a pass and fails on it if it ever passes, so the fix that
+  // closes the gap has to remove the marker in the same change (see
+  // `cli contacts` for the rule's origin).
+  expectedFail?: true;
 }
 
 function ok(name: string, passed: boolean, details: string[]): SpringResult {
   return { name, passed, details };
+}
+
+function expectedFail(name: string, passed: boolean, details: string[]): SpringResult {
+  return { name, passed, details, expectedFail: true };
 }
 
 // The self-weight droop an authored frequency works out to, in metres: the
@@ -1536,6 +1545,224 @@ function caseWinchLoad(): SpringResult {
   return ok("winch-load — a wind-up bears down on the sprung body it hangs from", passed, details);
 }
 
+// winch-anchor-load - a wind-up keeps bearing down on the PLAIN pivot it hangs
+// from; winch-anchor-load-hung - the same statement about a free chain-hung
+// body, which is still open and carries the `expectedFail` marker.
+//
+// `winch-load` above is the sprung half of this statement; this is the rest of
+// it. The spin rollback strips an anchor of its share of the length correction
+// on the premise that the winding has no force behind it, and once the ball is
+// rising under the previous frame's winch credit that share is the whole of
+// the correction - the hanging ball's weight included. A plain pivot's rotation
+// credit saturates and a chain-hung body's velocity is re-derived by the
+// scene-chain settle, so neither had any other path for the weight to arrive
+// by, and a wind-up UNLOADED its anchor: `session-106f`'s pulley disc, spun to
+// 2.4 rad/s by the ball hanging off it, slowed to a stop and reversed under its
+// counterweight the moment the ball began to wind, and `session-126f`'s
+// ceiling-hung wheel did the same off its own pendulum torque. The fix hands
+// the rolled-back share back as the ball's weight at the point the chain leaves
+// the holder, after the settle (see the `hang-load` phase in `BallLevel`) - to
+// a PIVOT. A free body is deliberately still left out: handed the same weight,
+// `session-324f`'s 12.6 kg hung weight was spun by up to 7 rad/s a frame and
+// read 85 J of unforced gain, and `session-611f`'s floor polygon was tipped
+// into a stalled wound-tight pose - a steady force stands in for a load only
+// where the holder answers it with a bounded state, and a free body does not.
+// The `hung` rig records that half red until the coupled solve carries it.
+//
+// Three rigs, each run twice with identical throws - the aim HELD on the
+// anchor, and the aim WOUND a turn per 2 s - and the anchor's spin measured
+// over the same window of both. Holding is the control: a ball merely hanging
+// loads its anchor through the solve's own credit, and winding may not load it
+// LESS than that. The plain pivot has no scene chain and so no settle to
+// re-derive its velocity from; there the control's credit saturates at the
+// drive rate (the whirl governor), so it carries the analytic floor instead:
+// the ball's weight at the rim, `m·g·arm/I` a frame, is what the wind-up
+// must deliver on the frames the chain is taut.
+function winchAnchorLoadRigs(
+  which: readonly string[],
+): { passed: boolean; details: string[] } {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // An 80 cm steel disc (3.2 t, so a hanging ball turns it slowly enough that
+  // the lever it hangs from stays roughly where it landed for the whole
+  // window) three metres up; the ball spawns under its right-hand rim and
+  // throws straight up, so the hook lands 13 degrees below 3 o'clock and the
+  // ball hangs off the widest lever the disc has.
+  const disc = (
+    extra: Partial<LevelBodyData>,
+    objects: SceneObjectData[],
+    material = "steel",
+  ): LevelBodyData => ({
+    kind: "rigid",
+    x: 0,
+    y: -300,
+    rot: 0,
+    friction: 1,
+    ...extra,
+    objects: [{ type: "collision", material, shape: { kind: "circle", r: 80 } }, ...objects],
+  });
+  const rigs: Record<string, RawLevelData> = {
+    // A plain pivot: bearing at the centre of mass, nothing else on it.
+    pivot: {
+      player: { x: 78, y: -100, radius: 12 },
+      bodies: [disc({ pivot: true }, [])],
+    } as RawLevelData,
+    // The pulley of session-106f: the same disc with a 50 kg oak weight hung
+    // from its left rim on a scene chain - a counterweight that BALANCES the
+    // hanging ball, so the disc stands still while both loads reach it and
+    // runs away under the weight the moment the ball's stops arriving. The
+    // disc is a body the settle re-derives.
+    pulley: {
+      player: { x: 78, y: -100, radius: 12 },
+      bodies: [
+        disc({ pivot: true }, [{ type: "anchor", id: 1, x: -80, y: 0 }]),
+        {
+          kind: "rigid",
+          x: -80,
+          y: -100,
+          rot: 0,
+          friction: 1,
+          objects: [
+            { type: "collision", shape: { kind: "rect", w: 60, h: 60 } },
+            { type: "anchor", id: 2, x: 0, y: -30 },
+          ],
+        },
+      ],
+      chains: [{ a: 1, b: 2 }],
+    } as RawLevelData,
+    // The wheel of session-126f: the same disc FREE and in oak (281 kg), hung
+    // from the ceiling by a scene chain tied 20 cm above its centre - a
+    // pendulum about that point, and light enough that the ball's torque is a
+    // tenth of its inertia a second rather than a hundredth.
+    hung: {
+      player: { x: 78, y: -100, radius: 12 },
+      bodies: [
+        {
+          kind: "static",
+          x: 0,
+          y: -700,
+          rot: 0,
+          friction: 1,
+          objects: [
+            { type: "collision", shape: { kind: "rect", w: 400, h: 40 } },
+            { type: "anchor", id: 1, x: 0, y: 20 },
+          ],
+        },
+        disc({}, [{ type: "anchor", id: 2, x: 0, y: -20 }], "wood"),
+      ],
+      chains: [{ a: 1, b: 2 }],
+    } as RawLevelData,
+  };
+
+  const WIND_FRAMES = 90;
+  // How far under the held control a wound run may read, per rig. Set against
+  // the measured split: with the load arriving the two read within a few
+  // hundredths of each other; without it the pulley's disc runs away under its
+  // counterweight and the hung wheel loses the whole of the ball's torque.
+  const TOLERANCES: Record<string, number> = { pulley: 0.5, hung: 0.5 };
+  const run = (
+    data: RawLevelData,
+    wind: boolean,
+  ): { anchored: boolean; dw: number; floor: number; taut: number } => {
+    const level = new BallLevel(data);
+    const anchor = level.bodies.find(
+      (b): b is RigidBody2D => b instanceof RigidBody2D && b !== level.ball && b.pivot,
+    ) ?? level.bodies.find(
+      (b): b is RigidBody2D =>
+        b instanceof RigidBody2D && b !== level.ball && b.globalPosition.y < level.ball.globalPosition.y,
+    )!;
+    let prev = emptyFrameInput();
+    const feed = (aim: Vec2): void => {
+      const input: FrameInput = {
+        ...emptyFrameInput(),
+        fire: button(true, prev.fire),
+        mouseWorldPosition: aim,
+      };
+      prev = input;
+      level.physicsProcess(input, DT);
+    };
+    // Throw straight up at the rim and let the catch settle for half a second.
+    const up = new Vec2(0.78, -3.0);
+    for (let f = 0; f < 30; f++) feed(up);
+    const anchored = level.ball.chain?.end.contact.obj === anchor;
+    const w0 = anchor.angularVelocity;
+    const start = level.ball.loopDirection.angle();
+    let floor = 0;
+    let taut = 0;
+    for (let f = 0; f < WIND_FRAMES; f++) {
+      const angle = start + (f / 120) * Math.PI * 2;
+      const aim = wind
+        ? level.ball.globalPosition.add(new Vec2(Math.cos(angle), Math.sin(angle)).mul(2))
+        : up;
+      feed(aim);
+      // The weight the frame should have delivered, from where the chain
+      // actually left the disc: `m·g·dt·arm_x / I`, on a frame the chain ended
+      // taut with the ball hanging under it. A slack frame carries no tension
+      // and owes the anchor nothing.
+      const chain = level.ball.chain;
+      if (chain && chain.end.contact.obj === anchor) {
+        const point = chain.endLoadPoint();
+        const slack = chain.constraintLength - chain.getCurrentLength();
+        if (point && slack < 1e-3 && level.ball.globalPosition.y > point.y) {
+          taut++;
+          floor += (level.ball.mass * GRAVITY.y * DT * (point.x - anchor.globalPosition.x)) / anchor.inertia;
+        }
+      }
+    }
+    return { anchored, dw: anchor.angularVelocity - w0, floor, taut };
+  };
+
+  for (const name of which) {
+    const data = rigs[name]!;
+    const held = run(data, false);
+    const wound = run(data, true);
+    check(`${name}: both throws anchor to the disc`, held.anchored && wound.anchored);
+    if (name === "pivot") {
+      // `floor` is signed in the disc's own rotation sense, so the spin must
+      // move the same way and by at least half of it: the winch credit flings
+      // the ball on some frames and leaves the chain slack behind it, and a
+      // slack frame owes the disc nothing. Zero before the fix - the disc
+      // coasted, with nothing reaching its bearing.
+      check(
+        `${name}: the wind-up drives the disc (Δw ${wound.dw.toFixed(2)} rad/s over ${WIND_FRAMES} frames, ${wound.taut} taut, analytic ${wound.floor.toFixed(2)}, floor half)`,
+        Math.abs(wound.floor) > 0.2 &&
+          Math.sign(wound.dw) === Math.sign(wound.floor) &&
+          Math.abs(wound.dw) >= 0.5 * Math.abs(wound.floor),
+      );
+    } else {
+      // The control's own drift over the window (a pendulum's swing, a
+      // counterweight a hair off balance) is whatever it is; what may not
+      // happen is winding unloading the anchor below it.
+      const tol = TOLERANCES[name]!;
+      check(
+        `${name}: winding loads the anchor no less than hanging does (Δw wound ${wound.dw.toFixed(2)} vs held ${held.dw.toFixed(2)} rad/s, tol ${tol})`,
+        wound.dw >= held.dw - tol,
+      );
+    }
+  }
+
+  return { passed, details };
+}
+
+function caseWinchAnchorLoad(): SpringResult {
+  const r = winchAnchorLoadRigs(["pivot", "pulley"]);
+  return ok("winch-anchor-load — a wind-up keeps bearing down on the pivot it hangs from", r.passed, r.details);
+}
+
+function caseWinchAnchorLoadHung(): SpringResult {
+  const r = winchAnchorLoadRigs(["hung"]);
+  return expectedFail(
+    "winch-anchor-load-hung — ...and on a free chain-hung body (open: see the case comment)",
+    r.passed,
+    r.details,
+  );
+}
+
 function caseWhirlAnchor(): SpringResult {
   const details: string[] = [];
   let passed = true;
@@ -2069,6 +2296,8 @@ export function runSpringCases(): SpringResult[] {
     casePivotAuthored(),
     caseSpawnAtRest(),
     caseWinchLoad(),
+    caseWinchAnchorLoad(),
+    caseWinchAnchorLoadHung(),
     caseWhirlAnchor(),
     caseYankCatch(),
     caseHangSettle(),

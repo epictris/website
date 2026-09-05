@@ -54,6 +54,14 @@ export class BallPlayer extends RigidBody2D {
   // Spool rate (m per radian) below which turning does not wind chain and the
   // stall has nothing to limit.
   static readonly STALL_MIN_SPOOL = 0.001;
+  // Share of the ball's radius the spool must reach for a refused turn to
+  // LATCH the stall at all. A chain wound onto the rim leaves it tangentially,
+  // at the radius itself; one anchored point-blank and leaving radially winds
+  // nothing per radian (2% of the radius on `session-287f`), so a turn there
+  // is never a wind-up the chain could refuse, whatever the unwind - answering
+  // push-out over-length that is not the spin's - happens to hand back. The
+  // wound-tight endgame that must still latch read 43% (`session-611f` f283).
+  static readonly STALL_LATCH_SPOOL_SHARE = 0.25;
   // Coulomb coefficient for ground contact. Friction that DRIVES the ball
   // (the steered spin gripping the ground) always applies in full, so aiming
   // kicks and crawls the ball at any speed. Friction that would BRAKE the

@@ -2224,12 +2224,24 @@ async function cmdSpring(): Promise<void> {
   const { runSpringCases } = await import("../sim/springCases");
   const results = runSpringCases();
   let failed = 0;
+  let xfail = 0;
   for (const r of results) {
-    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    // The contact runner's rule: an expected failure is a pass for the exit
+    // code, and an expected PASS is a failure - a case that has started working
+    // while still marked is a stale marker, a lie about what the suite covers.
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
     for (const d of r.details) console.log(`        ${d}`);
-    if (!r.passed) failed++;
+    if (stale) {
+      console.log(`        this case is marked expectedFail but PASSED — delete the marker`);
+    }
+    if (bad) failed++;
+    if (r.expectedFail && !r.passed) xfail++;
   }
-  console.log(`[spring] ${results.length - failed}/${results.length} cases passed`);
+  const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
+  console.log(`[spring] ${results.length - failed}/${results.length} cases passed${x}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
