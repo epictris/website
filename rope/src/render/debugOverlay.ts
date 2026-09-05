@@ -19,6 +19,7 @@ import type { Level } from "../level/level";
 import {
   activeCameraRule,
   pathBandAxes,
+  pathHasBand,
   pathLookahead,
   pathParamsAt,
   PATH_KEY_FIELDS,
@@ -29,7 +30,7 @@ import {
   type CameraRule,
 } from "./cameraController";
 import { pointAtArcLength, projectOntoPolyline } from "./cameraPath";
-import { outlineOfData, pathCorridorEllipseInto, pathOutline, pathOutlineGrown } from "./shapePath";
+import { outlineOfData, pathCorridorSweepInto, pathOutline, pathOutlineGrown } from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -270,9 +271,10 @@ function drawCameraPath(
 ): void {
   const ix = rule.index;
 
-  const range = pathRangeAxes(rule.path);
+  // Each corridor's ellipse is resolved through the path's keys at every
+  // sample, so a range that widens along the route is drawn widening.
   ctx.beginPath();
-  pathCorridorEllipseInto(ctx, ix.verts, range.x, range.y);
+  pathCorridorSweepInto(ctx, ix, (s) => pathRangeAxes(pathParamsAt(rule, s)));
   ctx.strokeStyle = CAMERA_REGION;
   ctx.lineWidth = 1.5 * PX;
   ctx.setLineDash([6 * PX, 4 * PX]);
@@ -308,18 +310,16 @@ function drawCameraPath(
   // path's grip on the framing fades to nothing across the first, and only past
   // the second does the rule itself let go - so a path that seems slow to hand
   // over has both of its reasons on screen.
-  const band = pathBandAxes(rule.path);
-  if (band.x > range.x || band.y > range.y) {
+  if (pathHasBand(rule)) {
     ctx.beginPath();
-    pathCorridorEllipseInto(ctx, ix.verts, band.x, band.y);
+    pathCorridorSweepInto(ctx, ix, (s) => pathBandAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = PX;
     ctx.setLineDash([3 * PX, 3 * PX]);
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  const release = pathReleaseAxes(rule.path);
   ctx.beginPath();
-  pathCorridorEllipseInto(ctx, ix.verts, release.x, release.y);
+  pathCorridorSweepInto(ctx, ix, (s) => pathReleaseAxes(pathParamsAt(rule, s)));
   ctx.lineWidth = PX;
   ctx.setLineDash([2 * PX, 5 * PX]);
   ctx.stroke();

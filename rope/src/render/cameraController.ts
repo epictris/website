@@ -49,6 +49,7 @@ import {
 import type { Camera } from "./camera";
 import {
   buildPolylineIndex,
+  ellipseReach,
   flattenPathNodes,
   pathNodesOf,
   pointAtArcLength,
@@ -206,19 +207,25 @@ export function buildCameraRules(
 
 // --- keys -------------------------------------------------------------------
 //
-// The fields a node may key (see `CameraPathVert`): everything that shapes the
+// The fields a node may key (see `CameraPathVert`). The first five shape the
 // path's TARGET - how much world is on screen, how far ahead the camera looks
-// and how much slack that lead is measured with. Not the range, falloff or
-// buffer: those shape the GRIP, are tested at the projection rather than at
-// the lead origin, and would drag the corridor drawing with them (a corridor
-// whose ellipse varies along the route is a sweep, not the fixed-axis
-// Minkowski sum the editor and overlay draw today).
+// and how much slack that lead is measured with - and are read at the
+// committed lead origin. The last five shape the GRIP - the corridor, its
+// falloff band and the release hysteresis - and are read at the player's
+// projection, the arc length the range is measured from. `pathParamsAt`
+// resolves all ten at whatever `s` it is given; the caller knows which `s` a
+// field is about.
 export const PATH_KEY_FIELDS = [
   "viewportScale",
   "lookaheadX",
   "lookaheadY",
   "lookaheadBufferX",
   "lookaheadBufferY",
+  "rangeX",
+  "rangeY",
+  "falloffX",
+  "falloffY",
+  "buffer",
 ] as const;
 export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
 
@@ -237,6 +244,11 @@ const PATH_PARAM_DEFAULTS: PathParams = {
   lookaheadY: DEFAULT_PATH_LOOKAHEAD_Y,
   lookaheadBufferX: DEFAULT_PATH_LOOKAHEAD_BUFFER_X,
   lookaheadBufferY: DEFAULT_PATH_LOOKAHEAD_BUFFER_Y,
+  rangeX: DEFAULT_PATH_RANGE_X,
+  rangeY: DEFAULT_PATH_RANGE_Y,
+  falloffX: DEFAULT_PATH_FALLOFF_X,
+  falloffY: DEFAULT_PATH_FALLOFF_Y,
+  buffer: REGION_EXIT_MARGIN,
 };
 
 // The path-level values: what every field is with no keys at all, and what a
@@ -306,25 +318,6 @@ function ruleBlend(r: CameraRule | null): number | undefined {
   return r === null ? undefined : r.kind === "region" ? r.region.blend : r.path.blend;
 }
 
-// The distance along `dir` that lands on the ellipse with semi-axes `ax`, `ay`.
-//
-// This is how every per-axis distance on a path is resolved into the one arc
-// length the geometry deals in: moving by `L` along `dir` displaces by
-// `L * dir`, and this is the `L` that puts that displacement on the ellipse. So
-// a horizontal route takes `ax`, a vertical one `ay`, and a diagonal what fits
-// between - which is the whole point of the pairs, since a 16:9 frame has far
-// less screen above and below the player than either side of them.
-//
-// `dir` need not be normalised, and a zero one answers `ax`: a path with
-// nowhere left to go is horizontal as far as this is concerned.
-function ellipseReach(ax: number, ay: number, dir: Vec2): number {
-  const a = Math.max(1e-6, ax);
-  const b = Math.max(1e-6, ay);
-  const len = dir.length();
-  if (len < 1e-9) return a;
-  return 1 / Math.hypot(dir.x / len / a, dir.y / len / b);
-}
-
 // How far along the path the camera leads, for a route heading in `dir`.
 export function pathLookahead(p: PathParams, dir: Vec2): number {
   return ellipseReach(p.lookaheadX, p.lookaheadY, dir);
@@ -370,39 +363,48 @@ export function committedLeadS(s: number, held: number, buffer: number): number 
 // Unlike the lookahead's ellipse - which is resolved against the direction the
 // ROUTE runs - these are resolved against the direction the player actually
 // left the route in, because that is the displacement the screen has to hold.
-export function pathRangeAxes(p: CameraPathData): { x: number; y: number } {
-  return {
-    x: Math.max(0, p.rangeX ?? DEFAULT_PATH_RANGE_X),
-    y: Math.max(0, p.rangeY ?? DEFAULT_PATH_RANGE_Y),
-  };
+//
+// All of them take the path's fields RESOLVED at the player's projection
+// (`pathParamsAt`), since the grip fields are keyable along the route.
+export function pathRangeAxes(p: PathParams): { x: number; y: number } {
+  return { x: Math.max(0, p.rangeX), y: Math.max(0, p.rangeY) };
 }
 
-export function pathFalloffAxes(p: CameraPathData): { x: number; y: number } {
-  return {
-    x: Math.max(0, p.falloffX ?? DEFAULT_PATH_FALLOFF_X),
-    y: Math.max(0, p.falloffY ?? DEFAULT_PATH_FALLOFF_Y),
-  };
+export function pathFalloffAxes(p: PathParams): { x: number; y: number } {
+  return { x: Math.max(0, p.falloffX), y: Math.max(0, p.falloffY) };
+}
+
+// Does the path have a falloff band ANYWHERE - at the path level or at any
+// node's key? What decides whether the band's outer edge is worth drawing.
+export function pathHasBand(rule: CameraRule & { kind: "path" }): boolean {
+  const base = pathParamsOf(rule.path);
+  return (
+    base.falloffX > 0 ||
+    base.falloffY > 0 ||
+    rule.keys.falloffX.some((k) => k.v > 0) ||
+    rule.keys.falloffY.some((k) => k.v > 0)
+  );
 }
 
 // The semi-axes of the falloff band's outer ellipse, and of the release
 // ellipse beyond it. Exported so the overlay and the editor draw exactly the
 // boundaries the functions below test - the same one-source rule
 // `pathOutlineGrown` follows for a region's buffer.
-export function pathBandAxes(p: CameraPathData): { x: number; y: number } {
+export function pathBandAxes(p: PathParams): { x: number; y: number } {
   const r = pathRangeAxes(p);
   const f = pathFalloffAxes(p);
   return { x: r.x + f.x, y: r.y + f.y };
 }
 
-export function pathReleaseAxes(p: CameraPathData): { x: number; y: number } {
+export function pathReleaseAxes(p: PathParams): { x: number; y: number } {
   const band = pathBandAxes(p);
-  const b = p.buffer ?? REGION_EXIT_MARGIN;
+  const b = Math.max(0, p.buffer);
   return { x: band.x + b, y: band.y + b };
 }
 
 // How far off the route the path's corridor reaches, for a player displaced
 // along `dir`.
-export function pathRange(p: CameraPathData, dir: Vec2): number {
+export function pathRange(p: PathParams, dir: Vec2): number {
   const r = pathRangeAxes(p);
   return ellipseReach(r.x, r.y, dir);
 }
@@ -410,7 +412,7 @@ export function pathRange(p: CameraPathData, dir: Vec2): number {
 // The outer edge of the falloff band along `dir` - the ellipse with semi-axes
 // (rangeX + falloffX, rangeY + falloffY), where the path's target has faded to
 // exactly the plain follow.
-export function pathBand(p: CameraPathData, dir: Vec2): number {
+export function pathBand(p: PathParams, dir: Vec2): number {
   const band = pathBandAxes(p);
   return ellipseReach(band.x, band.y, dir);
 }
@@ -420,7 +422,7 @@ export function pathBand(p: CameraPathData, dir: Vec2): number {
 // back to the same default a region's does. Growing the SEMI-AXES rather than
 // adding to the resolved reach is what keeps the release boundary an ellipse,
 // so the editor and the overlay can draw exactly the zone tested here.
-export function pathRelease(p: CameraPathData, dir: Vec2): number {
+export function pathRelease(p: PathParams, dir: Vec2): number {
   const rel = pathReleaseAxes(p);
   return ellipseReach(rel.x, rel.y, dir);
 }
@@ -456,7 +458,7 @@ export function pathRelease(p: CameraPathData, dir: Vec2): number {
 // from the deadbanded point the lead is taken from: this is about where they
 // actually are relative to the route, which is the same quantity the range is
 // measured in.
-export function pathFalloffWeight(p: CameraPathData, offset: Vec2): number {
+export function pathFalloffWeight(p: PathParams, offset: Vec2): number {
   const inner = pathRange(p, offset);
   const outer = pathBand(p, offset);
   if (outer - inner < 1e-9) return 0;
@@ -464,11 +466,20 @@ export function pathFalloffWeight(p: CameraPathData, offset: Vec2): number {
   return smoothstep(t);
 }
 
-// The avatar's displacement from their global projection onto the polyline.
-// Its length is the projection's own `dist`; its direction is what the range
-// and falloff ellipses are resolved along.
-function pathOffset(index: PolylineIndex, p: Vec2): Vec2 {
-  return p.sub(pointAtArcLength(index, projectOntoPolyline(index, p).s));
+// Where the avatar stands relative to a path: the arc length of a projection
+// and the displacement from it. The offset's length is the projection's own
+// `dist` and its direction is what the range and falloff ellipses are resolved
+// along; the arc length is where those ellipses' axes are read from, the grip
+// fields being keyable along the route.
+export interface PathStanding {
+  s: number;
+  off: Vec2;
+}
+
+// The avatar's standing against their GLOBAL projection onto the polyline.
+function pathStanding(index: PolylineIndex, p: Vec2): PathStanding {
+  const s = projectOntoPolyline(index, p).s;
+  return { s, off: p.sub(pointAtArcLength(index, s)) };
 }
 
 // Does `p` fall inside the rule at all? Containment for a region, displacement
@@ -477,19 +488,19 @@ function pathOffset(index: PolylineIndex, p: Vec2): Vec2 {
 // a funny shape.
 function ruleContains(r: CameraRule, p: Vec2): boolean {
   if (r.kind === "region") return pointInRegion(r.region, p);
-  const off = pathOffset(r.index, p);
-  return off.length() <= pathRange(r.path, off);
+  const at = pathStanding(r.index, p);
+  return at.off.length() <= pathRange(pathParamsAt(r, at.s), at.off);
 }
 
 // Does the incumbent keep its grip? Its volume grown by `regionBuffer` for a
-// region; the release ellipse for a path, measured to `pathOff` - the
-// displacement from the WINDOWED projection the controller is tracking, not
-// from the global closest point, so a switchback passing nearby cannot hold a
-// player who has fallen off the branch they were actually on.
-function ruleHolds(r: CameraRule, p: Vec2, pathOff: Vec2 | null): boolean {
+// region; the release ellipse for a path, measured at `held` - the standing
+// against the WINDOWED projection the controller is tracking, not the global
+// closest point, so a switchback passing nearby cannot hold a player who has
+// fallen off the branch they were actually on.
+function ruleHolds(r: CameraRule, p: Vec2, held: PathStanding | null): boolean {
   if (r.kind === "region") return pointInRegion(r.region, p, regionBuffer(r.region));
-  const off = pathOff ?? pathOffset(r.index, p);
-  return off.length() <= pathRelease(r.path, off);
+  const at = held ?? pathStanding(r.index, p);
+  return at.off.length() <= pathRelease(pathParamsAt(r, at.s), at.off);
 }
 
 // The rule governing the camera for an avatar at `p`. Highest `priority` among
@@ -513,11 +524,10 @@ export function activeCameraRule(
   rules: readonly CameraRule[],
   p: Vec2,
   current: CameraRule | null = null,
-  // Displacement from the WINDOWED projection on `current` to `p`, when
-  // `current` is a path. The controller is the only thing that has it, so it
-  // passes it in rather than this recomputing a global answer that means
-  // something else.
-  currentPathOffset: Vec2 | null = null,
+  // The standing against the WINDOWED projection on `current`, when `current`
+  // is a path. The controller is the only thing that has it, so it passes it
+  // in rather than this recomputing a global answer that means something else.
+  currentHeld: PathStanding | null = null,
 ): CameraRule | null {
   let best: CameraRule | null = null;
   for (const r of rules) {
@@ -527,7 +537,7 @@ export function activeCameraRule(
   if (
     current &&
     rules.includes(current) &&
-    ruleHolds(current, p, currentPathOffset) &&
+    ruleHolds(current, p, currentHeld) &&
     (!best || rulePriority(best) <= rulePriority(current))
   ) {
     return current;
@@ -790,7 +800,12 @@ export class CameraController {
         ? follow.sub(pointAtArcLength(this.rule.index, heldPath.s))
         : null;
 
-    const next = activeCameraRule(rules, follow, this.rule, heldOffset);
+    const next = activeCameraRule(
+      rules,
+      follow,
+      this.rule,
+      heldPath && heldOffset ? { s: heldPath.s, off: heldOffset } : null,
+    );
 
     // Acquiring a path is unbuffered and history-free, exactly as entering a
     // region is: a path that was not the incumbent is projected onto globally.
@@ -831,11 +846,12 @@ export class CameraController {
     if (
       next?.kind === "path" &&
       next === this.rule &&
-      offset!.length() > pathRange(next.path, offset!) + (next.path.buffer ?? REGION_EXIT_MARGIN)
+      offset!.length() >
+        pathRange(pathParamsAt(next, proj!.s), offset!) + pathParamsAt(next, proj!.s).buffer
     ) {
       const g = projectOntoPolyline(next.index, follow);
       const goff = follow.sub(pointAtArcLength(next.index, g.s));
-      if (goff.length() <= pathRange(next.path, goff)) {
+      if (goff.length() <= pathRange(pathParamsAt(next, g.s), goff)) {
         proj = g;
         offset = goff;
         branchJump = true;
@@ -868,7 +884,7 @@ export class CameraController {
     // The falloff weight, from the avatar's TRUE displacement off the route -
     // the windowed one while held, so at a switchback the weight is about the
     // branch they are actually on, exactly as the grip is.
-    const w = next?.kind !== "path" ? 0 : pathFalloffWeight(next.path, offset!);
+    const w = next?.kind !== "path" ? 0 : pathFalloffWeight(pathParamsAt(next, s), offset!);
 
     const target = cameraRuleTarget(next, follow, baseZoom, leadS, w);
 
@@ -909,8 +925,8 @@ export class CameraController {
         follow,
         baseZoom,
         this.pathLeadS,
-        this.rule?.kind === "path" && heldOffset
-          ? pathFalloffWeight(this.rule.path, heldOffset)
+        this.rule?.kind === "path" && heldPath && heldOffset
+          ? pathFalloffWeight(pathParamsAt(this.rule, heldPath.s), heldOffset)
           : 0,
       );
       const rest = 1 - smoothstep(this.s);

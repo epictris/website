@@ -111,6 +111,29 @@ export function cubicAt(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: number): Vec2
     .add(p3.mul(t * t * t));
 }
 
+// The distance along `dir` that lands on the ellipse with semi-axes `ax`, `ay`.
+//
+// This is how every per-axis distance on a path is resolved into the one arc
+// length the geometry deals in: moving by `L` along `dir` displaces by
+// `L * dir`, and this is the `L` that puts that displacement on the ellipse. So
+// a horizontal route takes `ax`, a vertical one `ay`, and a diagonal what fits
+// between - which is the whole point of the pairs, since a 16:9 frame has far
+// less screen above and below the player than either side of them.
+//
+// `dir` need not be normalised, and a zero one answers `ax`: a path with
+// nowhere left to go is horizontal as far as this is concerned.
+//
+// Here rather than in the controller because the corridor SWEEP in
+// `shapePath.ts` resolves the same ellipse at every sample it draws, and the
+// drawing must not depend on the controller.
+export function ellipseReach(ax: number, ay: number, dir: Vec2): number {
+  const a = Math.max(1e-6, ax);
+  const b = Math.max(1e-6, ay);
+  const len = dir.length();
+  if (len < 1e-9) return a;
+  return 1 / Math.hypot(dir.x / len / a, dir.y / len / b);
+}
+
 export interface PolylineIndex {
   // World-space verts in direction-of-travel order.
   verts: Vec2[];

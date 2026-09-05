@@ -27,11 +27,14 @@ import {
   cameraRuleTarget,
   activeCameraRule,
   pathParamsAt,
+  pathParamsOf,
+  pathRangeAxes,
   type CameraRule,
 } from "../render/cameraController";
 import type { CameraPathData, CameraRegionData, RawLevelData } from "../level/levelFormat";
 import { scaleLevelData } from "../level/levelFormat";
 import { modelFromDisk, modelToDisk, reversePathVerts } from "../editor/model";
+import { pathCorridorSweepInto } from "../render/shapePath";
 import {
   buildPolylineIndex,
   cubicAt,
@@ -177,6 +180,20 @@ function ride(
       edge: held.edge,
     };
   });
+}
+
+// Every point the corridor sweep draws for a path's RANGE, in world metres,
+// through a sink that records rather than paints.
+function sweepPoints(rule: CameraRule & { kind: "path" }): Vec2[] {
+  const pts: Vec2[] = [];
+  const sink = {
+    moveTo: (x: number, y: number) => void pts.push(new Vec2(x, y)),
+    lineTo: (x: number, y: number) => void pts.push(new Vec2(x, y)),
+    closePath: () => {},
+    arc: () => {},
+  };
+  pathCorridorSweepInto(sink, rule.index, (s) => pathRangeAxes(pathParamsAt(rule, s)));
+  return pts;
 }
 
 // The sum of a ride's frame-to-frame zoom travel over its last second: zero
@@ -784,7 +801,7 @@ export function runCameraCases(): CameraResult[] {
       const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2 };
       const hard: CameraPathData = { ...RIDE };
       const h = 1e-3;
-      const w = (d: number): number => pathFalloffWeight(path, V(0, d));
+      const w = (d: number): number => pathFalloffWeight(pathParamsOf(path), V(0, d));
       return [
         { label: "on the route", got: w(0), want: 0 },
         { label: "exactly at the range", got: w(1), want: 0 },
@@ -793,7 +810,7 @@ export function runCameraCases(): CameraResult[] {
         { label: "far past the band", got: w(10), want: 1 },
         { label: "flat at the inner edge", got: (w(1 + h) - w(1)) / h, want: 0, tol: 0.01 },
         { label: "flat at the outer edge", got: (w(3) - w(3 - h)) / h, want: 0, tol: 0.01 },
-        { label: "zero falloff keeps full grip", got: pathFalloffWeight(hard, V(0, 5)), want: 0 },
+        { label: "zero falloff keeps full grip", got: pathFalloffWeight(pathParamsOf(hard), V(0, 5)), want: 0 },
       ];
     }),
 
@@ -806,7 +823,7 @@ export function runCameraCases(): CameraResult[] {
       const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, viewportScale: 2 };
       const rule = buildCameraRules([], [path])[0]!;
       const at = (dist: number): { pos: Vec2; zoom: number } =>
-        cameraRuleTarget(rule, new Vec2(5, dist), BASE_ZOOM, 5, pathFalloffWeight(path, V(0, dist)));
+        cameraRuleTarget(rule, new Vec2(5, dist), BASE_ZOOM, 5, pathFalloffWeight(pathParamsOf(path), V(0, dist)));
       const boundary = at(1);
       const mid = at(2);
       const edge = at(3);
@@ -860,7 +877,7 @@ export function runCameraCases(): CameraResult[] {
       const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, buffer: 0.15 };
       const rules = buildCameraRules([ROOM], [path]);
       const bad: string[] = [];
-      const rel = pathRelease(path, V(0, 1));
+      const rel = pathRelease(pathParamsOf(path), V(0, 1));
       if (Math.abs(rel - 3.15) > 1e-9) bad.push(`release at ${rel}, want 3.15`);
       // Ride out from the route and check where it lets go.
       const held = ride(rules, [new Vec2(5, 0), new Vec2(5, 2.5), new Vec2(5, 3.1)]);
@@ -883,14 +900,14 @@ export function runCameraCases(): CameraResult[] {
       // clamp off.
       const path: CameraPathData = { ...RIDE, rangeX: 4, rangeY: 1, falloffX: 2, falloffY: 0.5 };
       return [
-        { label: "range along the route", got: pathRange(path, V(1, 0)), want: 4 },
-        { label: "range straight off it", got: pathRange(path, V(0, 1)), want: 1 },
-        { label: "band edge along", got: pathBand(path, V(1, 0)), want: 6 },
-        { label: "band edge straight off", got: pathBand(path, V(0, 1)), want: 1.5 },
+        { label: "range along the route", got: pathRange(pathParamsOf(path), V(1, 0)), want: 4 },
+        { label: "range straight off it", got: pathRange(pathParamsOf(path), V(0, 1)), want: 1 },
+        { label: "band edge along", got: pathBand(pathParamsOf(path), V(1, 0)), want: 6 },
+        { label: "band edge straight off", got: pathBand(pathParamsOf(path), V(0, 1)), want: 1.5 },
         // The same distance off the route is mid-band vertically and not even
         // out of the corridor horizontally.
-        { label: "weight 1.25 m below", got: pathFalloffWeight(path, V(0, 1.25)), want: 0.5 },
-        { label: "weight 1.25 m along", got: pathFalloffWeight(path, V(1.25, 0)), want: 0 },
+        { label: "weight 1.25 m below", got: pathFalloffWeight(pathParamsOf(path), V(0, 1.25)), want: 0.5 },
+        { label: "weight 1.25 m along", got: pathFalloffWeight(pathParamsOf(path), V(1.25, 0)), want: 0 },
       ];
     }),
 
@@ -1451,7 +1468,7 @@ export function runCameraCases(): CameraResult[] {
             y: 0,
             rot: 0,
             verts: [
-              { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55 },
+              { x: 0, y: 0, viewportScale: 2, lookaheadX: 250, lookaheadBufferY: 55, rangeX: 300, buffer: 20 },
               { x: 100, y: 0 },
             ],
           },
@@ -1462,8 +1479,151 @@ export function runCameraCases(): CameraResult[] {
         { label: "view", got: v[0]!.viewportScale ?? NaN, want: 2 },
         { label: "x lead", got: v[0]!.lookaheadX ?? NaN, want: 2.5 },
         { label: "y lead buffer", got: v[0]!.lookaheadBufferY ?? NaN, want: 0.55 },
+        { label: "x range", got: v[0]!.rangeX ?? NaN, want: 3 },
+        { label: "buffer", got: v[0]!.buffer ?? NaN, want: 0.2 },
         { label: "absent stays absent", got: v[0]!.lookaheadY === undefined && v[1]!.viewportScale === undefined ? 1 : 0, want: 1 },
       ];
+    }),
+
+    // --- grip keys ----------------------------------------------------------
+    //
+    // Range, falloff and buffer are keyable too, and are read at the player's
+    // PROJECTION rather than at the lead origin: the range is a statement about
+    // the point on the route the player is nearest. The corridor the editor and
+    // overlay draw is then a sweep of a varying ellipse, and the claim it has
+    // to keep is the one the fixed-axis construction kept for free - that what
+    // is drawn is exactly the zone tested.
+
+    runFacts("grip-keys-are-read-at-the-projection", () => {
+      // A corridor keyed 1 m wide at the start and 3 m at the end. The same
+      // sideways offset is inside the range near the end and outside it near
+      // the start, and the boundary is the smoothstep between - which a range
+      // read anywhere but at the projection cannot reproduce.
+      const path: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0, rangeX: 1, rangeY: 1 },
+          { x: 10, y: 0, rangeX: 3, rangeY: 3 },
+        ],
+      };
+      const rules = buildCameraRules([], [path]);
+      const ss = (t: number) => t * t * (3 - 2 * t);
+      const bad: string[] = [];
+      const at = (x: number, y: number) => activeCameraRule(rules, V(x, y)) === rules[0];
+      // s = 2: range 1 + 2 * ss(0.2) = 1.208.
+      if (!at(2, 1.2)) bad.push("1.2 m off at s = 2 should be inside a 1.208 m range");
+      if (at(2, 1.3)) bad.push("1.3 m off at s = 2 should be outside a 1.208 m range");
+      // s = 8: range 1 + 2 * ss(0.8) = 2.792.
+      if (!at(8, 2.7)) bad.push("2.7 m off at s = 8 should be inside a 2.792 m range");
+      if (at(8, 2.9)) bad.push("2.9 m off at s = 8 should be outside a 2.792 m range");
+      // ...and the number itself, resolved through the rule.
+      const r = rules[0]!;
+      if (r.kind !== "path") return ["rule kind"];
+      const want = 1 + 2 * ss(0.2);
+      const got = pathRange(pathParamsAt(r, 2), V(0, 1));
+      if (Math.abs(got - want) > 1e-9) bad.push(`range at s = 2: ${got} != ${want}`);
+      return bad;
+    }),
+
+    runFacts("grip-keys-hold-by-the-keyed-buffer", () => {
+      // The release hysteresis keyed wide at one end and narrow at the other:
+      // a held path lets go at range + buffer, and the buffer it lets go by is
+      // the one where the player is projected.
+      const path: CameraPathData = {
+        ...RIDE,
+        lookaheadBufferX: 0,
+        lookaheadBufferY: 0,
+        verts: [
+          { x: 0, y: 0, buffer: 1 },
+          { x: 10, y: 0, buffer: 0 },
+        ],
+      };
+      const rules = buildCameraRules([], [path]);
+      // Acquire on the route near the start, then step 1.8 m off it: inside
+      // range 1 + buffer ~1 there, so the grip holds. The same step near the
+      // end, where the buffer is ~0, releases.
+      const near = ride(rules, [V(0.5, 0), V(0.5, 0), V(0.5, 1.8), V(0.5, 1.8)]);
+      const far = ride(rules, [V(9.5, 0), V(9.5, 0), V(9.5, 1.8), V(9.5, 1.8)]);
+      const bad: string[] = [];
+      if (near[3]!.rule !== rules[0]) bad.push("the wide-buffer end let go at 1.8 m");
+      if (far[3]!.rule !== null) bad.push("the zero-buffer end held at 1.8 m");
+      return bad;
+    }),
+
+    runFacts("corridor-sweep-is-the-zone-tested", () => {
+      // The drawn boundary, point by point, against the predicate the
+      // controller tests: every sample the sweep emits must sit ON the range
+      // ellipse of its own projection (a straight route has no concave joint,
+      // so nothing may be inside either), for a range that varies along it.
+      const path: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0, rangeX: 1, rangeY: 0.5 },
+          { x: 4, y: 0 },
+          { x: 10, y: 0, rangeX: 3, rangeY: 1.5 },
+        ],
+      };
+      const rule = buildCameraRules([], [path])[0]!;
+      if (rule.kind !== "path") return ["rule kind"];
+      const pts = sweepPoints(rule);
+      const bad: string[] = [];
+      if (pts.length < 40) bad.push(`only ${pts.length} samples drawn`);
+      let worst = 0;
+      for (const p of pts) {
+        const s = projectOntoPolyline(rule.index, p).s;
+        const off = p.sub(pointAtArcLength(rule.index, s));
+        const reach = pathRange(pathParamsAt(rule, s), off);
+        worst = Math.max(worst, Math.abs(off.length() - reach));
+      }
+      if (worst > 1e-6) bad.push(`a drawn point is ${worst} m off the tested boundary`);
+      // ...and it really does widen: the far end's samples reach 1.5 m off the
+      // route where the near end's reach 0.5 m.
+      const offAt = (x: number) => Math.max(...pts.filter((p) => Math.abs(p.x - x) < 0.3).map((p) => Math.abs(p.y)));
+      if (Math.abs(offAt(0.5) - 0.5) > 0.05) bad.push(`near end reaches ${offAt(0.5)} m, want 0.5`);
+      if (Math.abs(offAt(9.5) - 1.5) > 0.05) bad.push(`far end reaches ${offAt(9.5)} m, want 1.5`);
+      return bad;
+    }),
+
+    runFacts("corridor-sweep-never-leaves-the-zone", () => {
+      // On a route that bends, the inside of the bend is where a plain offset
+      // curve grows a swallowtail, and with an ellipse that loop pokes OUTSIDE
+      // the tested zone (19 cm here, before the pull-in). No drawn point may
+      // sit outside; the pulled ones sit on the boundary within the bisection's
+      // millimetre; and what is left of the loop - the part that was inside
+      // all along - stays a small minority, drawn inside as an offset curve's
+      // self-crossing always was.
+      const path: CameraPathData = {
+        ...RIDE,
+        verts: [
+          { x: 0, y: 0, rangeX: 1, rangeY: 0.6 },
+          { x: 5, y: 0, outX: 1, outY: 0 },
+          { x: 8, y: 4, inX: 0, inY: -1, rangeX: 2, rangeY: 1.2 },
+        ],
+      };
+      const rule = buildCameraRules([], [path])[0]!;
+      if (rule.kind !== "path") return ["rule kind"];
+      const pts = sweepPoints(rule);
+      let outside = 0;
+      let loop = 0;
+      let pulled = 0;
+      for (const p of pts) {
+        const s = projectOntoPolyline(rule.index, p).s;
+        const off = p.sub(pointAtArcLength(rule.index, s));
+        const reach = pathRange(pathParamsAt(rule, s), off);
+        const d = off.length() - reach;
+        if (d > 1e-6) outside++;
+        else if (d < -2e-3) loop++;
+        // A pulled-in point stops within the bisection's millimetre; an
+        // untouched one is exact to rounding.
+        else if (d < -1e-6) pulled++;
+      }
+      const bad: string[] = [];
+      if (outside) bad.push(`${outside} of ${pts.length} drawn points lie outside the zone`);
+      if (loop > pts.length * 0.15) bad.push(`${loop} of ${pts.length} drawn points are loop, not boundary`);
+      // The case has to be one where the pull-in did something, or it says
+      // nothing about the swallowtail.
+      if (pulled === 0) bad.push("no point needed pulling in - the bend is not tight enough to be a test");
+      return bad;
     }),
 
     runFacts("editor-key-round-trip", () => {
@@ -1479,14 +1639,25 @@ export function runCameraCases(): CameraResult[] {
             y: 0,
             rot: 0,
             verts: [
-              { x: -300, y: 0, viewportScale: 1.5, lookaheadX: 120 },
+              { x: -300, y: 0, viewportScale: 1.5, lookaheadX: 120, rangeX: 500, falloffY: 70 },
               { x: 0, y: 0 },
-              { x: 300, y: 0, lookaheadY: 90, lookaheadBufferX: 40, lookaheadBufferY: 30 },
+              { x: 300, y: 0, lookaheadY: 90, lookaheadBufferX: 40, lookaheadBufferY: 30, rangeY: 150, falloffX: 60, buffer: 25 },
             ],
           },
         ],
       };
-      const KEYS = ["viewportScale", "lookaheadX", "lookaheadY", "lookaheadBufferX", "lookaheadBufferY"] as const;
+      const KEYS = [
+        "viewportScale",
+        "lookaheadX",
+        "lookaheadY",
+        "lookaheadBufferX",
+        "lookaheadBufferY",
+        "rangeX",
+        "rangeY",
+        "falloffX",
+        "falloffY",
+        "buffer",
+      ] as const;
       const bad: string[] = [];
       const want = authored.cameraPaths![0]!;
       const compare = (out: CameraPathData, order: number[], label: string): void => {

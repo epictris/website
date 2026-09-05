@@ -1269,11 +1269,21 @@ export interface CameraPathVert {
   //
   // Same units and meaning as the path-level field of the same name; the
   // lengths are pixels on disk like everything else here.
+  //
+  // The first five shape the TARGET and are read at the committed lead origin;
+  // the last five shape the GRIP - the corridor, its falloff band and the
+  // release hysteresis - and are read at the player's projection, since that
+  // is where the range is measured from (see `pathParamsAt`).
   viewportScale?: number;
   lookaheadX?: number;
   lookaheadY?: number;
   lookaheadBufferX?: number;
   lookaheadBufferY?: number;
+  rangeX?: number;
+  rangeY?: number;
+  falloffX?: number;
+  falloffY?: number;
+  buffer?: number;
 }
 
 export interface CameraPathData {
@@ -2331,6 +2341,11 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.lookaheadBufferY !== undefined
           ? { lookaheadBufferY: v.lookaheadBufferY * factor }
           : {}),
+        ...(v.rangeX !== undefined ? { rangeX: v.rangeX * factor } : {}),
+        ...(v.rangeY !== undefined ? { rangeY: v.rangeY * factor } : {}),
+        ...(v.falloffX !== undefined ? { falloffX: v.falloffX * factor } : {}),
+        ...(v.falloffY !== undefined ? { falloffY: v.falloffY * factor } : {}),
+        ...(v.buffer !== undefined ? { buffer: v.buffer * factor } : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a

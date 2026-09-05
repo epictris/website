@@ -13,6 +13,13 @@ import { Vec2 } from "../engine/vec2";
 import { shapeVertices } from "../engine/shapes";
 import type { Shape } from "../engine/shapes";
 import type { ShapeData } from "../level/levelFormat";
+import {
+  ellipseReach,
+  PATH_FLATTEN_STEP,
+  pointAtArcLength,
+  projectOntoPolyline,
+  type PolylineIndex,
+} from "./cameraPath";
 
 export type Outline =
   | { kind: "circle"; radius: number }
@@ -283,83 +290,180 @@ export function pathOutlineGrown(
   ctx.restore();
 }
 
-// The boundary of a camera path's corridor: everything within `grow` of an OPEN
-// polyline, pathed as one closed loop in world coordinates.
+// The boundary of a camera path's corridor: everything whose displacement from
+// its closest point on the route lies inside the ellipse the route carries
+// THERE, pathed as one closed loop in world coordinates. `axesAt` answers the
+// ellipse's semi-axes at an arc length - the range, the band or the release,
+// each resolved through the path's keys - so what is drawn is exactly the
+// zone `pathRange` / `pathBand` / `pathRelease` test, which is the whole
+// reason the editor and the overlay draw it while it is being authored.
 //
-// A corridor is not an outline of anything - there is no inside to a polyline -
-// so it is traversed as the degenerate polygon that runs the verts forward and
-// then back again. That doubling is what makes the rest fall out of the same
-// walk `pathOutlineIntoGrown` does: the reversed leg's edge normals point the
-// other way, so it draws the far side of the corridor, and the turnaround at
-// each end is a fillet of exactly half a turn, which is the round cap.
+// A corridor is not an outline of anything - there is no inside to a polyline
+// - so it is traversed as the degenerate polygon that runs the samples forward
+// and then back again, the same walk `pathOutlineIntoGrown` does one dimension
+// down: the reversed leg's edge normals point the other way, so it draws the
+// far side, and the turnaround at each end is a fan of exactly half a turn,
+// which is the cap.
 //
-// The fillet is skipped where it would sweep the LONG way round (the inside of
-// a bend, where the corridor genuinely overlaps itself); the boundary crosses
-// itself there, as an offset curve always does, rather than looping out into
-// space. Same caveat as `pathOutlineIntoGrown`'s convexity rule, one dimension
-// down.
-export function pathCorridorInto(p: OutlineSink, verts: readonly Vec2[], grow: number): void {
-  if (verts.length < 2 || grow <= 0) return;
-  const loop = [...verts, ...verts.slice(1, -1).reverse()];
+// A SWEEP rather than a Minkowski sum, because the ellipse is allowed to vary
+// along the route: the old construction ran the circular fillet walk in a
+// space with y scaled by the axis ratio, which only works while one ratio
+// holds for the whole path. So each side is the route offset along its edge
+// normal by the ellipse reach at that sample, and each convex joint is a fan of
+// the joint's own ellipse from one edge normal round to the next. Straight
+// edges are resampled at `step` on the way, since the axes may change along a
+// single authored edge and the offset of a straight edge is then a curve. The
+// fan is skipped where it would sweep the LONG way round - the inside of a
+// bend, where the offsets of neighbouring edges genuinely overlap.
+//
+// Every sample is then held to the predicate itself. An offset curve grows a
+// swallowtail on the inside of a bend tighter than its offset, and for a
+// circle that loop lies inside the zone; for an ellipse it need not - the
+// point's NEAREST route point is somewhere else on the bend, seeing it along
+// a direction where the reach is shorter, so the loop pokes outside what is
+// tested (19 cm on an ordinary bend, before this). A sample that tests
+// outside is pulled back along its own offset ray until it does not, which
+// lands it on the zone's boundary exactly - the tested zone has a radial cusp
+// there, and that is what gets drawn. The check is one projection per sample
+// and the pull-in a dozen more on the few samples that need it.
+export function pathCorridorSweepInto(
+  sink: OutlineSink,
+  index: PolylineIndex,
+  axesAt: (s: number) => { x: number; y: number },
+  step = PATH_FLATTEN_STEP,
+): void {
+  const { verts, cum } = index;
+  if (verts.length < 2) return;
+  // Samples along the route with their arc lengths: every vertex, plus enough
+  // between two to keep the spacing under `step`.
+  const pts: Vec2[] = [verts[0]!];
+  const ss: number[] = [cum[0]!];
+  for (let i = 0; i + 1 < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[i + 1]!;
+    const len = cum[i + 1]! - cum[i]!;
+    if (len < 1e-9) continue;
+    const n = Math.max(1, Math.ceil(len / step));
+    for (let k = 1; k <= n; k++) {
+      pts.push(a.add(b.sub(a).mul(k / n)));
+      ss.push(cum[i]! + (len * k) / n);
+    }
+  }
+  const m = pts.length;
+  if (m < 2) return;
+  const loop: number[] = [];
+  for (let i = 0; i < m; i++) loop.push(i);
+  for (let i = m - 2; i >= 1; i--) loop.push(i);
   const n = loop.length;
-  const normals = loop.map((a, i) => {
-    const e = loop[(i + 1) % n]!.sub(a);
+  const normals = loop.map((ia, i) => {
+    const e = pts[loop[(i + 1) % n]!]!.sub(pts[ia]!);
     const len = e.length();
     return len < 1e-9 ? null : new Vec2(e.y / len, -e.x / len);
   });
+  const reach = (i: number, dir: Vec2): number => {
+    const ax = axesAt(ss[i]!);
+    return ellipseReach(ax.x, ax.y, dir);
+  };
+  // The predicate the controller tests (`pathRange` and its kin, through the
+  // caller's `axesAt`): is `p` within the ellipse the route carries at p's
+  // nearest point?
+  const inside = (p: Vec2): boolean => {
+    const s = projectOntoPolyline(index, p).s;
+    const off = p.sub(pointAtArcLength(index, s));
+    const ax = axesAt(s);
+    // A hair of slack, so a sample that is on the boundary by construction is
+    // not pulled in by the rounding of its own projection.
+    return off.length() <= ellipseReach(ax.x, ax.y, off) + 1e-9;
+  };
+  // `p`, offset from its route point `q`, held to the predicate: on the
+  // boundary or inside it, never outside.
+  const held = (q: Vec2, p: Vec2): Vec2 => {
+    if (inside(p)) return p;
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < CORRIDOR_PULL_STEPS; k++) {
+      const mid = (lo + hi) / 2;
+      if (inside(q.add(p.sub(q).mul(mid)))) lo = mid;
+      else hi = mid;
+    }
+    return q.add(p.sub(q).mul(lo));
+  };
   let started = false;
+  // Set when the joint just passed was concave and emitted its miter, so the
+  // next edge does not restate its own start point a hair away from it.
+  let mitred = false;
   for (let i = 0; i < n; i++) {
     const nrm = normals[i];
     if (!nrm) continue;
-    const a = loop[i]!;
-    const b = loop[(i + 1) % n]!;
-    const oa = a.add(nrm.mul(grow));
-    if (!started) {
-      p.moveTo(oa.x, oa.y);
-      started = true;
-    } else {
-      p.lineTo(oa.x, oa.y);
+    const ia = loop[i]!;
+    const ib = loop[(i + 1) % n]!;
+    const a = pts[ia]!;
+    const b = pts[ib]!;
+    if (!mitred) {
+      const oa = held(a, a.add(nrm.mul(reach(ia, nrm))));
+      if (!started) {
+        sink.moveTo(oa.x, oa.y);
+        started = true;
+      } else {
+        sink.lineTo(oa.x, oa.y);
+      }
     }
-    p.lineTo(b.x + nrm.x * grow, b.y + nrm.y * grow);
-    // The next edge with a direction, so a duplicate vert is stepped over
-    // rather than ending the fillet chain.
-    let next = null;
-    for (let k = 1; k <= n && !next; k++) next = normals[(i + k) % n];
-    if (!next) continue;
+    mitred = false;
+    // The next edge with a direction, so a duplicate sample is stepped over
+    // rather than ending the chain.
+    let next: Vec2 | null = null;
+    for (let k = 1; k <= n && !next; k++) next = normals[(i + k) % n] ?? null;
+    const rb = reach(ib, nrm);
+    if (!next) {
+      const ob = held(b, b.add(nrm.mul(rb)));
+      sink.lineTo(ob.x, ob.y);
+      continue;
+    }
     const from = Math.atan2(nrm.y, nrm.x);
     const to = Math.atan2(next.y, next.x);
     const sweep = (to - from + Math.PI * 2) % (Math.PI * 2);
-    if (sweep <= Math.PI + 1e-9) p.arc(b.x, b.y, grow, from, to);
+    if (sweep > Math.PI + 1e-9) {
+      // A CONCAVE joint: the two edges' offsets cross, and the boundary is
+      // their crossing - the miter - rather than either edge's own end point.
+      // Emitting both end points, as the fillet walk did, put two points a
+      // reach-difference apart at every sample on the inside of a bend, which
+      // for a circle is an invisible inward nick and for an ellipse is a
+      // visible zigzag. The lines are x.n = b.n + r for each edge's normal and
+      // reach at `b`; parallel ones (a straight run) fall back to the end
+      // point itself.
+      const rn = reach(ib, next);
+      const det = nrm.x * next.y - nrm.y * next.x;
+      const c1 = b.dot(nrm) + rb;
+      const c2 = b.dot(next) + rn;
+      const miter =
+        Math.abs(det) < 1e-9
+          ? b.add(nrm.mul(rb))
+          : new Vec2((c1 * next.y - c2 * nrm.y) / det, (nrm.x * c2 - next.x * c1) / det);
+      const m = held(b, miter);
+      sink.lineTo(m.x, m.y);
+      mitred = true;
+      continue;
+    }
+    const ob = held(b, b.add(nrm.mul(rb)));
+    sink.lineTo(ob.x, ob.y);
+    // The fan at `b`: the joint's own ellipse from this normal round to the
+    // next, sampled finely enough that the chord error is a centimetre on the
+    // axes a level authors.
+    const fanSteps = Math.max(1, Math.ceil(sweep / CORRIDOR_FAN_STEP));
+    for (let k = 1; k <= fanSteps; k++) {
+      const t = from + (sweep * k) / fanSteps;
+      const d = new Vec2(Math.cos(t), Math.sin(t));
+      const f = held(b, b.add(d.mul(reach(ib, d))));
+      sink.lineTo(f.x, f.y);
+    }
   }
-  p.closePath();
+  sink.closePath();
 }
 
-// The corridor grown by an ELLIPSE rather than a circle: the polyline's
-// Minkowski sum with the ellipse of semi-axes (rx, ry), which is what a
-// path's per-axis range means (see `pathRange` in cameraController.ts).
-//
-// Built by anisotropy rather than by a second fillet walk: in a space with y
-// scaled by rx/ry the ellipse is a circle of radius rx, so the circular
-// corridor of the same-scaled polyline IS this shape, and the canvas transform
-// carries it back. The transform is applied only while the path is
-// CONSTRUCTED - canvas records path points through the CTM at construction -
-// and restored before the caller strokes, so the stroke width stays uniform
-// rather than being squashed with the shape. Needs a real 2D context rather
-// than the abstract sink for exactly that reason.
-export function pathCorridorEllipseInto(
-  ctx: CanvasRenderingContext2D,
-  verts: readonly Vec2[],
-  rx: number,
-  ry: number,
-): void {
-  if (rx <= 0 || ry <= 0) return;
-  const k = ry / rx;
-  ctx.save();
-  ctx.scale(1, k);
-  pathCorridorInto(
-    ctx,
-    verts.map((v) => new Vec2(v.x, v.y / k)),
-    rx,
-  );
-  ctx.restore();
-}
+// Radians between the samples of a corridor fan. At 10° on a 4 m axis the
+// chord sits 1.5 cm inside the true ellipse.
+const CORRIDOR_FAN_STEP = Math.PI / 18;
+
+// Bisection steps when a sample is pulled back onto the boundary: 2^-12 of
+// the offset, a millimetre on the widest corridor a level authors.
+const CORRIDOR_PULL_STEPS = 12;

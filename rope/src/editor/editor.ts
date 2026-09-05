@@ -4505,10 +4505,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       key: "rangeX" | "rangeY" | "falloffX" | "falloffY" | "lookaheadX" | "lookaheadY" | "lookaheadBufferX" | "lookaheadBufferY",
       fallback: number,
     ): void => {
-      const keyed =
-        key === "lookaheadX" || key === "lookaheadY" || key === "lookaheadBufferX" || key === "lookaheadBufferY"
-          ? keyedAt(key)
-          : null;
+      const keyed = keyedAt(key);
       const input = num(
         label,
         (b) => (keyed ? NaN : (b.cam[key] ?? NaN) * M2PX),
@@ -4567,18 +4564,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Extra hysteresis outside `range` before the path lets go, on top of the
     // corridor itself. Blank = the controller's jitter margin, which is the same
     // default a region's buffer falls back to.
-    num(
+    const bufKeyed = keyedAt("buffer");
+    const bufInput = num(
       "buffer",
-      (b) => (b.cam.buffer ?? NaN) * M2PX,
+      (b) => (bufKeyed ? NaN : (b.cam.buffer ?? NaN) * M2PX),
       (b, v) => (b.cam.buffer = Math.max(0, v * PX)),
       10,
       {
-        placeholder: String(Math.round(REGION_EXIT_MARGIN * M2PX)),
+        placeholder: bufKeyed ? "keyed" : String(Math.round(REGION_EXIT_MARGIN * M2PX)),
+        disabled: bufKeyed !== null,
         onEmpty: () => {
           for (const b of paths) b.cam.buffer = null;
         },
       },
     );
+    if (bufKeyed) bufInput.title = bufKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     // Three whole-path actions, because each is miserable to do node by node.
@@ -4637,7 +4637,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Keys: the path's view and lead, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. Keys are read where the lead is measured from, so a swing across a change does not pump the camera. Blank drops the key.";
+      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View and lead are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff and buffer are read at the player's projection, and the corridor is drawn as they vary. Blank drops the key.";
     g.appendChild(hint);
 
     // What each picked node is effectively at, through the SAME rule the game
@@ -4675,11 +4675,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         },
       );
     };
-    field("view ×", "viewportScale", 1, 0.1);
+    field("range x", "rangeX", M2PX, 10);
+    field("range y", "rangeY", M2PX, 10);
+    field("falloff x", "falloffX", M2PX, 10);
+    field("falloff y", "falloffY", M2PX, 10);
     field("lead x", "lookaheadX", M2PX, 10);
     field("lead y", "lookaheadY", M2PX, 10);
     field("lead buf x", "lookaheadBufferX", M2PX, 10);
     field("lead buf y", "lookaheadBufferY", M2PX, 10);
+    field("view ×", "viewportScale", 1, 0.1);
+    field("buffer", "buffer", M2PX, 10);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in

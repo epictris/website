@@ -185,13 +185,11 @@ export type EdShape =
 // the lengths, as everything in the model is.
 export type EdPathKey = Record<PathKeyField, number | null>;
 
-export const NO_KEY = (): EdPathKey => ({
-  viewportScale: null,
-  lookaheadX: null,
-  lookaheadY: null,
-  lookaheadBufferX: null,
-  lookaheadBufferY: null,
-});
+export const NO_KEY = (): EdPathKey => {
+  const k = {} as EdPathKey;
+  for (const f of PATH_KEY_FIELDS) k[f] = null;
+  return k;
+};
 
 // Does this node key anything at all? What the editor and the overlay draw a
 // diamond for.

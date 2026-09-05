@@ -2544,7 +2544,7 @@ Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gai
 
 #### Keys
 
-A node may **key** the path's target-shaping fields - `viewportScale`, `lookaheadX/Y` and `lookaheadBufferX/Y`, as optionals on `CameraPathVert` - so the framing changes along the route: a tighter view through a corridor, a longer lead down a drop.
+A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `rangeX/Y`, `falloffX/Y` and `buffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out.
 A node that carries a value is a keyframe for THAT field only, and a node that carries none is transparent to it.
 Per field, `pathParamsAt` holds the first key's value before it and the last key's after it, smoothsteps between two by arc length (flat at each key, for the same reason the falloff band is smoothstepped: a kink in the target is a step in the camera's velocity), and interpolates the view scale geometrically like every other zoom blend here.
 A field no node keys at all is the path-level field, exactly as before keys existed, so every level on disk is unchanged and `keys-without-keys-are-the-path` says so.
@@ -2553,18 +2553,26 @@ Keys live **on the nodes, not at authored arc lengths**, because a node is what 
 Putting a key mid-edge is one gesture, since inserting a node is a de Casteljau split that changes the curve by nothing and the new node keys nothing.
 A node's arc length is only known once the curve into it is flattened, so `flattenPathNodes` reports where each node landed and the `PolylineIndex` carries `nodeS`; `buildCameraRules` lays each field's keys out along it once, as the rule's `keys` tracks.
 
-Every keyed field is read at the **committed lead origin** (`pathLeadS`), not at the raw projection.
+The **target** fields (view, lead, lead buffer) are read at the **committed lead origin** (`pathLeadS`), not at the raw projection.
 The lead origin sits still inside the lookahead deadband while a swing runs back and forth under it, so a swing across a zoom gradient moves the zoom by nothing - read at the projection it would pump every half-swing, which no easing fixes because the target itself is rocking.
 `keys-are-read-at-the-lead-origin` asserts the pair: the same swing across a keyed gradient with the band leaves the zoom at rest, and without it does not.
 Nothing new is needed for hand-offs: a rule change or a branch jump already runs the target through the frozen-delta blend, zoom ratio included.
 
-The grip fields - range, falloff, buffer - are deliberately **not** keyable yet.
-They decide acquisition and release, so they would be read at the projection rather than the lead origin, and they would drag the corridor drawing with them: the editor and overlay draw exactly the corridor the controller tests, and a corridor whose ellipse varies along the route is a sweep rather than the fixed-axis Minkowski sum drawn today.
+The **grip** fields (range, falloff, buffer) are read at the **projection** - the global one on acquisition, the windowed one while held, the same standing (`PathStanding`) the grip was always measured against - because the range is a statement about the point on the route the player is nearest, and it is the quantity the offset is measured from.
+`grip-keys-are-read-at-the-projection` asserts the smoothstepped corridor width against acquisition, and `grip-keys-hold-by-the-keyed-buffer` that a held path lets go by the buffer where the player is projected.
+The one authoring consequence: acquisition uses the global projection, so a stretch keyed with a wide range grabs the camera from further away than the rest of the path, which is the intended meaning and the thing to watch where a wide section runs near another branch.
+
+The corridor drawing is therefore a **sweep** (`pathCorridorSweepInto`) rather than a Minkowski sum.
+The old construction ran the circular fillet walk in a space with y scaled by the axis ratio and let the canvas transform carry it back, which only works while one ratio holds for the whole path; the sweep offsets the route along its edge normals by the ellipse reach at each sample, fans each convex joint with the joint's own ellipse, and resamples straight edges at `PATH_FLATTEN_STEP` since the axes may change along one authored edge.
+Every sample is then **held to the predicate itself**: an offset curve grows a swallowtail on the inside of a bend tighter than its offset, and where a circle's loop lies inside the zone an ellipse's need not - the point's nearest route point is elsewhere on the bend and sees it along a shorter reach, so the loop poked 19 cm outside what is tested.
+A sample that tests outside is bisected back along its own offset ray onto the boundary, which is exactly the radial cusp the tested zone has there.
+`corridor-sweep-is-the-zone-tested` holds every drawn point of a straight keyed route on the range ellipse of its own projection to a micron, and `corridor-sweep-never-leaves-the-zone` holds a bent one to none outside and none more than the bisection's millimetre inside, and is red without the pull-in - which is the test the fixed-ratio construction never had, and the one that keeps "exactly the zone tested" a claim rather than a hope.
 
 In the editor a keyed node wears a **diamond** on the route, selected or not, so where the framing changes can be seen without clicking through every node; the debug overlay draws the same mark.
-Picking nodes on a selected path opens a **node sub-panel** under the path's own fields, carrying the five keyable fields for the picked nodes: blank is no key, and the placeholder is the value the node has anyway - the path's own when nothing keys the field, the interpolation's when other nodes do, computed through the same rule the game builds (`pathDataOf`) - so typing a key starts from what it is replacing.
+Picking nodes on a selected path opens a **node sub-panel** under the path's own fields, carrying the ten keyable fields for the picked nodes: blank is no key, and the placeholder is the value the node has anyway - the path's own when nothing keys the field, the interpolation's when other nodes do, computed through the same rule the game builds (`pathDataOf`) - so typing a key starts from what it is replacing.
 Once a field is keyed anywhere on the path its path-level field is shown inert, reading `keyed`, with the keyed nodes in its tooltip, since its value is read nowhere and a live dial there would be connected to nothing.
 Keys are a third per-node array on the editor's path shape (`keys`, beside `handles`), kept one per vert by `setPathVerts` and carried through deletion, insertion and `Reverse` by the same indices as the tangents; parallel rather than folded into the handle record so `Smooth` and `Sharpen`, which rebuild every handle, cannot drop a key by rebuilding it.
+The editor draws every corridor through the rule the game builds (`pathDataOf` -> `buildCameraRules`), so the polyline, the keys along it and the sweep are the controller's own.
 `cli camera` asserts the key at a curved node's arc length, the interpolation shape, the zoom riding a keyed route end to end, the format scaling the length keys and not the view key, and the editor round trip with a reversal.
 
 #### The corridor is an ellipse too
@@ -2574,7 +2582,7 @@ The frame is 16:9 - half of it is 4.8 m across and only 2.7 m down at `view × 1
 The defaults are the frame's own ratio (`DEFAULT_PATH_RANGE_Y` = 4 × 9/16 = 2.25), which puts the worst-case vertical offset the band ever asks for (~2.3 m) inside the 2.7 m half-height.
 
 Unlike the lookahead's ellipse - resolved against the direction the ROUTE runs - these are resolved against the direction the player actually left the route in (`pathOffset`, the displacement from their projection), because that is the displacement the screen has to hold.
-`pathRange`, `pathBand` and `pathRelease` answer the reach along that direction; `pathReleaseAxes` grows both semi-axes by `buffer`, so the release boundary stays an ellipse and the editor and overlay draw EXACTLY the zone tested - through `pathCorridorEllipseInto`, which builds the polyline's Minkowski sum with the ellipse by running the circular fillet walk in a y-scaled space and letting the canvas transform carry it back.
+`pathRange`, `pathBand` and `pathRelease` answer the reach along that direction; `pathReleaseAxes` grows both semi-axes by `buffer`, so the release boundary stays an ellipse and the editor and overlay draw EXACTLY the zone tested - through `pathCorridorSweepInto`, which sweeps the route with the ellipse it carries at each sample (see **Keys** below for why it is a sweep and how it is held to the predicate).
 The retired scalar `range` / `falloff` are folded into both axes by `scaleLevelData` at the one gate, so a level that authored a circle keeps exactly that circle; `cli camera` asserts the fold, the per-axis reaches, and - on the rule set - that acquisition is screen-shaped: 2 m below a 1 m vertical range does not take the path while 3 m past its end inside the horizontal range does, which a circular implementation cannot split.
 
 #### The falloff band

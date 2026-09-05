@@ -12,6 +12,7 @@ import { hexToRgba } from "../render/color";
 import {
   arrowEnds,
   isKeyed,
+  pathDataOf,
   CAMERA_REGION_COLOR,
   chainEnds,
   vineRestPath,
@@ -35,7 +36,7 @@ import {
   type EdModel,
   type SettleGhost,
 } from "./model";
-import { cubicAt, flattenPath } from "../render/cameraPath";
+import { cubicAt } from "../render/cameraPath";
 import {
   DEFAULT_PATH_FALLOFF_X,
   DEFAULT_PATH_FALLOFF_Y,
@@ -49,7 +50,7 @@ import {
 } from "../level/levelFormat";
 import {
   pathOutline,
-  pathCorridorEllipseInto,
+  pathCorridorSweepInto,
   pathOutlineGrown,
   pathOutlineInto,
   pathOutlineIntoGrown,
@@ -57,7 +58,16 @@ import {
   type Margin,
   type Outline,
 } from "../render/shapePath";
-import { REGION_EXIT_MARGIN, type PathKeyField } from "../render/cameraController";
+import {
+  REGION_EXIT_MARGIN,
+  buildCameraRules,
+  pathBandAxes,
+  pathHasBand,
+  pathParamsAt,
+  pathRangeAxes,
+  pathReleaseAxes,
+  type PathKeyField,
+} from "../render/cameraController";
 import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 
 const PLAYER = "#65bddb";
@@ -786,16 +796,19 @@ export function cameraRegionLabel(r: EdItem): string {
     // A path's defaults are shown rather than omitted: `range` and `lookahead`
     // ARE the tuning, so "not authored" and "authored at the default" have to
     // read the same way while an author is comparing two paths by eye.
-    parts.push(
-      `range ${px(r.cam.rangeX ?? DEFAULT_PATH_RANGE_X)},${px(r.cam.rangeY ?? DEFAULT_PATH_RANGE_Y)}`,
-    );
-    const fallX = r.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
-    const fallY = r.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
-    if (fallX > 0 || fallY > 0) parts.push(`falloff ${px(fallX)},${px(fallY)}`);
     // A keyed field's path-level value is read nowhere, so it is not quoted
     // as if it were; the keys are on the nodes, and the label says how many.
     const nodeKeys = r.shape.keys;
     const keyed = (f: PathKeyField): boolean => nodeKeys.some((k) => k[f] !== null);
+    parts.push(
+      keyed("rangeX") || keyed("rangeY")
+        ? "range keyed"
+        : `range ${px(r.cam.rangeX ?? DEFAULT_PATH_RANGE_X)},${px(r.cam.rangeY ?? DEFAULT_PATH_RANGE_Y)}`,
+    );
+    const fallX = r.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
+    const fallY = r.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
+    if (keyed("falloffX") || keyed("falloffY")) parts.push("falloff keyed");
+    else if (fallX > 0 || fallY > 0) parts.push(`falloff ${px(fallX)},${px(fallY)}`);
     const leadKeyed = keyed("lookaheadX") || keyed("lookaheadY");
     const bufKeyed = keyed("lookaheadBufferX") || keyed("lookaheadBufferY");
     parts.push(
@@ -816,7 +829,8 @@ export function cameraRegionLabel(r: EdItem): string {
     const keys = nodeKeys.filter(isKeyed).length;
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);
-    if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
+    if (keyed("buffer")) parts.push("buf keyed");
+    else if (r.cam.buffer !== null) parts.push(`buf ${px(r.cam.buffer)}`);
     if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
     return `path · ${parts.join(" · ")}`;
   }
@@ -869,14 +883,12 @@ function drawCameraPath(
   const shape = item.shape;
   // THE FLATTENED CURVE, not the node points: the handles are what shape the
   // route, and drawing the control polygon instead would draw something the
-  // camera does not ride.
-  const world = flattenPath(
-    shape.verts.map((p, i) => ({
-      p,
-      in: shape.handles[i]?.in ?? Vec2.ZERO,
-      out: shape.handles[i]?.out ?? Vec2.ZERO,
-    })),
-  ).map((v) => toWorld(item, v));
+  // camera does not ride. Built as the RULE the game builds (`pathDataOf` is
+  // the one mapping), so the polyline, the keys along it and every corridor
+  // below are exactly what the controller tests.
+  const rule = buildCameraRules([], [pathDataOf(item)])[0];
+  if (rule?.kind !== "path") return;
+  const world = rule.index.verts;
   // NOT through `paint`. That is the fill switch - it goes fully transparent in
   // the overlay view, where the 3D scene underneath is what shows the level -
   // and every mark here is a STROKE or a glyph on one, the same as a camera
@@ -886,13 +898,12 @@ function drawCameraPath(
 
   // The corridor at the range: how far off the route the player may be while
   // the path still narrates it. Per axis - the ellipse with the range's
-  // semi-axes swept along the route, so it is screen-shaped -
-  // `pathCorridorEllipseInto` owns the geometry, so what is drawn is exactly
-  // the zone the controller tests.
-  const rangeX = item.cam.rangeX ?? DEFAULT_PATH_RANGE_X;
-  const rangeY = item.cam.rangeY ?? DEFAULT_PATH_RANGE_Y;
+  // semi-axes swept along the route, so it is screen-shaped, and resolved
+  // through the keys at every sample, so a range that widens along the route
+  // is drawn widening - `pathCorridorSweepInto` owns the geometry, so what is
+  // drawn is exactly the zone the controller tests.
   ctx.beginPath();
-  pathCorridorEllipseInto(ctx, world, rangeX, rangeY);
+  pathCorridorSweepInto(ctx, rule.index, (s) => pathRangeAxes(pathParamsAt(rule, s)));
   ctx.strokeStyle = stroke;
   ctx.lineWidth = worldLine * 1.5;
   ctx.setLineDash([6 * PX, 4 * PX]);
@@ -903,11 +914,9 @@ function drawCameraPath(
   // path's grip fades to nothing, which is a different statement from the
   // corridor and worth seeing while the range and falloff are being tuned
   // against each other.
-  const falloffX = item.cam.falloffX ?? DEFAULT_PATH_FALLOFF_X;
-  const falloffY = item.cam.falloffY ?? DEFAULT_PATH_FALLOFF_Y;
-  if (falloffX > 0 || falloffY > 0) {
+  if (pathHasBand(rule)) {
     ctx.beginPath();
-    pathCorridorEllipseInto(ctx, world, rangeX + falloffX, rangeY + falloffY);
+    pathCorridorSweepInto(ctx, rule.index, (s) => pathBandAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = worldLine;
     ctx.setLineDash([3 * PX, 3 * PX]);
     ctx.stroke();
@@ -917,10 +926,9 @@ function drawCameraPath(
   // thinner line, as a region's buffer is drawn: it is the path's reach rather
   // than a second corridor. The buffer grows both semi-axes, which is exactly
   // how `pathRelease` tests it.
-  if (item.cam.buffer !== null && item.cam.buffer > 0) {
-    const b = item.cam.buffer;
+  if (item.cam.buffer !== null || shape.keys.some((k) => k.buffer !== null)) {
     ctx.beginPath();
-    pathCorridorEllipseInto(ctx, world, rangeX + falloffX + b, rangeY + falloffY + b);
+    pathCorridorSweepInto(ctx, rule.index, (s) => pathReleaseAxes(pathParamsAt(rule, s)));
     ctx.lineWidth = worldLine;
     ctx.setLineDash([2 * PX, 5 * PX]);
     ctx.stroke();
