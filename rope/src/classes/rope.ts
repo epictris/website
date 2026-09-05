@@ -93,6 +93,14 @@ function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): boolean {
   return shape.owner.getShapes().length > 1 && !shape.isVertexExposed(vertexIndex);
 }
 
+// What a caller that pushed a path body out of geometry this frame reports to
+// `absorbBlockedLength`: which body, and the outward normals of every surface
+// that pushed it. See `unreachableShortening`.
+export interface LengthRefusal {
+  body: PhysicsBody2D;
+  normals: readonly Vec2[];
+}
+
 export class RopePath {
   constructor(
     public from: RopeNode,
@@ -137,6 +145,10 @@ export class Rope {
   // (Δposition over Δt), so that is a kick. 0.5 m/s gives back 8 mm a frame —
   // faster than any block accrues, slow enough to read as the rope reeling in.
   static readonly SLACK_RELEASE_RATE = 0.5;
+  // Tolerance on "does not re-enter a surface" in `unreachableShortening`: a
+  // surface's own tangent dots to zero with its normal up to float noise, and
+  // the tangent is exactly the direction the statement is about.
+  private static readonly REFUSAL_EPSILON = 1e-9;
 
   maxRopeLength = 10;
   maxIterations = 10;
@@ -1125,9 +1137,48 @@ export class Rope {
   // The bound is against the lease at FRAME START rather than its running value,
   // so it says the same thing however many times a frame this is called, and so
   // a block being re-earned after the release is not charged twice.
-  absorbBlockedLength(): void {
+  //
+  // And, where the caller names the surfaces that pushed (`refusal`), it is
+  // measured against what those surfaces make UNREACHABLE rather than against
+  // where one solve left the path. A push-out along a normal does not refuse a
+  // correction that was not along that normal; it deflects it. A ball resting on
+  // a steep slope with its chain anchored a hand's width up the same slope is
+  // hauled along the chain, which points 27% into the slope, and the push-out
+  // hands back that 27% - which lengthens the path by 7% of what the solve just
+  // took out. That residual is not a block: the ball can slide up the slope and
+  // the very next solve would take it out, as it takes out any other length
+  // error. Read as a block it was leased, the lease loosened the constraint by
+  // exactly that much, the loosened constraint let the ball settle a little
+  // lower, and the next frame's solve paid the same residual again: 0.2 mm of
+  // chain a frame, for ever, out of a ball that was doing nothing but resting
+  // against a wall. 7 cm of chain had doubled by frame 483 of `session-483f`,
+  // and the rig that isolates it (`ball-slope-rest`) let out 20 cm in 600
+  // frames. The push bound above could not see it, because the push really
+  // was that big; what it could not tell was that the push was a deflection.
+  //
+  // So the refusal is the shortest path the pushing surfaces would still let
+  // the body reach (`unreachableShortening`), and the lease may not stand above
+  // what THAT is over `maxRopeLength`. Point-blank - anchor straight through the
+  // surface the ball rests on - nothing along the surface shortens the span,
+  // the whole over-length is unreachable, and the lease is what it always was.
+  // On the slope the span can be closed by sliding, nothing is refused, and the
+  // residual stands for the next solve. The same number answers whether the
+  // geometry is blocking at all (the returned value; see
+  // `noteBlockedByGeometry`), so a lease held against a surface that has only
+  // been deflecting the solve is released like any other.
+  //
+  // Returns the refusal: how much of the over-length the named surfaces make
+  // unreachable, or the whole over-length when no refusal is given.
+  absorbBlockedLength(refusal?: LengthRefusal): number {
     const settledLength = this.calculateRopePathLength();
-    const blocked = Mathf.max(settledLength - this.maxRopeLength, 0);
+    const overLength = Mathf.max(settledLength - this.maxRopeLength, 0);
+    const blocked =
+      refusal === undefined
+        ? overLength
+        : Mathf.max(
+            settledLength - this.unreachableShortening(refusal) - this.maxRopeLength,
+            0,
+          );
     const granted =
       this.geometryPushAccum === null
         ? blocked
@@ -1137,6 +1188,57 @@ export class Rope {
       0,
     );
     this.blockedSlack = Mathf.max(this.blockedSlack, granted);
+    return blocked;
+  }
+
+  // How much of the path `refusal.body` can still take out of its own free span
+  // by moving in a direction its pushing surfaces allow - to first order, with
+  // the body translating and the span's far end held. The body may move along
+  // any direction that does not re-enter a surface that pushed it (`d · n >= 0`
+  // for every normal); moving along such a `d` shortens the span at the rate
+  // `p · d`, where `p` is the pull direction, and the span's length can be
+  // brought down to its perpendicular distance from that line, `s · sqrt(1 -
+  // (p · d)²)`. The best `d` is `p` itself when nothing forbids it, else one of
+  // the surface tangents; wedged so that no direction is allowed, nothing can
+  // be shortened at all.
+  //
+  // Zero for a body the path does not hold by an attachment: a wrapped body's
+  // span geometry is not the statement this makes, and zero here says the whole
+  // over-length is refused, which is what the caller got before it named any
+  // surfaces.
+  private unreachableShortening(refusal: LengthRefusal): number {
+    const span = this.freeSpan(refusal.body);
+    if (span === null) return 0;
+    const allowed = (d: Vec2): boolean =>
+      refusal.normals.every((n) => d.dot(n) >= -Rope.REFUSAL_EPSILON);
+    let best = allowed(span.pull) ? 1 : 0;
+    for (const n of refusal.normals) {
+      for (const t of [n.orthogonal(), n.orthogonal().neg()]) {
+        if (allowed(t)) best = Mathf.max(best, span.pull.dot(t));
+      }
+    }
+    if (best <= 0) return 0;
+    const reachable = span.length * Math.sqrt(Mathf.max(1 - best * best, 0));
+    return span.length - reachable;
+  }
+
+  // The span the length solve hauls `body` along, for a body the path is
+  // attached to: its direction (the pull, away from the body) and its length.
+  // Leaves a coil on the body where the chain leaves it, since the coil rides
+  // the body and only the free span moves with it.
+  private freeSpan(body: PhysicsBody2D): { pull: Vec2; length: number } | null {
+    for (const pathObject of this.generatePathObjects()) {
+      if (pathObject.body !== body) continue;
+      if (pathObject instanceof PathStart) {
+        const segment = (pathObject.selfWrap ?? pathObject).next;
+        return { pull: pathObject.resolveCorrectionDir(), length: segment.length() };
+      }
+      if (pathObject instanceof PathEnd) {
+        const segment = (pathObject.selfWrap ?? pathObject).previous;
+        return { pull: pathObject.resolveCorrectionDir(), length: segment.length() };
+      }
+    }
+    return null;
   }
 
   private regenerateSpans(): RopePath[] {

@@ -1183,13 +1183,27 @@ export class BallLevel {
       // 37 m/s slingshot was made of. Left un-leased, next frame's solve
       // corrects it like any other length error. Every other anchor keeps the
       // unconditional raise it always had (see `pivotAnchored` above).
-      if (!pivotAnchored || pushedOutOf.length > 0) this.ball.chain.absorbBlockedLength();
+      //
+      // The lease is measured against what those surfaces make UNREACHABLE, not
+      // against where the solve left the path: a surface the chain pulls along
+      // rather than into deflects the correction and refuses nothing, and the
+      // residual its push-out leaves is next frame's ordinary length error (see
+      // `Rope.absorbBlockedLength`; `session-483f` is the ball resting on a
+      // slope, ratcheting 0.2 mm of lease a frame out of exactly that residual).
+      const refused =
+        !pivotAnchored || pushedOutOf.length > 0
+          ? this.ball.chain.absorbBlockedLength({
+              body: this.ball,
+              normals: pushedOutOf.map((p) => p.normal),
+            })
+          : 0;
       // Whether the geometry actually refused the chain this frame — the same
-      // push-out normals the velocity above was cancelled against. Next frame's
+      // push-out normals the velocity above was cancelled against, and only
+      // where they stand in the way of a shorter chain. Next frame's
       // `beginFrame` reads it to decide whether the lease may be handed back:
       // released into a live block, the constraint spends every frame hauling
       // the ball into a surface that is already saying no.
-      this.ball.chain.noteBlockedByGeometry(pushedOutOf.length > 0);
+      this.ball.chain.noteBlockedByGeometry(pushedOutOf.length > 0 && refused > 0);
       // Length only, never velocity — a delta showing up here would mean the
       // stall lease had learnt to move something, which it must not.
       PhaseTrace.mark("stall-lease", this.world);

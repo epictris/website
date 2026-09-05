@@ -1,0 +1,74 @@
+{
+  "level": "ball-slope-rest",
+  "controller": "ball",
+  "frames": 620,
+  "spawn": {
+    "x": 0,
+    "y": 0
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 32,
+        "y": 8,
+        "rot": -1.33,
+        "shape": {
+          "kind": "rect",
+          "w": 600,
+          "h": 50
+        },
+        "friction": 1
+      },
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 400,
+        "rot": 0,
+        "shape": {
+          "kind": "rect",
+          "w": 4000,
+          "h": 100
+        },
+        "friction": 1
+      }
+    ]
+  },
+  "holds": [
+    {
+      "action": "deploy",
+      "from": 1,
+      "to": 620
+    }
+  ],
+  "aim": [
+    {
+      "from": 1,
+      "to": 20,
+      "x": 0.114,
+      "y": -0.127
+    },
+    {
+      "from": 21,
+      "to": 620,
+      "x": 0.5446,
+      "y": 0.8387,
+      "relative": true
+    }
+  ],
+  "asserts": [
+    {
+      "window": {
+        "from": 100,
+        "to": 620
+      },
+      "maxChainGrowth": 0.005,
+      "maxDrift": 0.02
+    }
+  ]
+}
