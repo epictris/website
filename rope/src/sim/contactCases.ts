@@ -2907,6 +2907,127 @@ function casePointBlankTurn(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// converged-aim-hang - a ball hanging against a chain-hung weight, its aim
+// reached, still turns when the aim moves on.
+//
+// The wind-stall latch fires on a turn the unwind refunds (nearly) whole, and
+// it read the size of that turn as a share of the ask alone. A proportional
+// steering that has REACHED its aim keeps asking for the residual - a few
+// thousandths of a radian a second, micrometres of chain at the spool - and a
+// ball hanging on a taut chain against the body it is anchored to has that
+// refunded whole every frame, because there is nothing there to wind. So the
+// moment the ball settled on its aim the stall latched, with nothing refused,
+// and it held for as long as the ball kept touching the weight: the steering
+// was dead through a 180 degree sweep of the aim on `session-379f` (f301-360),
+// on a 7 micrometre ask. The latch now asks for a turn worth a stall - at least
+// `STALL_EPSILON` of chain at the spool - before a whole refund means anything.
+//
+// The rig is the recording's: a 280 kg oak cube on a scene chain, the ball
+// touching its left face and throwing point-blank into it, then the aim held
+// half a radian off the chain so the steering converges while the ball hangs
+// against the face. The ball must not latch on the residual, and must follow
+// the aim on when it sweeps half a turn. The wound-tight stall the latch exists
+// for (`session-611f` f284, a 3.4 mm ask) sits well above the floor and is
+// what `session-611f` in the corpus holds.
+function caseConvergedAimHang(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // A 1 m oak cube hung from a bolt 2.5 m above it; the ball spawns touching
+  // its left face, level with its centre.
+  const level = new BallLevel({
+    player: { x: 1298, y: -1950, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 1360,
+        y: -2200,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "circle", r: 10 } },
+          { type: "anchor", id: 1, x: 0, y: 10 },
+        ],
+      },
+      {
+        kind: "rigid",
+        x: 1360,
+        y: -1950,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 100, h: 100 }, thickness: 40 },
+          { type: "anchor", id: 2, x: 0, y: -50 },
+        ],
+      },
+    ],
+    chains: [{ a: 1, b: 2 }],
+  } as RawLevelData);
+  const weight = level.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b !== level.ball,
+  )!;
+  let prev = emptyFrameInput();
+  const feed = (aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  const anchored = (): boolean => level.ball.chain?.end.contact.obj === weight;
+  const touching = (): boolean =>
+    level.world.frameContacts.some(
+      (c) => (c.a === level.ball && c.b === weight) || (c.a === weight && c.b === level.ball),
+    );
+  // Point-blank into the face just above the ball, then hold the aim on the
+  // anchor while the catch settles.
+  for (let f = 0; f < 60; f++) {
+    feed(anchored() ? level.ball.chain!.end.contact.globalPosition : new Vec2(13.3, -19.7));
+  }
+  check("the chain is anchored to the weight", anchored());
+  check("and the ball hangs against it", touching());
+
+  // The aim held half a radian off the chain for 90 frames: the steering
+  // reaches it and then asks for its residual, frame after frame.
+  const chainAngle = level.ball.chain!.end.contact.globalPosition
+    .sub(level.ball.globalPosition)
+    .angle();
+  const dir = 1;
+  const aimAt = (offset: number): Vec2 =>
+    level.ball.globalPosition.add(
+      new Vec2(Math.cos(chainAngle + dir * offset), Math.sin(chainAngle + dir * offset)).mul(2),
+    );
+  for (let f = 0; f < 90; f++) feed(aimAt(0.5));
+  // Reached to within the floor: the last degree or two of a turn is an ask
+  // under `STALL_EPSILON` of chain, which a taut chain refunds and the latch
+  // now ignores, so the loop rests that far short of the aim rather than on it.
+  const error = Math.abs(wrapAngle(chainAngle + dir * 0.5 - level.ball.loopDirection.angle()));
+  check(`the steering reached the aim (${(error * 180 / Math.PI).toFixed(2)} deg off, under 3)`, error < 3 * Math.PI / 180);
+  check("while the ball still hangs against the weight", touching());
+  check(`resting on the reached aim did not latch the stall (${level.ball.windStall})`, level.ball.windStall === 0);
+
+  // Then the aim sweeps half a turn onward over 90 frames: the ball must follow.
+  const rotations: number[] = [];
+  for (let f = 0; f < 90; f++) {
+    feed(aimAt(0.5 + (Math.PI * f) / 90));
+    rotations.push(level.ball.globalRotation);
+  }
+  const turned = rotationSpan(rotations);
+  check(
+    `the ball follows the sweep (turned ${turned.toFixed(2)} rad of a ${Math.PI.toFixed(2)} rad sweep, floor 1.0)`,
+    turned >= 1.0,
+  );
+
+  return ok("converged-aim-hang - a ball hanging against its anchor turns on from a reached aim", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 function caseChainHungJam(sims: Sim[]): ContactResult {
   const sim = new Sim("chain-hung-jam", 30);
   sims.push(sim);
@@ -4380,6 +4501,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseHookSparks());
   results.push(caseBallSparks());
   results.push(casePointBlankTurn());
+  results.push(caseConvergedAimHang());
   results.push(caseHookSeam());
   results.push(casePassableBody());
   results.push(caseDecorGroup());

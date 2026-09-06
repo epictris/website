@@ -251,6 +251,8 @@ export class BallLevel {
   // as refused outright (see `BallPlayer.windStall`).
   static readonly STALL_REFUND_SHARE = 0.9;
   // Length below which a stall is float noise rather than a blocked correction.
+  // Also the least chain a turn must ask to wind before the unwind refunding it
+  // whole can latch the wind-stall (see the latch in `physicsProcess`).
   static readonly STALL_EPSILON = 0.001;
   // Lease below which there is nothing worth calling a surplus: the release
   // hands back 8 mm a frame, so anything under a couple of centimetres is on its
@@ -1024,6 +1026,23 @@ export class BallLevel {
         // separates the two is the spool, not the size of the refund (2.7 mm
         // there, and it MUST latch), so the latch asks for a spool at rim
         // scale: `BallPlayer.STALL_LATCH_SPOOL_SHARE` of the ball's radius.
+        //
+        // And only where the turn asked for a stall's worth of chain. The
+        // refund is judged as a share of the ask, and the ask of a steering
+        // that has REACHED its aim is the proportional residual - thousandths
+        // of a radian a second, micrometres of chain at any spool - which a
+        // ball hanging on a taut chain against its anchor body has refunded
+        // whole every frame, there being nothing to wind. So the ball latched
+        // the moment it settled on its aim, with nothing refused, and stayed
+        // latched for as long as it touched the weight: dead through a 180
+        // degree sweep of the aim on a 7 micrometre ask (`session-379f`
+        // f301-360). The ask must be worth at least `STALL_EPSILON` of chain
+        // at the spool - the same floor under which `chainStallFrames` calls a
+        // stall float noise - before a whole refund is a refusal. The wound-
+        // tight latch is far above it (`session-611f` f284 asked 3.4 mm), and
+        // so is the hammer; what sits under it is the last degree or two of a
+        // turn the chain will not give, which the steering may go on asking
+        // for and being refused, since a refused micrometre costs nothing.
         const asked = Math.abs(this.aimSpin) * delta;
         const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
         this.chainUnwindRefund = refunded;
@@ -1033,12 +1052,12 @@ export class BallLevel {
           const other = c.a === this.ball ? c.b : c.a;
           return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
         });
+        const spool = Math.abs(this.ball.chain.lengthPerRadian(this.ball));
         if (
-          asked > 0 &&
+          asked * spool >= BallLevel.STALL_EPSILON &&
           this.ball.windStallHeld &&
           refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
-          Math.abs(this.ball.chain.lengthPerRadian(this.ball)) >=
-            BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
+          spool >= BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
         ) {
           this.ball.windStall = Math.sign(this.aimSpin);
         }
