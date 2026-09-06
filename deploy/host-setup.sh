@@ -19,9 +19,12 @@ if [ -z "${OCI_OS_NAMESPACE:-}" ]; then
   exit 0
 fi
 
+# Unattended upgrades run apt on their own schedule and hold its lock for
+# minutes at a time; the first deploy landed on one. Wait for the lock rather
+# than fail the deploy over it.
 if ! command -v rclone >/dev/null 2>&1; then
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rclone
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq rclone
 fi
 
 # The instance knows its own compartment and region; rclone authenticates as
