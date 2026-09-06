@@ -363,6 +363,14 @@ export class BallLevel {
     return this.ball.renderPosition(alpha);
   }
 
+  // Whether the camera treats this frame as a SWING (see
+  // `Level.cameraAnchored`). A chain still in flight is not one: the ball is
+  // rolling or falling until the hook bites, and it is the bite that starts the
+  // oscillation the anchored episode is about.
+  get cameraAnchored(): boolean {
+    return this.ball.chainAnchored;
+  }
+
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     this.sparkEvents.length = 0;

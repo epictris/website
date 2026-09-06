@@ -31,6 +31,12 @@
 //
 // A single mechanism covers default→region, region→region and region→default:
 // "no region" is just the null region, whose target is the plain follow point.
+//
+// On top of those sits one one-sided rule, the ANCHORED EPISODE (see `update`):
+// while the avatar hangs on a taut line the camera does not walk back down the
+// track, because half of a swing is travel the level did not mean. It is not a
+// smoothing - it is a constraint, and it is given back through the hand-off
+// blend when the anchor is released.
 
 import { Vec2 } from "../engine/vec2";
 import { PIXELS_PER_METER } from "../engine/units";
@@ -88,6 +94,30 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 // what keeps the window frame-rate independent.
 export const PATH_TRACK_SLACK_SPEED = 5;
 
+// --- the frame guarantee's three parameters ---------------------------------
+//
+// Global, and deliberately not authorable: a level may frame the avatar however
+// it likes and none of those framings is allowed to be "off the bottom of the
+// screen", so what the guarantee does is a property of the GAME rather than of
+// a room in it. The three are tuned together and are what every one of them
+// means:
+//
+//   CAMERA_EDGE_MARGIN     where the avatar may never go.
+//   CAMERA_EDGE_EASE       how far in from there the override starts.
+//   CAMERA_EDGE_SMOOTHING  how long it takes to take over, in seconds.
+//
+// The first two are fractions of the frame, so they mean the same thing at any
+// zoom; the third is a clock. `edgeReach` turns the fractions into the
+// distances a given camera actually allows, `softEdgeOffset` is the curve
+// between them and `edgeTakeUp` is the clock.
+//
+// The override runs in two places, which is what makes it smooth (see
+// `CameraController.softEdge` and `holdEdge`): the band shapes what the camera
+// is AIMING at, so the camera answers it through its own follow ease and its
+// velocity turns over instead of reversing, and the same band plus the hard
+// floor is then applied to where the camera actually IS, because an aim can be
+// outrun and the guarantee may not be.
+
 // How much of the frame the avatar may never enter, as a fraction of the FULL
 // width and height, on every axis and under every rule.
 //
@@ -102,10 +132,95 @@ export const PATH_TRACK_SLACK_SPEED = 5;
 // seeing. At 0.08 that is 77 cm either side and 43 cm above and below, on the
 // 9.6 x 5.4 m a 1080p frame shows at GRAPPLE_ZOOM.
 //
-// This is the one camera rule with no authored override, and deliberately: a
-// level may frame the avatar however it likes, and none of those framings is
-// allowed to be "off the bottom of the screen".
-export const CAMERA_EDGE_MARGIN = 0.08;
+// It is the absolute floor rather than the point the override engages at - see
+// CAMERA_EDGE_EASE, which is where it starts and what makes reaching this one
+// a limit the avatar approaches rather than a line they are held on.
+export const CAMERA_EDGE_MARGIN = 0.05;
+
+// How much FURTHER into the frame the guarantee starts easing itself in, as the
+// same kind of fraction of the full width and height. Together the two say
+// where the override begins (`CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE` in from
+// the edge) and where the avatar may never go (`CAMERA_EDGE_MARGIN`), and the
+// band between them is what the override is spread over.
+//
+// A bare clamp is a discontinuity in the camera's VELOCITY, which is the one
+// thing a camera may not have. Up to the boundary the camera is easing toward
+// whatever the level asked for; one frame later it is rigidly locked to the
+// avatar, moving at exactly their speed. Nothing about the position jumps -
+// that is what makes it hard to see coming - but the change of speed reads as
+// the camera being caught and dragged, and it happens again every time a swing
+// crosses back out.
+//
+// Eased in over a band, `softEdgeOffset` hands the same amount of ground over
+// gradually: the camera gives way a little at the near edge and is fully
+// carried by the avatar deep in the band, so the two regimes are joined by a
+// ramp rather than by a step. Nothing about the guarantee itself is weakened -
+// the avatar stays strictly inside `CAMERA_EDGE_MARGIN` throughout, and rather
+// further inside it than the bare clamp ever left them.
+//
+// Sized against the margin it softens rather than against the frame: at 0.15 to
+// the margin's 0.05 the override begins 20% in from the edge and the band is
+// 1.44 m wide horizontally and 81 cm vertically on the 9.6 x 5.4 m a 1080p
+// frame shows at GRAPPLE_ZOOM. How much of that the avatar actually spends is
+// CAMERA_EDGE_SMOOTHING's, not this one's - the band is the room the take-up
+// has to work in, and a narrow one is answered by the barrier instead.
+//
+// Set it to 0 and this is exactly the bare clamp again, which is what makes it
+// the parameter to turn down when the ease is felt as the camera giving way too
+// early - as against turning the smoothing down, which keeps the band and makes
+// the handover inside it crisper.
+export const CAMERA_EDGE_EASE = 0.15;
+
+// How long the override takes to give the band's pull, seconds - the third of
+// the three, and the one that makes the correction a RATE rather than a
+// distance.
+//
+// The band alone is a statement about distance, and that is not enough on its
+// own, because what the override has to undo is the camera's own MOTION. A
+// backswing is the case that shows it: the lead is ratcheted forward, so the
+// camera is still easing forward while the avatar swings back, and by the time
+// the boundary is reached the override is not slowing the camera down, it is
+// turning it round. At swing speeds the band is crossed in a handful of frames,
+// so however graded the ramp is, the turn arrives as an event.
+//
+// So the pull is given at a speed set by how much of it is still owed - see
+// `edgeTakeUp`, which is where the law is - and this is the constant in it: the
+// seconds a correction takes when the band has room for it, self-shortening to
+// nothing as the room runs out. Deeper past the boundary is corrected faster,
+// the correction fades out as it finishes rather than ending, and the floor is
+// never reached at all.
+//
+// What it buys is measured rather than argued. Worst camera ACCELERATION and
+// JERK - which is what "harsh" is - over two recorded swings and a walk out of
+// a locked room, in m/s² and m/s³:
+//
+//                                   118f          137f          walking out
+//   bare clamp (EASE = 0)      127 / 8044    103 / 6148     288 / 17280
+//   the band, given outright    65 / 4412     25 /  972      36 /   886
+//   the band, on a held pull   141 / 8479     26 /  972      30 /   278
+//   the band, at this rate     19 / 1462      17 /  972      14 /   179
+//
+// The third row is the design this replaced, and its 118f column is the reason:
+// a pull held across frames goes stale when the geometry turns under it, and
+// there it made the override HARSHER THAN THE BARE CLAMP it exists to soften
+// (see `edgeAxis`). What is left in the last row is not the override at all -
+// 1462 is the lead ratchet engaging on the frame the chain goes taut and 972 is
+// the lookahead deadband letting go, both of which are steps in the target's
+// velocity that this has nothing to do with.
+//
+// It is bounded ABOVE by the band and the speeds in play: past what the band
+// can absorb the rate rides the barrier and the camera is turned over hard
+// instead of being carried, so much longer than a fifth of a second is a sign
+// the BAND is too narrow for the speeds rather than that this is too long.
+//
+// A SHAPE knob was tried here first and removed. The family
+// `1 - (1+uk)**(-1/k)` holds the curve's two end conditions for every `k` and
+// looks like a free choice of tail, but its curvature at the join is `-(1+k)`:
+// a longer tail is a SHARPER bend exactly where the override engages, so the
+// knob ran the wrong way and every value of it was worse than `k = 0` (23, 29,
+// 44, 77 m/s² of peak acceleration for k = 0.01, 1, 4, 20 on `session-137f`).
+// What it was reaching for is a delay, and a delay is a clock.
+export const CAMERA_EDGE_SMOOTHING = 0.15;
 
 // The buffer a region actually holds by: its own, or the jitter default.
 //
@@ -335,8 +450,26 @@ export function pathLookaheadBuffer(p: PathParams, dir: Vec2): number {
 // so there is no step in the target to be blended away - and the price is that
 // on genuine forward travel the lead is short by the band, which is what the
 // buffer means and what the author is choosing when they widen it.
-export function committedLeadS(s: number, held: number, buffer: number): number {
-  return Math.min(Math.max(held, s - buffer), s + buffer);
+//
+// `anchored` is the swing regime (see `Level.cameraAnchored`), and there the
+// band is a RATCHET: only its rear edge may drag the origin, so the lead runs
+// forward with the swing and is never hauled back by the return. That is the
+// bias down the track this whole regime is for - a swing that reaches further
+// along the route has said something about where the player is going, and the
+// half-swing back has not. The band still absorbs everything narrower than
+// itself, exactly as it does rolling; what is dropped is the front edge, which
+// is the only thing that ever moved the origin BACKWARD.
+//
+// It is one-sided rather than frozen because the forward drag is what keeps it
+// continuous: the origin is still only ever moved by an edge of the band.
+export function committedLeadS(
+  s: number,
+  held: number,
+  buffer: number,
+  anchored: boolean,
+): number {
+  const forward = Math.max(held, s - buffer);
+  return anchored ? forward : Math.min(forward, s + buffer);
 }
 
 // The range's and falloff's per-axis pairs, floored at zero. Every distance a
@@ -623,28 +756,196 @@ function tangentAt(index: PolylineIndex, s: number): Vec2 {
 }
 
 // How far the camera centre may be from the follow point, per axis, before the
-// avatar enters the keep-out band at the edge of the frame.
+// avatar enters the band `margin` names at the edge of the frame. The default
+// is the guarantee's own keep-out; `CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE` is
+// where the override starts easing in.
 //
 // Zero when the margin is wider than half the frame, which pins the camera on
 // the avatar rather than inverting the clamp and shoving it out the far side.
-export function edgeReach(camera: Camera, zoom: number): Vec2 {
+export function edgeReach(camera: Camera, zoom: number, margin = CAMERA_EDGE_MARGIN): Vec2 {
   const scale = Math.max(1e-6, zoom * PIXELS_PER_METER);
-  const keep = Math.max(0, 1 - 2 * CAMERA_EDGE_MARGIN);
+  const keep = Math.max(0, 1 - 2 * margin);
   return new Vec2(
     ((camera.viewportWidth / 2) * keep) / scale,
     ((camera.viewportHeight / 2) * keep) / scale,
   );
 }
 
-// The nearest camera position to `pos` that keeps `follow` out of the frame's
-// edge band. Applied to where the camera ACTUALLY IS rather than to what it is
-// aiming at: a target the avatar can outrun is not a guarantee, and outrunning
-// the ease is exactly what a fast swing or a launch does.
+// The offset from the follow point the camera is actually allowed, for one it
+// WANTS of `d` (both distances, so per axis and unsigned).
+//
+// Inside `soft` the camera is left alone. Past it the excess is handed over on
+// an exponential whose length scale is the band itself, so the offset climbs
+// toward `hard` and never past it:
+//
+//   a(d) = soft + (hard - soft) * (1 - exp(-(d - soft) / (hard - soft)))
+//
+// The exponential is the shape because both of its end conditions matter: the
+// slope at `soft` is exactly 1, so the override costs nothing at the moment it
+// engages, and the slope decays to 0, so the camera arrives at being carried by
+// the avatar rather than being caught by them. A smoothstep across the band
+// satisfies the second and not the first - it is flat where it starts, so it
+// takes the whole of the first millimetre's excess and the step is back, moved
+// inward.
+//
+// It has no shape parameter, and CAMERA_EDGE_SMOOTHING says why one was tried
+// here and moved to the clock instead.
+//
+// It is asymptotic for the same reason it is C1 at the join: a curve that met
+// `hard` at a finite distance and had slope 1 where it started would have to
+// make the ground up somewhere in between, which means giving way FASTER than
+// the avatar moves. Approaching it is the stronger guarantee anyway - across
+// everything a swing reaches the avatar is strictly inside the keep-out band
+// rather than sitting exactly on its line, which is where the bare clamp used
+// to hold them. (Far enough out the arithmetic does land on the line, which is
+// the bare clamp's own answer for a launch and is the right one.)
+//
+// A zero-width band is the bare clamp, exactly, which is what makes
+// CAMERA_EDGE_EASE = 0 a real setting rather than a division by zero.
+export function softEdgeOffset(d: number, soft: number, hard: number): number {
+  if (d <= soft) return d;
+  const band = hard - soft;
+  if (band <= 0) return Math.min(d, hard);
+  return soft + band * (1 - Math.exp(-(d - soft) / band));
+}
+
+// How much the band wants the camera pulled in on one axis, in metres: the
+// offset it has less the offset it is allowed. Zero anywhere inside `soft`.
+export function edgePull(away: number, soft: number, hard: number): number {
+  return away <= soft ? 0 : away - softEdgeOffset(away, soft, hard);
+}
+
+// One axis of the guarantee, and the whole of what makes it a delayed override
+// rather than an immediate one.
+//
+// It has NO STATE, and that is the whole of the design. What it returns is a
+// function of this frame's geometry alone: how far past the band's inner line
+// the point is, and how much of the band is left between where the band wants
+// it and the floor it may not pass (see `edgeTakeUp`, which is the rate law).
+//
+// A carried pull was tried here first and is the thing to not re-invent. The
+// argument for it is obvious - the override should not arrive all at once, so
+// hold how much of it has been given and take up the rest over a clock - and
+// the flaw is that the pull is a DISPLACEMENT held against a geometry that
+// moves. A swing turns and the band stops asking within a handful of frames
+// while the held pull is still most of its old size, so the camera goes on
+// being dragged for a third of a second after the reason for it has gone, and
+// then whatever bounds the pull cuts the remainder off in one frame. That is
+// the sharp stop at the end of a correction, and it is worse the longer the
+// clock is: on `session-118f` the held version peaks at 141 m/s^2 against the
+// bare clamp's own 127, which is the override being harsher than the thing it
+// replaced.
+//
+// Nothing is lost by dropping it, because the CAMERA POSITION is already the
+// integrator this wants. Applied to `this.pos` every frame (see `holdEdge`), a
+// fraction of the demand per frame IS a first-order approach to the band's
+// curve - the accumulation happens in the thing being corrected, where it
+// cannot go stale, and the correction fades out with the demand that drives it
+// because it is nothing but that demand.
+//
+// Applied to an AIM, which is rebuilt from the rule every frame and is not
+// state, the same fraction would be a permanent weakening of the band rather
+// than a delay - so `softEdge` asks for the whole of it there. The exception is
+// a latched axis, where the pin IS state and accumulates exactly as the
+// position does.
+//
+// The pull can only ever move the camera TOWARD the avatar, which is what lets
+// it compose with everything else: it cannot spring a camera the anchored latch
+// is holding, and it cannot fight the rule in force for the camera's return.
+//
+// The hard floor is applied last and is not delayed by anything, but under this
+// rate it is a backstop rather than a mechanism: the rate diverges as the
+// camera nears the line, so the camera is turned before it arrives rather than
+// caught when it does.
+//
+// An untouched axis is returned as it came in rather than rebuilt from the
+// follow point, and that is not a shortcut: `follow + (pos - follow)` is not
+// `pos` in floats, so rebuilding it moves the camera by an ULP on every frame
+// of ordinary play and reports the override as engaged on all of them - which
+// is what the overlay draws and what the anchored latch pins on.
+export function edgeAxis(
+  pos: number,
+  follow: number,
+  soft: number,
+  hard: number,
+  dt: number,
+): { pos: number; pull: number } {
+  const d = pos - follow;
+  const away = Math.abs(d);
+  const demand = edgePull(away, soft, hard);
+  if (demand <= 0) return { pos, pull: 0 };
+  const side = Math.sign(d);
+  const pull = demand * edgeTakeUp(demand, hard - (away - demand), dt);
+  return { pos: follow + side * Math.min(away - pull, hard), pull };
+}
+
+// What fraction of the band's `demand` to give this frame: the rate law, and
+// the answer to "how fast should the override correct".
+//
+// It is a rate set by the ERROR rather than a fixed delay, and the two are not
+// the same thing. A fixed delay says the override always takes the same time to
+// arrive, so a small incursion is corrected as urgently as a large one and a
+// large one is corrected far too late; the avatar reaches the floor while the
+// pull is still coming on, and the floor is a rigid clamp - the camera is
+// dragged at exactly their speed and stops dead the moment they come back
+// inside. That is the harshness this replaces, and it is a discontinuity in the
+// camera's VELOCITY however long the delay is. Making the delay longer makes it
+// worse, not better, because it guarantees the floor is reached.
+//
+// A rate set by the error has neither end of that. `demand` is how far the
+// point is from where the band wants it, and it is given at
+// `demand / CAMERA_EDGE_SMOOTHING` per second, so:
+//
+//   - at the moment the override engages the demand is zero and so is the
+//     correction: nothing starts, it grows;
+//   - twice as far past the boundary is corrected twice as fast (and rather
+//     more than twice, since the band's own curve is quadratic where it
+//     starts), so a shallow incursion is barely answered and a deep one is
+//     answered hard;
+//   - and the correction fades out as it finishes rather than ending, because
+//     the thing driving it is the thing being consumed. There is no arrival and
+//     no release, which is what a stateless rate buys over a held pull (see
+//     `edgeAxis`): nothing is carried, so there is nothing to discard.
+//
+// `headroom` is what stops it ever being too late: the metres left between
+// where the band wants the camera and the floor it may not pass. The rate is
+// divided by how much of that headroom the demand has eaten, so it diverges as
+// the last of it goes. The camera cannot reach the floor - it is turned over
+// harder and harder as it approaches, and the harder that is, the more the
+// avatar was outrunning it, which is exactly when a hard correction is what the
+// player asked for. Deep in the band the override is therefore its own
+// undelayed self, and at the edge of engagement it is at its gentlest.
+//
+// It is also what makes where the avatar ends up a property of the BAND rather
+// than of how fast they were going: walked out of a locked room at 3, 4.8, 9
+// and 18 m/s, the camera settles between 0.916 and 0.930 of the floor.
+//
+// `Infinity` (a snap, and an aim that wants the band applied outright) and a
+// smoothing of 0 both answer 1, which is the whole of the demand at once.
+export function edgeTakeUp(demand: number, headroom: number, dt: number): number {
+  if (CAMERA_EDGE_SMOOTHING <= 0) return 1;
+  const urgency = demand > 0 && headroom > 0 ? Math.min(demand / headroom, 1) : 0;
+  if (urgency >= 1) return 1;
+  const rate = 1 / (CAMERA_EDGE_SMOOTHING * (1 - urgency));
+  return 1 - Math.exp(-Math.max(0, dt) * rate);
+}
+
+// The camera position nearest `pos` that the frame guarantee allows, for an
+// avatar at `follow`, with the whole of the band's pull taken up at once.
+//
+// Applied to where the camera ACTUALLY IS rather than to what it is aiming at:
+// a target the avatar can outrun is not a guarantee, and outrunning the ease is
+// exactly what a fast swing or a launch does.
+//
+// This is the undelayed answer, which is what the geometry cases assert and
+// what the controller reduces to at `CAMERA_EDGE_SMOOTHING = 0`; the controller
+// itself gives the same pull over a clock instead (see `edgeTakeUp`).
 export function clampToEdge(camera: Camera, zoom: number, follow: Vec2, pos: Vec2): Vec2 {
-  const r = edgeReach(camera, zoom);
+  const hard = edgeReach(camera, zoom);
+  const soft = edgeReach(camera, zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
   return new Vec2(
-    Math.min(Math.max(pos.x, follow.x - r.x), follow.x + r.x),
-    Math.min(Math.max(pos.y, follow.y - r.y), follow.y + r.y),
+    edgeAxis(pos.x, follow.x, soft.x, hard.x, Infinity).pos,
+    edgeAxis(pos.y, follow.y, soft.y, hard.y, Infinity).pos,
   );
 }
 
@@ -657,10 +958,16 @@ export interface HeldCamera {
   s: number;
   leadS: number;
   // The edge constraint, when it is what is holding the camera this frame:
-  // where the camera centre is and how far from the follow point it is allowed
-  // to be. Null whenever the clamp is not binding, so the overlay drawing it at
-  // all means the camera is being held rather than following.
-  edge: { centre: Vec2; reach: Vec2 } | null;
+  // where the camera centre is, how far from the follow point the avatar may
+  // ever be (`reach`), and where the override started easing in (`soft`). Null
+  // whenever nothing is being overridden, so the overlay drawing it at all
+  // means the camera is being held back rather than following.
+  edge: { centre: Vec2; reach: Vec2; soft: Vec2 } | null;
+  // The frame-edge latch, per axis: where the clamp last forced the camera
+  // during the anchored episode in force, and null on an axis it has not.
+  // Non-null on an axis means the camera is PINNED there rather than aiming at
+  // the rule's target, which the overlay is otherwise unable to explain.
+  latch: { x: number | null; y: number | null };
 }
 
 export class CameraController {
@@ -689,7 +996,42 @@ export class CameraController {
 
   // Set on any frame the edge clamp actually moved the camera (see
   // `clampToEdge`), for the debug overlay and for nothing else.
-  private edge: { centre: Vec2; reach: Vec2 } | null = null;
+  private edge: { centre: Vec2; reach: Vec2; soft: Vec2 } | null = null;
+
+  // The FRAME-EDGE LATCH: per axis, where the edge clamp forced the camera
+  // during the anchored episode in force, and null on an axis it never did.
+  //
+  // A swing that carries the avatar out of the frame is answered by the edge
+  // guarantee, which shoves the camera along to keep them in it. Unlatched, the
+  // half-swing back releases the shove and the camera eases straight back to
+  // the target it was being held off: the whole arc wobbles the camera in and
+  // out, twice a swing, for as long as the avatar hangs there. So the point the
+  // clamp forced is KEPT - the camera is pinned there for the rest of the
+  // episode, and the pin moves only when the clamp forces it further. What is
+  // on screen then stops moving until the swing asks for something the frame
+  // guarantee will not allow, which is the smallest amount of camera motion a
+  // swing at the edge of the frame can be answered with.
+  //
+  // Per axis because the clamp is per axis: a swing that drops the avatar out
+  // of the bottom of the frame has said nothing about the horizontal lead, and
+  // pinning x for it would freeze the route the camera is narrating.
+  //
+  // Cleared when the anchor is released, which is what hands the camera back to
+  // its rule - through the hand-off blend, since the gap by then is arbitrary.
+  private latchX: number | null = null;
+  private latchY: number | null = null;
+
+  // Whether the avatar was anchored last frame - the edge of the episode the
+  // latch and the lead ratchet both belong to.
+  private wasAnchored = false;
+
+  // How far the band moved the AIM on this frame, per axis, in metres. A
+  // record of what just happened rather than carried state - the override has
+  // none, which is the whole of why it cannot go stale (see `edgeTakeUp`) -
+  // read by the anchored latch to know the guarantee shoved this axis, and by
+  // the overlay to know to draw the keep-out boxes.
+  private aimPullX = 0;
+  private aimPullY = 0;
 
   // The screen-edge guarantee, which the GAME never turns off: it is the one
   // camera rule a level may not opt out of (see CAMERA_EDGE_MARGIN).
@@ -724,7 +1066,13 @@ export class CameraController {
   // are all stateful, so a recomputed answer disagrees with the camera exactly
   // where the overlay is opened to look.
   get held(): HeldCamera {
-    return { rule: this.rule, s: this.pathS, leadS: this.pathLeadS, edge: this.edge };
+    return {
+      rule: this.rule,
+      s: this.pathS,
+      leadS: this.pathLeadS,
+      edge: this.edge,
+      latch: { x: this.latchX, y: this.latchY },
+    };
   }
 
   // Drop the easing for one frame — the camera arrives at its target instantly.
@@ -752,12 +1100,38 @@ export class CameraController {
     return projectOntoPolylineWindow(rule.index, follow, this.pathS - maxStep, this.pathS + maxStep);
   }
 
+  // `anchored` is whether the avatar is hanging on a taut line rather than
+  // moving under their own feet (see `Level.cameraAnchored`), and it opens an
+  // EPISODE in which the camera does not walk back down the track.
+  //
+  // A swing is an oscillation, so half of it is travel the level did not mean:
+  // the forward half says where the player is going and the return half says
+  // nothing, and a camera that answers both equally spends the whole arc
+  // rocking. Two one-sided rules answer that at the two levels it happens on,
+  // and they are the same statement said twice:
+  //
+  //  * the committed lead origin RATCHETS forward (see `committedLeadS`), so
+  //    the target only ever moves further along the route;
+  //  * the frame-edge guarantee LATCHES (see `latchX`/`latchY`), so a shove it
+  //    had to give the camera is kept rather than eased back out of.
+  //
+  // The second is what happens when the first is not enough. With the lead
+  // ratcheted the target stays forward while the avatar swings back, so far
+  // enough back and the frame guarantee takes over and hauls the camera after
+  // them - the one camera rule a level may never opt out of, and it outranks
+  // this one too. Where it leaves the camera then becomes the pin, so the
+  // forward half of the next swing does not spring the camera back off it.
+  //
+  // The episode ends when the anchor is released, and the camera returns to
+  // whatever its rule wants through the frozen-delta hand-off below, since by
+  // then the gap is arbitrary and a 0.15 s ease across it would be a lurch.
   update(
     camera: Camera,
     dt: number,
     follow: Vec2,
     rules: readonly CameraRule[],
     baseZoom: number,
+    anchored: boolean,
   ): void {
     if (!this.started) {
       // A snap is history-free: there is no incumbent to keep a grip, and no
@@ -765,8 +1139,17 @@ export class CameraController {
       this.rule = null;
       this.pathS = 0;
       this.pathLeadS = 0;
+      this.latchX = null;
+      this.latchY = null;
+      this.aimPullX = 0;
+      this.aimPullY = 0;
       this.lastFollow = follow;
     }
+
+    // The frame the episode ends on. The lead origin un-ratchets and the latch
+    // lets go together, and both are read BELOW - the outgoing aim is the one
+    // they were still shaping.
+    const releasing = this.wasAnchored && !anchored;
 
     // Resolved BEFORE the rule decision, because a path's grip is measured to
     // the windowed projection rather than to the global closest point. The
@@ -856,6 +1239,7 @@ export class CameraController {
                 pathParamsAt(next, this.pathLeadS),
                 tangentAt(next.index, this.pathLeadS),
               ),
+              anchored,
             )
           : s;
 
@@ -875,13 +1259,19 @@ export class CameraController {
       this.zoomRatio = 1;
       this.s = 1;
       this.zoom = target.zoom;
-      this.pos = this.applyEdge(camera, target.pos, follow);
+      this.pos = this.holdEdge(
+        camera,
+        this.softEdge(camera, target.pos, follow, Infinity),
+        follow,
+        Infinity,
+      );
+      this.wasAnchored = anchored;
       camera.position = this.pos;
       camera.zoom = this.zoom;
       return;
     }
 
-    if (next !== this.rule || branchJump) {
+    if (next !== this.rule || branchJump || releasing) {
       // The discrepancy is measured between the two *targets*, not against
       // where the camera is: aiming at the camera's own position would drop its
       // velocity to nothing for an instant, which reads as a hitch. Taken this
@@ -898,6 +1288,15 @@ export class CameraController {
       // An outgoing PATH is evaluated at its tracked projection, not at a fresh
       // global one: both targets have to be measured at the same instant and on
       // the same branch, or the frozen delta is a gap that never existed.
+      //
+      // A RELEASED anchor comes through here for the same reason a branch jump
+      // does, and it is the larger step of the two: the lead origin gives up a
+      // whole swing's worth of ratchet in one frame, and a pinned camera gives
+      // up however far the frame guarantee had shoved it. The outgoing aim is
+      // taken with the episode's constraints still on - the ratcheted lead
+      // origin, and the pin over the top of it - so the delta frozen here is
+      // exactly what the release gave up, and the camera leaves the pin at the
+      // blend's pace rather than the follow lag's.
       const prev = cameraRuleTarget(
         this.rule,
         follow,
@@ -908,7 +1307,7 @@ export class CameraController {
           : 0,
       );
       const rest = 1 - smoothstep(this.s);
-      this.offset = prev.pos.add(this.offset.mul(rest)).sub(target.pos);
+      this.offset = this.latched(prev.pos.add(this.offset.mul(rest))).sub(target.pos);
       this.zoomRatio = (prev.zoom * this.zoomRatio ** rest) / target.zoom;
       this.s = 0;
       // Entering a rule uses its blend; leaving one back to the default uses
@@ -920,41 +1319,131 @@ export class CameraController {
     this.pathLeadS = leadS;
     this.lastFollow = follow;
     this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
+    // Read by the hand-off above and dropped here: outside an episode there is
+    // nothing pinning the camera, and the gap the pin leaves behind is already
+    // frozen into the delta that is now decaying.
+    if (!anchored) {
+      this.latchX = null;
+      this.latchY = null;
+    }
+    this.wasAnchored = anchored;
 
-    // What is left of the hand-off discrepancy, laid on top of the live target.
+    // What is left of the hand-off discrepancy, laid on top of the live target,
+    // and then the pin - which outranks every rule, being the frame guarantee's
+    // own answer kept rather than re-derived.
     const k = 1 - smoothstep(this.s);
-    const aim: CameraTarget = {
-      pos: target.pos.add(this.offset.mul(k)),
-      zoom: target.zoom * this.zoomRatio ** k,
-    };
+    const aimZoom = target.zoom * this.zoomRatio ** k;
 
     // Frame-rate independent exponential ease: the same time constant on a
-    // 60 Hz and a 144 Hz display.
+    // 60 Hz and a 144 Hz display. The zoom first, because the frame guarantee
+    // is a fraction of the frame and the frame is what the zoom decides.
     const t = 1 - Math.exp(-Math.max(0, dt) / CAMERA_FOLLOW_TAU);
-    this.pos = this.pos.add(aim.pos.sub(this.pos).mul(t));
-    this.zoom = lerpZoom(this.zoom, aim.zoom, t);
+    this.zoom = lerpZoom(this.zoom, aimZoom, t);
 
-    // LAST, and on the camera's own state rather than on the target: the avatar
-    // may never be in the frame's edge band, whatever rule is in force and
-    // however fast it got there. Clamping `this.pos` rather than only what is
-    // handed to the Camera is what keeps the next frame's ease continuous -
-    // the camera really is where the constraint put it, so it carries on from
-    // there instead of being dragged back to an illegal position every frame.
-    this.pos = this.applyEdge(camera, this.pos, follow);
+    // The frame guarantee, in its two halves (see CAMERA_EDGE_MARGIN and the
+    // parameters beside it). The SOFT half shapes what the camera is aiming
+    // at, so the camera answers it through the follow ease and its velocity
+    // turns over rather than reversing; the HARD half is applied last and to
+    // where the camera actually IS, because a target the avatar can outrun is
+    // not a guarantee and outrunning the ease is exactly what a launch does.
+    const aimPos = this.softEdge(camera, this.latched(target.pos.add(this.offset.mul(k))), follow, dt);
+    this.pos = this.pos.add(aimPos.sub(this.pos).mul(t));
+    const eased = this.pos;
+    this.pos = this.holdEdge(camera, this.pos, follow, dt);
+
+    // Whatever the guarantee moved is the pin, per axis and per anchored
+    // episode: the aim where the soft half shaped it, and the camera's own
+    // position where the floor had to catch it, the floor being the stronger
+    // demand of the two.
+    if (anchored) {
+      if (this.aimPullX > 0) this.latchX = aimPos.x;
+      if (this.aimPullY > 0) this.latchY = aimPos.y;
+    }
 
     camera.position = this.pos;
     camera.zoom = this.zoom;
   }
 
-  private applyEdge(camera: Camera, pos: Vec2, follow: Vec2): Vec2 {
+  // `p` with each latched axis replaced by its pin (see `latchX`).
+  private latched(p: Vec2): Vec2 {
+    if (this.latchX === null && this.latchY === null) return p;
+    return new Vec2(this.latchX ?? p.x, this.latchY ?? p.y);
+  }
+
+  // The SOFT half of the frame guarantee, applied to what the camera is AIMING
+  // at rather than to where it is.
+  //
+  // That is the whole of what makes it smooth. Applied to the position it can
+  // only ever be a correction - the camera's velocity is whatever the
+  // correction happens to need this frame, and on a backswing that is a
+  // reversal, since the camera is still advancing into a lead the avatar has
+  // already left. Applied to the aim, the camera answers it through the same
+  // exponential ease it answers everything else with: the forward motion is
+  // bled off and turned over on the follow lag's own clock, and there is no
+  // frame on which the camera's speed jumps.
+  //
+  // The aim can be outrun, which is exactly why it is only the soft half; the
+  // floor below cannot.
+  //
+  // The band is given OUTRIGHT here rather than at the rate law, because an aim
+  // is rebuilt from the rule every frame and holds nothing: a fraction of it
+  // per frame would be a band permanently weakened to that fraction rather than
+  // a delayed one. A LATCHED axis is the exception and takes the rate, the pin
+  // being state and accumulating exactly as the camera's position does - and it
+  // has to, since the pin is re-pulled every frame and is therefore an
+  // integrator of whatever this gives it (measured: given outright, the pin
+  // walks in three times as far over a swing, which is the camera following the
+  // avatar back in that the latch exists to stop).
+  private softEdge(camera: Camera, aim: Vec2, follow: Vec2, dt: number): Vec2 {
+    if (!this.edgeClamp) {
+      this.aimPullX = 0;
+      this.aimPullY = 0;
+      return aim;
+    }
+    const hard = edgeReach(camera, this.zoom);
+    const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
+    const x = edgeAxis(aim.x, follow.x, soft.x, hard.x, this.latchX === null ? Infinity : dt);
+    const y = edgeAxis(aim.y, follow.y, soft.y, hard.y, this.latchY === null ? Infinity : dt);
+    this.aimPullX = x.pull;
+    this.aimPullY = y.pull;
+    return new Vec2(x.pos, y.pos);
+  }
+
+  // The HOLDING half, on where the camera actually IS and applied last: the
+  // same band given at the rate law, and the hard floor under it. The avatar
+  // may never be in the frame's edge band, whatever rule is in force and
+  // however fast they got there.
+  //
+  // The aim can be outrun and this cannot, which is why there are two of them
+  // rather than one. What outruns it is not a launch but the ordinary follow
+  // lag: the camera trails its aim by `speed x CAMERA_FOLLOW_TAU`, so a
+  // sustained excursion would otherwise ride the floor - the one place a step
+  // is left - even though the aim it is chasing is comfortably inside.
+  //
+  // This is where the SMOOTHING lives, and it is the one place a fraction of
+  // the demand per frame means a delay rather than a weakening: `this.pos` is
+  // carried to the next frame, so the fractions accumulate in it and what the
+  // camera performs is a first-order approach to the band's curve. Nothing
+  // beside the position holds any of it (see `edgeAxis`).
+  //
+  // Clamping `this.pos` rather than only what is handed to the Camera is what
+  // keeps the next frame's ease continuous - the camera really is where the
+  // constraint put it, so it carries on from there instead of being dragged
+  // back to an illegal position every frame.
+  private holdEdge(camera: Camera, pos: Vec2, follow: Vec2, dt: number): Vec2 {
     if (!this.edgeClamp) {
       this.edge = null;
       return pos;
     }
-    const clamped = clampToEdge(camera, this.zoom, follow, pos);
+    const reach = edgeReach(camera, this.zoom);
+    const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
+    const hx = edgeAxis(pos.x, follow.x, soft.x, reach.x, dt);
+    const hy = edgeAxis(pos.y, follow.y, soft.y, reach.y, dt);
+    const clamped = new Vec2(hx.pos, hy.pos);
+    const engaged = this.aimPullX > 0 || this.aimPullY > 0;
     this.edge =
-      clamped.x !== pos.x || clamped.y !== pos.y
-        ? { centre: clamped, reach: edgeReach(camera, this.zoom) }
+      engaged || clamped.x !== pos.x || clamped.y !== pos.y
+        ? { centre: clamped, reach, soft }
         : null;
     return clamped;
   }

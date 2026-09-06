@@ -26,6 +26,15 @@ bun run dev
 
 ## Working practices
 
+### Validate the behaviour before writing the cases
+
+When a change is about how something FEELS - a camera, a control, a piece of game feel - do not write regression cases for it until the behaviour has been played and confirmed as the thing that was asked for.
+
+A case written against an unvalidated behaviour is a case written twice: the bars encode the numbers the current attempt happens to produce, and the next attempt reddens all of them for no reason other than having changed.
+Worse, they read as coverage while they are really a snapshot, so the temptation on the next pass is to nudge the bars rather than the behaviour.
+
+Get the measurement, hand it over to be played, and write the cases once the shape is settled.
+
 ### Bash timeouts
 
 Never run a Bash command with a timeout greater than 30s unless a long timeout is explicitly necessary and justified.

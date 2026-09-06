@@ -194,6 +194,9 @@ const CAMERA_REGION = "#c792ea"; // matches the editor's camera layer
 // an authored volume, it is the one rule a level cannot opt out of, and it is
 // on screen only while it is overriding whatever the level asked for.
 const EDGE_HOLD = "#ffcc66";
+// The frame-edge latch, in the same amber: it is the same rule's doing, kept
+// rather than re-derived, so it belongs to the same family on screen.
+const EDGE_LATCH = "#ffcc66";
 
 // Metres between the direction arrowheads along a camera path. Direction is the
 // design (the lookahead never reverses), so it has to be readable at a glance.
@@ -409,16 +412,31 @@ export function drawDebugOverlay(
   drawPlayerCollider(ctx, level);
   drawCameraRules(ctx, level, heldCamera);
   drawEdgeConstraint(ctx, heldCamera);
+  drawEdgeLatch(ctx, heldCamera);
 }
 
 // The screen-edge keep-out, drawn ONLY on the frames it is what is holding the
 // camera. A camera that has stopped following has no on-screen cause otherwise,
 // and drawing the box every frame would make it furniture rather than a
 // diagnosis: seeing it at all means the avatar is against the constraint.
+//
+// Two boxes, because the constraint has two boundaries (see CAMERA_EDGE_EASE):
+// the inner one is where the override starts easing in, drawn finely, and the
+// outer one is the line the avatar may never cross. The avatar between them is
+// the override working; the avatar hard against the outer one is the framing
+// being asked for having run out of room, which is the thing to re-tune.
 function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
   const edge = held?.edge;
   if (!edge) return;
   ctx.strokeStyle = EDGE_HOLD;
+  ctx.lineWidth = 1 * PX;
+  ctx.setLineDash([3 * PX, 5 * PX]);
+  ctx.strokeRect(
+    edge.centre.x - edge.soft.x,
+    edge.centre.y - edge.soft.y,
+    edge.soft.x * 2,
+    edge.soft.y * 2,
+  );
   ctx.lineWidth = 1.5 * PX;
   ctx.setLineDash([10 * PX, 6 * PX]);
   ctx.strokeRect(
@@ -427,5 +445,34 @@ function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | nu
     edge.reach.x * 2,
     edge.reach.y * 2,
   );
+  ctx.setLineDash([]);
+}
+
+// The frame-edge latch, as a line through the pinned coordinate on each axis it
+// holds (see `CameraController.latchX`). Drawn only while an anchored episode
+// is pinning the camera, and drawn as a LINE because that is what the pin is: a
+// value on one axis, with the other still free to follow the rule.
+function drawEdgeLatch(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
+  const latch = held?.latch;
+  if (!latch || (latch.x === null && latch.y === null)) return;
+  // The visible world rect, from the transform the overlay is already drawing
+  // under: the pin is a coordinate rather than a point, so what says so is a
+  // line right across the frame.
+  const inv = ctx.getTransform().inverse();
+  const tl = inv.transformPoint({ x: 0, y: 0 });
+  const br = inv.transformPoint({ x: ctx.canvas.width, y: ctx.canvas.height });
+  ctx.strokeStyle = EDGE_LATCH;
+  ctx.lineWidth = 1 * PX;
+  ctx.setLineDash([3 * PX, 5 * PX]);
+  ctx.beginPath();
+  if (latch.x !== null) {
+    ctx.moveTo(latch.x, tl.y);
+    ctx.lineTo(latch.x, br.y);
+  }
+  if (latch.y !== null) {
+    ctx.moveTo(tl.x, latch.y);
+    ctx.lineTo(br.x, latch.y);
+  }
+  ctx.stroke();
   ctx.setLineDash([]);
 }

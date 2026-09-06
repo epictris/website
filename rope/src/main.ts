@@ -352,7 +352,14 @@ function frame(now: number): void {
   // deterministic fixed step. The default framing centres the avatar; shifting
   // it is a camera region's job (offsetX/offsetY), not a per-controller rule.
   // It follows the *interpolated* avatar, so the two never disagree on screen.
-  cameraCtl.update(camera, dt, level.cameraRenderPosition(alpha), level.cameraRules, baseZoom);
+  cameraCtl.update(
+    camera,
+    dt,
+    level.cameraRenderPosition(alpha),
+    level.cameraRules,
+    baseZoom,
+    level.cameraAnchored,
+  );
 
   // Poll-based aim (gamepad sticks) refreshes per rendered frame, not per
   // physics step, so the reticle/crosshair moves at display rate on a monitor

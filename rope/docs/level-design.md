@@ -74,6 +74,14 @@ Past the band the point is dragged by its edge, which is continuous - nothing ju
 That is the trade to tune: widen it until swinging stops moving the camera, and no further.
 Setting both to 0 tracks the player exactly.
 
+**While the player is hanging on a line the band is one-sided**, and that is worth knowing before tuning it against a swing.
+A swing's forward half says something about where the player is going and its return half says nothing, so on those frames only the band's rear edge moves the point the lead is taken from: it walks forward with the swing and is never hauled back by the return.
+So a swing wider than the band no longer rocks the camera either - it ratchets it a little further down the route each arc and holds there - and what the band is really tuning is how much of a *roll* it absorbs.
+Letting go hands the point back to the middle of the band, blended, so the camera eases back to the lead it would have had all along.
+
+If a swing carries the player right off the edge of the frame, the screen-edge guarantee (below) takes over, and it too holds where it put the camera until the line is released.
+Neither is authorable, and neither needs to be: they are about the difference between swinging and travelling rather than about this route.
+
 `range x` and `range y` are the corridor: how far off the route the player may be while the camera still narrates it.
 Two numbers for the same 16:9 reason the lead is two: the pair is read as an ellipse around the route, resolved along the direction the player actually left in, so the corridor is screen-shaped.
 That matters because a circular corridor wide enough to mean anything horizontally is taller than the screen: half a frame is 4.8 m across and only 2.7 m down, so with one round `range` of 4 a player could sit fully inside the corridor and past the bottom edge of the frame at the same time - which is exactly when the ball used to vanish with the edge clamp off.
@@ -115,8 +123,27 @@ It is measured as a fraction of the frame, so it means the same thing at any `vi
 In ordinary play it never fires: the default camera centres the player, and outrunning the follow lag far enough to reach the band takes a sustained ~27 m/s against a hard swing's ~10.
 Where it does fire is a locked region the player has left and a path leading hard in one direction while they move the other way, and it fires as a limit rather than a snap - the camera is simply not allowed past it.
 
-The debug overlay draws the keep-out box in amber on the frames it is holding the camera, so "why has the camera stopped following" has an answer on screen.
+**It eases itself in rather than arriving all at once.**
+There are two boundaries: the override starts a little further in from the edge, gives way gently at first, and takes over completely only as the player keeps pushing - so the camera is never *caught* at a line, it is gradually carried.
+It works by moving what the camera is **aiming** at rather than shoving the camera itself, which is what lets the camera turn over on its own follow lag instead of being reversed; the shove on the camera is still there underneath as the thing the player can never outrun.
+And it comes on over a fraction of a second rather than instantly, so a swing that reaches the edge is answered by the camera gradually giving ground rather than by a yank.
+
+The three numbers behind it (how close to the edge the player may ever get, how far in from there the override starts, and how long it takes to come on) are global game settings rather than level fields, for the same reason the guarantee itself is: what it does is a property of the game, not of a room in it.
+
+What an author sees of it is that **a framing which puts the player inside that outer band is trimmed a little** - a very long lead down a corridor, or a lock the player has walked well away from.
+At the shipped settings the band starts 20% in from the edge, and it is wide on purpose: the wider it is, the more room the override has to come on gently, and a narrow one is answered by the hard floor instead, which is the one place a jolt is left.
+The ball level's own path is comfortably clear of it standing still, so what the band catches is a swing carrying the player toward the edge, which is what it is for.
+
+**While the player hangs on a line it latches.**
+A swing that reaches the edge of the frame reaches it twice an arc, so a camera that is shoved and then eased back rocks for as long as the player hangs there.
+Instead the point it was shoved to is kept: the camera is pinned there for the rest of the swing, and the pin moves only when the guarantee has to move it again.
+Per axis, so a swing that drops the player out of the bottom of the frame pins nothing horizontally and the route goes on being narrated.
+Releasing the line drops the pin and the camera eases back to whatever the region or path wanted, blended.
+
+The debug overlay draws the keep-out boxes in amber on the frames it is holding the camera - the inner one finely, where the override starts easing in, and the outer one as the line the player may never cross - and a dashed amber line across the frame through each pinned axis, so "why has the camera stopped following" has an answer on screen either way.
+The player between the two boxes is the override working; the player hard against the outer one is the framing you asked for having run out of room.
 Seeing that box is a sign to re-tune whatever was asking for the framing it is overriding: the constraint is a backstop, not a framing tool.
+A pin that shows up on an ordinary swing means the same thing - the framing being asked for does not fit the arc the player actually takes.
 
 The toolbar's **`edge clamp`** checkbox turns it off for ▶ Test, and for nothing else - the game always applies it.
 Untick it when you want to see the framing a lock or a lookahead is really asking for rather than the one the backstop allowed; tick it back to see what the player will get.

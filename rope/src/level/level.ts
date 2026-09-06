@@ -178,6 +178,18 @@ export class Level {
     return this.player.renderPosition(alpha);
   }
 
+  // Is the avatar hanging on a taut line rather than moving under their own
+  // feet? It opens the camera's ANCHORED EPISODE (see `CameraController.update`)
+  // - the camera does not walk back down the track while they swing, because a
+  // swing is an oscillation and running under their own feet is not.
+  //
+  // The grapple's rope is taut from the frame it is fired - there is no hook in
+  // flight - so having one at all is the whole condition, which is the same
+  // reading `sim/playtest.ts` takes.
+  get cameraAnchored(): boolean {
+    return this.player.rope !== null;
+  }
+
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     this.sparkEvents.length = 0;
