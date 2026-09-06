@@ -330,11 +330,24 @@ physical pendulum that a landing changes, and a scripted one is a rhythm that
 nothing in the level can argue with - which is what a jump timed against it has
 to be.
 
-A level authors two of them (see `LevelBodyData.swingAmp` and `movePath`): a body
-that **swings** about a bearing on a sine, and a body that **travels** an
-authored route, there and back or round a closed loop, at an authored speed and
-under an authored ease. Both compose on one body, and both are pure functions of
-the frame number, so a recorded replay lands them where they were.
+A level authors two of them (see `LevelBodyData.swingAmp` and `moveNodes`): a
+body that **swings** about a bearing on a sine, and a body that **travels** an
+authored route at an authored speed and under an authored ease.
+Both compose on one body, and both are pure functions of the frame number, so a
+recorded replay lands them where they were.
+
+A route is a **cubic Bézier curve** - the same node list a camera path is, down
+to the field names, and flattened, indexed and keyed by the same two modules
+(`lib/path.ts`, `lib/keyframes.ts`) - and node zero is the body itself, so the
+route rides the thing it belongs to.
+Three **modes** say what happens at the end of it: travelled there and back,
+gone round for ever, or run once and *teleported* back to the start.
+Its nodes may **key** the body's angle and its speed where they stand, so a
+minecart noses over the lip of a drop and runs away down it; `moveAlign` aims the
+body along the route's own tangent, which is the same effect with no keys at all.
+Keying a speed makes the trip time an integral of 1/speed along the route rather
+than a division, which a table built at load inverts - so the pose stays
+arithmetic on the frame number, which is what a replay needs it to be.
 
 The constraint an author works inside is the **contact speed**: a mover's surface
 must cross well under about 2 cm a frame, or the character sweep resolves against

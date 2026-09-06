@@ -25,18 +25,20 @@ import {
 } from "../lib/polygon";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import {
+  PATH_FLATTEN_STEP,
   buildPolylineIndex,
   flattenPath,
   pathNodesOf,
   projectOntoPolyline,
   type PathNode,
-} from "../render/cameraPath";
+} from "../lib/path";
 import { PATH_KEY_FIELDS, type PathKeyField } from "../render/cameraController";
 import { DECOR_Z } from "../level/decor";
 import { catenaryPolyline } from "../level/catenary";
-import { buildMovePath, type MovePath } from "../level/movers";
+import { buildMoveRoute, moveAngleAt, type MoveRoute } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
 import { World } from "../engine/world";
+import { wrapAngle } from "../engine/mathf";
 import { RigidBody2D } from "../engine/body";
 import {
   DEFAULT_MATERIAL,
@@ -54,10 +56,14 @@ import {
   DEFAULT_SURFACE_FRICTION,
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
+  moveModeCloses,
+  moveModeOf,
+  moveNodesOf,
   scaleLevelData,
   type BodyKind,
   type MoveEase,
   movePeakFactor,
+  type MoveMode,
   type CameraPathData,
   type CameraRegionData,
   type ChainData,
@@ -184,6 +190,45 @@ export type EdShape =
 // One node's keyframes: null = this node does not key that field. Metres for
 // the lengths, as everything in the model is.
 export type EdPathKey = Record<PathKeyField, number | null>;
+
+// One node of a body's travel route (see `EdItem.route` and
+// `LevelBodyData.moveNodes`): the point, its two cubic tangent handles as
+// offsets from it, and its keys.
+//
+// A record per node rather than the camera path's three parallel arrays, and the
+// difference is what the two are edited BY. A camera path is an `EdShape`, so
+// its points go through `localVertices`, `setPathVerts`, the vertex handles and
+// the resize gizmo - every one of which wants the points and nothing else, and
+// the parallel arrays are what hands them over. A route is not a shape: nothing
+// generic ever walks it, its own gestures are the only writers, and a record is
+// then the form that cannot lose a key by renumbering one array and not another.
+//
+// `p` is in the body's own frame and node zero's is always `Vec2.ZERO` - it IS
+// the body. `rot` is an angle offset in radians and `speed` is metres per
+// second; null on either is a node that does not key it.
+export interface EdRouteNode {
+  p: Vec2;
+  in: Vec2;
+  out: Vec2;
+  rot: number | null;
+  speed: number | null;
+}
+
+export const routeNode = (p: Vec2): EdRouteNode => ({
+  p,
+  in: Vec2.ZERO,
+  out: Vec2.ZERO,
+  rot: null,
+  speed: null,
+});
+
+export const cloneRouteNode = (n: EdRouteNode): EdRouteNode => ({ ...n });
+
+// Does this route node key anything at all? What the canvas draws a diamond for,
+// the same mark and the same question a camera path's `isKeyed` asks.
+export function isRouteKeyed(n: EdRouteNode): boolean {
+  return n.rot !== null || n.speed !== null;
+}
 
 export const NO_KEY = (): EdPathKey => {
   const k = {} as EdPathKey;
@@ -397,21 +442,25 @@ export interface EdItem {
   swingPeriod: number;
   swingPhase: number;
   // Static bodies only: the route the body travels (see
-  // `LevelBodyData.movePath`), as the waypoints AFTER the first - the body's own
-  // frame origin is waypoint zero, which is what makes the route ride the body
+  // `LevelBodyData.moveNodes`), as the whole node list - NODE ZERO IS THE BODY,
+  // pinned at the frame origin, which is what makes the route ride the body
   // through every gesture that moves or turns it, exactly as `pivotAt` does.
   // Frame-local for the same reason and held the same way: replaced rather than
   // mutated, since `syncBodyProps` hands one array to every member of a body.
-  movePath: Vec2[];
-  moveClosed: boolean;
-  // ...and how it is travelled: the average speed in METRES per second (the
+  //
+  // Empty is a body with no route at all; a route that exists is two nodes or
+  // more, node zero included, which is how "absent" is spelled in a model whose
+  // fields are always present.
+  route: EdRouteNode[];
+  moveMode: MoveMode;
+  // ...and how it is travelled: the base speed in METRES per second (the
   // inspector shows the file's px/s, as it does for every other length), the
-  // phase in cycles, and the ease. A speed of 0 or an empty route is a body that
-  // stands still, which is how "absent" is spelled in a model whose fields are
-  // always present.
+  // phase in cycles, the ease, and whether the body turns with the route. A
+  // speed of 0 or an empty route is a body that stands still.
   moveSpeed: number;
   movePhase: number;
   moveEase: MoveEase;
+  moveAlign: boolean;
   // Camera layer:
   cam: EdCamera;
   // Lights layer:
@@ -983,13 +1032,25 @@ function fromLevelData(data: LevelData): EdModel {
       return bearing.pos.sub(frame.pos).rotated(-frame.rot);
     })();
     // ...and the route, carried into the same frame and for the same reason: a
-    // waypoint is a point in the body, so it is measured against the frame the
-    // model holds the body in rather than the one the file wrote.
-    const routeIn = (b.movePath ?? []).map((p) => {
+    // route node is a point in the body, so it is measured against the frame the
+    // model holds the body in rather than the one the file wrote. A handle is an
+    // OFFSET from its node, so it takes the turn and not the shift; a key is a
+    // number and takes neither.
+    //
+    // NODE ZERO IS THE BODY and is pinned at the model frame's own origin, which
+    // is what the file means by writing it at (0, 0) - it is the one node no
+    // gesture drags, because moving the body is what moves it.
+    const routeIn: EdRouteNode[] = moveNodesOf(b).map((n, i) => {
       const first = b.objects[0];
-      if (!first) return new Vec2(p.x, p.y);
-      const frame = worldPlacement(b, first);
-      return worldPlacement(b, p).pos.sub(frame.pos).rotated(-frame.rot);
+      const frame = first ? worldPlacement(b, first) : { pos: new Vec2(b.x, b.y), rot: b.rot };
+      const turn = b.rot - frame.rot;
+      return {
+        p: i === 0 ? Vec2.ZERO : worldPlacement(b, n).pos.sub(frame.pos).rotated(-frame.rot),
+        in: new Vec2(n.inX ?? 0, n.inY ?? 0).rotated(turn),
+        out: new Vec2(n.outX ?? 0, n.outY ?? 0).rotated(turn),
+        rot: n.rot ?? null,
+        speed: n.speed ?? null,
+      };
     });
     const base = {
       layer: "scene" as const,
@@ -1014,11 +1075,12 @@ function fromLevelData(data: LevelData): EdModel {
       swingAmp: b.swingAmp ?? 0,
       swingPeriod: b.swingPeriod ?? 0,
       swingPhase: b.swingPhase ?? 0,
-      movePath: routeIn,
-      moveClosed: b.moveClosed === true,
+      route: routeIn,
+      moveMode: moveModeOf(b),
       moveSpeed: b.moveSpeed ?? 0,
       movePhase: b.movePhase ?? 0,
       moveEase: b.moveEase ?? "linear",
+      moveAlign: b.moveAlign === true,
       cam: defaultCamera(),
       light: defaultLight(),
       note: defaultNote(),
@@ -1148,11 +1210,12 @@ function fromLevelData(data: LevelData): EdModel {
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
-    movePath: [],
-    moveClosed: false,
+    route: [],
+    moveMode: "backAndForth",
     moveSpeed: 0,
     movePhase: 0,
     moveEase: "linear",
+    moveAlign: false,
     cam: {
       offset: new Vec2(r.offsetX ?? 0, r.offsetY ?? 0),
       viewportScale: r.viewportScale ?? DEFAULT_VIEWPORT_SCALE,
@@ -1231,11 +1294,12 @@ function fromLevelData(data: LevelData): EdModel {
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
-    movePath: [],
-    moveClosed: false,
+    route: [],
+    moveMode: "backAndForth",
     moveSpeed: 0,
     movePhase: 0,
     moveEase: "linear",
+    moveAlign: false,
     cam: {
       // A path IS the position rule, so it has no offset and no lock to compose
       // with (see "Explicitly out of scope" in plans/camera-tracking.md).
@@ -1311,11 +1375,12 @@ function lightItem(
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
-    movePath: [],
-    moveClosed: false,
+    route: [],
+    moveMode: "backAndForth",
     moveSpeed: 0,
     movePhase: 0,
     moveEase: "linear",
+    moveAlign: false,
     cam: defaultCamera(),
     light: {
       kind: l.kind ?? "point",
@@ -1369,11 +1434,12 @@ function lightItem(
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
-    movePath: [],
-    moveClosed: false,
+    route: [],
+    moveMode: "backAndForth",
     moveSpeed: 0,
     movePhase: 0,
     moveEase: "linear",
+    moveAlign: false,
     cam: defaultCamera(),
     light: defaultLight(),
     anchorId: 0,
@@ -1603,7 +1669,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     const swingsHere =
       lead.kind === "static" && lead.swingAmp !== 0 && lead.swingPeriod > 0;
     // ...and whether it travels, the same question for the route's own fields.
-    const movesHere = lead.kind === "static" && lead.movePath.length > 0 && lead.moveSpeed > 0;
+    const movesHere = lead.kind === "static" && lead.route.length > 1 && lead.moveSpeed > 0;
     const cos = Math.cos(-origin.rot);
     const sin = Math.sin(-origin.rot);
     const localOf = (i: { pos: Vec2; rot: number }): { x?: number; y?: number; rot?: number } => {
@@ -1774,18 +1840,30 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                 }
               : {}),
             // The route, on a static body and only where it is actually
-            // travelled (see `LevelBodyData.movePath`). Its waypoints are
-            // already in the frame this body is being written in, exactly as the
-            // bearing's point is, so they go out as they stand; the closure, the
-            // phase and the ease ride only when they are not the defaults every
-            // level means by saying nothing.
+            // travelled (see `LevelBodyData.moveNodes`). Its nodes are already in
+            // the frame this body is being written in, exactly as the bearing's
+            // point is, so they go out as they stand; a zero handle and an unset
+            // key are OMITTED, so a route drawn as a plain polyline of corners
+            // writes exactly the points it always did and nothing else. The
+            // mode, the phase, the ease and the alignment ride only when they
+            // are not the defaults every level means by saying nothing.
             ...(movesHere
               ? {
-                  movePath: lead.movePath.map((p) => ({ x: p.x, y: p.y })),
+                  moveNodes: lead.route.map((n) => ({
+                    x: n.p.x,
+                    y: n.p.y,
+                    ...(n.in.x !== 0 ? { inX: n.in.x } : {}),
+                    ...(n.in.y !== 0 ? { inY: n.in.y } : {}),
+                    ...(n.out.x !== 0 ? { outX: n.out.x } : {}),
+                    ...(n.out.y !== 0 ? { outY: n.out.y } : {}),
+                    ...(n.rot !== null ? { rot: n.rot } : {}),
+                    ...(n.speed !== null ? { speed: n.speed } : {}),
+                  })),
                   moveSpeed: lead.moveSpeed,
-                  ...(lead.moveClosed ? { moveClosed: true } : {}),
+                  ...(lead.moveMode !== "backAndForth" ? { moveMode: lead.moveMode } : {}),
                   ...(lead.movePhase ? { movePhase: lead.movePhase } : {}),
                   ...(lead.moveEase !== "linear" ? { moveEase: lead.moveEase } : {}),
+                  ...(lead.moveAlign ? { moveAlign: true } : {}),
                 }
               : {}),
             // The BEARING, written for whichever of the two mountings has one.
@@ -2678,35 +2756,57 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.swingAmp = lead.swingAmp;
     m.swingPeriod = lead.swingPeriod;
     m.swingPhase = lead.swingPhase;
-    m.movePath = lead.movePath;
-    m.moveClosed = lead.moveClosed;
+    m.route = lead.route;
+    m.moveMode = lead.moveMode;
     m.moveSpeed = lead.moveSpeed;
     m.movePhase = lead.movePhase;
     m.moveEase = lead.moveEase;
+    m.moveAlign = lead.moveAlign;
   }
 }
 
 // --- scripted motion --------------------------------------------------------
 
-// A body's authored route, as the travelled thing (see `MovePath`): its
-// waypoints resolved into the body's frame with the frame's own origin
-// prepended, which is waypoint zero. The editor's side of what
-// `buildBodies.authoredMover` does at load, so the canvas, the panel's trip
-// readout and the sim cannot each measure a route their own way.
-export function routeOf(model: EdModel, item: EdItem): MovePath {
+// A body's authored route as the travelled thing (see `MoveRoute`): its nodes in
+// the body's frame, built exactly the way `buildBodies.authoredRoute` builds
+// them at load - so the canvas, the panel's trip readout and the sim cannot each
+// measure a route their own way.
+export function routeOf(model: EdModel, item: EdItem): MoveRoute {
   const frame = bodyFrameOf(model, item.bodyId);
-  return buildMovePath(
-    item.movePath.map((p) => p.rotated(frame.rot)),
-    item.moveClosed,
+  return buildMoveRoute(
+    item.route,
+    item.moveMode,
+    frame.rot,
+    item.moveSpeed,
+    item.route.map((n) => n.rot ?? undefined),
+    item.route.map((n) => n.speed ?? undefined),
   );
 }
 
-// ...and the same route in WORLD points, which is what the canvas draws and what
-// a waypoint handle is placed at. Waypoint zero is the body's frame origin,
-// which is why moving the body moves the whole route with it.
+// ...and the same route's NODES in world points, which is what a node handle is
+// placed at and what a tangent grip is measured from. Node zero is the body's
+// frame origin, which is why moving the body moves the whole route with it.
 export function routeWorldPoints(model: EdModel, item: EdItem): Vec2[] {
   const frame = bodyFrameOf(model, item.bodyId);
-  return [frame.pos, ...item.movePath.map((p) => frame.pos.add(p.rotated(frame.rot)))];
+  return item.route.map((n) => frame.pos.add(n.p.rotated(frame.rot)));
+}
+
+// ...and the CURVE it draws as: the flattened polyline in world points, closing
+// leg included on a loop. What the canvas strokes, what the picks are measured
+// against, and the same flattening the sim rides - so what an author drags and
+// what the platform travels cannot disagree about where the route is.
+export function routePolyline(model: EdModel, item: EdItem): Vec2[] {
+  const frame = bodyFrameOf(model, item.bodyId);
+  const nodes = item.route.map((n) => ({ p: n.p, in: n.in, out: n.out }));
+  const seq =
+    moveModeCloses(item.moveMode) && nodes.length > 1 ? [...nodes, nodes[0]!] : nodes;
+  return flattenPath(seq).map((v) => frame.pos.add(v.rotated(frame.rot)));
+}
+
+// Where each node landed along the route, in metres of arc length - what a key
+// is read at, and what the panel's placeholders interpolate against.
+export function routeNodeArcLengths(model: EdModel, item: EdItem): number[] {
+  return routeOf(model, item).index.nodeS;
 }
 
 // The fastest any point of a mover's surface crosses a frame, in metres - the
@@ -2734,10 +2834,58 @@ export function peakSurfaceSpeed(model: EdModel, item: EdItem): number {
     }
     peak += Math.abs(item.swingAmp) * ((2 * Math.PI) / item.swingPeriod) * reach;
   }
-  if (item.movePath.length > 0 && item.moveSpeed > 0) {
-    peak += item.moveSpeed * movePeakFactor(item.moveEase, item.moveClosed);
+  if (item.route.length > 1 && item.moveSpeed > 0) {
+    // The route's peak is its FASTEST stretch times what the ease peaks at,
+    // rather than its authored speed: a node may key a speed of its own, and a
+    // cart that runs away downhill crosses a frame at the speed it gets to
+    // there. The unkeyed route answers `moveSpeed`, which is what it always did.
+    let fastest = item.moveSpeed;
+    for (const n of item.route) if (n.speed !== null) fastest = Math.max(fastest, n.speed);
+    peak += fastest * movePeakFactor(item.moveEase, item.moveMode);
+    // ...plus what TURNING the body drags its far corners round at. A route that
+    // aligns the body to its own tangent, or keys a rotation along it, sweeps
+    // the surface as well as carrying it - and on a tight bend that is the
+    // larger of the two. Measured as the worst turn per metre anywhere on the
+    // route times the speed and the reach, which is `ω × r` with the arc length
+    // as the clock.
+    const turn = peakRouteTurnRate(model, item);
+    if (turn > 0) peak += turn * fastest * bodyReach(model, item);
   }
   return peak / 60;
+}
+
+// The worst turn per metre the route asks of the body anywhere along it, in
+// radians per metre - the `dθ/ds` the surface-speed readout multiplies by the
+// speed to get an angular rate.
+//
+// Sampled off the flattened polyline rather than differentiated, because that
+// is the curve the body actually rides: `moveAngleAt` reads the polyline's own
+// tangent, so a bend that only exists between two flattening samples is a bend
+// the mover does not take either.
+function peakRouteTurnRate(model: EdModel, item: EdItem): number {
+  if (!item.moveAlign && item.route.every((n) => n.rot === null)) return 0;
+  const route = routeOf(model, item);
+  let worst = 0;
+  const step = PATH_FLATTEN_STEP;
+  for (let s = 0; s < route.total; s += step) {
+    const b = Math.min(s + step, route.total);
+    if (b <= s) break;
+    const d = moveAngleAt(route, item.moveAlign, b) - moveAngleAt(route, item.moveAlign, s);
+    worst = Math.max(worst, Math.abs(wrapAngle(d)) / (b - s));
+  }
+  return worst;
+}
+
+// How far the body's farthest corner sits from the point it turns about, which
+// for a travelling body is its own frame origin.
+function bodyReach(model: EdModel, item: EdItem): number {
+  const frame = bodyFrameOf(model, item.bodyId);
+  let reach = 0;
+  for (const m of bodyMembers(model.items, item.bodyId)) {
+    if (m.object !== "collision") continue;
+    for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(frame.pos).length());
+  }
+  return reach;
 }
 
 // Every point of a shape a rider can meet, in world metres: the corners of a
@@ -3081,8 +3229,9 @@ export function emptyModel(): EdModel {
         swingAmp: 0,
         swingPeriod: 0,
         swingPhase: 0,
-        movePath: [],
-        moveClosed: false,
+        route: [],
+        moveMode: "backAndForth",
+        moveAlign: false,
         moveSpeed: 0,
         movePhase: 0,
         moveEase: "linear",

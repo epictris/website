@@ -494,10 +494,36 @@ export class AnimatableBody2D extends StaticBody2D {
     return Math.abs(this.angularVelocity) > 1e-9;
   }
 
+  // Did this frame's move JUMP (see `teleported`)? Cleared by `beginMove`, so it
+  // is only ever true for the frame the jump happened on.
+  //
+  // Public because a jump is a fact about the frame that things outside the body
+  // legitimately need: `cli movers` measures how far every mover's surface
+  // crosses a frame and a teleport is not that measurement's business, and a
+  // reader of the transform delta has no other way to tell a 9 m jump from 9 m
+  // of travel.
+  jumped = false;
+
   // Snapshot the transform before the mover script runs this frame.
   beginMove(): void {
     this.prevPosition = this.globalPosition;
     this.prevRotation = this.globalRotation;
+    this.jumped = false;
+  }
+
+  // Re-snapshot after a JUMP, so this frame's transform delta is not read as
+  // motion. A `repeat` route reaching the end of its run puts the body back at
+  // the start, and that is a teleport rather than a journey: derived from the
+  // delta it would be a contact velocity of tens of metres a second, handed for
+  // one frame to whatever is standing on the body and to the character sweep.
+  //
+  // The frame's contact velocities are then ZERO, which is the honest answer: a
+  // body that has vanished from under a rider is carrying it nowhere, and the
+  // rider being left behind is what teleporting home MEANS.
+  teleported(): void {
+    this.prevPosition = this.globalPosition;
+    this.prevRotation = this.globalRotation;
+    this.jumped = true;
   }
 
   // Derive contact velocities from the per-frame transform delta.

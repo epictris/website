@@ -29,7 +29,7 @@ import {
   regionBuffer,
   type CameraRule,
 } from "./cameraController";
-import { pointAtArcLength, projectOntoPolyline } from "./cameraPath";
+import { pointAtArcLength, projectOntoPolyline } from "../lib/path";
 import { outlineOfData, pathCorridorSweepInto, pathOutline, pathOutlineGrown } from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green

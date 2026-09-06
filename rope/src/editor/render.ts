@@ -37,8 +37,10 @@ import {
   type EdLayer,
   type EdModel,
   type SettleGhost,
+  isRouteKeyed,
+  routePolyline,
 } from "./model";
-import { cubicAt } from "../render/cameraPath";
+import { cubicAt } from "../lib/path";
 import {
   DEFAULT_PATH_FALLOFF_X,
   DEFAULT_PATH_FALLOFF_Y,
@@ -49,6 +51,7 @@ import {
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_VIEWPORT_SCALE,
+  moveModeCloses,
 } from "../level/levelFormat";
 import {
   pathOutline,
@@ -353,35 +356,74 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
   };
 }
 
-// Where a path's tangent grips are drawn, in screen space. A handle that has
-// been authored sits at its own offset; one that has not is a STUB along the
+// Where a node list's tangent grips sit, in the list's OWN frame. A handle that
+// has been authored sits at its own offset; one that has not is a STUB along the
 // edge it belongs to, at a fixed screen distance so it is the same size to grab
 // at any zoom. An end node has only the edge it actually has, so its outward
 // side takes that edge's direction too rather than pointing nowhere.
+//
+// Local rather than screen, and node-list rather than item, because the two
+// things this editor authors as Bezier curves live in different frames: a camera
+// path's nodes are its shape's and go through `toWorld`, and a mover route's are
+// its BODY's and go through `bodyFrameOf`. The grips are the same grips either
+// way, so the frame is the caller's to apply.
+//
+// `wrap` closes the list, so a looping route's first and last nodes each have
+// the edge that the closing leg gives them rather than falling back to their one
+// open neighbour.
+export function tangentGripPoints(
+  nodes: readonly { p: Vec2; in: Vec2; out: Vec2 }[],
+  perPx: number,
+  wrap = false,
+): { local: Vec2; node: number; side: "in" | "out" }[] {
+  const out: { local: Vec2; node: number; side: "in" | "out" }[] = [];
+  const n = nodes.length;
+  for (let i = 0; i < n; i++) {
+    const node = nodes[i]!;
+    // The edge direction each side faces, falling back to the other edge at an
+    // end node so a stub always has somewhere to point.
+    const prev = nodes[wrap ? (i - 1 + n) % n : i - 1];
+    const next = nodes[wrap ? (i + 1) % n : i + 1];
+    const back = (prev ? prev.p.sub(node.p) : next ? node.p.sub(next.p) : Vec2.LEFT).normalized();
+    const fwd = (next ? next.p.sub(node.p) : prev ? node.p.sub(prev.p) : Vec2.RIGHT).normalized();
+    for (const [side, offset, dir] of [
+      ["in", node.in, back],
+      ["out", node.out, fwd],
+    ] as const) {
+      const local = offset.lengthSquared() > 0 ? offset : dir.mul(HANDLE_STUB_PX * perPx);
+      out.push({ local: node.p.add(local), node: i, side });
+    }
+  }
+  return out;
+}
+
+// ...as a camera path's, in screen space.
 function pathHandlePoints(
   cam: Camera,
   body: EdItem,
   nodes: readonly { p: Vec2; in: Vec2; out: Vec2 }[],
 ): PathHandlePoint[] {
-  const out: PathHandlePoint[] = [];
-  const perPx = 1 / (cam.zoom * PIXELS_PER_METER);
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i]!;
-    // The edge direction each side faces, falling back to the other edge at an
-    // end node so a stub always has somewhere to point.
-    const prev = nodes[i - 1];
-    const next = nodes[i + 1];
-    const back = (prev ? prev.p.sub(n.p) : next ? n.p.sub(next.p) : Vec2.LEFT).normalized();
-    const fwd = (next ? next.p.sub(n.p) : prev ? n.p.sub(prev.p) : Vec2.RIGHT).normalized();
-    for (const [side, offset, dir] of [
-      ["in", n.in, back],
-      ["out", n.out, fwd],
-    ] as const) {
-      const local = offset.lengthSquared() > 0 ? offset : dir.mul(HANDLE_STUB_PX * perPx);
-      out.push({ pos: worldToScreen(cam, toWorld(body, n.p.add(local))), vert: i, side });
-    }
-  }
-  return out;
+  return tangentGripPoints(nodes, 1 / (cam.zoom * PIXELS_PER_METER)).map((g) => ({
+    pos: worldToScreen(cam, toWorld(body, g.local)),
+    vert: g.node,
+    side: g.side,
+  }));
+}
+
+// ...and as a mover ROUTE's, in WORLD metres - which is what the canvas draws
+// them at and what the press handler measures against, the route being held in
+// its body's frame rather than in an item's own.
+export function routeHandlePoints(
+  cam: Camera,
+  model: EdModel,
+  item: EdItem,
+): { pos: Vec2; node: number; side: "in" | "out" }[] {
+  const frame = bodyFrameOf(model, item.bodyId);
+  return tangentGripPoints(
+    item.route,
+    1 / (cam.zoom * PIXELS_PER_METER),
+    moveModeCloses(item.moveMode),
+  ).map((g) => ({ pos: frame.pos.add(g.local.rotated(frame.rot)), node: g.node, side: g.side }));
 }
 
 // Screen positions of a chain's two anchor handles and of its wrap points'
@@ -1281,7 +1323,7 @@ function drawGroupMarks(
 // invisible on a still canvas: a swinging body and a plain wall are the same
 // picture, and so are a platform and the lift it is about to become.
 //
-// Two marks, one per motion (see `LevelBodyData.swingAmp` and `movePath`):
+// Two marks, one per motion (see `LevelBodyData.swingAmp` and `moveNodes`):
 //
 //   - a PENDULUM gets a ring at its bearing, and the arc its body sweeps drawn
 //     through the point of it that reaches furthest - which is the part a player
@@ -1303,6 +1345,8 @@ function drawMoverMarks(
   all: readonly EdItem[],
   selectedBodyIds: ReadonlySet<number>,
   worldLine: number,
+  cam: Camera,
+  pickedNodes: ReadonlySet<number>,
 ): void {
   const bodies = new Set<number>();
   for (const b of visible) bodies.add(b.bodyId);
@@ -1349,24 +1393,30 @@ function drawMoverMarks(
       }
     }
 
-    if (lead.movePath.length === 0) continue;
-    const pts = routeWorldPoints(model, lead);
+    if (lead.route.length < 2) continue;
+    // The route as the CURVE it is: the flattened Bezier, which is what the
+    // mover rides and what the picks are measured against - the node hull would
+    // draw a bowed leg as the chord it is not.
+    const curve = routePolyline(model, lead);
     ctx.strokeStyle = MOVER_MARK;
     ctx.lineWidth = worldLine * 1.5;
     ctx.setLineDash([6 * PX, 4 * PX]);
     ctx.beginPath();
-    ctx.moveTo(pts[0]!.x, pts[0]!.y);
-    for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
-    if (lead.moveClosed) ctx.closePath();
+    ctx.moveTo(curve[0]!.x, curve[0]!.y);
+    for (const p of curve.slice(1)) ctx.lineTo(p.x, p.y);
     ctx.stroke();
     ctx.setLineDash([]);
 
+    const pts = routeWorldPoints(model, lead);
+
     // Which way it sets off, on the first leg - the only thing that separates a
-    // lap from the same lap the other way round.
-    const dir = pts[1]!.sub(pts[0]!);
+    // lap from the same lap the other way round. Taken off the curve rather than
+    // off the chord, since a bowed first leg leaves in a different direction
+    // from the one its nodes suggest.
+    const dir = curve[Math.min(1, curve.length - 1)]!.sub(curve[0]!);
     if (dir.length() > 1e-9) {
-      const at = pts[0]!.add(dir.mul(0.5));
       const n = dir.normalized();
+      const at = curve[0]!.add(n.mul(pts[0]!.distanceTo(pts[1] ?? pts[0]!) * 0.5));
       const t = new Vec2(-n.y, n.x);
       const a = 5 * worldLine;
       ctx.beginPath();
@@ -1378,47 +1428,90 @@ function drawMoverMarks(
       ctx.fill();
     }
 
-    // The waypoints. Zero is the body itself and is drawn as a ring rather than
-    // as a square, because it is the one point of the route that is not dragged
-    // on its own - moving the body moves it, which is what makes the route ride
-    // the thing it belongs to.
+    // The nodes. Zero is the body itself and is drawn as a ring rather than as a
+    // square, because it is the one node of the route that is not dragged on its
+    // own - moving the body moves it, which is what makes the route ride the
+    // thing it belongs to.
     const r = 4 * worldLine;
     ctx.lineWidth = worldLine * 1.5;
     ctx.strokeStyle = picked ? HANDLE : MOVER_MARK;
     ctx.beginPath();
     ctx.arc(pts[0]!.x, pts[0]!.y, r, 0, Math.PI * 2);
     ctx.stroke();
-    for (const p of pts.slice(1)) {
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i]!;
       ctx.beginPath();
       ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
       if (picked) {
-        ctx.fillStyle = HANDLE_FILL;
+        ctx.fillStyle = pickedNodes.has(i) ? HANDLE : HANDLE_FILL;
         ctx.fill();
       }
       ctx.stroke();
     }
-    // ...and the midpoints, which insert one. Only on the selected body: they
-    // are an affordance rather than information, and drawn on every mover in the
-    // level they would be a second row of dots nobody may click.
+    // A KEYED node wears a diamond, selected or not, so where the cart tilts or
+    // changes pace can be seen without clicking through every node - the same
+    // mark a camera path's keyed nodes wear, and for the same reason.
+    ctx.fillStyle = MOVER_MARK;
+    lead.route.forEach((n, i) => {
+      const w = pts[i];
+      if (!w || !isRouteKeyed(n)) return;
+      const d = worldLine * PATH_KEY_DIAMOND_PX;
+      ctx.beginPath();
+      ctx.moveTo(w.x, w.y - d);
+      ctx.lineTo(w.x + d, w.y);
+      ctx.lineTo(w.x, w.y + d);
+      ctx.lineTo(w.x - d, w.y);
+      ctx.closePath();
+      ctx.fill();
+    });
+    // ...the insert midpoints and the tangent grips, both affordances rather
+    // than information: only on the selected body, since drawn on every mover in
+    // the level they would be two more rows of dots nobody may click.
     if (!picked) continue;
     ctx.strokeStyle = HANDLE;
     ctx.lineWidth = worldLine;
-    for (const m of routeMidpoints(pts, lead.moveClosed)) {
+    for (const m of routeMidpoints(model, lead)) {
       ctx.beginPath();
       ctx.arc(m.x, m.y, r * 0.6, 0, Math.PI * 2);
       ctx.stroke();
     }
+    // The grips, each on a leader line from its own node - a round grip against
+    // the square nodes, exactly as a camera path draws them.
+    ctx.strokeStyle = MOVER_MARK;
+    ctx.fillStyle = MOVER_MARK;
+    for (const g of routeHandlePoints(cam, model, lead)) {
+      const from = pts[g.node];
+      if (!from) continue;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(g.pos.x, g.pos.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(g.pos.x, g.pos.y, r * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
-// The midpoint of every leg a waypoint can be inserted into - the legs between
-// consecutive waypoints, plus the closing leg home on a loop. Exported because
-// the press handler picks the same points the canvas drew, and two lists of them
+// The midpoint of every leg a node can be inserted into - the legs between
+// consecutive nodes, plus the closing leg home on a loop. Exported because the
+// press handler picks the same points the canvas drew, and two lists of them
 // would be two answers to "what is under the pointer".
-export function routeMidpoints(pts: readonly Vec2[], closed: boolean): Vec2[] {
+//
+// The CURVE's own midpoint (`cubicAt` at t = 1/2), not the chord's, because that
+// is where the de Casteljau split puts the new node: a grip drawn off the curve
+// it inserts into would jump the moment it was clicked.
+export function routeMidpoints(model: EdModel, item: EdItem): Vec2[] {
+  const frame = bodyFrameOf(model, item.bodyId);
+  const n = item.route.length;
+  const legs = moveModeCloses(item.moveMode) ? n : n - 1;
   const mids: Vec2[] = [];
-  for (let i = 1; i < pts.length; i++) mids.push(pts[i - 1]!.add(pts[i]!).mul(0.5));
-  if (closed && pts.length > 1) mids.push(pts[pts.length - 1]!.add(pts[0]!).mul(0.5));
+  for (let i = 0; i < legs; i++) {
+    const a = item.route[i]!;
+    const b = item.route[(i + 1) % n]!;
+    const mid = cubicAt(a.p, a.p.add(a.out), b.p.add(b.in), b.p, 0.5);
+    mids.push(frame.pos.add(mid.rotated(frame.rot)));
+  }
   return mids;
 }
 
@@ -1522,6 +1615,11 @@ export function drawEditor(
   // editor.ts): the whole route with the new point in it, and whether it is
   // over a body it could land on.
   wrapDraft: { path: readonly Vec2[]; valid: boolean } | null = null,
+  // ...and which of the selected body's ROUTE nodes are picked (see `routeSel`
+  // in editor.ts), drawn the same way and for the same reason: a keyed node is
+  // where the cart tilts or changes pace, and which of them an edit applies to
+  // has to be legible on the route rather than only in the panel.
+  selectedRouteNodes: ReadonlySet<number> = new Set<number>(),
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // The backdrop is the editor's own paper. With a 3D scene underneath, this
@@ -1794,7 +1892,7 @@ export function drawEditor(
   drawGroupMarks(ctx, model, markable, model.items, selectedIds, worldLine);
 
   // ...and how the level DRIVES a body: a pendulum's arc and a platform's route.
-  drawMoverMarks(ctx, model, markable, model.items, selectedBodyIds, worldLine);
+  drawMoverMarks(ctx, model, markable, model.items, selectedBodyIds, worldLine, cam, selectedRouteNodes);
 
   // Where a sprung body actually rests, as a dashed outline of its collision
   // shapes at the settled pose. The authored outline stays what is drawn and

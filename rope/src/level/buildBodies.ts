@@ -33,6 +33,8 @@ import { KillZone } from "../classes/killZone";
 import {
   collides,
   isMover,
+  moveModeOf,
+  moveNodesOf,
   moves,
   swings,
   isCollisionObject,
@@ -44,16 +46,11 @@ import {
   type CollisionObjectData,
   type LevelBodyData,
   type LevelData,
+  type MoveEase,
   type ObjectPlacement,
   type ShapeData,
 } from "./levelFormat";
-import {
-  buildMovePath,
-  composeMovers,
-  moveScript,
-  swingScript,
-  type MoverScript,
-} from "./movers";
+import { buildMoveRoute, moverScript, type MoverScript } from "./movers";
 import type { CollisionObject2D } from "../engine/body";
 
 // An authored shape as the ENGINE primitives it is made of, each with the
@@ -458,40 +455,55 @@ export function settledPivotAngle(rb: RigidBody2D): number {
 }
 
 // The authored motion of a mover, as the one script that drives it: the route it
-// travels and the swing it hangs at, composed (see `composeMovers`). Null for a
-// body that authored neither, which `isMover` has already excluded - it is
-// asked again here rather than assumed, so the two cannot drift apart.
-//
-// Both are measured from the pose the body was BUILT at: the route's waypoint
-// zero is the body's own origin and the swing's rest angle is the angle it was
-// mounted at, which is the same statement `RigidBody2D.pivotSpring.restAngle`
-// makes. So a mover at time zero stands exactly where the file drew it, phase
-// permitting, and every offset is honest about what it is measured from.
+// travels and the swing it hangs at, summed (see `moverScript`). Null for a body
+// that authored neither, which `isMover` has already excluded - it is asked
+// again here rather than assumed, so the two cannot drift apart.
 function authoredMover(b: LevelBodyData, body: AnimatableBody2D): MoverScript | null {
-  const scripts: MoverScript[] = [];
-  if (moves(b)) {
-    // The waypoints are in the body's authored frame, so they turn with it -
-    // `worldPlacement` is the same composition every other placement in a body
-    // goes through, and the authored origin is subtracted back off because a
-    // route is a list of OFFSETS from waypoint zero rather than of positions.
-    const origin = new Vec2(b.x, b.y);
-    const offsets = (b.movePath ?? []).map((p) => worldPlacement(b, p).pos.sub(origin));
-    scripts.push(
-      moveScript(
-        body.globalPosition,
-        buildMovePath(offsets, b.moveClosed === true),
-        b.moveSpeed ?? 0,
-        b.movePhase ?? 0,
-        b.moveEase ?? "linear",
-      ),
-    );
-  }
-  if (swings(b)) {
-    scripts.push(
-      swingScript(body.globalRotation, b.swingAmp ?? 0, b.swingPeriod ?? 0, b.swingPhase ?? 0),
-    );
-  }
-  return composeMovers(scripts);
+  const travels = moves(b);
+  const swinging = swings(b);
+  if (!travels && !swinging) return null;
+  return moverScript({
+    base: body.globalPosition,
+    restRot: body.globalRotation,
+    route: travels ? authoredRoute(b) : null,
+    swing: swinging
+      ? { amp: b.swingAmp ?? 0, period: b.swingPeriod ?? 0, phase: b.swingPhase ?? 0 }
+      : null,
+  });
+}
+
+// ...and the route half of it, as the geometry the motion rides.
+//
+// The nodes are in the body's own authored frame (see `MoveNodeData`), so what
+// the builder is handed is that frame and the body's rotation: it flattens in
+// the local frame and turns the polyline once, which is the same curve as
+// turning every node first and costs one rotation per point instead of three.
+// No translation, because a route is OFFSETS from node zero - the body's own
+// origin - rather than positions, and `moverScript` adds the body's pose back.
+function authoredRoute(b: LevelBodyData): {
+  route: ReturnType<typeof buildMoveRoute>;
+  phase: number;
+  ease: MoveEase;
+  align: boolean;
+} {
+  const nodes = moveNodesOf(b);
+  return {
+    route: buildMoveRoute(
+      nodes.map((n) => ({
+        p: new Vec2(n.x, n.y),
+        in: new Vec2(n.inX ?? 0, n.inY ?? 0),
+        out: new Vec2(n.outX ?? 0, n.outY ?? 0),
+      })),
+      moveModeOf(b),
+      b.rot,
+      b.moveSpeed ?? 0,
+      nodes.map((n) => n.rot),
+      nodes.map((n) => n.speed),
+    ),
+    phase: b.movePhase ?? 0,
+    ease: b.moveEase ?? "linear",
+    align: b.moveAlign === true,
+  };
 }
 
 // `data` must already be in metres (scaleLevelData(_, PX)). `onReset` fires when
@@ -539,7 +551,10 @@ export function buildLevelBodies(
     if (built instanceof AnimatableBody2D) {
       const script = authoredMover(b, built);
       if (script) {
-        script(built, 0);
+        // Frame zero, with no step behind it: there is no previous frame for a
+        // jump to be measured against, so `dt` is 0 and the wrap test declines
+        // (see `MoverScript`).
+        script(built, 0, 0);
         movers.push({ body: built, script });
       }
     }
@@ -661,7 +676,7 @@ function buildOne(
   // shapes themselves, so an ordinary static carries it (see `Piece`).
   //
   // ...and neither is MOVING (see `LevelBodyData.swingAmp` for the pendulum and
-  // `movePath` for the travelling body, which may both be on one). A static that
+  // `moveNodes` for the travelling body, which may both be on one). A static that
   // moves is an `AnimatableBody2D`: infinite mass, so nothing in the level
   // disturbs it, with the per-frame contact velocities that let the avatar ride
   // it. It is still a static in every other respect - it collides, it is

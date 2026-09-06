@@ -19,7 +19,7 @@ import {
   pointAtArcLength,
   projectOntoPolyline,
   type PolylineIndex,
-} from "./cameraPath";
+} from "../lib/path";
 
 export type Outline =
   | { kind: "circle"; radius: number }

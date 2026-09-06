@@ -104,17 +104,116 @@ export type MoveEase = "linear" | "sine" | "easeIn" | "easeOut";
 // existing rather than by being added to a second place.
 export const MOVE_EASES: readonly MoveEase[] = ["linear", "sine", "easeIn", "easeOut"];
 
+// What a body does when it reaches the end of an OPEN route (see
+// `LevelBodyData.moveMode`), and the one field that decides what a route means.
+//
+//   backAndForth  travelled there and back for ever - a lift, a shuttle. The
+//                 ease belongs to this one: the return leg is the outward one
+//                 mirrored in time, so the ends are where the body turns round.
+//   loop          the last node runs back to the first and the body goes ROUND
+//                 in one direction for ever - a trolley on a circuit. There are
+//                 no ends, so there is nothing to ease at and nothing to turn
+//                 round from.
+//   repeat        travelled start to end, then TELEPORTED back to the start and
+//                 travelled again - a conveyor's carrier, a wave of traffic. The
+//                 jump is the point of it rather than a flaw in it: the route
+//                 need not close, so a run that only makes sense in one
+//                 direction can be repeated without a return leg and without the
+//                 body having to fly back through the level to do it.
+//
+// `loop` is the retired `moveClosed: true` and `backAndForth` is the retired
+// `moveClosed: false`; `scaleLevelData` folds the flag into this at the one gate
+// (see there), so a level authored before the field keeps exactly the motion it
+// had.
+export type MoveMode = "backAndForth" | "loop" | "repeat";
+
+// The three as a list, for the editor's picker - so a new one is offered by
+// existing rather than by being added to a second place.
+export const MOVE_MODES: readonly MoveMode[] = ["backAndForth", "loop", "repeat"];
+
+// Does this mode close the route - does the last node run back to the first?
+// One predicate, because the flatten, the arc length, the editor's dashed line
+// and its insert midpoints all have to agree about whether the closing leg
+// exists, and "mode === loop" spelled out in five places is five chances to
+// disagree.
+export function moveModeCloses(mode: MoveMode): boolean {
+  return mode === "loop";
+}
+
+// ...and does it have ENDS to ease at? `backAndForth` turns round at both, and
+// `repeat` arrives at one and departs the other, so both read the ease; a lap
+// has neither and would be a body that slows down at an arbitrary point of a
+// circle with nothing there.
+export function moveModeEases(mode: MoveMode): boolean {
+  return mode !== "loop";
+}
+
 // The fastest a body travelling at an average `moveSpeed` actually goes, as a
 // multiple of it. It is what a `linear` route runs at flat, and an ease trades
 // the middle of the trip against the ends: `sine` peaks in the middle at π/2,
 // and either one-sided ease spends the whole trip accelerating or decelerating
 // and so peaks at twice the average. The number the editor's surface-speed
 // readout is built on, and the reason it is here rather than in that readout.
-export function movePeakFactor(ease: MoveEase, closed: boolean): number {
-  if (closed) return 1;
+export function movePeakFactor(ease: MoveEase, mode: MoveMode): number {
+  if (!moveModeEases(mode)) return 1;
   if (ease === "sine") return Math.PI / 2;
   if (ease === "easeIn" || ease === "easeOut") return 2;
   return 1;
+}
+
+// One node of a body's travel route (see `LevelBodyData.moveNodes`): a point the
+// body passes through, the cubic Bezier tangent handles that shape the two legs
+// meeting at it, and the keys it carries.
+//
+// The same node the camera path has (`CameraPathVert`), down to the field names,
+// because it is the same object - an authored curve with a direction, an arc
+// length and per-node keyframes - and both are flattened, indexed and read by
+// the one module (`lib/path.ts`, `lib/keyframes.ts`).
+//
+// `x`/`y` are in the BODY's own authored frame, so the route rides its body:
+// turning the body turns the route and moving it in the editor carries the route
+// along with no gesture knowing the field exists. NODE ZERO IS THE BODY, pinned
+// at (0, 0) - it is written out anyway rather than being implied, because it
+// carries handles and keys of its own and a node with nowhere to put them is a
+// corner the author cannot round.
+//
+// The handles are OFFSETS from (x, y), in the same frame, and both are optional:
+// a leg whose two facing handles are both absent is a straight one, so a route
+// authored as a plain polyline stores nothing extra and flattens to exactly its
+// own nodes - which is what every route drawn before handles existed is, and why
+// adding them changed no level on disk. `in` points back toward the previous
+// node and `out` toward the next, the way every pen tool states them, so a
+// smooth node is one whose two handles are opposite: `in = -out`.
+export interface MoveNodeData {
+  x: number;
+  y: number;
+  inX?: number;
+  inY?: number;
+  outX?: number;
+  outY?: number;
+  // KEYS. A node that carries one is a keyframe for THAT field only and a node
+  // that carries none is transparent to it; between two keyed nodes the value is
+  // smoothstepped by arc length, before the first and past the last it holds,
+  // and a field no node keys at all is the body's own (see `lib/keyframes.ts`).
+  //
+  // `rot` is an angle OFFSET in radians from the pose the body was drawn at, so
+  // a minecart keyed -0.3 at the top of a drop and +0.3 at the bottom noses over
+  // the lip and levels out again. An angle, so it crosses `scaleLevelData`
+  // untouched - the split `swingAmp` already makes. It composes with `moveAlign`
+  // (the route's own slope) by addition, which is what makes it a correction to
+  // the track rather than a replacement for it.
+  //
+  // `speed` is how fast the body travels THERE, in pixels/s on disk and metres/s
+  // once scaled, overriding `moveSpeed` for the stretch it governs - a cart that
+  // runs away downhill and labours up the far side. It is a length per second
+  // and converts. Keying it makes the trip time an INTEGRAL of 1/speed along the
+  // route rather than a division, which is what `MoveRoute`'s time table is (see
+  // `level/movers.ts`); a route that keys none of them keeps exactly the
+  // arithmetic it had. A key of zero or less is floored rather than obeyed: a
+  // body that stops for ever on a route is a body standing still, which is the
+  // plain static that is cheaper to build.
+  rot?: number;
+  speed?: number;
 }
 
 // The retired kind, as levels on disk (and the generated `levelData.ts`) still
@@ -837,55 +936,76 @@ export interface LevelBodyData {
   swingAmp?: number;
   swingPeriod?: number;
   swingPhase?: number;
-  // Static bodies only: a body that TRAVELS AN AUTHORED PATH - a lift, a
-  // shuttling platform, a trolley going round and round a loop. The same kind
-  // of mover the pendulum is and driven the same way: nothing in the level can
-  // disturb it, it carries whatever rides it, and where it is on a given frame
-  // is a pure function of the frame number.
+  // Static bodies only: a body that TRAVELS AN AUTHORED ROUTE - a lift, a
+  // shuttling platform, a trolley going round and round a loop, a minecart
+  // nosing down a track. The same kind of mover the pendulum is and driven the
+  // same way: nothing in the level can disturb it, it carries whatever rides it,
+  // and where it is on a given frame is a pure function of the frame number.
   //
-  // `movePath` is the route as a polyline in the body's own authored frame, and
-  // THE AUTHORED POSITION IS THE FIRST WAYPOINT - so this list is the rest of
-  // them, a plain shuttle is one entry, and a body with an empty or absent list
-  // is a body that stands where it was drawn. Measured from the authored origin
-  // rather than in world coordinates so the route rides its body: turning the
-  // body turns the path, and moving it in the editor carries the path along
-  // with no gesture knowing the field exists. They are lengths and scale.
+  // `moveNodes` is the route, as a cubic Bezier node list in the body's own
+  // authored frame (see `MoveNodeData`), and NODE ZERO IS THE BODY - pinned at
+  // (0, 0), so a plain shuttle is two nodes and a body with fewer than two is a
+  // body that stands where it was drawn. Frame-local rather than in world
+  // coordinates so the route rides its body: turning the body turns the route,
+  // and moving it in the editor carries the route along with it.
   //
-  // `moveClosed` says the route is connected at both ends: the last waypoint
-  // runs back to the first and the body goes ROUND it in one direction for
-  // ever, where an open path is travelled THERE AND BACK. A flag rather than a
-  // repeated final waypoint, because the two would then have to agree to the
-  // float - and it is the same statement a collision polygon makes by being a
-  // loop rather than by restating its first vertex at the end.
+  // `movePath` is the RETIRED form: the waypoints after the first, as a plain
+  // polyline with no handles and no keys. `scaleLevelData` folds it into
+  // `moveNodes` at the one gate every level passes through - prepending the body
+  // as node zero - so a level authored before curves keeps exactly the polyline
+  // it authored and nothing downstream reads the field at all.
+  //
+  // `moveMode` is what the body does at the end of the route (see `MoveMode`):
+  // travelled there and back, gone round for ever, or travelled once and
+  // teleported back to the start. `moveClosed` is its retired two-valued form
+  // and is folded the same way, at the same gate. Absent = `backAndForth`.
   //
   // `moveSpeed` is how fast the body travels, in pixels/s on disk and metres/s
   // once scaled - a SPEED and not a duration, so that lengthening a route makes
   // the trip longer rather than the platform faster, which is what an author
-  // means by "this lift moves at half a metre a second". Under an ease it is
-  // the AVERAGE over a traverse (the ease redistributes the same trip time, so
-  // `sine` peaks at π/2 of it); under `linear` it is simply the speed. 0 or
-  // absent = a body that does not move, which is every static authored before
-  // these fields.
+  // means by "this lift moves at half a metre a second". It is the speed
+  // everywhere no node keys one (`MoveNodeData.speed`); under an ease it is the
+  // AVERAGE over a traverse, since the ease redistributes the same trip time
+  // rather than shortening it (so `sine` peaks at π/2 of it) and under `linear`
+  // with nothing keyed it is simply the speed. 0 or absent = a body that does
+  // not move, which is every static authored before these fields.
   //
   // `movePhase` is where in the trip the body starts, in CYCLES like the
-  // pendulum's and for the same reason - a row of lifts at 0, 0.25, 0.5, 0.75
-  // is the interleaving an author means. A cycle is one lap of a closed route
-  // and one THERE-AND-BACK of an open one, so 0.5 on an open path is the far
-  // end, which is the useful half to be able to name.
+  // pendulum's and for the same reason - a row of lifts at 0, 0.25, 0.5, 0.75 is
+  // the interleaving an author means. A cycle is one lap of a `loop`, one
+  // THERE-AND-BACK of a `backAndForth` (so 0.5 is the far end, which is the
+  // useful half to be able to name) and one end-to-end trip of a `repeat`.
   //
-  // `moveEase` shapes the speed within a traverse and is for the OPEN path (see
-  // `MoveEase`): a closed route has no ends to ease at, and easing round a lap
-  // would be a body that slows down at an arbitrary point of a loop with
+  // `moveEase` shapes the speed within a traverse (see `MoveEase`) and belongs
+  // to the modes that have ENDS: a `loop` has none to ease at, and easing round
+  // a lap would be a body that slows down at an arbitrary point of a circle with
   // nothing there. Absent = `linear`.
   //
-  // A body may swing AND move, and the two compose exactly: the path writes
-  // where the body is and the pendulum writes which way it is turned, so a
-  // bearing on a moving body is a pendulum hung from a travelling cart.
-  movePath?: { x: number; y: number }[];
-  moveClosed?: boolean;
+  // `moveAlign` turns the body with the route: an aligned body's rotation IS the
+  // route's own direction, so a minecart noses up and down a curved track with
+  // no keys at all. The track decides which way the body faces, exactly as the
+  // route already decides where it is - so the drawn rotation stops being an
+  // input to rotation, the way the drawn position stopped being an input to
+  // position past node zero, and this is the one place a mover's pose at time
+  // zero is not the pose the file drew (see `moveAngleAt` for why the
+  // alternative is worse). `MoveNodeData.rot` adds to it, as a correction to the
+  // track rather than a replacement for it.
+  //
+  // A body may swing AND move, and the three motions compose by addition: the
+  // route writes where the body is, the route's alignment and rot keys write
+  // which way the track has turned it, and the pendulum writes the swing on top
+  // of that - so a bearing on a moving body is a pendulum hung from a travelling
+  // cart.
+  moveNodes?: MoveNodeData[];
+  moveMode?: MoveMode;
   moveSpeed?: number;
   movePhase?: number;
   moveEase?: MoveEase;
+  moveAlign?: boolean;
+  // The retired forms, folded into `moveNodes` / `moveMode` by `scaleLevelData`
+  // and read nowhere downstream of it.
+  movePath?: { x: number; y: number }[];
+  moveClosed?: boolean;
   // What this body is made of, looks like and lights with. Order is authored
   // order, and it is what the build and both renderers walk: a body's collision
   // objects become its shapes in this order (which is what `setCompoundInertia`
@@ -938,13 +1058,35 @@ export function swings(b: LevelBodyData): boolean {
   return b.kind === "static" && (b.swingAmp ?? 0) !== 0 && (b.swingPeriod ?? 0) > 0;
 }
 
-// ...and does it travel a route (see `LevelBodyData.movePath`)? A waypoint and a
+// ...and does it travel a route (see `LevelBodyData.moveNodes`)? A leg and a
 // speed are both needed for there to be a journey: a route with no speed is a
-// body standing at its first waypoint, and a speed with no route is a body with
+// body standing at its first node, and a speed with no route is a body with
 // nowhere to take it, and either alone is the plain static that is cheaper to
 // build.
+//
+// TWO nodes rather than one, because node zero is the body itself: a route that
+// is only the body is a body standing where it was drawn.
+//
+// Asked of the FOLDED form, so a caller reaching this has already been through
+// `scaleLevelData` and the retired `movePath` is not a second answer.
 export function moves(b: LevelBodyData): boolean {
-  return b.kind === "static" && (b.movePath?.length ?? 0) > 0 && (b.moveSpeed ?? 0) > 0;
+  return b.kind === "static" && (b.moveNodes?.length ?? 0) > 1 && (b.moveSpeed ?? 0) > 0;
+}
+
+// The route's movement mode, with the retired `moveClosed` folded in. Here as
+// well as in `scaleLevelData` because the editor reads a level straight off disk
+// through `modelFromDisk`, and a default spelled out twice is a default that
+// drifts.
+export function moveModeOf(b: LevelBodyData): MoveMode {
+  return b.moveMode ?? (b.moveClosed === true ? "loop" : "backAndForth");
+}
+
+// ...and the route itself, with the retired `movePath` folded in: the body as
+// node zero, then the authored waypoints as plain corners.
+export function moveNodesOf(b: LevelBodyData): MoveNodeData[] {
+  if (b.moveNodes) return b.moveNodes;
+  if (!b.movePath?.length) return [];
+  return [{ x: 0, y: 0 }, ...b.movePath.map((p) => ({ x: p.x, y: p.y }))];
 }
 
 // Is this body a scripted mover at all - either of the two ways a level can
@@ -2506,17 +2648,41 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.swingAmp !== undefined ? { swingAmp: b.swingAmp } : {}),
       ...(b.swingPeriod !== undefined ? { swingPeriod: b.swingPeriod } : {}),
       ...(b.swingPhase !== undefined ? { swingPhase: b.swingPhase } : {}),
-      // The route is a list of POINTS, so every one of them is a length; the
-      // speed is a length per second and converts with them. What does not is
-      // the phase (cycles), the ease (a name) and the closure (a fact about the
-      // polyline) - the same split the pendulum's fields make above.
-      ...(b.movePath !== undefined
-        ? { movePath: b.movePath.map((p) => ({ x: p.x * factor, y: p.y * factor })) }
+      // The route is a list of POINTS with tangent handles, so every one of
+      // those is a length, and so is a node's speed key and the body's own
+      // speed - a length per second. What is not is the phase (cycles), the
+      // ease and the mode (names), the alignment (a fact about the curve) and a
+      // node's rot key (an angle) - the same split the pendulum's fields make
+      // above, and the same one `CameraPathVert`'s keys make below.
+      //
+      // The RETIRED forms are folded here, at the one gate every level passes
+      // through, so nothing downstream reads them and a level that authored a
+      // plain looped polyline keeps exactly the route and the motion it
+      // authored: `movePath` becomes `moveNodes` with the body prepended as
+      // node zero, and `moveClosed` becomes the mode it named. Both are dropped
+      // rather than carried, which is what makes the fold idempotent - a level
+      // may cross this gate twice (px -> m -> px) and must come back the same.
+      ...(moveNodesOf(b).length
+        ? {
+            moveNodes: moveNodesOf(b).map((n) => ({
+              x: n.x * factor,
+              y: n.y * factor,
+              ...(n.inX !== undefined ? { inX: n.inX * factor } : {}),
+              ...(n.inY !== undefined ? { inY: n.inY * factor } : {}),
+              ...(n.outX !== undefined ? { outX: n.outX * factor } : {}),
+              ...(n.outY !== undefined ? { outY: n.outY * factor } : {}),
+              ...(n.rot !== undefined ? { rot: n.rot } : {}),
+              ...(n.speed !== undefined ? { speed: n.speed * factor } : {}),
+            })),
+          }
         : {}),
-      ...(b.moveClosed !== undefined ? { moveClosed: b.moveClosed } : {}),
+      ...(b.moveMode !== undefined || b.moveClosed !== undefined
+        ? { moveMode: moveModeOf(b) }
+        : {}),
       ...(b.moveSpeed !== undefined ? { moveSpeed: b.moveSpeed * factor } : {}),
       ...(b.movePhase !== undefined ? { movePhase: b.movePhase } : {}),
       ...(b.moveEase !== undefined ? { moveEase: b.moveEase } : {}),
+      ...(b.moveAlign !== undefined ? { moveAlign: b.moveAlign } : {}),
       objects: b.objects.map((o) => scaleObject(o, factor)),
     })),
   };

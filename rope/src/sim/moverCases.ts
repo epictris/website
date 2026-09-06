@@ -3,7 +3,7 @@
 //
 // A mover is a body the level drives rather than one the sim solves - a
 // pendulum on a bearing (`LevelBodyData.swingAmp`) and a body travelling a route
-// (`movePath`) - so, like the spring body, its whole behaviour has a closed
+// (`moveNodes`) - so, like the spring body, its whole behaviour has a closed
 // form: where it is on frame N is an arithmetic expression in N, and every
 // number an author types has a consequence that can be written down. A regression
 // is therefore a number rather than a screenshot, which matters more here than
@@ -20,6 +20,14 @@
 //   - it CARRIES what rides it, through the ordinary contact path (`rider`);
 //   - and the authored fields are READ - a level with them builds a mover and
 //     one without builds the plain static it always did (`authored`).
+//
+// Several cases below deliberately author the RETIRED `movePath` / `moveClosed`
+// form rather than `moveNodes` / `moveMode`. That is not laziness left over from
+// the rewrite: it means the shuttle, the lap, the phase and the rider are all
+// measured THROUGH the fold in `scaleLevelData`, so a fold that quietly stopped
+// working would take them all red rather than being covered only by the one
+// case that is about it. `legacy` is that case, and asserts the two forms play
+// bit-identically.
 
 import { Vec2 } from "../engine/vec2";
 import { AnimatableBody2D, RigidBody2D, StaticBody2D } from "../engine/body";
@@ -28,12 +36,47 @@ import { World } from "../engine/world";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { PX as PX_FACTOR, PIXELS_PER_METER } from "../engine/units";
 import { buildLevelBodies, worldPlacement } from "../level/buildBodies";
-import { scaleLevelData, type LevelBodyData, type RawLevelData } from "../level/levelFormat";
-import { buildMovePath, easeFraction, moveDistanceAt, pointAlong } from "../level/movers";
+import {
+  scaleLevelData,
+  type LevelBodyData,
+  type MoveMode,
+  type RawLevelData,
+} from "../level/levelFormat";
+import { TANGENT_WINDOW } from "../lib/path";
+import { keyValueAt } from "../lib/keyframes";
+import {
+  buildMoveRoute,
+  easeFraction,
+  moveAngleAt,
+  moveDistanceAt,
+  pointAlong,
+  type MoveRoute,
+} from "../level/movers";
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { LEVELS } from "../level/registry";
 
 const DT = 1 / 60;
+
+// The route these cases build by hand: the body as node zero, then the given
+// waypoints as plain corners at a plain speed. The retired `buildMovePath`'s
+// shape, so every case written against that reads unchanged, and the one place
+// the new node form is spelled out for a test.
+function route(
+  waypoints: readonly Vec2[],
+  mode: MoveMode = "backAndForth",
+  speed = 1,
+  keys: { rot?: (number | undefined)[]; speed?: (number | undefined)[] } = {},
+): MoveRoute {
+  const pts = [Vec2.ZERO, ...waypoints];
+  return buildMoveRoute(
+    pts.map((p) => ({ p, in: Vec2.ZERO, out: Vec2.ZERO })),
+    mode,
+    0,
+    speed,
+    keys.rot ?? pts.map(() => undefined),
+    keys.speed ?? pts.map(() => undefined),
+  );
+}
 
 export interface MoverResult {
   name: string;
@@ -69,7 +112,7 @@ class Scene {
       const time = this.frame * DT;
       for (const m of this.movers) {
         m.body.beginMove();
-        m.script(m.body, time);
+        m.script(m.body, time, DT);
         m.body.commitMove(DT);
       }
       this.world.integrate(DT);
@@ -609,10 +652,10 @@ function caseEase(): MoverResult {
 
   // ...and none of them changes how long the trip takes: the body is at the far
   // end after exactly one traverse whichever is authored.
-  const path = buildMovePath([new Vec2(4, 0)], false);
+  const path = route([new Vec2(4, 0)]);
   for (const ease of ["linear", "sine", "easeIn", "easeOut"] as const) {
-    const atEnd = moveDistanceAt(path, 1, 0, ease, 4);
-    const atStart = moveDistanceAt(path, 1, 0, ease, 0);
+    const atEnd = moveDistanceAt(path, 0, ease, 4);
+    const atStart = moveDistanceAt(path, 0, ease, 0);
     check(
       `${ease} takes the same 4 s (start ${atStart.toFixed(4)} m, end ${atEnd.toFixed(4)} m of 4)`,
       Math.abs(atStart) < 1e-9 && Math.abs(atEnd - 4) < 1e-9,
@@ -635,20 +678,20 @@ function caseMovePhase(): MoverResult {
     if (!cond) passed = false;
   };
 
-  const open = buildMovePath([new Vec2(4, 0)], false);
+  const open = route([new Vec2(4, 0)]);
   check(
-    `half a cycle is the far end of a shuttle (${moveDistanceAt(open, 1, 0.5, "linear", 0).toFixed(4)} m of 4)`,
-    Math.abs(moveDistanceAt(open, 1, 0.5, "linear", 0) - 4) < 1e-9,
+    `half a cycle is the far end of a shuttle (${moveDistanceAt(open, 0.5, "linear", 0).toFixed(4)} m of 4)`,
+    Math.abs(moveDistanceAt(open, 0.5, "linear", 0) - 4) < 1e-9,
   );
   check(
-    `a whole one is the start again (${moveDistanceAt(open, 1, 1, "linear", 0).toFixed(4)} m)`,
-    Math.abs(moveDistanceAt(open, 1, 1, "linear", 0)) < 1e-9,
+    `a whole one is the start again (${moveDistanceAt(open, 1, "linear", 0).toFixed(4)} m)`,
+    Math.abs(moveDistanceAt(open, 1, "linear", 0)) < 1e-9,
   );
-  const closed = buildMovePath([new Vec2(2, 0), new Vec2(2, -1), new Vec2(0, -1)], true);
+  const closed = route([new Vec2(2, 0), new Vec2(2, -1), new Vec2(0, -1)], "loop");
   check(`a closed route's journey is its perimeter (${closed.total} m)`, Math.abs(closed.total - 6) < 1e-12);
   check(
-    `half a cycle is half way round a loop (${moveDistanceAt(closed, 1, 0.5, "linear", 0).toFixed(4)} m of 6)`,
-    Math.abs(moveDistanceAt(closed, 1, 0.5, "linear", 0) - 3) < 1e-9,
+    `half a cycle is half way round a loop (${moveDistanceAt(closed, 0.5, "linear", 0).toFixed(4)} m of 6)`,
+    Math.abs(moveDistanceAt(closed, 0.5, "linear", 0) - 3) < 1e-9,
   );
 
   // ...and the two spawn where that says: a phase-less body on waypoint zero.
@@ -691,24 +734,24 @@ function caseRouteGeometry(): MoverResult {
     if (!cond) passed = false;
   };
 
-  const l = buildMovePath([new Vec2(3, 0), new Vec2(3, -4)], false);
+  const l = route([new Vec2(3, 0), new Vec2(3, -4)]);
   check(`an L is measured along its legs (${l.total} m)`, l.total === 7);
   check("half way is on the first leg", pointAlong(l, 3).sub(new Vec2(3, 0)).length() < 1e-12);
   check("the corner is a waypoint", pointAlong(l, 5).sub(new Vec2(3, -2)).length() < 1e-12);
   check("before the start clamps to it", pointAlong(l, -10).length() === 0);
   check("past the end clamps to it", pointAlong(l, 99).sub(new Vec2(3, -4)).length() < 1e-12);
 
-  const loop = buildMovePath([new Vec2(2, 0), new Vec2(2, -1), new Vec2(0, -1)], true);
+  const loop = route([new Vec2(2, 0), new Vec2(2, -1), new Vec2(0, -1)], "loop");
   check(`a loop counts the leg home (${loop.total} m)`, loop.total === 6);
   check("a lap wraps to the start", pointAlong(loop, 6).length() < 1e-12);
   check("...and keeps wrapping", pointAlong(loop, 13).sub(new Vec2(1, 0)).length() < 1e-12);
   check("a negative distance wraps too", pointAlong(loop, -1).sub(new Vec2(0, -1)).length() < 1e-12);
 
-  const dup = buildMovePath([new Vec2(1, 0), new Vec2(1, 0), new Vec2(2, 0)], false);
+  const dup = route([new Vec2(1, 0), new Vec2(1, 0), new Vec2(2, 0)]);
   check(`a repeated waypoint is passed through (${dup.total} m)`, dup.total === 2);
   check("...and does not divide by nothing", Number.isFinite(pointAlong(dup, 1).x));
 
-  const none = buildMovePath([], false);
+  const none = route([]);
   check("an empty route is a body standing still", none.total === 0 && pointAlong(none, 5).length() === 0);
 
   return ok("route-geometry - a route is measured and walked along its legs", passed, details);
@@ -822,10 +865,19 @@ function caseAuthored(): MoverResult {
   // is narrowed back to the modern body these cases author.
   const src = raw.bodies[1] as LevelBodyData;
   const trip = back.bodies[1] as LevelBodyData;
+  // The retired `movePath` is FOLDED into `moveNodes` at this gate, with the
+  // body prepended as node zero - so what has to survive is the authored
+  // waypoint, now at index 1.
   check(
-    `the route survives px -> m -> px (${trip.movePath?.[0]?.x} of ${src.movePath?.[0]?.x})`,
-    Math.abs((trip.movePath?.[0]?.x ?? 0) - (src.movePath?.[0]?.x ?? 0)) < 1e-9 &&
+    `the route survives px -> m -> px (${trip.moveNodes?.[1]?.x} of ${src.movePath?.[0]?.x})`,
+    trip.moveNodes?.length === 2 &&
+      Math.abs((trip.moveNodes?.[1]?.x ?? 0) - (src.movePath?.[0]?.x ?? 0)) < 1e-9 &&
+      Math.abs((trip.moveNodes?.[0]?.x ?? 9) - 0) < 1e-12 &&
       Math.abs((trip.moveSpeed ?? 0) - (src.moveSpeed ?? 0)) < 1e-9,
+  );
+  check(
+    `...and the retired fields are gone with it (${trip.movePath}, ${trip.moveClosed})`,
+    trip.movePath === undefined && trip.moveClosed === undefined,
   );
   check(
     `the pendulum's amplitude is an ANGLE and does not scale (${metres.bodies[0]?.swingAmp})`,
@@ -845,7 +897,7 @@ function caseAuthored(): MoverResult {
   const model = modelFromDisk(raw);
   const saved = modelToDisk(model);
   const savedSwing = saved.bodies.find((b) => b.swingAmp !== undefined);
-  const savedMove = saved.bodies.find((b) => b.movePath !== undefined);
+  const savedMove = saved.bodies.find((b) => b.moveNodes !== undefined);
   check(
     `the editor keeps the pendulum (${savedSwing?.swingAmp}, ${savedSwing?.swingPeriod} s)`,
     Math.abs((savedSwing?.swingAmp ?? 0) - SWING_AMP) < 1e-9 &&
@@ -864,16 +916,30 @@ function caseAuthored(): MoverResult {
     bearingNow !== null && bearingNow.sub(bearingWas).length() < 1e-6,
   );
   check(
-    `the editor keeps the route (${savedMove?.movePath?.length} waypoints at ${savedMove?.moveSpeed} px/s, ${savedMove?.moveEase})`,
-    savedMove?.movePath?.length === 1 &&
+    `the editor keeps the route (${savedMove?.moveNodes?.length} nodes at ${savedMove?.moveSpeed} px/s, ${savedMove?.moveEase})`,
+    savedMove?.moveNodes?.length === 2 &&
       Math.abs((savedMove?.moveSpeed ?? 0) - 90) < 1e-9 &&
       savedMove?.moveEase === "easeOut" &&
       Math.abs((savedMove?.movePhase ?? 0) - 0.3) < 1e-9,
   );
+  // A route of plain corners writes NO handles and NO keys, which is what keeps
+  // a level authored before curves byte-identical through a save.
+  check(
+    "a route of corners writes no handles and no keys",
+    (savedMove?.moveNodes ?? []).every(
+      (n) =>
+        n.inX === undefined &&
+        n.inY === undefined &&
+        n.outX === undefined &&
+        n.outY === undefined &&
+        n.rot === undefined &&
+        n.speed === undefined,
+    ),
+  );
   const wasAt = worldPlacement(raw.bodies[1] as LevelBodyData, { x: 300, y: -200 }).pos;
   const nowAt =
-    savedMove && savedMove.movePath?.[0]
-      ? worldPlacement(savedMove, savedMove.movePath[0]).pos
+    savedMove && savedMove.moveNodes?.[1]
+      ? worldPlacement(savedMove, savedMove.moveNodes[1]).pos
       : null;
   check(
     `...at the waypoint it was authored at (${nowAt?.x.toFixed(3)}, ${nowAt?.y.toFixed(3)})`,
@@ -898,6 +964,12 @@ function caseAuthored(): MoverResult {
 // (whose fastest point is its centre's speed plus its own spin, and no shipped
 // mover is one). Measured rather than bounded, because a bound that overstates a
 // rotation by the shape's half-diagonal fails levels that are within the rule.
+// An angle folded into (-π, π], so a turn measured across the seam of a lap is
+// the turn and not the branch cut.
+function wrapPi(a: number): number {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
+
 function surfacePoints(body: AnimatableBody2D): Vec2[] {
   const points: Vec2[] = [];
   for (const s of body.getShapes()) {
@@ -935,6 +1007,14 @@ function caseLevels(): MoverResult {
       const before = scene.movers.map((m) => surfacePoints(m.body));
       scene.step();
       scene.movers.forEach((m, i) => {
+        // A `repeat`'s wrap is a TELEPORT, and the bar is about how fast a
+        // surface CROSSES a frame - a body that jumped did not cross anything,
+        // it stopped being where it was. Measuring the jump would make the bar
+        // unmeetable for the mode rather than informative about it. (What the
+        // jump does cost an author is real and is not this: a carrier landing
+        // on top of the player pushes them out, so the start of a repeat is a
+        // place to keep clear.)
+        if (m.body.jumped) return;
         const after = surfacePoints(m.body);
         after.forEach((p, k) => {
           const moved = p.sub(before[i]![k]!).length();
@@ -955,6 +1035,564 @@ function caseLevels(): MoverResult {
   return ok("levels - every shipped mover stays under the contact-speed bar", passed, details);
 }
 
+
+// ---------------------------------------------------------------------------
+// repeat: a route travelled once and started again, with the way home a
+// TELEPORT rather than a return leg.
+//
+// Three claims, and the last is the one that makes it usable. The body runs the
+// route in one direction (never backwards, which is what separates it from a
+// shuttle); it is back at the start on the frame after it reaches the end; and
+// the jump imparts NO contact velocity, because a jump is not motion - read off
+// the transform delta it would be tens of metres a second thrown for one frame
+// at whatever is standing on it.
+// ---------------------------------------------------------------------------
+function caseRepeat(): MoverResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (label: string, cond: boolean): void => {
+    details.push(`${cond ? "ok  " : "BAD "} ${label}`);
+    if (!cond) passed = false;
+  };
+
+  const r = route([new Vec2(4, 0)], "repeat");
+  check(`a repeat's cycle is ONE traverse (${r.traverse} s of 4)`, Math.abs(r.traverse - 4) < 1e-12);
+  check(
+    `half a cycle is half way along (${moveDistanceAt(r, 0, "linear", 2).toFixed(4)} m of 4)`,
+    Math.abs(moveDistanceAt(r, 0, "linear", 2) - 2) < 1e-9,
+  );
+  // ...and one cycle on is back at the start rather than at the far end, which
+  // is the whole difference from a shuttle.
+  check(
+    `a whole cycle is the START again (${moveDistanceAt(r, 0, "linear", 4).toFixed(4)} m)`,
+    Math.abs(moveDistanceAt(r, 0, "linear", 4)) < 1e-9,
+  );
+  // Forward everywhere but the wrap, which is the whole difference from a
+  // shuttle: two runs of a 4 s route over 8 s must step back exactly twice, at
+  // the two ends, and nowhere in between.
+  let backwards = 0;
+  let prev = moveDistanceAt(r, 0, "linear", 0);
+  for (let f = 1; f <= Math.round(8 / DT); f++) {
+    const d = moveDistanceAt(r, 0, "linear", f * DT);
+    if (d < prev) backwards++;
+    prev = d;
+  }
+  check(`it only goes back at the wrap (${backwards} steps back over 2 runs)`, backwards === 2);
+
+  // The level's own answer, and the contact velocity across the wrap.
+  const scene = new Scene(
+    swingLevel([
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        moveNodes: [{ x: 0, y: 0 }, { x: 400, y: 0 }],
+        moveMode: "repeat",
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+      },
+    ]),
+  );
+  const body = scene.mover();
+  let far = 0;
+  let jumped = false;
+  let worstJumpSpeed = 0;
+  let travellingSpeed = 0;
+  for (let f = 1; f <= Math.round(5 / DT); f++) {
+    const was = body.globalPosition.x;
+    scene.step();
+    const now = body.globalPosition.x;
+    far = Math.max(far, now);
+    if (now < was - 1e-9) {
+      jumped = true;
+      worstJumpSpeed = Math.max(worstJumpSpeed, body.linearVelocity.length());
+    } else {
+      travellingSpeed = Math.max(travellingSpeed, body.linearVelocity.length());
+    }
+  }
+  check(`it reaches the far end (${far.toFixed(3)} m of 4)`, Math.abs(far - 4) < 0.02);
+  check("...and jumps home rather than turning round", jumped);
+  check(
+    `the jump imparts no contact velocity (${worstJumpSpeed.toFixed(4)} m/s, travelling ${travellingSpeed.toFixed(2)})`,
+    worstJumpSpeed === 0 && Math.abs(travellingSpeed - 1) < 1e-6,
+  );
+
+  // A body ON it is left where it stood rather than flung after it: the whole
+  // reason the frame's velocity is zeroed instead of derived.
+  const rider = new Scene({
+    player: { x: -1000, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        moveNodes: [{ x: 0, y: 0 }, { x: 300, y: 0 }],
+        moveMode: "repeat",
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 400, h: 24 } }],
+      },
+      {
+        kind: "rigid",
+        x: 0,
+        y: -40,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 40, h: 40 } }],
+      },
+    ],
+  });
+  const crate = rider.bodies[1]!.body as RigidBody2D;
+  let worstFling = 0;
+  for (let f = 1; f <= Math.round(4 / DT); f++) {
+    rider.step();
+    worstFling = Math.max(worstFling, Math.abs(crate.linearVelocity.x));
+  }
+  check(
+    `a rider is never flung by the wrap (${worstFling.toFixed(3)} m/s, carried at 1)`,
+    worstFling < 1.5,
+  );
+
+  return ok("repeat - a route run once and started again, with a teleport home", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// curves: a route's nodes carry Bezier tangent handles, and the whole of what
+// they cost is the flattening.
+//
+// The claims are the camera path's own, restated where it matters here: a route
+// of corners is bit-identical to the polyline it was, a bowed leg is LONGER than
+// its chord and the body actually travels the bow, and the arc length the motion
+// is expressed in is the curve's rather than the node hull's.
+// ---------------------------------------------------------------------------
+function caseCurves(): MoverResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (label: string, cond: boolean): void => {
+    details.push(`${cond ? "ok  " : "BAD "} ${label}`);
+    if (!cond) passed = false;
+  };
+
+  const corners = route([new Vec2(3, 0), new Vec2(3, -4)]);
+  check(`a route of corners is its own legs (${corners.total} m)`, corners.total === 7);
+
+  // One leg bowed out by a pair of handles a metre long each way. A cubic never
+  // strays outside its control polygon, so the arc is between the chord and the
+  // polygon - longer than 4, shorter than the 6 the polygon walks.
+  const bowed = buildMoveRoute(
+    [
+      { p: Vec2.ZERO, in: Vec2.ZERO, out: new Vec2(0, -2) },
+      { p: new Vec2(4, 0), in: new Vec2(0, -2), out: Vec2.ZERO },
+    ],
+    "backAndForth",
+    0,
+    1,
+    [undefined, undefined],
+    [undefined, undefined],
+  );
+  check(
+    `a bowed leg is longer than its chord (${bowed.total.toFixed(3)} m, chord 4)`,
+    bowed.total > 4.3 && bowed.total < 8,
+  );
+  // ...and the body is genuinely off the chord half way along, which a
+  // flattening that ignored the handles could not produce.
+  const mid = pointAlong(bowed, bowed.total / 2);
+  check(
+    `half way along is off the chord (${mid.x.toFixed(3)}, ${mid.y.toFixed(3)})`,
+    Math.abs(mid.x - 2) < 0.05 && mid.y < -1.4,
+  );
+  // The chordal error against the true cubic, which is what a route's precision
+  // ultimately means: every flattened point is on the curve by construction, so
+  // what is measured is the worst SAG of a chord between two of them.
+  let worstSag = 0;
+  for (let i = 0; i + 1 < bowed.index.verts.length; i++) {
+    const a = bowed.index.verts[i]!;
+    const b = bowed.index.verts[i + 1]!;
+    const t = (bowed.index.cum[i]! + bowed.index.cum[i + 1]!) / 2;
+    worstSag = Math.max(worstSag, pointAlong(bowed, t).sub(a.add(b).mul(0.5)).length());
+  }
+  check(`the flattening holds the curve to a millimetre (${(worstSag * 1000).toFixed(2)} mm)`, worstSag < 0.001);
+
+  // A loop's closing leg is a Bezier edge like any other: handles on node zero's
+  // `in` and the last node's `out` bow the way home rather than being ignored.
+  const straightHome = buildMoveRoute(
+    [
+      { p: Vec2.ZERO, in: Vec2.ZERO, out: Vec2.ZERO },
+      { p: new Vec2(4, 0), in: Vec2.ZERO, out: Vec2.ZERO },
+      { p: new Vec2(4, -3), in: Vec2.ZERO, out: Vec2.ZERO },
+    ],
+    "loop",
+    0,
+    1,
+    [undefined, undefined, undefined],
+    [undefined, undefined, undefined],
+  );
+  const bowedHome = buildMoveRoute(
+    [
+      { p: Vec2.ZERO, in: new Vec2(0, 2), out: Vec2.ZERO },
+      { p: new Vec2(4, 0), in: Vec2.ZERO, out: Vec2.ZERO },
+      { p: new Vec2(4, -3), in: Vec2.ZERO, out: new Vec2(0, 2) },
+    ],
+    "loop",
+    0,
+    1,
+    [undefined, undefined, undefined],
+    [undefined, undefined, undefined],
+  );
+  check(`a lap of corners is its perimeter (${straightHome.total.toFixed(3)} m of 12)`, Math.abs(straightHome.total - 12) < 1e-9);
+  check(
+    `...and the closing leg takes its handles (${bowedHome.total.toFixed(3)} m)`,
+    bowedHome.total > straightHome.total + 0.2,
+  );
+
+  return ok("curves - a route's legs are cubics and its arc length is the curve's", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// keys: a node keys the body's ANGLE and its SPEED where it stands, and the
+// value between two of them is eased by arc length.
+//
+// The minecart, in other words: it noses over on the descent and runs away down
+// it. The load-bearing claim is the speed one, because keying a speed turns the
+// trip time from a division into an integral - and doing that has to leave a
+// route that keys NONE of them at exactly the arithmetic it had.
+// ---------------------------------------------------------------------------
+function caseKeys(): MoverResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (label: string, cond: boolean): void => {
+    details.push(`${cond ? "ok  " : "BAD "} ${label}`);
+    if (!cond) passed = false;
+  };
+
+  // ANGLE. Two nodes 4 m apart, keyed 0 and 90 degrees.
+  const turned = route([new Vec2(4, 0)], "backAndForth", 1, { rot: [0, Math.PI / 2] });
+  check(`a rot key is the angle at its node (${moveAngleAt(turned, false, 4).toFixed(4)} rad)`,
+    Math.abs(moveAngleAt(turned, false, 0)) < 1e-12 &&
+      Math.abs(moveAngleAt(turned, false, 4) - Math.PI / 2) < 1e-9);
+  // Smoothstepped between them: half way is half the turn, and the rate is FLAT
+  // at each key - which is what stops a keyed angle putting a step in the
+  // body's angular velocity where a node sits.
+  const half = moveAngleAt(turned, false, 2);
+  check(`half way is half the turn (${half.toFixed(4)} of ${(Math.PI / 4).toFixed(4)})`,
+    Math.abs(half - Math.PI / 4) < 1e-9);
+  const rateAtKey = (moveAngleAt(turned, false, 0.004) - moveAngleAt(turned, false, 0)) / 0.004;
+  const rateAtMid = (moveAngleAt(turned, false, 2.004) - moveAngleAt(turned, false, 2)) / 0.004;
+  check(`the turn is flat at a key and steepest between (${rateAtKey.toFixed(4)} vs ${rateAtMid.toFixed(3)})`,
+    rateAtKey < 0.01 && rateAtMid > 0.5);
+  // Past the last key and before the first it HOLDS: there is nothing beyond the
+  // ends of a route to blend toward.
+  check("past the last key it holds", Math.abs(moveAngleAt(turned, false, 99) - Math.PI / 2) < 1e-9);
+
+  // ALIGN, which is the same angle taken from the route's own tangent - and
+  // taken as the CHANGE from where the route starts, so a body stands at the
+  // angle it was drawn at on frame zero.
+  const corner = route([new Vec2(4, 0), new Vec2(4, -4)]);
+  check(`aligned, the body faces along the route (${moveAngleAt(corner, true, 0).toFixed(6)})`,
+    Math.abs(moveAngleAt(corner, true, 0)) < 1e-12);
+  // An aligned body's rotation IS the route's direction, not a turn measured
+  // from where the route started - so a route that sets off up a slope puts the
+  // body ON that slope rather than leaving it level and 45 degrees out for the
+  // whole trip. Red against a change-since-the-start implementation, which
+  // answers 0 here and 90 (rather than 45) at the far end.
+  const sloped = route([new Vec2(4, -4), new Vec2(8, -4)]);
+  check(`...along a SLOPED start too (${((moveAngleAt(sloped, true, 0) * 180) / Math.PI).toFixed(1)}° of -45)`,
+    Math.abs(moveAngleAt(sloped, true, 0) + Math.PI / 4) < 1e-9);
+  check(`...and level where the route levels out (${((moveAngleAt(sloped, true, sloped.total) * 180) / Math.PI).toFixed(1)}°)`,
+    Math.abs(moveAngleAt(sloped, true, sloped.total)) < 1e-9);
+  check(`...and has turned a right angle down the far leg (${moveAngleAt(corner, true, 8).toFixed(4)})`,
+    Math.abs(Math.abs(moveAngleAt(corner, true, 8)) - Math.PI / 2) < 1e-9);
+  // ...and it turns GRADUALLY. The tangent is the chord across a window rather
+  // than a segment's own direction, so a corner is spread over half a metre of
+  // track instead of landing entirely on the frame the body crosses a vertex -
+  // which read off the segments is a 90 degree step in one frame, and is what
+  // this is red against.
+  let worstStep = 0;
+  for (let x = 0; x < corner.total; x += 0.01) {
+    const step = moveAngleAt(corner, true, Math.min(x + 0.01, corner.total)) - moveAngleAt(corner, true, x);
+    worstStep = Math.max(worstStep, Math.abs(step));
+  }
+  check(`...gradually, over the corner rather than at it (${((worstStep * 180) / Math.PI).toFixed(2)}° per cm)`,
+    worstStep < 0.05);
+  // The turn really does happen AROUND the corner: a quarter-metre before it the
+  // body has begun turning, and a quarter-metre after it is nearly done.
+  const before = Math.abs(moveAngleAt(corner, true, 4 - TANGENT_WINDOW / 2));
+  const after = Math.abs(moveAngleAt(corner, true, 4 + TANGENT_WINDOW));
+  check(`...and around the corner rather than along the leg (${((before * 180) / Math.PI).toFixed(1)}° before, ${((after * 180) / Math.PI).toFixed(1)}° after)`,
+    before > 0.05 && after > Math.PI / 2 - 1e-9);
+  check("unaligned and unkeyed, it never turns at all",
+    moveAngleAt(corner, false, 0) === 0 && moveAngleAt(corner, false, 6) === 0);
+
+  // A LOOP has no ends, so the tangent window must not clamp at them. Clamped,
+  // the seam frame reads two one-sided chords over opposite halves of the
+  // window: the aligned body holds one angle all the way round and then turns
+  // the route's whole turn across the window in a single frame, which is a kick
+  // handed to whatever is riding it. A circle is the case that shows it, since
+  // there every point of the lap is the same as every other and the seam has no
+  // right to be different.
+  const R = 2;
+  const K = (4 / 3) * Math.tan(Math.PI / 8); // the cubic circle's handle length
+  const circle = buildMoveRoute(
+    [0, 1, 2, 3].map((i) => {
+      const a = (i * Math.PI) / 2;
+      const p = new Vec2(Math.cos(a) * R, Math.sin(a) * R);
+      const t = new Vec2(-Math.sin(a), Math.cos(a)).mul(K * R);
+      return { p, in: t.neg(), out: t };
+    }),
+    "loop",
+    0,
+    1,
+    [undefined, undefined, undefined, undefined],
+    [undefined, undefined, undefined, undefined],
+  );
+  check(`a cubic circle laps its circumference (${circle.total.toFixed(4)} m of ${(2 * Math.PI * R).toFixed(4)})`,
+    Math.abs(circle.total - 2 * Math.PI * R) < 0.01);
+  // Round the lap in 1 cm steps and take the worst turn in any one of them. On a
+  // circle every step should turn by the same tiny amount.
+  let worstLap = 0;
+  const step = 0.01;
+  for (let x = 0; x + step <= circle.total; x += step) {
+    worstLap = Math.max(
+      worstLap,
+      Math.abs(wrapPi(moveAngleAt(circle, true, x + step) - moveAngleAt(circle, true, x))),
+    );
+  }
+  const ideal = step / R;
+  check(`...and an aligned body turns evenly round it (worst ${(worstLap / ideal).toFixed(2)}x ideal)`,
+    worstLap < ideal * 2);
+  // ...and the SEAM is one of those steps rather than a special place. The sim
+  // reaches it by wrapping - `moveDistanceAt` runs the arc length back to 0 -
+  // so the step to measure is from just before `total` to just after 0, which a
+  // monotone scan up the route never crosses. A clamped window answers the
+  // one-sided chord at each end and the two differ by the route's turn across
+  // the WHOLE window, so the body turns 25 cm of circle in one frame.
+  const eps = step / 2;
+  const seam = Math.abs(
+    wrapPi(moveAngleAt(circle, true, eps) - moveAngleAt(circle, true, circle.total - eps)),
+  );
+  check(`...the SEAM included (${(seam / ideal).toFixed(2)}x ideal, clamped it is ~${(TANGENT_WINDOW / R / ideal).toFixed(0)}x)`,
+    seam < ideal * 2);
+
+  // SPEED. 4 m at 1 m/s is 4 s; the same 4 m keyed at 2 m/s throughout is 2 s.
+  const plain = route([new Vec2(4, 0)]);
+  const fast = route([new Vec2(4, 0)], "backAndForth", 1, { speed: [2, 2] });
+  check(`an unkeyed route's trip is a division (${plain.traverse} s)`, plain.traverse === 4);
+  check("...and it builds NO pace table", plain.pace === null);
+  check(`a route keyed twice as fast takes half as long (${fast.traverse.toFixed(4)} s of 2)`,
+    Math.abs(fast.traverse - 2) < 1e-6);
+  check("...and it does build one", fast.pace !== null);
+
+  // The half-and-half case, which is what "speeds up down the slope" IS: 4 m
+  // keyed 1 m/s at the start and 3 m/s at the end. Smoothstepped, the mean of
+  // 1/v over the route is what the trip time is, and it must land strictly
+  // between the 4 s the slow end alone would take and the 4/3 s the fast end
+  // would - and nearer the harmonic mean than the arithmetic one, since it is
+  // TIME that adds and not speed.
+  const slope = route([new Vec2(4, 0)], "backAndForth", 1, { speed: [1, 3] });
+  check(`a route that speeds up takes between the two (${slope.traverse.toFixed(4)} s, 1.33..4)`,
+    slope.traverse > 4 / 3 && slope.traverse < 4);
+  check(`...and longer than the arithmetic mean would say (${slope.traverse.toFixed(4)} s vs 2)`,
+    slope.traverse > 2);
+  // It really does travel faster at the fast end: the last metre takes less time
+  // than the first.
+  const tAt = (s: number): number => {
+    let lo = 0;
+    let hi = slope.traverse;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (moveDistanceAt(slope, 0, "linear", mid) < s) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+  const firstMetre = tAt(1) - tAt(0);
+  const lastMetre = tAt(4) - tAt(3);
+  check(`the last metre is quicker than the first (${lastMetre.toFixed(3)} s vs ${firstMetre.toFixed(3)})`,
+    lastMetre < firstMetre * 0.6);
+
+  // A keyed speed and an EASE compose: the ease reshapes progress through the
+  // trip and the keys say how the trip maps onto the route, so the trip still
+  // takes exactly as long and still ends where it ends.
+  for (const ease of ["linear", "sine", "easeIn", "easeOut"] as const) {
+    const atEnd = moveDistanceAt(slope, 0, ease, slope.traverse);
+    const atStart = moveDistanceAt(slope, 0, ease, 0);
+    check(`${ease} over a keyed route still runs 0 -> ${slope.total} (${atStart.toFixed(4)}, ${atEnd.toFixed(4)})`,
+      Math.abs(atStart) < 1e-9 && Math.abs(atEnd - slope.total) < 1e-6);
+  }
+
+  // ...and the level reads all of it, which is the half arithmetic cannot say.
+  const scene = new Scene(
+    swingLevel([
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        moveNodes: [
+          { x: 0, y: 0, rot: 0, speed: 100 },
+          { x: 400, y: 0, rot: Math.PI / 4, speed: 300 },
+        ],
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+      },
+    ]),
+  );
+  const body = scene.mover();
+  check(`a keyed body spawns at its first key's angle (${body.globalRotation.toFixed(6)})`,
+    Math.abs(body.globalRotation) < 1e-12);
+  let turnedTo = 0;
+  for (let f = 1; f <= Math.round(3 / DT); f++) {
+    scene.step();
+    turnedTo = Math.max(turnedTo, body.globalRotation);
+  }
+  check(`...and turns to the last one as it arrives (${turnedTo.toFixed(4)} of ${(Math.PI / 4).toFixed(4)})`,
+    Math.abs(turnedTo - Math.PI / 4) < 1e-3);
+
+  // The keys survive both round trips, which is the half nothing else can see.
+  const raw = swingLevel([
+    {
+      kind: "static",
+      x: 0,
+      y: 0,
+      rot: 0,
+      moveNodes: [
+        { x: 0, y: 0, outX: 50, outY: -20 },
+        { x: 400, y: 0, inX: -50, inY: -20, rot: 0.3, speed: 250 },
+      ],
+      moveMode: "repeat",
+      moveSpeed: 100,
+      moveAlign: true,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+    },
+  ]);
+  const back = scaleLevelData(scaleLevelData(raw, PX_FACTOR) as RawLevelData, PIXELS_PER_METER);
+  const n = (back.bodies[0] as LevelBodyData).moveNodes ?? [];
+  check(
+    `a handle is a LENGTH and converts (${n[0]?.outX?.toFixed(3)} of 50)`,
+    Math.abs((n[0]?.outX ?? 0) - 50) < 1e-9 && Math.abs((n[1]?.inY ?? 0) - -20) < 1e-9,
+  );
+  check(
+    `a speed key converts and a rot key does not (${n[1]?.speed}, ${n[1]?.rot})`,
+    Math.abs((n[1]?.speed ?? 0) - 250) < 1e-9 && n[1]?.rot === 0.3,
+  );
+  check(
+    `the mode and the alignment cross untouched (${(back.bodies[0] as LevelBodyData).moveMode}, ${(back.bodies[0] as LevelBodyData).moveAlign})`,
+    (back.bodies[0] as LevelBodyData).moveMode === "repeat" &&
+      (back.bodies[0] as LevelBodyData).moveAlign === true,
+  );
+  // A LOOP repeats node zero's key at the far end of the arc length, so the
+  // value between the last keyed node and the seam eases back toward it. The
+  // editor's key placeholders read this very track (`MoveRoute.speedKeys`); a
+  // second one assembled from the node list alone is one key short and holds the
+  // last key instead, which is a placeholder that changes the motion when it is
+  // typed in.
+  const lap = route([new Vec2(4, 0), new Vec2(4, -4), new Vec2(0, -4)], "loop", 1, {
+    speed: [2, undefined, 5, undefined],
+  });
+  const lapNodeS = lap.index.nodeS;
+  check(`a lap's key track carries node zero at both ends (${lap.speedKeys.length} keys of 3)`,
+    lap.speedKeys.length === 3 &&
+      lap.speedKeys[0]!.s === 0 &&
+      Math.abs(lap.speedKeys[2]!.s - lap.total) < 1e-9 &&
+      lap.speedKeys[2]!.v === 2);
+  const atLast = keyValueAt(lap.speedKeys, lapNodeS[3] ?? 0, 1);
+  check(`...so past the last keyed node it eases back to it (${atLast.toFixed(3)}, not 5)`,
+    atLast > 2 && atLast < 5);
+
+  const saved = modelToDisk(modelFromDisk(raw)).bodies.find((b) => b.moveNodes !== undefined);
+  const sn = saved?.moveNodes ?? [];
+  check(
+    `the editor keeps the handles and the keys (${sn.length} nodes, rot ${sn[1]?.rot}, speed ${sn[1]?.speed})`,
+    sn.length === 2 &&
+      Math.abs((sn[1]?.rot ?? 0) - 0.3) < 1e-9 &&
+      Math.abs((sn[1]?.speed ?? 0) - 250) < 1e-9 &&
+      Math.abs((sn[0]?.outX ?? 0) - 50) < 1e-6 &&
+      Math.abs((sn[1]?.inX ?? 0) - -50) < 1e-6,
+  );
+  check(
+    `...and the mode and the alignment (${saved?.moveMode}, ${saved?.moveAlign})`,
+    saved?.moveMode === "repeat" && saved?.moveAlign === true,
+  );
+
+  return ok("keys - a node keys the angle and the speed the body has there", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// legacy: a level authored before nodes, modes and keys plays exactly as it did.
+//
+// The one claim that cannot be got from the arithmetic: `movePath` becomes
+// `moveNodes` with the body prepended, `moveClosed` becomes the mode it named,
+// and both are folded at `scaleLevelData` - the one gate every level passes
+// through - so nothing downstream has a second opinion.
+// ---------------------------------------------------------------------------
+function caseLegacy(): MoverResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (label: string, cond: boolean): void => {
+    details.push(`${cond ? "ok  " : "BAD "} ${label}`);
+    if (!cond) passed = false;
+  };
+
+  const legacy = (closed: boolean): RawLevelData =>
+    swingLevel([
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        movePath: [{ x: 200, y: 0 }, { x: 200, y: -100 }],
+        ...(closed ? { moveClosed: true } : {}),
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 24 } }],
+      },
+    ]);
+  const modern = (mode: MoveMode): RawLevelData =>
+    swingLevel([
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        moveNodes: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: -100 }],
+        moveMode: mode,
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 100, h: 24 } }],
+      },
+    ]);
+
+  for (const [closed, mode] of [[false, "backAndForth"], [true, "loop"]] as const) {
+    const a = new Scene(legacy(closed));
+    const b = new Scene(modern(mode));
+    let worst = 0;
+    for (let f = 1; f <= 600; f++) {
+      a.step();
+      b.step();
+      worst = Math.max(worst, a.mover().globalPosition.sub(b.mover().globalPosition).length());
+    }
+    check(`moveClosed: ${closed} plays as ${mode}, to the bit (${worst})`, worst === 0);
+  }
+
+  const folded = scaleLevelData(legacy(true), 1).bodies[0] as LevelBodyData;
+  check(
+    `the fold prepends the body as node zero (${folded.moveNodes?.length} nodes)`,
+    folded.moveNodes?.length === 3 &&
+      folded.moveNodes[0]!.x === 0 &&
+      folded.moveNodes[0]!.y === 0 &&
+      folded.moveNodes[1]!.x === 200,
+  );
+  check(`...names the mode (${folded.moveMode})`, folded.moveMode === "loop");
+  check(
+    `...and drops the retired fields (${folded.movePath}, ${folded.moveClosed})`,
+    folded.movePath === undefined && folded.moveClosed === undefined,
+  );
+  // Idempotent, which is what lets a level cross the gate twice (px -> m -> px)
+  // and come back the same.
+  const twice = scaleLevelData(scaleLevelData(legacy(true), 1), 1).bodies[0] as LevelBodyData;
+  check("the fold is idempotent", JSON.stringify(twice) === JSON.stringify(folded));
+
+  return ok("legacy - a route authored before nodes plays exactly as it did", passed, details);
+}
+
 export function runMoverCases(): MoverResult[] {
   return [
     caseSwingArc(),
@@ -967,6 +1605,10 @@ export function runMoverCases(): MoverResult[] {
     caseEase(),
     caseMovePhase(),
     caseRouteGeometry(),
+    caseRepeat(),
+    caseCurves(),
+    caseKeys(),
+    caseLegacy(),
     caseDeterminism(),
     caseAuthored(),
     caseLevels(),

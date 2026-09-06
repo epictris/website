@@ -501,26 +501,35 @@ const SWING_DATA: RawLevelData = {
 
 export const TEST_SWING: LevelSpec = { data: SWING_DATA };
 
-// Bodies that travel a route (see `LevelBodyData.movePath`): the three shapes a
-// route comes in, side by side, so what each authored field does is a thing you
-// can stand on.
+// Bodies that travel a route (see `LevelBodyData.moveNodes`): the shapes a route
+// comes in, side by side, so what each authored field does is a thing you can
+// stand on.
 //
-//   - a LIFT up a shaft, an open route eased with `sine` - it comes to a stop at
-//     both ends and turns round smoothly, which is what a lift does and what
-//     stops a rider being thrown off at the top;
-//   - a TROLLEY going round a closed rectangle at a constant speed, one way for
-//     ever, which is what `moveClosed` means;
+//   - a LIFT up a shaft, a `backAndForth` route eased with `sine` - it comes to
+//     a stop at both ends and turns round smoothly, which is what a lift does
+//     and what stops a rider being thrown off at the top;
+//   - a TROLLEY going round a `loop` at a constant speed, one way for ever;
 //   - a SHUTTLE across the gap eased with `easeOut` - it leaves the near side at
 //     full speed and settles into the far one, so the two ends of the same trip
 //     feel different, which is the reason there is a pair of one-sided eases
-//     rather than one.
+//     rather than one;
+//   - a MINECART down a curved track and up the far side, which is the whole of
+//     what a route learned when it became a Bezier: the legs are cubics, the
+//     cart is turned by the track under it (`moveAlign`) and it runs away into
+//     the dip and labours out again because the node at the bottom keys a speed
+//     of its own;
+//   - a CARRIER on a `repeat` - one way along its run, then home in a jump
+//     rather than by flying back through the level, which is the mode a return
+//     leg would be nonsense for.
 //
 // Speeds are picked against the same contact-speed rule the swings are (see
 // `SWING_DATA`), and the ease is half of that arithmetic: `moveSpeed` is the
 // AVERAGE over a traverse, and the peak is that times 1 under `linear`, π/2
 // under `sine` and 2 under either one-sided ease. So the lift's 0.6 m/s peaks at
 // 0.94, the shuttle's 0.5 at 1.0, and the trolley runs flat at 0.5 - 1.6, 1.7
-// and 0.8 cm a frame.
+// and 0.8 cm a frame. A keyed route is bounded by its FASTEST key rather than by
+// `moveSpeed`, and an aligned one is charged for what turning drags its corners
+// round at as well, which is what keeps the minecart slow.
 const LIFT_DATA: RawLevelData = {
   // At the right-hand end of the left ledge, which frames the shuttle and the
   // trolley at once; the lift is a walk to the left.
@@ -562,7 +571,7 @@ const LIFT_DATA: RawLevelData = {
       y: 92,
       rot: 0,
       color: "#5a6a7a",
-      movePath: [{ x: 0, y: -500 }],
+      moveNodes: [{ x: 0, y: 0 }, { x: 0, y: -500 }],
       moveSpeed: 60,
       moveEase: "sine",
       objects: [{ type: "collision", shape: { kind: "rect", w: 240, h: 24 } }],
@@ -585,12 +594,13 @@ const LIFT_DATA: RawLevelData = {
       y: -300,
       rot: 0,
       color: "#7a5a3a",
-      movePath: [
+      moveNodes: [
+        { x: 0, y: 0 },
         { x: 400, y: 0 },
         { x: 400, y: -200 },
         { x: 0, y: -200 },
       ],
-      moveClosed: true,
+      moveMode: "loop",
       moveSpeed: 50,
       objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
     },
@@ -602,10 +612,55 @@ const LIFT_DATA: RawLevelData = {
       y: 92,
       rot: 0,
       color: "#5a6a7a",
-      movePath: [{ x: 200, y: 0 }],
+      moveNodes: [{ x: 0, y: 0 }, { x: 200, y: 0 }],
       moveSpeed: 50,
       moveEase: "easeOut",
       objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+    },
+    // The minecart: down into a valley and up the far side, on a track whose
+    // legs are cubics rather than corners.
+    //
+    // The handles are what make it a valley instead of a V. All three pairs are
+    // HORIZONTAL, so the track leaves level, levels out again at the bottom and
+    // arrives level at the far side - and the cart, which is drawn level, is
+    // therefore drawn ON its own rails. `moveAlign` aims it along them, so it
+    // noses over the lip on the way down and levels out in the dip; a cart drawn
+    // across a track it does not lie on would be snapped onto it at load, which
+    // is what align means and is worth not demonstrating in the worked level.
+    //
+    // The bottom node keys a speed of its own, which is the thing keys are for:
+    // the cart runs away into the dip at 0.7 m/s and labours out of it at 0.3,
+    // and the trip time is the integral of 1/speed along the track rather than
+    // its length over one number.
+    {
+      kind: "static",
+      x: -900,
+      y: -900,
+      rot: 0,
+      color: "#6a5a4a",
+      moveNodes: [
+        { x: 0, y: 0, outX: 200, outY: 0, speed: 30 },
+        { x: 400, y: 250, inX: -150, inY: 0, outX: 150, outY: 0, speed: 70 },
+        { x: 800, y: 0, inX: -200, inY: 0, speed: 30 },
+      ],
+      moveSpeed: 30,
+      moveAlign: true,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 160, h: 20 } }],
+    },
+    // The carrier: one way along its run and then HOME IN A JUMP, which is what
+    // `repeat` is for - a belt's carrier reaching the end of the belt does not
+    // walk back down it. The jump imparts no contact velocity, so nothing riding
+    // it is flung after it; it is simply left standing where the carrier was.
+    {
+      kind: "static",
+      x: -1000,
+      y: -1250,
+      rot: 0,
+      color: "#4a6a5a",
+      moveNodes: [{ x: 0, y: 0 }, { x: 900, y: 0 }],
+      moveMode: "repeat",
+      moveSpeed: 60,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 180, h: 20 } }],
     },
   ],
 };

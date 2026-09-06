@@ -192,7 +192,7 @@ export class Level {
     const time = this.frame * delta;
     for (const m of this.movers) {
       m.body.beginMove();
-      m.script(m.body, time);
+      m.script(m.body, time, delta);
       m.body.commitMove(delta);
     }
 

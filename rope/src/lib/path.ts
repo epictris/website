@@ -1,19 +1,28 @@
-// Camera-path geometry: projecting a point onto an open polyline, and walking
-// arc length along it. Pure functions with no controller state and no DOM, so
-// they are checked directly by `cli camera` rather than through a level.
+// Bezier-path geometry: flattening a node list with cubic tangent handles into
+// a polyline, walking arc length along it, and projecting a point onto it. Pure
+// functions with no controller state and no DOM, so they are checked directly
+// by `cli camera` and `cli movers` rather than through a level.
 //
-// FRAME. An index is built in WORLD space: the path's local verts are
-// transformed by its (origin, rot) once at construction and never again, since
-// nothing mutates a path at runtime. Every function here therefore takes and
-// returns world points and no caller transforms anything - unlike
-// `pointInRegion`, which tests in the region's local frame because a rect and a
-// polygon have no world form to test against.
+// SHARED, and that is the point of it being here rather than beside either
+// caller. A camera path (`CameraPathData`) and a body's travel route
+// (`LevelBodyData.moveNodes`) are the same object - an authored curve with a
+// direction and an arc length - and the two would otherwise carry two
+// flatteners, two arc-length indices and two answers to "where is s metres
+// along this". The camera reads it render-side; the mover build reads it
+// sim-side, which is why nothing in here may touch a clock or a DOM.
+//
+// FRAME. An index is built in WORLD space: the local nodes are transformed by
+// an (origin, rot) once at construction and never again, since nothing mutates
+// a path at runtime. Every function here therefore takes and returns world
+// points and no caller transforms anything - unlike `pointInRegion`, which
+// tests in the region's local frame because a rect and a polygon have no world
+// form to test against.
 //
 // ARC LENGTH is the coordinate everything is expressed in: `s` metres from the
-// first vert along the polyline. It is what makes "the camera leads the player
-// by `lookahead` metres" a single addition, and it is monotone along the path
-// even where the path passes near itself, which is what the windowed projection
-// below leans on.
+// first node along the polyline. It is what makes "the camera leads the player
+// by `lookahead` metres" and "the cart is `s` metres round the track" a single
+// addition, and it is monotone along the path even where the path passes near
+// itself, which is what the camera's windowed projection below leans on.
 
 import { Vec2 } from "../engine/vec2";
 
@@ -251,4 +260,121 @@ function projectRange(
     return { s, dist: pointAtArcLength(ix, s).distanceTo(p) };
   }
   return { s: bestS, dist: bestDist };
+}
+
+// How much arc length either side of `s` the tangent below is measured over.
+//
+// A corner therefore turns a body aligned to the route over half a metre of
+// track rather than in one frame. The number is a statement about how sharply a
+// rideable thing may turn, which is why it is a length rather than a count of
+// samples: measured between adjacent polyline vertices instead, a corner between
+// two straight legs would spread its whole turn over an entire 4 m leg (a
+// straight leg flattens to its two endpoints) while the same corner on a curved
+// one turned within centimetres - the same authored shape reading differently
+// for a reason that is about the flattener rather than about the route.
+export const TANGENT_WINDOW = 0.25;
+
+// The direction the route runs at arc length `s`, as a unit vector, clamped to
+// [0, total] like `pointAtArcLength`.
+//
+// Read off the flattened polyline rather than differentiated from the cubic, so
+// it is the tangent of the curve everything ELSE rides: a body aligned to the
+// route and the route it is drawn on cannot disagree about which way the track
+// points.
+//
+// The chord across a WINDOW rather than the segment's own direction, and that is
+// the whole of the function. A segment's direction is constant along it, so
+// answering with it makes the tangent a STAIRCASE - a body aligned to the route
+// would hold one angle for a whole segment and then turn the entire
+// segment-to-segment angle on the single frame it crossed the vertex, which is a
+// jerk on screen and a contact-velocity spike for anything riding it. On a
+// smooth stretch the chord's direction is the tangent at its midpoint, so the
+// window costs a curve nothing; what it spreads is a CORNER, over
+// `TANGENT_WINDOW` either side of it.
+//
+// The window clamps at the ends of an OPEN route, so the tangent at `s = 0` is
+// the direction the route sets off in over its first quarter-metre - which is
+// the right answer to "which way does this start". A `closed` route has no ends
+// to clamp at and wraps instead; see below for why that is load-bearing.
+//
+// A degenerate path (one point, or all points coincident, or a route shorter
+// than the window that doubles back on itself) answers `Vec2.RIGHT`, the same
+// nothing-to-go-on default `ellipseReach` takes.
+export function tangentAtArcLength(ix: PolylineIndex, s: number, closed = false): Vec2 {
+  if (ix.verts.length < 2 || ix.total <= 0) return Vec2.RIGHT;
+  const total = ix.total;
+  // A CLOSED route has no ends, so the window must not clamp at them: it wraps,
+  // and the two samples straddle the seam exactly as they straddle any other
+  // point. Clamped, the seam frame reads two one-sided chords over opposite
+  // halves of the window, which differ by the route's own turn across it - on a
+  // 2 m circuit that is 0.13 rad delivered in one frame, an 8 rad/s kick handed
+  // to whatever is riding the platform. It is the same seam `buildMoveRoute`
+  // repeats node zero's keys across and the same one `repeat` guards with
+  // `teleported`; the tangent needs its own answer to it.
+  if (closed) {
+    const t = ((s % total) + total) % total;
+    const at = (x: number): Vec2 => pointAtArcLength(ix, ((x % total) + total) % total);
+    const d = at(t + TANGENT_WINDOW).sub(at(t - TANGENT_WINDOW));
+    return d.lengthSquared() < 1e-18 ? Vec2.RIGHT : d.normalized();
+  }
+  const t = Math.min(Math.max(s, 0), total);
+  const lo = Math.max(0, t - TANGENT_WINDOW);
+  const hi = Math.min(total, t + TANGENT_WINDOW);
+  const d = pointAtArcLength(ix, hi).sub(pointAtArcLength(ix, lo));
+  return d.lengthSquared() < 1e-18 ? Vec2.RIGHT : d.normalized();
+}
+
+// The angle of that direction. Its own function because both callers want the
+// angle rather than the vector, and `atan2` on a tangent is the kind of line
+// that gets written slightly differently in two places.
+export function tangentAngleAt(ix: PolylineIndex, s: number, closed = false): number {
+  const d = tangentAtArcLength(ix, s, closed);
+  return Math.atan2(d.y, d.x);
+}
+
+// One cubic edge split at t = 1/2, as the four handle offsets the split leaves
+// behind: the edge's own two are shortened and the new node between them gets a
+// pair of its own.
+//
+// De Casteljau, so the two halves TOGETHER are the curve that was there - a
+// bowed edge gains a node and changes shape by nothing. Splitting the chord
+// instead would straighten the edge the moment it was subdivided, which is the
+// one thing an insert must not do.
+//
+// Offsets rather than control points, because that is how both node forms store
+// a handle (see `PathNode`): the caller writes them straight onto the nodes.
+export function splitCubicAtHalf(
+  a: PathNode,
+  b: PathNode,
+): { mid: Vec2; outA: Vec2; inB: Vec2; inMid: Vec2; outMid: Vec2 } {
+  const c1 = a.p.add(a.out);
+  const c2 = b.p.add(b.in);
+  const m1 = a.p.add(c1).mul(0.5);
+  const m2 = c1.add(c2).mul(0.5);
+  const m3 = c2.add(b.p).mul(0.5);
+  const n1 = m1.add(m2).mul(0.5);
+  const n2 = m2.add(m3).mul(0.5);
+  const mid = n1.add(n2).mul(0.5);
+  return { mid, outA: m1.sub(a.p), inB: m3.sub(b.p), inMid: n1.sub(mid), outMid: n2.sub(mid) };
+}
+
+// The Catmull-Rom tangent at every node: a third of the chord between a node's
+// two neighbours, which is the standard interpolating spline and what "smooth
+// this" means - the curve still passes through every authored point and only
+// the way it arrives at them changes. End nodes take the one neighbour they
+// have, so a two-node path smooths to exactly the straight line it already was.
+//
+// `wrap` treats the list as a closed loop, so a route that comes back round to
+// its first node is smooth THROUGH it rather than cornering there.
+export function smoothTangents(
+  points: readonly Vec2[],
+  wrap = false,
+): { in: Vec2; out: Vec2 }[] {
+  const n = points.length;
+  return points.map((p, i) => {
+    const prev = points[wrap ? (i - 1 + n) % n : i - 1] ?? p;
+    const next = points[wrap ? (i + 1) % n : i + 1] ?? p;
+    const t = next.sub(prev).div(3);
+    return { in: t.neg(), out: t };
+  });
 }

@@ -56,7 +56,14 @@ import {
   projectOntoPolyline,
   projectOntoPolylineWindow,
   type PolylineIndex,
-} from "./cameraPath";
+} from "../lib/path";
+import {
+  buildKeyTrack,
+  keyValueAt,
+  lerpZoom,
+  smoothstep,
+  type KeyTrack,
+} from "../lib/keyframes";
 import type { Margin } from "./shapePath";
 import { marginSides, uniformMargin } from "./shapePath";
 
@@ -172,7 +179,7 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0):
 // is why they generalise into one list rather than each carrying a copy of it.
 //
 // A path's `index` is built once, at level construction: it is the authored
-// curve FLATTENED into a polyline, in WORLD space (see `cameraPath.ts`), and
+// curve FLATTENED into a polyline, in WORLD space (see `lib/path.ts`), and
 // nothing mutates a path at runtime. Everything downstream - the projection, the
 // arc length, the lookahead, the corridor - rides that polyline and knows
 // nothing about the Bézier handles that produced it.
@@ -236,7 +243,7 @@ export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
 export type PathParams = Record<PathKeyField, number>;
 
 // One field's keys in arc-length order. Empty = no node keys it.
-export type PathKeyTracks = Record<PathKeyField, { s: number; v: number }[]>;
+export type PathKeyTracks = Record<PathKeyField, KeyTrack>;
 
 const PATH_PARAM_DEFAULTS: PathParams = {
   viewportScale: DEFAULT_VIEWPORT_SCALE,
@@ -264,12 +271,7 @@ export function pathParamsOf(p: CameraPathData): PathParams {
 export function pathKeyTracks(p: CameraPathData, index: PolylineIndex): PathKeyTracks {
   const tracks = {} as PathKeyTracks;
   for (const k of PATH_KEY_FIELDS) {
-    const track: { s: number; v: number }[] = [];
-    p.verts.forEach((v, i) => {
-      const s = index.nodeS[i];
-      if (v[k] !== undefined && s !== undefined) track.push({ s, v: v[k]! });
-    });
-    tracks[k] = track;
+    tracks[k] = buildKeyTrack(p.verts.map((v) => v[k]), index.nodeS);
   }
   return tracks;
 }
@@ -288,24 +290,7 @@ export function pathKeyTracks(p: CameraPathData, index: PolylineIndex): PathKeyT
 export function pathParamsAt(rule: CameraRule & { kind: "path" }, s: number): PathParams {
   const base = pathParamsOf(rule.path);
   for (const k of PATH_KEY_FIELDS) {
-    const track = rule.keys[k];
-    if (track.length === 0) continue;
-    if (s <= track[0]!.s) {
-      base[k] = track[0]!.v;
-      continue;
-    }
-    const last = track[track.length - 1]!;
-    if (s >= last.s) {
-      base[k] = last.v;
-      continue;
-    }
-    let i = 0;
-    while (track[i + 1]!.s <= s) i++;
-    const a = track[i]!;
-    const b = track[i + 1]!;
-    const span = b.s - a.s;
-    const t = span > 0 ? smoothstep((s - a.s) / span) : 1;
-    base[k] = k === "viewportScale" ? lerpZoom(a.v, b.v, t) : a.v + (b.v - a.v) * t;
+    base[k] = keyValueAt(rule.keys[k], s, base[k], k === "viewportScale" ? lerpZoom : undefined);
   }
   return base;
 }
@@ -662,13 +647,6 @@ export function clampToEdge(camera: Camera, zoom: number, follow: Vec2, pos: Vec
     Math.min(Math.max(pos.y, follow.y - r.y), follow.y + r.y),
   );
 }
-
-const smoothstep = (t: number): number => t * t * (3 - 2 * t);
-
-// Geometric interpolation — the right one for a scale factor, so blending 1→4
-// passes through 2 rather than 2.5 and the zoom reads as even.
-const lerpZoom = (a: number, b: number, t: number): number =>
-  Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * t);
 
 // The camera state the debug overlay draws (see `CameraController.held`).
 export interface HeldCamera {

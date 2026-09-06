@@ -38,8 +38,23 @@ import {
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
   MOVE_EASES,
+  MOVE_MODES,
+  moveModeCloses,
+  moveModeEases,
   type MoveEase,
+  type MoveMode,
 } from "../level/levelFormat";
+import { moveAngleAt } from "../level/movers";
+import { smoothTangents, splitCubicAtHalf } from "../lib/path";
+import { keyValueAt } from "../lib/keyframes";
+
+// The three movement modes as an author reads them (see `MoveMode`). The stored
+// names are camelCase because they are a format's; the picker says the thing.
+const MOVE_MODE_LABELS: Readonly<Record<MoveMode, string>> = {
+  backAndForth: "back & forth",
+  loop: "loop",
+  repeat: "repeat",
+};
 import {
   arrowEnds,
   bodyIntersectsRect,
@@ -131,7 +146,9 @@ import {
   type EdShape,
   type EdLayer,
   type EdModel,
+  cloneRouteNode,
   peakSurfaceSpeed,
+  routeNode,
   routeOf,
   routeWorldPoints,
 } from "./model";
@@ -150,7 +167,9 @@ import {
   HANDLE_HIT_PX,
   lightPickRadius,
   depthOf,
+  routeHandlePoints,
   routeMidpoints,
+
 } from "./render";
 import {
   DEFAULT_MATERIAL,
@@ -357,12 +376,17 @@ type Drag =
   // writing the opposite handle as the negation of this one; Alt breaks it, so a
   // deliberate cusp is a modifier away rather than unauthorable.
   | { mode: "pathHandle"; body: EdItem; index: number; side: "in" | "out"; mirror: boolean }
-  // One waypoint of a body's route follows the pointer (see
-  // `LevelBodyData.movePath`). `lead` is the body's collision lead, which is
-  // where the route is held, and `index` counts the AUTHORED waypoints - so 0 is
-  // the first one after the body itself, which is waypoint zero and is moved by
-  // moving the body.
+  // One node of a body's route follows the pointer (see
+  // `LevelBodyData.moveNodes`). `lead` is the body's collision lead, which is
+  // where the route is held, and `index` counts the whole node list - so 0 is
+  // the body itself, which is never dragged this way because moving the body is
+  // what moves it.
   | { mode: "moveWaypoint"; lead: EdItem; index: number }
+  // ...and one of that node's two Bezier tangent grips, on exactly the terms a
+  // camera path's are: `mirror` keeps the node smooth by writing the opposite
+  // handle as the negation of this one, and Alt at the press breaks the pair
+  // into a cusp.
+  | { mode: "routeHandle"; lead: EdItem; index: number; side: "in" | "out"; mirror: boolean }
   // One end of an arrow note follows the pointer; the other stays put.
   | { mode: "arrowEnd"; body: EdItem; fixed: Vec2; movingIsHead: boolean }
   // A whole compound body turns about its centre of mass - the point its built
@@ -603,6 +627,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // edit that renumbers the loop - an index means nothing once the shape it
   // indexes is not the one on screen.
   const selectedVerts = new Set<number>();
+  // ...and the same second level for a mover's ROUTE, as indices into one body's
+  // node list. A separate selection rather than a third arm of the one above,
+  // because a route is not a shape: it belongs to a body that has a shape of its
+  // own, so a body can perfectly well have a polygon vertex and a route node
+  // picked at once and the two must not stand for each other.
+  //
+  // It carries the BODY it indexes, and that is the whole reason it is a record
+  // rather than a bare set: an index means nothing without the list it indexes,
+  // and a set alone would have to be cleared at every one of the ten places a
+  // selection changes - miss one and node 2 of the body just deselected reads as
+  // node 2 of the body just selected. Carrying the id makes a stale pick
+  // impossible to express instead of merely unlikely (`selectedRouteNodes` is
+  // the one reader, and it asks whose nodes these are).
+  let routeSel: { bodyId: number; nodes: Set<number> } | null = null;
+  const NO_NODES: ReadonlySet<number> = new Set<number>();
   let tool: Tool = "select";
   let newKind: BodyKind = "static";
   // Layers. Every *visible* layer is hit-testable, so a selection may span them
@@ -723,8 +762,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     drag = null;
     nudging = false;
     // An undone edit may have been the one that placed a corner, so an index
-    // carried across it names a different vertex or none at all.
+    // carried across it names a different vertex or none at all. A route node's
+    // index is the same kind of thing over the same kind of list - undoing the
+    // midpoint insert that picked it leaves the index naming the node that used
+    // to be the one after it - so it goes the same way.
     selectedVerts.clear();
+    clearRouteSel();
     const live = new Set(model.items.map((b) => b.id));
     for (const id of selectedIds) if (!live.has(id)) selectedIds.delete(id);
     const liveChains = new Set(model.chains.map((c) => c.id));
@@ -808,6 +851,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function selectedVertIndices(item: EdItem): number[] {
     const n = item.shape.kind === "poly" || item.shape.kind === "path" ? item.shape.verts.length : 0;
     return [...selectedVerts].filter((i) => i < n).sort((a, b) => a - b);
+  }
+  // The body whose ROUTE nodes are pickable right now: the lone selected body,
+  // if it is a static with a route. The same one statement `vertexEditTarget`
+  // makes for shape vertices, so what a click selects, what the panel keys and
+  // what the canvas draws as grabbable cannot drift apart.
+  function routeEditTarget(): EdItem | null {
+    const id = soleBodyId();
+    if (id === null) return null;
+    const lead = routeLeadOf(id);
+    return lead && lead.route.length > 1 && !orbited() ? lead : null;
+  }
+  // ...and the nodes actually picked on it, sorted and with anything past the
+  // route's end dropped: an index outlives the list it indexes only until the
+  // next edit, and reading one that has gone is how a stale set keys the wrong
+  // node.
+  // ...and the nodes actually picked on it, sorted, empty for any body but the
+  // one they were picked on, and with anything past the route's end dropped: an
+  // index outlives the list it indexes only until the next edit, and reading one
+  // that has gone is how a stale set keys the wrong node.
+  function selectedRouteNodes(item: EdItem): number[] {
+    if (routeSel?.bodyId !== item.bodyId) return [];
+    return [...routeSel.nodes].filter((i) => i < item.route.length).sort((a, b) => a - b);
+  }
+  function pickRouteNode(item: EdItem, index: number, add: boolean): void {
+    if (!add || routeSel?.bodyId !== item.bodyId) {
+      routeSel = { bodyId: item.bodyId, nodes: new Set([index]) };
+      return;
+    }
+    if (!routeSel.nodes.delete(index)) routeSel.nodes.add(index);
+  }
+  function clearRouteSel(): void {
+    routeSel = null;
   }
   function setSelection(ids: readonly number[]): void {
     // Every selection this clears has to be in the test, or the early return is
@@ -2807,7 +2882,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // SCRIPTED MOTION, static bodies only: the pendulum on a bearing
-  // (`LevelBodyData.swingAmp`) and the body that travels a route (`movePath`).
+  // (`LevelBodyData.swingAmp`) and the body that travels a route (`moveNodes`).
   // Both on one panel because they are the same kind of thing - a static the
   // LEVEL drives rather than one the solver owns - and because they compose on
   // one body, which is a pendulum hung from a travelling cart.
@@ -2827,9 +2902,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const bodyIds = new Set(leads.map((b) => b.bodyId));
     const one = bodyIds.size === 1 ? leads[0]! : null;
     const swinging = (b: EdItem): boolean => b.swingAmp !== 0 && b.swingPeriod > 0;
-    const travelling = (b: EdItem): boolean => b.movePath.length > 0 && b.moveSpeed > 0;
+    const travelling = (b: EdItem): boolean => b.route.length > 1 && b.moveSpeed > 0;
     const anySwing = leads.some(swinging);
-    const anyRoute = leads.some((b) => b.movePath.length > 0);
+    const anyRoute = leads.some((b) => b.route.length > 1);
 
     // Degrees, like every other angle the inspector shows - the model and the
     // file hold radians (see `LevelBodyData.swingAmp`).
@@ -2886,10 +2961,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // The route. A speed rather than a duration (see `LevelBodyData.moveSpeed`),
     // in the file's px/s like every other length, so re-drawing a route makes
     // the trip longer rather than the platform faster.
-    numField(
+    //
+    // Shown INERT and reading `keyed` where a node keys a speed, the same way a
+    // camera path's path-level field is once a node keys it: its value is read
+    // only on the stretches nothing keys, and a live dial that governs some of a
+    // route and not the rest is a dial that says the wrong thing.
+    const speedKeyed = keyedRouteNodes(leads, "speed");
+    const speedInput = numField(
       g,
       "speed",
-      () => shared(leads, (b) => b.moveSpeed * M2PX),
+      () => (speedKeyed ? NaN : shared(leads, (b) => b.moveSpeed * M2PX)),
       (v) => {
         for (const b of leads) b.moveSpeed = Math.max(0, v) * PX;
         syncEditedBodies(leads);
@@ -2897,8 +2978,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
       10,
       leads.length > 1,
-      { placeholder: anyRoute ? "still" : "draw a route first", disabled: !anyRoute },
+      {
+        placeholder: speedKeyed ? "keyed" : anyRoute ? "still" : "draw a route first",
+        disabled: !anyRoute || speedKeyed !== null,
+      },
     );
+    if (speedKeyed) speedInput.title = speedKeyed;
+
     if (anyRoute) {
       numField(
         g,
@@ -2911,72 +2997,61 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         0.125,
         leads.length > 1,
       );
-      // The loop switch, which is the one thing that decides what a route MEANS:
-      // connected at both ends it is gone round in one direction for ever, and
-      // open it is travelled there and back. The ease belongs to the open case
-      // alone - a lap has no ends to ease at - so ticking this disables it
-      // rather than leaving a control that says nothing.
-      const loopBox = document.createElement("input");
-      loopBox.type = "checkbox";
-      loopBox.checked = leads.every((b) => b.moveClosed);
-      loopBox.indeterminate = !loopBox.checked && leads.some((b) => b.moveClosed);
-      loopBox.addEventListener("change", () => {
-        beginAction();
-        for (const b of leads) b.moveClosed = loopBox.checked;
-        syncEditedBodies(leads);
-        markDirty();
-        rebuildInspector();
-      });
-      const loopWrap = el("label", "ed-field");
-      loopWrap.textContent = "loop";
-      loopWrap.appendChild(loopBox);
-      g.appendChild(loopWrap);
+      // The MODE, which is the one thing that decides what a route means (see
+      // `MoveMode`): travelled there and back, gone round for ever, or run once
+      // and teleported home. The ease belongs to the two that have ends - a lap
+      // has none to ease at - so picking `loop` disables it rather than leaving
+      // a control that says nothing.
+      picker(
+        g,
+        "mode",
+        MOVE_MODES,
+        MOVE_MODE_LABELS,
+        leads,
+        (b) => b.moveMode,
+        (b, v) => {
+          b.moveMode = v;
+        },
+        true,
+      );
+      const easeSel = picker(
+        g,
+        "ease",
+        MOVE_EASES,
+        null,
+        leads,
+        (b) => b.moveEase,
+        (b, v) => {
+          b.moveEase = v;
+        },
+        false,
+      );
+      easeSel.disabled = leads.some((b) => !moveModeEases(b.moveMode));
 
-      const easeWrap = el("label", "ed-field");
-      easeWrap.textContent = "ease";
-      const easeSel = document.createElement("select");
-      easeSel.className = "ed-select";
-      easeSel.disabled = leads.some((b) => b.moveClosed);
-      const sharedEase = leads.every((b) => b.moveEase === leads[0]!.moveEase)
-        ? leads[0]!.moveEase
-        : null;
-      if (!sharedEase) {
-        const o = document.createElement("option");
-        o.value = "";
-        o.textContent = "mixed";
-        easeSel.appendChild(o);
-      }
-      for (const k of MOVE_EASES) {
-        const o = document.createElement("option");
-        o.value = k;
-        o.textContent = k;
-        easeSel.appendChild(o);
-      }
-      easeSel.value = sharedEase ?? "";
-      easeSel.addEventListener("change", () => {
-        if (!easeSel.value) return;
-        beginAction();
-        for (const b of leads) b.moveEase = easeSel.value as MoveEase;
-        syncEditedBodies(leads);
-        markDirty();
-        refreshFields();
+      // Whether the route AIMS the body. A checkbox rather than a keyed field
+      // because it is a statement about the whole route: either the track
+      // decides which way the body faces or the drawn angle does, and a node
+      // keying its own answer to that would be a cart that detaches from its
+      // rails half way along (see `LevelBodyData.moveAlign`).
+      checkField(g, "align", leads, (b) => b.moveAlign, (b, v) => {
+        b.moveAlign = v;
       });
-      easeWrap.appendChild(easeSel);
-      g.appendChild(easeWrap);
 
       // What the route IS, since the canvas draws it but nothing on the panel
       // otherwise says how long the trip is - which is the number a speed has to
-      // be picked against.
+      // be picked against. With a keyed speed the seconds come from the route's
+      // own time table rather than from a division, which is exactly the point
+      // of keying one.
       const trip = (): string => {
         if (!one) return "mixed";
-        const path = routeOf(model, one);
-        const lead = one;
-        const secs = lead.moveSpeed > 0 ? path.total / lead.moveSpeed : 0;
-        const legs = `${lead.movePath.length + 1} waypoints, ${(path.total * M2PX).toFixed(0)} px`;
-        return secs > 0 ? `${legs}, ${secs.toFixed(1)} s` : legs;
+        const route = routeOf(model, one);
+        const legs = `${one.route.length} nodes, ${(route.total * M2PX).toFixed(0)} px`;
+        return route.traverse > 0 && one.moveSpeed > 0
+          ? `${legs}, ${route.traverse.toFixed(1)} s`
+          : legs;
       };
       const trow = el("label", "ed-field");
-      trow.textContent = one?.moveClosed ? "lap" : "trip";
+      trow.textContent = one && moveModeCloses(one.moveMode) ? "lap" : "trip";
       const tval = document.createElement("span");
       tval.textContent = trip();
       trow.appendChild(tval);
@@ -2985,28 +3060,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
 
     // The gesture that STARTS a route, which the canvas cannot offer: an empty
-    // route has no waypoint to drag and no leg to insert into, so there is
-    // nothing on screen to press. Past the first one the canvas is where a route
-    // is shaped - drag a waypoint, click a midpoint to add one, Alt+click to
-    // remove one - and this row goes on offering the append because reaching the
-    // far end of a long route by halving legs is miserable.
+    // route has no node to drag and no leg to insert into, so there is nothing
+    // on screen to press. Past the first one the canvas is where a route is
+    // shaped - drag a node, click a midpoint to add one, Alt+click to remove
+    // one, drag a round grip to bow a leg - and this row goes on offering the
+    // append because reaching the far end of a long route by halving legs is
+    // miserable.
     if (one) {
       const lead = one;
       const row = el("div", "ed-row");
       row.appendChild(
-        button(lead.movePath.length ? "+ waypoint" : "draw a route", () => {
+        button(lead.route.length ? "+ node" : "draw a route", () => {
           beginAction();
           // A metre on from wherever the route currently ends, along the leg it
           // arrived by - so appending twice draws a straight run rather than
-          // stacking two waypoints on one point.
-          const pts = routeWorldPoints(model, lead);
+          // stacking two nodes on one point. A route that does not exist yet is
+          // the body plus one, which is the shortest thing that is a route.
+          const frame = bodyFrameOf(model, lead.bodyId);
+          const pts = lead.route.length ? routeWorldPoints(model, lead) : [frame.pos];
           const last = pts[pts.length - 1]!;
           const prev = pts.length > 1 ? pts[pts.length - 2]! : last.sub(new Vec2(1, 0));
           const dir = last.sub(prev);
           const step = dir.length() > 1e-9 ? dir.normalized() : new Vec2(1, 0);
-          const frame = bodyFrameOf(model, lead.bodyId);
-          lead.movePath = [...lead.movePath, last.add(step).sub(frame.pos).rotated(-frame.rot)];
-          // A route with no speed never moves, so the first waypoint brings one
+          const next = lead.route.length ? [...lead.route] : [routeNode(Vec2.ZERO)];
+          next.push(routeNode(last.add(step).sub(frame.pos).rotated(-frame.rot)));
+          lead.route = next;
+          // A route with no speed never moves, so the first node brings one
           // rather than leaving a body that has a route and stands still.
           if (lead.moveSpeed <= 0) lead.moveSpeed = 0.5;
           syncEditedBodies([lead]);
@@ -3014,11 +3093,40 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           rebuildInspector();
         }),
       );
-      if (lead.movePath.length) {
+      if (lead.route.length > 1) {
+        // The two curve gestures, which are the camera path's own (`Smooth` /
+        // `Sharpen`) doing the same thing to the same kind of node list: a route
+        // is a Bezier curve and a corner is a route whose handles are zero, so
+        // rounding every corner at once and dropping every tangent at once are
+        // the two ends an author works between. Shaping ONE leg is a grip drag
+        // on the canvas.
+        row.appendChild(
+          button("smooth", () => {
+            beginAction();
+            const t = smoothTangents(
+              lead.route.map((n) => n.p),
+              moveModeCloses(lead.moveMode),
+            );
+            lead.route = lead.route.map((n, i) => ({ ...n, in: t[i]!.in, out: t[i]!.out }));
+            syncEditedBodies([lead]);
+            markDirty();
+            rebuildInspector();
+          }),
+        );
+        row.appendChild(
+          button("sharpen", () => {
+            beginAction();
+            lead.route = lead.route.map((n) => ({ ...n, in: Vec2.ZERO, out: Vec2.ZERO }));
+            syncEditedBodies([lead]);
+            markDirty();
+            rebuildInspector();
+          }),
+        );
         row.appendChild(
           button("clear route", () => {
             beginAction();
-            lead.movePath = [];
+            lead.route = [];
+            clearRouteSel();
             syncEditedBodies([lead]);
             markDirty();
             rebuildInspector();
@@ -3049,11 +3157,198 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       readouts.push({ el: sval, get: speed });
     }
 
+    // The picked nodes' own fields, under the route's, exactly where a camera
+    // path's node keys sit under its path-level ones - and reached the same way,
+    // by clicking a node on the canvas.
+    const pickedNodes = one ? selectedRouteNodes(one) : [];
+    if (one && pickedNodes.length && one.route.length > 1) {
+      buildRouteNodeKeys(g, one, pickedNodes);
+    }
+
     const hint = el("div", "ed-hint");
     hint.textContent = anySwing || anyRoute
-      ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a waypoint to move it, the small handles between them to add one, Alt+click to remove one; the body itself is the first waypoint. Keep the surface speed under 2 cm/frame."
-      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a route drawn on the canvas makes it a platform, travelled there and back, or round and round if it is looped. Nothing in the level can disturb either, which is what lets a jump be timed against it.";
+      ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a node to move it, the small handles between them to add one, Alt+click to remove one, a round grip to bow a leg; the body itself is node zero. Click a node to key its angle or its speed there. Keep the surface speed under 2 cm/frame."
+      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb either, which is what lets a jump be timed against it.";
     g.appendChild(hint);
+  }
+
+  // Which nodes of the selected routes key `field`, as the sentence the inert
+  // route-level input wears in its tooltip - or null when none do.
+  //
+  // The camera path's `keyedAt` asked of a path's `shape.keys`; this asks of a
+  // body's route, and both are here for the same reason: a route-level value
+  // that some of the route overrides is a value the panel must stop offering as
+  // if it governed the whole thing.
+  function keyedRouteNodes(leads: readonly EdItem[], field: "rot" | "speed"): string | null {
+    const bodies = new Map<number, number[]>();
+    for (const b of leads) {
+      if (bodies.has(b.bodyId)) continue;
+      const at = b.route.flatMap((n, i) => (n[field] !== null ? [i] : []));
+      if (at.length) bodies.set(b.bodyId, at);
+    }
+    if (bodies.size === 0) return null;
+    const one = bodies.size === 1;
+    const parts = [...bodies].map(([id, at]) =>
+      one ? at.join(", ") : `#${id}:${at.join(",")}`,
+    );
+    return `keyed at node${one && bodies.values().next().value!.length === 1 ? "" : "s"} ${parts.join("  ")}`;
+  }
+
+  // The picked route nodes' keys: what the body's angle and its speed ARE where
+  // those nodes sit (see `MoveNodeData`).
+  //
+  // Blank is no key, and the placeholder is the value the node has anyway - the
+  // route's own where nothing keys the field, the interpolation's where other
+  // nodes do, computed through the very route the sim builds (`routeOf`) - so
+  // typing a key starts from what it is replacing rather than from a zero that
+  // is not what is happening there.
+  function buildRouteNodeKeys(g: HTMLElement, item: EdItem, picked: number[]): void {
+    g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Where the body is on the route decides these. A node that carries one keys that field only; between two keys the value is eased by distance along the route, and before the first and past the last it holds. Blank drops the key.";
+    g.appendChild(hint);
+
+    const route = routeOf(model, item);
+    const at = (i: number): number => route.index.nodeS[i] ?? 0;
+    const effAngle = (i: number): number => moveAngleAt(route, item.moveAlign, at(i));
+    // Both read the route the SIM builds rather than a track assembled here: a
+    // `loop` repeats node zero's key at the far end of the arc length, and a
+    // second construction that forgot to would offer a placeholder the motion
+    // disagrees with (see `MoveRoute.speedKeys`).
+    const effSpeed = (i: number): number =>
+      keyValueAt(route.speedKeys, at(i), item.moveSpeed);
+
+    // Every angle the inspector shows is in degrees and every length in the
+    // file's pixels, so the keys are too - the model holds radians and metres.
+    //
+    // The placeholders are rounded to what the field can SHOW: a numeric input
+    // is 64px of monospace, so `fmt`'s three decimals put "-173.336" half
+    // outside it, and a placeholder that has to be selected to be read is worse
+    // than a coarser one. A tenth of a degree and a whole pixel per second are
+    // finer than either dial is authored at anyway.
+    field("angle °", "rot", (v) => (v * 180) / Math.PI, (v) => (v * Math.PI) / 180, effAngle, 5, 1);
+    field("speed", "speed", (v) => v * M2PX, (v) => Math.max(0, v) * PX, effSpeed, 10, 0);
+
+    function field(
+      label: string,
+      key: "rot" | "speed",
+      show: (model: number) => number,
+      store: (shown: number) => number,
+      effective: (node: number) => number,
+      step: number,
+      // Decimals the placeholder is rounded to, so it fits the input.
+      places: number,
+    ): void {
+      const eff = picked.map((i) => show(effective(i)));
+      const agreed = eff.every((v) => Math.abs(v - eff[0]!) < 1e-9)
+        ? eff[0]!.toFixed(places)
+        : "mixed";
+      numField(
+        g,
+        label,
+        () => {
+          const vals = picked.map((i) => item.route[i]?.[key] ?? null);
+          if (vals.some((v) => v === null)) return null;
+          const first = show(vals[0]!);
+          return vals.every((v) => Math.abs(show(v!) - first) < 1e-9) ? first : null;
+        },
+        (v) => {
+          for (const i of picked) {
+            const n = item.route[i];
+            if (n) n[key] = store(v);
+          }
+          syncEditedBodies([item]);
+          refreshFields();
+        },
+        step,
+        true,
+        {
+          placeholder: agreed,
+          onEmpty: () => {
+            for (const i of picked) {
+              const n = item.route[i];
+              if (n) n[key] = null;
+            }
+            syncEditedBodies([item]);
+          },
+        },
+      );
+    }
+  }
+
+  // A one-of-N `<select>` over a group of bodies, with a blank `mixed` entry
+  // while they disagree. The mover panel's mode and ease pickers are the same
+  // control twice, and the pair was written out twice before there were three
+  // of them to keep in step.
+  function picker<T extends string>(
+    parent: HTMLElement,
+    label: string,
+    values: readonly T[],
+    // Display names where the stored name is not what an author should read;
+    // null uses the value itself.
+    labels: Readonly<Record<string, string>> | null,
+    leads: EdItem[],
+    get: (b: EdItem) => T,
+    set: (b: EdItem, v: T) => void,
+    // Does changing this change what the rest of the panel offers?
+    rebuild: boolean,
+  ): HTMLSelectElement {
+    const wrap = el("label", "ed-field");
+    wrap.textContent = label;
+    const sel = document.createElement("select");
+    sel.className = "ed-select";
+    const agreed = leads.every((b) => get(b) === get(leads[0]!)) ? get(leads[0]!) : null;
+    if (!agreed) {
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "mixed";
+      sel.appendChild(o);
+    }
+    for (const v of values) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = labels?.[v] ?? v;
+      sel.appendChild(o);
+    }
+    sel.value = agreed ?? "";
+    sel.addEventListener("change", () => {
+      if (!sel.value) return;
+      beginAction();
+      for (const b of leads) set(b, sel.value as T);
+      syncEditedBodies(leads);
+      markDirty();
+      if (rebuild) rebuildInspector();
+      else refreshFields();
+    });
+    wrap.appendChild(sel);
+    parent.appendChild(wrap);
+    return sel;
+  }
+
+  // ...and a checkbox over the same group, indeterminate while they disagree.
+  function checkField(
+    parent: HTMLElement,
+    label: string,
+    leads: EdItem[],
+    get: (b: EdItem) => boolean,
+    set: (b: EdItem, v: boolean) => void,
+  ): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = leads.every(get);
+    box.indeterminate = !box.checked && leads.some(get);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of leads) set(b, box.checked);
+      syncEditedBodies(leads);
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = label;
+    wrap.appendChild(box);
+    parent.appendChild(wrap);
   }
 
   // The bearing a pendulum turns about, which is the rigid pivot's own pair of
@@ -5797,11 +6092,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       swingAmp: 0,
       swingPeriod: 0,
       swingPhase: 0,
-      movePath: [],
-      moveClosed: false,
+      route: [],
+      moveMode: "backAndForth" as const,
       moveSpeed: 0,
       movePhase: 0,
       moveEase: "linear" as const,
+      moveAlign: false,
       // A fresh region is a no-op until a framing field is authored.
       cam: defaultCamera(),
       light: defaultLight(),
@@ -6387,6 +6683,89 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return { mode: "polyVertex", body: item, index, others, accepted: lead };
   }
 
+  // A press on a mover's route: a node, a tangent grip, or a leg midpoint that
+  // inserts one - the camera path's three gestures, on the one other kind of
+  // path this editor authors, and deliberately in the same order and with the
+  // same modifiers so an author who has shaped one has shaped both.
+  //
+  // Node zero is pickable but not draggable: it IS the body, and dragging it
+  // would be a second, quieter way of moving the body that left every other node
+  // behind. It is still picked, because it keys like any other node - the angle
+  // and the speed a cart sets off at are exactly the kind of thing to want to
+  // state.
+  function pickRouteHandle(
+    lead: EdItem,
+    scr: Vec2,
+    alt: boolean,
+    shift: boolean,
+  ): Drag | "consumed" | null {
+    const pts = routeWorldPoints(model, lead);
+    for (let i = 0; i < pts.length; i++) {
+      if (worldToScreen(camera, pts[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
+      // Alt removes it, the same gesture that removes a polygon's corner - and
+      // never node zero, which is the body. A route of one node is not a route,
+      // so the last leg's removal takes the whole thing.
+      if (alt && i > 0) {
+        beginAction();
+        lead.route = lead.route.filter((_, j) => j !== i).map(cloneRouteNode);
+        if (lead.route.length < 2) lead.route = [];
+        clearRouteSel();
+        syncEditedBodies([lead]);
+        markDirty();
+        rebuildInspector();
+        return "consumed";
+      }
+      // Picking a node is what opens its key fields, and Shift extends the set
+      // exactly as it does for a polygon's corners.
+      if (shift || selectedRouteNodes(lead).indexOf(i) < 0) pickRouteNode(lead, i, shift);
+      rebuildInspector();
+      return i === 0 ? "consumed" : { mode: "moveWaypoint", lead, index: i };
+    }
+    // The tangent grips, AFTER the nodes: a handle pulled back onto its own node
+    // sits under it, and the node is the thing that has to stay pickable.
+    for (const g of routeHandlePoints(camera, model, lead)) {
+      if (worldToScreen(camera, g.pos).distanceTo(scr) > HANDLE_HIT_PX) continue;
+      return { mode: "routeHandle", lead, index: g.node, side: g.side, mirror: !alt };
+    }
+    // ...and the leg midpoints, which insert a node and drag it in the same
+    // gesture. A de Casteljau split at t = 1/2 (`splitCubicAtHalf`), so a bowed
+    // leg gains a node and changes shape by nothing - splitting the chord would
+    // straighten the leg the moment it was subdivided.
+    const mids = routeMidpoints(model, lead);
+    for (let i = 0; i < mids.length; i++) {
+      if (worldToScreen(camera, mids[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
+      beginAction();
+      const a = lead.route[i]!;
+      const b = lead.route[(i + 1) % lead.route.length]!;
+      const split = splitCubicAtHalf(
+        { p: a.p, in: a.in, out: a.out },
+        { p: b.p, in: b.in, out: b.out },
+      );
+      const next = lead.route.map(cloneRouteNode);
+      next[i] = { ...next[i]!, out: split.outA };
+      next[(i + 1) % next.length] = { ...next[(i + 1) % next.length]!, in: split.inB };
+      // The new node keys nothing: putting a key mid-leg is then one further
+      // gesture, and an insert that invented one would be an insert that changed
+      // the motion.
+      next.splice(i + 1, 0, {
+        p: split.mid,
+        in: split.inMid,
+        out: split.outMid,
+        rot: null,
+        speed: null,
+      });
+      lead.route = next;
+      pickRouteNode(lead, i + 1, false);
+      syncEditedBodies([lead]);
+      markDirty();
+      rebuildInspector();
+      return { mode: "moveWaypoint", lead, index: i + 1 };
+    }
+    // Nothing on the route was under the pointer, so the press falls through to
+    // whatever is: the body, or the empty space that clears the selection.
+    return null;
+  }
+
   // Which handle of the selected body (if any) is under the pointer?
   //
   // `"consumed"` means the press *was* a handle interaction that finished on the
@@ -6394,56 +6773,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // distinguishable from "no handle here": falling through to the body pick
   // would land on empty space (the vertex just went away) and clear the
   // selection, so a removal would deselect the shape it edited.
-  // The item a selected body's route is held on: its collision lead, and only
-  // when it actually has a route. One place, so the press handler, the panel and
-  // the canvas cannot disagree about which item carries the waypoints.
-  function routeLead(): EdItem | null {
-    const id = [...selectedBodyIds][0];
-    if (id === undefined) return null;
+  // The item a body's route is held on: its collision lead, and only when it
+  // actually has a route. One place, so the press handler, the panel and the
+  // canvas cannot disagree about which item carries the nodes.
+  function routeLeadOf(id: number): EdItem | null {
     const lead = bodyMembers(model.items, id).find((m) => m.object === "collision");
-    return lead && lead.kind === "static" && lead.movePath.length > 0 ? lead : null;
+    return lead && lead.kind === "static" && lead.route.length > 0 ? lead : null;
   }
 
   function pickHandle(scr: Vec2, alt = false, shift = false): Drag | "consumed" | null {
-    // A selected body's ROUTE, first: its waypoints sit over the geometry that
-    // carries them, so a press on one has to mean the waypoint rather than the
-    // body under it. Only while exactly one body is selected, since a route
-    // belongs to a body and two of them have two.
-    const routeBody = selectedBodyIds.size === 1 ? routeLead() : null;
+    // A selected body's ROUTE, first: its nodes sit over the geometry that
+    // carries them, so a press on one has to mean the node rather than the body
+    // under it. Only while exactly one body is selected, since a route belongs
+    // to a body and two of them have two.
+    const routeBody = routeEditTarget();
     if (routeBody) {
-      const pts = routeWorldPoints(model, routeBody);
-      // Waypoint zero is skipped: it is the body itself, and dragging it would
-      // be a second, quieter way of moving the body that left every other
-      // waypoint behind.
-      for (let i = 1; i < pts.length; i++) {
-        if (worldToScreen(camera, pts[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
-        if (alt) {
-          // Alt removes it, the same gesture that removes a polygon's corner.
-          beginAction();
-          routeBody.movePath = routeBody.movePath.filter((_, j) => j !== i - 1);
-          syncEditedBodies([routeBody]);
-          markDirty();
-          rebuildInspector();
-          return "consumed";
-        }
-        return { mode: "moveWaypoint", lead: routeBody, index: i - 1 };
-      }
-      // ...and the midpoints, which insert a waypoint and drag it in the same
-      // gesture - the polygon's edge handles, one mechanic along.
-      const mids = routeMidpoints(pts, routeBody.moveClosed);
-      for (let i = 0; i < mids.length; i++) {
-        if (worldToScreen(camera, mids[i]!).distanceTo(scr) > HANDLE_HIT_PX) continue;
-        beginAction();
-        const frame = bodyFrameOf(model, routeBody.bodyId);
-        const local = mids[i]!.sub(frame.pos).rotated(-frame.rot);
-        const next = [...routeBody.movePath];
-        next.splice(i, 0, local);
-        routeBody.movePath = next;
-        syncEditedBodies([routeBody]);
-        markDirty();
-        rebuildInspector();
-        return { mode: "moveWaypoint", lead: routeBody, index: i };
-      }
+      const hit = pickRouteHandle(routeBody, scr, alt, shift);
+      if (hit) return hit;
     }
     // A selected vine is edited by its two handles and nothing else: the anchor
     // it hangs from, which is where it is, and its free end, which is how long
@@ -7318,13 +7664,32 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         break;
       case "moveWaypoint": {
         // Written into the BODY's frame, which is where a route is held: the
-        // waypoints ride the body through every gesture that moves or turns it,
-        // and a world position would have to be re-derived by each of them.
+        // nodes ride the body through every gesture that moves or turns it, and
+        // a world position would have to be re-derived by each of them.
         const frame = bodyFrameOf(model, drag.lead.bodyId);
         const local = snapVec(world).sub(frame.pos).rotated(-frame.rot);
-        const next = [...drag.lead.movePath];
-        next[drag.index] = local;
-        drag.lead.movePath = next;
+        const next = drag.lead.route.map(cloneRouteNode);
+        const at = next[drag.index];
+        if (at) at.p = local;
+        drag.lead.route = next;
+        syncEditedBodies([drag.lead]);
+        markDirty();
+        refreshFields();
+        break;
+      }
+      case "routeHandle": {
+        // NOT snapped to the grid: a tangent is a direction and a length, not a
+        // placement, and a snapped one quantises the curve's shape rather than
+        // where it sits - the same reason a camera path's grips are free.
+        const frame = bodyFrameOf(model, drag.lead.bodyId);
+        const next = drag.lead.route.map(cloneRouteNode);
+        const at = next[drag.index];
+        if (at) {
+          const offset = world.sub(frame.pos).rotated(-frame.rot).sub(at.p);
+          at[drag.side] = offset;
+          if (drag.mirror) at[drag.side === "in" ? "out" : "in"] = offset.neg();
+        }
+        drag.lead.route = next;
         syncEditedBodies([drag.lead]);
         markDirty();
         refreshFields();
@@ -8055,6 +8420,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         selectedVerts,
         currentSettleGhosts(),
         wrapDraftView(),
+        routeSel?.bodyId === soleBodyId() ? routeSel.nodes : NO_NODES,
       );
     }
     requestAnimationFrame(frame);
@@ -8200,6 +8566,12 @@ function injectStyles(): void {
   .ed-heading { color: #65bddb; border-bottom: 1px solid #313244; padding-bottom: 2px; margin-bottom: 2px; }
   .ed-field { display: flex; justify-content: space-between; align-items: center; color: #9aa0ac;
     gap: 6px; white-space: nowrap; }
+  /* A READOUT is the one thing in a field that cannot be sized: it is a
+     sentence the panel computes, and the panel is 190px wide. Left nowrap it
+     was simply cut off - "2.67 cm/frame - TOO FAST" read "2.67 cm/frame - TO",
+     losing exactly the half that was the warning. So the value wraps where the
+     label does not, and a long one takes a second line instead of a haircut. */
+  .ed-field > span { white-space: normal; text-align: right; min-width: 0; }
   /* A picker is bounded by the row it is in, whatever its longest option says.
      A <select> sizes itself to its widest option and "min-width: auto" refuses
      to shrink below that, so one long name - a sky called after the place it was

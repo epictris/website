@@ -1,4 +1,4 @@
-// Camera-path geometry cases (src/render/cameraPath.ts), run by `cli camera`.
+// Camera-path geometry cases (src/lib/path.ts), run by `cli camera`.
 //
 // The camera path is authored geometry that decides where the screen looks, so
 // a wrong answer here is not a crash but a camera that leads the player the
@@ -46,7 +46,7 @@ import {
   projectOntoPolyline,
   projectOntoPolylineWindow,
   type PolylineIndex,
-} from "../render/cameraPath";
+} from "../lib/path";
 
 const V = (x: number, y: number): Vec2 => new Vec2(x, y);
 
