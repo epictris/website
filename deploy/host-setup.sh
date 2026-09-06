@@ -19,13 +19,12 @@ if [ -z "${OCI_OS_NAMESPACE:-}" ]; then
   exit 0
 fi
 
-# Unattended upgrades run apt on their own schedule and hold its lock for
-# minutes at a time; the first deploy landed on one. Wait for the lock rather
-# than fail the deploy over it.
-if ! command -v rclone >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=600 update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq rclone
-fi
+# rclone runs from its own image rather than being installed: the first two
+# deploys died on apt's lists lock, held for minutes by unattended-upgrades,
+# and a deploy should not depend on the host's package manager being idle.
+# Docker is already here, the image is pinned, and it authenticates as the
+# instance through the metadata service like a host install would.
+RCLONE_IMAGE=rclone/rclone:1.72
 
 # The instance knows its own compartment and region; rclone authenticates as
 # the instance itself (instance principal), so no key is stored anywhere.
@@ -47,7 +46,7 @@ chmod 600 /root/.config/rclone/rclone.conf
 # `copy`, never `sync`: the store expires runs after 90 days and that must not
 # reach the backup. Nightly, logged, with the log rotated by size.
 cat > /etc/cron.d/playtest-backup <<EOF
-17 3 * * * root rclone copy ${PLAYTESTS} oci:${BUCKET} --exclude 'sessions/**' --log-file /var/log/playtest-backup.log --log-level INFO
+17 3 * * * root docker run --rm -v ${PLAYTESTS}:/data:ro -v /root/.config/rclone:/config/rclone:ro ${RCLONE_IMAGE} copy /data oci:${BUCKET} --exclude 'sessions/**' --log-level INFO >> /var/log/playtest-backup.log 2>&1
 EOF
 chmod 644 /etc/cron.d/playtest-backup
 cat > /etc/logrotate.d/playtest-backup <<EOF
