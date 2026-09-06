@@ -55,6 +55,13 @@ resource "oci_core_instance" "website" {
 
   lifecycle {
     # Keys are set at creation; ignore drift so re-applies never rebuild the box.
-    ignore_changes = [metadata["ssh_authorized_keys"]]
+    # `source_details` too: the image data source picks the newest Ubuntu build
+    # on every run, and once Canonical publishes one Terraform wants to swap
+    # the boot image in place, which on OCI replaces the boot volume and wipes
+    # the VM. The data source still picks the image for a NEW instance; an
+    # existing one keeps the disk it has (2026-09-07: an apply tried exactly
+    # this and was stopped only by the 47 GB boot volume being under the API's
+    # 50 GB minimum).
+    ignore_changes = [metadata["ssh_authorized_keys"], source_details]
   }
 }
