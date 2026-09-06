@@ -11,6 +11,7 @@ on:
       - 'Dockerfile'
       - 'compose.yml'
       - 'Caddyfile'
+      - 'deploy/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -39,6 +40,7 @@ jobs:
             deploy-config:
               - 'compose.yml'
               - 'Caddyfile'
+              - 'deploy/**'
               - '.github/workflows/deploy.yml'
 
       - name: Build service matrix
