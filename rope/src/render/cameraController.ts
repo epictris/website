@@ -94,22 +94,24 @@ export const REGION_EXIT_MARGIN = 0.15; // metres
 // what keeps the window frame-rate independent.
 export const PATH_TRACK_SLACK_SPEED = 5;
 
-// --- the frame guarantee's three parameters ---------------------------------
+// --- the frame guarantee's parameters ---------------------------------------
 //
 // Global, and deliberately not authorable: a level may frame the avatar however
 // it likes and none of those framings is allowed to be "off the bottom of the
 // screen", so what the guarantee does is a property of the GAME rather than of
-// a room in it. The three are tuned together and are what every one of them
-// means:
+// a room in it. They are tuned together and are what every one of them means:
 //
 //   CAMERA_EDGE_MARGIN     where the avatar may never go.
 //   CAMERA_EDGE_EASE       how far in from there the override starts.
-//   CAMERA_EDGE_SMOOTHING  how long it takes to take over, in seconds.
+//   CAMERA_EDGE_SMOOTHING  how long a correction takes, in seconds.
+//   CAMERA_LATCH_BUFFER    how much of it a PINNED axis ignores.
 //
-// The first two are fractions of the frame, so they mean the same thing at any
-// zoom; the third is a clock. `edgeReach` turns the fractions into the
+// Three of them are fractions of the frame, so they mean the same thing at any
+// zoom, and the smoothing is a clock. `edgeReach` turns the first two into the
 // distances a given camera actually allows, `softEdgeOffset` is the curve
-// between them and `edgeTakeUp` is the clock.
+// between them, `edgeTakeUp` is the clock, and `latchBuffer` is the fourth in
+// metres. The last belongs to the anchored latch rather than to the band, and
+// is declared beside them because it is tuned against them.
 //
 // The override runs in two places, which is what makes it smooth (see
 // `CameraController.softEdge` and `holdEdge`): the band shapes what the camera
@@ -221,6 +223,77 @@ export const CAMERA_EDGE_EASE = 0.15;
 // 44, 77 m/s² of peak acceleration for k = 0.01, 1, 4, 20 on `session-137f`).
 // What it was reaching for is a delay, and a delay is a clock.
 export const CAMERA_EDGE_SMOOTHING = 0.15;
+
+// How much of what the band asks for a PINNED axis simply ignores, as a
+// fraction of the frame's HEIGHT.
+//
+// It belongs to the anchored latch rather than to the band above, and it is the
+// answer to the one thing the pin does not already stop. The pin is re-pulled
+// every frame (see `latched`), so it holds only for as long as the guarantee
+// asks nothing of it - and every arc of a long swing asks for a little. The
+// avatar reaches a centimetre or two past where the last arc left the pin, the
+// pin is dragged that far in, and it never comes back out, the override only
+// ever pulling toward the avatar. Over `session-546f`'s ten arcs on one anchor
+// that is 9 cm of horizontal and 11 cm of vertical creep after the first swing
+// has done the real work: every shift too small to see happen and the sum large
+// enough to see, which is the worst shape a camera motion can have.
+//
+// A DEADBAND on the demand is enough and needs no state of its own, because
+// what the band asks of a pinned axis is a function of how far past the line
+// the avatar has got: an arc that never reaches the buffer moves the pin by
+// nothing at all, and one that does drags it by the excess. Continuous either
+// way - the excess grows out of zero - so an arc that crosses is not snapped to
+// what was asked, it pays the buffer once.
+//
+// It has to reach BOTH halves of the guarantee, and that is the part that is
+// easy to get wrong. Buffered on the aim alone the pin holds and the camera
+// does not: the position half goes on answering the band from where the camera
+// is, pulling in over each arc and easing back out after it, so the creep
+// becomes a wobble and the camera's total travel over the same ten arcs goes
+// from 21 cm to 91. Buffered on both, it is 0.
+//
+// The frame's height on BOTH axes rather than each axis's own extent, because
+// what this is about is how far the camera visibly MOVES, and a shift of a
+// given number of pixels reads the same whichever way it points. Sized per
+// axis, a 16:9 frame would need a vertical shift to be nearly twice as large as
+// a horizontal one before it was worth answering, which is backwards if it is
+// anything.
+//
+// At 0.02 that is 22 screen pixels, 8.6 cm of world at the ball level's zoom.
+// Over `session-546f` the first swing still does its work (22 cm of vertical
+// pin travel against 37 unbuffered), the camera's travel over every arc after
+// it is 0.000 m, and the cost is 1% of the floor's own margin: the avatar
+// reaches 0.925 of it rather than 0.916. That is what the buffer is spent on,
+// and it is the trade to read before turning it up:
+//
+//   buffer   creep after the first swing   camera travel   floor used
+//     0            9 cm / 11 cm                21 cm          0.916
+//     0.01         0 cm /  4 cm                 4 cm          0.921
+//     0.02         0    /  0                    0             0.925
+//     0.05         0    /  0                    0             0.940
+//
+// Setting it to 0 is the un-buffered pin exactly.
+//
+// It is deliberately the PIN's and not the guarantee's: the buffer is room the
+// pin is allowed to be wrong by, and what stops that mattering is that the
+// floor is enforced on the camera's own position regardless - which is why
+// `edgeAxis` runs its floor clamp even on the frames the buffer has left it
+// nothing to do.
+export const CAMERA_LATCH_BUFFER = 0.02;
+
+// How long the pin's buffer takes to open, in seconds - machinery rather than a
+// knob, and the reason is in `latchOpenX`: it exists so the buffer arrives as a
+// ramp instead of as a step. Half a second is long enough that a pin born deep
+// in the band costs a couple of m/s^2 rather than a hundred, and short enough
+// to be fully open before the second arc of any swing, which is the first one
+// it has anything to do.
+const LATCH_OPEN_TAU = 0.5;
+
+// The pin's buffer in metres, for a camera at a given zoom.
+export function latchBuffer(camera: Camera, zoom: number): number {
+  const scale = Math.max(1e-6, zoom * PIXELS_PER_METER);
+  return (camera.viewportHeight * CAMERA_LATCH_BUFFER) / scale;
+}
 
 // The buffer a region actually holds by: its own, or the jitter default.
 //
@@ -869,12 +942,17 @@ export function edgeAxis(
   soft: number,
   hard: number,
   dt: number,
+  slack = 0,
 ): { pos: number; pull: number } {
   const d = pos - follow;
   const away = Math.abs(d);
-  const demand = edgePull(away, soft, hard);
-  if (demand <= 0) return { pos, pull: 0 };
   const side = Math.sign(d);
+  const demand = edgePull(away, soft, hard) - slack;
+  // Nothing asked for, but the FLOOR is not the band's to forgive: `slack` can
+  // exceed what the band asks anywhere inside the line (see
+  // CAMERA_LATCH_BUFFER), and an early return that skipped the clamp would let
+  // a wide enough buffer disarm the one rule a level may not opt out of.
+  if (demand <= 0) return away <= hard ? { pos, pull: 0 } : { pos: follow + side * hard, pull: 0 };
   const pull = demand * edgeTakeUp(demand, hard - (away - demand), dt);
   return { pos: follow + side * Math.min(away - pull, hard), pull };
 }
@@ -1025,6 +1103,18 @@ export class CameraController {
   // latch and the lead ratchet both belong to.
   private wasAnchored = false;
 
+  // How far open each axis's pin buffer is, 0..1 (see CAMERA_LATCH_BUFFER).
+  //
+  // The buffer cannot simply switch on with the pin. A pin is born wherever the
+  // override happened to be when the anchor was taken, which on a swing already
+  // at the edge of the frame is deep in the band, and taking a tenth of a metre
+  // of demand away in one frame is a step in the camera's VELOCITY - the one
+  // thing it may not have (measured on `session-546f`: 112 m/s^2 on the frame
+  // after the anchor, against 26 without). It opens on the same clock the
+  // band's own rate uses, and closes the same way when the pin is dropped.
+  private latchOpenX = 0;
+  private latchOpenY = 0;
+
   // How far the band moved the AIM on this frame, per axis, in metres. A
   // record of what just happened rather than carried state - the override has
   // none, which is the whole of why it cannot go stale (see `edgeTakeUp`) -
@@ -1143,6 +1233,8 @@ export class CameraController {
       this.latchY = null;
       this.aimPullX = 0;
       this.aimPullY = 0;
+      this.latchOpenX = 0;
+      this.latchOpenY = 0;
       this.lastFollow = follow;
     }
 
@@ -1346,9 +1438,16 @@ export class CameraController {
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
     // not a guarantee and outrunning the ease is exactly what a launch does.
+    // The pin buffer opens and closes on the band's own clock rather than with
+    // the pin (see `latchOpenX`). Advanced before the guarantee runs and from
+    // LAST frame's pins, so the frame a pin is born carries no buffer at all -
+    // which is what makes a pin born deep in the band cost nothing.
+    const open = 1 - Math.exp(-Math.max(0, dt) / LATCH_OPEN_TAU);
+    this.latchOpenX += ((this.latchX === null ? 0 : 1) - this.latchOpenX) * open;
+    this.latchOpenY += ((this.latchY === null ? 0 : 1) - this.latchOpenY) * open;
+
     const aimPos = this.softEdge(camera, this.latched(target.pos.add(this.offset.mul(k))), follow, dt);
     this.pos = this.pos.add(aimPos.sub(this.pos).mul(t));
-    const eased = this.pos;
     this.pos = this.holdEdge(camera, this.pos, follow, dt);
 
     // Whatever the guarantee moved is the pin, per axis and per anchored
@@ -1362,6 +1461,14 @@ export class CameraController {
 
     camera.position = this.pos;
     camera.zoom = this.zoom;
+  }
+
+  // How one axis of the aim asks the band for its answer: outright and in full
+  // if the axis is free, and over the clock less the pin's buffer if it is
+  // pinned (see CAMERA_LATCH_BUFFER, and `softEdge` for why an unpinned aim
+  // takes the whole of it at once).
+  private pinnedAsk(pin: number | null, openness: number, dt: number, buffer: number): [number, number] {
+    return pin === null ? [Infinity, buffer * openness] : [dt, buffer * openness];
   }
 
   // `p` with each latched axis replaced by its pin (see `latchX`).
@@ -1402,8 +1509,9 @@ export class CameraController {
     }
     const hard = edgeReach(camera, this.zoom);
     const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
-    const x = edgeAxis(aim.x, follow.x, soft.x, hard.x, this.latchX === null ? Infinity : dt);
-    const y = edgeAxis(aim.y, follow.y, soft.y, hard.y, this.latchY === null ? Infinity : dt);
+    const buffer = latchBuffer(camera, this.zoom);
+    const x = edgeAxis(aim.x, follow.x, soft.x, hard.x, ...this.pinnedAsk(this.latchX, this.latchOpenX, dt, buffer));
+    const y = edgeAxis(aim.y, follow.y, soft.y, hard.y, ...this.pinnedAsk(this.latchY, this.latchOpenY, dt, buffer));
     this.aimPullX = x.pull;
     this.aimPullY = y.pull;
     return new Vec2(x.pos, y.pos);
@@ -1437,8 +1545,9 @@ export class CameraController {
     }
     const reach = edgeReach(camera, this.zoom);
     const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
-    const hx = edgeAxis(pos.x, follow.x, soft.x, reach.x, dt);
-    const hy = edgeAxis(pos.y, follow.y, soft.y, reach.y, dt);
+    const buffer = latchBuffer(camera, this.zoom);
+    const hx = edgeAxis(pos.x, follow.x, soft.x, reach.x, dt, buffer * this.latchOpenX);
+    const hy = edgeAxis(pos.y, follow.y, soft.y, reach.y, dt, buffer * this.latchOpenY);
     const clamped = new Vec2(hx.pos, hy.pos);
     const engaged = this.aimPullX > 0 || this.aimPullY > 0;
     this.edge =

@@ -140,6 +140,11 @@ Instead the point it was shoved to is kept: the camera is pinned there for the r
 Per axis, so a swing that drops the player out of the bottom of the frame pins nothing horizontally and the route goes on being narrated.
 Releasing the line drops the pin and the camera eases back to whatever the region or path wanted, blended.
 
+The pin also **ignores anything it is asked for by less than a couple of percent of the frame**, and that is what makes a long hang read as still rather than as slowly sliding.
+Each arc of a swing reaches a centimetre or two past where the last one left the pin, and the pin is only ever pulled inward, so without the deadband those nudges accumulate: a shift too small to see happen, ten times over, into a shift you can see.
+What it costs is that the player may sit a little closer to the edge while hanging, which is the same headroom the band above is spending and the reason the two are tuned together.
+Like the band, it is a global setting rather than a level field.
+
 The debug overlay draws the keep-out boxes in amber on the frames it is holding the camera - the inner one finely, where the override starts easing in, and the outer one as the line the player may never cross - and a dashed amber line across the frame through each pinned axis, so "why has the camera stopped following" has an answer on screen either way.
 The player between the two boxes is the override working; the player hard against the outer one is the framing you asked for having run out of room.
 Seeing that box is a sign to re-tune whatever was asking for the framing it is overriding: the constraint is a backstop, not a framing tool.

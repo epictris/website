@@ -2534,15 +2534,16 @@ It is the one camera rule with no authored override, and deliberately: a level m
 It is a clamp on **where the camera IS**, applied last in `update` and to the controller's own `pos` rather than to the target.
 A target the avatar can outrun is not a guarantee, and outrunning the ease is exactly what a launch does; clamping `this.pos` rather than only what is handed to the `Camera` is also what keeps the next frame continuous, since the camera really is where the constraint put it and carries on easing from there.
 
-**It is eased in over a band rather than applied as a step**, and that is what its three parameters are:
+**It is eased in over a band rather than applied as a step**, and that is what its parameters are - three for the band, and a fourth that belongs to the anchored latch below:
 
 | parameter | what it sets |
 |---|---|
 | `CAMERA_EDGE_MARGIN` (0.05) | where the avatar may never go, as a fraction of the frame |
 | `CAMERA_EDGE_EASE` (0.15) | how much further in from there the override starts, same units |
 | `CAMERA_EDGE_SMOOTHING` (0.15) | how long a correction takes when the band has room for it, in seconds |
+| `CAMERA_LATCH_BUFFER` (0.02) | how much of what the band asks a *pinned* axis simply ignores, as a fraction of the frame's height (see **The latch**) |
 
-All three are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
+All of them are **global** and deliberately not authorable, for the reason the margin always was: what the guarantee does is a property of the game rather than of a room in it.
 `edgeReach` turns the two fractions into the distances a given camera allows - the override starts at `edgeReach(margin + ease)` and the avatar may never pass `edgeReach(margin)` - and `softEdgeOffset` is the curve between them.
 
 A bare clamp is a discontinuity in the camera's **velocity**, which is the one thing a camera may not have.
@@ -2628,6 +2629,21 @@ So the camera moves on the frames the guarantee is actually moving it and on no 
 It is per **axis** because the clamp is: a swing that drops the avatar out of the bottom of the frame has said nothing about the horizontal lead, and pinning x for it would freeze the route the camera is narrating.
 
 The pin is recorded **after** the clamp has run, from what it actually moved, rather than predicted from the target before it - so next frame's aim is that position exactly and the ease has nothing left to do, which is what makes "the camera does not move" exact rather than nearly so.
+
+**The pin ignores what it is asked for by less than `CAMERA_LATCH_BUFFER`**, and without that it creeps.
+The pin is re-pulled every frame, so it holds only for as long as the guarantee asks nothing of it - and every arc of a long swing asks for a little: the avatar reaches a centimetre or two past where the last arc left the pin, the pin is dragged that far in, and it never comes back out, the override only ever pulling toward the avatar.
+Over `session-546f`'s ten arcs on one anchor that is 9 cm of horizontal and 11 cm of vertical creep after the first swing has done the real work - every shift too small to see happen and the sum large enough to see, which is the worst shape a camera motion can have.
+
+A plain deadband on the demand answers it and needs no state: what the band asks of a pinned axis is a function of how far past the line the avatar has got, so an arc that never reaches the buffer moves the pin by nothing and one that does drags it by the excess, continuously.
+
+It has to reach **both halves** of the guarantee, which is the part that is easy to get wrong.
+Buffered on the aim alone the pin holds and the camera does not: the position half goes on answering the band from where the camera is, pulling in over each arc and easing back out after it, so the creep becomes a *wobble* and the camera's travel over the same ten arcs goes from 21 cm to **91**.
+Buffered on both it is **0**.
+
+And it **opens on a clock rather than with the pin** (`latchOpenX`, half a second).
+A pin is born wherever the override happened to be when the anchor was taken, which on a swing already at the edge of the frame is deep in the band, so switching a tenth of a metre of demand off in one frame is a step in the camera's velocity: 112 m/s² on the frame after the anchor, against 26 without the buffer at all and 28 with it ramped.
+
+The buffer is spent as headroom against the floor, and that is the trade to read before turning it up - at the shipped 0.02 the avatar reaches 0.925 of the floor on `session-118f` rather than 0.916, and the first swing still does its work (22 cm of vertical pin travel against 37 unbuffered).
 
 It **outranks the lead ratchet** and is outranked by nothing.
 With the lead ratcheted (see **The anchored episode**) the target stays forward while the avatar swings back, so far enough back and the guarantee hauls the camera after them - down the track, against the ratchet's whole bias, because the frame guarantee is the one camera rule a level may never opt out of and this one is not an exception to that.
