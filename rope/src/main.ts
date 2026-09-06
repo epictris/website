@@ -137,6 +137,22 @@ window.addEventListener("resize", resize);
 let replayFrames: FrameInput[] | null = null;
 let replayIndex = 0;
 const replayName = params.get("replay");
+// The aim the RECORDED player had on the frame being replayed, drawn where the
+// live reticle would be: a replay watched without it shows a ball steering
+// itself. Null when the recording says "not aiming", which the ball's input
+// source encodes as the ball's own position at sample time (see
+// BallInputSource.sample); the replay is exact, so that is an equality test
+// against the ball before the step.
+let replayAim: Vec2 | null = null;
+
+function recordedAim(l: Level | BallLevel, input: FrameInput): Vec2 | null {
+  const aim = input.mouseWorldPosition;
+  if (l instanceof BallLevel) {
+    const origin = l.ball.globalPosition;
+    if (aim.x === origin.x && aim.y === origin.y) return null;
+  }
+  return aim;
+}
 
 function makeLevel(): Level | BallLevel {
   return isBall ? new BallLevel(levelSpec.data) : new Level(levelSpec.data, levelSpec.init);
@@ -430,6 +446,7 @@ function frame(now: number): void {
     const frameInput: FrameInput = replayFrames
       ? replayFrames[Math.min(replayIndex++, replayFrames.length - 1)]!
       : input.sample();
+    if (replayFrames) replayAim = recordedAim(level, frameInput);
     const simT0 = performance.now();
     const stepped = level;
     level.physicsProcess(frameInput, STEP);
@@ -510,7 +527,7 @@ function frame(now: number): void {
       level,
       camera,
       fps,
-      ballInput!.aimPoint(),
+      replayFrames ? replayAim : ballInput!.aimPoint(),
       alpha,
       scene3d !== null,
       sparks,
@@ -523,7 +540,7 @@ function frame(now: number): void {
       camera,
       fps,
       showDebug,
-      liveInput!.gamepadAim(),
+      replayFrames ? replayAim : liveInput!.gamepadAim(),
       alpha,
       cameraCtl.held,
       scene3d !== null,
