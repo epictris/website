@@ -15,5 +15,12 @@ pool.tris.sh {
 }
 
 rope.tris.sh {
+	# The playtest admin page and its API sit behind a password; the game and
+	# the ingest route it posts to stay open. The hash comes from the
+	# ROPE_ADMIN_HASH environment variable (compose.yml), never from this file.
+	@admin path /admin /admin/* /api/playtest/admin/*
+	basic_auth @admin {
+		tris {$ROPE_ADMIN_HASH}
+	}
 	reverse_proxy rope:8080
 }

@@ -101,10 +101,16 @@ jobs:
             ${{ matrix.service.image }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          # The image has no `.git`; rope stamps recordings with this instead
+          # (see rope/src/sim/treeStamp.ts). Harmless for the other services.
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
 
   deploy:
     needs: [changes, build]
-    if: always() && needs.changes.outputs.deploy == 'true' && needs.build.result != 'failure' && needs.build.result != 'cancelled'
+    # A manual run changes no files, so the paths filter alone would skip it; it
+    # is how a rotated ROPE_ADMIN_HASH reaches the host without a code change.
+    if: always() && (needs.changes.outputs.deploy == 'true' || github.event_name == 'workflow_dispatch') && needs.build.result != 'failure' && needs.build.result != 'cancelled'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -119,7 +125,27 @@ jobs:
       - name: Sync compose and Caddy config
         run: |
           rsync -az -e "ssh -i ~/.ssh/deploy_key" \
-            compose.yml Caddyfile ubuntu@${{ vars.SSH_HOST }}:/opt/website/
+            compose.yml Caddyfile deploy/host-setup.sh ubuntu@${{ vars.SSH_HOST }}:/opt/website/
+
+      # Host state the containers depend on: the playtest directory, and the
+      # nightly backup to Object Storage when OCI_OS_NAMESPACE is set
+      # (terraform output `object_storage_namespace`, as a repository variable).
+      - name: Configure host
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} \
+            "sudo OCI_OS_NAMESPACE='${{ vars.OCI_OS_NAMESPACE }}' bash /opt/website/host-setup.sh"
+
+      # Runtime secrets, written whole on every deploy so a rotated secret is a
+      # re-run away. Piped over stdin so the `$` signs in a bcrypt hash never
+      # meet a remote shell; single-quoted in the file because compose reads
+      # .env with dotenv rules. An unset secret fails here rather than starting
+      # Caddy with an empty hash, which would refuse the whole config.
+      - name: Write runtime secrets
+        run: |
+          hash='${{ secrets.ROPE_ADMIN_HASH }}'
+          if [ -z "$hash" ]; then echo "ROPE_ADMIN_HASH secret is not set"; exit 1; fi
+          printf "ROPE_ADMIN_HASH='%s'\n" "$hash" \
+            | ssh -i ~/.ssh/deploy_key ubuntu@${{ vars.SSH_HOST }} "umask 077 && cat > /opt/website/.env"
 
       - name: Pull and restart
         run: |

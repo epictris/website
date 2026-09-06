@@ -22,7 +22,7 @@ import {
   checkBallInvariants,
   checkInvariants,
   EnergyMonitor,
-  inputDeserializer,
+  recordingDeserializer,
   RollMonitor,
   StuckDetector,
   worldDigestBall,
@@ -85,7 +85,7 @@ function keepMax(current: number | null, next: number | null): number | null {
 
 export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const level = levelFromRecording(rec);
-  const deserialize = inputDeserializer();
+  const deserialize = recordingDeserializer(rec);
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
   const stuck = new StuckDetector();

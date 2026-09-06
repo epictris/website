@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>rope playtests</title>
+<style>
+  :root {
+    --bg: #1f2430; --fg: #cbccc6; --accent: #65bddb; --border: #313244;
+    --dim: #8a8f98; --warn: #ffcc66; --bad: #f28779; --ok: #bae67e; --row: #242a38;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  body { padding: 1.5em 2ch 3em; }
+  h1 { font-size: 1em; margin: 0 0 1em; color: var(--accent); font-weight: normal; }
+  h1 small { color: var(--dim); }
+  nav { display: flex; gap: 2ch; margin-bottom: 1em; border-bottom: 1px solid var(--border); }
+  nav button { background: none; border: 0; color: var(--dim); font: inherit; padding: 0.4em 0; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+  section[hidden] { display: none; }
+  .bar { display: flex; flex-wrap: wrap; gap: 1ch 2ch; align-items: center; margin-bottom: 1em; }
+  .bar label { color: var(--dim); }
+  input, select, textarea { background: var(--row); color: var(--fg); border: 1px solid var(--border); font: inherit; padding: 0.2em 0.6ch; }
+  input[type="date"] { color-scheme: dark; }
+  button.act { background: var(--row); color: var(--fg); border: 1px solid var(--border); font: inherit; padding: 0.2em 1ch; cursor: pointer; }
+  button.act:hover { border-color: var(--accent); }
+  button.act.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.act:disabled { opacity: 0.4; cursor: default; }
+  .wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; white-space: nowrap; }
+  th, td { text-align: left; padding: 0.3em 1ch; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--dim); font-weight: normal; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--bg); }
+  th[data-sorted="asc"]::after { content: " ▲"; } th[data-sorted="desc"]::after { content: " ▼"; }
+  tr:hover td { background: var(--row); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dim { color: var(--dim); } .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .accent { color: var(--accent); }
+  .tag { display: inline-block; border: 1px solid var(--border); border-radius: 3px; padding: 0 0.6ch; color: var(--dim); }
+  .tag.live { border-color: var(--ok); color: var(--ok); }
+  .star { cursor: pointer; color: var(--dim); } .star.on { color: var(--warn); }
+  td.note input { width: 14ch; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .actions { display: flex; gap: 1ch; }
+  .empty { color: var(--dim); padding: 2em 0; }
+  #status { position: fixed; right: 2ch; bottom: 1em; color: var(--dim); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.2em 2ch; margin: 0; }
+  dt { color: var(--dim); }
+  .ips { max-width: 40ch; white-space: normal; }
+</style>
+</head>
+<body>
+<h1>rope playtests <small id="here"></small></h1>
+<nav role="tablist">
+  <button role="tab" data-tab="runs" aria-selected="true">runs</button>
+  <button role="tab" data-tab="live">live</button>
+  <button role="tab" data-tab="players">players</button>
+  <button role="tab" data-tab="storage">storage</button>
+</nav>
+
+<section id="runs">
+  <div class="bar">
+    <label>player <select id="f-player"><option value="">all</option></select></label>
+    <label>level <select id="f-level"><option value="">all</option></select></label>
+    <label>from <input type="date" id="f-from" /></label>
+    <label>to <input type="date" id="f-to" /></label>
+    <label>end <select id="f-reason"><option value="">any</option><option>reset</option><option>kill</option><option>unload</option><option>pause</option><option>idle</option></select></label>
+    <label>verdict <select id="f-verdict"><option value="">any</option><option value="ok">reproduces</option><option value="diverges">diverges</option><option value="pending">pending</option></select></label>
+    <label><input type="checkbox" id="f-starred" /> starred</label>
+    <span class="dim" id="runs-count"></span>
+    <span style="flex:1"></span>
+    <button class="act danger" id="delete-selected" disabled>delete selected</button>
+  </div>
+  <div class="wrap"><table id="runs-table">
+    <thead><tr>
+      <th><input type="checkbox" id="select-all" /></th>
+      <th data-key="startedAt">when</th><th data-key="player">player</th><th data-key="level">level</th>
+      <th data-key="commit">commit</th><th data-key="frames" class="num">frames</th><th data-key="seconds" class="num">time</th>
+      <th data-key="reason">end</th><th data-key="verdictKey">verdict</th><th data-key="device">device</th>
+      <th data-key="ip">address</th><th>★</th><th>note</th><th></th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="empty" id="runs-empty" hidden>No runs match.</div>
+</section>
+
+<section id="live" hidden>
+  <div class="wrap"><table id="live-table">
+    <thead><tr><th>player</th><th>level</th><th class="num">run</th><th class="num">frames</th><th>started</th><th>last batch</th><th>address</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <div class="empty" id="live-empty" hidden>Nobody is playing right now.</div>
+</section>
+
+<section id="players" hidden>
+  <div class="wrap"><table id="players-table">
+    <thead><tr><th>name</th><th>id</th><th class="num">sessions</th><th class="num">runs</th><th>first seen</th><th>last seen</th><th>addresses</th><th>probably</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<section id="storage" hidden>
+  <dl id="storage-list"></dl>
+</section>
+
+<div id="status"></div>
+
+<script>
+(() => {
+  const API = "/api/playtest/admin";
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  let data = null;
+  let sort = { key: "startedAt", dir: "desc" };
+  const selected = new Set();
+
+  const fmtWhen = (ms) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
+  // Year in the tooltip, not the column: a runs table is read within a month.
+  const fmtShort = (ms) => new Date(ms).toISOString().slice(5, 16).replace("T", " ");
+  const fmtAgo = (ms) => {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 90) return `${s}s ago`;
+    if (s < 5400) return `${Math.round(s / 60)}m ago`;
+    if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  };
+  const fmtDur = (s) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`);
+  const fmtBytes = (b) => (b === null ? "unknown" : b < 1e6 ? `${(b / 1e3).toFixed(0)} kB` : b < 1e9 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e9).toFixed(2)} GB`);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const status = (msg, bad = false) => { const el = $("#status"); el.textContent = msg; el.className = bad ? "bad" : ""; };
+
+  const playerName = (id) => {
+    const p = data.players[id];
+    if (p && p.name) return p.name;
+    const nick = data.runs.find((r) => r.player === id && r.nick)?.nick;
+    return nick ? `${nick}?` : id.slice(0, 8);
+  };
+
+  async function api(method, path, body) {
+    const res = await fetch(API + path, {
+      method,
+      headers: body ? { "content-type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(`${method} ${path}: ${res.status}`);
+    return res.json();
+  }
+
+  async function load() {
+    try {
+      data = await api("GET", "/index");
+      $("#here").textContent = `serving ${data.here.srcHash} @${data.here.commit}`;
+      for (const id of [...selected]) if (!data.runs.some((r) => r.id === id)) selected.delete(id);
+      render();
+      status(`updated ${new Date().toLocaleTimeString()}`);
+    } catch (e) {
+      status(String(e), true);
+    }
+  }
+
+  // ---- runs -----------------------------------------------------------------
+  function rowsForView() {
+    const fPlayer = $("#f-player").value, fLevel = $("#f-level").value, fReason = $("#f-reason").value, fVerdict = $("#f-verdict").value;
+    const from = $("#f-from").value ? Date.parse($("#f-from").value) : -Infinity;
+    const to = $("#f-to").value ? Date.parse($("#f-to").value) + 86400000 : Infinity;
+    const starredOnly = $("#f-starred").checked;
+    return data.runs
+      .map((r) => {
+        const a = data.annotations[r.id] || { starred: false, note: "" };
+        const verdictKey = r.verdict === null ? "pending" : r.verdict.identical ? "ok" : "diverges";
+        return { ...r, playerName: playerName(r.player), seconds: Math.max(0, Math.round((r.endedAt - r.startedAt) / 1000)), ip: r.ips[r.ips.length - 1] || "", verdictKey, starred: a.starred, note: a.note };
+      })
+      .filter((r) => (!fPlayer || r.player === fPlayer) && (!fLevel || r.level === fLevel) && (!fReason || r.reason === fReason) && (!fVerdict || r.verdictKey === fVerdict) && (!starredOnly || r.starred) && r.startedAt >= from && r.startedAt < to)
+      .sort((a, b) => {
+        const k = sort.key === "player" ? "playerName" : sort.key;
+        const x = a[k], y = b[k];
+        const c = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+        return sort.dir === "asc" ? c : -c;
+      });
+  }
+
+  function verdictCell(r) {
+    if (r.verdict === null) return `<span class="dim">pending</span>`;
+    if (r.verdict.identical) return `<span class="ok">reproduces</span>`;
+    const d = r.verdict.firstDivergence;
+    return `<span class="bad">diverges</span> <span class="dim">@f${d ? d.frame : "?"} ${d ? esc(d.field) : ""}</span>`;
+  }
+
+  function renderRuns() {
+    const rows = rowsForView();
+    const tbody = $("#runs-table tbody");
+    tbody.innerHTML = rows.map((r) => `
+      <tr data-id="${esc(r.id)}">
+        <td><input type="checkbox" class="sel" ${selected.has(r.id) ? "checked" : ""} /></td>
+        <td title="${esc(r.id)} ${fmtWhen(r.startedAt)}">${fmtShort(r.startedAt)}</td>
+        <td><a href="#" class="pick-player" data-player="${esc(r.player)}">${esc(r.playerName)}</a></td>
+        <td>${esc(r.level)}</td>
+        <td>${esc(r.commit)}${r.srcHash === data.here.srcHash ? ' <span class="tag live">live</span>' : ""}</td>
+        <td class="num">${r.frames}</td>
+        <td class="num">${fmtDur(r.seconds)}</td>
+        <td class="${r.reason === "reset" || r.reason === "kill" ? "" : "warn"}">${esc(r.reason)}</td>
+        <td>${verdictCell(r)}</td>
+        <td class="dim">${esc(r.device)}</td>
+        <td class="dim">${esc(r.ip)}</td>
+        <td><span class="star ${r.starred ? "on" : ""}" title="star">★</span></td>
+        <td class="note"><input type="text" value="${esc(r.note)}" placeholder="note" /></td>
+        <td class="actions">
+          <a href="/?replay=run:${encodeURIComponent(r.id)}" target="_blank" title="play this run in the game">watch</a>
+          <a href="${API}/runs/${encodeURIComponent(r.id)}" download="${esc(r.id)}.json" title="the Recording bundle, for playtests/bundles/">json</a>
+          <a href="#" class="del" title="move to trash">delete</a>
+        </td>
+      </tr>`).join("");
+    $("#runs-empty").hidden = rows.length > 0;
+    $("#runs-count").textContent = `${rows.length} of ${data.runs.length} run(s)`;
+    $("#delete-selected").disabled = selected.size === 0;
+    $("#delete-selected").textContent = selected.size ? `delete ${selected.size} selected` : "delete selected";
+    $$("#runs-table th[data-key]").forEach((th) => th.dataset.sorted = th.dataset.key === sort.key ? sort.dir : "");
+  }
+
+  function fillFilters() {
+    const keep = (sel) => { const v = sel.value; return () => { sel.value = [...sel.options].some((o) => o.value === v) ? v : ""; }; };
+    const restorePlayer = keep($("#f-player")), restoreLevel = keep($("#f-level"));
+    const players = [...new Set(data.runs.map((r) => r.player))].sort((a, b) => playerName(a).localeCompare(playerName(b)));
+    $("#f-player").innerHTML = `<option value="">all</option>` + players.map((p) => `<option value="${esc(p)}">${esc(playerName(p))}</option>`).join("");
+    const levels = [...new Set(data.runs.map((r) => r.level))].sort();
+    $("#f-level").innerHTML = `<option value="">all</option>` + levels.map((l) => `<option>${esc(l)}</option>`).join("");
+    restorePlayer(); restoreLevel();
+  }
+
+  // ---- live, players, storage ------------------------------------------------
+  function renderLive() {
+    const tbody = $("#live-table tbody");
+    tbody.innerHTML = data.live.map((l) => `
+      <tr>
+        <td>${esc(playerName(l.player))}${l.nick ? ` <span class="dim">(${esc(l.nick)})</span>` : ""}</td>
+        <td>${esc(l.level)}</td><td class="num">${l.run}</td><td class="num">${l.frames}</td>
+        <td>${fmtWhen(l.startedAt)}</td>
+        <td class="${Date.now() - l.lastSeen < 5000 ? "ok" : "dim"}">${fmtAgo(l.lastSeen)}</td>
+        <td class="dim">${esc(l.ip || "")}</td>
+      </tr>`).join("");
+    $("#live-empty").hidden = data.live.length > 0;
+  }
+
+  function renderPlayers() {
+    const runsBy = {};
+    for (const r of data.runs) runsBy[r.player] = (runsBy[r.player] || 0) + 1;
+    const players = Object.values(data.players).sort((a, b) => b.lastSeen - a.lastSeen);
+    $("#players-table tbody").innerHTML = players.map((p) => `
+      <tr data-id="${esc(p.id)}">
+        <td><input type="text" class="rename" value="${esc(p.name || "")}" placeholder="${esc(playerName(p.id))}" /></td>
+        <td class="dim" title="${esc(p.aliases.join(", "))}">${esc(p.id.slice(0, 8))}${p.aliases.length ? ` +${p.aliases.length}` : ""}</td>
+        <td class="num">${p.sessions}</td><td class="num">${runsBy[p.id] || 0}</td>
+        <td>${fmtWhen(p.firstSeen)}</td><td>${fmtAgo(p.lastSeen)}</td>
+        <td class="ips dim">${Object.entries(p.ips).sort((a, b) => b[1].last - a[1].last).map(([ip, s]) => `<span title="${fmtWhen(s.first)} .. ${fmtWhen(s.last)}">${esc(ip)}</span>`).join(", ")}</td>
+        <td>${p.probably.filter((id) => data.players[id]).map((id) => `<button class="act merge" data-into="${esc(id)}" title="this is the same person: merge into ${esc(playerName(id))}">${esc(playerName(id))}</button>`).join(" ")}</td>
+        <td class="actions">
+          <select class="merge-into" title="merge into another player"><option value="">merge into…</option>${players.filter((q) => q.id !== p.id).map((q) => `<option value="${esc(q.id)}">${esc(playerName(q.id))}</option>`).join("")}</select>
+          <a href="#" class="del-player">delete</a>
+        </td>
+      </tr>`).join("");
+  }
+
+  function renderStorage() {
+    const s = data.storage;
+    $("#storage-list").innerHTML = [
+      ["runs", `${s.runs} (${fmtBytes(s.runBytes)})`],
+      ["trash", fmtBytes(s.trashBytes) + ' <span class="dim">purged after 30 days</span>'],
+      ["free on volume", fmtBytes(s.freeBytes) + (s.freeBytes !== null && s.freeBytes < 2e9 ? ' <span class="warn">ingest refuses under 1 GB</span>' : "")],
+      ["live sessions", String(data.live.length)],
+      ["players", String(Object.keys(data.players).length)],
+      ["serving", `${esc(data.here.srcHash)} @${esc(data.here.commit)}`],
+    ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  }
+
+  function render() {
+    fillFilters();
+    renderRuns();
+    renderLive();
+    renderPlayers();
+    renderStorage();
+  }
+
+  // ---- events -----------------------------------------------------------------
+  $$("nav [role=tab]").forEach((b) => b.addEventListener("click", () => {
+    $$("nav [role=tab]").forEach((x) => x.setAttribute("aria-selected", x === b));
+    $$("section").forEach((s) => s.hidden = s.id !== b.dataset.tab);
+    location.hash = b.dataset.tab;
+  }));
+  if (location.hash) $(`nav [data-tab="${location.hash.slice(1)}"]`)?.click();
+
+  $$("#runs .bar select, #runs .bar input").forEach((el) => el.addEventListener("change", renderRuns));
+  $$("#runs-table th[data-key]").forEach((th) => th.addEventListener("click", () => {
+    sort = sort.key === th.dataset.key ? { key: sort.key, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: th.dataset.key, dir: th.dataset.key === "startedAt" ? "desc" : "asc" };
+    renderRuns();
+  }));
+  $("#select-all").addEventListener("change", (e) => {
+    for (const r of rowsForView()) e.target.checked ? selected.add(r.id) : selected.delete(r.id);
+    renderRuns();
+  });
+
+  $("#runs-table").addEventListener("change", async (e) => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const id = tr.dataset.id;
+    if (e.target.classList.contains("sel")) { e.target.checked ? selected.add(id) : selected.delete(id); renderRuns(); }
+    if (e.target.closest("td.note")) {
+      try { data.annotations[id] = await api("PATCH", `/runs/${encodeURIComponent(id)}`, { note: e.target.value }); status("note saved"); }
+      catch (err) { status(String(err), true); }
+    }
+  });
+  $("#runs-table").addEventListener("click", async (e) => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const id = tr.dataset.id;
+    try {
+      if (e.target.classList.contains("star")) {
+        const on = !e.target.classList.contains("on");
+        data.annotations[id] = await api("PATCH", `/runs/${encodeURIComponent(id)}`, { starred: on });
+        renderRuns();
+      } else if (e.target.classList.contains("del")) {
+        e.preventDefault();
+        if (!confirm(`Move run ${id} to trash?`)) return;
+        await api("DELETE", `/runs/${encodeURIComponent(id)}`);
+        await load();
+      } else if (e.target.classList.contains("pick-player")) {
+        e.preventDefault();
+        $("#f-player").value = e.target.dataset.player;
+        renderRuns();
+      }
+    } catch (err) { status(String(err), true); }
+  });
+  $("#delete-selected").addEventListener("click", async () => {
+    if (!confirm(`Move ${selected.size} run(s) to trash?`)) return;
+    try {
+      for (const id of [...selected]) await api("DELETE", `/runs/${encodeURIComponent(id)}`);
+      selected.clear();
+      await load();
+    } catch (err) { status(String(err), true); }
+  });
+
+  $("#players-table").addEventListener("change", async (e) => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const id = tr.dataset.id;
+    try {
+      if (e.target.classList.contains("rename")) {
+        await api("PATCH", `/players/${encodeURIComponent(id)}`, { name: e.target.value });
+        await load();
+      } else if (e.target.classList.contains("merge-into") && e.target.value) {
+        const into = e.target.value;
+        if (!confirm(`Merge ${playerName(id)} into ${playerName(into)}? Their runs and future sessions move over.`)) { e.target.value = ""; return; }
+        await api("POST", `/players/${encodeURIComponent(into)}/merge`, { from: id });
+        await load();
+      }
+    } catch (err) { status(String(err), true); }
+  });
+  $("#players-table").addEventListener("click", async (e) => {
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const id = tr.dataset.id;
+    try {
+      if (e.target.classList.contains("merge")) {
+        const into = e.target.dataset.into;
+        if (!confirm(`${playerName(id)} is the same person as ${playerName(into)}? Their runs and future sessions move over.`)) return;
+        await api("POST", `/players/${encodeURIComponent(into)}/merge`, { from: id });
+        await load();
+      } else if (e.target.classList.contains("del-player")) {
+        e.preventDefault();
+        if (!confirm(`Delete ${playerName(id)} and every run attributed to them?`)) return;
+        await api("DELETE", `/players/${encodeURIComponent(id)}`);
+        await load();
+      }
+    } catch (err) { status(String(err), true); }
+  });
+
+  load();
+  setInterval(() => { if (document.visibilityState === "visible") load(); }, 15000);
+})();
+</script>
+</body>
+</html>

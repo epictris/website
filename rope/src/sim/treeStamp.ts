@@ -89,7 +89,11 @@ export function sourceHash(root: string): string {
 export function treeStamp(root: string, git: (args: string[]) => string | null): TreeStamp {
   // Trimmed here rather than in each caller's `git`: both hand back raw stdout,
   // and a commit with a newline in it lands in the middle of a printed line.
-  const commit = git(["rev-parse", "--short", "HEAD"])?.trim();
+  // Outside a checkout - the production image, whose build context has no
+  // `.git` - the deploy passes the commit in as `GIT_COMMIT` instead, and only
+  // when that is missing too does the stamp say unknown.
+  const commit =
+    git(["rev-parse", "--short", "HEAD"])?.trim() || process.env.GIT_COMMIT?.trim().slice(0, 7);
   // Scoped to `root`, not the whole repo: this stamp is about the rope tree, and
   // an edit somewhere else in the monorepo cannot change what it serves.
   const status = git(["status", "--porcelain", "--", "."]);

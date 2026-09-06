@@ -17,6 +17,7 @@ import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import {
   digest,
   digestBall,
+  recordingDeserializer,
   serializeInput,
   worldDigest,
   worldDigestBall,
@@ -27,8 +28,16 @@ import {
 } from "./sim/trace";
 import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
-import { inputDeserializer } from "./sim/trace";
 import { levelFromRecording } from "./sim/replay";
+import { PlaytestRecorder } from "./playtest/recorder";
+import {
+  ADMIN_API,
+  DIGEST_EVERY,
+  INGEST_PATH,
+  PAUSE_RESET_MS,
+  type Device,
+  type EndReason,
+} from "./playtest/protocol";
 import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
 import { showToast } from "./render/toast";
 // The tree this page was served from, not the commit the dev server booted at
@@ -189,6 +198,88 @@ const recDigests: Digest[] = [];
 // so a replay of this bundle is compared on the whole world rather than on the
 // avatar alone (see WorldDigest).
 const recWorldDigests: WorldDigest[] = [];
+// The held mask of the most recent sampled frame, which is the hand the NEXT
+// level's first frame is stepped from: the input source's previous-frame state
+// survives a reset, so a jump still held on the frame after the one that reset
+// the level is held, not pressed. A recording that begins there has to say so
+// (see `Recording.heldAtStart`).
+let lastHeld = 0;
+let recHeldAtStart = 0;
+
+function worldDigestOf(l: Level | BallLevel): WorldDigest {
+  return l instanceof BallLevel ? worldDigestBall(l) : worldDigest(l);
+}
+
+// Production playtest recording (see playtest/recorder.ts): on in a production
+// build, off while replaying, and `?record=1` / `?record=0` override either
+// way so the whole path can be exercised against a local `serve.ts`.
+const recordWanted =
+  replayName === null && (params.has("record") ? params.get("record") !== "0" : import.meta.env.PROD);
+
+function detectDevice(): Device {
+  if (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) return "touch";
+  try {
+    if (navigator.getGamepads?.().some((g) => g !== null)) return "gamepad";
+  } catch {
+    // Gamepad access can throw under a restrictive permissions policy; a mouse
+    // is then as good a guess as any.
+  }
+  return "mouse";
+}
+
+// `?player=NAME` on an invite link names the first session; it is remembered so
+// the name still arrives when the friend comes back by the bare URL.
+function playerNick(): string | null {
+  const fromUrl = params.get("player")?.trim().slice(0, 40) || null;
+  try {
+    if (fromUrl) localStorage.setItem("playtest.nick", fromUrl);
+    return fromUrl ?? localStorage.getItem("playtest.nick");
+  } catch {
+    return fromUrl;
+  }
+}
+
+const recorder = recordWanted
+  ? new PlaytestRecorder(INGEST_PATH, {
+      commit,
+      dirty,
+      srcHash,
+      level: levelId,
+      nick: playerNick(),
+      device: detectDevice(),
+      ua: navigator.userAgent,
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      dpr: window.devicePixelRatio,
+      render: scene3d ? "3d" : "2d",
+    })
+  : null;
+recorder?.startRun(levelId, 0);
+
+// Restart the level from outside a physics step: the page was hidden for long
+// enough that continuing would be a run with a gap in it the fixed step never
+// saw, or it came back out of the back/forward cache after its run was ended.
+function restartRun(reason: EndReason | null): void {
+  if (reason) recorder?.endRun(reason);
+  reset();
+  recHeldAtStart = lastHeld;
+  recorder?.startRun(levelId, lastHeld);
+}
+
+let hiddenAt: number | null = null;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    hiddenAt = performance.now();
+    recorder?.flush(true);
+  } else if (hiddenAt !== null) {
+    const away = performance.now() - hiddenAt;
+    hiddenAt = null;
+    if (recorder?.isRunOpen && away > PAUSE_RESET_MS) restartRun("pause");
+  }
+});
+window.addEventListener("pagehide", () => recorder?.endRun("unload", true));
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted && recorder && !recorder.isRunOpen) restartRun(null);
+});
 
 function downloadRecording(): void {
   const rec: Recording = {
@@ -196,6 +287,7 @@ function downloadRecording(): void {
     git: commit,
     dirty,
     srcHash,
+    heldAtStart: recHeldAtStart,
     frames: recFrames.slice(),
     digests: recDigests.slice(),
     worldDigests: recWorldDigests.slice(),
@@ -232,11 +324,32 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// Three places a replay can come from: a file under `public/` (the original,
+// for a bundle copied there by hand), `prod/<name>` for a pulled production run
+// the dev server serves out of `playtests/prod/`, and `run:<id>` for a run
+// fetched straight from the production store, which is what the admin page's
+// Watch button opens. The last two are the same bundle at different distances.
+function replaySource(name: string): string {
+  if (name.startsWith("run:")) return `${ADMIN_API}/runs/${encodeURIComponent(name.slice(4))}`;
+  if (name.startsWith("prod/")) return `/playtests/${name}`;
+  return `/${name}`;
+}
+
 if (replayName) {
   void (async () => {
-    const res = await fetch(`/${replayName}`);
+    const res = await fetch(replaySource(replayName));
+    if (!res.ok) {
+      showToast(`replay ${replayName}: ${res.status} ${res.statusText}`, "warn");
+      return;
+    }
     const rec = (await res.json()) as Recording;
-    const deserialize = inputDeserializer();
+    // A run played on a different tree is still worth watching, but it is
+    // evidence about that tree and not this one, and the page says so before
+    // the first frame rather than leaving it to be noticed.
+    if (rec.srcHash && rec.srcHash !== srcHash) {
+      showToast(`recorded on ${rec.git ?? rec.srcHash}, this page is ${commit}: the tree differs`, "warn");
+    }
+    const deserialize = recordingDeserializer(rec);
     const frames = rec.frames.map(deserialize);
     // A self-contained recording (level-editor export) carries its own
     // geometry; play it on that, not on the registry level the URL named.
@@ -318,16 +431,32 @@ function frame(now: number): void {
       ? replayFrames[Math.min(replayIndex++, replayFrames.length - 1)]!
       : input.sample();
     const simT0 = performance.now();
+    const stepped = level;
     level.physicsProcess(frameInput, STEP);
     simMs += performance.now() - simT0;
     // Drained inside the catch-up loop rather than after it: a frame that runs
     // several steps would otherwise silently drop every caught-up step's events.
     sparks.ingest(level.sparkEvents);
-    recFrames.push(serializeInput(frameInput));
-    recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
-    recWorldDigests.push(
-      level instanceof BallLevel ? worldDigestBall(level) : worldDigest(level),
-    );
+    const serialized = serializeInput(frameInput);
+    lastHeld = serialized.h;
+    if (level !== stepped) {
+      // The step reset the level (a jump press, or the kill zone). The input
+      // belongs to the run that just ended - the old level stepped it - and the
+      // fresh level has not seen it, so it is not the first frame of the new run.
+      // Recording it as one is what made runs after a reset replay a frame out.
+      recorder?.frame(serialized);
+      recorder?.digest(worldDigestOf(stepped));
+      recorder?.endRun(frameInput.jump.pressed ? "reset" : "kill");
+      recHeldAtStart = serialized.h;
+      recorder?.startRun(levelId, serialized.h);
+    } else {
+      recFrames.push(serialized);
+      recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
+      const wd = worldDigestOf(level);
+      recWorldDigests.push(wd);
+      recorder?.frame(serialized);
+      if (level.frame % DIGEST_EVERY === 0) recorder?.digest(wd);
+    }
     accumulator -= STEP;
     steps++;
   }

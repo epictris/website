@@ -5,6 +5,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # bcrypt hash of the rope admin password, from /opt/website/.env (written
+      # by the deploy from the ROPE_ADMIN_HASH secret; see rope/plans/playtest-recording.md).
+      - ROPE_ADMIN_HASH=${ROPE_ADMIN_HASH}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -36,6 +40,11 @@ services:
     restart: unless-stopped
     environment:
       - PORT=8080
+      - PLAYTEST_DIR=/data/playtests
+    volumes:
+      # Recorded playtest runs. A bind mount rather than a named volume so the
+      # host's backup cron (deploy/host-setup.sh) can read it directly.
+      - /opt/website/playtests:/data/playtests
 
 volumes:
   caddy_data:

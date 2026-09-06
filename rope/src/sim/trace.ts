@@ -24,6 +24,7 @@ import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { RawLevelData } from "../level/levelFormat";
 import type { SelfReplayVerdict } from "./selfReplay";
+import type { RunMeta } from "../playtest/protocol";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -76,6 +77,17 @@ export interface Recording {
   // present, replay builds from `data` instead of looking `level` up.
   controller?: "grapple" | "ball";
   data?: RawLevelData;
+  // The held-action mask the level's FIRST frame was stepped from. A serialized
+  // frame carries held bits only and the deserializer derives pressed/released
+  // by diffing against the previous frame, so a run that begins with a button
+  // still held from before it began (the jump that reset the level, on the
+  // frame after) replayed that hold as a fresh press - and a fresh jump press
+  // on frame 1 of a ball level is a reset. Absent on bundles from before the
+  // field existed, which all began from an empty hand.
+  heldAtStart?: number;
+  // Production playtest runs carry who played them and when (see
+  // `playtest/protocol.ts`). Never read by the sim.
+  meta?: RunMeta;
 }
 
 export interface Digest {
@@ -451,8 +463,12 @@ export function serializeInput(input: FrameInput): SerializedFrame {
 
 // Rebuild an input stream from serialized held-bits, deriving pressed/released
 // by diffing against the previous frame (stateful — call frames in order).
-export function inputDeserializer(): (f: SerializedFrame) => FrameInput {
+// `heldAtStart` seeds that previous frame (see `Recording.heldAtStart`).
+export function inputDeserializer(heldAtStart = 0): (f: SerializedFrame) => FrameInput {
   let prev: FrameInput = emptyFrameInput();
+  ACTIONS.forEach((a, i) => {
+    if (heldAtStart & (1 << i)) prev[a] = { held: true, pressed: false, released: false };
+  });
   return (f: SerializedFrame): FrameInput => {
     const input = emptyFrameInput();
     ACTIONS.forEach((a, i) => {
@@ -462,6 +478,11 @@ export function inputDeserializer(): (f: SerializedFrame) => FrameInput {
     prev = input;
     return input;
   };
+}
+
+// The deserializer a recording asks for: seeded with the hand it began from.
+export function recordingDeserializer(rec: Recording): (f: SerializedFrame) => FrameInput {
+  return inputDeserializer(rec.heldAtStart ?? 0);
 }
 
 export function digest(level: Level): Digest {

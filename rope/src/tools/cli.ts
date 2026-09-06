@@ -25,6 +25,8 @@
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
 //   bun run src/tools/cli.ts bundles   [dir]        (default playtests/bundles)
+//   bun run src/tools/cli.ts pull      [--all] [--url U]   (production runs -> playtests/prod/)
+//   bun run src/tools/cli.ts playtest  (the production store's cases)
 //   bun run src/tools/cli.ts restamp   [dir] [--write]
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
@@ -42,6 +44,7 @@
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -99,7 +102,7 @@ import {
   digestBall,
   EnergyMonitor,
   RollMonitor,
-  inputDeserializer,
+  recordingDeserializer,
   kineticEnergy,
   StuckDetector,
   type ChainDigest,
@@ -115,6 +118,9 @@ const [, , cmd, arg, ...rest] = process.argv;
 // Where bundles live: the committed regression corpus first, then the local
 // scratch dir (gitignored, and absent in a fresh clone).
 export const BUNDLE_DIRS = ["playtests/regressions", "playtests/bundles"];
+// Where `cli pull` puts production runs (gitignored). Scanned by `scan --all`,
+// never by `bundles`: the suite must not depend on what friends played last week.
+export const PROD_DIR = "playtests/prod";
 
 function fail(msg: string, code = 2): never {
   console.error(msg);
@@ -246,12 +252,6 @@ function worldDivergenceLine(r: {
   return `world: bit-exact match with recording`;
 }
 
-// How many frames of the run actually had a recorded full-world digest to be
-// compared against — 0 means the bundle predates them and the world lines are
-// silent rather than falsely green.
-function worldComparedFrames(rec: Recording, framesRun: number): number {
-  return Math.min(rec.worldDigests?.length ?? 0, framesRun);
-}
 
 function cmdPlay(file: string): void {
   const script = JSON.parse(readFileSync(file, "utf8")) as PlaytestScript;
@@ -270,7 +270,7 @@ function cmdReplay(file: string): void {
   printTreeStamp(rec);
   printSelfReplay(rec);
   console.log("  " + divergenceLine(r));
-  const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
+  const world = worldDivergenceLine(r);
   if (world) console.log("  " + world);
   // The first DIFFERENCE, which is not the same thing as the first drift: it is
   // usually earlier and usually on a field no distance can see (`cli diverge`).
@@ -294,7 +294,7 @@ function cmdDump(file: string, o: Record<string, string>): void {
   console.log(`[dump] ${file} — level=${r.level} frames=${r.framesRun} (current physics)`);
   printTreeStamp(rec);
   console.log("  " + divergenceLine(r));
-  const world = worldDivergenceLine({ ...r, worldComparedFrames: worldComparedFrames(rec, r.framesRun) });
+  const world = worldDivergenceLine(r);
   if (world) console.log("  " + world);
   const firstDiff = divergenceSummary(r.divergences);
   if (firstDiff) console.log("  " + firstDiff);
@@ -512,7 +512,7 @@ function cmdContinue(file: string, o: Record<string, string>): void {
 
   const level = levelFromRecording(rec);
   const ball = level instanceof BallLevel ? level : null;
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const stuck = new StuckDetector();
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
@@ -581,7 +581,7 @@ function cmdContinue(file: string, o: Record<string, string>): void {
 function cmdRender(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const target = Math.min(Number(o.frame ?? rec.frames.length), rec.frames.length);
   for (let i = 0; i < target; i++) level.physicsProcess(de(rec.frames[i]!), 1 / 60);
   const svg = renderFrameSVG(level);
@@ -621,7 +621,7 @@ function forkStateLine(level: Level | BallLevel): string {
 function cmdFork(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const total = rec.frames.length;
   const forkAt = Math.min(Number(o.frame ?? total), total);
   const window = Number(o.frames ?? 24);
@@ -659,7 +659,7 @@ function cmdFork(file: string, o: Record<string, string>): void {
 function cmdQuery(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const total = rec.frames.length;
   const single = o.frame !== undefined;
   const from = single ? Number(o.frame) : Number(o.from ?? 1);
@@ -780,7 +780,7 @@ async function collectPhaseTrace(
   // this file, and a static import would break all of them.
   const { PhaseTrace } = await import("../engine/phaseTrace");
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   PhaseTrace.reset();
   PhaseTrace.watch = watch;
   for (let i = 0; i < to; i++) {
@@ -1515,7 +1515,7 @@ function readCompareFrames(file: string): CompareFrame[] {
 function cmdCompareEmit(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const forkAt = Math.min(Number(o.frame), rec.frames.length);
   const window = Number(o.frames ?? 24);
   const prefix = o.out ?? "compare";
@@ -1543,7 +1543,7 @@ function cmdCompareEmit(file: string, o: Record<string, string>): void {
 function cmdSettle(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const total = rec.frames.length;
   const from = Math.min(Number(o.from ?? total), total);
   const frames = Number(o.frames ?? 600);
@@ -1638,7 +1638,7 @@ function cmdScan(fileOrAll: string, o: Record<string, string>): void {
   const topK = Number(o.top ?? 5);
   if (fileOrAll === "--all") {
     let flagged = 0;
-    for (const dir of BUNDLE_DIRS) {
+    for (const dir of [...BUNDLE_DIRS, PROD_DIR]) {
       let files: string[];
       try {
         files = readdirSync(dir).filter(isBundleFile).sort();
@@ -1716,7 +1716,7 @@ function cmdScan(fileOrAll: string, o: Record<string, string>): void {
 function cmdChainpath(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const from = Number(o.from ?? 1);
   const to = Number(o.to ?? rec.frames.length);
   const every = Number(o.every ?? 1);
@@ -2099,6 +2099,12 @@ switch (cmd) {
     // has) and the local scratch dir (which it does not).
     cmdBundles(arg ? [arg, ...rest.filter((r) => !r.startsWith("--"))] : BUNDLE_DIRS);
     break;
+  case "pull":
+    await cmdPull(opts([arg ?? "", ...rest].filter(Boolean)));
+    break;
+  case "playtest":
+    await cmdPlaytest();
+    break;
   case "restamp":
     cmdRestamp(
       arg && !arg.startsWith("--") ? [arg, ...rest.filter((r) => !r.startsWith("--"))] : BUNDLE_DIRS,
@@ -2143,8 +2149,89 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
     );
+}
+
+// The production playtest store's cases (src/server/storeCases.ts): ingest
+// sequencing, players, sealing, deletion, merging and recovery, each against a
+// temporary directory with a clock the case controls.
+async function cmdPlaytest(): Promise<void> {
+  const { runStoreCases } = await import("../server/storeCases");
+  const results = await runStoreCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[playtest] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Pull production runs into playtests/prod/ and replay each new one here.
+//
+// Credentials come from rope/.env (bun loads it): ROPE_ADMIN_USER and
+// ROPE_ADMIN_PASSWORD are the basic_auth pair Caddy checks, ROPE_ADMIN_URL the
+// origin (default https://rope.tris.sh). The verdict column is this tree's
+// replay against the run's sparse digests; a `tree mismatch` row is evidence
+// about a different tree, and the worktree command printed under it is how to
+// replay it exactly.
+async function cmdPull(o: Record<string, string>): Promise<void> {
+  const base = (o.url ?? process.env.ROPE_ADMIN_URL ?? "https://rope.tris.sh").replace(/\/$/, "");
+  const user = process.env.ROPE_ADMIN_USER;
+  const pass = process.env.ROPE_ADMIN_PASSWORD;
+  if (!user || !pass) fail("set ROPE_ADMIN_USER and ROPE_ADMIN_PASSWORD in rope/.env");
+  const headers = { authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}` };
+  const api = `${base}/api/playtest/admin`;
+  const res = await fetch(`${api}/index`, { headers });
+  if (!res.ok) fail(`${api}/index: ${res.status} ${res.statusText}`, 1);
+  const index = (await res.json()) as {
+    runs: { id: string; player: string; nick: string | null; level: string; commit: string; srcHash: string; startedAt: number; endedAt: number; frames: number; reason: string }[];
+    players: Record<string, { name: string | null }>;
+  };
+  const dir = join(ROPE_DIR, PROD_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "index.json"), JSON.stringify(index, null, 2) + "\n");
+  const fresh: string[] = [];
+  for (const row of index.runs) {
+    const file = join(dir, `${row.id}.json.gz`);
+    if (existsSync(file)) continue;
+    const r = await fetch(`${api}/runs/${encodeURIComponent(row.id)}/gz`, { headers });
+    if (!r.ok) {
+      console.log(`  skip ${row.id}: ${r.status}`);
+      continue;
+    }
+    writeFileSync(file, new Uint8Array(await r.arrayBuffer()));
+    fresh.push(row.id);
+  }
+  console.log(`[pull] ${index.runs.length} run(s) on ${base}, ${fresh.length} new, in ${PROD_DIR}/`);
+  const toReplay = o.all ? index.runs.map((r) => r.id) : fresh;
+  const here = hereStamp();
+  const mismatched = new Set<string>();
+  for (const id of toReplay) {
+    const row = index.runs.find((r) => r.id === id)!;
+    const rec = loadRecording(join(dir, `${id}.json.gz`));
+    const when = new Date(row.startedAt).toISOString().slice(0, 16).replace("T", " ");
+    const who = index.players[row.player]?.name ?? row.nick ?? row.player.slice(0, 8);
+    const secs = Math.round((row.endedAt - row.startedAt) / 1000);
+    let verdict: string;
+    if (rec.srcHash !== here.srcHash) {
+      verdict = `tree mismatch (bundle ${rec.srcHash} @${row.commit}, here ${here.srcHash} @${here.commit})`;
+      mismatched.add(row.commit);
+    } else {
+      const r = replayRecording(rec);
+      const first = divergenceSummary(r.divergences);
+      verdict = r.worldComparedFrames === 0 ? "no digests to compare" : first ? `DIVERGES: ${first}` : `reproduces (${r.worldComparedFrames} digests)`;
+      if (r.violations.length > 0) verdict += `, ${r.violations.length} violation(s)`;
+    }
+    console.log(
+      `  ${when}  ${who.padEnd(12)} ${row.level.padEnd(8)} @${row.commit.padEnd(7)} ${String(row.frames).padStart(6)}f ${String(secs).padStart(5)}s  ${row.reason.padEnd(6)} ${verdict}`,
+    );
+  }
+  for (const commit of mismatched) {
+    console.log(`  to replay the @${commit} runs exactly: git worktree add ../rope-${commit} ${commit} && cd ../rope-${commit}/rope && bun install && bun run replay replay ../../website/rope/${PROD_DIR}/<id>.json.gz`);
+  }
 }
 
 // 3D rendering cases (src/sim/render3dCases.ts): the camera correspondence

@@ -1,6 +1,10 @@
 node_modules
 dist
 playtests/bundles/
+# Production runs pulled by `cli pull`; the store on the server is the source.
+playtests/prod/
+# Where a local `bun run serve.ts` keeps its store.
+.playtests/
 # Binary assets - 3D props and authored PBR texture maps - are fetched from a
 # GitHub Release at build time, never committed; see "Asset store" in CLAUDE.md.
 # `bun run assets:fetch` populates both.

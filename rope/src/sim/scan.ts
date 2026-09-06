@@ -23,7 +23,7 @@ import type { World } from "../engine/world";
 import { BallLevel } from "../level/ballLevel";
 import type { Level } from "../level/level";
 import { bodyId, deepestEmbedding } from "./query";
-import { inputDeserializer, type Recording } from "./trace";
+import { recordingDeserializer, type Recording } from "./trace";
 import { levelFromRecording } from "./replay";
 
 // A body under this speed is a candidate for "settled" (m/s). Generous on
@@ -110,7 +110,7 @@ function pushSpike(list: Spike[], frame: number, magnitude: number, keep: number
 
 export function scanRecording(rec: Recording, topK = 5): ScanResult {
   const level = levelFromRecording(rec);
-  const de = inputDeserializer();
+  const de = recordingDeserializer(rec);
   const states = new Map<number, BodyState>();
   const chain: ChainScan = {
     longestStallRun: 0,

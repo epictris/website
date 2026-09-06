@@ -29,7 +29,7 @@ import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
 import type { Level } from "./level/level";
 import { levelFromRecording } from "./sim/replay";
-import { inputDeserializer, type Recording } from "./sim/trace";
+import { recordingDeserializer, type Recording } from "./sim/trace";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
 import { fitCanvas, LETTERBOX_COLOR, VIEW_HEIGHT, VIEW_WIDTH } from "./render/viewport";
 import { Vec2 } from "./engine/vec2";
@@ -66,7 +66,7 @@ const view = use3d ? fitCanvas([sceneCanvas, canvas]) : fitCanvas(canvas);
 
 const rec = (await (await fetch(q.get("bundle")!)).json()) as Recording;
 const level = levelFromRecording(rec);
-const de = inputDeserializer();
+const de = recordingDeserializer(rec);
 
 // Which frames to draw. `frame=N` is one grab; `frames=A..B` with `every=K` is a
 // filmstrip - one page load, one chromium session, N tiles - because a single

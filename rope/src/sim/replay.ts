@@ -15,7 +15,7 @@ import {
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
-  inputDeserializer,
+  recordingDeserializer,
   StuckDetector,
   worldDigest,
   worldDigestBall,
@@ -86,6 +86,10 @@ export interface ReplayResult {
   worldBitDivergedAtFrame: number | null;
   worldMaxDrift: number;
   worldMaxDriftName: string | null;
+  // How many frames had a recorded world digest to compare against. Zero means
+  // the bundle predates them and every world line above is silent rather than
+  // falsely green; a production run carries one a second and compares on those.
+  worldComparedFrames: number;
   // The first frame whose world digest differs from the recording field by
   // field, and the five after it. Empty when the bundle carries no
   // `worldDigests`, and empty when nothing differs.
@@ -111,11 +115,27 @@ export function levelFromRecording(rec: Recording): Level | BallLevel {
   return spec.controller === "ball" ? new BallLevel(spec.data) : new Level(spec.data, spec.init);
 }
 
+// Recorded digests looked up by the frame they describe rather than by their
+// position. A P download carries one per frame and the two agree; a production
+// run carries one a second (see playtest/protocol.ts), and indexing that by
+// position would compare frame 2 against the digest of frame 120.
+function byFrame<T extends { frame: number }>(list: T[] | undefined): (frame: number) => T | undefined {
+  if (!list || list.length === 0) return () => undefined;
+  const dense = list.every((d, i) => d.frame === i + 1);
+  if (dense) return (frame) => list[frame - 1];
+  const map = new Map<number, T>();
+  for (const d of list) map.set(d.frame, d);
+  return (frame) => map.get(frame);
+}
+
 export function replayRecording(rec: Recording, options: ReplayOptions = {}): ReplayResult {
   const tolerance = options.divergenceTolerance ?? DIVERGENCE_TOLERANCE;
   const fieldFilter = options.divergenceField;
   const level = levelFromRecording(rec);
-  const deserialize = inputDeserializer();
+  const deserialize = recordingDeserializer(rec);
+  const expectedDigestAt = byFrame(rec.digests);
+  const expectedWorldAt = byFrame(rec.worldDigests);
+  let worldComparedFrames = 0;
   const digests: Digest[] = [];
   const worldDigests: WorldDigest[] = [];
   const violations: Violation[] = [];
@@ -155,7 +175,7 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
       const sv = stuck.push(level, input);
       if (sv) violations.push(sv);
     }
-    const expected = rec.digests?.[i];
+    const expected = expectedDigestAt(i + 1);
     if (expected) {
       if (bitDivergedAtFrame === null && !digestsEqual(d, expected)) bitDivergedAtFrame = i + 1;
       const drift = digestDrift(d, expected);
@@ -165,8 +185,9 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
         divergedByStateFork = !Number.isFinite(drift);
       }
     }
-    const expectedWorld = rec.worldDigests?.[i];
+    const expectedWorld = expectedWorldAt(i + 1);
     if (expectedWorld) {
+      worldComparedFrames++;
       if (worldBitDivergedAtFrame === null && !worldDigestsEqual(wd, expectedWorld)) {
         worldBitDivergedAtFrame = i + 1;
       }
@@ -212,6 +233,7 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
     worldBitDivergedAtFrame,
     worldMaxDrift,
     worldMaxDriftName,
+    worldComparedFrames,
     divergences,
   };
 }

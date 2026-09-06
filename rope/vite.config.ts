@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execSync } from "node:child_process";
+import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 
@@ -144,6 +145,32 @@ function levelApi(): Plugin {
   };
 }
 
+// Pulled production runs (`cli pull` -> playtests/prod/) for `?replay=prod/<id>`,
+// served gunzipped so the page reads them like any other bundle.
+function prodReplays(): Plugin {
+  const dir = join(import.meta.dirname, "playtests", "prod");
+  return {
+    name: "prod-replays",
+    configureServer(server) {
+      server.middlewares.use("/playtests/prod", (req, res) => {
+        const name = decodeURIComponent((req.url ?? "/").split("?")[0]!.replace(/^\//, ""));
+        if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+          res.statusCode = 400;
+          return res.end("bad name");
+        }
+        for (const candidate of [join(dir, name), join(dir, `${name}.json.gz`), join(dir, `${name}.json`)]) {
+          if (!existsSync(candidate)) continue;
+          const raw = readFileSync(candidate);
+          res.setHeader("Content-Type", "application/json");
+          return res.end(candidate.endsWith(".gz") ? gunzipSync(raw) : raw);
+        }
+        res.statusCode = 404;
+        res.end("no such run; `bun run replay pull` first");
+      });
+    },
+  };
+}
+
 // Serve the editor page at the clean path /editor (dev). Production is handled
 // by serve.ts, which maps /editor → dist/editor.html.
 function editorRoute(): Plugin {
@@ -163,7 +190,15 @@ function editorRoute(): Plugin {
 }
 
 export default defineConfig({
-  server: { port: 3100 },
+  server: {
+    port: 3100,
+    // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
+    // beside the dev server, `?record=1` streams into it and /admin shows it.
+    proxy: {
+      "/api/playtest": "http://localhost:8080",
+      "/admin": "http://localhost:8080",
+    },
+  },
   build: {
     target: "esnext",
     rollupOptions: {
@@ -184,5 +219,5 @@ export default defineConfig({
       },
     },
   },
-  plugins: [treeStampPlugin(), levelApi(), editorRoute()],
+  plugins: [treeStampPlugin(), levelApi(), prodReplays(), editorRoute()],
 });
