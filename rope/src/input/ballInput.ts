@@ -18,24 +18,29 @@
 // renderer, which draws the aim reticle there — the OS cursor is hidden on the
 // ball controller, so that reticle *is* the cursor, and every device gets it.
 //
-// The mouse has two aim modes, chosen by the MOTION_AIM setting below:
+// The mouse has three aim modes, chosen by AIM_MODE (input/aimPointer.ts):
 //
-//   position (default) — the aim point is the cursor's own screen position,
-//     un-projected through the *current* camera every time it is read (see
-//     `currentAimLocal`), unbounded: the reticle is exactly where the pointer
-//     is, a drawn stand-in for the hidden OS cursor and nothing more, and a
-//     camera pan or ease never moves it.
+//   cursor (default) — the aim point is AimPointer's VIRTUAL cursor's screen
+//     position, un-projected through the *current* camera every time it is read
+//     (see `currentAimLocal`): the reticle is exactly where the pointer is, a
+//     drawn stand-in for the hidden OS cursor and nothing more, and a camera pan
+//     or ease never moves it. Under pointer lock that cursor is integrated from
+//     the mouse's own deltas and bounded by the play frame, so aim carries on
+//     past the edge of the window and of the screen.
+//   position — the same mapping reading the REAL cursor, unbounded. Identical to
+//     `cursor` until the lock is taken, and thereafter the mode that stops
+//     aiming at the edge of the window, and at the edge of the screen in
+//     fullscreen, because that is where the real cursor stops.
 //   motion — `aimLocal` accumulates each mousemove's delta (metres at the
-//     current zoom) and is held within the chain's reach, and the canvas takes
-//     pointer lock so the cursor stays in the window. Clamping a *position*
-//     mapping is what motion aim avoids: past the boundary the drawn dot would
-//     stop while the real cursor kept travelling outward, so moving back inward
-//     would do nothing until the real cursor re-entered the reach circle — dead
-//     travel the player can't see, since the cursor is hidden. Integrating
-//     motion keeps reticle and pointer one thing: it moves inward the instant
-//     the mouse does, and the reticle can be bounded without that cost. The
-//     first move (and the first after another device owned aim) seeds it from
-//     the cursor.
+//     current zoom) and is held within the chain's reach. The difference from
+//     `cursor` is only where the bound lives: in the world, at the reach, rather
+//     than on screen, at the frame. The first move (and the first after another
+//     device owned aim) seeds it from the cursor.
+//
+// `cursor` and `motion` take pointer lock on click (Esc releases it, the next
+// click takes it back); `position` never touches the pointer. See aimPointer.ts
+// for why the lock is the only thing that fixes the boundary, and why bounding a
+// virtual cursor costs none of what bounding a real one would.
 //
 // The stick and the on-screen joystick aim only while deflected past a
 // deadzone, writing a direction at exactly the reach distance; a released
@@ -53,19 +58,9 @@ import {
 } from "./frameInput";
 import { PAD_RB, PAD_Y, readGamepad } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
-import { clientToView, viewPerClientPx } from "../render/viewport";
+import { AIM_MODE, AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
 import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
-
-// Motion-driven mouse aim + pointer lock (see the header). Off: the reticle
-// follows the cursor's position, clamped to the reach. Override per session with
-// `?motionAim=1` / `?motionAim=0` to compare the two by feel without a rebuild.
-const MOTION_AIM_DEFAULT = false;
-const MOTION_AIM = ((): boolean => {
-  if (typeof location === "undefined") return MOTION_AIM_DEFAULT;
-  const q = new URLSearchParams(location.search).get("motionAim");
-  return q === null ? MOTION_AIM_DEFAULT : q !== "0";
-})();
 
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
 // The chain's reach. The stick and joystick aim at exactly this distance; motion
@@ -94,9 +89,9 @@ const TOUCH_CAPABLE =
 export class BallInputSource implements IInputSource {
   private prev: FrameInput = emptyFrameInput();
   private mouseLeft = false;
-  // Last cursor position in canvas space — the delta source for mouse aim, and
-  // the seed for the first move. Null until the first mousemove.
-  private mouseScreen: Vec2 | null = null;
+  // The cursor mouse aim reads: the real one in `position` mode, the virtual one
+  // the pointer lock feeds in the other two (see input/aimPointer.ts).
+  private pointer: AimPointer;
   // The aim point as an offset from the ball, in metres, clamped to the reach.
   // Null = nothing has aimed yet (don't aim, rather than snap the ball toward
   // some default direction before the first input).
@@ -118,28 +113,17 @@ export class BallInputSource implements IInputSource {
     private camera: Camera,
     private aimOrigin: () => Vec2,
   ) {
+    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK);
     canvas.addEventListener("mousemove", (e) => {
-      // View pixels, not client pixels: the frame is a fixed 16:9 scaled to fit
-      // the window, so the cursor has to be un-projected through that fit before
-      // the camera can un-project it into the world.
-      const screen = clientToView(canvas, e.clientX, e.clientY);
-      const prev = this.mouseScreen;
-      this.mouseScreen = screen;
-      this.aimLocal = MOTION_AIM
-        ? this.motionAim(e, screen, prev)
-        : screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin());
+      this.pointer.update(e);
+      // `position` and `cursor` differ only in WHICH cursor this is; both are
+      // re-derived per read in `currentAimLocal`, so this write is the seed the
+      // other devices hand back to.
+      this.aimLocal = AIM_MODE === "motion" ? this.motionAim() : this.cursorAim();
       this.aimSource = "mouse";
     });
     canvas.addEventListener("mousedown", (e) => {
       if (e.button === 0) this.mouseLeft = true;
-      // Motion aim only: keep the pointer in the window, since the cursor has no
-      // business leaving (or reaching a screen edge and quietly capping the
-      // motion). Needs a user gesture, hence here; Esc releases it and the next
-      // click takes it back. Rejects harmlessly if the browser refuses (e.g. a
-      // lock request too soon after an Esc exit).
-      if (MOTION_AIM && document.pointerLockElement !== canvas) {
-        void Promise.resolve(canvas.requestPointerLock()).catch(() => {});
-      }
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.mouseLeft = false;
@@ -151,25 +135,26 @@ export class BallInputSource implements IInputSource {
     }
   }
 
-  // Motion aim (MOTION_AIM): the new aim offset after this mousemove, moved by
-  // the mouse's own travel rather than set from the cursor's position.
-  private motionAim(e: MouseEvent, screen: Vec2, prev: Vec2 | null): Vec2 {
-    const locked = document.pointerLockElement === this.canvas;
-    const travel = prev ? screen.sub(prev) : null;
-    // `movementX/Y` is client pixels, where `screen` is already view pixels, so
-    // the device delta is scaled by the frame's fit before the two are used
-    // interchangeably — otherwise motion aim moved at the window's scale rather
-    // than the view's, and by a different amount on every display.
-    const device = new Vec2(e.movementX, e.movementY).mul(viewPerClientPx(this.canvas));
-    // Locked, the device delta is the only motion there is (the cursor holds
-    // still); it falls back to cursor travel for events that carry no
-    // movementX/Y, which is what synthetic events (headless tooling) dispatch.
-    const motion = locked && device.lengthSquared() > 0 ? device : travel;
+  // Position/cursor aim: the aim offset for wherever the pointer now is. Left
+  // unbounded — in `position` the cursor is the reticle and cannot be moved to
+  // suit us, and in `cursor` the virtual cursor is already held inside the play
+  // frame, which is a tighter bound than the reach in every direction the player
+  // can see.
+  private cursorAim(): Vec2 {
+    const screen = this.pointer.position() ?? Vec2.ZERO;
+    return screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin());
+  }
+
+  // Motion aim: the new aim offset after this mousemove, moved by the mouse's own
+  // travel rather than set from the cursor's position.
+  private motionAim(): Vec2 {
+    const motion = this.pointer.motion();
     // Taking over from another device (or aiming for the first time) puts the
     // reticle under the real cursor; from there it travels by motion alone.
     if (!motion || !this.aimLocal || this.aimSource !== "mouse") {
-      if (locked && this.aimLocal) return this.aimLocal; // locked: no cursor to seed from
-      return clampReach(screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin()));
+      // Locked there is no cursor on screen to seed from, so a held aim stays put.
+      if (this.pointer.locked() && this.aimLocal) return this.aimLocal;
+      return clampReach(this.cursorAim());
     }
     // Metres per screen pixel at the current zoom, so a given hand movement
     // covers the same on-screen distance whatever the zoom is.
@@ -334,22 +319,20 @@ export class BallInputSource implements IInputSource {
     return this.aimOrigin().add(local);
   }
 
-  // The aim offset as it stands *now*. Position-mode mouse aim is re-derived
-  // from the cursor's screen position through the CURRENT camera each time it is
-  // read, instead of being frozen at mousemove time: the reticle stands in for
-  // the hidden OS cursor, so it has to stay under the pointer when the camera
-  // pans, eases or changes zoom while the mouse holds still. Frozen as an offset
-  // from the ball, it slid across the screen on its own every time the camera
-  // moved — the cursor appearing to drift with no hand on the mouse.
+  // The aim offset as it stands *now*. Position- and cursor-mode mouse aim is
+  // re-derived from the pointer's screen position through the CURRENT camera each
+  // time it is read, instead of being frozen at mousemove time: the reticle
+  // stands in for the hidden OS cursor, so it has to stay under the pointer when
+  // the camera pans, eases or changes zoom while the mouse holds still. Frozen as
+  // an offset from the ball, it slid across the screen on its own every time the
+  // camera moved — the cursor appearing to drift with no hand on the mouse.
   // Motion aim is deliberately exempt: there the offset IS the state, integrated
   // from the mouse's own travel, and the cursor may not even be on screen
   // (pointer lock). Stick and joystick aim are ball-relative directions by
   // definition, so they are exempt too.
   private currentAimLocal(): Vec2 | null {
-    if (this.aimSource === "mouse" && !MOTION_AIM && this.mouseScreen) {
-      return screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y).sub(
-        this.aimOrigin(),
-      );
+    if (this.aimSource === "mouse" && AIM_MODE !== "motion" && this.pointer.position()) {
+      return this.cursorAim();
     }
     return this.aimLocal;
   }

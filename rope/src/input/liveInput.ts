@@ -12,6 +12,13 @@
 //
 // Aim source follows the most recent device: moving the mouse aims with the
 // cursor; deflecting the right stick aims from the player along the stick.
+//
+// Mouse aim reads AimPointer rather than the raw event, so under the `cursor`
+// (default) and `motion` aim modes (input/aimPointer.ts) it takes pointer lock on
+// click and keeps aiming past the edge of the window and of the screen. The lock
+// hides the OS cursor, which on this controller IS the aim indicator, so
+// `crosshairAim` hands the renderer a crosshair to draw in its place. `?aim=position`
+// leaves the pointer alone and behaves exactly as it always did.
 
 import { Vec2 } from "../engine/vec2";
 import {
@@ -34,7 +41,7 @@ import {
   readGamepad,
 } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
-import { clientToView } from "../render/viewport";
+import { AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
 
 const MOVE_DEADZONE = 0.35; // left-stick X → digital move threshold
 const AIM_DEADZONE = 0.3; // right-stick deflection before it takes over aim
@@ -89,7 +96,9 @@ export class LiveInputSource implements IInputSource {
   private keys = new Set<string>();
   private mouseLeft = false;
   private mouseRight = false;
-  private mouseScreen = new Vec2(0, 0);
+  // The cursor mouse aim reads: the real one in `position` mode, the virtual one
+  // the pointer lock feeds in the other two (see input/aimPointer.ts).
+  private pointer: AimPointer;
   private prev: FrameInput = emptyFrameInput();
   private aimSource: "mouse" | "pad" = "mouse";
   private padAimDir = new Vec2(1, 0); // last stick aim, kept while stick is released
@@ -105,11 +114,9 @@ export class LiveInputSource implements IInputSource {
       if (e.code === "Space") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK);
     canvas.addEventListener("mousemove", (e) => {
-      // View pixels, not client pixels: the frame is a fixed 16:9 scaled to fit
-      // the window, so the cursor has to be un-projected through that fit before
-      // the camera can un-project it into the world.
-      this.mouseScreen = clientToView(canvas, e.clientX, e.clientY);
+      this.pointer.update(e);
       this.aimSource = "mouse";
     });
     canvas.addEventListener("mousedown", (e) => {
@@ -128,10 +135,21 @@ export class LiveInputSource implements IInputSource {
     return codes.some((c) => this.keys.has(c));
   }
 
-  // World-space aim point while the gamepad owns aim, for crosshair rendering.
-  // Null when the mouse is the active aim source (the OS cursor shows aim).
-  gamepadAim(): Vec2 | null {
-    return this.padAimWorld;
+  // World-space aim point the renderer should draw a crosshair at, or null when
+  // something else on screen already shows aim. That is the gamepad while the
+  // right stick owns aim - and the mouse too under pointer lock, where the
+  // browser has hidden the OS cursor and the crosshair is the only stand-in left.
+  crosshairAim(): Vec2 | null {
+    if (this.padAimWorld) return this.padAimWorld;
+    return this.pointer.locked() ? this.mouseAim() : null;
+  }
+
+  // The world point the mouse is aiming at. Before the first mousemove there is
+  // no pointer to read, and the view's top-left corner is the answer the raw
+  // client coordinates would have given anyway.
+  private mouseAim(): Vec2 {
+    const screen = this.pointer.position() ?? Vec2.ZERO;
+    return screenToWorld(this.camera, screen.x, screen.y);
   }
 
   // Refresh the stick-driven aim (and the crosshair point) from the live gamepad
@@ -159,9 +177,7 @@ export class LiveInputSource implements IInputSource {
     const pad = pollGamepad();
     this.pollAim();
 
-    const aim =
-      this.padAimWorld ??
-      screenToWorld(this.camera, this.mouseScreen.x, this.mouseScreen.y);
+    const aim = this.padAimWorld ?? this.mouseAim();
 
     const b = (held: boolean, prev: ButtonInput) => button(held, prev);
     const p = this.prev;

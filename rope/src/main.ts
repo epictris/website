@@ -540,7 +540,7 @@ function frame(now: number): void {
       camera,
       fps,
       showDebug,
-      replayFrames ? replayAim : liveInput!.gamepadAim(),
+      replayFrames ? replayAim : liveInput!.crosshairAim(),
       alpha,
       cameraCtl.held,
       scene3d !== null,

@@ -1045,10 +1045,23 @@ FrameInput carries, null when nothing aims).
 Every device writes one piece of state, `aimLocal` - the aim point as an offset
 from the ball, in metres. A deflected left stick or on-screen joystick writes it
 at exactly the chain's reach (`CHAIN_MAX_LENGTH`).
-The mouse has two aim modes behind the `MOTION_AIM` setting in `ballInput.ts`
-(default **off**, overridable per session with `?motionAim=1` / `?motionAim=0` so
-the two can be compared by feel without a rebuild):
-- **position** (default): the aim point is the cursor's **screen** position,
+The mouse has three aim modes behind `AIM_MODE` in `input/aimPointer.ts`, shared
+by both controllers (default **cursor**, overridable per session with
+`?aim=position` / `?aim=cursor` / `?aim=motion` so the three can be compared by
+feel without a rebuild):
+- **cursor** (default): the aim point is `AimPointer`'s **virtual** cursor's
+  screen position, un-projected through the *current* camera every time it is
+  read (`currentAimLocal`).
+  Clicking the canvas takes **pointer lock** (Esc releases it, the next click
+  takes it back; entering fullscreen through the Fullscreen API takes it too,
+  that being a user gesture of its own - F11 and the installed PWA's
+  `display: fullscreen` do not fire it, and there the first click does the job),
+  and while locked the virtual cursor is integrated from `movementX/Y` and held
+  inside the 1920x1080 play frame, so aim carries on past the edge of the window
+  and of the screen.
+  Unlocked the virtual cursor *is* the real one, so this mode and `position` are
+  the same picture until the lock is taken.
+- **position**: the aim point is the **real** cursor's screen position,
   un-projected through the *current* camera every time it is read
   (`currentAimLocal`), unbounded - the reticle is exactly where the pointer is, a
   drawn stand-in for the hidden OS cursor and nothing more.
@@ -1058,18 +1071,36 @@ the two can be compared by feel without a rebuild):
   drifting on its own. Motion aim is exempt (the offset *is* the state, and under
   pointer lock there may be no cursor on screen), as are stick and joystick aim,
   which are ball-relative directions by definition.
+  This is the mode with the **edges** in it, and the reason the other two exist:
+  aim stops at the edge of the window, and at the edge of the screen in
+  fullscreen, because that is where the real cursor stops.
+  It is the only mode that never touches the pointer, kept so the lock modes can
+  still be compared against the behaviour they replaced.
 - **motion**: `aimLocal` accumulates each mousemove's delta (metres at the
-  current zoom) and is held within the reach, and clicking the canvas takes
-  **pointer lock** (Esc releases it, the next click takes it back) so the cursor
-  stays in the window; while locked the delta comes from `movementX/Y`, falling
-  back to cursor travel for synthetic events that carry none.
-  Clamping a *position* mapping is what this avoids: past the boundary the drawn
-  dot would stop while the real cursor kept travelling outward, so moving back
-  inward would do nothing until the real cursor re-entered the reach circle, dead
-  travel the player cannot see since the cursor is hidden. Integrating motion
-  lets the reticle be bounded without that cost.
+  current zoom) and is held within the reach.
+  It takes the same lock as `cursor`; the difference is only where the bound
+  lives, in the world at the reach rather than on screen at the frame.
   The first move (and the first after another device owned aim) seeds `aimLocal`
   from the real cursor position.
+
+Pointer lock is the only fix for the edges, and only the *first* edge is a
+listener problem: past the screen edge the cursor genuinely stopped moving, so no
+listener anywhere could have seen more.
+Bounding a **virtual** cursor is free, which is the thing worth knowing.
+Clamping a *real* cursor's projection is what motion aim was originally written
+to avoid: past the boundary the drawn dot stops while the real cursor keeps
+travelling outward, so coming back inward does nothing until it re-enters, dead
+travel the player cannot see since the cursor is hidden.
+A virtual cursor never accumulates past its bound, so it moves inward on the
+first pixel back - which is why `cursor` can bound a position mapping and keep
+the feel motion aim gave up.
+The lock is requested **without** `unadjustedMovement`: the virtual cursor is
+meant to feel like the desktop cursor it replaces, and that one has the OS
+pointer acceleration curve on it.
+On the grapple controller the OS cursor *is* the aim indicator, so under lock
+`LiveInputSource.crosshairAim()` hands the renderer a crosshair to draw in its
+place (the same one the right stick gets); the ball controller already hides the
+cursor and draws its reticle either way.
 `BALL_ZOOM` is a plain constant: the view is a fixed 16:9 frame scaled to fit the
 window (see **The view**), so a landscape phone gets the same framing as a
 desktop at a smaller size rather than a smaller slice of the level.

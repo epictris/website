@@ -1577,6 +1577,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     root.style.display = "";
     testBanner.style.display = "none";
     canvas.style.cursor = "default";
+    // Test mode's input source may hold pointer lock (see input/aimPointer.ts).
+    // Leaving the test has to give the cursor back whichever way it was left, or
+    // the editor comes back with nothing to click its toolbar with.
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
   }
 
   // --- DOM ------------------------------------------------------------------
@@ -8345,7 +8349,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           camera,
           fps,
           testShowDebug,
-          liveInput!.gamepadAim(),
+          liveInput!.crosshairAim(),
           alpha,
           testCameraCtl.held,
           testIn3d,

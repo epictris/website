@@ -445,7 +445,9 @@ export function render(
   camera: Camera,
   fps: number,
   showDebug = false,
-  gamepadAim: Vec2 | null = null,
+  // Where to draw the aim crosshair, or null when the OS cursor is showing aim by
+  // itself (see LiveInputSource.crosshairAim).
+  crosshairAim: Vec2 | null = null,
   // Fraction of a physics step elapsed since the last one: every moving body is
   // drawn between its previous and current sim transform. 1 = draw the sim
   // state exactly (what a caller with no fixed-step accumulator wants).
@@ -557,9 +559,9 @@ export function render(
 
   sparks?.draw(ctx);
 
-  // Gamepad crosshair — only while the right stick owns aim (with the mouse,
-  // the OS cursor shows aim already).
-  if (gamepadAim) drawCrosshair(ctx, gamepadAim);
+  // Aim crosshair — drawn only when nothing else on screen shows aim: the right
+  // stick owns it, or the mouse does under pointer lock, which hides the cursor.
+  if (crosshairAim) drawCrosshair(ctx, crosshairAim);
 
   // Debug overlay (toggle: L): ledge-grab markers + player contact normals.
   if (showDebug) drawDebugOverlay(ctx, level, heldCamera);
