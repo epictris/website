@@ -21,6 +21,7 @@
 //   bun run src/tools/cli.ts shot      bundle.json [--frame N] [--zoom Z] [--3d]
 //                                      [--at X,Y] [--out f.png] [--allow-errors]
 //   bun run src/tools/cli.ts shot      bundle.json --frames A..B [--every K] [--3d]
+//   bun run src/tools/cli.ts shot      bundle.json --dump A..B   (chain state per frame, as JSON lines)
 //   bun run src/tools/cli.ts shot      --diff a.png b.png [--out diff.png]
 //   bun run src/tools/cli.ts chainpath bundle.json [--from A] [--to B] [--every N]
 //   bun run src/tools/cli.ts fork      bundle.json --frame N [--frames M] [--out prefix]
@@ -937,6 +938,8 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
   const label = range ? `f${range[1]}-${range[2]}` : `f${frame}`;
   const out = resolve(o.out ?? `${first.replace(/\.json(\.gz)?$/, "")}.${label}.png`);
   const zoom = o.zoom;
+  const dumpRange = /^(\d+)\.\.(\d+)$/.exec(o.dump ?? "");
+  if (o.dump !== undefined && !dumpRange) fail("usage: cli shot <bundle> --dump A..B");
   const port = Number(o.port ?? SHOT_PORT);
   const chromium = findChromium();
   if (!chromium) fail("no headless chromium found (chromium-browser | chromium | google-chrome)", 1);
@@ -965,6 +968,10 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
     const url =
       `http://127.0.0.1:${port}/shot.html?bundle=/playtests/_shot.json` +
       (range ? `&frames=${range[1]}..${range[2]}&every=${o.every ?? 1}` : `&frame=${frame}`) +
+      // `--dump A..B` asks for the chain state of those frames as JSON lines
+      // rather than a picture: the one way to read what the recording engine
+      // actually held on a frame bun does not reproduce (see shotMain.ts).
+      (dumpRange ? `&dump=${dumpRange[1]}..${dumpRange[2]}` : "") +
       (zoom ? `&zoom=${zoom}` : "") +
       // `--at X,Y` pins the camera on a world point instead of the avatar, which
       // is the only way to photograph something the avatar has swung away from.
@@ -977,7 +984,7 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
     try {
       const result = await grab(chromium, {
         url,
-        out,
+        out: dumpRange ? null : out,
         gpu: o["3d"] !== undefined,
         width: VIEW_WIDTH,
         height: VIEW_HEIGHT,
@@ -989,7 +996,8 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
         timeoutMs: Number(o.timeout ?? 30000),
       });
       log = result.log;
-      console.log(`[shot] ${first} @${label} → ${out} (${result.elapsedMs}ms)`);
+      if (dumpRange) console.log(`[shot] ${first} dump f${dumpRange[1]}..${dumpRange[2]} (${result.elapsedMs}ms)`);
+      else console.log(`[shot] ${first} @${label} → ${out} (${result.elapsedMs}ms)`);
     } catch (e) {
       if (e instanceof PageNotReady) {
         log = e.log;
@@ -1036,6 +1044,11 @@ function printPageLog(log: PageLogEntry[]): void {
     const motion = /^motion (\{.*\})$/.exec(entry.text);
     if (motion) {
       printMotion(motion[1]!);
+      continue;
+    }
+    const dumped = /^dump (\{.*\})$/.exec(entry.text);
+    if (dumped) {
+      console.log(dumped[1]);
       continue;
     }
     for (const line of entry.text.split("\n")) console.log(`[page] ${entry.level}: ${line}`);

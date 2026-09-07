@@ -50,6 +50,10 @@ import {
 } from "../level/levelFormat";
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
+import { shapeCrossesSpan } from "../lib/spanSweep";
+import { Intersections } from "../lib/intersections";
+import { Segment } from "../lib/segment";
+import { IntersectionStatus, WrapDirection } from "../lib/types";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { BallLevel } from "../level/ballLevel";
 import { slideSparkDirection, SLIDE_RAMP_STEPS, SparkSystem } from "../render/sparks";
@@ -5413,6 +5417,211 @@ function caseChainSweep(): ContactResult {
   return ok("chain-sweep — the player's chain catches a small body it passes at speed, and the whip that follows is a swing", passed, details);
 }
 
+// chain-sweep-slide-off - a corner the span was already cutting is not a body
+// passing through the span.
+//
+// `session-3649f` f3474 (and f2633 before it, the same way): the ball on the
+// ground winding its deployed chain in against a hook hanging at full length,
+// and the span from the coil's exit cutting 4 mm through the tip of a polygon
+// corner 3 cm from the exit - close enough that the start-proximity gate had
+// declined to wrap it, which is the tolerated-penetration state every gate
+// leaves behind. One more frame of winding slid the corner back out to the
+// body's side. `shapeCrossesSpan` reported it arriving from ABOVE - the side
+// that vertex alone had poked through to, opposite to the rest of the shape -
+// so the rope was bent round the body counter-clockwise, from the tangent
+// vertex 80 cm away on its far side: 2 cm over length through a corner the
+// rope never touched, the hanging hook hauled 1.3 m in one frame to fit, and
+// the attach that followed anchored the chain over that phantom wrap.
+//
+// The rule: a crossing found while the span was already cutting the shape at
+// the last look is discarded, and the overlap test answers for the shape. The
+// case is the recording's geometry - the polygon and the two spans exactly -
+// played both ways. Forwards is the slide-off: the old span cuts the shape,
+// the new stands clear, and there is no crossing. Backwards, the same two
+// spans are the rope arriving from clear onto the corner: a genuine crossing,
+// reported CLOCKWISE - the side the corner and the rest of its body stood on -
+// at the corner itself. The pair is what makes this a detector of the rule
+// rather than of a null: without it the forward crossing is reported from the
+// wrong side, and a rule that silenced the sweep outright would fail the
+// backward half.
+function caseChainSweepSlideOff(): ContactResult {
+  const world = new World();
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: 2025.655172413799,
+          y: -301.2873563218392,
+          rot: 0,
+          friction: 1,
+          objects: [
+            {
+              type: "collision",
+              shape: {
+                kind: "poly",
+                verts: [
+                  { x: 4.344827586207017, y: -98.71264367816089 },
+                  { x: 4.3448275862069945, y: -18.71264367816088 },
+                  { x: 64.34482758620676, y: 91.28735632183908 },
+                  { x: -15.655172413793284, y: 51.2873563218391 },
+                  { x: -35.655172413793025, y: -8.712643678160891 },
+                  { x: -25.655172413793142, y: -88.71264367816089 },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as RawLevelData,
+    PX,
+  );
+  const shape = buildLevelBodies(world, data, () => {}).bodies[0]!.body!.primaryShape();
+  const corner = new Vec2(20, -3.9);
+  // The coil's exit and the hanging hook, at the regeneration before (f3473's
+  // baseline) and at f3474's.
+  const forwards = {
+    s0: new Vec2(19.97487551319471, -3.8794840989273722),
+    e0: new Vec2(21.40707855662092, -4.758101078934793),
+    s1: new Vec2(19.985470386210746, -3.891469961889547),
+    e1: new Vec2(21.406550751512967, -4.734414902302741),
+  };
+  const backwards = { s0: forwards.s1, e0: forwards.e1, s1: forwards.s0, e1: forwards.e0 };
+  const before = Intersections.intersectsSegment(shape, new Segment(forwards.s0, forwards.e0));
+  const after = Intersections.intersectsSegment(shape, new Segment(forwards.s1, forwards.e1));
+  const off = shapeCrossesSpan(shape, null, forwards, () => true);
+  const on = shapeCrossesSpan(shape, null, backwards, () => true);
+
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const status = (s: IntersectionStatus): string => IntersectionStatus[s]!;
+  check(`the span at the last look cut the corner (${status(before)})`, before === IntersectionStatus.Overlap);
+  // The corner slid out by a tenth of a millimetre (the crossing sits at
+  // u = 0.01 on the span, t = 0.98 through the motion), so the new span
+  // touches it rather than standing clear; what matters is that it no longer
+  // cuts the shape.
+  check(`...and now no more than touches it (${status(after)})`, after !== IntersectionStatus.Overlap);
+  check(
+    `sliding off the corner is not a crossing (got ${off ? `${WrapDirection[off.side]} at ${off.point}` : "none"})`,
+    off === null,
+  );
+  check(
+    `arriving onto it is, clockwise, at the corner (got ${on ? `${WrapDirection[on.side]} at ${on.point}` : "none"})`,
+    on !== null && on.side === WrapDirection.Clockwise && on.point.distanceTo(corner) < 1e-6,
+  );
+
+  // The same thing end to end, on a rig. The ball on a floor throws up and to
+  // the right, runs out of chain in the air at 1.8 m and leaves the hook
+  // hanging there; then the aim circles it at 10 rad/s and the ball winds the
+  // chain in. A wedge stands beside the ball with its top corner 6 cm under
+  // the throw line, and as the coil walks the span's exit round the rim the
+  // span nicks that corner and slides off it again. Without the rule the
+  // slide-off is read as the wedge passing through the span from above: the
+  // path is bent under the wedge round its bottom corners, 90 cm under the
+  // floor, the hanging hook is hauled 71 cm in one frame to pay for it, and
+  // the chain is lost the frame after (measured with the rule switched off:
+  // jump 0.705 m and 2.13 m of path at f39). With it the hook comes in at the
+  // winding's own pace and the path never lengthens while the hook hangs.
+  const rig = {
+    player: { x: 0, y: -12, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 50,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 100 } }],
+      },
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        friction: 1,
+        objects: [
+          {
+            type: "collision",
+            shape: {
+              kind: "poly",
+              verts: [
+                { x: 34, y: -7 },
+                { x: 94, y: -27 },
+                { x: 94, y: 73 },
+                { x: 44, y: 73 },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  } as RawLevelData;
+  const level = new BallLevel(rig);
+  let prev = emptyFrameInput();
+  let angle = Math.atan2(-1.33, 1.9);
+  let hungAt: number | null = null;
+  let lastTip: Vec2 | null = null;
+  let lastLen: number | null = null;
+  let jump = 0;
+  let jumpAt: number | null = null;
+  let lengthened = 0;
+  let lengthenedAt: number | null = null;
+  let lostAt: number | null = null;
+  for (let f = 1; f <= 60; f++) {
+    const ball = level.ball;
+    if (hungAt !== null && f > hungAt + 5) angle += 10 * DT;
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(f >= 10, prev.fire),
+      mouseWorldPosition: ball.globalPosition.add(new Vec2(Math.cos(angle) * 2, Math.sin(angle) * 2)),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+    const chain = ball.chain;
+    const tip = ball.chainTip;
+    if (!chain) {
+      // No chain before the throw; none after the hook hung is the loss.
+      if (hungAt === null) continue;
+      lostAt = f;
+      break;
+    }
+    if (tip && !ball.hookInFlight) {
+      hungAt ??= f;
+      const len = chain.getCurrentLength();
+      if (lastTip) {
+        const d = tip.globalPosition.distanceTo(lastTip);
+        if (d > jump) {
+          jump = d;
+          jumpAt = f;
+        }
+      }
+      if (lastLen !== null && len - lastLen > lengthened) {
+        lengthened = len - lastLen;
+        lengthenedAt = f;
+      }
+      lastTip = tip.globalPosition;
+      lastLen = len;
+    }
+  }
+  check(`wind-in: the hook hangs at full length from f${hungAt} and is wound in`, hungAt !== null && hungAt < 30);
+  check(`wind-in: ...never hauled more than 15 cm in a frame (max ${(jump * 100).toFixed(1)} cm @f${jumpAt})`, jump < 0.15);
+  check(
+    `wind-in: ...and the path never lengthens by more than 2 cm while it hangs (max ${(lengthened * 100).toFixed(1)} cm @f${lengthenedAt})`,
+    lengthened < 0.02,
+  );
+  check(`wind-in: the chain is not lost (lost @f${lostAt ?? "never"})`, lostAt === null);
+  return ok(
+    "chain-sweep-slide-off — a corner the span was already cutting sliding back out is not a body passing through the span",
+    passed,
+    details,
+  );
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -5457,6 +5666,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainWrapPoint());
   results.push(caseChainPostCatch());
   results.push(caseChainSweep());
+  results.push(caseChainSweepSlideOff());
   results.push(caseChainWedgedEnd());
   results.push(caseHungAnchor());
   results.push(casePlankAnchor());

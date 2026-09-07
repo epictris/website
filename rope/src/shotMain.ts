@@ -151,7 +151,21 @@ const advanceTo = (target: number): void => {
   }
 };
 
-if (frames.length === 1) {
+// `dump=A..B` prints the chain state of every frame in the span as one JSON
+// line each (`dump {...}`) instead of drawing anything. It exists because the
+// browser and bun disagree about a 1-ulp libm result and a long recording's tail
+// is chaotic in that: the state the player SAW at f3600 is reproducible only
+// here, on the engine that recorded it, and `cli chainpath` re-simulating in bun
+// is by then describing a different run (`session-3649f`).
+const dump = /^(\d+)\.\.(\d+)$/.exec(q.get("dump") ?? "");
+if (dump) {
+  const from = clampFrame(Number(dump[1]));
+  const to = clampFrame(Number(dump[2]));
+  for (let f = from; f <= to; f++) {
+    advanceTo(f);
+    console.log(`dump ${JSON.stringify({ frame: f, ...chainState() })}`);
+  }
+} else if (frames.length === 1) {
   advanceTo(frames[0]!);
   drawFrame(frames[0]!);
 } else {
@@ -163,6 +177,35 @@ reportErrors();
 (window as unknown as { shotReady: boolean }).shotReady = true;
 
 // ---------------------------------------------------------------------------
+
+// The chain as the sim holds it this frame: the avatar's pose, the hook in
+// flight if there is one, and every node of the wrap path with the body and
+// piece it sits on and its position in that body's frame. Metres, sim frame.
+function chainState(): Record<string, unknown> {
+  if (!(level instanceof BallLevel)) return {};
+  const ball = level.ball;
+  const node = (n: { contact: { obj: { buildIndex: number }; shapeIndex: number; position: Vec2; globalPosition: Vec2 } }) => ({
+    kind: n.constructor.name,
+    body: n.contact.obj.buildIndex,
+    shape: n.contact.shapeIndex,
+    local: [n.contact.position.x, n.contact.position.y],
+    at: [n.contact.globalPosition.x, n.contact.globalPosition.y],
+  });
+  const hook = ball.hookInFlight ?? ball.chainTip;
+  return {
+    ball: { x: ball.globalPosition.x, y: ball.globalPosition.y, rot: ball.globalRotation, w: ball.angularVelocity },
+    hook: hook ? { x: hook.globalPosition.x, y: hook.globalPosition.y, flying: ball.hookInFlight !== null } : null,
+    anchorBody:
+      ball.chain && !ball.hookInFlight && !ball.chainTip ? ball.chain.end.contact.obj.buildIndex : null,
+    chain: ball.chain
+      ? {
+          length: ball.chain.getCurrentLength(),
+          max: ball.chain.maxRopeLength,
+          path: ball.chain.path().map(node),
+        }
+      : null,
+  };
+}
 
 // One frame, drawn exactly as the game draws it. Stepped with `alpha = 1`: the
 // frame is drawn at the sim state exactly, never interpolated, so two grabs of

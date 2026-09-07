@@ -24,8 +24,10 @@
 
 import { Vec2 } from "../engine/vec2";
 import type { CollisionShape2D, PhysicsBody2D } from "../engine/body";
+import { Intersections } from "./intersections";
+import { Segment } from "./segment";
 import { ShapeGeometry } from "./shapeGeometry";
-import { WrapDirection } from "./types";
+import { IntersectionStatus, WrapDirection } from "./types";
 
 // Where a span was at the last look and where it is now.
 export interface SpanMotion {
@@ -130,6 +132,44 @@ export function pointAtPose(body: PhysicsBody2D, pose: Pose, now: Vec2): Vec2 {
   return pose.position.add(now.sub(body.globalPosition).rotated(pose.rotation - body.globalRotation));
 }
 
+// The inverse: where a world point that was at `then` when the body stood at
+// `pose` is now, carried along with the body's motion since.
+export function pointNowFromPose(body: PhysicsBody2D, pose: Pose, then: Vec2): Vec2 {
+  return body.globalPosition.add(then.sub(pose.position).rotated(body.globalRotation - pose.rotation));
+}
+
+// Was the span already cutting the shape at the last look?
+//
+// A shape the span overlapped stood on neither side of it, and a vertex of it
+// crossing now is not the shape passing through the span: it is the span
+// coming back OUT of the shape, or going deeper in, and either is the overlap
+// test's business. Read as a pass-through it is wrong in exactly the way that
+// matters, because the side such a vertex "came from" is the side it alone
+// had poked through to - the opposite of where the rest of the shape stood -
+// so the rope is bent round the body the wrong way, from a tangent vertex on
+// the body's far side.
+//
+// `session-3649f` f3474: the ball on the ground, winding its deployed chain in
+// against a hook hanging at full length, had the span cutting 4 mm through the
+// tip of a polygon's corner 3 cm from the span's start - which the
+// start-proximity gate had declined to wrap. One more frame of winding slid the corner back out to the
+// body's side; the sweep reported the corner arriving from above, wrapped the
+// body counter-clockwise, and chose the tangent vertex 80 cm away on its far
+// side. The path was 2 cm over length through a corner the rope never touched,
+// the hanging hook was hauled 1.3 m in one frame to make it fit, and the attach
+// that followed anchored the chain over that phantom wrap.
+//
+// The old span is placed against the shape as it is now, by carrying the
+// span's old endpoints along with the body's motion since - the inverse of the
+// placement the crossing test makes - so a static and a mobile body are the
+// same question.
+function cutAtLastLook(shape: CollisionShape2D, pose: Pose | null, span: SpanMotion): boolean {
+  const body = shape.owner as PhysicsBody2D;
+  const now = (p: Vec2): Vec2 => (pose ? pointNowFromPose(body, pose, p) : p);
+  const then = new Segment(now(span.s0), now(span.e0));
+  return Intersections.intersectsSegment(shape, then) === IntersectionStatus.Overlap;
+}
+
 // Did the shape pass through the span? Polygons by their exposed vertices
 // (a seam vertex has no outside to bend round, so it cannot be what the rope
 // caught), circles by their centre - a disc whose centre crossed the span has
@@ -148,18 +188,22 @@ export function shapeCrossesSpan(
 ): Crossing | null {
   const body = shape.owner as PhysicsBody2D;
   const before = (p: Vec2): Vec2 => (pose ? pointAtPose(body, pose, p) : p);
+  let best: Crossing | null = null;
   if (shape.shape.kind === "circle") {
     const c = shape.globalPosition;
-    return pointCrossesSpan(span, before(c), c);
+    best = pointCrossesSpan(span, before(c), c);
+  } else {
+    const corners = ShapeGeometry.getGlobalCorners(shape);
+    for (let i = 0; i < corners.length; i++) {
+      if (!exposed(i)) continue;
+      const v = corners[i]!;
+      const crossing = pointCrossesSpan(span, before(v), v);
+      if (crossing && (best === null || crossing.commitment > best.commitment)) best = crossing;
+    }
   }
-  const corners = ShapeGeometry.getGlobalCorners(shape);
-  let best: Crossing | null = null;
-  for (let i = 0; i < corners.length; i++) {
-    if (!exposed(i)) continue;
-    const v = corners[i]!;
-    const crossing = pointCrossesSpan(span, before(v), v);
-    if (crossing && (best === null || crossing.commitment > best.commitment)) best = crossing;
-  }
+  // Asked only once a crossing is found: the overlap test costs more than the
+  // vertex loop, and nearly every candidate has no crossing to qualify.
+  if (best && cutAtLastLook(shape, pose, span)) return null;
   return best;
 }
 

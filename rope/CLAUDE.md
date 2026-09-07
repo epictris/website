@@ -1526,6 +1526,14 @@ launches, mover misbehavior):
    `--3d` grabs the same frame through the WebGL renderer instead, which is the
    only headless view that can see the 3D scene at all: every other one draws its
    own picture of the sim state and is blind to the renderer by construction.
+   `cli shot bundle.json --dump A..B` takes no picture: it prints the chain state
+   of every frame in the span as one JSON line each (the ball's pose, the hook,
+   the anchor, every node of the wrap path with its body, piece and position),
+   simulated on the SAME engine that recorded the bundle. It exists because the
+   browser and bun disagree about a 1-ulp libm result and a long recording's
+   tail is chaotic in that: what the player saw at f3600 is reproducible only
+   there, and every bun-side view (`cli chainpath`, `cli render`, `cli query`) is
+   by then describing a different run (`session-3649f`, diverged in bun from f859).
    `--frames A..B --every K` draws a filmstrip instead of a frame, in one page
    load, and prints the changed-pixel count between adjacent tiles - which is the
    only headless evidence there is for anything that MOVES (see **Debugging
@@ -3405,6 +3413,19 @@ The chord between the nodes either side of a body's wraps is what records that s
 `cli contacts` `chain-sweep` is the case: the recording's fall past the block, the same fall past a 5 cm round post, a hook thrown sideways from a falling ball with a post inside the wedge the deploying span sweeps, and a stone dropped through a taut chain (the body moving rather than the chain), each run twice - the sweep on, and off on the identical run so the monitor reports the pass-through - which is what makes every rig a detector rather than a script that happens to pass.
 `playtests/regressions/session-126f.json.gz` is the recording.
 Across the rest of the corpus the change is invisible: `cli ab --ref` reads identical on every bundle but `session-611f`, whose lease and over-length shrink a little.
+
+### A crossing out of a shape the span was already cutting is not a pass-through
+
+A crossing is discarded when the span was **already cutting the shape at the last look** (`cutAtLastLook` in `lib/spanSweep.ts`): the old span, carried along with the body's motion since, is tested for overlap against the shape as it is now, and a shape it overlapped was on neither side of it.
+A vertex of such a shape crossing now is the span coming back *out* of the shape, or going deeper in, and either is the overlap test's business.
+Read as a pass-through it is wrong in exactly the way that matters: the side that vertex "came from" is the side it alone had poked through to, the opposite of where the rest of the shape stood, so the rope is bent round the body the wrong way and, since the span's start is clear, from the **tangent vertex on the body's far side**.
+
+`session-3649f` f3474 is the finding (f2633 of the same run went the same way, seventeen seconds earlier).
+The ball on the ground was winding its deployed chain in against a hook hanging at full length, and the span from the coil's exit was cutting 4 mm through the tip of a polygon corner 3 cm from the exit - close enough that the start-proximity gate (5 cm) had declined to wrap it, which is the tolerated-penetration state every gate leaves behind.
+One more frame of winding slid the corner back out to the body's side; the sweep reported it arriving from above, wrapped the body counter-clockwise, and chose the tangent vertex 80 cm away on its far side.
+The path was 2 cm over length through a corner the rope never touched, the hanging hook was hauled 1.3 m in one frame to make it fit, and the attach two frames later anchored the chain over that phantom wrap, which is what was seen: the chain draped over a vertex nowhere near the straight line to its anchor.
+Only the `--dump` of `cli shot` could show it - the bundle diverges in bun from f859 on the libm knife-edge, and the tail is chaotic in that - and the fixed page reproduces the recording bit for bit up to f2633, where the rule first bites.
+`cli contacts` `chain-sweep-slide-off` is the detector: the recording's polygon and its two spans exactly, played forwards (the slide-off, no crossing) and backwards (the rope arriving from clear onto the corner: a clockwise crossing at the corner itself), so a rule that silenced the sweep outright fails the second half.
 
 ## Hook-proof surfaces
 
