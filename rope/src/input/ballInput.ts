@@ -61,6 +61,7 @@ import { screenToWorld, type Camera } from "../render/camera";
 import { AIM_MODE, AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
 import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
+import { ButtonLatch } from "./latch";
 
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
 // The chain's reach. The stick and joystick aim at exactly this distance; motion
@@ -88,7 +89,9 @@ const TOUCH_CAPABLE =
 
 export class BallInputSource implements IInputSource {
   private prev: FrameInput = emptyFrameInput();
-  private mouseLeft = false;
+  // Latched rather than a plain flag, so a click shorter than a sim step still
+  // reaches the next sample (see input/latch.ts).
+  private mouseLeft = new ButtonLatch();
   // The cursor mouse aim reads: the real one in `position` mode, the virtual one
   // the pointer lock feeds in the other two (see input/aimPointer.ts).
   private pointer: AimPointer;
@@ -106,7 +109,7 @@ export class BallInputSource implements IInputSource {
   // past the deadzone, else null ("not aiming").
   private joyAim: Vec2 | null = null;
   // On-screen DEPLOY button (touch only), hold-to-keep.
-  private touchFire = false;
+  private touchFire = new ButtonLatch();
 
   // `active` is whether this source is the one driving the game right now. It is
   // true forever in the game itself; the editor passes "a test is running", so a
@@ -116,11 +119,15 @@ export class BallInputSource implements IInputSource {
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
-    active: () => boolean = () => true,
+    private active: () => boolean = () => true,
   ) {
     this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK, active);
     canvas.addEventListener("mousemove", (e) => {
       this.pointer.update(e);
+      // The move carries the button state the browser believes in, so a press
+      // or release it never announced as an event is picked up at the next
+      // move rather than never.
+      this.press(this.mouseLeft, (e.buttons & 1) !== 0);
       // `position` and `cursor` differ only in WHICH cursor this is; both are
       // re-derived per read in `currentAimLocal`, so this write is the seed the
       // other devices hand back to.
@@ -128,16 +135,24 @@ export class BallInputSource implements IInputSource {
       this.aimSource = "mouse";
     });
     canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.mouseLeft = true;
+      if (e.button === 0) this.press(this.mouseLeft, true);
     });
     window.addEventListener("mouseup", (e) => {
-      if (e.button === 0) this.mouseLeft = false;
+      if (e.button === 0) this.press(this.mouseLeft, false);
     });
 
     if (TOUCH_CAPABLE) {
       this.buildJoystick();
       this.buildDeploy();
     }
+  }
+
+  // A button edge is queued for the next sample only while this source is the
+  // one driving the game; otherwise it is the level and nothing more, so a
+  // click made between the editor's tests is not replayed into the next one.
+  private press(latch: ButtonLatch, level: boolean): void {
+    if (this.active()) latch.set(level);
+    else latch.reset(level);
   }
 
   // Position/cursor aim: the aim offset for wherever the pointer now is. Left
@@ -302,7 +317,7 @@ export class BallInputSource implements IInputSource {
 
     const press = (held: boolean) => (e: Event) => {
       e.preventDefault();
-      this.touchFire = held;
+      this.press(this.touchFire, held);
       deploy.style.background = held ? "#313244" : "#1f2430";
     };
     deploy.addEventListener("touchstart", press(true), { passive: false });
@@ -377,7 +392,9 @@ export class BallInputSource implements IInputSource {
     const p = this.prev;
     const input: FrameInput = {
       ...emptyFrameInput(),
-      fire: button(this.mouseLeft || padFire || this.touchFire, p.fire),
+      // Every latch is sampled, whatever the others said: a short-circuit would
+      // leave the unread one's queued edge for a later frame.
+      fire: button([this.mouseLeft.sample(), padFire, this.touchFire.sample()].some(Boolean), p.fire),
       jump: button(restart, p.jump), // restart routed through jump (stays in the recorded stream)
       mouseWorldPosition: aimWorld,
     };

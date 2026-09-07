@@ -2131,6 +2131,9 @@ switch (cmd) {
   case "selftest":
     cmdSelftest();
     break;
+  case "latch":
+    void cmdLatch();
+    break;
   case "ledges":
     void cmdLedges();
     break;
@@ -2166,8 +2169,22 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
     );
+}
+
+// The button latch's cases (src/input/inputCases.ts).
+async function cmdLatch(): Promise<void> {
+  const { runInputCases } = await import("../input/inputCases");
+  const results = runInputCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[latch] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 // The production playtest store's cases (src/server/storeCases.ts): ingest

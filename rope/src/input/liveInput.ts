@@ -42,6 +42,7 @@ import {
 } from "./gamepad";
 import { screenToWorld, type Camera } from "../render/camera";
 import { AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
+import { ButtonLatch } from "./latch";
 
 const MOVE_DEADZONE = 0.35; // left-stick X → digital move threshold
 const AIM_DEADZONE = 0.3; // right-stick deflection before it takes over aim
@@ -93,9 +94,13 @@ function pollGamepad(): PadState {
 }
 
 export class LiveInputSource implements IInputSource {
-  private keys = new Set<string>();
-  private mouseLeft = false;
-  private mouseRight = false;
+  // One latch per key code and mouse button rather than a flag, so a tap or a
+  // click shorter than a sim step still reaches the next sample (see
+  // input/latch.ts). Keys are latched on first sight; a code never pressed has
+  // no latch and reads as released.
+  private keys = new Map<string, ButtonLatch>();
+  private mouseLeft = new ButtonLatch();
+  private mouseRight = new ButtonLatch();
   // The cursor mouse aim reads: the real one in `position` mode, the virtual one
   // the pointer lock feeds in the other two (see input/aimPointer.ts).
   private pointer: AimPointer;
@@ -115,33 +120,60 @@ export class LiveInputSource implements IInputSource {
     private active: () => boolean = () => true,
   ) {
     window.addEventListener("keydown", (e) => {
-      this.keys.add(e.code);
+      this.press(this.key(e.code), true);
       // Space is the jump key, so the page must not scroll on it - but only
       // while this source is the one being played. In the editor these
       // listeners outlive the test, and swallowing Space there kills the space
       // bar on a focused inspector checkbox for the rest of the session.
       if (e.code === "Space" && this.active()) e.preventDefault();
     });
-    window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+    window.addEventListener("keyup", (e) => {
+      const latch = this.keys.get(e.code);
+      if (latch) this.press(latch, false);
+    });
     this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK, active);
     canvas.addEventListener("mousemove", (e) => {
       this.pointer.update(e);
       this.aimSource = "mouse";
+      // The move carries the button state the browser believes in, so a press
+      // or release it never announced is picked up here (see ballInput.ts).
+      this.press(this.mouseLeft, (e.buttons & 1) !== 0);
+      this.press(this.mouseRight, (e.buttons & 2) !== 0);
     });
     canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.mouseLeft = true;
-      if (e.button === 2) this.mouseRight = true;
+      if (e.button === 0) this.press(this.mouseLeft, true);
+      if (e.button === 2) this.press(this.mouseRight, true);
       this.aimSource = "mouse";
     });
     window.addEventListener("mouseup", (e) => {
-      if (e.button === 0) this.mouseLeft = false;
-      if (e.button === 2) this.mouseRight = false;
+      if (e.button === 0) this.press(this.mouseLeft, false);
+      if (e.button === 2) this.press(this.mouseRight, false);
     });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
+  // A button edge is queued for the next sample only while this source is the
+  // one driving the game; otherwise it is the level and nothing more, so a
+  // click or a keystroke made between the editor's tests is not replayed into
+  // the first frames of the next one.
+  private press(latch: ButtonLatch, level: boolean): void {
+    if (this.active()) latch.set(level);
+    else latch.reset(level);
+  }
+
+  private key(code: string): ButtonLatch {
+    let latch = this.keys.get(code);
+    if (!latch) {
+      latch = new ButtonLatch();
+      this.keys.set(code, latch);
+    }
+    return latch;
+  }
+
+  // Sampled once per step for every code given - no short-circuit, or a code
+  // behind a held one would keep its queued edge for a later frame.
   private held(...codes: string[]): boolean {
-    return codes.some((c) => this.keys.has(c));
+    return codes.map((c) => this.keys.get(c)?.sample() ?? false).some(Boolean);
   }
 
   // World-space aim point the renderer should draw a crosshair at, or null when
@@ -196,8 +228,8 @@ export class LiveInputSource implements IInputSource {
       jump: b(this.held("Space") || pad.jump, p.jump),
       retract: b(this.held("KeyC") || pad.retract, p.retract),
       extend: b(this.held("KeyS") || pad.extend, p.extend),
-      fire: b(this.mouseLeft || pad.fire, p.fire),
-      retractClick: b(this.mouseRight || pad.retractTug, p.retractClick),
+      fire: b([this.mouseLeft.sample(), pad.fire].some(Boolean), p.fire),
+      retractClick: b([this.mouseRight.sample(), pad.retractTug].some(Boolean), p.retractClick),
       spawnSmallCircle: b(this.held("Digit1") || pad.spawnSmall, p.spawnSmallCircle),
       spawnLargeCircle: b(this.held("Digit2") || pad.spawnLarge, p.spawnLargeCircle),
       mouseWorldPosition: aim,

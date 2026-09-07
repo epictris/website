@@ -1134,6 +1134,7 @@ bun run src/tools/cli.ts vines                # vine cases (the pass-through gua
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
+bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
@@ -1894,6 +1895,26 @@ server-set `pid` cookie, with the address as corroboration only.
 A recording carries `heldAtStart`, the held mask its first frame was stepped
 from: the frame after a reset still has jump held, and a deserializer seeded
 empty read that as a fresh press (a reset) on frame 1.
+
+## The input latch
+
+**Every button edge the DOM delivers reaches the sim as at least one frame** (`input/latch.ts`).
+The live input sources used to keep a plain boolean per button, set on the down event and cleared on the up, read once per sim step.
+A click shorter than a step, both events landing between two samples, never changed what any sample saw: the press was gone without a trace, and the mirror case read a release-and-re-press inside one step as an unbroken hold.
+`ButtonLatch` keeps the transitions the sampler has not reported yet and plays them out one per sample, so a sub-step click is one held frame then a released one, and a sub-step re-click a released frame then a held one.
+A level that matches the last one queued (a key's auto-repeat, an up without a down because the down landed off the canvas) queues nothing.
+Every latch is sampled once per step whatever its neighbours said - no short-circuit, or a latch behind a held one keeps its queued edge for a later frame.
+An edge is queued only while the source is the one driving the game (`active`); the editor's sources outlive a test, and a click on the canvas between tests is a selection, not a shot to be played into the next test's first frames.
+Each mousemove also reconciles the mouse latches with its `buttons` bitmask, so a press or release the browser knew about and never announced as an event is picked up at the next move rather than never.
+`cli latch` is the case suite.
+
+**The clicks that prompted it were not lost in the page.**
+`session-929f` was a release at f852 and no press for the 77 frames after, on a hand whose recorded holds run as short as three frames, and the bundle could say nothing about why, because a bundle's frames are what the sim sampled.
+A temporary trace of the raw DOM input beside the frames answered it: bundles recorded while a headless chromium grab ran on the same machine carried `mouseup` events with no `mousedown` before them and a `buttons` bitmask that never showed the button down, with the page focused and pointer-locked throughout and every lost press inside the life of that grab's chromium.
+The presses were lost between the Wayland compositor and the browser process.
+The desktop browser and a headless grab are the same `chromium-browser` binary, and a second instance attached to the session while the first held a pointer lock is what cost it its presses; the same launch loop with the grab detached from the display reproduced nothing.
+So `shotRunner` launches chromium with `--ozone-platform=headless` and `WAYLAND_DISPLAY`/`DISPLAY` unset - a grab needs no display, ANGLE over EGL finds the GPU without one - and any other headless chromium run on this machine wants the same.
+The trace itself was removed once it had answered; the latch stays, since a click shorter than a step is a real hole whatever the browser does.
 
 ## Level editor
 

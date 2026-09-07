@@ -133,6 +133,15 @@ async function grabWith(
       chromium,
       [
         "--headless",
+        // Detached from the session's display, and the env below unsets the
+        // variables that would find it. A headless chromium is the same binary
+        // as the desktop one, and one attached to the Wayland session while the
+        // desktop browser held a pointer lock cost that window its button
+        // PRESSES - releases still arrived, presses never reached the browser
+        // process (session-1600f, session-1167f: three orphan mouseups apiece,
+        // each inside the life of a grab's chromium; none with this on). A
+        // grab needs no display: ANGLE over EGL still finds the GPU without one.
+        "--ozone-platform=headless",
         // Port 0 asks the OS for a free one and chromium writes it into the
         // profile, so two grabs can never collide over a fixed port - which is
         // exactly how a stale server once got screenshotted instead of the new
@@ -146,7 +155,11 @@ async function grabWith(
         ...glFlags,
         "about:blank",
       ],
-      { stdio: ["ignore", "ignore", "pipe"], detached: true },
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        detached: true,
+        env: { ...process.env, WAYLAND_DISPLAY: undefined, DISPLAY: undefined },
+      },
     );
     // chromium's stderr is kept as a last resort for a launch that never gets as
     // far as speaking the protocol.
