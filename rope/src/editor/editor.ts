@@ -452,6 +452,15 @@ const MAX_STEPS = 2;
 
 const M2PX = PIXELS_PER_METER;
 
+// The way out of a test, per controller. Esc always works; Space is offered
+// only on the ball, whose input source binds no keyboard at all
+// (input/ballInput.ts), where the grapple controller jumps with it
+// (input/liveInput.ts) and a test that could not jump would not be a test.
+const TEST_BANNER: Record<"grapple" | "ball", string> = {
+  grapple: "TESTING - Esc to return to the editor",
+  ball: "TESTING - Space or Esc to return to the editor",
+};
+
 // Angles are authored in degrees everywhere in the inspector (`rot°`), and
 // stored in radians everywhere else.
 const deg = (r: number): number => (r * 180) / Math.PI;
@@ -1524,6 +1533,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testSparks.reset();
     mode = "test";
     root.style.display = "none";
+    testBanner.textContent = TEST_BANNER[controller];
     testBanner.style.display = "block";
     // The ball controller draws its own aim reticle, so the OS cursor would be
     // a second pointer — hide it there (the grapple aims with the cursor).
@@ -1591,7 +1601,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   const testBanner = document.createElement("div");
   testBanner.className = "ed-test-banner";
-  testBanner.textContent = "TESTING — Esc to return to the editor";
+  testBanner.textContent = TEST_BANNER.grapple;
   testBanner.style.display = "none";
   document.body.appendChild(testBanner);
 
@@ -8094,6 +8104,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     if (mode === "test") {
+      // Space leaves the test on the ball controller, where the keyboard has no
+      // bindings at all (see input/ballInput.ts) and the hand is on the mouse:
+      // the way out should be under the thumb rather than across the board. The
+      // grapple controller jumps with Space (input/liveInput.ts), so there it
+      // stays a jump and Esc is the way out.
+      if (e.code === "Space" && testController === "ball") {
+        e.preventDefault();
+        stopTest();
+        return;
+      }
       if (e.code === "KeyP") downloadTestRecording();
       // The same toggle the game has, and for the same reason: camera rules are
       // invisible in play, so a path that leads, releases or re-acquires has no
