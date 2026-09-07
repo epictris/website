@@ -14,7 +14,7 @@ import {
 import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
-import { GRAVITY, World, type PushOut } from "../engine/world";
+import { GRAVITY, PUSH_OUT_MIN_DEPTH, World, isRealPush, type PushOut } from "../engine/world";
 import { circleOverlap } from "../engine/collision";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -237,18 +237,12 @@ export class BallLevel {
   // a rotation that clears one point can seat another.
   static readonly PAIR_SEPARATION_PASSES = 2;
   // Overlap below which a push-out is a pair touching, not a surface refusing
-  // anything: nothing is separated for it and nothing downstream hears of it.
-  // The leading push-out leaves the ball at exactly zero depth against what it
-  // rests on, and "exactly" is float arithmetic: the same pair re-measures
-  // 1e-17 m deep on one machine and clear on another. Read as a refusal, that
-  // noise held the stall lease for a frame (`Rope.noteBlockedByGeometry`) that
-  // the other machine released, 8.3 mm of chain the two then disagreed on for
-  // good; read by the into-surface refusal, it stripped 1.1 m/s the other
-  // machine kept. Every bundle recorded in the browser after the pair
-  // separation landed replayed as DIVERGED headlessly (`session-154f` f89-90,
-  // `session-345f` f196). A micron is a thousand times the noise and a
-  // thousandth of anything a solve hauls.
-  static readonly PUSH_OUT_MIN_DEPTH = 1e-6;
+  // anything: nothing is separated for it and nothing downstream hears of it -
+  // neither the stall lease nor the into-surface refusal, which stripped
+  // 1.1 m/s on one machine that the other kept when it read float noise as a
+  // push. The floor itself is the engine's (`PUSH_OUT_MIN_DEPTH` in
+  // `engine/world.ts`), shared with the scene-chain settle.
+  static readonly PUSH_OUT_MIN_DEPTH = PUSH_OUT_MIN_DEPTH;
   // Share of the aim's turn the unwind must give back for the turn to count
   // as refused outright (see `BallPlayer.windStall`).
   static readonly STALL_REFUND_SHARE = 0.9;
@@ -837,9 +831,10 @@ export class BallLevel {
       // credit is taken over is the one the phase actually ends on - a rollback
       // run afterwards would undo part of the move while the credit for it
       // stayed, which is the whole failure this exists to prevent.
-      if (sceneBefore.length > 0) {
-        settleChainBodies(solveChains, sceneBefore, this.world, delta);
-      }
+      const blockedScene =
+        sceneBefore.length > 0
+          ? settleChainBodies(solveChains, sceneBefore, this.world, delta)
+          : new Set<RigidBody2D>();
       // The same closure for the ball's own anchor, which used to have none.
       //
       // A rigid body the chain is anchored to is hauled by the solve exactly as
@@ -872,6 +867,14 @@ export class BallLevel {
       // contacts` is the detector, and `chain-body-embedded` is the invariant
       // that would have caught the recording.
       const blockedPath = refuseRopeBodiesIntoStatics(pathBefore, this.world, delta);
+      // ...and a chain-held body on the ball's path that the scene settle had to
+      // push out of the scenery is blocked by the same token, whichever phase
+      // did the pushing: the plank under the ball's hook that the feet refused
+      // (`session-193f`) is the ball's to take the correction for exactly as a
+      // plank no scene chain holds is.
+      for (const body of blockedScene) {
+        if (this.ball.chain.path().some((n) => n.contact.obj === body)) blockedPath.add(body);
+      }
       const pathBlocked = blockedPath.size > 0;
       // What a blocked anchor could not take of the correction is still owed,
       // and it is the ball's: the same constraint solved once more with the
@@ -1271,10 +1274,9 @@ export class BallLevel {
       // slope, ratcheting 0.2 mm of lease a frame out of exactly that residual).
       const refused =
         !pivotAnchored || pushedOutOf.length > 0
-          ? this.ball.chain.absorbBlockedLength({
-              body: this.ball,
-              normals: pushedOutOf.map((p) => p.normal),
-            })
+          ? this.ball.chain.absorbBlockedLength([
+              { body: this.ball, normals: pushedOutOf.map((p) => p.normal) },
+            ])
           : 0;
       // Whether the geometry actually refused the chain this frame — the same
       // push-out normals the velocity above was cancelled against, and only
@@ -1425,7 +1427,7 @@ export class BallLevel {
   // A push-out deep enough to be a surface's answer rather than float noise
   // (see `PUSH_OUT_MIN_DEPTH`).
   private static realPush(p: PushOut): boolean {
-    return p.depth > BallLevel.PUSH_OUT_MIN_DEPTH;
+    return isRealPush(p);
   }
 
   private separateBallFromPathBodies(delta: number): PushOut[] {

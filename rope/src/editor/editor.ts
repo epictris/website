@@ -4363,7 +4363,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const planeHint = el("div", "ed-hint");
     planeHint.textContent =
-      "Scenery: drawn behind the level, and solved against nothing but its own two bodies and the bodies its wrap points are on, so it passes through everything else - the geometry, the player and the hook.";
+      "Scenery: drawn behind the level, and solved against the level's geometry - it catches on corners as the ball's chain does - but never against the player or the hook, which pass straight through it.";
     g.appendChild(planeHint);
 
     if (chains.length === 1) addWrapPointRows(g, chains[0]!);

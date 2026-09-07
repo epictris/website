@@ -281,10 +281,11 @@ LINKS: a vine is `length / spacing` bodies and that many constraints, all of the
 swept every frame, which is why the spacing is a cost decision an author makes
 (see **Vines** in `CLAUDE.md`).
 
-A chain is **scenery**, and that is all it is. It is drawn behind the level's
-geometry, faded, and solved against nothing but its own two bodies: it hangs,
-swings and hauls those two, and passes straight through the level, the avatar and
-the hook.
+A chain is **scenery** in what may touch it, and level geometry in what it bends
+around. It is drawn behind the level's geometry, faded, and solved against the
+level's wrappable bodies but never against the play space: it hangs, swings and
+hauls its own two bodies, catches on the corners of the level as the ball's chain
+does, and passes straight through the avatar and the hook.
 
 There was briefly a second, "foreground" kind - in the play space, drawn over the
 geometry and solved against the whole scene, so the avatar and its hook could push

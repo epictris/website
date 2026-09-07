@@ -141,6 +141,24 @@ export interface PushOut {
   readonly point: Vec2;
 }
 
+// Overlap below which a push-out is a pair touching, not a surface refusing
+// anything: nothing downstream may read it as a refusal. The leading push-out
+// leaves a body at exactly zero depth against what it rests on, and "exactly"
+// is float arithmetic: the same pair re-measures 1e-17 m deep on one machine
+// and clear on another. Read as a refusal, that noise held the ball's stall
+// lease for a frame that the other machine released, 8.3 mm of chain the two
+// then disagreed on for good, and every bundle recorded in the browser after
+// the pair separation landed replayed as DIVERGED headlessly (`session-154f`
+// f89-90, `session-345f` f196). A micron is a thousand times the noise and a
+// thousandth of anything a solve hauls. One floor for every reader - the
+// ball's phase and the scene-chain settle - because the lease they feed is the
+// same lease.
+export const PUSH_OUT_MIN_DEPTH = 1e-6;
+
+export function isRealPush(p: PushOut): boolean {
+  return p.depth > PUSH_OUT_MIN_DEPTH;
+}
+
 interface Depenetration {
   readonly normal: Vec2;
   readonly depth: number;

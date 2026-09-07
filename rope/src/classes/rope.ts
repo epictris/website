@@ -95,7 +95,9 @@ function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): boolean {
 
 // What a caller that pushed a path body out of geometry this frame reports to
 // `absorbBlockedLength`: which body, and the outward normals of every surface
-// that pushed it. See `unreachableShortening`.
+// that pushed it. One per body the geometry pushed this frame - a scene chain
+// holds two, and either may be the one standing in a surface. See
+// `unreachableShortening`.
 export interface LengthRefusal {
   body: PhysicsBody2D;
   normals: readonly Vec2[];
@@ -1168,17 +1170,25 @@ export class Rope {
   // been deflecting the solve is released like any other.
   //
   // Returns the refusal: how much of the over-length the named surfaces make
-  // unreachable, or the whole over-length when no refusal is given.
-  absorbBlockedLength(refusal?: LengthRefusal): number {
+  // unreachable, or the whole over-length when no refusals are given. Given an
+  // EMPTY list the answer is that nothing refused anything: every body on the
+  // path is free to move along its own pull, so the whole over-length is next
+  // frame's ordinary length error. With several bodies pushed, what each can
+  // still take out of its own span adds up - to first order the two ends
+  // shorten the path independently.
+  absorbBlockedLength(refusals?: readonly LengthRefusal[]): number {
     const settledLength = this.calculateRopePathLength();
     const overLength = Mathf.max(settledLength - this.maxRopeLength, 0);
-    const blocked =
-      refusal === undefined
-        ? overLength
-        : Mathf.max(
-            settledLength - this.unreachableShortening(refusal) - this.maxRopeLength,
-            0,
-          );
+    let blocked = overLength;
+    if (refusals !== undefined) {
+      let reachable = 0;
+      for (const refusal of refusals) reachable += this.unreachableShortening(refusal);
+      // Nothing pushed: the far end is not held by anything, and this is the
+      // same statement made with an empty normal set below (`allowed` is true
+      // of every direction), taken over the whole path rather than one span.
+      if (refusals.length === 0) reachable = overLength;
+      blocked = Mathf.max(settledLength - reachable - this.maxRopeLength, 0);
+    }
     const granted =
       this.geometryPushAccum === null
         ? blocked

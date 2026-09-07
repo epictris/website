@@ -51,7 +51,7 @@ import { RigidBody2D, type CollisionObject2D } from "../engine/body";
 import { Mathf } from "../engine/mathf";
 import { Rope } from "../classes/rope";
 import type { RopeContact } from "../lib/ropeContact";
-import { VINE_TOLERANCE, type SceneConstraint } from "./chains";
+import { VINE_TOLERANCE, type BodyPush, type SceneConstraint } from "./chains";
 
 // How many times the projection is re-taken. One is exact for a single
 // constraint; the second is the float check that it landed, and is what keeps
@@ -206,9 +206,13 @@ export class VinePair implements SceneConstraint {
     return this.a.obj === body || this.b.obj === body;
   }
 
-  settle(blocked: boolean): void {
+  // A two-body joint solved in closed form has no free end to hand a refused
+  // share to that the next pass will not reach anyway.
+  resolveHolding(): void {}
+
+  settle(pushes: readonly BodyPush[]): void {
     this.absorbBlockedLength();
-    this.blockedLastFrame = blocked;
+    this.blockedLastFrame = pushes.length > 0;
   }
 
   // `Rope.absorbBlockedLength`, on a constraint whose length never moves - and

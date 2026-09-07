@@ -266,6 +266,8 @@ export class VineBend implements SceneConstraint {
   // there.
   settle(): void {}
 
+  resolveHolding(): void {}
+
   solve(): void {
     const offset = this.b.position.sub(this.a.position.add(this.c.position).mul(0.5));
     const c = offset.length();

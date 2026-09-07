@@ -683,8 +683,8 @@ export function drawProbeOutline(
 // both ends instead of to their 60 Hz sim positions.
 //
 // Drawn behind the level's geometry, which is the visible half of a chain being
-// scenery; the other half is that it is solved against nothing but its own two
-// bodies (see `SceneChain.physicsStep`).
+// scenery; the other half is that nothing in the play space is solved against
+// it (see `buildSceneChains` for what it is solved against).
 function drawSceneChains(
   ctx: CanvasRenderingContext2D,
   chains: readonly SceneChain[],

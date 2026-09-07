@@ -2644,6 +2644,355 @@ function caseChainWrapPoint(): ContactResult {
   ]);
 }
 
+// chain-post-catch - a chain catches on the level's geometry, and a surface
+// that deflects its correction has not refused it.
+//
+// `session-497f`, both halves of it. A weight hangs beside a post on a chain
+// that runs up over a pulley, and as the weight falls past the post's top the
+// chain has to bend over the post's corner and hang the weight from there.
+// It did not: a scene chain was solved against nothing but the bodies its wrap
+// points named, so it cut straight through the post and the weight fell to
+// wherever the chain's length allowed - a chain drawn through a pillar it
+// plainly ran into. Solved against the level's wrappable bodies, the same
+// scene the ball's chain scans, the corner is found the frame the span crosses
+// it.
+//
+// The second half is what happened once the weight was leaning on the post.
+// The chain pulls it up and INTO the post; the post hands the into-post share
+// back every frame, and the scene-chain settle leased that share as if the
+// post had refused it - the whole residual, unmeasured and unbounded, where
+// the ball's own phase had long since learnt to ask what the pushing surfaces
+// make UNREACHABLE (`Rope.absorbBlockedLength`, `session-483f`). Sliding up
+// the post shortens the span, so nothing is refused; leased anyway, the
+// loosened constraint let the weight settle a little lower and the next frame
+// paid the same share again: 0.5 mm of chain a frame, 24 cm over 480 frames,
+// read from the game as the chain growing while the weight slid down the post.
+//
+// The rig is the recording's post, pulley and weight, with the chain's far end
+// on a static hitching post instead of the recording's plank so the weight is
+// the only thing the chain moves, and 20 cm of authored slack so the weight
+// falls past the corner before the chain comes taut, as it did. The bars: the
+// post is on the chain's path from the fall onwards; the weight ends hung
+// under the corner against the post's face; the chain never stands over its
+// AUTHORED length by more than the sweep's tolerance - the lease is not
+// allowed to hide it - and the weight has stopped moving by the time it has
+// hung there for five seconds.
+// ---------------------------------------------------------------------------
+function caseChainPostCatch(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: -600, radius: 8 },
+      bodies: [
+        // The hitching post: where the recording's plank was.
+        {
+          kind: "static",
+          x: -150,
+          y: -290,
+          rot: 0,
+          objects: [
+            { type: "collision", shape: { kind: "rect", w: 20, h: 20 } },
+            { type: "anchor", id: 1, x: 0, y: -10 },
+          ],
+        },
+        // The post the weight hangs beside: top at y=-480, right face at
+        // x=119.7, as recorded.
+        {
+          kind: "static",
+          x: 109.7,
+          y: -370,
+          rot: 0,
+          friction: 1,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 220 } }],
+        },
+        // The pulley, with one wrap point on top of it.
+        {
+          kind: "static",
+          x: 50,
+          y: -520,
+          rot: 0,
+          objects: [
+            { type: "collision", shape: { kind: "circle", r: 10 } },
+            { type: "anchor", id: 3, x: 0, y: -10 },
+          ],
+        },
+        // The weight: 20 x 80 of oak hung from its top edge, a hand clear of
+        // the post's face.
+        {
+          kind: "rigid",
+          x: 140,
+          y: -450,
+          rot: 0,
+          friction: 1,
+          objects: [
+            { type: "collision", shape: { kind: "rect", w: 20, h: 80 } },
+            { type: "anchor", id: 2, x: -1.4, y: -40 },
+          ],
+        },
+      ],
+      chains: [{ a: 1, b: 2, via: [3], length: 0 }],
+    } as RawLevelData,
+    PX,
+  );
+  // Taut as authored, plus the slack: the loader measures "taut" along the
+  // seeded route, which is what an author dragging the chain out sees.
+  const slack = 0.2;
+  const world = new World();
+  const built = buildLevelBodies(world, data, () => {});
+  const probe = buildSceneChains(
+    { ...data, chains: [{ a: 1, b: 2, via: [3] }] },
+    built,
+  )[0]!;
+  const authored = probe.rope.maxRopeLength + slack;
+  const chain = buildSceneChains(
+    { ...data, chains: [{ a: 1, b: 2, via: [3], length: authored }] },
+    built,
+  )[0]!;
+  const post = built.bodies[1]!.body as StaticBody2D;
+  const weight = built.bodies[3]!.body as RigidBody2D;
+  const anchorY = () => chain.rope.end.contact.globalPosition.y;
+  const anchorX = () => chain.rope.end.contact.globalPosition.x;
+  const cornerX = 1.197;
+  const cornerY = -4.8;
+
+  const onPost = () => chain.rope.path().some((n) => n.contact.obj === post);
+  let caughtAt: number | null = null;
+  let lostAfterCatch = false;
+  let worstOverAuthored = 0;
+  let worstLease = 0;
+  let y300 = 0;
+  const TAUT_FROM = 120;
+  for (let f = 1; f <= 600; f++) {
+    world.integrate(DT);
+    stepSceneChains([chain], world, DT);
+    const caught = onPost();
+    if (caught && caughtAt === null) caughtAt = f;
+    if (!caught && caughtAt !== null) lostAfterCatch = true;
+    if (f >= TAUT_FROM) {
+      // Against the AUTHORED length, not the constraint: a lease would loosen
+      // the constraint by exactly the growth this is looking for.
+      const pathLength = chain.rope.maxRopeLength + chain.rope.blockedSlack + chain.rope.overLength;
+      worstOverAuthored = Math.max(worstOverAuthored, pathLength - authored);
+      worstLease = Math.max(worstLease, chain.rope.blockedSlack);
+    }
+    if (f === 300) y300 = weight.globalPosition.y;
+  }
+  const crept = weight.globalPosition.y - y300;
+
+  check(
+    `the chain catches the post's corner as the weight falls past it (caught @f${caughtAt ?? "never"})`,
+    caughtAt !== null && caughtAt < TAUT_FROM,
+  );
+  check("...and stays over it", !lostAfterCatch);
+  check(
+    `the weight ends hung under the corner against the post's face (anchor ${anchorX().toFixed(3)}, ${anchorY().toFixed(3)}; corner ${cornerX}, ${cornerY})`,
+    anchorY() > cornerY + 0.05 && anchorX() > cornerX - 0.01 && anchorX() < cornerX + 0.15,
+  );
+  check(
+    `the chain never stands over its authored length by more than the sweep's tolerance (worst ${(worstOverAuthored * 1000).toFixed(2)}mm, bar ${CHAIN_TOLERANCE * 1000}mm)`,
+    worstOverAuthored <= CHAIN_TOLERANCE,
+  );
+  check(
+    `the post refuses nothing, so nothing is leased (worst lease ${(worstLease * 1000).toFixed(2)}mm)`,
+    worstLease <= 0.001,
+  );
+  check(
+    `the weight has stopped moving: ${(crept * 1000).toFixed(1)}mm between f300 and f600 (bar 5mm)`,
+    Math.abs(crept) <= 0.005,
+  );
+  check(
+    `the chain's length is what was authored (${chain.rope.maxRopeLength.toFixed(4)} m of ${authored.toFixed(4)})`,
+    Math.abs(chain.rope.maxRopeLength - authored) < 1e-9,
+  );
+  return ok("chain-post-catch — a chain catches on the level's geometry, and a deflected correction is not leased", passed, details);
+}
+
+// chain-wedged-end - a refused share goes to the chain's free end, and a
+// block found by one settle is a block for the whole frame.
+//
+// `session-527f`. The plank of `session-497f`'s rig had fallen off its feet and
+// stood wedged in the corner between the post and its foot, taller than the
+// post, its chain running from its top down over the post's far corner to the
+// weight hanging on the other side. Every frame the solve split the weight's
+// gravity step between the two ends by their effective mass, the wedged
+// plank's share was hauled 8 mm into the corner and pushed 8 mm back out, and
+// the share it could not take stood as over-length - though the weight on the
+// other end could have taken every millimetre of it. Asked what the corner
+// refused, the settle honestly said "all of it" (`Rope.absorbBlockedLength`
+// measures the pushed bodies' spans, and the plank's is wedged shut) and
+// leased it: 7.5 mm of chain a frame, the weight creeping down its chain for
+// as long as the ball was not hooked to anything. Hooked to the post, the
+// ball's phase settles the scene set a second time after the coupled sweep,
+// that settle found nothing left to push and overwrote the first's "blocked"
+// with "not blocked", and the lease was handed back at the release rate
+// instead: the weight creeping UP the chain while the ball hung there, and
+// down again when it let go, exactly as reported.
+//
+// Two fixes, each asserted on its own leg. The refused share is re-solved with
+// the pushed bodies held (`SceneConstraint.resolveHolding`, the winch's own
+// mechanism), so the weight takes it and nothing stands over length to lease.
+// And a settle records "blocked" for the frame cumulatively
+// (`SceneChain.blockedThisFrame`), so a second settle cannot un-block the
+// first.
+//
+// The rig: a post with a foot, a slab standing on the foot against the post
+// and a metre taller than it, a chain from the slab's top down over the post's
+// far corner, over a peg beyond it, to a weight hanging plumb under the peg -
+// so the pull at the slab's top is into the corner and the weight hangs
+// clear of everything. One leg steps the scene set alone; the other runs it
+// inside a `BallLevel` with the ball hooked to a static above, which is the
+// path that settles twice. On both the weight must hang still and the chain
+// must stay at its authored length with no lease against it.
+// ---------------------------------------------------------------------------
+function caseChainWedgedEnd(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const raw: RawLevelData = {
+    player: { x: -300, y: -700, radius: 8 },
+    bodies: [
+      // The post: 20 wide, top at y=-480, faces at x=100 and x=120; its
+      // top-right corner is a wrap point.
+      {
+        kind: "static",
+        x: 110,
+        y: -370,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 20, h: 220 } },
+          { type: "anchor", id: 3, x: 10, y: -110 },
+        ],
+      },
+      // The foot, running left from the post's base, top at y=-280.
+      {
+        kind: "static",
+        x: 50,
+        y: -270,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 140, h: 20 } }],
+      },
+      // The slab: 20 wide and 3 m tall, standing on the foot against the
+      // post's near face, a metre above the post's top, anchored at its top.
+      {
+        kind: "rigid",
+        x: 90,
+        y: -430,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 20, h: 300 } },
+          { type: "anchor", id: 1, x: 10, y: -150 },
+        ],
+      },
+      // The peg beyond the post, at the post's height, with a wrap point on
+      // its far top corner.
+      {
+        kind: "static",
+        x: 200,
+        y: -470,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 20, h: 20 } },
+          { type: "anchor", id: 4, x: 10, y: -10 },
+        ],
+      },
+      // The weight, hanging plumb under the peg's far corner.
+      {
+        kind: "rigid",
+        x: 210,
+        y: -380,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 20, h: 80 } },
+          { type: "anchor", id: 2, x: 0, y: -40 },
+        ],
+      },
+      // Something for the ball to hook, well away from the rig.
+      {
+        kind: "static",
+        x: -300,
+        y: -900,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 40 } }],
+      },
+    ],
+    chains: [{ a: 1, b: 2, via: [3, 4] }],
+  } as RawLevelData;
+
+  const run = (label: string, step: (level: BallLevel, f: number) => void): void => {
+    const level = new BallLevel(raw);
+    const chain = level.sceneChains[0]!;
+    const weight = chain.rope.end.contact.obj as RigidBody2D;
+    const slab = chain.rope.start.contact.obj as RigidBody2D;
+    const slab0 = slab.globalPosition;
+    const authored = chain.rope.maxRopeLength;
+    let y120 = 0;
+    let worstLease = 0;
+    let worstOver = 0;
+    for (let f = 1; f <= 420; f++) {
+      step(level, f);
+      if (f === 120) y120 = weight.globalPosition.y;
+      if (f >= 120) {
+        worstLease = Math.max(worstLease, chain.rope.blockedSlack);
+        worstOver = Math.max(worstOver, chain.rope.blockedSlack + chain.rope.overLength);
+      }
+    }
+    const crept = weight.globalPosition.y - y120;
+    check(
+      `${label}: the chain runs over the post and the peg, and the slab stays wedged (${chain.rope.path().length} nodes, slab moved ${(slab.globalPosition.distanceTo(slab0) * 1000).toFixed(1)} mm, ${Math.abs(wrapAngle(slab.globalRotation)).toFixed(3)} rad)`,
+      // 7 mm and 0.014 rad measured: the slab settling into its corner off
+      // the authored spot, not a slab going anywhere.
+      chain.rope.path().length >= 4 &&
+        slab.globalPosition.distanceTo(slab0) < 0.02 &&
+        Math.abs(wrapAngle(slab.globalRotation)) < 0.05,
+    );
+    check(`${label}: nothing is leased (worst ${(worstLease * 1000).toFixed(2)} mm)`, worstLease <= 0.001);
+    check(
+      `${label}: the chain stays at its authored length (worst ${(worstOver * 1000).toFixed(2)} mm over ${authored.toFixed(3)} m, bar ${CHAIN_TOLERANCE * 1000})`,
+      worstOver <= CHAIN_TOLERANCE,
+    );
+    check(
+      `${label}: the weight does not creep (${(crept * 1000).toFixed(1)} mm between f120 and f420, bar 5)`,
+      Math.abs(crept) <= 0.005,
+    );
+  };
+
+  // The scene set stepped alone: no ball input, the ball falling far away.
+  run("alone ", (level) => level.physicsProcess(emptyFrameInput(), DT));
+  // ...and with the ball hooked to the static above it, which is the frame
+  // that settles the scene set twice.
+  let prev = emptyFrameInput();
+  run("hooked", (level, f) => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(f > 5, prev.fire),
+      mouseWorldPosition: new Vec2(-3, -9),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+    if (f === 120) {
+      check("hooked: the ball is anchored to the static", level.ball.chain !== null && level.ball.chainAnchored);
+    }
+  });
+
+  return ok("chain-wedged-end - a refused share goes to the chain's free end, whichever settle finds the block", passed, details);
+}
+
 // hung-anchor - a chain-hung anchor cannot be wound into a slingshot.
 //
 // `cli spring`'s `whirl-anchor` made this statement about a pivot, and a body a
@@ -2794,6 +3143,196 @@ function caseHungAnchor(): ContactResult {
   );
 
   return ok("hung-anchor - a chain-hung anchor cannot be wound into a slingshot", passed, details);
+}
+
+// ---------------------------------------------------------------------------
+// plank-haul - a chain-held plank hauled down onto its feet stays on them.
+//
+// `plank-anchor`'s statement, for the plank a SCENE CHAIN holds. That case's
+// plank is held by nothing but the feet it lies on, so the ball's phase closes
+// it against them itself (`refuseRopeBodiesIntoStatics`, at the pushed point
+// and in rotation). A plank with a scene chain on its end is a scene-held body
+// instead, and the scene settle closed it with a TRANSLATION out of the deepest
+// overlap (`World.depenetrateRigid`) - which for a plank hauled down by one end
+// is the wrong answer, and a compounding one. The solve turns the plank about
+// its centre far more than it moves it (35 mm down at the hauled end, 7 mm UP
+// at the far one, for 14 mm at the centre); the foot's translation push then
+// lifts the whole plank by the near end's depth, the far end included, and the
+// phase's books read that as upward motion earned and a turn kept: -0.7 m/s and
+// -0.7 rad/s on the snap frame, -2.2 and -1.7 the next, -3.9 and -3.0, -5.1 and
+// -4.0, until at -6.5 m/s and -6.7 rad/s the plank left both feet and
+// cartwheeled away on its own chain - `session-193f`, a 91 kg plank on two
+// feet with the ball hooked to its underside while falling at 3.5 m/s, read
+// from the game as pulling the plank down making it fly up. HEALTHY on every
+// invariant: the energy monitor is disarmed while the aim turns the ball, and
+// the rest are about the ball.
+//
+// The scene settle now pushes out at the point and through the body's inertia
+// too (`World.depenetrateRigidAtPoints`), so the foot turns the plank back out
+// the way the haul turned it in, and the frame's net displacement is the
+// nothing a plank on two feet actually did. And a scene-held body the feet
+// refused is handed to the ball's chain as blocked, so the ball takes the
+// correction its anchor could not (`Rope.solveLengthHolding`) and is arrested
+// by the plank rather than left falling under it.
+//
+// The rig is `plank-anchor`'s, with a slack scene chain from the plank's near
+// end to a hitching post above it - slack so it carries nothing, there so the
+// plank is scene-held - and twenty frames of fall before the shot, which is the
+// recording's snap. The bars are `plank-anchor`'s: the plank never tips, never
+// leaves its feet, ends at rest on both, and the ball hangs from it; plus the
+// launch itself, which is a plank peak speed of 6.5 m/s against a bar of 0.5.
+// ---------------------------------------------------------------------------
+function casePlankHaul(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const post = (x: number, verts: { x: number; y: number }[]): RawLevelData["bodies"][number] =>
+    ({
+      kind: "static",
+      x,
+      y: -280,
+      rot: 0,
+      friction: 1,
+      objects: [{ type: "collision", shape: { kind: "poly", verts } }],
+    }) as RawLevelData["bodies"][number];
+  const level = new BallLevel({
+    player: { x: -107, y: -190, radius: 8 },
+    bodies: [
+      post(-180, [
+        { x: 0, y: -50 },
+        { x: 0, y: 0 },
+        { x: 40, y: 0 },
+        { x: 40, y: 20 },
+        { x: -20, y: 20 },
+        { x: -20, y: -50 },
+      ]),
+      post(100, [
+        { x: 0, y: 0 },
+        { x: 0, y: -70 },
+        { x: 20, y: -70 },
+        { x: 20, y: 20 },
+        { x: -70, y: 20 },
+        { x: -70, y: 0 },
+      ]),
+      {
+        kind: "rigid",
+        x: -40,
+        y: -285,
+        rot: 0,
+        friction: 1,
+        objects: [
+          { type: "collision", thickness: 50, shape: { kind: "rect", w: 260, h: 10 } },
+          { type: "anchor", id: 1, x: -111, y: -5 },
+        ],
+      },
+      // The hitching post, well above the plank's near end.
+      {
+        kind: "static",
+        x: -150,
+        y: -520,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 20, h: 20 } },
+          { type: "anchor", id: 2, x: 0, y: 10 },
+        ],
+      },
+    ],
+    // 2.25 m from post to plank end; 30 cm of slack.
+    chains: [{ a: 2, b: 1, length: 255 }],
+  } as RawLevelData);
+  const plank = level.bodies.find(
+    (b): b is RigidBody2D => b !== level.ball && b instanceof RigidBody2D,
+  );
+  check("the plank was built", plank !== undefined);
+  check("the plank is held by a scene chain", level.sceneChains.length === 1 && plank !== undefined && level.sceneChains[0]!.holds(plank));
+  if (!plank) return ok("plank-haul - a chain-held plank hauled down onto its feet stays on them", false, details);
+  const statics = level.world.bodies.filter(
+    (b): b is StaticBody2D => b instanceof StaticBody2D && b.hasShape(),
+  );
+  const restY = plank.globalPosition.y;
+  const embed = (): number => {
+    let worst = 0;
+    for (const shape of plank.getShapes()) {
+      for (const st of statics) {
+        for (const other of st.getShapes()) {
+          for (const c of shapeContacts(shape, other)) worst = Math.max(worst, c.depth);
+        }
+      }
+    }
+    return worst;
+  };
+
+  let prev = emptyFrameInput();
+  const feed = (fire: boolean, aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(fire, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  const anchor = new Vec2(-1.07, -2.85);
+  for (let f = 0; f < 20; f++) feed(false, anchor);
+  let speedAtAttach = 0;
+  let maxEmbed = 0;
+  let maxTilt = 0;
+  let maxDrop = 0;
+  let maxLift = 0;
+  let maxPlankV = 0;
+  let maxBallVAfter = 0;
+  let anchoredAt = -1;
+  for (let f = 0; f < 300; f++) {
+    feed(true, anchor);
+    const chain = level.ball.chain;
+    const anchored =
+      chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
+    if (anchored && anchoredAt < 0) {
+      anchoredAt = f;
+      speedAtAttach = level.ball.linearVelocity.length();
+    } else if (anchored) {
+      maxBallVAfter = Math.max(maxBallVAfter, level.ball.linearVelocity.length());
+    }
+    maxEmbed = Math.max(maxEmbed, embed());
+    maxTilt = Math.max(maxTilt, Math.abs(wrapAngle(plank.globalRotation)));
+    maxDrop = Math.max(maxDrop, plank.globalPosition.y - restY);
+    maxLift = Math.max(maxLift, restY - plank.globalPosition.y);
+    maxPlankV = Math.max(maxPlankV, plank.linearVelocity.length());
+  }
+  const chain = level.ball.chain;
+  check(
+    `the chain anchored to the plank (frame ${anchoredAt})`,
+    anchoredAt >= 0 && chain !== null && chain.end.contact.obj === plank,
+  );
+  check(
+    `the ball was falling when it caught (${speedAtAttach.toFixed(2)} m/s, need 2.5)`,
+    speedAtAttach > 2.5,
+  );
+  check(`the plank is never launched (peak ${maxPlankV.toFixed(2)} m/s, bar 0.5)`, maxPlankV < 0.5);
+  check(`the plank never tips (${maxTilt.toFixed(3)} rad, bar 0.08)`, maxTilt < 0.08);
+  check(`the plank never leaves its feet (${(maxLift * 1000).toFixed(1)} mm above rest, bar 20)`, maxLift < 0.02);
+  check(`the plank never sinks (${(maxDrop * 1000).toFixed(1)} mm below rest, bar 20)`, maxDrop < 0.02);
+  check(`the plank never stands in a post (${(maxEmbed * 1000).toFixed(1)} mm, bar 15)`, maxEmbed < 0.015);
+  check(
+    `and is back at rest on both posts (${((plank.globalPosition.y - restY) * 1000).toFixed(1)} mm, ${wrapAngle(plank.globalRotation).toFixed(4)} rad)`,
+    Math.abs(plank.globalPosition.y - restY) < 0.005 && Math.abs(wrapAngle(plank.globalRotation)) < 0.01,
+  );
+  // Arrested, not slung: once caught the ball never moves faster than it was
+  // falling when the chain took it, and it ends hanging under the plank.
+  check(
+    `the ball is arrested by the plank rather than slung (peak ${maxBallVAfter.toFixed(2)} m/s after the catch, no more than the ${speedAtAttach.toFixed(2)} it caught at)`,
+    maxBallVAfter <= speedAtAttach,
+  );
+  check(
+    `...and ends hanging from it (${level.ball.linearVelocity.length().toFixed(2)} m/s, bar 0.5; ${chain ? (chain.overLength * 1000).toFixed(1) : "-"} mm over length, bar ${CHAIN_TOLERANCE * 1000})`,
+    level.ball.linearVelocity.length() < 0.5 && chain !== null && chain.overLength <= CHAIN_TOLERANCE,
+  );
+
+  return ok("plank-haul - a chain-held plank hauled down onto its feet stays on them", passed, details);
 }
 
 // ---------------------------------------------------------------------------
@@ -4681,8 +5220,11 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainOrder());
   results.push(caseChainHungJam(sims));
   results.push(caseChainWrapPoint());
+  results.push(caseChainPostCatch());
+  results.push(caseChainWedgedEnd());
   results.push(caseHungAnchor());
   results.push(casePlankAnchor());
+  results.push(casePlankHaul());
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());
   results.push(caseHookSnapBand());

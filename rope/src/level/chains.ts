@@ -13,20 +13,25 @@
 // of that constraint. (Both would need the chain to be a body per link - see
 // docs/game-design.md.)
 //
-// A chain is scenery, and scenery is all it is: it is solved against nothing but
-// the two bodies it is tied to and the bodies its WRAP POINTS name, so it hangs
-// and swings and hauls those two and passes through everything else, and it is
-// drawn behind the level's geometry to say so. There was briefly a second,
-// "foreground" kind that the whole scene was solved against - the avatar and its
-// hook could push into it and be held by it - and it was dropped: it bought
-// little that a body does not already buy, and it paid for that by making every
-// chain a thing the player might silently snag on.
+// A chain is scenery in what it is drawn behind and in what may touch IT, and
+// it is level geometry in what it bends around: its spans are solved against the
+// level's wrappable bodies - the statics and the authored rigid bodies, the same
+// scene the ball's chain scans (`BuiltBodies.wrapBodies`) - so a chain that
+// swings across a post catches on the post's corner and hangs its load from
+// there, exactly as the ball's chain would. What it is solved against is NOT
+// the avatar or its hook: those are in the play space and a chain is not, so
+// nothing the player does can snag on a chain. (There was briefly a
+// "foreground" kind the whole scene, avatar included, was solved against, and
+// it was dropped for that reason; and for a while after it a chain was solved
+// against nothing at all but the bodies its wrap points named, which read as
+// the chain being drawn through a pillar it plainly ran into - `session-497f`,
+// a weight hung beside a post on a chain over a pulley, the chain cutting
+// straight through the post's top as the weight fell past it.)
 //
-// A wrap point (`ChainData.via`) is the opt-in: an authored anchor the chain is
+// A wrap point (`ChainData.via`) is the authored route: an anchor the chain is
 // routed OVER, which at load becomes an ordinary wrap node on the corner of the
-// piece it sits on, and puts that piece's body in the set this chain's spans
-// are solved against. From then on it is the same wrap the ball's chain finds
-// by scanning - regenerated as the bodies move, culled if the chain ever pulls
+// piece it sits on. From then on it is the same wrap the ball's chain finds by
+// scanning - regenerated as the bodies move, culled if the chain ever pulls
 // straight past it - which is what a chain over a beam or a pulley does. The
 // authoring exists because the scan cannot find it: a chain hung from a hub up
 // over a beam and down to a load is, as a straight line, nowhere near the beam.
@@ -41,8 +46,8 @@ import {
   type CollisionShape2D,
 } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
-import { GRAVITY, type PushOut, type World } from "../engine/world";
-import { Rope } from "../classes/rope";
+import { GRAVITY, isRealPush, type PushOut, type World } from "../engine/world";
+import { Rope, type LengthRefusal } from "../classes/rope";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { Segment } from "../lib/segment";
 import { ShapeGeometry } from "../lib/shapeGeometry";
@@ -59,11 +64,23 @@ import {
   type LevelData,
 } from "./levelFormat";
 
-// The wrap-candidate list a chain solves against: nothing. Its two anchor bodies
-// are already the ends of every span, and `Rope.regeneratePath` never wraps a
-// span around the bodies that span starts and finishes on, so an empty scene is
-// exactly "hangs between its two bodies and touches nothing else".
+// The wrap-candidate list for a constraint that bends around nothing: a vine's
+// pair chain, or a `SceneChain` built by hand with no scene to give it. A rope's
+// two anchor bodies are already the ends of every span, and
+// `Rope.regeneratePath` never wraps a span around the bodies that span starts
+// and finishes on, so an empty scene is exactly "hangs between its two bodies
+// and touches nothing else". An AUTHORED chain is not built with this: see
+// `buildSceneChains`.
 export const NOTHING: PhysicsBody2D[] = [];
+
+// A body the chain phase pushed out of static geometry this frame, and the
+// push-outs that did it (real ones only - see `isRealPush`). What `settle`
+// hands each constraint, so a chain can measure how much of its over-length
+// those surfaces actually refuse.
+export interface BodyPush {
+  readonly body: RigidBody2D;
+  readonly pushedOutOf: readonly PushOut[];
+}
 
 // What the chain phase actually needs of a thing it solves: open a frame, take
 // a pass, say how far it still is from being satisfied, and name the bodies it
@@ -106,21 +123,30 @@ export interface SceneConstraint {
   // for (see `Rope.topologyCreditScale`). 1 for a constraint whose corrections
   // are all honest motion.
   readonly creditScale: number;
-  // End of the phase, with whether any body of this constraint had to be pushed
-  // out of the scenery.
-  settle(blocked: boolean): void;
+  // The geometry has just refused these bodies their share of the phase's
+  // correction (they were pushed back out of it): take that share off the
+  // bodies it can still go to, with these held immovable. For a rope that is
+  // the winch's own mechanism (`Rope.solveLengthHolding`); a constraint with
+  // no length to re-solve does nothing.
+  resolveHolding(held: ReadonlySet<RigidBody2D>): void;
+  // End of the phase, with every body of this constraint that had to be pushed
+  // out of the scenery and what pushed it. Empty when nothing was. May be
+  // called more than once a frame (`BallLevel` settles the scene set twice, once
+  // on its own and once after the coupled sweep), and what it records about the
+  // frame accumulates across the calls.
+  settle(pushes: readonly BodyPush[]): void;
 }
 
 export class SceneChain implements SceneConstraint {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
   readonly color: string | null;
-  // What this chain's spans may bend around. `NOTHING` for a scenery chain, and
-  // that is what makes a per-chain solve an order cheaper than the ball's (no
-  // wrap path to regenerate). A vine's load-bearing span passes the level's
-  // static bodies instead, because tension routed past a corner has to go
-  // round it (see `level/vines.ts`); it is an optional list rather than a
-  // sibling class so `sweepChains` reads `rope.overLength` and works unchanged.
+  // What this chain's spans may bend around: the level's wrappable bodies for
+  // an authored chain (see `buildSceneChains`), a vine's for its load-bearing
+  // span (`level/vines.ts`), `NOTHING` for a constraint built with no scene.
+  // The scan is broadphased (`World.segmentCandidates`), so handing a chain the
+  // whole level costs a tree walk per span rather than a segment test per
+  // shape.
   readonly wrapBodies: PhysicsBody2D[];
 
   // Every body whose transform is an input to this chain's solve: the two end
@@ -138,6 +164,15 @@ export class SceneChain implements SceneConstraint {
   // and this is what stops the converged chains in it paying a full rope solve
   // per sweep for the privilege of doing nothing.
   private lastSolveWasIdentity = false;
+  // Whether any settle THIS frame found geometry refusing this chain a shorter
+  // path. Accumulated rather than overwritten because the ball level settles
+  // the set twice a frame - once on its own, once after the coupled sweep -
+  // and the second settle, finding nothing left to push, said "not blocked"
+  // over the first's answer, so a lease against a live block was released
+  // while the ball was hooked and re-earned while it was not: a weight on a
+  // wedged plank's chain crept up the chain while the ball hung from the post
+  // and back down when it let go (`session-527f`).
+  private blockedThisFrame = false;
 
   // `length` null = the path length as built, through `wraps` - "taut as
   // authored" for a chain routed over its wrap points as much as for one
@@ -163,6 +198,21 @@ export class SceneChain implements SceneConstraint {
   // Open this chain's frame. Once per frame, however many solve passes follow.
   beginFrame(delta: number): void {
     this.rope.beginFrame(delta);
+    // Open the frame's geometry-push account (see `Rope.noteGeometryPush`) so
+    // every lease raise this frame - the one each solve pass makes on its own
+    // and the settle's - is bounded by what geometry actually pushed. Left
+    // unopened, a pass's own raise is unbounded and a sweep that ends short of
+    // convergence leases its whole residual as if a surface had refused it.
+    this.rope.noteGeometryPush(0);
+    this.blockedThisFrame = false;
+  }
+
+  resolveHolding(held: ReadonlySet<RigidBody2D>): void {
+    let holdsOne = false;
+    for (const node of this.rope.path()) {
+      if (held.has(node.contact.obj as RigidBody2D)) holdsOne = true;
+    }
+    if (holdsOne) this.rope.solveLengthHolding(held);
   }
 
   // One solve pass. Called after `World.integrate`, so the constraint has the
@@ -224,9 +274,34 @@ export class SceneChain implements SceneConstraint {
   // by the geometry one of its bodies rests against - the winch stall - and
   // re-basing lets the constraint settle there instead of winding up against
   // the block.
-  settle(blocked: boolean): void {
-    this.rope.absorbBlockedLength();
-    this.rope.noteBlockedByGeometry(blocked);
+  //
+  // "Held" is measured, in the ball's phase's words (see
+  // `Rope.absorbBlockedLength`): against what the pushing surfaces make
+  // UNREACHABLE, and bounded by how far they pushed. A push-out along a normal
+  // does not refuse a correction that was not along that normal; it deflects
+  // it. Leased as if it had been refused, a weight hung beside a post on a
+  // chain that pulled it up and INTO the post had the post hand back the
+  // into-post share every frame, that share leased, the loosened constraint
+  // let the weight settle a little lower, and the next frame paid the same
+  // share again: 0.5 mm of chain a frame, 24 cm over 480 frames, read from the
+  // game as the chain growing while the weight slid down the post
+  // (`session-497f`). Measured against what the post refuses - nothing, since
+  // sliding up it shortens the span - the residual is next frame's ordinary
+  // length error and the weight hangs where its chain says.
+  settle(pushes: readonly BodyPush[]): void {
+    const refusals: LengthRefusal[] = [];
+    let pushed = 0;
+    for (const p of pushes) {
+      refusals.push({ body: p.body, normals: p.pushedOutOf.map((o) => o.normal) });
+      for (const o of p.pushedOutOf) pushed += o.depth;
+    }
+    this.rope.noteGeometryPush(pushed);
+    const refused = this.rope.absorbBlockedLength(refusals);
+    // Whether geometry actually refused the chain this frame - only where the
+    // surfaces stand in the way of a shorter chain. Next frame's `beginFrame`
+    // reads it to decide whether the lease may be handed back.
+    if (refused > 0) this.blockedThisFrame = true;
+    this.rope.noteBlockedByGeometry(this.blockedThisFrame);
   }
 }
 
@@ -379,8 +454,6 @@ export function stepSceneChains(
   sweepChains(chains, extra, delta);
   settleChainBodies(chains, before, world, delta);
 }
-
-const isStatic = (body: PhysicsBody2D): boolean => body instanceof StaticBody2D;
 
 // The share of this frame's chain-phase displacement each body may be paid
 // velocity for: the lowest `topologyCreditScale` among the chains that hold it
@@ -589,13 +662,19 @@ export function refuseRopeBodiesIntoStatics(
   return blocked;
 }
 
+//
+// Returns the bodies the geometry pushed: a caller whose own rope also runs
+// over one of them (the ball's chain anchored to a chain-held plank) re-solves
+// its length with those held, so its far end takes the correction the pushed
+// body could not (`Rope.solveLengthHolding`).
 export function settleChainBodies(
   chains: readonly SceneConstraint[],
   before: readonly ChainBodyState[],
   world: World,
   delta: number,
-): void {
-  const blockedBodies = new Set<RigidBody2D>();
+): Set<RigidBody2D> {
+  const pushes = new Map<RigidBody2D, PushOut[]>();
+  const pushedOutOfBy = new Map<RigidBody2D, PushOut[]>();
   const scales = creditScales(chains);
   for (const s of before) {
     // Out of the SCENERY, and not out of other dynamic bodies. A chain-hung body
@@ -606,8 +685,50 @@ export function settleChainBodies(
     // for having moved. `steered-hung-hold` is the case: the ball rests on a
     // chain-hung slab, and a push-out that counted the ball shoved the slab out
     // from under it every frame and rode the credit 15 m across the level.
-    const pushedOutOf = world.depenetrateRigid(s.body, 2, isStatic);
-    if (pushedOutOf.length > 0) blockedBodies.add(s.body);
+    //
+    // And out of them AT THE POINT the surface met the body, in rotation as
+    // much as in translation (`World.depenetrateRigidAtPoints`), which is how
+    // the ball's own path bodies have been closed since `session-133f` and
+    // was left as the open half of `chain-hung-jam`. A chain hauls a long body
+    // by one end, and the correction is a turn about its centre far more than
+    // it is a move: a 91 kg plank across two feet, the ball hooked under its
+    // near end and the chain snapping taut, was turned 0.016 rad and moved
+    // 14 mm down in one solve - 35 mm at the hauled end, 7 mm UP at the far
+    // one. The translation push-out then lifted the whole plank by the near
+    // end's depth, 23 mm, far end included, and the phase's books read that as
+    // 9 mm of upward motion the plank had earned and a turn it had kept:
+    // -0.7 m/s and -0.7 rad/s on the first frame, -2.2 and -1.7 on the next,
+    // -3.9 and -3.0, -5.1 and -4.0, until at -6.5 m/s and -6.7 rad/s the plank
+    // left both feet and cartwheeled off its own chain (`session-193f`, read
+    // from the game as pulling the plank down making it fly up). Resolved at
+    // the point, the foot turns the plank back out the way the haul turned it
+    // in - the same effective-mass split the solve wrote it with - and the
+    // frame's net displacement is the nothing a plank on two feet actually did.
+    const pushedOutOf = world.depenetrateRigidAtPoints(s.body, 4);
+    pushedOutOfBy.set(s.body, pushedOutOf);
+    // What the constraints hear of: the pushes that were pushes, not the float
+    // noise of a body left at exactly zero depth (see `PUSH_OUT_MIN_DEPTH`).
+    const real = pushedOutOf.filter(isRealPush);
+    if (real.length > 0) pushes.set(s.body, real);
+  }
+  // The share of the correction a pushed body could not take is still owed,
+  // and it goes to whatever else the constraint holds: the same constraint
+  // solved once more with the pushed bodies held immovable, which is the
+  // winch's own mechanism and what the ball's phase does for its own anchor.
+  // Without it the refused share stood as over-length every frame - a plank
+  // wedged in a corner, hauled 8 mm into it and pushed 8 mm back out, frame
+  // after frame, while the weight on the chain's other end that could have
+  // taken every millimetre of it hung 9 mm low - and the settle below, asked
+  // what the corner refused, honestly answered "all of it" and leased it:
+  // 7.5 mm of chain a frame, the weight creeping down its chain for as long as
+  // the plank stayed wedged (`session-527f`). Before the credit, so the move
+  // is paid for over the phase like every other.
+  if (pushes.size > 0) {
+    const held = new Set(pushes.keys());
+    for (const chain of chains) chain.resolveHolding(held);
+  }
+  for (const s of before) {
+    const pushedOutOf = pushedOutOfBy.get(s.body) ?? [];
     // Discounted the same way each solve discounts its own credit, and it has to
     // be carried here because this REPLACES those credits rather than adding to
     // them: a length error the path's own topology put there is corrected in
@@ -629,18 +750,21 @@ export function settleChainBodies(
     );
     refuseIntoSurfaces(s, pushedOutOf, delta);
   }
-  // ...and then each constraint is told whether the geometry was in its way,
-  // which is what a chain uses to re-base a length it could not reach (see
-  // `SceneChain.settle`). Per constraint and not per scene: a lease released
-  // into a live block spends every frame hauling a body into a surface that is
-  // already saying no, and one blocked chain is no reason to hold another's.
+  // ...and then each constraint is told which of its bodies the geometry
+  // pushed, and how, which is what a chain uses to measure the length it could
+  // not reach (see `SceneChain.settle`). Per constraint and not per scene: a
+  // lease released into a live block spends every frame hauling a body into a
+  // surface that is already saying no, and one blocked chain is no reason to
+  // hold another's.
   for (const chain of chains) {
-    let blocked = false;
+    const own: BodyPush[] = [];
     chain.eachBody((body) => {
-      if (blockedBodies.has(body)) blocked = true;
+      const pushedOutOf = pushes.get(body);
+      if (pushedOutOf) own.push({ body, pushedOutOf });
     });
-    chain.settle(blocked);
+    chain.settle(own);
   }
+  return new Set(pushes.keys());
 }
 
 // A rope swept alongside the scene set because it shares a body with it: the
@@ -1098,11 +1222,18 @@ export function snapToCorner(
 // built nothing (decoration, a lone light), or the same body at both ends (which
 // has nothing to constrain) is dropped rather than fed to a solver that has no
 // meaning for it.
+//
+// Every chain is solved against the level's wrappable bodies (`wrapBodies`:
+// the statics and the authored rigid bodies, areas and pass-through scenery
+// excluded), which is the scene the ball's chain scans. It is the one list,
+// shared by every chain rather than copied per chain, and it is the level's
+// geometry and not the play space: the avatar, its hook and anything spawned
+// in play are never in it.
 export function buildSceneChains(data: LevelData, built: BuiltBodies): SceneChain[] {
   const anchors = collectAnchorSites(built);
   const chains: SceneChain[] = [];
   for (const c of data.chains ?? []) {
-    const chain = buildOne(c, anchors);
+    const chain = buildOne(c, anchors, built.wrapBodies);
     if (chain) chains.push(chain);
   }
   return chains;
@@ -1160,7 +1291,11 @@ export function anchorWorldPoint(site: AnchorSite): Vec2 {
   return body.globalPosition.add(local.pos.rotated(body.globalRotation));
 }
 
-function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | null {
+function buildOne(
+  c: ChainData,
+  anchors: Map<number, AnchorSite>,
+  scene: PhysicsBody2D[],
+): SceneChain | null {
   const siteA = anchors.get(c.a);
   const siteB = anchors.get(c.b);
   if (!siteA || !siteB) return null;
@@ -1213,11 +1348,14 @@ function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | 
     const next = i === runs.length - 1 ? tieB.point : runs[i + 1]!.ties[0]!.point;
     for (const w of authoredWrap(run.obj, run.ties, prev, next)) wraps.push(w);
   });
-  // ...and its body joins the set this chain is solved against, once each,
-  // so the corner is re-found as the bodies move and a sibling corner of the
-  // same body catches the chain the way it would catch the ball's.
-  const wrapBodies: PhysicsBody2D[] = [];
-  for (const v of vias) if (!wrapBodies.includes(v.obj)) wrapBodies.push(v.obj);
+  // ...and its body is in the set this chain is solved against - the level's
+  // wrappable bodies, which every solid body that builds is in - so the corner
+  // is re-found as the bodies move and a sibling corner of the same body
+  // catches the chain the way it would catch the ball's. A wrap point on a
+  // body that is NOT in that set (pass-through scenery) is a node the scan
+  // could never re-find; it is seeded all the same and culled the first time
+  // the chain pulls straight past it, which is what a wrap on a body the rope
+  // cannot hold means.
 
   // Absent length = exactly taut as authored, which is what dragging a chain out
   // between two bodies in the editor means - measured along the path as the
@@ -1228,12 +1366,5 @@ function buildOne(c: ChainData, anchors: Map<number, AnchorSite>): SceneChain | 
   // that predates wrap points replays bit-for-bit against the direct one.
   const length =
     c.length ?? (wraps.length > 0 ? null : tieA.point.distanceTo(tieB.point));
-  return new SceneChain(
-    start,
-    end,
-    length,
-    c.color ?? null,
-    wrapBodies.length > 0 ? wrapBodies : NOTHING,
-    wraps,
-  );
+  return new SceneChain(start, end, length, c.color ?? null, scene, wraps);
 }

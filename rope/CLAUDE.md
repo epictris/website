@@ -2313,16 +2313,20 @@ There is deliberately **no new physics**: `Rope` already models a rope between t
 What a chain is **not** is collision geometry: nothing stands on it and another rope does not wrap it.
 Both would need the chain to be a body per link, which is a different mechanism.
 
-A chain is **scenery**: drawn behind the level's geometry at 55% alpha, and solved against **nothing** - `SceneChain.physicsStep` hands the rope an empty candidate list, so it hangs, swings and hauls its own two bodies and passes through everything else.
-The one opt-in is a **wrap point** (below), which puts the body it sits on into that list and nothing else.
-The editor draws it dashed and `cli render` dashes it too, so a snapshot never reads a chain lying across a body as a chain caught on it.
+A chain is **scenery** in what may touch it and **level geometry** in what it bends around.
+It is drawn behind the level's geometry at 55% alpha, and its spans are solved against the level's wrappable bodies - the statics and the authored rigid bodies, `BuiltBodies.wrapBodies`, the same scene the ball's chain scans - so a chain that swings across a post catches on the post's corner and hangs its load from there, exactly as the ball's chain would.
+What it is **not** solved against is the play space: the avatar, its hook and anything spawned in play are never in that list, so nothing the player does can snag on a chain.
+The editor draws it dashed and `cli render` dashes it too, which is what tells a scene chain from the ball's in a snapshot.
 
-There was briefly a second, `foreground` plane - in the play space, drawn over the geometry and solved against the whole scene, so the span wrapped corners and the avatar and its hook could be caught by it - and it was **removed**.
-It bought very little that a rigid body on a chain does not already buy, and it charged for that by making every chain a thing the player might silently snag on, and every wrap-and-corner bug in the solver reachable from a piece of decoration.
+For a while a chain was solved against **nothing** but the bodies its wrap points named - "hangs between its two bodies and passes through everything else", the empty list being exactly what `Rope.regeneratePath` already does for a span's own two end bodies.
+That read as the chain being drawn through a pillar it plainly ran into: `session-497f` hung a weight beside a post on a chain over a pulley, the weight fell past the post's top, and the chain cut straight through the post instead of bending over its corner and hanging the weight from there.
+`cli contacts` `chain-post-catch` is the detector, and the scan is broadphased (`World.segmentCandidates`), so handing every chain the whole level costs a tree walk per span rather than a segment test per shape.
+
+There was briefly a `foreground` plane before that - in the play space, drawn over the geometry and solved against the whole scene, avatar included, so the player and the hook could be caught by it - and it was **removed**.
+It bought very little that a rigid body on a chain does not already buy, and it charged for that by making every chain a thing the player might silently snag on.
 If a chain in the play space is ever wanted again, note that the plane has to stay *one* decision and not two: what a chain is drawn in front of and what it is allowed to touch are the same statement, because a chain hanging visibly behind the level that still snagged the player is a lie the level tells.
 
-The empty candidate list is exactly right rather than a special case: `Rope.regeneratePath` never wraps a span around the bodies that span starts and ends on, so "the scene is empty" and "only the two anchors exist" are the same solve.
-It is also why `Rope.physicsStep` derives its **own** set of bodies to pay for the correction (`moved` = the scene it was handed ∪ the bodies on its path) rather than crediting the list it was given: a chain is handed none of the scene, and a body whose position the solve corrects but whose velocity nothing credits keeps every frame's gravity - a wrecking ball on a chain sat perfectly still at **119 m/s** by the twelfth second, waiting for the first frame that gave it slack.
+`Rope.physicsStep` derives its **own** set of bodies to pay for the correction (`moved` = the bodies on its path) rather than crediting the list it was given: the scene a chain is handed is what it may wrap, not what it moves, and a body whose position the solve corrects but whose velocity nothing credits keeps every frame's gravity - a wrecking ball on a chain sat perfectly still at **119 m/s** by the twelfth second, waiting for the first frame that gave it slack.
 
 The chain set is solved as **one system**, not as a list of independent ropes: `stepSceneChains` opens every chain's frame once and then sweeps the set, alternating direction, until no chain is more than `CHAIN_TOLERANCE` (5 mm) over its length or `MAX_CHAIN_SWEEPS` (64) is spent.
 Each chain is a full PBD solve that writes positions and credits itself velocity, so a single pass in list order is Gauss-Seidel with one iteration - the chain that solves first moves the bodies, the next one gets the last word, and the residual is whatever the earlier chains asked for and did not get.
@@ -2370,7 +2374,7 @@ The `funded` bound on the into-surface refusal is `BallLevel`'s and is there for
 Two details are load-bearing.
 The push-out counts **statics only**: a chain-hung body is as often a platform as a weight, and an overlap with something resting on it is a pair the next `integrate` solves for both sides - resolving it here moves the wrong body and then pays it for having moved, which shoved the slab out from under the ball in `steered-hung-hold` and rode the credit 15 m across the level.
 And the credit carries `topologyCreditScale`, because this **replaces** the per-pass credits rather than adding to them: a scene chain wraps nothing, but its span is still re-resolved around the corner of the body it is bolted to, and dropping the scale let this rig's span grow 46 cm in one frame as the plank turned under its own anchor and threw it off at 13.9 m/s.
-`cli contacts` `chain-hung-jam` is the case, and what it asserts is the **compounding** (peak 6.6 m/s against 14.5) rather than the tunnel, since a runaway is what a tunnel is made of.
+`cli contacts` `chain-hung-jam` is the case, and what it asserts is the **compounding** (peak 4.4 m/s against 14.5; 6.6 with the translation push-out described below) rather than the tunnel, since a runaway is what a tunnel is made of.
 
 Still open there: a hard jam ends 15 s at ~1 m/s rather than at rest, and `energy-gained` still fires on one.
 
@@ -2387,6 +2391,32 @@ The share of the correction a blocked anchor refuses is still the ball's to take
 `cli contacts` `plank-anchor` is the case: the recording's own posts and plank, the ball dropped for twelve frames and re-hooked so the chain snaps taut at 2.8 m/s, and the plank must never stand in a post, never tip, and end on both posts where it began (105 mm, 3.1 rad and 123 m of fall on the old physics, with the ball slung at 49 m/s).
 The chain's correction is part rotation and the push-out that answers it is a translation, so the difference is credit nothing takes back - the same fight one derivative up.
 An angular push-out is what that wants, and it belongs with the ball's phase, which has the identical hole.
+
+The scene settle had that hole too, for every body it closes, and `session-193f` fell through it.
+`settleChainBodies` pushed a chain-held body out of the scenery by a **translation** along the deepest normal (`World.depenetrateRigid`), which for a long body hauled by one end is the wrong answer and a compounding one.
+That session is a 91 kg plank on two feet, held by a scene chain at one end, the ball hooked to its underside while falling at 3.5 m/s.
+The solve turned the plank 0.016 rad and moved it 14 mm down - 35 mm down at the hauled end, 7 mm **up** at the far one - and the foot's translation push-out then lifted the whole plank by the near end's depth, far end included, which the phase's books read as upward motion earned and a turn kept: -0.7 m/s and -0.7 rad/s on the snap frame, -2.2 and -1.7 the next, -3.9 and -3.0, -5.1 and -4.0, until at -6.5 m/s and -6.7 rad/s the plank left both feet and cartwheeled off on its own chain, reported as pulling the plank down making it fly up.
+HEALTHY throughout: the energy monitor is disarmed while the aim turns the ball, and the rest of the invariants are about the ball.
+The settle now pushes out at the point and through the body's inertia (`World.depenetrateRigidAtPoints`, as `refuseRopeBodiesIntoStatics` already did), so the foot turns the plank back out the way the haul turned it in - the same effective-mass split the solve wrote it with - and the frame's net displacement is the nothing a plank on two feet actually did; the snap frame ends at 0.03 m/s and 0.03 rad/s.
+A scene-held body the feet refused is then handed to the ball's chain as **blocked**, so the ball takes the correction its anchor could not (`Rope.solveLengthHolding`, as for a path body no scene chain holds) and is arrested by the plank instead of left falling under it.
+`cli contacts` `plank-haul` is the case - `plank-anchor`'s rig with a slack scene chain on the plank's end, which is the whole difference between the two - and it is red with the translation push-out put back.
+
+What the settle **leases** is measured too, in the ball's phase's words (see `Rope.absorbBlockedLength` and `session-483f`): against what the pushing surfaces make unreachable, and bounded by how far they pushed.
+It used to lease the whole residual on the strength of any push at all.
+A push-out along a normal does not refuse a correction that was not along that normal, it deflects it: `session-497f`'s weight, hung beside the post on the chain that had just caught the post's corner, was pulled up and **into** the post, the post handed back the into-post share every frame, that share was leased, the loosened constraint let the weight settle a little lower, and the next frame paid the same share again - 0.5 mm of chain a frame, 24 cm over 480 frames, read from the game as the chain growing while the weight slid down the post.
+Sliding up the post shortens the span, so nothing is refused, the residual is next frame's ordinary length error, and the weight hangs where its chain says.
+`Rope.absorbBlockedLength` takes a refusal per pushed body now, since a scene chain has two ends and either may be the one standing in a surface, and the same account bounds every raise in the frame: `SceneChain.beginFrame` opens the geometry-push account at zero, so a sweep that ends short of convergence leaves its residual as residual rather than leasing it as if a surface had refused it.
+The push floor is the engine's `PUSH_OUT_MIN_DEPTH` (`engine/world.ts`, shared with `BallLevel`), so a float-noise depth decides nothing here either.
+`chain-post-catch` covers this half as well, and is red with the unmeasured lease put back.
+
+What the pushing surfaces refuse a body is still **owed**, and it goes to whatever else the chain holds: after the push-out the settle re-solves each affected chain with the pushed bodies held immovable (`SceneConstraint.resolveHolding`, which for a chain is `Rope.solveLengthHolding` - the winch's own mechanism, and what the ball's phase already did for its own anchor).
+Without that the refused share stood as over-length every frame, and the measured lease was honestly wrong about it: `session-527f`'s plank had fallen off its feet and lay wedged in the corner between the post and its foot, its chain running over the post's corner to the weight hanging free on the far side, and every frame the solve hauled the plank's share of the weight's gravity step 8 mm into the corner, the corner pushed it 8 mm back, and the settle, asked what the corner refused, said "all of it" - the plank's span is wedged shut - and leased it, though the weight could have taken every millimetre.
+7.5 mm of chain a frame, the weight creeping down its chain for as long as nothing was hooked.
+Hooked to the post it crept **up** instead, and that is the other half: the ball level settles the scene set twice a frame (once alone, once after the coupled sweep), the second settle found nothing left to push and overwrote the first's "blocked" with "not blocked", and the lease was handed back at the release rate into a live block.
+A settle now records "blocked" for the frame cumulatively (`SceneChain.blockedThisFrame`, reset in `beginFrame`).
+`cli contacts` `chain-wedged-end` is the case, on both legs - the set stepped alone, and inside a `BallLevel` with the ball hooked to a static - and both legs are red with the holding re-solve out (342 mm leased, the weight 243 mm down its chain in five seconds).
+The accumulation has no leg of its own: with the refused share re-solved there is no lease for a second settle to release, so it is a correctness fix the case only covers with the re-solve out as well.
+The arena's `session-2504f` was the same ratchet by another door: its 140 kg block sliding on a slope at the end of the crane chain leased 2.2 m over 1400 frames, and the release of that lease then winched the block up the slope - 24 J over 32 unforced frames, `energy-gained` at three points of the run - which the holding re-solve closes too, since the crane's hub takes the share the slope refuses the block.
 
 #### Anchors
 
@@ -2431,7 +2461,7 @@ A chain may be **routed over** geometry: `ChainData.via` is an ordered list of a
 That is the whole of the format: a wrap point is a point that belongs to a body and rides it, and the chain is still the only thing in a level that is a relation.
 It exists because the scan cannot find such a route - a chain hung from a hub, up over a beam and down to a load is, as a straight line from hub to load, nowhere near the beam - and a level author has to be able to say it.
 
-At load (`buildOne` in `level/chains.ts`) each wrap point becomes an **ordinary `RopeWrap`** handed to the `Rope` constructor, and its body joins the chain's wrap-candidate list, so from then on it is exactly the wrap the ball's chain finds by scanning: re-resolved as the bodies move, slid along a circle to its tangent point, and **let go** by `cullDetachedNodes` the moment the chain pulls straight past it, which is what a chain over a beam does.
+At load (`buildOne` in `level/chains.ts`) each wrap point becomes an **ordinary `RopeWrap`** handed to the `Rope` constructor, and its body is in the chain's wrap-candidate list as every wrappable body of the level is, so from then on it is exactly the wrap the ball's chain finds by scanning: re-resolved as the bodies move, slid along a circle to its tangent point, and **let go** by `cullDetachedNodes` the moment the chain pulls straight past it, which is what a chain over a beam does.
 There is deliberately no pinned node kind: the same machinery, with the route seeded rather than discovered.
 Three things about the seeding are load-bearing.
 The point is snapped to the **nearest corner** of its piece (`snapToCorner`; the rim, for a circle), because a corner is what a rope bends around - a node on the middle of a face is one the rope hangs from with nothing under the bend.
