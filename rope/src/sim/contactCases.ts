@@ -3622,6 +3622,142 @@ function casePointBlankTurn(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// wound-tight - a ball that winds its whole chain onto itself comes to rest
+// against its anchor body with the anchor on its rim, nothing over length,
+// and the steering latched.
+//
+// This is `session-611f`'s endgame: a ball wound along the floor into a heavy
+// slab it is anchored to, the chain all coil, the anchor exactly where the ball
+// touches the slab. There the unwind's search stood still - `used 0%` for
+// forty frames - while the aim went on winding at the full frame's turn, and
+// the chain ran 26 cm over its 1.1 m. The coil's nodes ride the body, and its
+// last one is the point the rope leaves the rim at: a tangent fixed in the
+// world by the anchor, not a material point. Riding the body, that point slid
+// round the rim away from an anchor sitting on it, the chord back to the anchor
+// grew with every candidate rotation in either direction, and the search found
+// nothing to improve. Now every candidate is measured with the coil brought to
+// it (`syncCoil` at each, and a rim-projected leaving point once the anchor is
+// on or inside the circle), so a turn back really does shorten the path.
+//
+// The rig: a 60 cm steel cube on the floor, the ball a metre to its left,
+// thrown at the cube's face at the ball's own resting height so the anchor is
+// where the ball will touch, then the aim held a little ahead of the loop so the
+// ball winds itself along the floor and into the face. Once there, the ball
+// rests on the floor with the anchor on its rim and the chain at its length.
+// On the tree this was found on, the search's failure let the aim keep winding
+// for six frames and the winch ride the ball 85 mm up the face, where it hung
+// with 5.7 mm over length on a 2.5 mm lease.
+function caseWoundTight(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  const level = new BallLevel({
+    player: { x: -160, y: -20, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 20,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 2000, h: 40 } }],
+      },
+      {
+        kind: "rigid",
+        x: 0,
+        y: -30,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", material: "steel", shape: { kind: "rect", w: 60, h: 60 } }],
+      },
+    ],
+  } as RawLevelData);
+  const slab = level.bodies.find(
+    (b): b is RigidBody2D => b instanceof RigidBody2D && b !== level.ball,
+  )!;
+  let prev = emptyFrameInput();
+  const feed = (fire: boolean, aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(fire, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  const anchored = (): boolean => level.ball.chain?.end.contact.obj === slab;
+  const rim = level.ball.radius;
+  // Settle on the floor, then throw at the face at the ball's own height and
+  // hold the aim on the anchor while the catch settles.
+  for (let f = 0; f < 30; f++) feed(false, Vec2.ZERO);
+  const restY = level.ball.globalPosition.y;
+  for (let f = 0; f < 40; f++) {
+    feed(true, anchored() ? level.ball.chain!.end.contact.globalPosition : new Vec2(-0.3, restY));
+  }
+  check("the chain is anchored to the slab", anchored());
+  const anchor = level.ball.chain!.end.contact.globalPosition;
+  check(
+    `at the ball's resting height (${(Math.abs(anchor.y - restY) * 1000).toFixed(1)} mm off, under 5)`,
+    Math.abs(anchor.y - restY) < 0.005,
+  );
+
+  // The aim half a radian ahead of the loop, re-read against the loop every
+  // frame so the steering never reaches it: a steady wind-up along the floor.
+  const AIM_ERROR = 0.5;
+  let worstOver = 0;
+  let latchedAt = -1;
+  let turned = 0;
+  let previous = level.ball.globalRotation;
+  for (let f = 0; f < 300; f++) {
+    const at = level.ball.globalPosition;
+    feed(true, at.add(level.ball.loopDirection.rotated(AIM_ERROR).mul(5)));
+    const chain = level.ball.chain!;
+    if (latchedAt < 0 && level.ball.windStall !== 0) latchedAt = f;
+    // The last half: the ball has arrived, and what stands over length there is
+    // the unwind's failure and nothing else.
+    if (f < 150) {
+      previous = level.ball.globalRotation;
+      continue;
+    }
+    worstOver = Math.max(worstOver, chain.getCurrentLength() - chain.maxRopeLength);
+    turned += Math.abs(level.ball.globalRotation - previous);
+    previous = level.ball.globalRotation;
+  }
+  const chain = level.ball.chain!;
+  const at = level.ball.globalPosition;
+  const anchorOffRim = chain.end.contact.globalPosition.distanceTo(at) - rim;
+  const touching = level.world.frameContacts.some(
+    (c) => (c.a === level.ball && c.b === slab) || (c.a === slab && c.b === level.ball),
+  );
+  const spool = Math.abs(chain.lengthPerRadian(level.ball));
+  check("the ball ends resting against the slab", touching);
+  check(
+    `on the floor (${(Math.abs(at.y - restY) * 1000).toFixed(1)} mm off its resting height, under 2)`,
+    Math.abs(at.y - restY) < 0.002,
+  );
+  check(
+    `with the anchor on its rim (${(anchorOffRim * 1000).toFixed(1)} mm off, under 2)`,
+    Math.abs(anchorOffRim) < 0.002,
+  );
+  check(
+    `the chain never stands more than 1 mm over its length once wound (${(worstOver * 1000).toFixed(2)} mm)`,
+    worstOver < 0.001,
+  );
+  check(`the steering latched (frame ${latchedAt})`, latchedAt >= 0);
+  check(`and the ball did not turn again (${turned.toFixed(4)} rad over the last 150 frames)`, turned < 1e-3);
+  check(
+    `the spool reads the rim (${(spool / rim).toFixed(2)} of it, over 0.9)`,
+    spool > 0.9 * rim,
+  );
+
+  return ok("wound-tight - a ball wound up to its anchor rests with the anchor on its rim", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // converged-aim-hang - a ball hanging against a chain-hung weight, its aim
 // reached, still turns when the aim moves on.
 //
@@ -5846,6 +5982,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseHookSparks());
   results.push(caseBallSparks());
   results.push(casePointBlankTurn());
+  results.push(caseWoundTight());
   results.push(caseConvergedAimHang());
   results.push(caseHookSeam());
   results.push(casePassableBody());

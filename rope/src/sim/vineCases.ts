@@ -1147,14 +1147,27 @@ function caseBallSteer(): VineResult {
 
   // The sweep starts where the loop already points, so what is measured is the
   // steering rather than the transient of catching up to a jump.
+  //
+  // And it reverses: half a turn on, a full turn back, a full turn on again, at
+  // the same hand speed throughout and never more than half a turn from where
+  // the loop began. The chain here is 1.18 m and the ball's rim 1.13 m round,
+  // so a sweep that only ever went one way had wound the whole chain onto the
+  // ball inside 240 frames and hauled it up onto the link it hangs from. From
+  // there a turn winds chain the ball does not have, and the unwind refuses it
+  // whole, as it must (`session-611f`, `Rope.unwindOverLength`): the last 240
+  // frames were measuring the wound-out endgame, not the steering, and read as
+  // steering only while the coil sync let the link pass INSIDE the ball and
+  // left a stale coil riding it.
   const start = level.ball.loopDirection.angle();
+  const RATE = (Math.PI * 2) / 240;
+  const sweep = (f: number): number => (f < 120 ? f : f < 360 ? 240 - f : f - 480) * RATE;
   let worstLag = 0;
   let pinned = 0;
   let turned = 0;
   let previous = level.ball.globalRotation;
   const FRAMES = 600;
   for (let f = 0; f < FRAMES; f++) {
-    const angle = start + (f / 240) * Math.PI * 2;
+    const angle = start + sweep(f);
     const aim = level.ball.globalPosition.add(
       new Vec2(Math.cos(angle), Math.sin(angle)).mul(2),
     );

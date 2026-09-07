@@ -535,13 +535,30 @@ export class Rope {
   // fixed one. For a circle that comes to ±radius per radian, since the rope
   // leaves tangentially, but the sum is written generally so a body the rope
   // wraps mid-path measures the same way.
+  //
+  // The coil is the exception to "nodes ride the body". Its last node is the
+  // point the rope leaves the rim at, which is geometry - a tangent from the
+  // next node, fixed in the world while the body turns under it - and only the
+  // material start point turns. So the span leaving the coil contributes
+  // nothing and the coil contributes exactly its radius, in the direction that
+  // winds (see `syncCoil` and `coilLengthPerRadian`). Read as a material span
+  // instead, the leaving span gives the same radius at first order while it is
+  // long enough to have a direction, and reads zero or either sign once the
+  // anchor has come down onto the rim (`session-611f`), which is the frame
+  // the unwind needs it most.
   lengthPerRadian(body: PhysicsBody2D): number {
     const centre = body.globalPosition;
+    const coil = this.leadingCoilRun();
+    const coilExit = coil.nodes > 0 ? this.wraps_[coil.nodes - 1]! : null;
     let rate = 0;
     for (const span of this.regenerateSpans()) {
       const fromOnBody = span.from.contact.obj === body;
       const toOnBody = span.to.contact.obj === body;
       if (fromOnBody === toOnBody) continue;
+      if (span.from === coilExit) {
+        rate += this.coilLengthPerRadian();
+        continue;
+      }
       const moving = fromOnBody ? span.span.start : span.span.end;
       const fixed = fromOnBody ? span.span.end : span.span.start;
       if (moving.distanceSquaredTo(fixed) < PX * PX * 1e-4) continue;
@@ -550,6 +567,19 @@ export class Rope {
       rate -= moving.directionTo(fixed).dot(new Vec2(-lever.y, lever.x));
     }
     return rate;
+  }
+
+  // How the coil's arc changes as its body turns by a radian with the rope's
+  // leaving point held: the start point sweeps a radius of rim, towards the
+  // leaving point when the turn is against the wrap and away from it when the
+  // turn is with it. `absoluteAngle` measures from the start point to the
+  // leaving point in the wrap direction, and a positive rotation carries the
+  // start point the way `Clockwise` (+1) sweeps, so that direction shortens a
+  // clockwise coil and lengthens a counter-clockwise one.
+  private coilLengthPerRadian(): number {
+    const shape = this.start_.contact.shape;
+    if (shape.shape.kind !== "circle" || this.coilWrapDir === null) return 0;
+    return -(this.coilWrapDir as number) * shape.shape.radius;
   }
 
   // Give the frame's remaining over-length back to `body`'s spin, and only then
@@ -612,11 +642,27 @@ export class Rope {
     const startRotation = body.globalRotation;
     const lowRotation = Mathf.min(startRotation, rotationAtFrameStart);
     const highRotation = Mathf.max(startRotation, rotationAtFrameStart);
+    // Every candidate is measured with the coil brought to it. The coil's nodes
+    // are stored in the body's frame and so ride its rotation, which is right
+    // for every other node on the body and wrong for the coil's last one: that
+    // is the point the rope leaves the rim at, a tangent fixed in the world by
+    // the next node, and turning the body under it changes the ARC and not the
+    // point (`syncCoil`). Riding the body instead, the leaving point slid round
+    // the rim away from an anchor sitting on it and the chord back to the
+    // anchor grew with every candidate in either direction, so the search
+    // found nothing to improve and stood still while the winding it was there
+    // to refuse went on at the full frame's turn: `used 0%` for forty frames
+    // and 26 cm over length on a 1.1 m chain (`session-611f` f250-290).
+    const excessAt = (rotation: number): number => {
+      body.globalRotation = rotation;
+      this.syncCoil();
+      return this.calculateRopePathLength() - this.constraintLength - forgive;
+    };
     let bestRotation = startRotation;
-    let bestExcess = this.calculateRopePathLength() - this.constraintLength - forgive;
+    let bestExcess = excessAt(startRotation);
 
     for (let i = 0; i < Rope.UNWIND_ITERATIONS && bestExcess > 0; i++) {
-      body.globalRotation = bestRotation;
+      excessAt(bestRotation);
       const rate = this.lengthPerRadian(body);
       if (Math.abs(rate) < Rope.MIN_SPOOL_RATE) break;
       let step = -bestExcess / rate;
@@ -624,8 +670,7 @@ export class Rope {
       for (let t = 0; t < Rope.UNWIND_BACKTRACKS; t++, step *= 0.5) {
         const candidate = Mathf.clamp(bestRotation + step, lowRotation, highRotation);
         if (candidate === bestRotation) break;
-        body.globalRotation = candidate;
-        const excess = this.calculateRopePathLength() - this.constraintLength - forgive;
+        const excess = excessAt(candidate);
         if (excess < bestExcess) {
           bestRotation = candidate;
           bestExcess = excess;
@@ -636,7 +681,7 @@ export class Rope {
       if (!improved) break;
     }
 
-    body.globalRotation = bestRotation;
+    excessAt(bestRotation);
     // What the search did with the window it was given: a third of the window
     // unused with centimetres of residual over-length standing is a stalled
     // search rather than a chain that will not unwind (`session-477f`), and it
@@ -1845,16 +1890,29 @@ export class Rope {
     const centre = shape.globalPosition;
     const radius = shape.shape.radius;
     const exitTowards = (this.wraps[runLength] ?? this.end).contact.globalPosition;
-    // No tangent exists to a point inside the circle — a degenerate frame, and
-    // not one to re-derive an angle from. Leave the coil as it stands.
-    if (radius <= 0 || exitTowards.distanceTo(centre) <= radius) return;
+    const exitDistance = exitTowards.distanceTo(centre);
+    // A point at the centre has no direction to leave along - the one frame
+    // there is nothing to re-derive an angle from. Leave the coil as it stands.
+    if (radius <= 0 || exitDistance === 0) return;
 
-    const tangentPoint = RopeGeneration.calculateCircleTangentPoint(
-      shape,
-      wrapDir,
-      exitTowards,
-      GenerationDirection.Reversed,
-    );
+    // The point the rope leaves the rim at. A tangent, when the exit point is
+    // clear of the circle; the exit point's own radial projection when it is on
+    // or inside it, which is the tangent's limit as the point comes down onto
+    // the rim (`acos(r/d)` goes to zero with `d - r`) and so keeps the wind
+    // angle continuous through it. A ball wound tight against its anchor body
+    // rests with the anchor ON its rim, to float noise either side
+    // (`session-611f` f250-290): treating that as a frame with no answer left
+    // the coil riding the body, so the unwind below measured every rotation as
+    // LENGTHENING the path and refused to turn the ball back at all.
+    const tangentPoint =
+      exitDistance > radius
+        ? RopeGeneration.calculateCircleTangentPoint(
+            shape,
+            wrapDir,
+            exitTowards,
+            GenerationDirection.Reversed,
+          )
+        : centre.add(centre.directionTo(exitTowards).mul(radius));
     const fromDirection = centre.directionTo(this.start.contact.globalPosition);
     const rawAngle = Calc.absoluteAngle(
       fromDirection,
