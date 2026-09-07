@@ -39,8 +39,10 @@ import {
 import {
   buildSceneChains,
   CHAIN_TOLERANCE,
+  refuseRopeBodiesIntoStatics,
   settleChainBodies,
   snapshotChainBodies,
+  snapshotRopeBodies,
   stepSceneChains,
   sweepChains,
   type SceneChain,
@@ -551,6 +553,16 @@ export class BallLevel {
       const solveChains = this.solveChains();
       const sceneBefore =
         solveChains.length > 0 ? snapshotChainBodies(solveChains, this.ball) : [];
+      // And the rigid bodies the ball's OWN chain runs over - its anchor, and
+      // anything it wraps - which no scene chain holds and the settle below
+      // therefore never reaches. Their books are the rope's own (see
+      // `refuseRopeBodiesIntoStatics`); what is snapshotted here is the
+      // velocity each one brought into the phase, which is the bound on what
+      // the phase may leave it moving into a surface with.
+      const sceneHeld = new Set(sceneBefore.map((s) => s.body));
+      const pathBefore = snapshotRopeBodies(this.ball.chain, this.ball).filter(
+        (s) => !sceneHeld.has(s.body),
+      );
       this.ball.chain.beginFrame(delta);
       // Opens the frame's geometry-push account (see `Rope.noteGeometryPush`),
       // so from here the lease is bounded by what surfaces actually pushed
@@ -828,6 +840,46 @@ export class BallLevel {
       if (sceneBefore.length > 0) {
         settleChainBodies(solveChains, sceneBefore, this.world, delta);
       }
+      // The same closure for the ball's own anchor, which used to have none.
+      //
+      // A rigid body the chain is anchored to is hauled by the solve exactly as
+      // a scene chain's plank is, and paid velocity for it exactly the same
+      // way: Δposition over Δt, honest only if the correction is the last word
+      // on where the body ends up. For an anchor resting on static geometry it
+      // was not. The frame ended with the anchor inside the surface and the
+      // credit kept; next frame's `integrate` pushed it out positionally and
+      // the contact solve killed the approach at the contact - but the chain
+      // had already re-measured a gap that was the push-out's depth plus the
+      // distance the credit had carried the body, and paid for that too. Gain
+      // above one, and it compounded: `session-133f`, a 91 kg plank resting
+      // across two posts, the ball re-hooked to it while falling at 1.7 m/s.
+      // The snap credited the plank 0.37 m/s and 0.48 rad/s, next frame 0.49
+      // and 0.63, and once the credited spin had lifted the plank's far end off
+      // its post the contact could only pivot it on the near post's corner:
+      // 1.9, 2.5, 3.0, 3.6, 4.1 m/s downward over the next five frames, the
+      // corner's push-out growing 92, 111, 130, 144, 156 mm to match, until the
+      // plank's end stood 89 mm inside a 200 mm foot and the next push-out
+      // let it out sideways through the foot's inner face. It replayed
+      // HEALTHY: nothing watched a rigid anchor's depth in the scenery, and
+      // the ball's every invariant is about the ball.
+      //
+      // `session-147f` was this failure on a scene chain and `settleChainBodies`
+      // is its fix, in the same words; the ball's chain never went through it
+      // because its anchor is held by no scene constraint. What is applied
+      // here is the closure alone - push out of the statics, refuse the
+      // velocity into them - and NOT the credit replacement: the ball's chain
+      // bounds its own credit and those bounds stay. `plank-anchor` in `cli
+      // contacts` is the detector, and `chain-body-embedded` is the invariant
+      // that would have caught the recording.
+      const blockedPath = refuseRopeBodiesIntoStatics(pathBefore, this.world, delta);
+      const pathBlocked = blockedPath.size > 0;
+      // What a blocked anchor could not take of the correction is still owed,
+      // and it is the ball's: the same constraint solved once more with the
+      // blocked bodies held immovable, as the winch pass above holds the whole
+      // path. Without it the ball keeps the anchor's refused share as
+      // over-length every frame and hangs that much lower than its chain says,
+      // re-corrected and re-refused for as long as it hangs there.
+      if (pathBlocked) this.ball.chain.solveLengthHolding(blockedPath);
       // Position for the scene's chain-held bodies, and the velocity they are
       // owed for it - the ball's own share of this phase is `chain-velocity`.
       PhaseTrace.mark("chain-settle", this.world);
@@ -1230,7 +1282,12 @@ export class BallLevel {
       // `beginFrame` reads it to decide whether the lease may be handed back:
       // released into a live block, the constraint spends every frame hauling
       // the ball into a surface that is already saying no.
-      this.ball.chain.noteBlockedByGeometry(pushedOutOf.length > 0 && refused > 0);
+      // A static that pushed one of the chain's own path bodies is geometry in
+      // the chain's way by the same token: the solve hauled the anchor into it
+      // and it said no, and a lease released into that hauls it there again.
+      this.ball.chain.noteBlockedByGeometry(
+        (pushedOutOf.length > 0 && refused > 0) || pathBlocked,
+      );
       // Length only, never velocity — a delta showing up here would mean the
       // stall lease had learnt to move something, which it must not.
       PhaseTrace.mark("stall-lease", this.world);
@@ -1430,7 +1487,7 @@ export class BallLevel {
         body.linearVelocity = body.linearVelocity.add(bodyMove.div(delta));
         body.angularVelocity += bodyTurn / delta;
         chain.noteGeometryPush(ballMove.length());
-        out.push({ normal, depth: deepest.depth, other: body });
+        out.push({ normal, depth: deepest.depth, other: body, point: deepest.point });
       }
     }
     return out;

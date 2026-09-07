@@ -132,12 +132,20 @@ export interface PushOut {
   // that decide anything. See `BallLevel.PUSH_OUT_MIN_DEPTH`.
   readonly depth: number;
   readonly other: PhysicsBody2D;
+  // Where on the body's boundary the surface met it, in world space, as
+  // measured BEFORE the push (the body then moves by `depth` along `normal`,
+  // so as a lever arm it is off by that much - millimetres, against arms of
+  // a metre). A refusal taken in velocity has to be taken here rather than at
+  // the centre: a plank whose END a foot pushes up is being told about its
+  // spin as much as about its fall (see `refuseIntoSurfaces`).
+  readonly point: Vec2;
 }
 
 interface Depenetration {
   readonly normal: Vec2;
   readonly depth: number;
   readonly other: PhysicsBody2D;
+  readonly point: Vec2;
 }
 // Approach speed (m/s) below which a contact earns no bounce at all.
 //
@@ -1318,8 +1326,8 @@ export class World {
           body.globalPosition = body.globalPosition.add(b.normal.mul(b.depth));
         }
         pushedOutOf.push(
-          { normal: a.normal, depth: a.depth, other: a.other },
-          { normal: b.normal, depth: b.depth, other: b.other },
+          { normal: a.normal, depth: a.depth, other: a.other, point: a.point },
+          { normal: b.normal, depth: b.depth, other: b.other, point: b.point },
         );
       } else if (b && c <= -0.98) {
         // A true crush: two near-opposite faces, whose simultaneous solve has no
@@ -1344,14 +1352,60 @@ export class World {
         // callers deriving velocity from the frame (see BallLevel) must refuse
         // themselves credit for driving into either.
         pushedOutOf.push(
-          { normal: a.normal, depth: a.depth, other: a.other },
-          { normal: b.normal, depth: b.depth, other: b.other },
+          { normal: a.normal, depth: a.depth, other: a.other, point: a.point },
+          { normal: b.normal, depth: b.depth, other: b.other, point: b.point },
         );
       } else {
         // A single overlap: push out of it.
         body.globalPosition = body.globalPosition.add(a.normal.mul(a.depth));
-        pushedOutOf.push({ normal: a.normal, depth: a.depth, other: a.other });
+        pushedOutOf.push({ normal: a.normal, depth: a.depth, other: a.other, point: a.point });
       }
+    }
+    return pushedOutOf;
+  }
+
+  // Push `body` out of the STATIC geometry it stands in, resolving each overlap
+  // at the point the surface meets it - a positional impulse there, split
+  // between translation and rotation by the body's effective mass at that
+  // point, the way `BallLevel.separateBallFromPathBodies` resolves the ball's
+  // overlap with a path body - rather than by translating the whole body along
+  // the deepest normal as `depenetrateRigid` does.
+  //
+  // The difference is the whole point for a body that is long. A plank a chain
+  // hauls down by one end is TURNED into the foot under that end far more than
+  // it is moved, and a translation out by the end's depth lifts the plank's
+  // whole length by it: the far end rises off its own post, the near end
+  // stands on its tip alone, and the plank settles into a ratchet equilibrium
+  // 9 mm above its rest and tilted, hauled a little and lifted a little every
+  // frame for as long as the ball hangs (`plank-anchor` in `cli contacts`,
+  // measured with the translation push). Resolved at the point, the push turns
+  // the plank back out the way the haul turned it in, and the plank ends on
+  // both posts where it began.
+  //
+  // Iterated, because a rotation about one overlap can deepen another (the far
+  // end coming back down onto its post); each pass re-gathers and resolves the
+  // deepest, and a pass that finds nothing ends it. The wedge solve
+  // `depenetrateRigid` carries is not needed here: two overlaps resolved in
+  // rotation converge on their own, since turning out of one face does not
+  // drive the body along the other the way a translation does.
+  //
+  // Statics only, by construction: an overlap with another dynamic body is the
+  // next `integrate`'s to solve for both sides (see `settleChainBodies`).
+  depenetrateRigidAtPoints(body: RigidBody2D, passes: number): PushOut[] {
+    const pushedOutOf: PushOut[] = [];
+    if (body.removed || !body.hasShape()) return pushedOutOf;
+    if (World.isAsleep(body)) return pushedOutOf;
+    if (body.pivot) return pushedOutOf;
+    for (let pass = 0; pass < passes; pass++) {
+      const [a] = this.gatherDepenetration(body, (other) => other instanceof StaticBody2D);
+      if (!a) break;
+      const arm = a.point.sub(body.globalPosition).cross(a.normal);
+      const invEff = body.inverseMass + arm * arm * body.inverseInertia;
+      if (invEff <= 0) break;
+      const lambda = a.depth / invEff;
+      body.globalPosition = body.globalPosition.add(a.normal.mul(lambda * body.inverseMass));
+      body.globalRotation += arm * lambda * body.inverseInertia;
+      pushedOutOf.push(a);
     }
     return pushedOutOf;
   }
@@ -1371,8 +1425,16 @@ export class World {
     // ground it drapes across. Answering with no overlaps is what stops the
     // scenery a leaf hangs in front of shoving the leaf out of itself.
     if (body.passable) return [null, null];
-    const consider = (overlap: { normal: Vec2; depth: number }, other: PhysicsBody2D): void => {
-      const ov: Depenetration = { normal: overlap.normal, depth: overlap.depth, other };
+    const consider = (
+      overlap: { normal: Vec2; depth: number; point: Vec2 },
+      other: PhysicsBody2D,
+    ): void => {
+      const ov: Depenetration = {
+        normal: overlap.normal,
+        depth: overlap.depth,
+        other,
+        point: overlap.point,
+      };
       if (!a || ov.depth > a.depth) {
         b = a;
         a = ov;
@@ -1417,7 +1479,8 @@ export class World {
           if (Math.abs(bc.y - oshape.globalPosition.y) > be.y + oe.y) continue;
           if (bshape.shape.kind === "circle") {
             const ov = circleOverlap(bc, bshape.shape.radius, oshape);
-            if (ov) consider(ov, other);
+            // A circle meets a surface on its rim, back along the normal.
+            if (ov) consider({ ...ov, point: bc.sub(ov.normal.mul(bshape.shape.radius)) }, other);
           } else {
             // A vertex shape contributes its manifold points, same as the
             // dynamic solver reads them.

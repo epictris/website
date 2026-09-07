@@ -1150,8 +1150,11 @@ anchored), player-embedded-in-geometry.
 Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame), `rope-credit-unearned` (the chain phase
-took more along its own pull than the constraint was opening at) and `chain-clip`
-(a span's interior deep inside static geometry).
+took more along its own pull than the constraint was opening at), `chain-clip`
+(a span's interior deep inside static geometry) and `chain-body-embedded` (a
+rigid body the chain runs over - its anchor, or anything it wraps - deep inside
+static geometry; the chain solve is the one thing that hauls those into the
+scenery, and `session-133f`'s plank tunnelled through a post HEALTHY without it).
 `rope-solve-kick` exists because `runaway-speed` is a 1000 m/s ceiling and so
 never saw a 96 m/s one-frame launch.
 It is measured against what the frame's own **winding** entitles the solve to:
@@ -2370,6 +2373,18 @@ And the credit carries `topologyCreditScale`, because this **replaces** the per-
 `cli contacts` `chain-hung-jam` is the case, and what it asserts is the **compounding** (peak 6.6 m/s against 14.5) rather than the tunnel, since a runaway is what a tunnel is made of.
 
 Still open there: a hard jam ends 15 s at ~1 m/s rather than at rest, and `energy-gained` still fires on one.
+
+The ball's **own** chain has the same closure now, for the rigid bodies on its path - its anchor, and anything it wraps - which no scene constraint holds and `settleChainBodies` therefore never reached (`refuseRopeBodiesIntoStatics`).
+`session-133f` is `147f` wearing that mounting: a 91 kg plank lying across two L-shaped posts, the ball re-hooked to it while falling at 1.7 m/s.
+The snap credited the plank 0.37 m/s and 0.48 rad/s, the credited spin lifted its far end off its post within a frame, the near post could then only pivot it on the foot's corner, and it went 1.9, 2.5, 3.0, 3.6, 4.1 m/s downward over five frames with the push-out growing 92 to 156 mm to match, until its end stood 89 mm inside a 200 mm foot and the next push-out let it out sideways through the foot's inner face.
+HEALTHY on every invariant, all of which were about the ball; `chain-body-embedded` is the one that now watches a path body's depth in the scenery, by the `player-embedded` rule and tolerance.
+What is applied is the closure alone - push out of the statics, refuse the velocity into them - and **not** the credit replacement, because the ball's chain bounds its own credit (`creditBound`, the spin-share rollback, the pivot's rotation bound) and those bounds are load-bearing; so the change is bit-identical on every frame no path body stands in a static, which is every frame of every recording before it.
+Two things about the refusal turned out to be the fix rather than details.
+It is taken **at the pushed point and through the body's inertia** - an impulse there, split between translation and rotation by the effective mass a contact would use - and not as a clamp on the centre's velocity: clamped at the centre, the plank's fall was refused and its spin kept, its end went on turning into the foot 0.47, 0.66, 0.77, 0.90, 1.07, 1.30, 1.59 rad/s over seven frames, and the ball, reading an anchor whose attachment point was chasing it at 0.5 m/s, had its own brake credit clamped to nothing and went on falling until the plank stood on one corner and fell through more slowly.
+And the **push-out is at the point too** (`World.depenetrateRigidAtPoints`), for the reason a chain-hauled plank is turned into the foot far more than it is moved: `depenetrateRigid`'s translation along the deepest normal lifted the whole plank by its tip's depth, its far end rose off its own post, and it settled into a ratchet equilibrium 9.3 mm above its rest and 0.007 rad tilted, hauled a little and lifted a little every frame the ball hung there.
+Resolved in rotation it ends within the resting sawtooth (1.5 mm, 0.001 rad).
+The share of the correction a blocked anchor refuses is still the ball's to take, so the length is solved once more with the blocked bodies held (`solveLengthHolding`, the winch's own mechanism) - otherwise the ball keeps that share as over-length and hangs lower than its chain says, re-corrected and re-refused every frame.
+`cli contacts` `plank-anchor` is the case: the recording's own posts and plank, the ball dropped for twelve frames and re-hooked so the chain snaps taut at 2.8 m/s, and the plank must never stand in a post, never tip, and end on both posts where it began (105 mm, 3.1 rad and 123 m of fall on the old physics, with the ball slung at 49 m/s).
 The chain's correction is part rotation and the push-out that answers it is a translation, so the difference is credit nothing takes back - the same fight one derivative up.
 An angular push-out is what that wants, and it belongs with the ball's phase, which has the identical hole.
 

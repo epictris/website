@@ -2797,6 +2797,176 @@ function caseHungAnchor(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// plank-anchor - a plank the ball hangs from stays on the posts it rests on.
+//
+// A rigid body the ball's chain is anchored to is a chain-hung body: the solve
+// writes its correction straight onto it and pays it velocity for the move,
+// Δposition over Δt, which is honest only if the correction is the last word on
+// where the body ends up. For an anchor RESTING ON static geometry it was not,
+// and nothing closed the phase for it - `settleChainBodies` closes a scene
+// chain's bodies against the scenery, and the ball's own anchor is held by no
+// scene chain. So the plank kept a credit for a move the foot under it had
+// refused, next frame's contact pushed it back out and killed the approach, and
+// the chain re-measured a gap that was the push-out plus what the credit had
+// carried the plank in the meantime: gain above one. `session-133f` is a 91 kg
+// plank across two L-shaped posts, the ball re-hooked to it while falling at
+// 1.7 m/s. The snap credited the plank 0.37 m/s and 0.48 rad/s, the credited
+// spin lifted its far end off the far post within a frame, the near post could
+// then only pivot it on its corner, and it went 1.9, 2.5, 3.0, 3.6, 4.1 m/s
+// downward over five frames until its end stood 89 mm inside a 200 mm foot and
+// it fell through. HEALTHY on every invariant, all of which are about the ball.
+//
+// The chain phase now closes its own path bodies against the statics the way
+// it closes a scene set's (`refuseRopeBodiesIntoStatics`), and the refusal is
+// taken at the PUSHED POINT through the body's inertia, not as a clamp on the
+// centre: with the centre clamped alone the plank's spin was kept, its end
+// turned a little further into the foot each frame, and it fell through more
+// slowly (see `refuseIntoSurfaces`).
+//
+// The rig is the recording's own geometry, with the ball dropped and re-hooked
+// so the chain goes taut on a ball already falling at 2 m/s - the snap that
+// starts it. Twelve frames of free fall before the shot is what the recording
+// had; a ball hooked while resting never reproduced it.
+// ---------------------------------------------------------------------------
+function casePlankAnchor(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // Two L-shaped posts, feet facing inward, and a 2.6 m plank lying across them
+  // with 30 cm of each end on a foot (scene px; the plank's rest is y = -285,
+  // the feet's tops at y = -280).
+  const post = (x: number, verts: { x: number; y: number }[]): RawLevelData["bodies"][number] =>
+    ({
+      kind: "static",
+      x,
+      y: -280,
+      rot: 0,
+      friction: 1,
+      objects: [{ type: "collision", shape: { kind: "poly", verts } }],
+    }) as RawLevelData["bodies"][number];
+  const level = new BallLevel({
+    player: { x: -107, y: -190, radius: 8 },
+    bodies: [
+      post(-180, [
+        { x: 0, y: -50 },
+        { x: 0, y: 0 },
+        { x: 40, y: 0 },
+        { x: 40, y: 20 },
+        { x: -20, y: 20 },
+        { x: -20, y: -50 },
+      ]),
+      post(100, [
+        { x: 0, y: 0 },
+        { x: 0, y: -70 },
+        { x: 20, y: -70 },
+        { x: 20, y: 20 },
+        { x: -70, y: 20 },
+        { x: -70, y: 0 },
+      ]),
+      {
+        kind: "rigid",
+        x: -40,
+        y: -285,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", thickness: 50, shape: { kind: "rect", w: 260, h: 10 } }],
+      },
+    ],
+  } as RawLevelData);
+  const plank = level.bodies.find(
+    (b): b is RigidBody2D => b !== level.ball && b instanceof RigidBody2D,
+  );
+  check("the plank was built", plank !== undefined);
+  if (!plank) return ok("plank-anchor - a plank the ball hangs from stays on its posts", false, details);
+  const statics = level.world.bodies.filter(
+    (b): b is StaticBody2D => b instanceof StaticBody2D && b.hasShape(),
+  );
+  const restY = plank.globalPosition.y;
+
+  // The plank's deepest standing in either post, along any manifold point.
+  const embed = (): number => {
+    let worst = 0;
+    for (const shape of plank.getShapes()) {
+      for (const st of statics) {
+        for (const other of st.getShapes()) {
+          for (const c of shapeContacts(shape, other)) worst = Math.max(worst, c.depth);
+        }
+      }
+    }
+    return worst;
+  };
+
+  let prev = emptyFrameInput();
+  const feed = (fire: boolean, aim: Vec2): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(fire, prev.fire),
+      mouseWorldPosition: aim,
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  };
+  const anchor = new Vec2(-1.07, -2.85);
+  // Twelve frames of free fall, then the shot straight up at the plank.
+  for (let f = 0; f < 12; f++) feed(false, anchor);
+  let speedAtAttach = 0;
+  let maxEmbed = 0;
+  let maxTilt = 0;
+  let maxDrop = 0;
+  let maxBallV = 0;
+  let anchoredAt = -1;
+  for (let f = 0; f < 300; f++) {
+    feed(true, anchor);
+    const chain = level.ball.chain;
+    const anchored =
+      chain !== null && !(chain.end.contact.obj instanceof BallHook) && level.ball.chainAnchored;
+    if (anchored && anchoredAt < 0) {
+      anchoredAt = f;
+      speedAtAttach = level.ball.linearVelocity.length();
+    }
+    maxEmbed = Math.max(maxEmbed, embed());
+    maxTilt = Math.max(maxTilt, Math.abs(wrapAngle(plank.globalRotation)));
+    maxDrop = Math.max(maxDrop, plank.globalPosition.y - restY);
+    maxBallV = Math.max(maxBallV, level.ball.linearVelocity.length());
+  }
+  const chain = level.ball.chain;
+  check(
+    `the chain anchored to the plank (frame ${anchoredAt})`,
+    anchoredAt >= 0 && chain !== null && chain.end.contact.obj === plank,
+  );
+  // The snap: 2.0 m/s measured, which is what makes the first correction a
+  // shove rather than gravity's own step.
+  check(
+    `the ball was falling when it caught (${speedAtAttach.toFixed(2)} m/s, need 1.5)`,
+    speedAtAttach > 1.5,
+  );
+  // 105 mm on the old physics, on its way through the foot; 1.2 mm of transient
+  // at the snap now, inside the contact skin.
+  check(`the plank never stands in a post (${(maxEmbed * 1000).toFixed(1)} mm, bar 15)`, maxEmbed < 0.015);
+  // Fell clean through and turned over (3.1 rad, 123 m down, the ball slung at
+  // 49 m/s) before; 0.002 rad now - the snap rocks it and both feet take it
+  // back.
+  check(`the plank never tips (${maxTilt.toFixed(3)} rad, bar 0.08)`, maxTilt < 0.08);
+  check(`the plank never sinks (${(maxDrop * 1000).toFixed(1)} mm below rest, bar 20)`, maxDrop < 0.02);
+  // 1.5 mm up and 0.001 rad measured, which is inside the 2.7 mm sawtooth a
+  // resting body's gravity step and push-out make of "at rest" here; the
+  // translation-only push-out settled 9.3 mm up and 0.007 rad, a plank standing
+  // on its near tip with its far end lifted off the post (see
+  // `World.depenetrateRigidAtPoints`).
+  check(
+    `and is back at rest on both posts (${((plank.globalPosition.y - restY) * 1000).toFixed(1)} mm, ${wrapAngle(plank.globalRotation).toFixed(4)} rad)`,
+    Math.abs(plank.globalPosition.y - restY) < 0.005 && Math.abs(wrapAngle(plank.globalRotation)) < 0.01,
+  );
+  check(`the ball hangs from it rather than being slung (peak ${maxBallV.toFixed(2)} m/s, bar 4)`, maxBallV < 4);
+
+  return ok("plank-anchor - a plank the ball hangs from stays on its posts", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // point-blank-turn - a ball anchored point-blank, its chain leaving it
 // radially, still turns to follow the aim while it rests against the anchor.
 //
@@ -4512,6 +4682,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainHungJam(sims));
   results.push(caseChainWrapPoint());
   results.push(caseHungAnchor());
+  results.push(casePlankAnchor());
   results.push(caseHookBlockedAttaches());
   results.push(caseChainOut());
   results.push(caseHookSnapBand());

@@ -41,7 +41,7 @@ import {
   type CollisionShape2D,
 } from "../engine/body";
 import { nearestShapeIndex, nearestSurfacePoint } from "../engine/shapes";
-import { GRAVITY, type World } from "../engine/world";
+import { GRAVITY, type PushOut, type World } from "../engine/world";
 import { Rope } from "../classes/rope";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { Segment } from "../lib/segment";
@@ -487,6 +487,108 @@ export function snapshotChainBodies(
 // instead of 6 and rings instead of settling. The honest bound for a coupled set
 // is a coupled velocity solve over the whole set, which is what this would need
 // before it could have one.
+// The velocity half of a push-out: a body may not END the chain phase moving
+// into a surface that has just refused to let it be there. The push-out undid
+// the motion in position; this is the same statement in velocity, bounded by
+// `funded` for the reason given above `settleChainBodies` - gravity's own step,
+// and no more than the body brought into the phase with it.
+//
+// Taken at the POINT the surface pushed, and paid for as an impulse there -
+// through the body's mass and its inertia by the same effective-mass split a
+// contact uses - rather than as a linear clamp on the centre. The centre is
+// the wrong place for a body that is not a circle. A plank a chain hauls down
+// by one end is turned by the solve as much as it is moved, and its credit is
+// a spin as much as a fall: clamped at the centre alone, the fall was refused
+// and the spin kept, the plank's end went on turning into the foot it rested
+// on, and the ball, reading an anchor whose attachment point was chasing it at
+// 0.5 m/s, had its own brake credit clamped to nothing and went on falling
+// (`session-133f` with the linear clamp: 0.47, 0.66, 0.77, 0.90, 1.07, 1.30,
+// 1.59 rad/s over seven frames, the plank lifted clear each frame and rotated
+// a little deeper the next, until it stood on one corner and fell through).
+// The end's velocity into the surface is the thing the surface refused, and
+// the impulse that stops it is the one the foot would have applied.
+//
+// Shared with the ball's own chain (see `BallLevel`), whose rigid ANCHOR is a
+// chain-hung body by every measure that matters here: the solve writes its
+// correction onto it and pays it velocity, and a static under it can refuse
+// the move exactly as it refuses a scene chain's plank.
+export function refuseIntoSurfaces(
+  s: ChainBodyState,
+  pushedOutOf: readonly PushOut[],
+  delta: number,
+): void {
+  const body = s.body;
+  const gravityStep = GRAVITY.mul(body.gravityScale * delta);
+  for (const { normal, point } of pushedOutOf) {
+    const r = point.sub(body.globalPosition);
+    const into = body.velocityAtPoint(point).dot(normal);
+    // What the point brought into the phase: the snapshot's velocity, at the
+    // same arm.
+    const brought = s.velocity.add(new Vec2(-r.y, r.x).mul(s.spin)).dot(normal);
+    const funded = Math.max(Math.min(brought, 0), Math.min(gravityStep.dot(normal), 0));
+    if (into >= funded) continue;
+    const arm = r.cross(normal);
+    const invEff = body.inverseMass + arm * arm * body.inverseInertia;
+    if (invEff <= 0) continue;
+    const j = (funded - into) / invEff;
+    body.linearVelocity = body.linearVelocity.add(normal.mul(j * body.inverseMass));
+    body.angularVelocity += arm * j * body.inverseInertia;
+  }
+}
+
+// Every rigid body a rope's path runs over, other than `exclude`, snapshotted as
+// `snapshotChainBodies` snapshots a scene set's - the same books, for the
+// ball's own chain.
+export function snapshotRopeBodies(rope: Rope, exclude: RigidBody2D | null): ChainBodyState[] {
+  const states: ChainBodyState[] = [];
+  const seen = new Set<RigidBody2D>();
+  for (const node of rope.path()) {
+    const body = node.contact.obj;
+    if (!(body instanceof RigidBody2D) || body === exclude || seen.has(body)) continue;
+    seen.add(body);
+    states.push({
+      body,
+      position: body.globalPosition,
+      rotation: body.globalRotation,
+      velocity: body.linearVelocity,
+      spin: body.angularVelocity,
+    });
+  }
+  return states;
+}
+
+// Close a rope's rigid path bodies against the scenery WITHOUT replacing the
+// credit the rope's own solve paid them. The ball's chain bounds that credit
+// itself (`Rope.creditBound`, the spin-share rollback, a pivot's rotation
+// bound) and those bounds are load-bearing; what its bodies were missing is
+// only the closure `settleChainBodies` gives a scene set - pushed out of the
+// statics, and refused the velocity into them. Bit-identical on every frame no
+// path body is standing in a static, which is every frame of every recording
+// made before it existed.
+//
+// The push-out is `World.depenetrateRigidAtPoints` - out of the surface in
+// rotation as much as in translation, which for a chain-hauled plank is the
+// way it went in - and the refusal in velocity is taken at the same points.
+//
+// Returns the bodies that were pushed: geometry standing in the path's way
+// this frame. The caller re-solves the length with those held, so the ball
+// takes the correction its anchor could not (`Rope.solveLengthHolding`), and
+// the lease release must not run into them (`Rope.noteBlockedByGeometry`).
+export function refuseRopeBodiesIntoStatics(
+  before: readonly ChainBodyState[],
+  world: World,
+  delta: number,
+): Set<RigidBody2D> {
+  const blocked = new Set<RigidBody2D>();
+  for (const s of before) {
+    const pushedOutOf = world.depenetrateRigidAtPoints(s.body, 4);
+    if (pushedOutOf.length === 0) continue;
+    blocked.add(s.body);
+    refuseIntoSurfaces(s, pushedOutOf, delta);
+  }
+  return blocked;
+}
+
 export function settleChainBodies(
   chains: readonly SceneConstraint[],
   before: readonly ChainBodyState[],
@@ -525,17 +627,7 @@ export function settleChainBodies(
     s.body.linearVelocity = s.velocity.add(
       s.body.globalPosition.sub(s.position).div(delta).mul(credit),
     );
-    const gravityStep = GRAVITY.mul(s.body.gravityScale * delta);
-    for (const { normal } of pushedOutOf) {
-      const into = s.body.linearVelocity.dot(normal);
-      const funded = Math.max(
-        Math.min(s.velocity.dot(normal), 0),
-        Math.min(gravityStep.dot(normal), 0),
-      );
-      if (into < funded) {
-        s.body.linearVelocity = s.body.linearVelocity.sub(normal.mul(into - funded));
-      }
-    }
+    refuseIntoSurfaces(s, pushedOutOf, delta);
   }
   // ...and then each constraint is told whether the geometry was in its way,
   // which is what a chain uses to re-base a length it could not reach (see

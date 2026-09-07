@@ -10,7 +10,8 @@ import {
   StaticBody2D,
   type PhysicsBody2D,
 } from "../engine/body";
-import { bodyOverlapCircle, shapeRadius } from "../engine/collision";
+import { bodyOverlapCircle, circleOverlap, shapeRadius } from "../engine/collision";
+import { shapeContacts } from "../engine/manifold";
 import { Hook } from "../classes/hook";
 import { BallHook } from "../classes/ballHook";
 import { LedgeClimbState } from "../classes/states/ledgeClimbState";
@@ -1275,6 +1276,39 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
         kind: "chain-clip",
         detail: `chain span ${clip.depth.toFixed(2)}m inside ${clip.name}`,
       });
+    }
+    // Chain-body-embedded: no rigid body the chain runs over - its anchor, or
+    // anything it wraps - may stand deep inside static geometry. The chain
+    // solve writes its correction straight onto those bodies and pays them
+    // velocity for it, so they are the one class of body a chain can haul into
+    // the scenery, and nothing watched them: `session-133f`'s plank tunnelled
+    // through the post it rested on, 89 mm deep, and replayed HEALTHY on every
+    // invariant, all of which are about the ball. The same tolerance as
+    // `player-embedded`, and measured the same way - the deepest manifold
+    // point against each static piece.
+    for (const node of b.chain.path()) {
+      const obj = node.contact.obj;
+      if (!(obj instanceof RigidBody2D) || obj === b || obj.removed || !obj.hasShape()) continue;
+      let worst: { depth: number; name: string } | null = null;
+      for (const shape of obj.getShapes()) {
+        for (const body of statics) {
+          for (const other of body.getShapes()) {
+            const depth =
+              shape.shape.kind === "circle"
+                ? (circleOverlap(shape.globalPosition, shape.shape.radius, other)?.depth ?? 0)
+                : Math.max(0, ...shapeContacts(shape, other).map((c) => c.depth));
+            if (depth > (worst?.depth ?? 0)) worst = { depth, name: body.name || "static" };
+          }
+        }
+      }
+      if (worst && worst.depth > EMBED_TOLERANCE) {
+        out.push({
+          frame,
+          kind: "chain-body-embedded",
+          detail: `${obj.name || obj.constructor.name} ${(worst.depth * 1000).toFixed(0)}mm inside ${worst.name}`,
+        });
+        break;
+      }
     }
   }
   for (const body of level.world.bodies) {
