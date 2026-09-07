@@ -1512,13 +1512,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     testCameraCtl.snap();
     if (controller === "ball") {
       testLevel = new BallLevel(pixelData);
-      ballInput ??= new BallInputSource(canvas, camera, () =>
-        testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO,
+      ballInput ??= new BallInputSource(
+        canvas,
+        camera,
+        () => (testLevel instanceof BallLevel ? testLevel.ball.globalPosition : Vec2.ZERO),
+        // The input sources outlive the test that made them, so their canvas
+        // listeners are still live in edit mode. Without this a click meant for a
+        // body or the toolbar takes pointer lock and the editor loses its cursor
+        // to a level nobody is playing (see input/aimPointer.ts).
+        () => mode === "test",
       );
     } else {
       testLevel = new Level(pixelData);
-      liveInput ??= new LiveInputSource(canvas, camera, () =>
-        testLevel instanceof Level ? testLevel.player.globalPosition : Vec2.ZERO,
+      liveInput ??= new LiveInputSource(
+        canvas,
+        camera,
+        () => (testLevel instanceof Level ? testLevel.player.globalPosition : Vec2.ZERO),
+        () => mode === "test",
       );
     }
     testLevel.onReset = () => startTest(controller, spawn);

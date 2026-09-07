@@ -104,17 +104,26 @@ export class LiveInputSource implements IInputSource {
   private padAimDir = new Vec2(1, 0); // last stick aim, kept while stick is released
   private padAimWorld: Vec2 | null = null;
 
+  // `active` is whether this source is the one driving the game right now. It is
+  // true forever in the game itself; the editor passes "a test is running", so a
+  // click meant for the toolbar between tests does not capture the cursor (see
+  // input/aimPointer.ts).
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
+    private active: () => boolean = () => true,
   ) {
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.code);
-      if (e.code === "Space") e.preventDefault();
+      // Space is the jump key, so the page must not scroll on it - but only
+      // while this source is the one being played. In the editor these
+      // listeners outlive the test, and swallowing Space there kills the space
+      // bar on a focused inspector checkbox for the rest of the session.
+      if (e.code === "Space" && this.active()) e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
-    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK);
+    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK, active);
     canvas.addEventListener("mousemove", (e) => {
       this.pointer.update(e);
       this.aimSource = "mouse";

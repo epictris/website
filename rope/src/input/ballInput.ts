@@ -108,12 +108,17 @@ export class BallInputSource implements IInputSource {
   // On-screen DEPLOY button (touch only), hold-to-keep.
   private touchFire = false;
 
+  // `active` is whether this source is the one driving the game right now. It is
+  // true forever in the game itself; the editor passes "a test is running", so a
+  // click meant for the toolbar between tests does not capture the cursor (see
+  // input/aimPointer.ts).
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
+    active: () => boolean = () => true,
   ) {
-    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK);
+    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK, active);
     canvas.addEventListener("mousemove", (e) => {
       this.pointer.update(e);
       // `position` and `cursor` differ only in WHICH cursor this is; both are

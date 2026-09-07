@@ -80,9 +80,17 @@ export class AimPointer {
   // `takeLock` false leaves the pointer entirely alone (position mode): no lock
   // request, so no capture the player did not ask for, and the virtual cursor
   // just tracks the real one.
+  //
+  // `active` is whether the source owning this pointer is driving the game right
+  // now. It is true forever in the game itself, and it is the editor that needs
+  // it: a test there keeps its input source alive after the test stops (see
+  // editor/editor.ts), so these listeners outlive the run and a click meant for
+  // the toolbar would otherwise capture the cursor into a level nobody is
+  // playing.
   constructor(
     private canvas: HTMLCanvasElement,
     private takeLock: boolean,
+    private active: () => boolean = () => true,
   ) {
     if (!takeLock) return;
     canvas.addEventListener("mousedown", () => this.requestLock());
@@ -106,7 +114,7 @@ export class AimPointer {
   // desktop cursor it replaces, and the desktop cursor has the OS pointer
   // acceleration curve applied to it.
   requestLock(): void {
-    if (!this.takeLock || typeof document === "undefined") return;
+    if (!this.takeLock || !this.active() || typeof document === "undefined") return;
     if (document.pointerLockElement === this.canvas) return;
     // Rejects harmlessly when the browser refuses - most often a re-lock too soon
     // after an Esc exit, which Chrome rate-limits.
