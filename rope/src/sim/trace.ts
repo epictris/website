@@ -31,6 +31,7 @@ import type { BallLevel } from "../level/ballLevel";
 import type { RawLevelData } from "../level/levelFormat";
 import type { SelfReplayVerdict } from "./selfReplay";
 import type { RunMeta } from "../playtest/protocol";
+import type { InputTraceBundle } from "../input/inputTrace";
 
 // Bit order for the held-action mask in a serialized frame.
 export const ACTIONS = [
@@ -91,6 +92,11 @@ export interface Recording {
   // on frame 1 of a ball level is a reset. Absent on bundles from before the
   // field existed, which all began from an empty hand.
   heldAtStart?: number;
+  // The raw DOM button story the page saw while these frames were sampled
+  // (see `input/inputTrace.ts`, read by `cli clicks`). The frames are what the
+  // sim sampled; this is what the browser delivered, so a click that reached
+  // neither can be told from one the page dropped. Never read by the sim.
+  inputTrace?: InputTraceBundle;
   // Production playtest runs carry who played them and when (see
   // `playtest/protocol.ts`). Never read by the sim.
   meta?: RunMeta;

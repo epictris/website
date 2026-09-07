@@ -5,6 +5,7 @@ import { Level } from "./level/level";
 import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
+import { InputTrace } from "./input/inputTrace";
 import { drawProbeOutline, render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
@@ -165,8 +166,13 @@ let level = makeLevel();
 // with the level.
 const sparks = new SparkSystem();
 
+// Runs this page has played: the input trace stamps its events with it, so a
+// click can be laid beside the frames of the run it landed in.
+let resets = 0;
+
 function reset(): void {
   level = makeLevel();
+  resets++;
   // A restart must not carry the dead level's embers.
   sparks.reset();
   level.onReset = reset;
@@ -204,6 +210,12 @@ const liveInput = isBall
   ? null
   : new LiveInputSource(canvas, camera, () => (level as Level).player.globalPosition);
 const input: IInputSource = (ballInput ?? liveInput)!;
+
+// The raw DOM button story, downloaded beside the frames (see
+// input/inputTrace.ts): the frames say what the sim sampled, this says what
+// the browser delivered, and a dropped click is found by which one lacks it.
+const inputTrace = new InputTrace(canvas, () => ({ run: resets, frame: level.frame }));
+inputTrace.install();
 
 // Full-session recording — press P to download a replayable bundle. A bundle
 // must start at level start to replay deterministically, so the trace isn't
@@ -307,6 +319,7 @@ function downloadRecording(): void {
     frames: recFrames.slice(),
     digests: recDigests.slice(),
     worldDigests: recWorldDigests.slice(),
+    inputTrace: inputTrace.bundle(),
   };
   // Before the file leaves: does this bundle reproduce HERE? The browser and bun
   // once disagreed on a 1e-17 m overlap and nothing in this path could know it,

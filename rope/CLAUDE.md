@@ -1166,7 +1166,8 @@ bun run src/tools/cli.ts vines                # vine cases (the pass-through gua
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
-bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample
+bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
+bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants
@@ -1954,7 +1955,15 @@ A temporary trace of the raw DOM input beside the frames answered it: bundles re
 The presses were lost between the Wayland compositor and the browser process.
 The desktop browser and a headless grab are the same `chromium-browser` binary, and a second instance attached to the session while the first held a pointer lock is what cost it its presses; the same launch loop with the grab detached from the display reproduced nothing.
 So `shotRunner` launches chromium with `--ozone-platform=headless` and `WAYLAND_DISPLAY`/`DISPLAY` unset - a grab needs no display, ANGLE over EGL finds the GPU without one - and any other headless chromium run on this machine wants the same.
-The trace itself was removed once it had answered; the latch stays, since a click shorter than a step is a real hole whatever the browser does.
+The latch stays whatever the browser does, since a click shorter than a step is a real hole.
+
+**The drops outlived that explanation, so the trace is permanent** (`input/inputTrace.ts`, the `inputTrace` field of a P bundle, read by `cli clicks`).
+`session-1346f` and `session-796f` (2026-09-07, 23:05 and 23:10) each end in seconds of aiming with no press, with no second chromium on the machine and nothing in the compositor's log for the hour.
+The trace had been removed by then, so once again the bundles could only say what the sim sampled.
+It now records every mousedown and mouseup the window sees (capture phase, target named when it is not the canvas), every mousemove whose `buttons` bitmask changed, the pointer lock coming and going, focus, visibility, and the cursor entering and leaving the canvas, each stamped with the run and sim frame it landed after.
+`cli clicks` lays it against the frames and names the layer that lost a click: an **orphan up** (a release with no press before it) is a press the browser never had, so the compositor, libinput or the mouse lost it; an **unsampled** down is one the DOM delivered and the page dropped; an **unsourced** held run is a press the sim saw with nothing in the DOM behind it (pad or touch).
+The desktop is sway on wlroots, the mouse a Razer DeathAdder V2 on `event9`; `journalctl` shows libinput's button-debounce timer on that device firing late under compositor lag earlier the same day, which is the layer to watch when the next orphan up arrives.
+`sudo libinput debug-events --device /dev/input/event9` beside a session is the evdev half of that comparison.
 
 ## Level editor
 

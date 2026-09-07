@@ -30,6 +30,7 @@
 //   bun run src/tools/cli.ts playtest  (the production store's cases)
 //   bun run src/tools/cli.ts restamp   [dir] [--write]
 //   bun run src/tools/cli.ts selftest
+//   bun run src/tools/cli.ts clicks    bundle.json [--all]   (the DOM button story beside the frames)
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
 //   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
@@ -2135,6 +2136,10 @@ switch (cmd) {
   case "latch":
     void cmdLatch();
     break;
+  case "clicks":
+    if (!arg) fail("usage: cli clicks bundle.json [--all]");
+    void cmdClicks(arg, rest.includes("--all"));
+    break;
   case "ledges":
     void cmdLedges();
     break;
@@ -2173,7 +2178,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2189,6 +2194,24 @@ async function cmdLatch(): Promise<void> {
   }
   console.log(`[latch] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// The raw DOM button story a bundle carries beside its frames (see
+// input/inputTrace.ts): every press and release the browser delivered, laid
+// against the frames, so a dropped click is placed in the layer that lost it.
+async function cmdClicks(file: string, all: boolean): Promise<void> {
+  const { auditClicks, auditSummary } = await import("../input/inputTrace");
+  const rec = loadRecording(file);
+  if (!rec.inputTrace) {
+    fail(`${file}: no input trace - recorded before the trace existed, or not by the P key`);
+  }
+  const audit = auditClicks(rec.inputTrace, rec.frames, all);
+  for (const line of audit.lines) console.log(`  ${line}`);
+  const runs = new Set(rec.inputTrace.events.map((e) => e.r)).size;
+  console.log(
+    `[clicks] run ${rec.inputTrace.run} of ${runs} traced, ${rec.frames.length} frames, ` +
+      `${rec.inputTrace.events.length} events${all ? "" : " (--all for every run)"}: ${auditSummary(audit)}`,
+  );
 }
 
 // The production playtest store's cases (src/server/storeCases.ts): ingest
