@@ -1,6 +1,9 @@
-// Godot Mathf helpers — only the members the game uses. Plain float64 math;
+// Godot Mathf helpers - only the members the game uses. Plain float64 math;
 // the simulation is self-consistent (deterministic replay) without matching C#
-// float32 bit-for-bit.
+// float32 bit-for-bit. The transcendentals come from `dmath`, never `Math`, so
+// the same bits come out of every engine (see engine/dmath.ts).
+
+import { dmath } from "./dmath";
 
 export const Mathf = {
   Pi: Math.PI,
@@ -9,13 +12,13 @@ export const Mathf = {
 
   abs: Math.abs,
   sqrt: Math.sqrt,
-  cos: Math.cos,
-  sin: Math.sin,
-  acos: Math.acos,
-  cosh: Math.cosh,
-  sinh: Math.sinh,
-  log: Math.log,
-  pow: Math.pow,
+  cos: dmath.cos,
+  sin: dmath.sin,
+  acos: dmath.acos,
+  cosh: dmath.cosh,
+  sinh: dmath.sinh,
+  log: dmath.log,
+  pow: dmath.pow,
 
   min(a: number, b: number): number {
     return a < b ? a : b;

@@ -85,6 +85,30 @@ compares are both in the browser:
 `identical`, and a bundle with one recorded digest value nudged by 1e-3 must come
 back false naming `chain.blockedSlack` at exactly that frame.
 
+### Cross-platform determinism
+
+The sim computes the **same bits on every engine and every platform**, and that is an engineering decision rather than a property JavaScript hands out.
+IEEE 754 fixes `+ - * /` and `Math.sqrt` as correctly rounded, and every engine honours that; what ECMAScript leaves **implementation-defined** is the transcendentals - `Math.sin`, `cos`, `tan`, `atan2`, `exp`, `log`, `pow`, `sinh`, `cosh`, `hypot` and the rest.
+V8 ships fdlibm ports for some and glibc's or LLVM libc's for others (it changed in May 2026), JavaScriptCore calls the platform libm, SpiderMonkey carries its own fork, and they agree to within an ulp and differ in the last bit.
+Measured with `bun run dmath:crosscheck`: bun's `Math` differs from fdlibm on 2-27% of inputs per function, node 24's on none but `pow`.
+A physics step that tests `depth > 0` on a 1e-17 m overlap turns that last bit into a different branch and a different game, which is what every "libm knife-edge" in this document was (`session-1052f` f379, `session-3649f` f859).
+
+So the sim never asks the engine.
+**`engine/dmath.ts`** is a port of fdlibm 5.3 (the code Java's `StrictMath` mandates for exactly this reason) written against the operations the spec does pin down, with every constant built from its hex bit pattern rather than a decimal literal (the spec guarantees correctly rounded parsing only to 20 significant digits and fdlibm prints 21), and `hypot` is V8's two-argument form.
+Everything in `src/engine`, `src/classes`, `src/lib`, `src/level`, `src/input`, `src/playtest` and the replay path of `src/sim` calls `dmath.sin` and never `Math.sin`; `Mathf` and `Vec2` route through it.
+`cli dmath` is the detector and it is part of `bun run test`: every function against a committed table of bit-exact answers (`src/sim/dmathVectors.json`, inputs and outputs as hex) plus a digest over twenty thousand more inputs, a set of closed-form facts, and a **scan of those sources for the banned `Math` members and for `**`** (which is `Math.pow`).
+The table was written on V8, where every function but `pow` was also checked to agree with `Math` bit for bit over 200k random inputs (V8 13.6 uses glibc's correctly rounded `pow`; fdlibm's is within an ulp), and it reproduces to the bit on bun and in Chromium 142.
+`cli dmath --write` regenerates it, and that is a determinism change made on purpose: every recording made before it may replay differently.
+
+What it costs is nothing, and that took a second piece.
+`dmath.sin` is 1.5-3.5x the platform's per call (about 20 ns against 5-14), and the ball arena was making **84,000** `sin`/`cos` calls a frame - every whole-body overlap query re-rotating each shape's mount offset, the slack chain's node scan re-taking every shape's extents per node - nearly all of them on a rotation that changes once a frame at most.
+Replaying `session-1052f` went from 2.0 s to 2.4 s.
+So `engine/trig.ts` memoises cos/sin per rotation **bit pattern** (a direct-mapped table in front of `dmath`; a hit is the bits a fresh computation gives, +0 and -0 kept apart, and `cli dmath` asserts that), `Vec2.rotated` and `shapeExtents` read it, and the same replay is back at 2.0 s - a hair under the tree before the change.
+
+What that buys is that a bundle recorded in any browser replays bit-exact under bun, node and every other browser, so the node-built CLI (below) is a tool for recordings that predate the change rather than a standing requirement.
+`session-1052f` is the measurement: recorded in Chromium, bun left it at f379 before the change and follows it to f932 after, exactly as V8 does.
+What it does not cover is a NaN's payload (not pinned by the spec either, and the sim never produces one) and anything outside the sim that feeds it - the level file's numbers parse identically everywhere (JSON is correctly rounded), and the render side may use whatever `Math` it likes, since nothing there reaches the fixed step.
+
 Godot idioms that were collapsed in the port:
 - `Vector2` value-type semantics → **immutable** `Vec2` (every op returns a new vector).
 - `PhysicsServer2D.BodySetState(Transform/…)` in `Rope` → no-op; the TS `RigidBody2D`
@@ -1127,6 +1151,8 @@ bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (spe
 bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
+bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
+bun run dmath:crosscheck                      # how far THIS engine's own Math is from it (an instrument, not a test)
 bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle/stack/ramps/impact/momentum/loop-cap/loop-ride)
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
@@ -1162,7 +1188,7 @@ bun run src/tools/cli.ts rig     playtests/rigs/ceiling-hold.json [--series] [--
 bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the same metrics on this tree alone
 ```
 
-`bun run test` is what "all green" means: typecheck, `selftest`, `contacts`,
+`bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
 `spring`, `movers`, `vines`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
@@ -1530,11 +1556,15 @@ launches, mover misbehavior):
    `cli shot bundle.json --dump A..B` takes no picture: it prints the chain state
    of every frame in the span as one JSON line each (the ball's pose, the hook,
    the anchor, every node of the wrap path with its body, piece and position),
-   simulated on the SAME engine that recorded the bundle. It exists because the
-   browser and bun disagree about a 1-ulp libm result and a long recording's
-   tail is chaotic in that: what the player saw at f3600 is reproducible only
-   there, and every bun-side view (`cli chainpath`, `cli render`, `cli query`) is
+   simulated on the SAME engine that recorded the bundle. It was written when the
+   browser and bun disagreed about a 1-ulp libm result and a long recording's
+   tail was chaotic in that: what the player saw at f3600 was reproducible only
+   there, and every bun-side view (`cli chainpath`, `cli render`, `cli query`) was
    by then describing a different run (`session-3649f`, diverged in bun from f859).
+   Since `dmath` (see **Cross-platform determinism**) the two engines compute the
+   same bits and the bun-side views describe the player's run; the dump remains
+   the way to ask the browser build itself, and the only view of a bundle
+   recorded before the change.
    `--frames A..B --every K` draws a filmstrip instead of a frame, in one page
    load, and prints the changed-pixel count between adjacent tiles - which is the
    only headless evidence there is for anything that MOVES (see **Debugging
@@ -1726,10 +1756,10 @@ Each one exists because its absence cost a real debugging day.
 - **Record a browser bundle against every physics change, and run `cli diverge` on it.**
   Headless validation alone shipped two defects on 2026-09-04 that a single fresh recording would have caught the same hour: the browser/bun determinism knife-edge, and the loop hammer the hold-then-pair redesign left standing.
   The bundle's own `selfReplay` verdict covers the live-vs-re-simulation class but *cannot* see a browser-vs-bun difference (see **Determinism & correspondence**); replaying the fresh bundle here is what does.
-- **A bundle bun cannot follow, V8 can.**
-  When `cli diverge` leaves a fresh browser bundle on the libm knife-edge (`session-3649f` f859, `session-1052f` f379) the frames after it are bun's, not the player's, and `cli trace` / `cli query` on them describe a run nobody saw.
-  Build the CLI for the browser's engine instead: `bun build src/tools/cli.ts --target=node --outfile=<scratch>/cli.node.mjs`, then `node <scratch>/cli.node.mjs diverge bundle.json` - node is V8, the same libm as Chromium, and `session-1052f` replays bit-exact there to its last frame (the tree stamp reads MISMATCH under node because the bundled file cannot find the source files it hashes; ignore that line).
-  Every replaying command works the same way, so the phase trace of the reported frame is one build away; `cli shot --dump` reaches the same truth through headless Chromium at the cost of a browser launch per query.
+- **A bundle recorded before `dmath` (2026-09-07) may sit on the libm knife-edge; one recorded after it cannot.**
+  Since the sim stopped calling the platform `Math` (see **Cross-platform determinism**), a browser bundle replays bit-exact under bun, and a divergence on a fresh recording is a physics finding rather than a libm one.
+  For the historical bundles - `session-3649f` f859, `session-1052f` f379 before the change - the frames after the knife-edge under the old tree were bun's, not the player's, and the way to see the player's run was to build the CLI for the browser's engine: `bun build src/tools/cli.ts --target=node --outfile=<scratch>/cli.node.mjs`, then `node <scratch>/cli.node.mjs diverge bundle.json` (the tree stamp reads MISMATCH under node because the bundled file cannot find the source files it hashes; ignore that line).
+  That build still works and is still how a V8-only question is asked; `cli shot --dump` reaches the same truth through headless Chromium at the cost of a browser launch per query.
 - **No fix before a measured cause.**
   State the root cause with a number from a replay, probe, or trace before editing the solver.
   A theory that fits the code is not a diagnosis: the rope-refund bug survived four sessions because a plausible neighbour (missing rigid-rigid friction) was fixed instead of the measured energy source (`session-394f`/`458f`/`431f`/`726f`).

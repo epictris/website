@@ -11,6 +11,7 @@
 // frame, which way that has turned it, and how a keyed speed makes the first of
 // those an integral rather than a division.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { AnimatableBody2D } from "../engine/body";
 import { rectShape } from "../engine/shapes";
@@ -59,7 +60,7 @@ export type MoverScript = (body: AnimatableBody2D, time: number, dt: number) => 
 // swing is 0.25 rather than π/2.
 function swingOffsetAt(amp: number, period: number, phase: number, time: number): number {
   if (period <= 0) return 0;
-  return amp * Math.sin(2 * Math.PI * (time / period + phase));
+  return amp * dmath.sin(2 * Math.PI * (time / period + phase));
 }
 
 // A route as the mover travels it: the authored nodes flattened into a polyline
@@ -204,7 +205,7 @@ function paceTable(
     const v0 = at(a);
     const v1 = at(b);
     s.push(b);
-    t.push(t[i - 1]! + (len <= 0 ? 0 : v0 === v1 ? len / v0 : (len * Math.log(v1 / v0)) / (v1 - v0)));
+    t.push(t[i - 1]! + (len <= 0 ? 0 : v0 === v1 ? len / v0 : (len * dmath.log(v1 / v0)) / (v1 - v0)));
   }
   return { s, t };
 }
@@ -232,7 +233,7 @@ export function easeFraction(ease: MoveEase, t: number): number {
     // Zero rate at both ends: the body eases out of each and turns round with no
     // step in velocity at all.
     case "sine":
-      return (1 - Math.cos(Math.PI * t)) / 2;
+      return (1 - dmath.cos(Math.PI * t)) / 2;
     // Zero rate leaving, full rate arriving - so the near end is smooth and the
     // far end is the hard turn.
     case "easeIn":
@@ -415,7 +416,7 @@ export function addSlidingPlatform(
   platform.setShape(rectShape(width, height));
   platform.globalPosition = base;
   level.addMover(platform, (body, time) => {
-    body.globalPosition = base.add(new Vec2(amplitude * Math.sin(time * omega), 0));
+    body.globalPosition = base.add(new Vec2(amplitude * dmath.sin(time * omega), 0));
   });
 }
 

@@ -15,6 +15,7 @@
 // not a parallel driver - so a saved rig cannot behave differently from the rig
 // that produced it.
 
+import { dmath } from "../engine/dmath";
 import type { RawLevelData } from "../level/levelFormat";
 import { recordScript } from "./record";
 import { bundleMetrics, type BundleMetrics } from "./metrics";
@@ -82,8 +83,8 @@ function whirlRanges(from: number, frames: number, period: number): MouseRange[]
     out.push({
       from: start,
       to: Math.min(start + hold - 1, from + frames - 1),
-      x: round4(Math.cos(angle)),
-      y: round4(Math.sin(angle)),
+      x: round4(dmath.cos(angle)),
+      y: round4(dmath.sin(angle)),
       relative: true,
     });
   }
@@ -102,7 +103,7 @@ function driveRanges(from: number, drive: RigDrive): MouseRange[] {
   const to = from + drive.frames - 1;
   if (drive.kind === "hold") {
     const a = (drive.deg * Math.PI) / 180;
-    return [{ from, to, x: round4(Math.cos(a)), y: round4(Math.sin(a)), relative: true }];
+    return [{ from, to, x: round4(dmath.cos(a)), y: round4(dmath.sin(a)), relative: true }];
   }
   return [{ from, to, x: drive.x, y: drive.y }];
 }
@@ -201,8 +202,8 @@ function rigSeries(worldDigests: WorldDigest[]): RigSample[] {
     const chain = wd.chain;
     return {
       frame: wd.frame,
-      ballSpeed: ball ? Math.hypot(ball.vx, ball.vy) : 0,
-      anchorSpeed: anchor ? Math.hypot(anchor.vx, anchor.vy) : null,
+      ballSpeed: ball ? dmath.hypot(ball.vx, ball.vy) : 0,
+      anchorSpeed: anchor ? dmath.hypot(anchor.vx, anchor.vy) : null,
       lease: chain?.blockedSlack ?? 0,
       // Against the length the solver actually enforces, which is the rope's own
       // length plus the lease - the same quantity `worstOverLength` measures.

@@ -7,6 +7,7 @@
 // edge torques the ball (the rope solver's lever-arm path, which Player
 // deliberately bypasses).
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
@@ -654,7 +655,7 @@ export class BallPlayer extends RigidBody2D {
       const speed = this.linearVelocity.length();
       brake =
         BallPlayer.AIM_BRAKE_MIN +
-        (1 - BallPlayer.AIM_BRAKE_MIN) * Math.exp(-speed / BallPlayer.AIM_BRAKE_DECAY_SPEED);
+        (1 - BallPlayer.AIM_BRAKE_MIN) * dmath.exp(-speed / BallPlayer.AIM_BRAKE_DECAY_SPEED);
     }
     this.contactBrakeScale = brake;
     // While aiming, the steering below drives rotation kinematically. Flag it so

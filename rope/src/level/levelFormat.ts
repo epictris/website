@@ -76,6 +76,8 @@
 // consulted. It is still written (and defaults to `static`), because a shape may
 // be switched back and forth while a level is authored and silently losing the
 // kind on the way through would be a field that forgets.
+import { dmath } from "../engine/dmath";
+
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water";
 
 // How a moving body spends a traverse of an OPEN route (see
@@ -2150,8 +2152,8 @@ function withChainAnchors(
     // Into the body's OWN frame, which is what every other object's placement is
     // measured in. The inverse of `worldPlacement`, and deliberately written as
     // its mirror image so the two cannot drift.
-    const cos = Math.cos(-body.rot);
-    const sin = Math.sin(-body.rot);
+    const cos = dmath.cos(-body.rot);
+    const sin = dmath.sin(-body.rot);
     const dx = end.x - body.x;
     const dy = end.y - body.y;
     const x = dx * cos - dy * sin;
@@ -2332,8 +2334,8 @@ function placeInWorld(
 ): SceneObjectData {
   const lx = o.x ?? 0;
   const ly = o.y ?? 0;
-  const cos = Math.cos(rot);
-  const sin = Math.sin(rot);
+  const cos = dmath.cos(rot);
+  const sin = dmath.sin(rot);
   return {
     ...o,
     x: x + lx * cos - ly * sin,

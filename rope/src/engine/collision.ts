@@ -13,6 +13,7 @@
 // agree geometrically but not bit-for-bit. Polygons therefore get their own
 // branch throughout rather than the two being merged.
 
+import { dmath } from "./dmath";
 import { Vec2 } from "./vec2";
 import { polyEdgeNormal, shapeVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
@@ -606,7 +607,7 @@ export function rayVsShape(
 // Radius of the shape's bounding circle about its own origin.
 export function shapeRadius(s: Shape): number {
   if (s.kind === "circle") return s.radius;
-  if (s.kind === "rect") return Math.hypot(s.size.x * 0.5, s.size.y * 0.5);
+  if (s.kind === "rect") return dmath.hypot(s.size.x * 0.5, s.size.y * 0.5);
   let best = 0;
   for (const v of s.verts) best = Math.max(best, v.length());
   return best;

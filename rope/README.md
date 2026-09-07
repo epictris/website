@@ -54,7 +54,9 @@ Gamepad only for now:
 ## Share a playtest
 
 Press **P** to download a `session-*.json` bundle. Replay it (deterministically, with
-sanity checks) headlessly:
+sanity checks) headlessly - and identically on every engine and platform, since the
+simulation computes its transcendentals itself (`src/engine/dmath.ts`) rather than
+through the browser's `Math`:
 
 ```sh
 bun run src/tools/cli.ts replay session-1234f.json

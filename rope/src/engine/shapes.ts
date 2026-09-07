@@ -16,6 +16,7 @@
 // never hold a taut contact on a reflex corner — none of which survives a
 // concave loop.
 
+import { TRIG_COS, TRIG_SIN, trigSlot } from "./trig";
 import { Vec2 } from "./vec2";
 
 export type Shape =
@@ -370,8 +371,9 @@ export function isExposedCorner(
 export function shapeExtents(t: ShapeTransform): Vec2 {
   const s = t.shape;
   if (s.kind === "circle") return new Vec2(s.radius, s.radius);
-  const c = Math.abs(Math.cos(t.globalRotation));
-  const sn = Math.abs(Math.sin(t.globalRotation));
+  const slot = trigSlot(t.globalRotation);
+  const c = Math.abs(TRIG_COS[slot]!);
+  const sn = Math.abs(TRIG_SIN[slot]!);
   if (s.kind === "rect") {
     const hw = s.size.x / 2;
     const hh = s.size.y / 2;

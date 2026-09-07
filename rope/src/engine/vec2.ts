@@ -2,6 +2,9 @@
 // Godot uses y-down screen space. Value semantics: every operation returns a new Vec2,
 // so there is no aliasing — this mirrors C# struct copy-on-assignment exactly.
 
+import { dmath } from "./dmath";
+import { TRIG_COS, TRIG_SIN, trigSlot } from "./trig";
+
 export class Vec2 {
   readonly x: number;
   readonly y: number;
@@ -89,17 +92,20 @@ export class Vec2 {
   }
 
   angle(): number {
-    return Math.atan2(this.y, this.x);
+    return dmath.atan2(this.y, this.x);
   }
 
   // Signed angle from this to `to`, matching Godot's Vector2.AngleTo.
   angleTo(to: Vec2): number {
-    return Math.atan2(this.cross(to), this.dot(to));
+    return dmath.atan2(this.cross(to), this.dot(to));
   }
 
   rotated(rad: number): Vec2 {
-    const c = Math.cos(rad);
-    const s = Math.sin(rad);
+    // Cached cos/sin (see engine/trig.ts): the same bits dmath computes, at a
+    // fraction of the cost on the angles a frame rotates by over and over.
+    const i = trigSlot(rad);
+    const c = TRIG_COS[i]!;
+    const s = TRIG_SIN[i]!;
     return new Vec2(this.x * c - this.y * s, this.x * s + this.y * c);
   }
 

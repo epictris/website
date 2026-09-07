@@ -76,6 +76,7 @@
 // chains sharing a body, one order further out. So a bend is a
 // `SceneConstraint` and goes into that loop.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { RigidBody2D, VineLink } from "../engine/body";
 import { RopeContact } from "../lib/ropeContact";
@@ -124,7 +125,7 @@ export const BEND_EI_POLE = 1000000;
 // The bending rigidity an authored `stiffness` stands for.
 export function bendRigidity(stiffness: number): number {
   const s = Math.min(1, Math.max(0, stiffness));
-  return BEND_EI_LIMP * Math.pow(BEND_EI_POLE / BEND_EI_LIMP, s);
+  return BEND_EI_LIMP * dmath.pow(BEND_EI_POLE / BEND_EI_LIMP, s);
 }
 
 // The XPBD compliance of ONE joint of a vine of the given link spacing, in

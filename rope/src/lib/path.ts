@@ -24,6 +24,7 @@
 // addition, and it is monotone along the path even where the path passes near
 // itself, which is what the camera's windowed projection below leans on.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 
 // Below this a segment has no direction to project onto and is treated as a
@@ -140,7 +141,7 @@ export function ellipseReach(ax: number, ay: number, dir: Vec2): number {
   const b = Math.max(1e-6, ay);
   const len = dir.length();
   if (len < 1e-9) return a;
-  return 1 / Math.hypot(dir.x / len / a, dir.y / len / b);
+  return 1 / dmath.hypot(dir.x / len / a, dir.y / len / b);
 }
 
 export interface PolylineIndex {
@@ -329,7 +330,7 @@ export function tangentAtArcLength(ix: PolylineIndex, s: number, closed = false)
 // that gets written slightly differently in two places.
 export function tangentAngleAt(ix: PolylineIndex, s: number, closed = false): number {
   const d = tangentAtArcLength(ix, s, closed);
-  return Math.atan2(d.y, d.x);
+  return dmath.atan2(d.y, d.x);
 }
 
 // One cubic edge split at t = 1/2, as the four handle offsets the split leaves

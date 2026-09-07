@@ -19,6 +19,7 @@
 // math below works in a y-up frame with x running horizontally from `a` toward
 // `b` and flips on the way out.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 
 // Below this ratio of horizontal separation to cord length the solve is handed
@@ -74,11 +75,11 @@ export function catenaryPoints(
   const ratio = k / h;
   let lo = 1e-9;
   let hi = 1;
-  while (Math.sinh(hi) / hi < ratio && hi < U_MAX) hi *= 2;
+  while (dmath.sinh(hi) / hi < ratio && hi < U_MAX) hi *= 2;
   hi = Math.min(hi, U_MAX);
   for (let i = 0; i < 80; i++) {
     const mid = (lo + hi) / 2;
-    if (Math.sinh(mid) / mid < ratio) lo = mid;
+    if (dmath.sinh(mid) / mid < ratio) lo = mid;
     else hi = mid;
   }
   const u = (lo + hi) / 2;
@@ -86,17 +87,17 @@ export function catenaryPoints(
 
   // Where the vertex sits: `tanh` of the endpoint angles' mean is `v / L`,
   // which is in (-1, 1) because the height difference is a leg of the arc.
-  const m = Math.atanh(v / length);
+  const m = dmath.atanh(v / length);
   const xv = h / 2 - c * m;
 
   // Closed-form arc sampling: `s(x) = c sinh((x - xv)/c)` measured from the
   // vertex, inverted with `asinh`, then the height read straight off the curve.
   const dirX = Math.sign(chord.x);
-  const s0 = c * Math.sinh(-xv / c);
-  const y0 = c * Math.cosh(-xv / c);
+  const s0 = c * dmath.sinh(-xv / c);
+  const y0 = c * dmath.cosh(-xv / c);
   return arcs.map((s) => {
-    const x = xv + c * Math.asinh((s0 + s) / c);
-    const yUp = c * Math.cosh((x - xv) / c);
+    const x = xv + c * dmath.asinh((s0 + s) / c);
+    const yUp = c * dmath.cosh((x - xv) / c);
     return new Vec2(a.x + dirX * x, a.y - (yUp - y0));
   });
 }

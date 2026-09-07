@@ -32,6 +32,7 @@
 //   bun run src/tools/cli.ts selftest
 //   bun run src/tools/cli.ts corners
 //   bun run src/tools/cli.ts decompose
+//   bun run src/tools/cli.ts dmath     [--write]   (the deterministic libm: bit-exact vectors + source scan)
 //   bun run src/tools/cli.ts contacts
 //   bun run src/tools/cli.ts spring
 //   bun run src/tools/cli.ts movers
@@ -2143,6 +2144,9 @@ switch (cmd) {
   case "decompose":
     void cmdDecompose();
     break;
+  case "dmath":
+    void cmdDmath([arg, ...rest].includes("--write"));
+    break;
   case "tangents":
     void cmdTangents();
     break;
@@ -2169,7 +2173,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|ledges|corners|tangents|decompose|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2437,6 +2441,24 @@ async function cmdTangents(): Promise<void> {
     if (!r.ok) failed++;
   }
   console.log(`[tangents] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Deterministic-libm cases (src/sim/dmathCases.ts): the committed bit-exact
+// vectors, the closed-form facts and the scan for platform `Math` in the sim.
+// `--write` regenerates the vectors from this tree's dmath first - a
+// determinism change, made on purpose (see the header there).
+async function cmdDmath(write: boolean): Promise<void> {
+  const { runDmathCases, writeDmathVectors } = await import("../sim/dmathCases");
+  if (write) console.log(`[dmath] wrote ${writeDmathVectors()} vectors to src/sim/dmathVectors.json`);
+  const results = runDmathCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS" : "FAIL"}  ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[dmath] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

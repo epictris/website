@@ -38,6 +38,20 @@ CC BY 4.0 requires attribution, which `rope/CREDITS.md` provides.
 It also forbids imposing terms that restrict what the licence permits, which is precisely why the noncommercial licence in `LICENSE` is scoped to original work and stops short of these files.
 Commercial use of the CC BY and CC0 assets is permitted by their own licences and is not affected by anything in this repository.
 
+## Code (`rope/`)
+
+`rope/src/engine/dmath.ts` is a TypeScript port of **fdlibm** (the "Freely Distributable libm", Sun Microsystems, 1993), by way of the FreeBSD msun and V8 `ieee754.cc` lineage of the same code.
+It exists so the simulation computes identical floating-point bits on every JavaScript engine; see **Cross-platform determinism** in `rope/CLAUDE.md`.
+
+- Upstream: [netlib fdlibm](https://www.netlib.org/fdlibm/).
+- Licence: the fdlibm notice, reproduced in the file's header and here in full:
+
+> Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+> Developed at SunSoft, a Sun Microsystems, Inc. business.
+> Permission to use, copy, modify, and distribute this software is freely granted, provided that this notice is preserved.
+
+The two-argument `hypot` in the same file follows V8's `Math.hypot` (BSD-3-Clause, the V8 project authors), so that recordings made in Chromium replay bit for bit.
+
 ## Dependencies
 
 Packages resolved from npm (`app/`, `pool/`, `rope/`) and modules resolved from the Go module proxy (`clipboard/`) are not vendored into this repository and are not distributed by it.

@@ -10,6 +10,7 @@
 // is no physics path left to remember to exclude decoration from. What such a
 // body still gets is a place to stand, which is what `BuiltBody.origin` is for.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import {
   AnimatableBody2D,
@@ -108,8 +109,8 @@ export function worldPlacement(
 ): { pos: Vec2; rot: number } {
   const lx = o.x ?? 0;
   const ly = o.y ?? 0;
-  const cos = Math.cos(body.rot);
-  const sin = Math.sin(body.rot);
+  const cos = dmath.cos(body.rot);
+  const sin = dmath.sin(body.rot);
   return {
     pos: new Vec2(body.x + lx * cos - ly * sin, body.y + lx * sin + ly * cos),
     rot: body.rot + (o.rot ?? 0),
@@ -433,7 +434,7 @@ export function settledPivotAngle(rb: RigidBody2D): number {
     // A free bearing hangs with the centre of mass straight below (or above,
     // for a negative gravity scale), at the representative nearest the
     // authored angle.
-    const hang = (g > 0 ? Math.PI / 2 : -Math.PI / 2) - Math.atan2(r.y, r.x);
+    const hang = (g > 0 ? Math.PI / 2 : -Math.PI / 2) - dmath.atan2(r.y, r.x);
     return theta0 + wrapAngle(hang - theta0);
   }
   // Torsion spring: the root of `I·w²·(θ - rest) = m·g·(r rotated θ).x`,

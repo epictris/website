@@ -4,6 +4,7 @@
 // closely enough for the character controller and rope; it is self-consistent
 // (deterministic replay), not bit-compatible with Godot.
 
+import { dmath } from "./dmath";
 import { Vec2 } from "./vec2";
 import { circleShape, shapeExtents } from "./shapes";
 import type { ShapeTransform } from "./shapes";
@@ -341,7 +342,7 @@ const PAIR_LOAD_GRACE = 5;
 // 16 bins - `atan2` puts (-1, -0) and (-1, +0) at opposite ends of the turn, so
 // a plain vertical wall straddles the seam and its two halves fund each other,
 // which read as `ball-roll-wall` climbing 21 cm instead of 5.
-const PRESS_SAME_DIRECTION = Math.cos(Math.PI / 8);
+const PRESS_SAME_DIRECTION = dmath.cos(Math.PI / 8);
 
 // How many distinct presses a pair remembers. A press is 22.5 degrees wide, so
 // what needs more than a handful is a body a ball is rolling around the outside

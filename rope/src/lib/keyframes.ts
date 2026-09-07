@@ -23,6 +23,8 @@
 // and not from the node list alone.
 
 // One field's keys in arc-length order. Empty = no node keys the field.
+import { dmath } from "../engine/dmath";
+
 export type KeyTrack = readonly { s: number; v: number }[];
 
 // The interpolation between two keys of a field. Linear is the default and what
@@ -35,7 +37,7 @@ export const smoothstep = (t: number): number => t * t * (3 - 2 * t);
 export const lerpKey: KeyBlend = (a, b, t) => a + (b - a) * t;
 
 export const lerpZoom: KeyBlend = (a, b, t) =>
-  Math.exp(Math.log(Math.max(1e-6, a)) * (1 - t) + Math.log(Math.max(1e-6, b)) * t);
+  dmath.exp(dmath.log(Math.max(1e-6, a)) * (1 - t) + dmath.log(Math.max(1e-6, b)) * t);
 
 // One field's track: the nodes that carry a value, placed at the arc lengths
 // those nodes landed at.

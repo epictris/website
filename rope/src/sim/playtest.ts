@@ -2,6 +2,7 @@
 // ScriptedInputSource.cs. Drives the sim from a frame-indexed schedule of held
 // buttons and mouse aim, checks invariants every frame, and evaluates asserts.
 
+import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { button, emptyFrameInput, type ButtonInput, type FrameInput } from "../input/frameInput";
 import { Level, type LevelSpec } from "../level/level";
@@ -458,7 +459,7 @@ function evaluateAsserts(
     if (!d) return { ok: false, description: `frame ${a.frame} out of range` };
     if ("state" in a) return { ok: d.state === a.state, description: `f${a.frame} state=${d.state} want ${a.state}` };
     if ("maxSpeed" in a) {
-      const speed = Math.hypot(d.vx, d.vy);
+      const speed = dmath.hypot(d.vx, d.vy);
       return { ok: speed <= a.maxSpeed, description: `f${a.frame} speed=${speed.toFixed(1)} <= ${a.maxSpeed}` };
     }
     if ("hasRope" in a) {
