@@ -1726,6 +1726,10 @@ Each one exists because its absence cost a real debugging day.
 - **Record a browser bundle against every physics change, and run `cli diverge` on it.**
   Headless validation alone shipped two defects on 2026-09-04 that a single fresh recording would have caught the same hour: the browser/bun determinism knife-edge, and the loop hammer the hold-then-pair redesign left standing.
   The bundle's own `selfReplay` verdict covers the live-vs-re-simulation class but *cannot* see a browser-vs-bun difference (see **Determinism & correspondence**); replaying the fresh bundle here is what does.
+- **A bundle bun cannot follow, V8 can.**
+  When `cli diverge` leaves a fresh browser bundle on the libm knife-edge (`session-3649f` f859, `session-1052f` f379) the frames after it are bun's, not the player's, and `cli trace` / `cli query` on them describe a run nobody saw.
+  Build the CLI for the browser's engine instead: `bun build src/tools/cli.ts --target=node --outfile=<scratch>/cli.node.mjs`, then `node <scratch>/cli.node.mjs diverge bundle.json` - node is V8, the same libm as Chromium, and `session-1052f` replays bit-exact there to its last frame (the tree stamp reads MISMATCH under node because the bundled file cannot find the source files it hashes; ignore that line).
+  Every replaying command works the same way, so the phase trace of the reported frame is one build away; `cli shot --dump` reaches the same truth through headless Chromium at the cost of a browser launch per query.
 - **No fix before a measured cause.**
   State the root cause with a number from a replay, probe, or trace before editing the solver.
   A theory that fits the code is not a diagnosis: the rope-refund bug survived four sessions because a plausible neighbour (missing rigid-rigid friction) was fixed instead of the measured energy source (`session-394f`/`458f`/`431f`/`726f`).
@@ -3447,6 +3451,23 @@ One more frame of winding slid the corner back out to the body's side; the sweep
 The path was 2 cm over length through a corner the rope never touched, the hanging hook was hauled 1.3 m in one frame to make it fit, and the attach two frames later anchored the chain over that phantom wrap, which is what was seen: the chain draped over a vertex nowhere near the straight line to its anchor.
 Only the `--dump` of `cli shot` could show it - the bundle diverges in bun from f859 on the libm knife-edge, and the tail is chaotic in that - and the fixed page reproduces the recording bit for bit up to f2633, where the rule first bites.
 `cli contacts` `chain-sweep-slide-off` is the detector: the recording's polygon and its two spans exactly, played forwards (the slide-off, no crossing) and backwards (the rope arriving from clear onto the corner: a clockwise crossing at the corner itself), so a rule that silenced the sweep outright fails the second half.
+
+### A corner two statics share is the span's own end
+
+A point that stood within a nanometre of the old span's line was **on** it, not on a side of it (`NO_SIDE` in `lib/spanSweep.ts`), and a crossing is only reported for a point that had a side to come from.
+The side is the sign of a cross product, and below float noise that sign is not a fact about the scene.
+
+`session-1052f` f932 is the finding.
+The ball level's crane beam ends in a 20 cm block authored to share the beam's right face and both corners on it, a few ulps off round numbers (`x: 1069.9999999999998`), so the block's corner and the beam's coincident one stand 1.8e-15 m apart.
+The ball hung from the block's underside on a chain over that corner, wound itself up beside the block and spun, and the span from its loop to the corner turned through horizontal as the loop came round.
+That turn changed which side of the span's line the beam's corner was on - by 7e-18 m² - and the sweep read it as the beam passing through the span at u = 1: a wrap on the beam, counter-clockwise, at its tangent vertex on the far side, 20 cm away.
+The path was 28 cm over length through a corner the chain never went near; the solve hauled the ball 19 cm into the block to fit, the push-out threw it 10 cm back out, and the frame closed at 7.4 m/s - and every invariant read HEALTHY, because the kick was a *reversal* (the speed-gain bar under-reads those: 5.0 m/s of gain less the winding budget sat at 3.7 against a bar of 4) and the solve was entitled to what the phantom path opened.
+What was seen was the chain drawn from the ball to the beam's top corner and back down the face to its anchor under the block.
+The flip is deterministic, not chance: the two corners differ in x only, so the side reads as the sign of the span's y-extent, and it changes every time the loop crosses the corner's own height with the chain bent there.
+The same geometry with the sweep's floor in place drops the corner wrap that frame, as the straight line to the anchor no longer cuts the block, and the ball swings on.
+The bundle diverges in bun from f379 on the libm knife-edge; the fix was measured on V8 (see **Debugging discipline**), where the tree reproduces the recording bit for bit up to f932 and leaves it there.
+`cli contacts` `chain-shared-corner` is the detector, both halves red without the floor: the recording's block, beam and f931 -> f932 spans asked directly (coincident to noise and not to zero, and not a crossing), with the catch that put the chain over the corner twenty frames earlier as the control (the block's own corner arriving from clear, 6 mm² of commitment, still counter-clockwise at the corner); and the scene end to end, the ball seeded with the recording's state at the shot and steered by its cursor path, where the beam is never on the chain's path, no frame moves the ball more than 10 cm (18.3 without the floor) and none lengthens the path by more than 5 cm (11.3).
+`playtests/regressions/session-1052f.json.gz` is the recording.
 
 ## Hook-proof surfaces
 

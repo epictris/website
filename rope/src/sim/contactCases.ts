@@ -5622,6 +5622,198 @@ function caseChainSweepSlideOff(): ContactResult {
   );
 }
 
+// chain-shared-corner - a corner two statics share is the span's own end, not
+// a body passing through it.
+//
+// `session-1052f` f932. A 20 cm block sits at the end of a beam, authored so
+// the two share their right face and both corners on it - and authored a few
+// ulps off round numbers (x = 1069.9999999999998), so the block's corner and
+// the beam's coincident one are 1.8e-15 m apart. The ball hung from the
+// block's underside on a chain over that corner, wound itself up beside the
+// block, and spun; the span from the loop to the corner turned through
+// horizontal as the loop came round. That turn changed which side of the
+// span's line the beam's corner stood on - by 7e-18 m² - and the sweep read
+// it as the beam passing through the span at u = 1: a wrap on the beam,
+// counter-clockwise, at its tangent vertex 20 cm away on the far side. The
+// path was 28 cm over length through a corner the chain never went near, and
+// the solve hauled the ball 19 cm into the block to fit, the push-out threw it
+// 10 cm back, and the frame closed at 7.4 m/s - a 52 kg ball flung into a
+// corner by a chain that had not moved. Every invariant read HEALTHY: the kick
+// was a reversal, which the speed-gain bar under-reads, and the solve was
+// entitled to what the phantom path opened.
+//
+// The rule: a point that stood within a nanometre of the old span's line was
+// on it, not on a side of it (`NO_SIDE` in `lib/spanSweep.ts`). The first
+// half is the recording's geometry exactly - the block, the beam and the
+// f931 -> f932 spans - asked directly: the beam's corner is coincident with
+// the span's end to noise and not to zero (the premise), and it is not a
+// crossing. The control is the catch that had put the chain over the corner
+// twenty frames earlier, the block's own corner arriving from clear with 6 mm²
+// of commitment: still reported, counter-clockwise, at the corner, so a rule
+// that silenced the sweep fails here. The second half is the scene end to
+// end: the ball seeded with the recording's state at the shot and steered by
+// the recording's own cursor path for the 84 frames that follow. The beam is
+// never on the chain's path, the ball never moves more than 10 cm in a frame
+// (18.3 cm without the rule) and the path never lengthens by more than 5 cm
+// in one (11.3 cm without it) - while the chain does bend over the shared
+// corner, which is what makes the run the scenario rather than a miss.
+function caseChainSharedCorner(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // The recording's block and beam, authored coordinates and all: the noise
+  // is in the coordinates and the case is about the noise.
+  const scene = (): RawLevelData =>
+    ({
+      player: { x: 1077.69019180483, y: -1193.1562377289252, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: 1069.9999999999998,
+          y: -1245.0000000000007,
+          rot: 0,
+          friction: 1,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 20 } }],
+        },
+        {
+          kind: "static",
+          x: 899.9999999999998,
+          y: -1245.0000000000007,
+          rot: 0,
+          friction: 1,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 360, h: 20 } }],
+        },
+      ],
+    }) as RawLevelData;
+
+  const world = new World();
+  const built = buildLevelBodies(world, scaleLevelData(scene(), PX), () => {}).bodies;
+  const block = built[0]!.body!.primaryShape();
+  const beam = built[1]!.body!.primaryShape();
+  const sharedCorner = new Vec2(10.8, -12.35);
+  const beamCorner = ShapeGeometry.getGlobalCorners(beam).reduce((best, c) =>
+    c.distanceTo(sharedCorner) < best.distanceTo(sharedCorner) ? c : best,
+  );
+  // The span from the loop to the wrap on the block's corner, at f931's
+  // regeneration and at f932's: the loop came round from 4 mm above the
+  // corner's line to 39 mm below it. The end is the wrap node's position -
+  // the corner as its contact stores it, a local offset added back to the
+  // body's origin - which is where the ulps come from.
+  const turn = {
+    s0: new Vec2(11.007991829294758, -12.354188097066233),
+    e0: new Vec2(10.799999999999997, -12.350000000000007),
+    s1: new Vec2(11.031249691600634, -12.310837928470068),
+    e1: new Vec2(10.799999999999997, -12.350000000000007),
+  };
+  const gap = beamCorner.distanceTo(turn.e0);
+  check(`the beam's corner is the span's end to noise and not to zero (${gap.toExponential(1)} m apart)`, gap > 0 && gap < 1e-12);
+  const phantom = shapeCrossesSpan(beam, null, turn, () => true);
+  check(
+    `the loop turning past it is not the beam passing through the span (got ${phantom ? `${WrapDirection[phantom.side]} at u=${phantom.u.toFixed(3)}` : "none"})`,
+    phantom === null,
+  );
+  // f910: the ball falling past the corner from beside the block, the span
+  // from the loop to the anchor swinging onto the block's corner from clear.
+  const catchSpan = {
+    s0: new Vec2(10.854505797266286, -11.950472641209387),
+    e0: new Vec2(10.799999999999999, -12.462319052468963),
+    s1: new Vec2(10.799126197041252, -11.948014803340689),
+    e1: new Vec2(10.799999999999999, -12.462319052468963),
+  };
+  const caught = shapeCrossesSpan(block, null, catchSpan, () => true);
+  check(
+    `the catch that put the chain over the corner is still one, counter-clockwise, at the corner (got ${caught ? `${WrapDirection[caught.side]} at ${caught.point}, u=${caught.u.toFixed(2)}` : "none"})`,
+    caught !== null &&
+      caught.side === WrapDirection.CounterClockwise &&
+      caught.point.distanceTo(sharedCorner) < 1e-6 &&
+      caught.u > 0.5 &&
+      caught.u < 0.95,
+  );
+
+  // End to end. The recording's ball a frame before the shot - its position
+  // is the spawn, the rest is set - and its cursor from the shot on: the loop
+  // snaps to the aim and the hook lands on the block's underside 7 cm from the
+  // corner, the ball swings under the block, the cursor circles it and the
+  // wind-up carries it round beside the block with the chain over the corner.
+  const cursor = [
+    10.644, -12.944, 10.637, -12.936, 10.631, -12.928, 10.623, -12.917, 10.618, -12.910, 10.612, -12.900,
+    10.607, -12.893, 10.604, -12.887, 10.598, -12.878, 10.595, -12.872, 10.590, -12.863, 10.588, -12.857,
+    10.585, -12.851, 10.581, -12.842, 10.578, -12.836, 10.575, -12.827, 10.573, -12.822, 10.571, -12.816,
+    10.567, -12.807, 10.565, -12.801, 10.556, -12.786, 10.541, -12.777, 10.520, -12.768, 10.465, -12.750,
+    10.411, -12.735, 10.304, -12.704, 10.208, -12.666, 10.086, -12.628, 9.897, -12.532, 9.792, -12.456,
+    9.633, -12.318, 9.557, -12.232, 9.497, -12.140, 9.459, -12.010, 9.448, -11.921, 9.457, -11.792,
+    9.489, -11.704, 9.524, -11.616, 9.604, -11.482, 9.689, -11.375, 9.897, -11.176, 10.079, -11.044,
+    10.262, -10.938, 10.538, -10.812, 10.708, -10.752, 10.926, -10.688, 11.021, -10.661, 11.059, -10.650,
+    11.066, -10.649, 11.065, -10.648, 11.065, -10.647, 11.065, -10.647, 11.065, -10.646, 11.061, -10.658,
+    11.045, -10.681, 11.015, -10.716, 10.973, -10.752, 10.924, -10.797, 10.836, -10.875, 10.754, -10.937,
+    10.620, -11.048, 10.538, -11.129, 10.447, -11.233, 10.307, -11.449, 10.235, -11.638, 10.163, -11.997,
+    10.156, -12.232, 10.202, -12.460, 10.368, -12.741, 10.558, -12.904, 10.897, -13.106, 11.145, -13.210,
+    11.393, -13.269, 11.713, -13.282, 11.860, -13.243, 11.981, -13.142, 12.030, -13.027, 12.056, -12.880,
+    12.082, -12.593, 12.082, -12.391, 12.069, -12.097, 12.049, -11.934, 12.023, -11.777, 11.974, -11.581,
+  ];
+  const level = new BallLevel(scene());
+  const ball = level.ball;
+  const beamBody = level.world.bodies[2]!;
+  ball.linearVelocity = new Vec2(-1.907345339545607, 1.4927585059797137);
+  ball.globalRotation = -12.810341354933586;
+  ball.angularVelocity = 1.7910888729818364;
+  let prev = emptyFrameInput();
+  let lastPos: Vec2 | null = null;
+  let lastLen: number | null = null;
+  let overCornerAt: number | null = null;
+  let onBeamAt: number | null = null;
+  let jump = 0;
+  let jumpAt: number | null = null;
+  let lengthened = 0;
+  let lengthenedAt: number | null = null;
+  for (let f = 1; f * 2 <= cursor.length; f++) {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, prev.fire),
+      mouseWorldPosition: new Vec2(cursor[f * 2 - 2]!, cursor[f * 2 - 1]!),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+    const p = ball.globalPosition;
+    if (lastPos) {
+      const d = p.distanceTo(lastPos);
+      if (d > jump) {
+        jump = d;
+        jumpAt = f;
+      }
+    }
+    lastPos = p;
+    const chain = ball.chain;
+    if (!chain) {
+      lastLen = null;
+      continue;
+    }
+    const path = chain.path();
+    if (overCornerAt === null && path.some((n) => n instanceof RopeWrap && n.contact.globalPosition.distanceTo(sharedCorner) < 1e-6)) {
+      overCornerAt = f;
+    }
+    if (onBeamAt === null && path.some((n) => n.contact.obj === beamBody)) onBeamAt = f;
+    const len = chain.getCurrentLength();
+    if (lastLen !== null && len - lastLen > lengthened) {
+      lengthened = len - lastLen;
+      lengthenedAt = f;
+    }
+    lastLen = len;
+  }
+  check(`the chain bends over the shared corner (from f${overCornerAt})`, overCornerAt !== null && overCornerAt < 70);
+  check(`...and the beam is never on its path (first @f${onBeamAt ?? "never"})`, onBeamAt === null);
+  check(`the ball never moves more than 10 cm in a frame (max ${(jump * 100).toFixed(1)} cm @f${jumpAt})`, jump < 0.1);
+  check(
+    `the path never lengthens by more than 5 cm in a frame (max ${(lengthened * 100).toFixed(1)} cm @f${lengthenedAt})`,
+    lengthened < 0.05,
+  );
+  return ok("chain-shared-corner — a corner two statics share is the span's own end, not a body passing through it", passed, details);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -5667,6 +5859,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainPostCatch());
   results.push(caseChainSweep());
   results.push(caseChainSweepSlideOff());
+  results.push(caseChainSharedCorner());
   results.push(caseChainWedgedEnd());
   results.push(caseHungAnchor());
   results.push(casePlankAnchor());

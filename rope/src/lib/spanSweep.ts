@@ -61,6 +61,20 @@ export interface Crossing {
 
 const DEGENERATE_SPAN = 1e-12;
 
+// How far off the old span's line a point must have stood to have been on a
+// SIDE of it, in metres. The side is the sign of a cross product, and below
+// float noise that sign is not a fact about the scene: two statics authored
+// corner to corner put their corners a few ulps apart (1.8e-15 m in
+// `session-1052f`), so the span ending on one body's corner had the other
+// body's coincident corner "on a side" of it by 7e-18 m² - the side changing
+// with every regeneration that turned the span, and reported as that body
+// passing through the span at u = 1, which wrapped it at its tangent vertex
+// 20 cm away and hauled the ball 28 cm to fit. A nanometre is five orders of
+// magnitude above any offset float error can put between two coordinates of
+// this world and five below anything physical (the intersection test's own
+// touching band is 0.1 mm), so the floor moves no real crossing.
+const NO_SIDE = 1e-9;
+
 // Did `p` (moving p0 -> p1) pass through the span (moving s0e0 -> s1e1)?
 export function pointCrossesSpan(span: SpanMotion, p0: Vec2, p1: Vec2): Crossing | null {
   const a0 = p0.sub(span.s0);
@@ -72,8 +86,11 @@ export function pointCrossesSpan(span: SpanMotion, p0: Vec2, p1: Vec2): Crossing
   const f1 = a0.add(a1).cross(b0.add(b1));
   // A net change of side is exactly one root in (0, 1) of a quadratic, and no
   // change is none or two - the second being the in-and-out that is not a
-  // crossing. A point ON the line at either end has no side to have changed.
+  // crossing. A point ON the line at either end has no side to have changed,
+  // and "on" is measured against the noise floor where it is the side the
+  // point came FROM that is being read - that sign is the wrap direction.
   if (f0 === 0 || f1 === 0 || (f0 > 0) === (f1 > 0)) return null;
+  if (Math.abs(f0) <= NO_SIDE * b0.length()) return null;
 
   const c2 = a1.cross(b1);
   const c1 = a0.cross(b1) + a1.cross(b0);
