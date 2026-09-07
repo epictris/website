@@ -187,9 +187,11 @@ static geometry included. What is left outside it is the ball avatar's aim **ste
   replays bit-for-bit across the change, which is the test that it is a rejection and not an
   approximation. A grid or a BVH is the next step if body counts ever justify it, and this is
   the thing to measure it against rather than against the version with no rejection at all.
-- No CCD, no speculative *sweeps*, no sub-stepping. Body speeds are bounded by the invariants
-  and tunnelling has never been the failure mode; the rope's failure modes are geometric and
-  have their own tooling. (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
+- No sub-stepping, and no CCD for bodies beyond the two small fast circles that set
+  `RigidBody2D.continuous` (the ball and its hook). The one *sweep* is the player's chain's
+  wrap scan (see **Continuous wrap detection**): a span is swept between two looks at it,
+  because at 15 m/s a 10 cm body fits between them. Scene chains keep the plain sample.
+  (Contacts *are* speculative in the cheap sense — see `CONTACT_SLOP`.)
 - Circles remain single-point; polygon contacts get a real two-point manifold (above).
 - `SlackSimulation` is fully ported but currently unwired — the C# `Rope` also left its
   `slackSimulation` field unused; the grapple rope renders straight spans.
@@ -1151,10 +1153,12 @@ Ball runs add: `rope-anchor-kick` (the solve added speed on the frame the chain
 anchored — an anchor born over its length), `rope-solve-kick` (the solve added
 more than 4 m/s in **any** single frame), `rope-credit-unearned` (the chain phase
 took more along its own pull than the constraint was opening at), `chain-clip`
-(a span's interior deep inside static geometry) and `chain-body-embedded` (a
+(a span's interior deep inside static geometry), `chain-body-embedded` (a
 rigid body the chain runs over - its anchor, or anything it wraps - deep inside
 static geometry; the chain solve is the one thing that hauls those into the
-scenery, and `session-133f`'s plank tunnelled through a post HEALTHY without it).
+scenery, and `session-133f`'s plank tunnelled through a post HEALTHY without it)
+and `chain-tunnel` (a wrappable body a chain span passed *through* between two
+frames without the chain bending round it - see **Continuous wrap detection**).
 `rope-solve-kick` exists because `runaway-speed` is a 1000 m/s ceiling and so
 never saw a 96 m/s one-frame launch.
 It is measured against what the frame's own **winding** entitles the solve to:
@@ -3334,6 +3338,42 @@ gh release delete-asset assets rock.glb                      # change your mind
 - **`Scene3D` must be instantiable twice** - the game page and the editor both have one - so everything mutable lives on the instance. The `playerRig.ts` module-global pattern is the anti-pattern this is written against. The material cache in `assets.ts` is shared deliberately: it is immutable once built and belongs to no scene.
 - **Transform sync must not allocate**, and must read `renderPosition/renderRotation(alpha)` only. The debug overlay is the one deliberate exception (it exists to show what the sim believes) and it stays 2D.
 - **Where the chain's links fall is shared code.** `render/chainMetrics.ts` holds the one continuous arc walk both renderers use, because that is the one part of chain drawing that has ever been wrong (`session-1467f`) and two copies of it would drift.
+
+## Continuous wrap detection
+
+The wrap scan is a **sample**: each span is tested against the scene where it *is*, once per regeneration.
+At speed that is not a path.
+`session-126f` dropped the ball from eleven metres with its chain deployed, past a 20 x 10 cm block that lay in the first span's way, and the chain went straight through it: the span moved 25 cm a frame, was above the block on f92 and below it on f94, and on the one frame it landed inside the block (f93) the direction rule - which side is the body's **centre** on - chose the corner the chain was *leaving* by, which `cullDetachedNodes` dropped a frame later.
+Every invariant read HEALTHY, because the chain was never inside anything.
+
+The player's chain is the one rope that moves like that, so it is the one that **sweeps** (`Rope.continuous`, set by `BallPlayer.shoot`; scene chains and the grapple rope keep the sample, which is what every one of their recordings was made through).
+`Rope.sweepSpan` asks, per span, what passed *through* it since the last regeneration: the span's two ends move linearly from where the last regeneration left them to where they are, a point of the scene moves linearly from where its body's pose then put it, and the point's signed side of the span is a quadratic in time (`lib/spanSweep.ts`).
+A net change of side with the crossing inside the span's extent is a crossing; in-and-out is not, and going round the span's end is not - a body the hook flew past is not a body the chain ran into.
+A polygon is crossed by any exposed vertex (a seam vertex has no outside to bend round), a circle by its centre, and the side a point came **from** is the wrap direction: the rope bends round the body with the body on the side it entered from, which is what the centre rule gets wrong for a body most of the way through.
+A shape found both ways is one shape, and the crossing decides its direction; one that crossed and stands clear of the span's start is wrapped at its **tangent from there**, the same construction the sample uses for a span clean through a shape.
+
+The baseline is kept by **role**, not by node identity: the point the rope leaves its start body from (the last coil node, or the start), the far end, and a pose per mobile body in the scene.
+The coil re-derives its node objects every frame and an attach replaces `end`, so identity would lose exactly the two spans that move fastest; a wrap in between is a material point of its body and is placed by that body's recorded pose.
+Sweeps chain regeneration to regeneration rather than frame to frame, so every motion of the path is covered once whatever the caller's frame looks like - the ball controller regenerates before its solve, in it, and on an attach, and the sweep between each pair is that step's motion.
+`detectSceneCatch` re-records after it discards a coil it found, so a flight's baseline is the straight span it draws.
+The rope's own two bodies are never swept for: a span can cross the ball's own disc on a fast swing, the sample has always been free to wrap the rim when a span *overlaps* it (the coil), and a catch on the ball born of a crossing is a wrap the coil machinery has no reading of.
+The query is the box the moving span covered (`World.queryShapes`) plus every mobile surface, since a body that moved may have come from anywhere and there are few enough of those to ask each one.
+
+Catching the block is half of it.
+The far end of that chain was the quarter-kilo hook, and the 52 kg ball falling at 15 m/s then had to whip it round the block by 40 cm a frame.
+The correction step is a straight pull along the last span sized by the whole error, and the last span was 15 cm: the hook was carried a span past the corner, the next iteration pulled it straight back, and ten iterations oscillated about the corner for 3 mm of progress each (f97).
+The over-length stood at 0.9 m for four frames, the ball was braked to a standstill by a hook that could not move, and when the hook finally bit the block the solve hauled the ball 40 cm in one frame - an 18 m/s launch straight up.
+So on a continuous rope the far end may be drawn **up to** the node it is being pulled towards and no further (`Rope.boundToNode`), and an end that reaches its node has that wrap dropped inside the solve (`roundEndNode`) so the next iteration pulls it on towards the node before.
+That is how a light end rounds a corner *within* a frame: the hook whips over the block in the frame the error appears, bites where it lands, and the ball is arrested over the corner as a swing.
+Only a scene node is dropped - the coil is `syncCoil`'s to keep and the start is where the rope ends - and the monotone guard forgives a continuous rope a nanometre, because an end snapped onto a node measures the same path to the last bit only in exact arithmetic.
+
+`chain-tunnel` (`TunnelMonitor`) is the detector, and it exists because nothing else could see this.
+It runs the same crossing test over the frame rather than over each regeneration - what the sim does within a frame is its business, and what the invariant asserts is the frame's outcome: a wrappable body a span passed through, more than 2 cm beyond the chain and not within 5 cm of the span's start, that the chain does not run over at the frame's end.
+A body that crossed and *is* on the path is remembered with the side it came from, because the wrong-corner catch above holds a body for exactly one frame and by the time it is dropped no span crosses anything; a remembered body the chain lets go of on the far side, within a span's extent, went through rather than round.
+The chord between the nodes either side of a body's wraps is what records that side for a body that has just arrived on the path - the spans that end on it cannot, since a span never tests the shape it ends on.
+`cli contacts` `chain-sweep` is the case: the recording's fall past the block, the same fall past a 5 cm round post, a hook thrown sideways from a falling ball with a post inside the wedge the deploying span sweeps, and a stone dropped through a taut chain (the body moving rather than the chain), each run twice - the sweep on, and off on the identical run so the monitor reports the pass-through - which is what makes every rig a detector rather than a script that happens to pass.
+`playtests/regressions/session-126f.json.gz` is the recording.
+Across the rest of the corpus the change is invisible: `cli ab --ref` reads identical on every bundle but `session-611f`, whose lease and over-length shrink a little.
 
 ## Hook-proof surfaces
 

@@ -13,13 +13,20 @@ import {
   RigidBody2D,
 } from "../engine/body";
 import { isExposedCorner } from "../engine/shapes";
-import { GRAVITY } from "../engine/world";
+import { GRAVITY, type World } from "../engine/world";
 import { Colors } from "../engine/debug";
 import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeGeneration } from "../lib/ropeGeneration";
 import { cullDetachedNodes } from "../lib/nodeDetachment";
+import {
+  shapeCrossesSpan,
+  spanMotionBox,
+  type Crossing,
+  type Pose,
+  type SpanMotion,
+} from "../lib/spanSweep";
 import { Calc } from "../lib/calc";
 import {
   RopeAttachment,
@@ -89,7 +96,7 @@ function wrappableSurfaces(bodies: readonly PhysicsBody2D[]): WrapCandidate[] {
 // Single-shape bodies are answered without asking. Their vertices are all the
 // body's own corners by construction, and short-circuiting keeps a collinear
 // vertex of a lone convex polygon reading exactly as it always has.
-function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): boolean {
+export function isSeamVertex(shape: CollisionShape2D, vertexIndex: number): boolean {
   return shape.owner.getShapes().length > 1 && !shape.isVertexExposed(vertexIndex);
 }
 
@@ -224,6 +231,26 @@ export class Rope {
   // frames, so last frame's is the right one to act on.
   private blockedLastFrame = false;
   frictionCoefficient = 0.4;
+  // Continuous wrap detection: every regeneration also asks what passed
+  // THROUGH each span since the last one, not only what the span overlaps
+  // where it now is (see `sweepSpan`). Off by default and on for the ball's
+  // chain only: the sample is what every scene chain was recorded through, and
+  // a scene chain is not the thing moving at 15 m/s.
+  continuous = false;
+  // The baseline the sweep measures from - the path as the last regeneration
+  // left it. Nodes are placed by ROLE rather than by identity, because the
+  // node objects at the rope's two ends are not stable: the coil re-derives its
+  // nodes every frame, and an attach replaces `end`. The point the rope leaves
+  // its start body from (the last coil node, or the start itself) and the far
+  // end are one point each whatever object carries them; a wrap in between is
+  // a material point of its body, placed by that body's pose then.
+  private lastExit: Vec2 | null = null;
+  private lastEnd: Vec2 | null = null;
+  private lastPoses = new Map<PhysicsBody2D, Pose>();
+  // Set by a correction step that drew the far end all the way up to the node
+  // it was being pulled towards (see `correctShapePositionAndRotation`); read
+  // and cleared by the iteration loop, which rounds the corner for it.
+  private endReachedNode = false;
 
   // `start`/`end`/`wraps` invalidate the memoized path geometry on ASSIGNMENT
   // (see `markPathChanged` below), so no caller - this file or another - can
@@ -482,7 +509,12 @@ export class Rope {
   detectSceneCatch(bodies: PhysicsBody2D[], ballBody: PhysicsBody2D): boolean {
     this.regeneratePath(bodies);
     const caught = this.wraps.some((w) => w.contact.obj !== ballBody);
-    if (!caught) this.wraps = [];
+    if (!caught) {
+      this.wraps = [];
+      // The straight span is what the next sweep measures from, not the coil
+      // the regeneration found and this discarded.
+      this.recordSweepBaseline(bodies);
+    }
     return caught;
   }
 
@@ -1508,26 +1540,37 @@ export class Rope {
         scan = pool;
       }
 
-      const colliders = scan.filter(({ shape }) => {
-        // The span's own endpoints are excluded by SHAPE, not by body. A span
-        // ending on a shape always reports overlap against it, and wrapping the
-        // thing you are tied to is the self-intersection resolvers' job, not
-        // this scan's - but a *sibling* piece of that same body is ordinary
-        // scenery in the span's way. Excluding the whole body made a compound
-        // wall stop existing for every span touching any of it: once the chain
-        // wrapped the rotated slab, the vertical post it then cut straight
-        // through was invisible, because the post and the slab happen to be one
-        // body (`session-358f`).
-        if (shape === span.from.contact.shape || shape === span.to.contact.shape) return false;
-        if (
-          this.isPointOutsideBoundingStrip(shape.globalPosition, span.span) &&
+      // The span's own endpoints are excluded by SHAPE, not by body. A span
+      // ending on a shape always reports overlap against it, and wrapping the
+      // thing you are tied to is the self-intersection resolvers' job, not
+      // this scan's - but a *sibling* piece of that same body is ordinary
+      // scenery in the span's way. Excluding the whole body made a compound
+      // wall stop existing for every span touching any of it: once the chain
+      // wrapped the rotated slab, the vertical post it then cut straight
+      // through was invisible, because the post and the slab happen to be one
+      // body (`session-358f`).
+      const notInPlay = (shape: CollisionShape2D): boolean =>
+        shape === span.from.contact.shape ||
+        shape === span.to.contact.shape ||
+        (this.isPointOutsideBoundingStrip(shape.globalPosition, span.span) &&
           (Intersections.intersectsPoint(shape, span.span.start) === IntersectionStatus.Overlap ||
-            Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap)
-        ) {
-          return false;
+            Intersections.intersectsPoint(shape, span.span.end) === IntersectionStatus.Overlap));
+
+      const colliders = scan.filter(
+        ({ shape }) =>
+          !notInPlay(shape) &&
+          Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap,
+      );
+
+      // What the span passed THROUGH on its way here, which the overlap test
+      // above cannot see once it is through. A shape found both ways is one
+      // shape, and the crossing is what decides its direction.
+      const swept = this.continuous ? this.sweepSpan(span, surfaces, surfaceIndex, world) : null;
+      if (swept) {
+        for (const cand of swept.keys()) {
+          if (!notInPlay(cand.shape) && !colliders.includes(cand)) colliders.push(cand);
         }
-        return Intersections.intersectsSegment(shape, span.span) === IntersectionStatus.Overlap;
-      });
+      }
 
       colliders.sort(
         (a, b) =>
@@ -1535,13 +1578,36 @@ export class Rope {
           span.span.getClosestPointOnLine(b.shape.globalPosition).distanceTo(span.span.start),
       );
 
-      for (const { body, shape: bodyShape, shapeIndex } of colliders) {
-        const wrapDir = span.span.calculateWrapDirection(bodyShape.globalPosition);
+      for (const cand of colliders) {
+        const { body, shape: bodyShape, shapeIndex } = cand;
+        // The side the shape came FROM, where it crossed the span; the side its
+        // centre is on, where it did not. The second is the sample's rule and
+        // it is wrong for exactly the shapes the first knows about: a body most
+        // of the way through a span has its centre on the far side, and the
+        // wrap the centre chooses bends the rope the way the body is LEAVING,
+        // which the detachment cull then drops a frame later (`session-126f`
+        // f93). A shape that crossed and now stands clear of the span's start
+        // is wrapped at its tangent from there, the same construction the
+        // sample uses for a span clean through a shape.
+        const crossing = swept?.get(cand) ?? null;
+        const wrapDir = crossing
+          ? crossing.side
+          : span.span.calculateWrapDirection(bodyShape.globalPosition);
+        const crossedFromClear =
+          crossing !== null &&
+          Intersections.intersectsPoint(bodyShape, span.span.start) === IntersectionStatus.Separate;
 
         if (bodyShape.shape.kind === "circle") {
           let tangentPoint: Vec2;
           const { entry, exit } = Intersections.getIntersectionsShapeSegment(bodyShape, span.span);
-          if (entry && !exit) tangentPoint = entry.point;
+          if (crossedFromClear) {
+            tangentPoint = RopeGeneration.calculateCircleTangentPoint(
+              bodyShape,
+              wrapDir,
+              span.span.start,
+              GenerationDirection.Forward,
+            );
+          } else if (entry && !exit) tangentPoint = entry.point;
           else if (!entry && exit) tangentPoint = exit.point;
           else if (entry && exit) {
             tangentPoint = RopeGeneration.calculateCircleTangentPoint(
@@ -1564,7 +1630,13 @@ export class Rope {
           const corners = ShapeGeometry.getGlobalCorners(bodyShape);
           let vertexIndex: number | null = null;
           const { entry, exit } = Intersections.getIntersectionsShapeSegment(bodyShape, span.span);
-          if ((entry && !exit) || (!entry && exit) || (!entry && !exit)) {
+          if (crossedFromClear) {
+            vertexIndex = RopeGeneration.calculateTangentVertexIndex(
+              bodyShape,
+              wrapDir,
+              span.span.start,
+            );
+          } else if ((entry && !exit) || (!entry && exit) || (!entry && !exit)) {
             let maxVertexAngle = 0;
             for (let i = 0; i < corners.length; i++) {
               const vertex = corners[i]!;
@@ -1620,6 +1692,100 @@ export class Rope {
     this.cullDuplicateNodes();
     this.wraps = cullDetachedNodes(this.start, this.end, this.wraps);
     this.syncCoil();
+    this.recordSweepBaseline(bodies);
+  }
+
+  // Continuous wrap detection for one span: which surfaces passed through it
+  // between the last regeneration and this one, and from which side (see
+  // `SpanSweep`). The span's ends are placed where the last regeneration left
+  // them (`previousNodePosition`), the scene's mobile bodies where it saw them
+  // (`lastPoses`), and a static is where it is.
+  //
+  // Sweeps are chained regeneration to regeneration rather than frame to frame,
+  // so every motion of the path is covered exactly once whatever the caller's
+  // frame looks like: the ball controller regenerates before its solve, in it,
+  // and on an attach, and the sweep between each pair is that step's motion.
+  //
+  // The rope's own two bodies are never swept for. The chain can cross the
+  // ball's own disc on a fast swing, and the sample has always been free to
+  // wrap the ball's rim when a span overlaps it (the coil); what this scan is
+  // for is the SCENE, and a catch on the ball itself born of a crossing rather
+  // than an overlap is a wrap the coil machinery has no reading of.
+  private sweepSpan(
+    span: RopePath,
+    surfaces: readonly WrapCandidate[],
+    surfaceIndex: Map<CollisionShape2D, number>,
+    world: World | null,
+  ): Map<WrapCandidate, Crossing> | null {
+    const s0 = this.previousNodePosition(span.from);
+    const e0 = this.previousNodePosition(span.to);
+    if (s0 === null || e0 === null) return null;
+    const motion: SpanMotion = { s0, e0, s1: span.span.start, e1: span.span.end };
+
+    // The box the moving span covered answers for everything that stood still.
+    // A body that MOVED may have come from anywhere, and there are few enough
+    // of those to ask each one.
+    let pool: readonly WrapCandidate[];
+    if (world) {
+      const box = spanMotionBox(motion);
+      const found: WrapCandidate[] = [];
+      for (const shape of world.queryShapes(box.minX, box.minY, box.maxX, box.maxY)) {
+        const i = surfaceIndex.get(shape);
+        if (i !== undefined) found.push(surfaces[i]!);
+      }
+      for (const cand of surfaces) {
+        if (cand.body.isMobile && !found.includes(cand)) found.push(cand);
+      }
+      pool = found;
+    } else {
+      pool = surfaces;
+    }
+
+    const startObj = this.start.contact.obj;
+    const endObj = this.end.contact.obj;
+    let out: Map<WrapCandidate, Crossing> | null = null;
+    for (const cand of pool) {
+      if (cand.body === startObj || cand.body === endObj) continue;
+      if (cand.shape === span.from.contact.shape || cand.shape === span.to.contact.shape) continue;
+      const pose = cand.body.isMobile ? (this.lastPoses.get(cand.body) ?? null) : null;
+      const crossing = shapeCrossesSpan(cand.shape, pose, motion, (i) => !isSeamVertex(cand.shape, i));
+      if (crossing) (out ??= new Map()).set(cand, crossing);
+    }
+    return out;
+  }
+
+  // Where a node of the current path was at the last regeneration, by role
+  // (see `lastExit`); null where nothing was recorded, which is the first
+  // regeneration of a rope and a node on a mobile body the scene did not hold.
+  private previousNodePosition(node: RopeNode): Vec2 | null {
+    if (node === this.end) return this.lastEnd;
+    const obj = node.contact.obj;
+    if (obj === this.start.contact.obj && node.contact.shapeIndex === this.start.contact.shapeIndex) {
+      return this.lastExit;
+    }
+    if (!(obj instanceof PhysicsBody2D) || !obj.isMobile) return node.contact.globalPosition;
+    const pose = this.lastPoses.get(obj);
+    if (!pose) return null;
+    return pose.position.add(node.contact.position.rotated(pose.rotation));
+  }
+
+  private recordSweepBaseline(bodies: readonly PhysicsBody2D[]): void {
+    if (!this.continuous) return;
+    this.lastEnd = this.end.contact.globalPosition;
+    const startObj = this.start.contact.obj;
+    const startIndex = this.start.contact.shapeIndex;
+    let exit: RopeNode = this.start;
+    for (const wrap of this.wraps) {
+      if (wrap.contact.obj !== startObj || wrap.contact.shapeIndex !== startIndex) break;
+      exit = wrap;
+    }
+    this.lastExit = exit.contact.globalPosition;
+    this.lastPoses = new Map();
+    for (const body of bodies) {
+      if (body.isMobile) {
+        this.lastPoses.set(body, { position: body.globalPosition, rotation: body.globalRotation });
+      }
+    }
   }
 
   // The coil: rope wound onto the circular body the rope *starts* on — the ball
@@ -1986,6 +2152,10 @@ export class Rope {
     // shortens, the translation takes the span's worth and leaves the coil's
     // worth to the unwind, which is whose it is.
     let relaxation = 1;
+    // A continuous rope's guard carries a nanometre of tolerance, because the
+    // end drawn exactly onto a node measures the same path to the last bit
+    // only in exact arithmetic (see `roundEndNode`).
+    const guardEpsilon = this.continuous ? Rope.MONOTONE_EPSILON : 0;
     for (let iteration = 0; iteration < this.maxIterations; iteration++) {
       // An iteration may only shorten the path. The correction is a step along
       // the FIRST span's direction sized by the whole error, and on a chain
@@ -1999,13 +2169,15 @@ export class Rope {
       // stands as over-length for the unwind and the stall lease, which is
       // what a correction geometry will not let through has always been.
       const before = this.snapshotPathBodies();
+      const wrapsBefore = this.wraps;
+      this.endReachedNode = false;
       const correctionImpulse = this.correctShapePositionAndRotation(relaxation);
       if (correctionImpulse === null) {
         if (iteration === 0) return null;
         break;
       }
       const after = this.calculateRopePathLength() - this.constraintLength;
-      const undone = after > error;
+      const undone = after > error + guardEpsilon;
       // One record per iteration, before the guard acts on it: what the
       // iteration was handed, what it left, whether it stood, and the per-body
       // terms that decided where the correction went. A diverging solve is ten
@@ -2014,19 +2186,55 @@ export class Rope {
       PhaseTrace.solve(iteration, error, after, undone, this.solveTerms);
       if (undone) {
         this.restorePathBodies(before);
+        if (this.wraps !== wrapsBefore) this.wraps = wrapsBefore;
         relaxation *= 0.5;
         if (relaxation < Rope.MIN_RELAXATION) break;
         continue;
       }
       error = after;
       cumulativeCorrectionImpulse += correctionImpulse;
+      if (this.endReachedNode) this.roundEndNode();
     }
     return cumulativeCorrectionImpulse;
+  }
+
+  // The far end has been drawn up to the last wrap node, so the rope no longer
+  // bends there: drop the node, and the next iteration pulls the end on towards
+  // the one before it. This is how a light end rounds a corner INSIDE a solve.
+  //
+  // The correction step is a straight pull along the last span sized by the
+  // whole error, and a chain caught over a small body by a ball falling at
+  // 15 m/s has an error of 40 cm against a last span of 15 cm: the quarter-kilo
+  // hook was carried a whole span past the corner, the next iteration pulled it
+  // straight back, and ten iterations oscillated about the corner for 3 mm of
+  // progress each (`session-126f` f97). The over-length then stood at 0.9 m
+  // for four frames, the ball was braked to a standstill by a hook that could
+  // not move, and when the hook finally bit the block the solve hauled the ball
+  // 40 cm in one frame - 18 m/s straight up. Whipped round the block within
+  // the frame instead, the hook bites where it lands and the ball is arrested
+  // over the corner as a swing, which is what a chain over a block does.
+  //
+  // Only a scene node is dropped. The last node may be the start itself or
+  // the coil on the start body, and neither is a corner to round: the coil is
+  // `syncCoil`'s to keep and the start is where the rope ends.
+  private roundEndNode(): void {
+    const last = this.wraps[this.wraps.length - 1];
+    if (!last) return;
+    if (
+      last.contact.obj === this.start.contact.obj &&
+      last.contact.shapeIndex === this.start.contact.shapeIndex
+    ) {
+      return;
+    }
+    this.wraps = this.wraps.slice(0, -1);
   }
 
   // Smallest share of a correction step worth trying before the solve gives
   // the frame up: six halvings, a sixty-fourth of the error.
   private static readonly MIN_RELAXATION = 1 / 64;
+  // Metres of lengthening the monotone guard forgives a continuous rope's
+  // iteration, so an end snapped onto a node is not undone for float noise.
+  private static readonly MONOTONE_EPSILON = 1e-9;
 
   private snapshotPathBodies(): { body: PhysicsBody2D; position: Vec2; rotation: number }[] {
     const out: { body: PhysicsBody2D; position: Vec2; rotation: number }[] = [];
@@ -2262,17 +2470,30 @@ export class Rope {
             : 1 / torqueArm;
         this.applyCorrectionMotion(
           dynamicBody.body,
-          correctionDir.mul(totalCorrectionMagnitude * linearFactor),
+          this.boundToNode(pathObject, correctionDir.mul(totalCorrectionMagnitude * linearFactor)),
         );
         dynamicBody.body.globalRotation += totalCorrectionMagnitude * angularFactor;
       } else {
         this.applyCorrectionMotion(
           dynamicBody.body,
-          correctionDir.mul(totalCorrectionMagnitude),
+          this.boundToNode(pathObject, correctionDir.mul(totalCorrectionMagnitude)),
         );
       }
     }
     return scaledCorrectionImpulse;
+  }
+
+  // A continuous rope's far end may be drawn up to the node it is being pulled
+  // towards and no further: past it the pull is through the corner the rope
+  // is bent around, and the step only lands the end on the far side of a node
+  // it should have rounded (see `roundEndNode`). A step that reaches the node
+  // is noted for the iteration loop to round it.
+  private boundToNode(pathObject: PathObject, motion: Vec2): Vec2 {
+    if (!this.continuous || !(pathObject instanceof PathEnd) || pathObject.selfWrap) return motion;
+    const reach = pathObject.previous.length();
+    if (motion.length() < reach) return motion;
+    this.endReachedNode = true;
+    return pathObject.directionToPrevious.mul(reach);
   }
 
   // Positional corrections on the player go through the collision system so

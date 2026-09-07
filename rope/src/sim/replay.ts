@@ -12,6 +12,7 @@ import {
   digestBall,
   EnergyMonitor,
   RollMonitor,
+  TunnelMonitor,
   digestsEqual,
   digestDrift,
   DRIFT_EPSILON,
@@ -146,6 +147,7 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   // but a description of the level.
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
+  const tunnel = new TunnelMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
   let bitDivergedAtFrame: number | null = null;
@@ -170,6 +172,8 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
       if (ev) violations.push(ev);
       const rv = roll.push(level);
       if (rv) violations.push(rv);
+      const tv = tunnel.push(level);
+      if (tv) violations.push(tv);
     } else {
       violations.push(...checkInvariants(level));
       const sv = stuck.push(level, input);

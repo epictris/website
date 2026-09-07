@@ -46,12 +46,14 @@ import {
   type LegacyBodyData,
   type LevelBodyData,
   type RawLevelData,
+  type ShapeData,
 } from "../level/levelFormat";
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import { BallLevel } from "../level/ballLevel";
 import { slideSparkDirection, SLIDE_RAMP_STEPS, SparkSystem } from "../render/sparks";
+import { checkBallInvariants, TunnelMonitor, type Violation } from "./trace";
 
 const DT = 1 / 60;
 const DEG = Math.PI / 180;
@@ -5178,6 +5180,239 @@ function caseDecorGroup(): ContactResult {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// chain-sweep - the player's chain catches a small body it passes at speed.
+//
+// `session-126f`: the ball dropped from eleven metres with its chain deployed,
+// and a 20 x 10 cm block that lay in the chain's way was simply passed
+// through. The chain fell 25 cm a frame; the wrap scan is a sample of where
+// each span IS, so on f92 the span was above the block, on f94 below it, and
+// on the one frame it landed inside (f93) the direction rule - which side is
+// the body's CENTRE on - chose the corner the chain was leaving by, which the
+// detachment cull dropped a frame later. Every invariant read HEALTHY: the
+// chain was never inside anything.
+//
+// The rope's `continuous` scan sweeps each span from where the last
+// regeneration left it (`Rope.sweepSpan`, `SpanSweep`), and a body a span
+// passed THROUGH is wrapped from the side it entered. Three rigs, the same
+// question each: with the sweep the body is on the chain's path from the frame
+// of the crossing and stays there, no invariant fires, and the tunnel monitor
+// is silent; with the sweep OFF on the identical run the monitor reports the
+// pass-through, which is what makes each rig a detector rather than a script
+// that happens to pass.
+//
+//   drop-block   the recording's rig: the fall past the block, and the whip
+//                that follows - a 52 kg ball and a quarter-kilo hook on the
+//                far side, arrested over the corner as a swing.
+//   drop-post    the same fall past a 5 cm round post, which is the circle
+//                branch of the same scan (a disc is crossed by its centre).
+//   throw-post   a hook thrown sideways from a FALLING ball: the deploying
+//                span sweeps a wedge as the ball drops away under it, and a
+//                post inside the wedge is snagged mid-flight - the deploy
+//                stops there, as `detectSceneCatch` has always promised.
+//   drop-stone   the body moving rather than the chain: a 5 cm stone falls
+//                at 11 m/s through a chain held taut from the ball on the
+//                floor to a wall, and is caught by it. This is the sweep
+//                placing a MOBILE body where it was at the last look.
+// ---------------------------------------------------------------------------
+interface SweepRun {
+  caughtAt: number | null;
+  lostAfterCatch: boolean;
+  tunnelAt: number | null;
+  violations: Violation[];
+  peakSpeed: number;
+  endSpeed: number;
+  deployStoppedAt: number | null;
+}
+
+function runSweepRig(
+  data: RawLevelData,
+  frames: number,
+  input: (f: number, level: BallLevel, prev: FrameInput) => FrameInput,
+  obstacleIndex: number,
+  continuous: boolean,
+): SweepRun {
+  const level = new BallLevel(data);
+  const obstacle = level.bodies.find((b) => b.buildIndex === obstacleIndex + 1) ?? null;
+  const tunnel = new TunnelMonitor();
+  const out: SweepRun = {
+    caughtAt: null,
+    lostAfterCatch: false,
+    tunnelAt: null,
+    violations: [],
+    peakSpeed: 0,
+    endSpeed: 0,
+    deployStoppedAt: null,
+  };
+  let prev = emptyFrameInput();
+  for (let f = 1; f <= frames; f++) {
+    const next = input(f, level, prev);
+    prev = next;
+    level.physicsProcess(next, DT);
+    // The scan is switched at the frame's end, after the shot's own frame has
+    // taken its baseline: the sweep needs a previous look before it can see
+    // anything, so this leaves the two runs identical up to the first frame
+    // the sweep could act on.
+    if (!continuous && level.ball.chain) level.ball.chain.continuous = false;
+    out.violations.push(...checkBallInvariants(level));
+    const tv = tunnel.push(level);
+    if (tv) {
+      out.violations.push(tv);
+      out.tunnelAt ??= tv.frame;
+    }
+    const chain = level.ball.chain;
+    const caught = chain !== null && chain.path().some((n) => n.contact.obj === obstacle);
+    if (caught && out.caughtAt === null) out.caughtAt = f;
+    if (!caught && out.caughtAt !== null) out.lostAfterCatch = true;
+    if (chain && !level.ball.hookInFlight && out.deployStoppedAt === null) out.deployStoppedAt = f;
+    out.peakSpeed = Math.max(out.peakSpeed, level.ball.linearVelocity.length());
+    out.endSpeed = level.ball.linearVelocity.length();
+  }
+  return out;
+}
+
+function caseChainSweep(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const describe = (r: SweepRun): string =>
+    `caught @f${r.caughtAt ?? "never"}${r.lostAfterCatch ? " then lost" : ""}, tunnel @f${r.tunnelAt ?? "never"}, ` +
+    `${r.violations.length} violation(s), peak ${r.peakSpeed.toFixed(1)} m/s, end ${r.endSpeed.toFixed(1)} m/s`;
+  const firstOther = (r: SweepRun): string => {
+    const v = r.violations.find((x) => x.kind !== "chain-tunnel");
+    return v ? ` (first: f${v.frame} ${v.kind}: ${v.detail})` : "";
+  };
+
+  // The recording's rig: the ball eleven metres up, the block 1.13 m under
+  // where the chain's first span will fall, the throw at the recording's aim.
+  const drop = (obstacle: ShapeData): RawLevelData =>
+    ({
+      player: { x: -248.36, y: -1455.64, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: -190,
+          y: -325,
+          rot: 0,
+          friction: 1,
+          objects: [{ type: "collision", shape: obstacle }],
+        },
+      ],
+    }) as RawLevelData;
+  const dropInput = (f: number, _level: BallLevel, prev: FrameInput): FrameInput => ({
+    ...emptyFrameInput(),
+    fire: button(f >= 58, prev.fire),
+    mouseWorldPosition: new Vec2(-0.32, -9.6),
+  });
+  const block = { kind: "rect", w: 20, h: 10 } as const;
+  const post = { kind: "circle", r: 5 } as const;
+
+  for (const [name, shape] of [
+    ["drop-block", block],
+    ["drop-post", post],
+  ] as const) {
+    const on = runSweepRig(drop(shape), 126, dropInput, 0, true);
+    const off = runSweepRig(drop(shape), 126, dropInput, 0, false);
+    details.push(`${name} sweep on:  ${describe(on)}`);
+    details.push(`${name} sweep off: ${describe(off)}`);
+    check(`${name}: the chain catches the body as it falls past (f90-f96)`, on.caughtAt !== null && on.caughtAt >= 90 && on.caughtAt <= 96);
+    check(`${name}: ...and keeps it on its path`, !on.lostAfterCatch);
+    check(`${name}: nothing tunnels and no invariant fires${firstOther(on)}`, on.violations.length === 0);
+    check(`${name}: the ball is arrested from ${on.peakSpeed.toFixed(1)} m/s to a swing under 6 m/s`, on.peakSpeed > 14 && on.endSpeed < 6);
+    check(`${name}: without the sweep the chain passes through it (tunnel @f${off.tunnelAt ?? "never"})`, off.tunnelAt !== null && off.tunnelAt >= 90 && off.tunnelAt <= 96);
+    check(`${name}: ...and never holds it`, off.caughtAt === null || off.lostAfterCatch);
+  }
+
+  // The throw from a falling ball. The ball drops from eight metres aiming to
+  // its right, so the loop faces sideways by the time it fires at f60, a
+  // second in and falling at ~10 m/s; the hook leaves at 12 m/s and the span
+  // between them sweeps a wedge the post sits inside without ever lying on
+  // any frame's sample of it - the f62 and f63 spans pass 6 cm either side of
+  // a post 3 cm across.
+  const throwData: RawLevelData = {
+    player: { x: 0, y: -800, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 60,
+        y: -297,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "circle", r: 3 } }],
+      },
+    ],
+  } as RawLevelData;
+  const FIRE_AT = 60;
+  const throwInput = (f: number, level: BallLevel, prev: FrameInput): FrameInput => ({
+    ...emptyFrameInput(),
+    fire: button(f >= FIRE_AT, prev.fire),
+    // Aim to the right until the shot, then stop aiming (the ball's own centre).
+    mouseWorldPosition:
+      f < FIRE_AT ? level.ball.globalPosition.add(new Vec2(2, 0)) : level.ball.globalPosition,
+  });
+  const on = runSweepRig(throwData, 90, throwInput, 0, true);
+  const off = runSweepRig(throwData, 90, throwInput, 0, false);
+  details.push(`throw-post sweep on:  ${describe(on)}, deploy stopped @f${on.deployStoppedAt ?? "never"}`);
+  details.push(`throw-post sweep off: ${describe(off)}, deploy stopped @f${off.deployStoppedAt ?? "never"}`);
+  check(`throw-post: the deploying chain snags the post within three frames of the shot`, on.caughtAt !== null && on.caughtAt > FIRE_AT && on.caughtAt <= FIRE_AT + 3);
+  check(`throw-post: ...which ends the deploy there (stopped @f${on.deployStoppedAt ?? "never"})`, on.deployStoppedAt === on.caughtAt);
+  check(`throw-post: nothing tunnels and no invariant fires${firstOther(on)}`, on.violations.length === 0);
+  check(`throw-post: without the sweep the span passes over the post (tunnel @f${off.tunnelAt ?? "never"})`, off.tunnelAt !== null && off.tunnelAt > FIRE_AT && off.tunnelAt <= FIRE_AT + 3);
+  check(`throw-post: ...and the deploy runs to full length instead (stopped @f${off.deployStoppedAt ?? "never"})`, off.caughtAt === null && off.deployStoppedAt !== null && off.deployStoppedAt > FIRE_AT + 3);
+
+  // The stone through the taut chain. The ball sits on a floor aiming right
+  // for four frames so the loop faces the wall, fires, and the hook bites the
+  // wall's face; the chain then runs from the ball's rim up to the anchor and
+  // the stone, dropped from seven metres, falls through it at 11 m/s.
+  const stoneData: RawLevelData = {
+    player: { x: 0, y: -20, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 50,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 600, h: 100 } }],
+      },
+      {
+        kind: "static",
+        x: 160,
+        y: -60,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 120 } }],
+      },
+      {
+        kind: "rigid",
+        x: 80,
+        y: -700,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", material: "stone", shape: { kind: "circle", r: 5 } }],
+      },
+    ],
+  } as RawLevelData;
+  const stoneInput = (f: number, level: BallLevel, prev: FrameInput): FrameInput => ({
+    ...emptyFrameInput(),
+    fire: button(f >= 5, prev.fire),
+    mouseWorldPosition: f < 5 ? level.ball.globalPosition.add(new Vec2(2, 0)) : level.ball.globalPosition,
+  });
+  const stoneOn = runSweepRig(stoneData, 200, stoneInput, 2, true);
+  const stoneOff = runSweepRig(stoneData, 200, stoneInput, 2, false);
+  details.push(`drop-stone sweep on:  ${describe(stoneOn)}`);
+  details.push(`drop-stone sweep off: ${describe(stoneOff)}`);
+  check(`drop-stone: the chain catches the falling stone (f66-f72)`, stoneOn.caughtAt !== null && stoneOn.caughtAt >= 66 && stoneOn.caughtAt <= 72);
+  check(`drop-stone: ...and keeps it`, !stoneOn.lostAfterCatch);
+  check(`drop-stone: nothing tunnels and no invariant fires${firstOther(stoneOn)}`, stoneOn.violations.length === 0);
+  check(`drop-stone: without the sweep the stone falls through the chain (tunnel @f${stoneOff.tunnelAt ?? "never"})`, stoneOff.tunnelAt !== null && stoneOff.tunnelAt >= 66 && stoneOff.tunnelAt <= 74);
+
+  return ok("chain-sweep — the player's chain catches a small body it passes at speed, and the whip that follows is a swing", passed, details);
+}
+
 export function runContactCases(): ContactResult[] {
   const sims: Sim[] = [];
   // Audit every scene below, not a scene of its own (see `impulse-pairing`).
@@ -5221,6 +5456,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainHungJam(sims));
   results.push(caseChainWrapPoint());
   results.push(caseChainPostCatch());
+  results.push(caseChainSweep());
   results.push(caseChainWedgedEnd());
   results.push(caseHungAnchor());
   results.push(casePlankAnchor());

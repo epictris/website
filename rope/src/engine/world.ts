@@ -582,8 +582,9 @@ export class World {
   }
 
   // Broadphase candidates for a world-axis box, in canonical order (see
-  // `candidateOrder`).
-  private queryShapes(minX: number, minY: number, maxX: number, maxY: number): CollisionShape2D[] {
+  // `candidateOrder`). Public for the rope's continuous wrap scan, whose query
+  // is the box a MOVING span covered rather than a segment (see `SpanSweep`).
+  queryShapes(minX: number, minY: number, maxX: number, maxY: number): CollisionShape2D[] {
     this.syncBroadphase();
     const out: CollisionShape2D[] = [];
     this.broadphase.query(minX, minY, maxX, maxY, out);

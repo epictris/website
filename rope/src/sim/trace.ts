@@ -6,9 +6,11 @@
 import { Vec2 } from "../engine/vec2";
 import {
   CharacterBody2D,
+  PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
-  type PhysicsBody2D,
+  type CollisionObject2D,
+  type CollisionShape2D,
 } from "../engine/body";
 import { bodyOverlapCircle, circleOverlap, shapeRadius } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
@@ -19,7 +21,10 @@ import { LedgeHangState } from "../classes/states/ledgeHangState";
 import { OnWallState } from "../classes/states/onWallState";
 import { WallJumpingState } from "../classes/states/wallJumpingState";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
-import type { Rope } from "../classes/rope";
+import { isSeamVertex, type Rope } from "../classes/rope";
+import type { RopeNode } from "../lib/ropeContact";
+import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
+import { WrapDirection } from "../lib/types";
 import type { ContactConstraint, World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
@@ -951,6 +956,219 @@ export class RollMonitor {
         `for ${run} frames with neither its spin (${ball.angularVelocity.toFixed(2)} rad/s) ` +
         `nor the chain accounting for it`,
     };
+  }
+}
+
+// ---- chain-tunnel detector -------------------------------------------------
+// The chain may not pass THROUGH a body it could have wrapped. Between the end
+// of one frame and the end of the next, every span of the chain sweeps a
+// region; a wrappable body with an exposed corner (or a disc's centre) inside
+// that region has been run into, and the chain either bends round it by the
+// end of the frame or has tunnelled. The wrap scan is a sample of where the
+// span IS, and at 15 m/s a 10 cm body fits between two samples with room to
+// spare (`session-126f`): the chain was above it on f92 and below it on f94,
+// touched it on neither, and every invariant read HEALTHY, because the chain
+// was never inside anything.
+//
+// The same crossing test the rope's own continuous scan uses (`SpanSweep`),
+// measured over the frame rather than over each regeneration: what the sim
+// does within a frame is its business, and what this asserts is the frame's
+// outcome.
+//
+// Bodies the chain is tied to are not obstacles, nor is any body the chain runs
+// over at the frame's end - that IS the catch. A point that crossed by less
+// than `CHAIN_TUNNEL_TOLERANCE` is a graze the wrap scan's own deflection gate
+// ignores on purpose, and one within `CHAIN_TUNNEL_NEAR_START` of the span's
+// start is the ball's rim brushing something, which is contact's business.
+//
+// A body that crossed a span and IS on the path at the frame's end is a catch
+// so far, and it is remembered with the side it came from: a wrap born on the
+// wrong corner holds the body for a frame and is culled on the next, and by
+// then no span crosses anything - the body is simply on the far side of a
+// straight chain (`session-126f` f93-94, the round-post rig of `chain-sweep`).
+// So a remembered body that leaves the path is asked which side of the chain it
+// is on. Released the way it came, it was let go; on the far side, within the
+// span's extent, the chain went through it.
+const CHAIN_TUNNEL_TOLERANCE = 0.02;
+const CHAIN_TUNNEL_NEAR_START = 0.05;
+
+export class TunnelMonitor {
+  private chain: Rope | null = null;
+  private exit: Vec2 | null = null;
+  private end: Vec2 | null = null;
+  private poses = new Map<PhysicsBody2D, Pose>();
+  private held = new Map<CollisionShape2D, WrapDirection>();
+  private onPath = new Set<CollisionObject2D>();
+
+  push(level: BallLevel): Violation | null {
+    const chain = level.ball.chain;
+    let violation: Violation | null = null;
+    if (chain && chain === this.chain && this.exit && this.end) {
+      violation = this.check(level, chain, this.exit, this.end);
+    }
+    if (chain !== this.chain) this.held.clear();
+    this.chain = chain;
+    this.exit = null;
+    this.end = null;
+    this.poses = new Map();
+    this.onPath = new Set(chain ? chain.path().map((n) => n.contact.obj) : []);
+    if (chain) {
+      this.end = chain.end.contact.globalPosition;
+      const nodes = chain.path();
+      let exit: RopeNode = chain.start;
+      for (let i = 1; i < nodes.length - 1; i++) {
+        if (!TunnelMonitor.onStartShape(chain, nodes[i]!)) break;
+        exit = nodes[i]!;
+      }
+      this.exit = exit.contact.globalPosition;
+      for (const body of level.bodies) {
+        if (body.isMobile) {
+          this.poses.set(body, { position: body.globalPosition, rotation: body.globalRotation });
+        }
+      }
+    }
+    return violation;
+  }
+
+  private static onStartShape(chain: Rope, node: RopeNode): boolean {
+    return (
+      node.contact.obj === chain.start.contact.obj &&
+      node.contact.shapeIndex === chain.start.contact.shapeIndex
+    );
+  }
+
+  private previous(chain: Rope, node: RopeNode, exit: Vec2, end: Vec2): Vec2 | null {
+    if (node === chain.end) return end;
+    if (TunnelMonitor.onStartShape(chain, node)) return exit;
+    const obj = node.contact.obj;
+    if (!(obj instanceof PhysicsBody2D) || !obj.isMobile) return node.contact.globalPosition;
+    const pose = this.poses.get(obj);
+    if (!pose) return null;
+    return pose.position.add(node.contact.position.rotated(pose.rotation));
+  }
+
+  private check(level: BallLevel, chain: Rope, exit: Vec2, end: Vec2): Violation | null {
+    const nodes = chain.path();
+    const onPath = new Set(nodes.map((n) => n.contact.obj));
+    const startObj = chain.start.contact.obj;
+    const endObj = chain.end.contact.obj;
+    // Bodies remembered from an earlier crossing that the chain has let go of.
+    for (const [shape, side] of [...this.held]) {
+      const body = shape.owner as PhysicsBody2D;
+      if (onPath.has(body)) continue;
+      this.held.delete(shape);
+      if (body.removed) continue;
+      // Against the span the chain straightened INTO: the free span nearest
+      // the body among those whose extent covers it. Never a coil span - a
+      // 3 mm arc on the ball's rim covers a slab of the whole level in its
+      // extent, and a corner half a metre away read as "beyond" it.
+      const c = shape.globalPosition;
+      let nearest: { i: number; signed: number } | null = null;
+      for (let i = 0; i < nodes.length - 1; i++) {
+        if (nodes[i]!.contact.shape === nodes[i + 1]!.contact.shape) continue;
+        const s1 = nodes[i]!.contact.globalPosition;
+        const e1 = nodes[i + 1]!.contact.globalPosition;
+        const d = e1.sub(s1);
+        const dd = d.lengthSquared();
+        if (dd < CHAIN_TUNNEL_NEAR_START * CHAIN_TUNNEL_NEAR_START) continue;
+        const u = c.sub(s1).dot(d) / dd;
+        if (u < 0 || u > 1) continue;
+        const signed = c.sub(s1).cross(d) / Math.sqrt(dd);
+        if (nearest === null || Math.abs(signed) < Math.abs(nearest.signed)) nearest = { i, signed };
+      }
+      if (nearest === null) continue;
+      const nowSide = nearest.signed > 0 ? WrapDirection.CounterClockwise : WrapDirection.Clockwise;
+      if (nowSide === side || Math.abs(nearest.signed) < CHAIN_TUNNEL_TOLERANCE) continue;
+      return {
+        frame: level.frame,
+        kind: "chain-tunnel",
+        detail:
+          `the chain let go of ${body.name || body.constructor.name} on the far side of span ${nearest.i}` +
+          ` (${(Math.abs(nearest.signed) * 1000).toFixed(0)}mm beyond it): it went through rather than round`,
+      };
+    }
+    // A body the chain has just started running over crossed the CHORD its
+    // wraps now bend - the span as it was before the body was on it - and the
+    // spans that end on the body cannot say so, since a span never tests the
+    // shape it ends on. The chord can, and what it records is the side the body
+    // entered from, for the release check above.
+    for (let i = 1; i < nodes.length - 1; i++) {
+      const body = nodes[i]!.contact.obj;
+      if (body === startObj || body === endObj || this.onPath.has(body)) continue;
+      let last = i;
+      while (last + 1 < nodes.length - 1 && nodes[last + 1]!.contact.obj === body) last++;
+      const from = nodes[i - 1]!;
+      const to = nodes[last + 1]!;
+      const s0 = this.previous(chain, from, exit, end);
+      const e0 = this.previous(chain, to, exit, end);
+      if (s0 && e0 && body instanceof PhysicsBody2D) {
+        const motion: SpanMotion = {
+          s0,
+          e0,
+          s1: from.contact.globalPosition,
+          e1: to.contact.globalPosition,
+        };
+        const pose = body.isMobile ? (this.poses.get(body) ?? null) : null;
+        for (const shape of body.getShapes()) {
+          if (!shape.wrappable || this.held.has(shape)) continue;
+          const crossing = shapeCrossesSpan(shape, pose, motion, (k) => !isSeamVertex(shape, k));
+          if (crossing) this.held.set(shape, crossing.side);
+        }
+      }
+      i = last;
+    }
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const from = nodes[i]!;
+      const to = nodes[i + 1]!;
+      if (from.contact.shape === to.contact.shape) continue;
+      const s1 = from.contact.globalPosition;
+      const e1 = to.contact.globalPosition;
+      if (s1.distanceTo(e1) < 0.01) continue;
+      const s0 = this.previous(chain, from, exit, end);
+      const e0 = this.previous(chain, to, exit, end);
+      if (!s0 || !e0) continue;
+      const motion: SpanMotion = { s0, e0, s1, e1 };
+      const box = spanMotionBox(motion);
+      const candidates = level.world.queryShapes(box.minX, box.minY, box.maxX, box.maxY);
+      for (const body of level.bodies) {
+        if (body.isMobile) for (const shape of body.getShapes()) candidates.push(shape);
+      }
+      const seen = new Set<CollisionShape2D>();
+      for (const shape of candidates) {
+        if (seen.has(shape)) continue;
+        seen.add(shape);
+        const body = shape.owner;
+        if (!(body instanceof PhysicsBody2D) || !body.isSolid || !shape.wrappable) continue;
+        if (body === startObj || body === endObj || body instanceof BallHook) continue;
+        if (body.removed) continue;
+        if (shape === from.contact.shape || shape === to.contact.shape) continue;
+        // A body the chain ran over last frame is judged by the release check
+        // above and nothing else: its wraps bent the chain out of the chord
+        // this test draws, so the chord "crosses" the corner the chain was
+        // simply resting on as it lifts off (`session-576f` f70).
+        if (this.onPath.has(body)) continue;
+        const pose = body.isMobile ? (this.poses.get(body) ?? null) : null;
+        const crossing = shapeCrossesSpan(shape, pose, motion, (k) => !isSeamVertex(shape, k));
+        if (!crossing) continue;
+        if (onPath.has(body)) {
+          if (!this.held.has(shape)) this.held.set(shape, crossing.side);
+          continue;
+        }
+        const dir = s1.directionTo(e1);
+        const depth = Math.abs(crossing.point.sub(s1).cross(dir));
+        if (depth < CHAIN_TUNNEL_TOLERANCE) continue;
+        if (crossing.point.distanceTo(s1) < CHAIN_TUNNEL_NEAR_START) continue;
+        return {
+          frame: level.frame,
+          kind: "chain-tunnel",
+          detail:
+            `span ${i} of the chain passed through ${body.name || body.constructor.name}` +
+            ` (${(depth * 1000).toFixed(0)}mm beyond it, ${(crossing.u * 100).toFixed(0)}% along the span)` +
+            ` and the chain does not bend round it`,
+        };
+      }
+    }
+    return null;
   }
 }
 

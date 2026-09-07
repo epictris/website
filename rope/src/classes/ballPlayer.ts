@@ -812,6 +812,10 @@ export class BallPlayer extends RigidBody2D {
       [],
       null,
     );
+    // The player's chain is the one rope in the game that moves fast enough
+    // to pass clean through a small body between two looks at it, so it is
+    // the one that sweeps (see `Rope.continuous`).
+    this.chain.continuous = true;
     this.chainSlack = new SlackChain(this.chain);
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
