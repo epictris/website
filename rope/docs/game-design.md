@@ -131,6 +131,42 @@ kind is what a body IS, so hook-only could only ever be immovable scenery, while
 the thing levels want is a leaf on a stem that hangs, sags and springs back. A
 flag composes with `static` and `rigid` alike; a kind excludes every other.
 
+### Rails
+
+A third answer for the hook, beside biting a face and bouncing off one: a
+**rail** is a thin bar the manacle clamps *around* and then slides along
+(`CollisionShape2D.rail`, authored as `CollisionObjectData.rail`).
+A zipline, a pipe, the handle of a hanging lantern.
+
+It is a flag on the shape for exactly hook-proof's reason, and the case it
+exists for is a body made of both: a lantern whose handles are rails and whose
+lid, bulb and base are hook-proof, so the hook clamps a handle, slides along it
+until the cuff meets the lid, and bounces off the bulb.
+The bar is solid for everything else - the avatar stands on it, bodies collide
+with it, other chains wrap its corners - and hook-proof wins where both are set,
+since a hook that bounces off a piece never clamps it.
+
+The cuff lives on the shape's **centreline** - a rect's medial axis, a
+polygon's principal axis, a circle's centre (a peg the ring hangs on and pivots
+about without sliding) - and it is a **massless ring**: force balance on a ring
+on a bar is the friction cone, so the ring is stuck while the chain's pull stays
+inside the cone and runs along the bar to the cone's edge when it leaves.
+That is Coulomb friction exactly: on a frictionless bar the chain hangs plumb
+and the ball coasts at constant speed; on one with grip the chain trails at
+`atan(mu)` and the ball is braked at `mu·g`.
+The rail's grip is the body's authored `friction` on the rail coefficients, so a
+zipline authored slick and a rusted handle authored grippy are one number apart.
+
+Where the cuff may travel is where its disc is clear of the body's other,
+non-rail pieces - it stops against the lantern's lid - and it passes from one
+rail piece onto a sibling whose centreline meets it, so a curved handle is three
+straight bars.
+An open end stops the cuff.
+
+It is drawn with a steel line down the bar's middle, where the cuff will sit,
+and the clamped cuff is drawn with its axis along the bar - encircling it -
+rather than half-buried in a face.
+
 ### Decoration
 
 **Decoration** - a shape with its collision switched off (`LevelBodyData.collision: false`) - is the one thing the player sees that carries no glyph, and it is worth being explicit about why the rule above does not reach it.

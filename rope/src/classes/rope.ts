@@ -36,6 +36,13 @@ import {
 } from "../lib/ropeContact";
 import { GenerationDirection, IntersectionStatus, WrapDirection } from "../lib/types";
 import { PathEnd, PathObject, PathStart, PathWrap } from "../lib/pathObject";
+import {
+  RAIL_KINETIC_FRICTION,
+  RAIL_MAX_SLIDE_SPEED,
+  RAIL_STATIC_FRICTION,
+  RopeClamp,
+  type ClampState,
+} from "../lib/rail";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -116,6 +123,14 @@ export class RopePath {
     public to: RopeNode,
     public span: Segment,
   ) {}
+}
+
+// What one iteration of the length solve may move, for its monotone guard to
+// restore (see `snapshotPathBodies`).
+interface PathSnapshot {
+  bodies: { body: PhysicsBody2D; position: Vec2; rotation: number }[];
+  clamp: ClampState | null;
+  slideBudget: number;
 }
 
 interface DynamicBody {
@@ -378,6 +393,15 @@ export class Rope {
     this.coilRunCache = null;
   }
 
+  // Metres a clamped end (`RopeClamp`) may still run along its rail this frame
+  // - the slide speed cap's remainder, opened by `beginFrame` and spent by the
+  // slides the length solve's iterations take. Zero for a rope whose frame has
+  // not begun, so a clamp never slides outside a frame.
+  private slideBudget = 0;
+  // Whether this frame has looked at the clamp yet: the first look is the one
+  // that decides whether a running ring has come to rest (see `slideClampedEnd`).
+  private slideLooked = false;
+
   // Wires hook attachment callbacks; called on construction and after snapshot restore.
   registerHookCallbacks(): void {
     const endObj = this.end.contact.obj;
@@ -453,6 +477,8 @@ export class Rope {
   beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
+    this.slideBudget = RAIL_MAX_SLIDE_SPEED * delta;
+    this.slideLooked = false;
     this.geometryPushAccum = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
@@ -1424,6 +1450,12 @@ export class Rope {
   private resolveSelfIntersectionAtEnd(toNode: RopeNode, span: Segment): RopeNode | null {
     const obj = toNode.contact.obj;
     if (obj instanceof Hook && toNode === this.end) return null;
+    // A clamp's contact is the cuff's centre, which is INSIDE the rail it is
+    // clamped around, so the span ending on it always overlaps that piece.
+    // That is the chain reaching the bar, not the chain having wound around
+    // its own anchor (the failure this resolver exists for); the bar is thin
+    // and the cuff encircles it, so there is no corner to bend round.
+    if (toNode instanceof RopeClamp) return null;
     if (isPassThrough(obj)) return null;
 
     const toShape = toNode.contact.shape;
@@ -2294,23 +2326,66 @@ export class Rope {
   // iteration, so an end snapped onto a node is not undone for float noise.
   private static readonly MONOTONE_EPSILON = 1e-9;
 
-  private snapshotPathBodies(): { body: PhysicsBody2D; position: Vec2; rotation: number }[] {
-    const out: { body: PhysicsBody2D; position: Vec2; rotation: number }[] = [];
+  // Everything an iteration of the length solve may move, so the monotone
+  // guard can put it all back: the path bodies' poses, and - for a clamped
+  // end - where along its rail the cuff stands and what is left of the
+  // frame's slide budget. A slide undone with its budget kept would be a
+  // clamp that runs out of road for a move it never made.
+  private snapshotPathBodies(): PathSnapshot {
+    const bodies: PathSnapshot["bodies"] = [];
     for (const node of this.path()) {
       const body = node.contact.obj;
-      if (!(body instanceof PhysicsBody2D) || out.some((o) => o.body === body)) continue;
-      out.push({ body, position: body.globalPosition, rotation: body.globalRotation });
+      if (!(body instanceof PhysicsBody2D) || bodies.some((o) => o.body === body)) continue;
+      bodies.push({ body, position: body.globalPosition, rotation: body.globalRotation });
     }
-    return out;
+    const clamp = this.end instanceof RopeClamp ? this.end.snapshot() : null;
+    return { bodies, clamp, slideBudget: this.slideBudget };
   }
 
-  private restorePathBodies(
-    snapshot: readonly { body: PhysicsBody2D; position: Vec2; rotation: number }[],
-  ): void {
-    for (const s of snapshot) {
+  private restorePathBodies(snapshot: PathSnapshot): void {
+    for (const s of snapshot.bodies) {
       s.body.globalPosition = s.position;
       s.body.globalRotation = s.rotation;
     }
+    if (snapshot.clamp && this.end instanceof RopeClamp) {
+      this.end.restoreState(snapshot.clamp);
+      this.markPathChanged();
+    }
+    this.slideBudget = snapshot.slideBudget;
+  }
+
+  // Let a clamped end run along its rail under the pull of the span that
+  // reaches it, and say how much of the path's length that took out. The
+  // cuff is massless, so it goes first - to wherever force balance puts it
+  // (see `RopeClamp.slide`) - and the bodies split what is left of the error.
+  //
+  // The pull is the last span's own direction, from the cuff to whatever node
+  // the chain reaches it from: the ball, or a corner the chain bends round on
+  // the way. The rail's grip is the body's authored `friction` on the rail
+  // coefficients, exactly as a rigid body's contact friction is built.
+  private slideClampedEnd(): number {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeClamp) || this.slideBudget <= 0) return 0;
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    if (!prev) return 0;
+    const before = this.calculateRopePathLength();
+    const grip = clamp.body.surfaceFriction;
+    // The frame's first look settles the friction state; every later
+    // iteration finds the ring where that look left it (see `RopeClamp.slide`).
+    const settle = !this.slideLooked;
+    this.slideLooked = true;
+    const moved = clamp.slide(
+      prev.contact.globalPosition,
+      this.slideBudget,
+      RAIL_STATIC_FRICTION * grip,
+      RAIL_KINETIC_FRICTION * grip,
+      settle,
+    );
+    if (moved === 0) return 0;
+    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
+    this.markPathChanged();
+    return before - this.calculateRopePathLength();
   }
 
   // Perpendicular lever from the body's centre of rotation to the correction
@@ -2456,8 +2531,19 @@ export class Rope {
   }
 
   private correctShapePositionAndRotation(relaxationFactor = 1): number | null {
-    const currentLength = this.calculateRopePathLength();
+    let currentLength = this.calculateRopePathLength();
     if (currentLength <= this.constraintLength) return null;
+
+    // A clamped end slides before the bodies are moved, and may leave the
+    // chain SLACK: a ring released from the static cone runs to the kinetic
+    // cone's edge, which can be nearer the ball than a span's length, and the
+    // ball then flies until the chain comes taut again. That is a correction
+    // in the sense the iteration loop's guard reads it - the path got shorter
+    // - so it is reported as one, with nothing else to split.
+    if (this.slideClampedEnd() !== 0) {
+      currentLength = this.calculateRopePathLength();
+      if (currentLength <= this.constraintLength) return 0;
+    }
 
     const pathObjects = this.generatePathObjects();
     const lengthError = currentLength - this.constraintLength;

@@ -57,7 +57,9 @@ export class BallHook extends RigidBody2D {
   // manacle is oriented by the chain, not the body).
   private static readonly ROLL_RESISTANCE = 1e4;
 
-  private attachmentCallbacks: Array<(body: PhysicsBody2D, point: Vec2) => void> = [];
+  private attachmentCallbacks: Array<
+    (body: PhysicsBody2D, point: Vec2, piece: CollisionShape2D | null) => void
+  > = [];
   private chainOutCallbacks: Array<() => void> = [];
   private bounceCallbacks: Array<
     (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void
@@ -150,7 +152,16 @@ export class BallHook extends RigidBody2D {
     this.flying = false;
   }
 
-  registerAttachmentCallback(onAttach: (body: PhysicsBody2D, point: Vec2) => void): void {
+  // `piece` is the shape the hook actually reached - every attach path here
+  // knows it (the sweep's hit, the blocking contact's constraint, the probe's
+  // nearest piece) - so the owner decides by that piece rather than by
+  // re-deriving one from the point: at the joint between a rail and the lid
+  // it meets, the nearest surface to the bite can be either, and which the
+  // hook is on is the difference between clamping around a bar and biting a
+  // face. Null only where a path had no piece to name.
+  registerAttachmentCallback(
+    onAttach: (body: PhysicsBody2D, point: Vec2, piece: CollisionShape2D | null) => void,
+  ): void {
     this.attachmentCallbacks.push(onAttach);
   }
 
@@ -184,10 +195,10 @@ export class BallHook extends RigidBody2D {
     this.bounceCallbacks.push(onBounce);
   }
 
-  private attach(body: PhysicsBody2D, point: Vec2): void {
+  private attach(body: PhysicsBody2D, point: Vec2, piece: CollisionShape2D | null): void {
     this.armed = false;
     this.endFlight();
-    for (const cb of this.attachmentCallbacks) cb(body, point);
+    for (const cb of this.attachmentCallbacks) cb(body, point, piece);
     this.world?.remove(this);
   }
 
@@ -383,7 +394,7 @@ export class BallHook extends RigidBody2D {
     const point = circleOverlap(from, r, hit.shape)
       ? nearestSurfacePoint(hit.shape, from)
       : contactCenter.sub(hit.normal.mul(r));
-    this.attach(hit.collider, point);
+    this.attach(hit.collider, point, hit.shape);
   }
 
   // End the deploy at the exact point the wrapped path reaches the chain's
@@ -562,7 +573,7 @@ export class BallHook extends RigidBody2D {
       // names the piece, so a wall that is hook-proof on one face and
       // attachable on another is answered per face here too.
       if (s?.impermeable) continue;
-      this.attach(other, s ? nearestSurfacePoint(s, this.globalPosition) : c.point);
+      this.attach(other, s ? nearestSurfacePoint(s, this.globalPosition) : c.point, s ?? null);
       return true;
     }
     return false;
@@ -615,7 +626,7 @@ export class BallHook extends RigidBody2D {
       // radius plus the probe margin clear of the geometry, and anchoring at the
       // centre leaves the chain visibly ending short of the corner it caught and
       // the contact's `shapeIndex` resolved from a point that is on nothing.
-      this.attach(body, s ? nearestSurfacePoint(s, from) : from);
+      this.attach(body, s ? nearestSurfacePoint(s, from) : from, s ?? null);
       return;
     }
     // Deflect only a hook genuinely MOVING: the probe's seat holds the hook a

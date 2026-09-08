@@ -22,6 +22,11 @@ import type { RawLevelData } from "./levelFormat";
 // built app, which has no server. JSON widens string literals (`kind: string`),
 // hence the cast — the file is written by the editor against this schema.
 import ballLevelJson from "../../levels/ball.json";
+// The rail sandbox: a low-friction zipline between two posts, a peg, and a
+// hanging lantern whose handles are rails and whose lid, bulb and base are
+// hook-proof (see `lib/rail.ts`). Hand-authored, so `levels/ball.json` - which
+// the editor may have open - is left alone.
+import railTestJson from "../../levels/rail-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -59,6 +64,8 @@ export const LEVELS: Record<string, LevelSpec> = {
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },
+  // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
+  RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };

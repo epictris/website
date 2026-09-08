@@ -17,6 +17,7 @@ import { outwardDirection } from "../engine/collision";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
+import { RopeClamp } from "../lib/rail";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
@@ -128,6 +129,11 @@ export class BallPlayer extends RigidBody2D {
   // through `manacleFacing`.
   private anchorFacingLocal: Vec2 | null = null;
   private anchorBody: PhysicsBody2D | null = null;
+  // The anchor is a clamp around a rail rather than a bite into a face, so
+  // `anchorFacingLocal` is the rail's tangent - the cuff's AXIS - and the
+  // renderers turn the cuff to encircle the bar instead of half-burying it.
+  // Render-only, like the facing; cleared with it.
+  private anchorOnRail = false;
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
   // Scene bodies for the current frame, set by BallLevel before hooks step, so
   // the hook's attach callback can regenerate the chain's wrap path (the hook
@@ -607,6 +613,14 @@ export class BallPlayer extends RigidBody2D {
     return body === null ? local : local.rotated(body.renderRotation(alpha));
   }
 
+  // Is the anchored manacle CLAMPED AROUND A RAIL, rather than bitten into a
+  // face? Then `manacleFacing` is the rail's tangent, the cuff's axis lies
+  // along it, and nothing about the cuff is buried: the bar passes through the
+  // ring. False while the chain end is free, and for every bite.
+  get manacleOnRail(): boolean {
+    return this.anchorOnRail && this.anchorFacingLocal !== null;
+  }
+
   // The chain deploys from a fixed material point on the rim — the "loop",
   // at the top of the ball when unrotated. Aiming rotates the ball so the
   // loop faces the aim direction; the shot always leaves through the loop.
@@ -821,27 +835,40 @@ export class BallPlayer extends RigidBody2D {
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
     // keeps paying out until it reaches max length or snags on geometry.
-    hook.registerAttachmentCallback((body, point) => {
+    hook.registerAttachmentCallback((body, point, struck) => {
       this.hookInFlight = null;
       this.chainTip = null;
       this.anchorFacingLocal = null;
       this.anchorBody = null;
+      this.anchorOnRail = false;
       if (!this.chain) return;
       // Hook-proof surface: the chain is lost. `BallHook` deflects off one
       // rather than attaching, so this is a backstop - but it is asked of the
-      // PIECE the anchor point landed on, because a wall may be hook-proof on
-      // one face and attachable on the next and a body-level answer would be
-      // wrong for whichever face it is not about.
+      // PIECE the hook reached, because a wall may be hook-proof on one face
+      // and attachable on the next and a body-level answer would be wrong for
+      // whichever face it is not about. The hook names the piece it struck;
+      // the nearest piece to the point is the fallback for a path that could
+      // not, and at the joint between a rail and its lid the two can differ.
       const shapes = body.getShapes();
-      const piece = shapes[nearestShapeIndex(shapes, point)];
+      const pieceIndex = struck ? shapes.indexOf(struck) : nearestShapeIndex(shapes, point);
+      const piece = shapes[pieceIndex >= 0 ? pieceIndex : nearestShapeIndex(shapes, point)];
       if (piece?.impermeable) {
         this.releaseChain();
         return;
       }
-      // `RopeContact.at` rather than the primary shape: on a compound body the
-      // hook anchors on whichever piece it struck, and the wrap resolvers walk
-      // the piece the contact names (see RopeContact.at).
-      this.chain.end = new RopeAttachment(RopeContact.at(body, point));
+      if (piece?.rail) {
+        // A RAIL: the cuff closes around the bar rather than biting its face,
+        // so the anchor is a clamp on the bar's centreline that slides under
+        // the chain's pull against the rail's friction (see `lib/rail.ts`).
+        // The bite point was on the surface; the cuff's centre is a
+        // half-width in from it, which is the jump the cuff makes as it shuts.
+        this.chain.end = RopeClamp.at(body, shapes.indexOf(piece), point);
+      } else {
+        // `RopeContact.at` rather than the primary shape: on a compound body
+        // the hook anchors on whichever piece it struck, and the wrap
+        // resolvers walk the piece the contact names (see RopeContact.at).
+        this.chain.end = new RopeAttachment(RopeContact.at(body, point));
+      }
       // Regenerate wraps now so the length below is the true wrapped path. The
       // solver (chain.physicsStep) will wrap it this same frame regardless; if we
       // measured the straight span here, clamping to it would leave the wrapped
@@ -854,9 +881,17 @@ export class BallPlayer extends RigidBody2D {
       // caught, and stays exactly so for as long as it holds. See
       // `manacleFacing` for why the surface answers for the facing rather than
       // the throw that arrived at it.
+      //
+      // Around a rail the cuff's AXIS is the bar: the facing is the rail's
+      // tangent (either way along it; the cuff is symmetric about its axis),
+      // and a peg with no tangent takes the bite's answer.
       this.anchorBody = body;
+      const clamp = this.chain.end instanceof RopeClamp ? this.chain.end : null;
+      const tangent = clamp?.tangent() ?? null;
+      this.anchorOnRail = clamp !== null;
       this.anchorFacingLocal = (
-        piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition)
+        tangent ??
+        (piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition))
       ).rotated(-body.globalRotation);
       // The tolerance here is a SNAP backstop, not a range: it is sized for the
       // ~1 px of solver slop a dangling tip carries when it finally lands (see
@@ -953,6 +988,7 @@ export class BallPlayer extends RigidBody2D {
     this.chainTip = null;
     this.anchorFacingLocal = null;
     this.anchorBody = null;
+    this.anchorOnRail = false;
     this.chain = null;
     this.chainSlack = null;
   }

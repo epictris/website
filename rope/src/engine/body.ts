@@ -40,6 +40,19 @@ export class CollisionShape2D implements ShapeTransform {
   // wall with one attachable ledge and hook-proof faces everywhere else.
   impermeable = false;
 
+  // Is this surface a RAIL - a thin bar the manacle clamps around rather than
+  // bites into, and then slides along? The hook still anchors to it (a rail is
+  // attachable; hook-proof wins if both are set), but the anchor is a
+  // `RopeClamp` on the shape's centreline (`lib/rail.ts`) instead of a fixed
+  // point on its face, free to travel along the bar under the chain's pull
+  // against the rail's friction.
+  //
+  // Per SHAPE for the reason `impermeable` is, and the case it exists for is
+  // a body made of both: a hanging lantern whose handles are rails and whose
+  // lid, bulb and base are hook-proof. Solid for everything else - the avatar
+  // stands on it, bodies collide with it, other chains wrap its corners.
+  rail = false;
+
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,
@@ -151,6 +164,13 @@ export const LAYER_ANCHOR = 2;
 let transformEpoch = 0;
 export function currentTransformEpoch(): number {
   return transformEpoch;
+}
+// For a write that moves derived geometry WITHOUT moving a body: a rope
+// contact sliding along the body it rides (see `RopeClamp`). The memoized span
+// list is keyed on this count, so a contact that moves and does not bump it is
+// a path the solver keeps measuring at its old length.
+export function bumpTransformEpoch(): void {
+  transformEpoch++;
 }
 
 export abstract class CollisionObject2D {

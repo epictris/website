@@ -3603,6 +3603,41 @@ The case it exists for is the **treadwheel crane**: a wheel whose rim the player
 A rope that starts inside a piece has no consistent wrap of it in any case - the straight span leaves the rim without bending, so there is nothing for the scan to hold - which is why the flag is per shape and not something the solver could infer.
 The editor authors it as a `chain-through` checkbox beside `hook-proof` and draws the piece with the dotted edge a hook-only body wears; `chainable` refuses it as a chain host, and `anchorHost` prefers a wrappable sibling, so a chain dropped on the wheel lands on its hub.
 
+### Rails
+
+**`rail`** is the third per-shape hook flag (`CollisionObjectData.rail` -> `CollisionShape2D.rail`, `lib/rail.ts`): a thin bar the manacle clamps AROUND rather than bites into, and then slides along under the chain's pull against the body's `friction`.
+A zipline, a pipe, the handles of a hanging lantern - which is the case it exists for, and why it is per shape: the lantern's handles are rails and its lid, bulb and base are hook-proof, in one body.
+Hook-proof wins where both are set (the sweep sorts a piece as hook-proof before it is anything else), and the bar is solid for everything but the hook.
+
+**The clamp is a `RopeAttachment` whose contact can move** (`RopeClamp`), on the rail's own body, so the anchored regime is untouched: a rail on a static is a fixed anchor, a rail on the hanging lantern is a lever on the lantern, and the winch, the credits, the refusals and the lease all read it as the anchor it is.
+The hook body is removed on clamping exactly as on a bite.
+What the clamp adds is one step at the top of every iteration of `Rope.correctShapePositionAndRotation` (`slideClampedEnd`), before the bodies split what is left of the error.
+
+**The cuff is massless**, so it is solved geometrically rather than integrated: a quarter-kilo ring under a fifty-kilo ball's pull is wherever force balance puts it within a frame, and force balance for a ring on a bar is the friction cone.
+`slideStep` splits the last span's pull against the rail tangent; inside `mu·across` the ring is held, outside it runs toward the ball's plumb by `|along| − mu_k·across`, which is the point the pull meets the kinetic cone's edge.
+The static coefficient holds a stuck ring and the kinetic one a running one, and **the friction state is decided once a frame, on the solve's first look at the clamp**: a running ring whose pull has come back inside the kinetic cone since the last frame has stopped being driven and is stuck from there; one still outside it runs to the edge again.
+Later iterations of the same frame find the ring AT the edge and must not read that as rest, or a ring under a ball driving it steadily re-sticks and breaks away every frame - a stick-slip judder at frame rate, measured as the lean sawtoothing 16.9° to 19.3° where a steady 16.7° is the physics.
+Written this way the closed forms come out exact: on a frictionless bar the chain stays plumb to 0.00° and a 4 m/s ball coasts at 4.000 m/s; with grip the chain trails at atan(mu_k) to a tenth of a degree and the ball stops within Coulomb's `v²/(2·mu_k·g)`.
+A slide may leave the chain SLACK - the ring at the cone's edge can be nearer the ball than a span - and that is the physics: a ball swung wide past the static cone is released from its arc and caught when the chain comes taut again.
+`RAIL_MAX_SLIDE_SPEED` (the hook's own 12 m/s) is the one concession to the ring's inertia, so a release is a dash rather than a teleport; the budget is per frame and is part of the solve's monotone-guard snapshot, as is the clamp's parameter, so an undone iteration puts the ring back and refunds its road.
+`RAIL_STATIC_FRICTION`/`RAIL_KINETIC_FRICTION` (1.5 / 1.4, rubber on steel - which is what `friction: 1` means for every other surface) scale by the body's `friction` exactly as a rigid body's contact friction does, and both are guesses to be played; `cli rails` pins the LAW against the coefficient rather than the coefficient.
+What the pair actually sets is the angle the pull may make with the rail's NORMAL before the cuff gives way, the cone test being a pure direction: 56° static and 54.5° kinetic at these values, and a hanging ball's own weight is already off the normal by the rail's slope.
+They started at 0.35 / 0.3 and then 0.8 / 0.6, and both read as no grip: at 19° every ordinary swing of a 0.6 m chain crept the cuff 15-20 cm along a friction-1 bar (`session-526f`), and at 31° a 30° slope was the balance point, so a ball hanging still rode the cuff down the whole bar at 1 m/s (`session-212f`).
+The gap between the two is kept small on purpose: a breakaway runs the cuff from the static cone to the kinetic one within a frame and frees `across·(1/cos a_s − 1/cos a_k)` of chain doing it - 8% of the span at this pair, against the 43% a 2.0 / 1.5 pair would drop the ball by.
+
+**The centreline** is a rect's medial axis (along the longer side, a half-thickness in from each end), a polygon's principal axis through its centroid clipped to the outline and shortened by the half-width across it, and a circle's centre - a peg the ring hangs on without sliding.
+The principal axis is taken against the loop's winding, because the half-angle turns a sign flip on both moments into a quarter turn of the axis; an engine shape is always wound positive and the editor's glyph is drawn from an authored outline that may not be.
+**The range** is measured once at clamp time by sweeping the manacle's disc along the centreline against the body's other NON-RAIL pieces, so the cuff stops where it meets the lantern's lid; sibling rails do not clip, and a sibling whose centreline passes within a bar's width of this one's end is a JOINT the cuff crosses onto, which is how a curved handle is three straight bars.
+Other bodies do not clip at all - the hook body that would have collided with them is gone - so a rail run through another body's wall is a level-design mistake; an open end stops the cuff.
+
+The end's own piece is excluded from `resolveSelfIntersectionAtEnd`, since the contact is INSIDE the bar by construction and that resolver reads a span ending inside its own piece as the chain having wound around its anchor; the wrap scan already excludes the span's own end shape, and sibling pieces are scanned as scenery, so the chain still wraps the lid.
+`BallHook`'s attach callbacks are handed the PIECE the hook reached (the sweep's hit, the blocking contact's constraint, the probe's nearest piece) rather than re-deriving it from the point, because at the joint between a handle and its lid the nearest surface to the bite can be either.
+
+Rendering: a rail wears a steel line down the bar (both the game's 2D renderer and the editor; the 3D scene draws the authored form and needs nothing), and a clamped cuff is drawn with its axis ALONG the bar - turned a quarter turn in 3D, foreshortened to `RAIL_CUFF_SQUASH` in 2D - and never clipped as buried (`BallPlayer.manacleOnRail`; `manacleFacing` is the tangent).
+The editor authors it as a `rail` checkbox beside `hook-proof`, the two mutually exclusive.
+`cli rails` (`sim/railCases.ts`) is the coverage: the centreline arithmetic, the cone arithmetic, the clamp on a bar and on a peg, stuck inside the static cone, the frictionless coast, Coulomb's braking, the lid stopping the cuff and bouncing the hook, the joint, and the flag through the format, the build and the editor.
+`RAIL_TEST` (`levels/rail-test.json`) is the sandbox: a slick zipline between two posts, a peg, and the lantern on a chain.
+
 ## The slack chain drape
 
 A deployed ball chain with length to spare no longer draws as straight spans: `SlackChain`

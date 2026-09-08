@@ -2689,7 +2689,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     box.indeterminate = !box.checked && items.some((b) => b.impermeable);
     box.addEventListener("change", () => {
       beginAction();
-      for (const b of items) b.impermeable = box.checked;
+      for (const b of items) {
+        b.impermeable = box.checked;
+        // A hook-proof rail is a bar the hook bounces off and never clamps, so
+        // the two flags are one choice: ticking this unticks the other.
+        if (box.checked) b.rail = false;
+      }
       markDirty();
       // The border style is what says a surface is hook-proof, and it is drawn
       // from the item, so the canvas is already right; the panel is rebuilt so
@@ -2728,6 +2733,36 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "Chains and ropes pass straight through this piece: nothing wraps its corners or winds onto it, and a chain cannot be tied to it - drawn with a dotted edge. It stays solid for everything else. Per shape, so a wheel's hub can wind a chain while the rim it is welded to is ignored.";
+    g.appendChild(hint);
+  }
+
+  // A rail (see `CollisionObjectData.rail`): the ball's manacle clamps AROUND
+  // this piece and slides along it, instead of biting its face. Per shape for
+  // the reason hook-proof is, and the case it exists for is a body of both: a
+  // lantern whose handles are rails and whose lid, bulb and base are
+  // hook-proof. Mutually exclusive with hook-proof - ticking either unticks the
+  // other - since a hook-proof rail is a bar the hook bounces off.
+  function addRailField(g: HTMLElement, items: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = items.every((b) => b.rail);
+    box.indeterminate = !box.checked && items.some((b) => b.rail);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) {
+        b.rail = box.checked;
+        if (box.checked) b.impermeable = false;
+      }
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "rail";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, where the cuff rides. The cuff stops where it would meet a sibling piece that is not a rail, and passes onto a sibling rail whose centreline meets this one. Solid for everything else. A circle is a peg the ring hangs on without sliding.";
     g.appendChild(hint);
   }
 
@@ -4140,6 +4175,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
     ) {
       addImpermeableField(g, bodies);
+      addRailField(g, bodies);
       addWrappableField(g, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
@@ -6105,9 +6141,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // hook-proofing below is.
       bounce: DEFAULT_BOUNCE,
       launch: DEFAULT_LAUNCH,
-      // Hook-proof is opt-in: a fresh shape is one the hook can catch.
+      // Hook-proof is opt-in: a fresh shape is one the hook can catch, and a
+      // rail is opt-in the same way - a fresh shape is a face, not a bar.
       impermeable: false,
       wrappable: true,
+      rail: false,
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,

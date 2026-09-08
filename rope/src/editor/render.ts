@@ -41,6 +41,8 @@ import {
   routePolyline,
 } from "./model";
 import { cubicAt } from "../lib/path";
+import { centrelineAt } from "../lib/rail";
+import { circleShape, rectShape, type Shape } from "../engine/shapes";
 import {
   DEFAULT_PATH_FALLOFF_X,
   DEFAULT_PATH_FALLOFF_Y,
@@ -499,6 +501,44 @@ function outlineOf(body: EdItem): Outline {
 function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
   ctx.beginPath();
   pathOutline(ctx, body.pos, body.rot, outlineOf(body));
+}
+
+// A rail's centreline down the middle of the bar, in the steel a hook-proof
+// edge wears - the same mark the game draws, so an author sees where the cuff
+// will sit and slide. Drawn through the engine's own centreline rule on the
+// item's authored shape, which is what the build mounts; a concave outline is
+// cut into pieces at load and each piece gets its own line there, so the glyph
+// on one is the outline's principal axis rather than its pieces', which is
+// close enough to author against. A peg gets a dot.
+function drawRailGlyph(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: number): void {
+  const s = item.shape;
+  const shape: Shape | null =
+    s.kind === "rect"
+      ? rectShape(s.w, s.h)
+      : s.kind === "circle"
+        ? circleShape(s.r)
+        : s.kind === "poly" && s.verts.length >= 3
+          ? { kind: "poly", verts: s.verts }
+          : null;
+  if (!shape) return;
+  const { a, b } = centrelineAt(shape, item.pos, item.rot);
+  ctx.strokeStyle = IMPERMEABLE_EDGE;
+  ctx.fillStyle = IMPERMEABLE_EDGE;
+  ctx.lineWidth = worldLine;
+  ctx.setLineDash([]);
+  if (a.distanceTo(b) < 1e-6) {
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, worldLine, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  const cap = ctx.lineCap;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.lineCap = cap;
 }
 
 // A camera region's buffer zone: the volume grown by `buffer`, which is where
@@ -1771,6 +1811,7 @@ export function drawEditor(
       }
     });
     ctx.setLineDash([]);
+    for (const m of members) if (m.rail) drawRailGlyph(ctx, m, worldLine);
   }
   for (const body of ordered) {
     if (drawnAsBody.has(body.id)) continue;
@@ -1845,6 +1886,7 @@ export function drawEditor(
       ctx.lineWidth = worldLine;
       ctx.stroke();
     }
+    if (body.rail && body.object === "collision") drawRailGlyph(ctx, body, worldLine);
   }
 
   // What the 3D renderer will do with a shape, marked on the 2D view - which

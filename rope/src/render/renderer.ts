@@ -30,6 +30,7 @@ import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "./chainMetrics";
 import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { centrelineAt } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
@@ -65,6 +66,11 @@ const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+const RAIL_LINE = "#9db8c6"; // a rail's centreline: the same steel, drawn down the bar
+// How far the cuff is foreshortened along a rail it is clamped around: a ring
+// whose axis lies along the bar is seen nearly edge-on from the side, and this
+// is the ring turned most of the way there while still reading as a ring.
+const RAIL_CUFF_SQUASH = 0.45;
 const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
 // Water with no authored colour: sewer green, dark and murky rather than the
@@ -187,6 +193,31 @@ function unionPath(shapes: readonly ShapeTransform[]): Path2D {
   return p;
 }
 
+// A rail's centreline, drawn down the middle of the bar in the steel the
+// hook-proof edge wears: it is where the cuff will sit and slide, and the one
+// thing that says a bar is a rail rather than a thin wall. A peg (a circle, a
+// square) has a centreline of no length and gets a dot.
+function drawRailLine(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
+  const { a, b } = centrelineAt(t.shape, t.globalPosition, t.globalRotation);
+  ctx.strokeStyle = RAIL_LINE;
+  ctx.fillStyle = RAIL_LINE;
+  ctx.lineWidth = PX;
+  ctx.setLineDash([]);
+  if (a.distanceTo(b) < 1e-6) {
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, PX, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  const cap = ctx.lineCap;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.lineCap = cap;
+}
+
 // A world box comfortably containing `shapes` - the outer ring of an even-odd
 // "everything outside this shape" clip. Only ever used with a stroke a pixel or
 // two wide, so a metre of margin is generous.
@@ -263,6 +294,11 @@ function drawCompoundGeometry(
     ctx.restore();
   }
   ctx.setLineDash([]);
+  // Rails wear their centreline over the body: it is inside the bar, so no
+  // sibling can be in its way and nothing needs clipping.
+  for (let i = 0; i < shapes.length; i++) {
+    if (pieces[i]?.rail) drawRailLine(ctx, shapes[i]!);
+  }
 }
 
 // One piece of level geometry, drawn in the style its body's kind asks for.
@@ -286,6 +322,23 @@ function drawGeometryShape(
     ctx.setLineDash([5 * PX, 3 * PX]);
     ctx.stroke();
     ctx.setLineDash([]);
+    return;
+  }
+
+  // A rail: the body's ordinary fill and border, with the centreline the cuff
+  // rides drawn down the bar (see `drawRailLine`).
+  if (piece?.rail) {
+    const style = geometryStyle(body, piece);
+    pathShape(ctx, t);
+    if (style.fill) {
+      ctx.fillStyle = style.fill;
+      ctx.fill();
+    }
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.width;
+    ctx.setLineDash(style.dash);
+    ctx.stroke();
+    drawRailLine(ctx, t);
     return;
   }
 
@@ -726,11 +779,17 @@ function drawSceneChains(
 // other at either end - at the mouth and at the hinge - so the two pieces read
 // as two. Nothing may stand outside `MANACLE_DISC`, and nothing stands proud of
 // the band on the hinge side at all: the chain is laid over that arc.
+//
+// `onRail` is the cuff clamped AROUND a bar rather than bitten into a face:
+// `dir` is then the bar's own direction, the cuff's axis, and the cuff is
+// drawn foreshortened along it - a ring seen most of the way to edge-on, with
+// the bar running through its middle - and nothing about it is buried.
 function drawManacle(
   ctx: CanvasRenderingContext2D,
   center: Vec2,
   dir: Vec2,
   buried: boolean,
+  onRail = false,
 ): void {
   const R = MANACLE_RADIUS;
   const BAND = MANACLE_BAND; // bar stock the cuff is forged from
@@ -738,12 +797,13 @@ function drawManacle(
   ctx.save();
   ctx.translate(center.x, center.y);
   ctx.rotate(Math.atan2(dir.y, dir.x)); // +x now points along `dir`
+  if (onRail) ctx.scale(RAIL_CUFF_SQUASH, 1);
   // A clamped cuff is centred ON the surface it bit, so half of it is inside
   // that surface and only the half on the +x side of the bite is above ground.
   // The terrain is already drawn by the time the chain is, so without this the
   // buried half is painted back over the wall and the cuff reads as a ring stuck
   // ON the surface rather than one clamped THROUGH it.
-  if (buried) {
+  if (buried && !onRail) {
     ctx.beginPath();
     ctx.rect(0, -R - BAND, R + BAND, (R + BAND) * 2);
     ctx.clip();
@@ -942,7 +1002,7 @@ export function renderBall(
     trimPathStart(path, MANACLE_RADIUS);
     path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
     drawChainPolyline(ctx, path);
-    drawManacle(ctx, at, dir, clamped !== null);
+    drawManacle(ctx, at, dir, clamped !== null, ball.manacleOnRail);
   }
   if (!overlayOnly) {
     drawBody(ctx, ball, alpha);

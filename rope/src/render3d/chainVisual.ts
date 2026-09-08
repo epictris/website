@@ -152,7 +152,18 @@ export class ChainLayer {
         this.lay(this.path);
 
         this.manacle.position.set(at.x, threeY(at.y), 0);
-        this.manacle.rotation.z = Math.atan2(threeY(dir.y), dir.x);
+        // Turned about z to face `dir`, and - clamped around a RAIL - turned a
+        // quarter turn about its own x after that, so the ring's axis lies
+        // along the bar (`dir` is then the rail's tangent) and the bar runs
+        // through the cuff rather than the cuff standing half inside a face.
+        // "ZYX" applies z first, then y about the turned frame, which is the
+        // order that reading needs.
+        this.manacle.rotation.set(
+          0,
+          ball.manacleOnRail ? Math.PI / 2 : 0,
+          Math.atan2(threeY(dir.y), dir.x),
+          "ZYX",
+        );
         this.manacle.visible = true;
       }
     }

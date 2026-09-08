@@ -353,6 +353,20 @@ export interface CollisionObjectData extends ObjectPlacement {
   // wind on the hub and not the rim, and only the piece can say which is which
   // (`CollisionShape2D.wrappable`).
   wrappable?: boolean;
+  // A RAIL: a thin bar the manacle clamps AROUND rather than bites into, and
+  // then slides along under the chain's pull against the body's `friction` -
+  // a zipline, a pipe, the handle of a hanging lantern. Solid for everything
+  // else, exactly as a hook-proof piece is: the avatar stands on it, bodies
+  // collide with it, other chains wrap its corners. The cuff lives on the
+  // shape's centreline (`lib/rail.ts`: a rect's medial axis, a polygon's
+  // principal axis, a circle's centre - a peg the ring hangs on) and stops
+  // where its disc meets a sibling piece that is not a rail.
+  //
+  // Per OBJECT for the reason `impermeable` is, and the case it exists for is
+  // a body of both: a lantern whose handles are rails and whose lid, bulb and
+  // base are hook-proof. Hook-proof wins where both are set - a hook that
+  // bounces off a piece never clamps it.
+  rail?: boolean;
   // What this piece is made of and how thick it is through z - the dimension the
   // 2D view cannot show. Together they are the piece's mass: its area times
   // `thickness` times the material's density (`MATERIALS` in
@@ -2382,6 +2396,7 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       shape: scaleShape(o.shape, factor),
       ...(o.impermeable !== undefined ? { impermeable: o.impermeable } : {}),
       ...(o.wrappable !== undefined ? { wrappable: o.wrappable } : {}),
+      ...(o.rail !== undefined ? { rail: o.rail } : {}),
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),

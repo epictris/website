@@ -256,6 +256,9 @@ interface Piece {
   // same reason: a wheel's rim and its hub are one body and only one of them
   // winds the chain.
   wrappable: boolean;
+  // A rail (`CollisionObjectData.rail`), per piece for the same reason again: a
+  // lantern's handles are rails and its lid is not, and they are one body.
+  rail: boolean;
 }
 
 // One collision object as the pieces it builds: one for every kind but a
@@ -284,6 +287,7 @@ function makePiece(
     rot: world.rot,
     impermeable: o.impermeable === true,
     wrappable: o.wrappable !== false,
+    rail: o.rail === true,
     // The piece's own material and thickness, not the body's: they are the one
     // authored property a body does not have just one of, and every sum below -
     // centre of mass, mass, inertia - is written over the pieces precisely so
@@ -321,6 +325,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.setShape(only.shape);
     shape.impermeable = only.impermeable;
     shape.wrappable = only.wrappable;
+    shape.rail = only.rail;
     return;
   }
   body.globalPosition = centre;
@@ -330,6 +335,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.addShape(p.shape, p.pos.sub(centre), p.rot);
     shape.impermeable = p.impermeable;
     shape.wrappable = p.wrappable;
+    shape.rail = p.rail;
   }
 }
 
