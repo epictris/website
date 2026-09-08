@@ -16,7 +16,7 @@
 // run it landed in (how many resets the level had seen), so `cli clicks` can
 // lay the story beside the frames and say which layer lost a click.
 
-import type { SerializedFrame } from "../sim/trace";
+import { ACTIONS, type Action, type SerializedFrame } from "../sim/trace";
 
 export type InputTraceKind =
   | "down"
@@ -44,6 +44,13 @@ export interface InputTraceEvent {
 export interface InputTraceBundle {
   run: number; // the run the bundle's frames belong to
   events: InputTraceEvent[];
+  // Which action bit each mouse button drove on the controller that recorded
+  // this (see BUTTON_BITS). The audit's whole question is whether a press in
+  // the DOM reached a frame, and that question needs the bit the press was
+  // supposed to set - which is not the same on both controllers. Absent on
+  // bundles recorded before the field existed, which were all grapple-mapped
+  // or ball bundles whose only deploy button was the left one.
+  bits?: Record<number, number>;
 }
 
 // Where an event landed, for one that missed the canvas: "#id" when it has
@@ -60,12 +67,15 @@ export class InputTrace {
   private events: InputTraceEvent[] = [];
   private lastButtons = 0;
 
-  // `at` is the run and frame the sim stands at right now; `cap` bounds the
-  // buffer, oldest first, so a long session keeps its last few thousand facts
-  // rather than growing without end.
+  // `at` is the run and frame the sim stands at right now; `bits` is the button
+  // map of the controller being played, read at export because the editor can
+  // switch controller between tests; `cap` bounds the buffer, oldest first, so a
+  // long session keeps its last few thousand facts rather than growing without
+  // end.
   constructor(
     private canvas: HTMLCanvasElement,
     private at: () => { run: number; frame: number },
+    private bits: () => Record<number, number> = () => BUTTON_BITS.grapple,
     private cap = 5000,
   ) {}
 
@@ -114,7 +124,7 @@ export class InputTrace {
   }
 
   bundle(): InputTraceBundle {
-    return { run: this.at().run, events: this.events.slice() };
+    return { run: this.at().run, events: this.events.slice(), bits: this.bits() };
   }
 }
 
@@ -143,12 +153,31 @@ export interface ClickAudit {
   unsourced: number;
 }
 
-// The bits a mouse button drives, by button number, as `sim/trace.ts` orders
-// them: left is `fire`, right is `retractClick`.
-const BUTTON_BIT: Record<number, number> = { 0: 1 << 5, 2: 1 << 6 };
+// The bits a mouse button drives, by button number, in the frames' held mask
+// (the ACTIONS order of `sim/trace.ts`). The grapple controller binds the two
+// buttons to different actions; the ball controller has only the chain to
+// deploy, so every button drives `fire` and a right-click there is a deploy and
+// not a dropped press.
+const bitOf = (a: Action): number => 1 << ACTIONS.indexOf(a);
+export const BUTTON_BITS: Record<"grapple" | "ball", Record<number, number>> = {
+  grapple: { 0: bitOf("fire"), 2: bitOf("retractClick") },
+  ball: { 0: bitOf("fire"), 1: bitOf("fire"), 2: bitOf("fire") },
+};
 const BUTTON_NAME: Record<number, string> = { 0: "left", 1: "middle", 2: "right" };
 
 const name = (b: number): string => BUTTON_NAME[b] ?? `button${b}`;
+
+// The buttons that drive one bit, named as one thing: "left", or "left/middle/
+// right" where they are interchangeable, so a line about a held run says which
+// press could have been behind it.
+const namesFor = (bits: Record<number, number>, bit: number): string =>
+  Object.keys(bits)
+    .filter((b) => bits[Number(b)] === bit)
+    .map((b) => name(Number(b)))
+    .join("/");
+
+// The DOM button a `buttons` bitmask bit stands for.
+const MASK_BUTTON: Record<number, number> = { 1: 0, 2: 2, 4: 1 };
 
 function heldAt(frames: SerializedFrame[], f: number, bit: number): boolean | null {
   // A press that arrived after frame f is sampled by frame f+1, which is
@@ -172,10 +201,18 @@ export function auditClicks(
     unsampled: 0,
     unsourced: 0,
   };
+  const bits = trace.bits ?? BUTTON_BITS.grapple;
   const down = new Set<number>();
-  // Frame indices (0-based) at which the DOM put a button down, per button:
-  // the events a held run in the frames can be traced back to.
-  const pressesAt: Record<number, number[]> = { 0: [], 2: [] };
+  // Frame indices (0-based) at which the DOM put a press behind an action bit:
+  // the events a held run in the frames can be traced back to. Keyed by BIT
+  // rather than by button, because on the ball controller three buttons drive
+  // the same one and any of them sources the hold.
+  const pressesAt = new Map<number, number[]>();
+  const pressed = (bit: number, f: number): void => {
+    const at = pressesAt.get(bit);
+    if (at) at.push(f);
+    else pressesAt.set(bit, [f]);
+  };
 
   for (const ev of trace.events) {
     const inRun = ev.r === trace.run;
@@ -190,9 +227,9 @@ export function auditClicks(
         }
         down.add(b);
         if (ev.tgt) note += `  <- landed on ${ev.tgt}, not the canvas`;
-        const bit = BUTTON_BIT[b];
+        const bit = bits[b];
         if (inRun && bit !== undefined && !ev.tgt) {
-          pressesAt[b]!.push(ev.f);
+          pressed(bit, ev.f);
           const held = heldAt(frames, ev.f, bit);
           if (held === false) {
             audit.unsampled++;
@@ -226,11 +263,12 @@ export function auditClicks(
           // The browser's belief is the truth from here, as the sources treat
           // it: a press it knows about is a press the sim was told of.
           down.clear();
-          if (mask & 1) down.add(0);
-          if (mask & 2) down.add(2);
-          if (mask & 4) down.add(1);
-          if (inRun && mask & 1) pressesAt[0]!.push(ev.f);
-          if (inRun && mask & 2) pressesAt[2]!.push(ev.f);
+          for (const [maskBit, b] of Object.entries(MASK_BUTTON)) {
+            if ((mask & Number(maskBit)) === 0) continue;
+            down.add(b);
+            const bit = bits[b];
+            if (inRun && bit !== undefined) pressed(bit, ev.f);
+          }
         }
         if (inRun || allRuns) audit.lines.push(`${stamp}  buttons=${mask}${note}`);
         break;
@@ -241,16 +279,20 @@ export function auditClicks(
   }
 
   // Every held run in the frames wants a DOM press within a frame of its start.
-  for (const [bStr, bit] of Object.entries(BUTTON_BIT)) {
-    const b = Number(bStr);
+  // Once per BIT, not once per button: three buttons driving `fire` is one
+  // question about the frames, asked once.
+  for (const bit of new Set(Object.values(bits))) {
+    const at = pressesAt.get(bit) ?? [];
     let held = false;
     for (let i = 0; i < frames.length; i++) {
       const now = (frames[i]!.h & bit) !== 0;
       if (now && !held) {
-        const sourced = pressesAt[b]!.some((f) => Math.abs(f - i) <= 1);
+        const sourced = at.some((f) => Math.abs(f - i) <= 1);
         if (!sourced) {
           audit.unsourced++;
-          audit.lines.push(`frame ${i + 1}  ${name(b)} held with no DOM press behind it (pad or touch?)`);
+          audit.lines.push(
+            `frame ${i + 1}  ${namesFor(bits, bit)} held with no DOM press behind it (pad or touch?)`,
+          );
         }
       }
       held = now;

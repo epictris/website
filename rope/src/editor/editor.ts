@@ -20,7 +20,7 @@ import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
-import { InputTrace } from "../input/inputTrace";
+import { BUTTON_BITS, InputTrace } from "../input/inputTrace";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
   DEFAULT_FORCE_MAGNITUDE,
@@ -1488,10 +1488,16 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // export had one. Stamped with the test's run number, and with -1 outside a
   // test, so `cli clicks` lays only the tested run's events against the frames.
   let testRuns = 0;
-  const inputTrace = new InputTrace(canvas, () => ({
-    run: mode === "test" ? testRuns : -1,
-    frame: testLevel?.frame ?? 0,
-  }));
+  const inputTrace = new InputTrace(
+    canvas,
+    () => ({
+      run: mode === "test" ? testRuns : -1,
+      frame: testLevel?.frame ?? 0,
+    }),
+    // Read at export, so a bundle carries the map of the controller whose run
+    // it holds rather than of whichever test happened to start first.
+    () => (testController === "ball" ? BUTTON_BITS.ball : BUTTON_BITS.grapple),
+  );
   inputTrace.install();
 
   // `spawn` (world metres) overrides the level's own spawn marker for this run

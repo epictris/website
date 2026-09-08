@@ -4,7 +4,15 @@
 // reading of a bundle's DOM button story against its frames.
 
 import { ButtonLatch } from "./latch";
-import { alignEvdev, auditClicks, evdevReport, parseEvdev, parseWaylandDebug, type InputTraceEvent } from "./inputTrace";
+import {
+  BUTTON_BITS,
+  alignEvdev,
+  auditClicks,
+  evdevReport,
+  parseEvdev,
+  parseWaylandDebug,
+  type InputTraceEvent,
+} from "./inputTrace";
 import type { SerializedFrame } from "../sim/trace";
 
 export interface CaseResult {
@@ -121,6 +129,18 @@ const CASES: Record<string, () => string> = {
     expect(a.orphanUps === 0, "the up matches the press the bitmask announced");
     expect(a.unsourced === 0, "the bitmask press sources the held run");
     return `buttons=1 f10, up f20, held f11-f21 -> 1 disagreement, nothing else`;
+  },
+
+  "on the ball map a right-click is a deploy, not an unsampled press": () => {
+    const t = { ...trace(ev("down", 10, 2), ev("up", 20, 2)), bits: BUTTON_BITS.ball };
+    const a = auditClicks(t, frames(30, [11, 21]));
+    expect(issues(a) === 0, `audit: ${JSON.stringify(a)}`);
+    // The same trace read with the grapple map is the false positive this
+    // guards: there the right button drives `retractClick`, which no frame
+    // holds, so the press looks dropped and the `fire` run unsourced.
+    const g = auditClicks(trace(ev("down", 10, 2), ev("up", 20, 2)), frames(30, [11, 21]));
+    expect(g.unsampled === 1 && g.unsourced === 1, `grapple map: ${JSON.stringify(g)}`);
+    return `down/up right f10-f20, fire held f11-f21 -> clean on the ball map, 2 issues on the grapple one`;
   },
 
   "a down that landed off the canvas is named, not counted unsampled": () => {

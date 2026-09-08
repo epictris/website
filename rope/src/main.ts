@@ -5,7 +5,7 @@ import { Level } from "./level/level";
 import { BallLevel } from "./level/ballLevel";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
-import { InputTrace } from "./input/inputTrace";
+import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
 import { drawProbeOutline, render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
@@ -214,7 +214,11 @@ const input: IInputSource = (ballInput ?? liveInput)!;
 // The raw DOM button story, downloaded beside the frames (see
 // input/inputTrace.ts): the frames say what the sim sampled, this says what
 // the browser delivered, and a dropped click is found by which one lacks it.
-const inputTrace = new InputTrace(canvas, () => ({ run: resets, frame: level.frame }));
+const inputTrace = new InputTrace(
+  canvas,
+  () => ({ run: resets, frame: level.frame }),
+  () => (isBall ? BUTTON_BITS.ball : BUTTON_BITS.grapple),
+);
 inputTrace.install();
 
 // Full-session recording — press P to download a replayable bundle. A bundle

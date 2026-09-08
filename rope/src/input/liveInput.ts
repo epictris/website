@@ -15,10 +15,11 @@
 //
 // Mouse aim reads AimPointer rather than the raw event, so under the `cursor`
 // (default) and `motion` aim modes (input/aimPointer.ts) it takes pointer lock on
-// click and keeps aiming past the edge of the window and of the screen. The lock
+// click IN FULLSCREEN and keeps aiming past the edge of the screen. The lock
 // hides the OS cursor, which on this controller IS the aim indicator, so
-// `crosshairAim` hands the renderer a crosshair to draw in its place. `?aim=position`
-// leaves the pointer alone and behaves exactly as it always did.
+// `crosshairAim` hands the renderer a crosshair to draw in its place. Windowed,
+// and under `?aim=position` always, the pointer is left alone and aim behaves
+// exactly as it always did.
 
 import { Vec2 } from "../engine/vec2";
 import {

@@ -2,7 +2,7 @@
 // controller. Keyboard has no bindings here; the aim devices merge, most
 // recent wins:
 //
-//   Mouse:   move to aim (cursor) · left-click deploy chain
+//   Mouse:   move to aim (cursor) · click deploy chain (any button)
 //   Gamepad: left stick aim · RB deploy chain (hold-to-keep) ·
 //            top face button (X on a Pro Controller) restart level
 //   Touch:   on-screen joystick (bottom-left) aim ·
@@ -37,10 +37,17 @@
 //     than on screen, at the frame. The first move (and the first after another
 //     device owned aim) seeds it from the cursor.
 //
-// `cursor` and `motion` take pointer lock on click (Esc releases it, the next
-// click takes it back); `position` never touches the pointer. See aimPointer.ts
-// for why the lock is the only thing that fixes the boundary, and why bounding a
-// virtual cursor costs none of what bounding a real one would.
+// `cursor` and `motion` take pointer lock on click IN FULLSCREEN (Esc releases
+// it, the next click takes it back); windowed, and in `position` always, the
+// pointer is left alone. See aimPointer.ts for why the lock is the only thing
+// that fixes the boundary, why bounding a virtual cursor costs none of what
+// bounding a real one would, and why the lock is worth having only where the
+// screen edge is the boundary.
+//
+// Every mouse button deploys - left, middle, right - rather than the left alone.
+// The chain is the only thing the mouse does here, so there is nothing for a
+// second button to mean, and a hand that has learned to reach for a side button
+// should not find it dead.
 //
 // The stick and the on-screen joystick aim only while deflected past a
 // deadzone, writing a direction at exactly the reach distance; a released
@@ -91,7 +98,9 @@ export class BallInputSource implements IInputSource {
   private prev: FrameInput = emptyFrameInput();
   // Latched rather than a plain flag, so a click shorter than a sim step still
   // reaches the next sample (see input/latch.ts).
-  private mouseLeft = new ButtonLatch();
+  // One latch for the whole mouse, not one per button: every button deploys
+  // (see the header), so what matters is whether ANY of them is down.
+  private mouseButton = new ButtonLatch();
   // The cursor mouse aim reads: the real one in `position` mode, the virtual one
   // the pointer lock feeds in the other two (see input/aimPointer.ts).
   private pointer: AimPointer;
@@ -127,19 +136,24 @@ export class BallInputSource implements IInputSource {
       // The move carries the button state the browser believes in, so a press
       // or release it never announced as an event is picked up at the next
       // move rather than never.
-      this.press(this.mouseLeft, (e.buttons & 1) !== 0);
+      this.press(this.mouseButton, e.buttons !== 0);
       // `position` and `cursor` differ only in WHICH cursor this is; both are
       // re-derived per read in `currentAimLocal`, so this write is the seed the
       // other devices hand back to.
       this.aimLocal = AIM_MODE === "motion" ? this.motionAim() : this.cursorAim();
       this.aimSource = "mouse";
     });
-    canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.press(this.mouseLeft, true);
-    });
-    window.addEventListener("mouseup", (e) => {
-      if (e.button === 0) this.press(this.mouseLeft, false);
-    });
+    // A down of any button is a deploy. A release reads `e.buttons`, the mask AS
+    // OF the event and so already without the button just released: the deploy
+    // is held while another button is still down, and dropped when the last one
+    // comes up.
+    canvas.addEventListener("mousedown", () => this.press(this.mouseButton, true));
+    window.addEventListener("mouseup", (e) => this.press(this.mouseButton, e.buttons !== 0));
+    // The right button deploys now, so the context menu it would otherwise open
+    // is a menu over the game; `auxclick` carries the middle button's own
+    // defaults, which are no more wanted here.
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener("auxclick", (e) => e.preventDefault());
 
     if (TOUCH_CAPABLE) {
       this.buildJoystick();
@@ -394,7 +408,7 @@ export class BallInputSource implements IInputSource {
       ...emptyFrameInput(),
       // Every latch is sampled, whatever the others said: a short-circuit would
       // leave the unread one's queued edge for a later frame.
-      fire: button([this.mouseLeft.sample(), padFire, this.touchFire.sample()].some(Boolean), p.fire),
+      fire: button([this.mouseButton.sample(), padFire, this.touchFire.sample()].some(Boolean), p.fire),
       jump: button(restart, p.jump), // restart routed through jump (stays in the recorded stream)
       mouseWorldPosition: aimWorld,
     };

@@ -1061,7 +1061,10 @@ ball so the loop faces the aim direction (proportional steering — also while
 the chain is out, which winds it around the ball); the shot always leaves
 through the loop. A stick-released frame encodes its aim point as the ball's
 own position ("not aiming"). Controls (mouse + gamepad + touch, most-recent aim device
-wins): mouse move aim / left-click deploy chain; left
+wins): mouse move aim / click deploy chain (**any** mouse button - left, middle
+or right; the chain is the only thing the mouse does here, so there is nothing
+for a second button to mean, and the right button's context menu and the middle
+button's `auxclick` are both suppressed on the canvas); left
 stick aim, RB deploy chain, top face button (X on a Pro Controller)
 restart; on touch, the bottom-left on-screen joystick aims (deflect past the
 deadzone to steer the loop, like the left stick) and the bottom-right circular
@@ -1082,15 +1085,36 @@ feel without a rebuild):
 - **cursor** (default): the aim point is `AimPointer`'s **virtual** cursor's
   screen position, un-projected through the *current* camera every time it is
   read (`currentAimLocal`).
-  Clicking the canvas takes **pointer lock** (Esc releases it, the next click
-  takes it back; entering fullscreen through the Fullscreen API takes it too,
-  that being a user gesture of its own - F11 and the installed PWA's
-  `display: fullscreen` do not fire it, and there the first click does the job),
-  and while locked the virtual cursor is integrated from `movementX/Y` and held
-  inside the 1920x1080 play frame, so aim carries on past the edge of the window
-  and of the screen.
-  Unlocked the virtual cursor *is* the real one, so this mode and `position` are
-  the same picture until the lock is taken.
+  Clicking the canvas takes **pointer lock in fullscreen only** (Esc releases it,
+  the next click takes it back; entering fullscreen through the Fullscreen API
+  takes it without a click, that being a user gesture of its own, and leaving
+  fullscreen by either route gives the pointer back), and while locked the
+  virtual cursor is integrated from `movementX/Y` and held inside the 1920x1080
+  play frame, so aim carries on past the edge of the screen.
+  Unlocked the virtual cursor *is* the real one, so windowed this mode and
+  `position` are the same picture.
+
+  Fullscreen is detected two ways, because there are two ways in.
+  The Fullscreen API sets `document.fullscreenElement`, which must contain the
+  canvas for the *game* to be what fills the screen.
+  F11 and the installed PWA's `display: fullscreen` set no element at all and
+  fire no `fullscreenchange`; they show up only as `(display-mode: fullscreen)`,
+  which Chromium 142 does match for a plain F11 (verified through CDP
+  `Browser.setWindowBounds` with `windowState: "fullscreen"`, no fullscreen
+  element, media query true).
+  Entering that way carries no user gesture, so the lock cannot be requested at
+  the media query's `change` and the first click takes it instead; the `change`
+  going the other way is what releases it, since no `fullscreenchange` will.
+
+  Windowed the pointer is left alone, for two reasons pointing the same way.
+  The window edge is a boundary the player can see and walk back from, and other
+  windows are a mouse-move away, so capturing the cursor to fix an edge nobody
+  was pushing against costs an Esc for nothing.
+  And windowed is where the lock is unsafe on this machine: Chromium's Wayland
+  pointer location drifts out of the page under lock and presses that hit-test
+  onto the caption or a resize border are eaten (see **Dropped clicks** below,
+  where playing fullscreen is one of the two workarounds).
+  This gating is that workaround, made the default.
 - **position**: the aim point is the **real** cursor's screen position,
   un-projected through the *current* camera every time it is read
   (`currentAimLocal`), unbounded - the reticle is exactly where the pointer is, a
@@ -1104,6 +1128,9 @@ feel without a rebuild):
   This is the mode with the **edges** in it, and the reason the other two exist:
   aim stops at the edge of the window, and at the edge of the screen in
   fullscreen, because that is where the real cursor stops.
+  Only the second of those is fixed now that the lock is fullscreen-only, which
+  is the one that was worth fixing: past the screen edge there is nowhere else
+  for the hand to be going.
   It is the only mode that never touches the pointer, kept so the lock modes can
   still be compared against the behaviour they replaced.
 - **motion**: `aimLocal` accumulates each mousemove's delta (metres at the
@@ -1962,6 +1989,7 @@ The latch stays whatever the browser does, since a click shorter than a step is 
 `session-1346f` and `session-796f` (2026-09-07, 23:05 and 23:10) each end in seconds of aiming with no press, with no second chromium on the machine and nothing in the compositor's log for the hour.
 The trace had been removed by then, so once again the bundles could only say what the sim sampled.
 It now records every mousedown and mouseup the window sees (capture phase, target named when it is not the canvas), every mousemove whose `buttons` bitmask changed, the pointer lock coming and going, focus, visibility, and the cursor entering and leaving the canvas, each stamped with the run and sim frame it landed after.
+A bundle also carries the controller's button map (`InputTraceBundle.bits`, from `BUTTON_BITS`): the grapple controller binds left to `fire` and right to `retractClick`, the ball controller drives `fire` from every button, and without the map a right-click deploy in a ball bundle reads as a press that reached no frame.
 `cli clicks` lays it against the frames and names the layer that lost a click: an **orphan up** (a release with no press before it) is a press the browser never had, so the compositor, libinput or the mouse lost it; an **unsampled** down is one the DOM delivered and the page dropped; an **unsourced** held run is a press the sim saw with nothing in the DOM behind it (pad or touch).
 The desktop is sway on wlroots, the mouse a Razer DeathAdder V2 on `event9`; `journalctl` shows libinput's button-debounce timer on that device firing late under compositor lag earlier the same day, which is the layer to watch when the next orphan up arrives.
 The evdev half of that comparison is `libinput debug-events` beside the session, read by `cli clicks bundle.json --evdev /tmp/evdev.log`: it aligns the two clocks by the presses both streams share, lists the presses either side lacks, and prints both streams over the seconds before each orphan up with a verdict (the mouse sent it and the browser never got it; the mouse never sent it; or the log ends before it).
@@ -1988,6 +2016,7 @@ Every press is hit-tested by the browser frame at that drifted point (`WindowEve
 The renderer gets the synthesized release only (the press was consumed by the frame), and the real release is ignored as a release of an unpressed button (`OnPointerButtonEvent`).
 Nothing in the page can see or recover a press the frame ate.
 Workarounds: play fullscreen (no caption, no borders to hit), or run chromium with `--ozone-platform=x11`.
+The first of those is now the default: the lock is taken **only in fullscreen** (see the aim modes above), so a windowed session never enters the state that loses presses.
 
 
 ## Level editor

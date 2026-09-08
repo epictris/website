@@ -24,6 +24,18 @@
 // Unlocked, the virtual cursor IS the real one, so an aim mode reading
 // `position()` behaves exactly as it did before any of this existed. That is
 // what lets the lock be opt-in per session rather than a rewrite of aim.
+//
+// The lock is taken in FULLSCREEN ONLY, for two reasons that point the same way.
+// Windowed, the cursor is the player's: the window edge is a boundary they can
+// see and walk back from, other windows are a mouse-move away, and capturing the
+// pointer to fix an edge nobody was pushing against costs an Esc to get out of.
+// Fullscreen is the case the virtual cursor was written for - the screen edge is
+// the last boundary and there is nothing past it to reach for. It is also, on
+// this machine, the only place the lock is SAFE: locked in a window, Chromium's
+// Wayland pointer location drifts out of the page with the hand's net travel and
+// presses that hit-test onto the caption or a resize border are eaten and
+// delivered as a lone release (CLAUDE.md, "Answered: it is Chromium"). A
+// fullscreen window has no caption and no borders to drift onto.
 
 import { Vec2 } from "../engine/vec2";
 import {
@@ -38,9 +50,10 @@ import {
 // be compared by feel without a rebuild.
 //
 //   cursor (default) - the aim point is the VIRTUAL cursor's screen position,
-//     un-projected through the current camera. Under pointer lock that cursor is
-//     integrated from the mouse's own deltas and bounded by the play frame, so
-//     aim carries on past the edge of the window and of the screen.
+//     un-projected through the current camera. In fullscreen, where the lock is
+//     taken, that cursor is integrated from the mouse's own deltas and bounded
+//     by the play frame, so aim carries on past the edge of the screen. In a
+//     window it is the real cursor, and identical to `position`.
 //   position - the same mapping reading the REAL cursor, and the only mode that
 //     leaves the pointer alone. No lock, and no fix: this is the mode with the
 //     edges in it, kept so the two can still be compared by feel.
@@ -56,9 +69,27 @@ export const AIM_MODE: AimMode = ((): AimMode => {
   return AIM_MODES.includes(q as AimMode) ? (q as AimMode) : AIM_MODE_DEFAULT;
 })();
 
-// Every mode but `position` wants the lock; `position` exists to be compared
-// against, so it must keep behaving exactly as it always did.
+// Every mode but `position` wants the lock (in fullscreen: see AimPointer);
+// `position` exists to be compared against, so it must keep behaving exactly as
+// it always did, windowed or not.
 export const AIM_WANTS_LOCK = AIM_MODE !== "position";
+
+// Is the game showing fullscreen? There are two ways in and they report
+// themselves differently. The Fullscreen API sets a fullscreen ELEMENT, which
+// has to be an ancestor of the canvas (or the canvas itself) for the game to be
+// the thing filling the screen. F11 and an installed PWA launched with
+// `display: fullscreen` set no element at all and show up only as the display
+// mode, which both of them share with the API's fullscreen - so the mode alone
+// would very nearly do, and the element check is what keeps some OTHER element
+// being fullscreened from counting as the game being.
+const FULLSCREEN_MODE =
+  typeof matchMedia === "function" ? matchMedia("(display-mode: fullscreen)") : null;
+
+function fullscreen(canvas: HTMLCanvasElement): boolean {
+  if (typeof document === "undefined") return false;
+  if (document.fullscreenElement) return document.fullscreenElement.contains(canvas);
+  return FULLSCREEN_MODE?.matches ?? false;
+}
 
 // Hold a view-space point inside the play frame. The frame is the visible
 // picture (see render/viewport.ts), so this is the largest bound that keeps the
@@ -93,15 +124,26 @@ export class AimPointer {
     private active: () => boolean = () => true,
   ) {
     if (!takeLock) return;
+    // Fullscreen or not, a click is the gesture the lock needs; `requestLock`
+    // is what refuses it outside fullscreen. This is the ONLY path into the
+    // lock under F11 and under the installed PWA, neither of which announces
+    // itself with an event the moment it happens.
     canvas.addEventListener("mousedown", () => this.requestLock());
-    // Entering fullscreen is a user gesture of its own, so the lock can be taken
-    // there rather than waiting for a click the player has no reason to make -
-    // and fullscreen is exactly where the missing motion is most obvious, since
-    // the screen edge is the only boundary left. Only the Fullscreen API fires
-    // this; F11 and the installed PWA's `display: fullscreen` do not, and there
-    // the first click takes the lock as everywhere else.
+    // Entering fullscreen through the Fullscreen API is a user gesture of its
+    // own, so the lock can be taken there rather than waiting for a click the
+    // player has no reason to make. Leaving it gives the pointer back: the
+    // browser usually does that itself, but a lock that outlived fullscreen
+    // would be exactly the windowed capture this gating exists to prevent.
     document.addEventListener("fullscreenchange", () => {
-      if (document.fullscreenElement?.contains(canvas)) this.requestLock();
+      if (fullscreen(canvas)) this.requestLock();
+      else this.releaseLock();
+    });
+    // F11 fires no `fullscreenchange`; the display mode changing is the only
+    // word of it either way. Coming out, that word is what gives the pointer
+    // back. Going in, there is no user gesture attached to it - the browser
+    // would refuse a lock requested here - so the first click takes it instead.
+    FULLSCREEN_MODE?.addEventListener("change", (e) => {
+      if (!e.matches) this.releaseLock();
     });
   }
 
@@ -109,16 +151,25 @@ export class AimPointer {
     return typeof document !== "undefined" && document.pointerLockElement === this.canvas;
   }
 
-  // Take the lock if it is wanted and not already held. Deliberately WITHOUT
-  // `unadjustedMovement`: the point of the virtual cursor is to feel like the
-  // desktop cursor it replaces, and the desktop cursor has the OS pointer
-  // acceleration curve applied to it.
+  // Take the lock if it is wanted, allowed and not already held. Deliberately
+  // WITHOUT `unadjustedMovement`: the point of the virtual cursor is to feel
+  // like the desktop cursor it replaces, and the desktop cursor has the OS
+  // pointer acceleration curve applied to it.
   requestLock(): void {
     if (!this.takeLock || !this.active() || typeof document === "undefined") return;
+    if (!fullscreen(this.canvas)) return;
     if (document.pointerLockElement === this.canvas) return;
     // Rejects harmlessly when the browser refuses - most often a re-lock too soon
     // after an Esc exit, which Chrome rate-limits.
     void Promise.resolve(this.canvas.requestPointerLock()).catch(() => {});
+  }
+
+  // Give the pointer back. Held only while fullscreen, so this runs on the way
+  // out of it; unlocked, `update` follows the real cursor again from its next
+  // move, which is where the OS put the pointer when it reappeared.
+  private releaseLock(): void {
+    if (typeof document === "undefined") return;
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
   // Fold one mousemove into the virtual cursor; read `position()`/`motion()` after.
