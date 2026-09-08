@@ -259,6 +259,168 @@ export function auditClicks(
   return audit;
 }
 
+// ---- the evdev half ---------------------------------------------------------
+// What the mouse itself sent, as `libinput debug-events --device /dev/input/eventN`
+// prints it, laid against the DOM trace. The trace ends at the browser: an
+// orphan up says the browser never had the press, and this says whether the
+// mouse sent one. Its clock is the tool's own ("+84.544s" since it started),
+// so the two streams are aligned by matching the clicks they share.
+
+export interface EvdevEvent {
+  t: number; // ms since the tool started
+  b: number; // button as the DOM numbers it: 0 left, 1 middle, 2 right
+  e: "down" | "up";
+}
+
+const EVDEV_BUTTON: Record<string, number> = { BTN_LEFT: 0, BTN_MIDDLE: 1, BTN_RIGHT: 2 };
+const EVDEV_LINE = /\+(\d+\.\d+)s\s+(BTN_\w+) \(\d+\) (pressed|released)/;
+
+export function parseEvdev(text: string): EvdevEvent[] {
+  const out: EvdevEvent[] = [];
+  for (const line of text.split("\n")) {
+    const m = EVDEV_LINE.exec(line);
+    if (!m) continue;
+    const b = EVDEV_BUTTON[m[2]!];
+    if (b === undefined) continue;
+    out.push({ t: parseFloat(m[1]!) * 1000, b, e: m[3] === "pressed" ? "down" : "up" });
+  }
+  return out;
+}
+
+// The same stream one layer up: what the compositor sent the browser, as
+// `WAYLAND_DEBUG=1` on the browser prints it, one line per protocol event:
+//   [3273245.129] wl_pointer#31.button(33591, 3273245, 272, 1)
+// The bracketed stamp is the client's clock in ms, then serial, the
+// compositor's time, the evdev button code, and the state (1 pressed).
+// libwayland prints the object as `wl_pointer#3` (older builds `wl_pointer@3`).
+const WAYLAND_LINE = /\[\s*(\d+\.\d+)\]\s+(?:->\s+)?wl_pointer[@#]\d+\.button\(\d+,\s*\d+,\s*(\d+),\s*(\d)\)/;
+const WAYLAND_BUTTON: Record<string, number> = { "272": 0, "273": 2, "274": 1 };
+
+export function parseWaylandDebug(text: string): EvdevEvent[] {
+  const out: EvdevEvent[] = [];
+  for (const line of text.split("\n")) {
+    const m = WAYLAND_LINE.exec(line);
+    if (!m) continue;
+    const b = WAYLAND_BUTTON[m[2]!];
+    if (b === undefined) continue;
+    out.push({ t: parseFloat(m[1]!), b, e: m[3] === "1" ? "down" : "up" });
+  }
+  return out;
+}
+
+// A DOM press and an evdev press are the same click when they land within this
+// of each other once aligned: USB polling, the compositor and the browser's
+// input thread between them are a few ms, and a hand cannot click twice in it.
+const ALIGN_TOLERANCE_MS = 20;
+
+export interface EvdevAlignment {
+  offset: number; // ms to add to an evdev time to get a DOM time
+  matched: number; // DOM presses with an evdev press under them
+  domPresses: number;
+  ends: number; // the last evdev event, in DOM time
+}
+
+// Align by the left button's presses: every pairing of an early DOM press with
+// an early evdev press is a candidate offset, and the one under which the most
+// presses coincide is the alignment. Null when nothing coincides at all.
+export function alignEvdev(trace: InputTraceBundle, evdev: EvdevEvent[]): EvdevAlignment | null {
+  const dom = trace.events.filter((e) => e.e === "down" && (e.b ?? 0) === 0 && !e.tgt).map((e) => e.t);
+  const evd = evdev.filter((e) => e.e === "down" && e.b === 0).map((e) => e.t);
+  if (dom.length === 0 || evd.length === 0) return null;
+  const coincide = (offset: number): number =>
+    dom.filter((t) => evd.some((u) => Math.abs(t - (u + offset)) <= ALIGN_TOLERANCE_MS)).length;
+  let best: EvdevAlignment | null = null;
+  for (const t of dom.slice(0, 10)) {
+    for (const u of evd.slice(0, 10)) {
+      const offset = t - u;
+      const matched = coincide(offset);
+      if (!best || matched > best.matched) {
+        best = { offset, matched, domPresses: dom.length, ends: evdev[evdev.length - 1]!.t + offset };
+      }
+    }
+  }
+  return best && best.matched > 0 ? best : null;
+}
+
+// The lines `cli clicks --evdev` adds: the alignment, then every orphan up in
+// the bundle's run with the two streams merged over the seconds before it and
+// a verdict on which layer lost the press.
+// `label` names the stream the lines speak of: "evdev" for the mouse's own,
+// "wayland" for what the compositor sent the browser (see parseWaylandDebug).
+export function evdevReport(trace: InputTraceBundle, evdev: EvdevEvent[], label = "evdev"): string[] {
+  const lines: string[] = [];
+  const align = alignEvdev(trace, evdev);
+  if (!align) {
+    lines.push(`${label}: no left-button press in the log coincides with one in the trace; are they the same session?`);
+    return lines;
+  }
+  const { offset, matched, domPresses, ends } = align;
+  lines.push(
+    `${label}: ${evdev.length} events, aligned at ${(offset / 1000).toFixed(3)} s; ` +
+      `${matched} of ${domPresses} DOM presses have the ${label} press under them; ` +
+      `the log ends at DOM t=${(ends / 1000).toFixed(1)} s`,
+  );
+  const inRun = trace.events.filter((e) => e.r === trace.run);
+  const domDowns = inRun.filter((e) => e.e === "down" && (e.b ?? 0) === 0 && !e.tgt).map((e) => e.t);
+  const evdDowns = evdev.filter((e) => e.e === "down" && e.b === 0).map((e) => e.t + offset);
+  const near = (t: number, list: number[]): boolean => list.some((u) => Math.abs(t - u) <= ALIGN_TOLERANCE_MS);
+
+  // Presses one side has and the other lacks, inside the span both cover.
+  const first = evdev[0]!.t + offset;
+  const domOnly = domDowns.filter((t) => t >= first && t <= ends && !near(t, evdDowns));
+  const evdOnly = evdDowns.filter((u) => !near(u, domDowns) && u >= (inRun[0]?.t ?? 0));
+  if (domOnly.length) lines.push(`${label}: ${domOnly.length} DOM press(es) with no ${label} press under them at ${domOnly.map((t) => (t / 1000).toFixed(3) + " s").join(", ")}`);
+  if (evdOnly.length) lines.push(`${label}: ${evdOnly.length} ${label} press(es) the DOM never saw at ${evdOnly.map((t) => (t / 1000).toFixed(3) + " s").join(", ")}`);
+
+  // Each orphan up, with both streams over the seconds before it.
+  const down = new Set<number>();
+  for (const ev of trace.events) {
+    if (ev.e === "down") down.add(ev.b ?? 0);
+    else if (ev.e === "buttons") {
+      down.clear();
+      if ((ev.b ?? 0) & 1) down.add(0);
+      if ((ev.b ?? 0) & 2) down.add(2);
+    } else if (ev.e === "up") {
+      const b = ev.b ?? 0;
+      const orphan = !down.has(b);
+      down.delete(b);
+      if (!orphan || ev.r !== trace.run) continue;
+      lines.push(`orphan up at f${ev.f}, DOM t=${(ev.t / 1000).toFixed(3)} s:`);
+      const from = ev.t - 2500;
+      const merged = [
+        ...inRun.filter((e) => (e.e === "down" || e.e === "up") && e.t >= from && e.t <= ev.t + 500).map((e) => ({ t: e.t, src: "DOM".padEnd(7), e: `${e.e} ${name(e.b ?? 0)}` })),
+        ...evdev.filter((e) => e.t + offset >= from && e.t + offset <= ev.t + 500).map((e) => ({ t: e.t + offset, src: label.padEnd(7), e: `${e.e} ${name(e.b)}` })),
+      ].sort((a, b) => a.t - b.t);
+      for (const m of merged) lines.push(`    ${(m.t / 1000).toFixed(3).padStart(9)} s  ${m.src}  ${m.e}`);
+      if (ev.t > ends) {
+        lines.push(`  -> INCONCLUSIVE: the ${label} log ends ${((ev.t - ends) / 1000).toFixed(1)} s before it`);
+        continue;
+      }
+      const s = (t: number): string => `${(t / 1000).toFixed(3)} s`;
+      // The mouse's press under the very release: the press reached the
+      // browser with its state flipped (session-1192f: a press at 23.420 s
+      // arrived as a release, and the release 216 ms later as nothing).
+      const under = evdev.find((e) => e.e === "down" && e.b === b && Math.abs(e.t + offset - ev.t) <= ALIGN_TOLERANCE_MS);
+      if (under) {
+        const after = evdev.find((e) => e.e === "up" && e.b === b && e.t > under.t);
+        lines.push(
+          `  -> INVERTED: ${label} has a press at ${s(under.t + offset)} where the browser received a release` +
+            (after ? `; its release at ${s(after.t + offset)} reached nothing` : "") +
+            `: flipped between ${label} and the DOM`,
+        );
+        continue;
+      }
+      const sent = evdev.filter((e) => e.e === "down" && e.b === b && e.t + offset >= from && e.t + offset <= ev.t + ALIGN_TOLERANCE_MS && !near(e.t + offset, domDowns));
+      if (sent.length) {
+        lines.push(`  -> ${label} has the press at ${s(sent[0]!.t + offset)} and the browser never got it: lost between ${label} and the DOM`);
+      } else {
+        lines.push(`  -> no press in ${label} either: nothing was sent`);
+      }
+    }
+  }
+  return lines;
+}
+
 export function auditSummary(a: ClickAudit): string {
   const parts = [
     `${a.orphanUps} orphan up`,

@@ -20,6 +20,7 @@ import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
+import { InputTrace } from "../input/inputTrace";
 import type { FrameInput, IInputSource } from "../input/frameInput";
 import {
   DEFAULT_FORCE_MAGNITUDE,
@@ -1481,6 +1482,17 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // where the AVATAR first left the recording and nothing about what the body
   // it was anchored to was doing, which is the wrong half of a chain bug.
   const recWorldDigests: WorldDigest[] = [];
+  // The raw DOM button story beside the frames, as `main.ts` carries it (see
+  // input/inputTrace.ts): session-2191f was a test-mode bundle with a dropped
+  // click near its end and no trace to place it with, because only the game's
+  // export had one. Stamped with the test's run number, and with -1 outside a
+  // test, so `cli clicks` lays only the tested run's events against the frames.
+  let testRuns = 0;
+  const inputTrace = new InputTrace(canvas, () => ({
+    run: mode === "test" ? testRuns : -1,
+    frame: testLevel?.frame ?? 0,
+  }));
+  inputTrace.install();
 
   // `spawn` (world metres) overrides the level's own spawn marker for this run
   // only — the model is untouched, so a spot-check from the cursor never edits
@@ -1502,6 +1514,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     camera.viewportHeight = VIEW_HEIGHT;
     testController = controller;
     testData = pixelData;
+    testRuns++;
     recFrames.length = 0;
     recDigests.length = 0;
     recWorldDigests.length = 0;
@@ -1562,6 +1575,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       frames: recFrames.slice(),
       digests: recDigests.slice(),
       worldDigests: recWorldDigests.slice(),
+      inputTrace: inputTrace.bundle(),
     };
     // The same check the game's P-download runs: a bundle that does not
     // reproduce on the machine that made it is a determinism finding, and this

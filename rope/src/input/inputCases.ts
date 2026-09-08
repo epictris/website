@@ -4,7 +4,7 @@
 // reading of a bundle's DOM button story against its frames.
 
 import { ButtonLatch } from "./latch";
-import { auditClicks, type InputTraceEvent } from "./inputTrace";
+import { alignEvdev, auditClicks, evdevReport, parseEvdev, parseWaylandDebug, type InputTraceEvent } from "./inputTrace";
 import type { SerializedFrame } from "../sim/trace";
 
 export interface CaseResult {
@@ -130,6 +130,85 @@ const CASES: Record<string, () => string> = {
     expect(issues(a) === 0, `audit: ${JSON.stringify(a)}`);
     expect(a.lines[0]!.includes("landed on body"), `line: ${a.lines[0]}`);
     return `down f10 on body, up f12, nothing held -> clean, the body named`;
+  },
+
+  "an evdev log is aligned by shared presses and places an orphan up's lost press": () => {
+    // Three clicks the DOM saw, a fourth the mouse sent and the browser never
+    // got (its release reached the DOM as an orphan up), then a click after
+    // the log ends. The tool's clock started 1.5 s after the page's.
+    const log = [
+      "+1.000s\tBTN_LEFT (272) pressed",
+      "+1.100s\tBTN_LEFT (272) released",
+      "+2.000s\tBTN_LEFT (272) pressed",
+      "+2.100s\tBTN_LEFT (272) released",
+      "+3.000s\tBTN_LEFT (272) pressed",
+      "+3.100s\tBTN_LEFT (272) released",
+      "+4.000s\tBTN_LEFT (272) pressed",
+      "+4.100s\tBTN_LEFT (272) released",
+    ]
+      .map((l) => ` event9   POINTER_BUTTON               ${l}, seat count: 1`)
+      .join("\n");
+    const evd = parseEvdev(log);
+    expect(evd.length === 8, `parsed ${evd.length}`);
+    const at = (s: number, e: "down" | "up", f: number): InputTraceEvent => ({ ...ev(e, f, 0), t: s * 1000 });
+    const t = trace(
+      at(2.5, "down", 10), at(2.6, "up", 16),
+      at(3.5, "down", 70), at(3.6, "up", 76),
+      at(4.5, "down", 130), at(4.6, "up", 136),
+      at(5.6, "up", 196), // the orphan
+      at(7.0, "down", 280), at(7.1, "up", 286), // after the log
+    );
+    const align = alignEvdev(t, evd);
+    expect(align !== null && Math.abs(align.offset - 1500) < 1, `offset ${align?.offset}`);
+    expect(align!.matched === 3, `matched ${align!.matched}`);
+    const report = evdevReport(t, evd);
+    expect(report.some((l) => l.includes("evdev has the press at 5.500 s")), report.join("\n"));
+    return `offset 1.5 s, 3 of 4 matched, orphan at 5.6 s placed on the mouse's press at 5.5 s`;
+  },
+
+  "a mouse press under an orphan up is a flipped press": () => {
+    const log = [
+      "+1.000s\tBTN_LEFT (272) pressed",
+      "+1.100s\tBTN_LEFT (272) released",
+      "+2.000s\tBTN_LEFT (272) pressed",
+      "+2.216s\tBTN_LEFT (272) released",
+      "+3.000s\tBTN_LEFT (272) pressed",
+      "+3.100s\tBTN_LEFT (272) released",
+    ]
+      .map((l) => ` event9   POINTER_BUTTON               ${l}, seat count: 1`)
+      .join("\n");
+    const at = (s: number, e: "down" | "up", f: number): InputTraceEvent => ({ ...ev(e, f, 0), t: s * 1000 });
+    // The second click reached the DOM as a lone up at the press's own time.
+    const t = trace(at(1.0, "down", 10), at(1.1, "up", 16), at(2.0, "up", 70), at(3.0, "down", 130), at(3.1, "up", 136));
+    const report = evdevReport(t, parseEvdev(log));
+    const verdict = report.find((l) => l.includes("INVERTED"));
+    expect(verdict !== undefined, report.join("\n"));
+    expect(verdict!.includes("press at 2.000 s") && verdict!.includes("release at 2.216 s"), verdict!);
+    return `press at 2.0 s met by a DOM up at 2.0 s -> INVERTED, its release at 2.216 s reached nothing`;
+  },
+
+  "a WAYLAND_DEBUG log parses to the same stream": () => {
+    const log = [
+      "[3273245.129]  wl_pointer#31.button(33591, 3273245, 272, 1)",
+      "[3273245.130]  wl_pointer@31.frame()",
+      "[3273461.220]  wl_pointer@31.button(33592, 3273461, 272, 0)",
+      "[3273500.000] -> wl_surface@20.commit()",
+      "[3273600.500]  wl_pointer@31.button(33593, 3273600, 273, 1)",
+    ].join("\n");
+    const w = parseWaylandDebug(log);
+    expect(w.length === 3, `parsed ${w.length}`);
+    expect(w[0]!.e === "down" && w[0]!.b === 0 && Math.abs(w[0]!.t - 3273245.129) < 1e-6, JSON.stringify(w[0]));
+    expect(w[1]!.e === "up" && w[2]!.b === 2, JSON.stringify(w.slice(1)));
+    return `3 button lines of 5 -> left down, left up, right down`;
+  },
+
+  "an orphan up past the end of the evdev log is inconclusive": () => {
+    const log = [" event9   POINTER_BUTTON               +1.000s\tBTN_LEFT (272) pressed, seat count: 1", " event9   POINTER_BUTTON               +1.100s\tBTN_LEFT (272) released, seat count: 0"].join("\n");
+    const at = (s: number, e: "down" | "up", f: number): InputTraceEvent => ({ ...ev(e, f, 0), t: s * 1000 });
+    const t = trace(at(1.0, "down", 10), at(1.1, "up", 16), at(9.0, "up", 500));
+    const report = evdevReport(t, parseEvdev(log));
+    expect(report.some((l) => l.includes("INCONCLUSIVE")), report.join("\n"));
+    return `log ends at 1.1 s, orphan at 9.0 s -> inconclusive`;
   },
 
   "events of another run are read for state but not held against the frames": () => {
