@@ -28,32 +28,6 @@ import { PX } from "../engine/units";
 export const CHAIN_LINK_LEN = 3.8 * PX;
 export const CHAIN_LINK_W = 1.8 * PX;
 
-// Pull a chain path's ANCHOR-side end back along itself by `by` metres, in
-// place.
-//
-// The chain has to stop on the cuff's RIM rather than at its centre, which is
-// where the chain's end node is, or the links are drawn straight through the
-// middle of it.
-export function trimPathStart(points: Vec2[], by: number): void {
-  if (points.length < 2 || by <= 0) return;
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) total += points[i]!.distanceTo(points[i + 1]!);
-  // Never eat the whole path: a chain reeled almost to the ball still draws as a
-  // chain, with the manacle simply overlapping what is left of it.
-  let budget = Math.min(by, total * 0.8);
-  let i = 0;
-  while (i < points.length - 1) {
-    const seg = points[i]!.distanceTo(points[i + 1]!);
-    if (seg > budget) {
-      points[i] = points[i]!.add(points[i]!.directionTo(points[i + 1]!).mul(budget));
-      break;
-    }
-    budget -= seg;
-    i++;
-  }
-  if (i > 0) points.splice(0, i);
-}
-
 export interface ChainLink {
   // Centre of the link, in world metres.
   mid: Vec2;
@@ -64,10 +38,10 @@ export interface ChainLink {
   // in 2D it is drawn as a thinner ellipse, which is the same statement.
   //
   // The FIRST link of a walk is the edge-on one. A path is walked from its
-  // anchor end, and the ball & chain's anchor end is the manacle - a ring lying
-  // in the plane, like a broad link. Two rings in the same plane cannot be
-  // linked, and a broad first link was drawn crossing the cuff's band rather
-  // than looped over it.
+  // anchor end, and the ball & chain's anchor end is the manacle's hinge pin,
+  // whose axis lies in the plane (the ring is seen edge-on, see lib/manacle):
+  // a link hooked through a pin hangs in the plane square to that pin, which
+  // is the plane the camera looks along - the edge-on link.
   broad: boolean;
   index: number;
 }

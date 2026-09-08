@@ -167,6 +167,11 @@ export function shapeVertices(shape: Shape): readonly Vec2[] {
   return verts;
 }
 
+// A vertex shape's loop in the world, under its transform. Empty for a circle.
+export function shapeWorldVertices(t: ShapeTransform): Vec2[] {
+  return shapeVertices(t.shape).map((v) => t.globalPosition.add(v.rotated(t.globalRotation)));
+}
+
 // --- surface projection ------------------------------------------------------
 // Where a point lands when pushed onto a shape's boundary. Used to bolt a chain
 // anchor to the surface it is drawn on rather than to a body's centre: a rope

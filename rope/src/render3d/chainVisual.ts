@@ -21,8 +21,8 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
-import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "../render/chainMetrics";
-import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
+import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
@@ -125,58 +125,35 @@ export class ChainLayer {
         ball.chainSlack?.pathLoopToAnchor(alpha) ??
         chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
       if (loopToAnchor.length >= 2) {
-        // The manacle at the far end - the flying hook, the dangling tip, or the
-        // anchor. Centred on the chain's own end node, which free IS the hook
-        // body and anchored is the point it bit, so the cuff sits half in and
-        // half out of the geometry, or - clamped around a rail - the point the
-        // ring hangs at, which is a bore's radius below the bar it rests on.
-        // Facing the chain while it hangs from it, frozen on the surface's
-        // normal once it has bitten, and square to the way it hangs once it is
-        // clamped. See the 2D renderer, whose placement this mirrors.
-        //
-        // Clamped around a RAIL the chain is hooked over the ring's rim and the
-        // drape already ends there (`SlackChain`), so the cuff is centred on
-        // the chain's own end node and the path is left as it is.
-        const onRail = ball.manacleOnRail;
-        const at = onRail
-          ? ball.chain!.end.contact.renderGlobalPosition(alpha)
-          : loopToAnchor[loopToAnchor.length - 1]!;
-        const chainDir = chainEndFacing(loopToAnchor, ball.renderLoopDirection(alpha));
-        const dir = ball.manacleFacing(alpha) ?? chainDir;
-
         // Anchor first, ball last: the links then stay put in the world as the
         // chain reels and are consumed INTO the ball, rather than the whole
-        // chain compressing toward the anchor (see chainMetrics.ts).
+        // chain compressing toward the anchor (see chainMetrics.ts). The path
+        // already ends on the manacle's hinge pin - the chain's own end node,
+        // free or bitten; the rim the drape is pinned to around a rail - so the
+        // links run to exactly where the cuff is shackled. See the 2D renderer,
+        // whose placement this mirrors.
         this.path.length = 0;
         for (let i = loopToAnchor.length - 1; i >= 0; i--) {
           this.path.push(loopToAnchor[i]!);
         }
         this.path.push(ball.renderPosition(alpha));
-        // The links stop ON THE RIM, on whichever side the chain runs: the touch
-        // point of a chain laid over a ring, which slides round the ring as the
-        // ball swings. Around a rail the path already ends on the rim end the
-        // chain is hooked over.
-        if (!onRail) {
-          trimPathStart(this.path, MANACLE_RADIUS);
-          this.path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
-        }
         this.tint.set(DEFAULT_CHAIN_COLOR);
         this.lay(this.path);
 
-        this.manacle.position.set(at.x, threeY(at.y), 0);
-        // Turned about z to face `dir`, and - clamped around a RAIL - turned a
-        // quarter turn about its own x after that, so the ring's axis is `dir`
-        // (which is then square to the way the cuff hangs) and the bar runs
-        // through the cuff rather than the cuff standing half inside a face.
-        // "ZYX" applies z first, then y about the turned frame, which is the
-        // order that reading needs.
-        this.manacle.rotation.set(
-          0,
-          ball.manacleOnRail ? Math.PI / 2 : 0,
-          Math.atan2(threeY(dir.y), dir.x),
-          "ZYX",
-        );
-        this.manacle.visible = true;
+        // The manacle at the far end - the flying hook, the dangling tip, or the
+        // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
+        // Turned about z to face `dir` with its hinge, then a quarter turn about
+        // its own x, so the ring's axis lies in the gameplay plane square to
+        // the chain and the ring is seen edge-on: a shackle trailing its chain,
+        // a cuff driven half into the face it bit, or a ring with the bar of a
+        // rail through it. "ZXY" applies z first, then x about the turned
+        // frame, which is the order that reading needs.
+        const pose = ball.manaclePose(alpha);
+        if (pose) {
+          this.manacle.position.set(pose.centre.x, threeY(pose.centre.y), 0);
+          this.manacle.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(pose.dir.y), pose.dir.x), "ZXY");
+          this.manacle.visible = true;
+        }
       }
     }
 
@@ -226,24 +203,26 @@ export class ChainLayer {
 
 const FORWARD = new THREE.Vector3(0, 0, 1);
 
-// The chain's far end as an iron manacle: two jaws pinned together at the hinge,
-// where the chain is shackled, and shut on each other under the lock opposite
-// it. Built rather than authored, because it is four primitives and a GLTF for
-// it would be an asset to keep in step with a shape nobody is going to redesign.
-// +x points toward the chain, matching the 2D renderer's `drawManacle`.
+// The chain's far end as an iron manacle: a ring with the two jaws pinned
+// together at the hinge, where the chain is shackled, and shut on each other
+// under the lock opposite it. Built rather than authored, because it is four
+// primitives and a GLTF for it would be an asset to keep in step with a shape
+// nobody is going to redesign. +x points toward the hinge and the chain,
+// matching the 2D renderer's `drawManacle`; the group is turned so the ring
+// stands edge-on to the camera (see `sync`).
 //
 // Drawn shut always, for the reason `drawManacle` gives - the drawn shape has to
-// BE the disc the sim collides as - and what makes it a manacle rather than a
-// ring is fitted INWARD and through the depth for the same reason: nothing may
-// stand outside `MANACLE_DISC`, and nothing at all stands proud of the hinge
-// side, which the chain's first link is laid across.
+// BE the bar the sim collides as - and everything is fitted inside that bar for
+// the same reason: the lock housing IS the bar's thickness, and the knuckle is
+// set in from the ring's end by its own diameter.
 function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
   const g = new THREE.Group();
   // The same forged iron the links are, at the same scale: the manacle is the
   // end of the chain rather than a different object bolted to it.
   const iron = forgedMetal(FORGED_SMALL);
   const R = MANACLE_RADIUS;
-  const BAR = MANACLE_BAND / 2; // the bar's radius, so the cuff's outer edge is the disc
+  const BAR = MANACLE_BAND / 2; // the bar's radius, so the cuff's outer edge is the reach
+  const T = MANACLE_THICKNESS;
 
   const cuff = new THREE.TorusGeometry(R, BAR, 8, 28);
   owned.push(cuff);
@@ -251,26 +230,27 @@ function buildManacle(owned: THREE.BufferGeometry[]): THREE.Group {
   ring.castShadow = true;
   g.add(ring);
 
-  // No knuckle at the hinge, for the reason `drawManacle` gives: the chain's own
-  // first link is laid across that arc, so nothing may stand proud of it there.
-
   // Lock over the mouth, holding the two jaw tips shut. Set inward off the
-  // band's outer edge, as in 2D.
-  const lockGeo = new THREE.BoxGeometry(2.6 * PX, 2.8 * PX, BAR * 2.6);
+  // band's outer edge, as in 2D; its depth through the ring's axis is the
+  // bar's thickness, which after the group's quarter turn is what the camera
+  // sees across the cuff.
+  const lockGeo = new THREE.BoxGeometry(2.6 * PX, 2.8 * PX, T);
   owned.push(lockGeo);
   const lock = new THREE.Mesh(lockGeo, iron);
-  lock.position.set(-R - BAR + 1.6 * PX, 0, 0);
+  lock.position.set(-MANACLE_REACH + 1.3 * PX, 0, 0);
   lock.castShadow = true;
   g.add(lock);
 
-  // Rivets through the jaws, halfway round each.
-  const rivetGeo = new THREE.SphereGeometry(0.5 * PX, 8, 6);
-  owned.push(rivetGeo);
-  for (const sy of [-1, 1]) {
-    const rivet = new THREE.Mesh(rivetGeo, iron);
-    rivet.position.set(0, sy * R, BAR * 0.8);
-    g.add(rivet);
-  }
+  // Hinge knuckle: the pin's barrel, its axis along the ring's own, which the
+  // chain's first link is hooked through. A cylinder stands along y; turned
+  // onto z here.
+  const knuckleGeo = new THREE.CylinderGeometry(T / 2, T / 2, 1.8 * PX, 12);
+  owned.push(knuckleGeo);
+  const knuckle = new THREE.Mesh(knuckleGeo, iron);
+  knuckle.rotation.x = Math.PI / 2;
+  knuckle.position.set(MANACLE_REACH - T / 2, 0, 0);
+  knuckle.castShadow = true;
+  g.add(knuckle);
 
   return g;
 }

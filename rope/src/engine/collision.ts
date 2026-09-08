@@ -15,7 +15,7 @@
 
 import { dmath } from "./dmath";
 import { Vec2 } from "./vec2";
-import { polyEdgeNormal, shapeVertices } from "./shapes";
+import { polyEdgeNormal, shapeVertices, shapeWorldVertices } from "./shapes";
 import type { Shape, ShapeTransform } from "./shapes";
 import type { CollisionObject2D, CollisionShape2D } from "./body";
 
@@ -308,6 +308,188 @@ export function sweepCircle(
     s.size.x * 0.5,
     s.size.y * 0.5,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Swept convex polygon vs shapes
+// ---------------------------------------------------------------------------
+
+// A convex sweep's answer: when along the motion the two first touch, the
+// normal there (pointing away from the hit shape, toward the moving loop, as
+// `SweepHit` has it) and WHERE they touch - the point of the moving loop's
+// corner or the hit shape's corner that meets the other's face at that moment,
+// which is on the hit shape's boundary to within the sweep's own precision.
+export interface ConvexSweepHit extends SweepHit {
+  readonly point: Vec2;
+}
+
+// Project a loop onto a unit axis.
+function projectLoop(verts: readonly Vec2[], n: Vec2): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of verts) {
+    const d = v.dot(n);
+    if (d < min) min = d;
+    if (d > max) max = d;
+  }
+  return { min, max };
+}
+
+// The vertices of `verts` with the extreme projection onto `n` (`sign` +1 for
+// the largest, -1 for the smallest): one for a corner, two for a face lying
+// flat along the axis.
+function extremeVertices(verts: readonly Vec2[], n: Vec2, sign: 1 | -1): Vec2[] {
+  let best = -Infinity;
+  for (const v of verts) best = Math.max(best, sign * v.dot(n));
+  return verts.filter((v) => sign * v.dot(n) >= best - 1e-9);
+}
+
+function meanOf(points: readonly Vec2[]): Vec2 {
+  let sum = Vec2.ZERO;
+  for (const p of points) sum = sum.add(p);
+  return sum.div(points.length);
+}
+
+// Where two convex loops TOUCH along a separating axis `n` (pointing from `b`
+// toward `a`), on `b`'s boundary: the middle of the overlap of the two touching
+// features, measured along the axis's tangent.
+//
+// The features are `a`'s deepest vertices against the axis and `b`'s furthest
+// along it - a corner each for a corner-on-face hit, a whole face each for two
+// faces closing flat on each other. Taking either loop's feature ALONE is
+// wrong for the flat case, and which loop's the axis was attributed to decided
+// it: two parallel faces close at the same instant on both loops' normals, the
+// first considered wins, and a manacle flying mouth-first into a 2.6 m plank
+// was reported touching it at the plank's own midpoint, 67 cm from the mouth.
+// The overlap of the two features is the touching region whichever loop the
+// axis came from; a corner inside a face is a point of that face.
+function touchPoint(a: readonly Vec2[], b: readonly Vec2[], n: Vec2): Vec2 {
+  const aPts = extremeVertices(a, n, -1);
+  const bPts = extremeVertices(b, n, 1);
+  const t = new Vec2(-n.y, n.x);
+  let aMin = Infinity;
+  let aMax = -Infinity;
+  for (const p of aPts) {
+    const s = p.dot(t);
+    aMin = Math.min(aMin, s);
+    aMax = Math.max(aMax, s);
+  }
+  let bMin = Infinity;
+  let bMax = -Infinity;
+  for (const p of bPts) {
+    const s = p.dot(t);
+    bMin = Math.min(bMin, s);
+    bMax = Math.max(bMax, s);
+  }
+  const lo = Math.max(aMin, bMin);
+  const hi = Math.min(aMax, bMax);
+  // Features that do not overlap along the tangent (a corner meeting a corner,
+  // to within the sweep's precision): the deeper loop's own feature answers.
+  if (lo > hi + 1e-9) return meanOf(aPts);
+  const along = (lo + hi) / 2;
+  // On `b`'s feature: its own height along the axis, the overlap's middle
+  // along the tangent.
+  return t.mul(along).add(n.mul(bPts[0]!.dot(n)));
+}
+
+// A convex loop `a` (world vertices) translating by `d` against a static
+// convex loop `b` (world vertices): the separating-axis sweep. In two
+// dimensions the only axes that can separate two convex polygons are their
+// face normals, and under a pure translation each axis's two projected
+// intervals close at one exactly computable time, so the first contact is the
+// LATEST of the per-axis closing times and the axis that closes last is the
+// face the two meet on. Exact, like the slab method it generalises.
+function sweepLoopLoop(a: readonly Vec2[], d: Vec2, b: readonly Vec2[]): ConvexSweepHit | null {
+  if (a.length < 3 || b.length < 3) return null;
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  // The axis the loops meet on, oriented from `b` toward `a`.
+  let axis: Vec2 | null = null;
+  // When the two already overlap on every axis there is no meeting face; the
+  // shallowest overlap then stands in for it, as `circleOverlap` pushes out
+  // through the shallowest face.
+  let shallow = Infinity;
+  let shallowAxis: Vec2 | null = null;
+  const consider = (n: Vec2): boolean => {
+    if (n.x === 0 && n.y === 0) return true;
+    const pa = projectLoop(a, n);
+    const pb = projectLoop(b, n);
+    const v = d.dot(n);
+    if (pa.max < pb.min) {
+      // `a` entirely on the low side: closing only if it moves up the axis.
+      if (v <= 0) return false;
+      const te = (pb.min - pa.max) / v;
+      const tx = (pb.max - pa.min) / v;
+      if (te > tEnter) {
+        tEnter = te;
+        axis = n.neg();
+      }
+      if (tx < tExit) tExit = tx;
+    } else if (pb.max < pa.min) {
+      if (v >= 0) return false;
+      const te = (pb.max - pa.min) / v;
+      const tx = (pb.min - pa.max) / v;
+      if (te > tEnter) {
+        tEnter = te;
+        axis = n;
+      }
+      if (tx < tExit) tExit = tx;
+    } else {
+      // Overlapping on this axis now. It cannot be the entering face, only an
+      // exit, and a candidate for the embedded case's push-out.
+      const tx = v > 0 ? (pb.max - pa.min) / v : v < 0 ? (pb.min - pa.max) / v : Infinity;
+      if (tx < tExit) tExit = tx;
+      const up = pa.max - pb.min; // `a` overlaps from below by this much
+      const down = pb.max - pa.min; // ...and from above by this much
+      const pen = Math.min(up, down);
+      if (pen < shallow) {
+        shallow = pen;
+        shallowAxis = up <= down ? n.neg() : n;
+      }
+    }
+    return tEnter <= tExit;
+  };
+  for (let i = 0; i < a.length; i++) if (!consider(polyEdgeNormal(a, i))) return null;
+  for (let i = 0; i < b.length; i++) if (!consider(polyEdgeNormal(b, i))) return null;
+
+  if (axis === null) {
+    // Embedded from the start: t = 0, out through the shallowest face, and the
+    // contact is wherever `a` reaches deepest along it.
+    const n = shallowAxis ?? Vec2.UP;
+    return { t: 0, normal: n, point: meanOf(extremeVertices(a, n, -1)) };
+  }
+  if (tEnter > 1 + EPS || tExit < 0) return null;
+  const t = Math.max(tEnter, 0);
+  const n: Vec2 = axis;
+  const moved = a.map((v) => v.add(d.mul(t)));
+  return { t, normal: n, point: touchPoint(moved, b, n) };
+}
+
+// A convex loop `a` translating by `d` against a static circle: the same
+// question as the circle sweeping the other way against the loop standing
+// still, which `sweepCirclePoly` already answers. The normal comes back
+// pointing from the loop toward the circle and is turned round, and the touch
+// is the point of the circle's rim that faces the loop.
+function sweepLoopCircle(
+  a: readonly Vec2[],
+  d: Vec2,
+  centre: Vec2,
+  r: number,
+): ConvexSweepHit | null {
+  const hit = sweepCirclePoly(centre, d.neg(), r, Vec2.ZERO, 0, a);
+  if (!hit) return null;
+  return { t: hit.t, normal: hit.normal.neg(), point: centre.sub(hit.normal.mul(r)) };
+}
+
+// Sweep a convex loop (world vertices) along `d` against a target shape.
+export function sweepConvex(
+  verts: readonly Vec2[],
+  d: Vec2,
+  target: ShapeTransform,
+): ConvexSweepHit | null {
+  const s = target.shape;
+  if (s.kind === "circle") return sweepLoopCircle(verts, d, target.globalPosition, s.radius);
+  return sweepLoopLoop(verts, d, shapeWorldVertices(target));
 }
 
 // ---------------------------------------------------------------------------
@@ -689,6 +871,23 @@ export function bodySweepCircle(
   for (const s of body.getShapes()) {
     if (only && !only(s)) continue;
     const hit = sweepCircle(from, motion, radius, s);
+    if (hit && (!best || hit.t < best.t)) best = { ...hit, shape: s };
+  }
+  return best;
+}
+
+// Earliest swept-convex hit against any shape `body` carries, or null: the
+// `bodySweepCircle` of a body that is a vertex loop rather than a disc.
+export function bodySweepConvex(
+  body: CollisionObject2D,
+  verts: readonly Vec2[],
+  motion: Vec2,
+  only?: (s: CollisionShape2D) => boolean,
+): (ConvexSweepHit & { shape: CollisionShape2D }) | null {
+  let best: (ConvexSweepHit & { shape: CollisionShape2D }) | null = null;
+  for (const s of body.getShapes()) {
+    if (only && !only(s)) continue;
+    const hit = sweepConvex(verts, motion, s);
     if (hit && (!best || hit.t < best.t)) best = { ...hit, shape: s };
   }
   return best;

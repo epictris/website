@@ -6,7 +6,7 @@
 
 import { dmath } from "./dmath";
 import { Vec2 } from "./vec2";
-import { circleShape, shapeExtents } from "./shapes";
+import { circleShape, shapeExtents, shapeWorldVertices } from "./shapes";
 import type { ShapeTransform } from "./shapes";
 import {
   Area2D,
@@ -28,6 +28,7 @@ import {
   rayVsShape,
   shapeRadius,
   sweepCircle,
+  sweepConvex,
 } from "./collision";
 import { shapeContacts } from "./manifold";
 import { AABBTree } from "./aabbTree";
@@ -1074,14 +1075,17 @@ export class World {
       // shape can reach past it only by its own small protrusion, which is the
       // shallow-overlap regime the discrete solve and depenetration already
       // handle correctly.
+      //
+      // A circle is swept as a circle, exactly as it always was (every recorded
+      // replay of the ball went through `sweepCircle`); a vertex shape - the
+      // chain's manacle, a bar seen edge-on - is swept as the loop it is, at
+      // the rotation it holds for the step.
       {
         const bs = body.primaryShape();
-        if (bs.shape.kind !== "circle") {
-          body.globalPosition = body.globalPosition.add(remaining);
-          return;
-        }
         const start = bs.globalPosition;
-        const r = bs.shape.radius;
+        const circle = bs.shape.kind === "circle" ? bs.shape.radius : null;
+        const loop = circle === null ? shapeWorldVertices(bs) : null;
+        const r = circle ?? shapeRadius(bs.shape);
         const reach = r + remaining.length() + CONTACT_SLOP;
         const cands = this.queryShapes(
           start.x - reach,
@@ -1106,7 +1110,8 @@ export class World {
             const oe = ts.extents();
             if (Math.abs(start.x - ts.globalPosition.x) > oe.x + reach) continue;
             if (Math.abs(start.y - ts.globalPosition.y) > oe.y + reach) continue;
-            const hit = sweepCircle(start, remaining, r, ts);
+            const hit =
+              circle !== null ? sweepCircle(start, remaining, circle, ts) : sweepConvex(loop!, remaining, ts);
             if (!hit || hit.t > 1) continue;
             // The same phantom-contact guards as the character sweep
             // (moveAndCollide): a real contact opposes the motion, and its

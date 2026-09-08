@@ -73,9 +73,14 @@ export class CollisionShape2D implements ShapeTransform {
   ) {}
 
   // Where this shape lives in its owner's shape list, stamped by
-  // `setShape`/`addShape`. The broadphase's candidate sort key alongside the
-  // owner's `worldIndex` (see there).
+  // `setShape`/`addShape`/`removeShape`. The broadphase's candidate sort key
+  // alongside the owner's `worldIndex` (see there).
   mountIndex = 0;
+  // Not part of the body's DRAWN outline: something else draws what this piece
+  // is (the chain's manacle, clamped to a face and drawn by the chain renderer
+  // at the cuff's own pose), so the body renderers leave it out of the fill
+  // and the edge. It collides exactly as any other piece does.
+  hidden = false;
   // This shape's leaf in the world's broadphase tree, -1 while it has none.
   // Owned entirely by `World.syncBroadphase`.
   broadphaseProxy = -1;
@@ -366,6 +371,20 @@ export abstract class CollisionObject2D {
     this.invalidateExposure();
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
     return s;
+  }
+
+  // Unmount a shape `addShape` mounted. The primary never goes - a body with no
+  // shape is not something the world has an answer for - and a shape the body
+  // does not carry is a no-op. The broadphase leaf is the world's to drop, and
+  // it drops it on the next sync from the snapshot it keeps (`World.syncBody`,
+  // which already handles `setShape` replacing the whole set).
+  removeShape(s: CollisionShape2D): void {
+    const i = this.collisionShapes.indexOf(s);
+    if (i <= 0) return;
+    this.collisionShapes.splice(i, 1);
+    for (let k = i; k < this.collisionShapes.length; k++) this.collisionShapes[k]!.mountIndex = k;
+    this.invalidateExposure();
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
   }
 
   // The primary (first-mounted) shape, and ONLY that one.

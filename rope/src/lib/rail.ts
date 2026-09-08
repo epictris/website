@@ -67,7 +67,7 @@ import { buildPolylineIndex, pointAtArcLength, projectOntoPolyline, tangentAtArc
 import { RopeAttachment, RopeContact } from "./ropeContact";
 import { Intersections } from "./intersections";
 import { IntersectionStatus } from "./types";
-import { MANACLE_BORE, MANACLE_DISC, MANACLE_RADIUS } from "./manacle";
+import { MANACLE_BORE, MANACLE_REACH, MANACLE_RADIUS } from "./manacle";
 
 // Rubber on steel, which is what `friction: 1` means everywhere else in the
 // level format (0 = ice, 1 = rubber). The cone test is a pure direction, so
@@ -570,7 +570,7 @@ export class RopeClamp extends RopeAttachment {
   runOffPoint(sign: -1 | 1): Vec2 {
     const end = sign > 0 ? this.curve.total : 0;
     const t = tangentAtArcLength(this.curve, end);
-    const local = pointAtArcLength(this.curve, end).add(t.mul(sign * (MANACLE_DISC + 1e-3)));
+    const local = pointAtArcLength(this.curve, end).add(t.mul(sign * (MANACLE_REACH + 1e-3)));
     return this.body.globalPosition.add(local.rotated(this.body.globalRotation));
   }
 
@@ -688,7 +688,7 @@ export class RopeClamp extends RopeAttachment {
       // A disc already inside a piece cannot be swept out of it, and a ring
       // clamped right at a joint with the lid is that case: leave the piece to
       // the pull, which will move the ring away from it.
-      .filter((s) => !circleOverlap(here, MANACLE_DISC, s));
+      .filter((s) => !circleOverlap(here, MANACLE_REACH, s));
     if (!others.length) return { min: minEnd, max: maxEnd, openMin, openMax };
     const min = this.sweepBound(-1, minEnd, others);
     const max = this.sweepBound(1, maxEnd, others);
@@ -710,7 +710,7 @@ export class RopeClamp extends RopeAttachment {
       const from = this.worldAt(s);
       const step = this.worldAt(next).sub(from);
       for (const piece of others) {
-        const hit = sweepCircle(from, step, MANACLE_DISC, piece);
+        const hit = sweepCircle(from, step, MANACLE_REACH, piece);
         if (hit) return { s: s + (next - s) * hit.t, hit: true };
       }
       s = next;

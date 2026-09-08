@@ -11,9 +11,10 @@ import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
-import { PhysicsBody2D, RigidBody2D, type CollisionShape2D } from "../engine/body";
-import { circleShape, nearestShapeIndex } from "../engine/shapes";
+import { PhysicsBody2D, RigidBody2D, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
+import { circleShape, nearestShapeIndex, type ShapeTransform } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
+import { shapeContacts } from "../engine/manifold";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
@@ -22,7 +23,25 @@ import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
 import { BallHook } from "./ballHook";
-import { MANACLE_DISC } from "../lib/manacle";
+import { chainEndFacing, MANACLE_HINGE, MANACLE_REACH, manacleShape } from "../lib/manacle";
+
+// The manacle as the renderers draw it: see `BallPlayer.manaclePose`.
+export interface ManaclePose {
+  centre: Vec2;
+  // Unit vector out of the hinge - along the cuff's long axis toward the end
+  // the chain is shackled to.
+  dir: Vec2;
+  // Clamped to something (a face, half-buried; or a rail), rather than a free
+  // body on the end of the chain.
+  clamped: boolean;
+  // Clamped around a RAIL: the bar passes through the ring and nothing about
+  // the cuff is buried.
+  onRail: boolean;
+  // Bitten into a face: the face's outward normal, through the cuff's centre.
+  // Everything on the far side of that plane is inside the geometry. Null for
+  // a free cuff and around a rail.
+  buriedUnder: Vec2 | null;
+}
 
 export class BallPlayer extends RigidBody2D {
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
@@ -128,7 +147,15 @@ export class BallPlayer extends RigidBody2D {
   // but it belongs to the attachment, so it is stored and cleared with it. Read
   // through `manacleFacing`.
   private anchorFacingLocal: Vec2 | null = null;
+  // The outward normal of the face the cuff bit, in the anchor body's frame:
+  // the plane the cuff is half buried under, which is not the cuff's own
+  // midline once it has bitten at an angle. Render-only, like the facing.
+  private anchorNormalLocal: Vec2 | null = null;
   private anchorBody: PhysicsBody2D | null = null;
+  // The clamped cuff as a solid piece of the body it bit (see `onHookAttached`),
+  // to be unmounted when the chain lets go. Null while there is none: no
+  // anchor, a rail, or a bite the ball was already standing on.
+  private anchorCuff: { body: CollisionObject2D; shape: CollisionShape2D } | null = null;
   // The anchor is a clamp around a rail rather than a bite into a face, so
   // `anchorFacingLocal` is the rail's tangent - the cuff's AXIS - and the
   // renderers turn the cuff to encircle the bar instead of half-burying it.
@@ -594,14 +621,17 @@ export class BallPlayer extends RigidBody2D {
     return this.chain !== null && this.hookInFlight === null;
   }
 
-  // Which way an ANCHORED manacle faces - the way its hinge points, out of the
-  // surface it bit - or null while the chain end is still a free body, when the
-  // cuff simply faces the chain it hangs from.
+  // Which way an ANCHORED manacle faces - the way its hinge points - or null
+  // while the chain end is still a free body, when the cuff simply faces the
+  // chain it hangs from.
   //
-  // It is the surface's own outward normal, so a cuff clamped to a given face
-  // always presents the same half of itself: bitten at the arrival angle
-  // instead, the lock housing landed wherever the throw happened to come from,
-  // which for half of all throws is the half buried in the wall.
+  // It is the way the cuff ARRIVED: the throw drives the mouth into the face at
+  // whatever angle it came in at and the cuff stays at that angle, half in the
+  // geometry and half out, which is what a spike driven into a wall does. The
+  // one exception is a cuff whose BACK met the geometry - the hinge pointing
+  // into the surface, a tip lying hinge-down on a ledge - where no mouth bit
+  // anything, and the cuff is set square to the face on the surface's own
+  // outward normal instead (`onHookAttached`).
   //
   // Frozen from there. A clamped manacle does not turn as the ball swings around
   // it - it is bolted to what it bit - so the chain's touch point slides round
@@ -609,18 +639,73 @@ export class BallPlayer extends RigidBody2D {
   //
   // A cuff on a RAIL is the exception, and is not frozen at all: it is bolted to
   // nothing, and a ring resting on a bar hangs in the plane of what is pulling
-  // it, so its axis is read live off the clamp - square to the way the ring
-  // hangs, at the tangent the bar has where the ring has got to
-  // (`RopeClamp.cuffAxisLocal`). The frozen tangent would be the bar's
-  // direction where the hook first STRUCK it, which on a curved handle is not
-  // even the direction it has under the ring any more.
+  // it, so its facing is read live off the clamp - the end of the ring the
+  // chain leaves over, which is where the hinge is (`RopeClamp.rimLocal`),
+  // wherever along the bar the ring has got to. A frozen facing would be the
+  // way the ring hung where the hook first STRUCK, which on a curved handle is
+  // not even the way it hangs under the ring any more.
   manacleFacing(alpha: number): Vec2 | null {
     const clamp = this.railClamp;
-    if (clamp !== null) return clamp.cuffAxisLocal().rotated(clamp.body.renderRotation(alpha));
+    if (clamp !== null) return clamp.rimLocal().rotated(clamp.body.renderRotation(alpha));
     const local = this.anchorFacingLocal;
     if (local === null) return null;
     const body = this.anchorBody;
     return body === null ? local : local.rotated(body.renderRotation(alpha));
+  }
+
+  // Where the manacle is and which way it faces, for the renderers: its
+  // centre, the direction its hinge points (out of the face it bit, or back
+  // along the chain it hangs from), and whether it is clamped - to a face,
+  // half of it buried, or around a rail, nothing buried. Null while there is no
+  // chain out at all.
+  //
+  // One answer for both renderers, derived from the sim's own end node: the
+  // chain's end IS the hinge pin, so the cuff's centre is one hinge offset
+  // back from it along the facing, and the drawn cuff can never come apart
+  // from the point the drawn chain ends at.
+  manaclePose(alpha: number): ManaclePose | null {
+    const chain = this.chain;
+    if (!chain) return null;
+    const free = this.hookInFlight ?? this.chainTip;
+    if (free !== null) {
+      return {
+        centre: free.renderPosition(alpha),
+        dir: Vec2.RIGHT.rotated(free.renderRotation(alpha)),
+        clamped: false,
+        onRail: false,
+        buriedUnder: null,
+      };
+    }
+    const dir = this.manacleFacing(alpha);
+    if (dir === null) return null;
+    const clamp = this.railClamp;
+    if (clamp !== null) {
+      return { centre: clamp.contact.renderGlobalPosition(alpha), dir, clamped: true, onRail: true, buriedUnder: null };
+    }
+    const hinge = chain.end.contact.renderGlobalPosition(alpha);
+    const body = this.anchorBody;
+    const normal = this.anchorNormalLocal ?? dir;
+    return {
+      centre: hinge.sub(dir.mul(MANACLE_HINGE)),
+      dir,
+      clamped: true,
+      onRail: false,
+      buriedUnder: body === null ? normal : normal.rotated(body.renderRotation(alpha)),
+    };
+  }
+
+  // Which way a FREE cuff should face: from its centre back along the chain it
+  // hangs from (see `chainEndFacing`), or null once the chain no longer ends
+  // on it. Measured on the sim's own path, so the rotation the hook body takes
+  // from it is as deterministic as everything else about the sim; the drape
+  // the renderers draw is not consulted.
+  private hookFacing(hook: BallHook): Vec2 | null {
+    const chain = this.chain;
+    if (!chain || chain.end.contact.obj !== hook) return null;
+    const path = chain.path().map((n) => n.contact.globalPosition);
+    // From the CENTRE, not the hinge: the hinge is what turning moves.
+    path[path.length - 1] = hook.globalPosition;
+    return chainEndFacing(path, Vec2.RIGHT.rotated(hook.globalRotation));
   }
 
   // The chain's end as a rail clamp, or null for a bite, a dangling tip or a
@@ -790,15 +875,14 @@ export class BallPlayer extends RigidBody2D {
     const lastWrap = chain.wraps[chain.wraps.length - 1];
     const prevPos = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
     const overshoot = chain.getCurrentLength() - targetLength;
+    // Measured to the HINGE, where the chain ends; the body moves with it.
     if (overshoot > 0) {
-      hook.globalPosition = hook.globalPosition.add(
-        hook.globalPosition.directionTo(prevPos).mul(overshoot),
-      );
+      hook.globalPosition = hook.globalPosition.add(hook.hinge.directionTo(prevPos).mul(overshoot));
     }
     // Strip the outward radial velocity: the chain is taut, so integration
     // must not stretch it past target again this frame (the tangential
     // remainder becomes the swing).
-    const outward = prevPos.directionTo(hook.globalPosition);
+    const outward = prevPos.directionTo(hook.hinge);
     const vr = hook.linearVelocity.dot(outward);
     if (vr > 0) hook.linearVelocity = hook.linearVelocity.sub(outward.mul(vr));
 
@@ -810,14 +894,17 @@ export class BallPlayer extends RigidBody2D {
   private shoot(): void {
     // The shot leaves through the loop, wherever the ball is facing.
     const dir = this.loopDirection;
-    // Clear of the ball's own rim by the manacle's radius: the hook collides as
-    // the whole cuff, so a muzzle on the rim spawns it half inside the ball -
-    // and the chain's first span, from the loop to the cuff, then lies wholly
-    // within the cuff's own disc, which the wrap resolvers read as the chain
-    // having snagged and which ended every throw on the frame it was fired.
-    const muzzle = this.globalPosition.add(dir.mul(this.radius + MANACLE_DISC));
+    // The cuff leaves mouth first, hinge trailing toward the ball, with its
+    // MOUTH on the ball's rim: the hook collides as the whole cuff, so a muzzle
+    // on the rim spawns it half inside the ball, and a muzzle any further out
+    // spawns the mouth past whatever thin surface the ball is resting against -
+    // a hook aimed down at a slat the ball sits on has to meet that slat, not
+    // appear underneath it. The hinge is then a band's half-width off the rim,
+    // and the chain's first span is that short for one frame.
+    const muzzle = this.globalPosition.add(dir.mul(this.radius + MANACLE_REACH));
     const hook = new BallHook();
     hook.globalPosition = muzzle;
+    hook.globalRotation = dir.neg().angle();
     // Launch speed along the loop direction.
     hook.linearVelocity = dir.mul(BallPlayer.HOOK_SPEED);
     hook.addCollisionExceptionWith(this);
@@ -827,20 +914,19 @@ export class BallPlayer extends RigidBody2D {
     // Chain origin on the ball's edge, in the ball's local frame — it rotates
     // with the ball.
     //
-    // The chain ends on the cuff's CENTRE, which is the point the cuff will be
-    // clamped around when it bites and is where the renderers draw the model
-    // centred. The physics end and the middle of the manacle are the same point
-    // at every moment of the throw, so nothing about the chain's length or its
-    // anchor changes as the flight becomes an attachment; the drawing lays the
-    // last link on the rim from here (see `chainEndFacing`), which is a drawing
-    // matter and not the sim's.
+    // The chain ends on the cuff's HINGE PIN, in the cuff's own frame, which is
+    // where the links are shackled and where both renderers end the drawn
+    // chain. The pin is what the chain's length is measured to at every moment
+    // of the throw, and it is what the anchor becomes when the cuff bites (see
+    // `onHookAttached`), so the physics end and the drawn end are one point
+    // throughout.
     //
-    // The last span therefore ends inside the hook's own collision disc, which
+    // The last span therefore ends inside the hook's own collision shape, which
     // the wrap resolvers would read as the chain having snagged on the scene -
     // that is what `wrappable = false` on the hook's shape is for.
     this.chain = new Rope(
       new RopeContact(this, dir.mul(this.radius)),
-      new RopeContact(hook, Vec2.ZERO),
+      new RopeContact(hook, hook.hingeOffset()),
       [],
       null,
     );
@@ -868,8 +954,10 @@ export class BallPlayer extends RigidBody2D {
     this.hookInFlight = null;
     this.chainTip = null;
     this.anchorFacingLocal = null;
+    this.anchorNormalLocal = null;
     this.anchorBody = null;
     this.anchorOnRail = false;
+    this.unmountCuff();
     if (!this.chain) return;
     // Hook-proof surface: the chain is lost. `BallHook` deflects off one
     // rather than attaching, so this is a backstop - but it is asked of the
@@ -879,12 +967,23 @@ export class BallPlayer extends RigidBody2D {
     // the nearest piece to the point is the fallback for a path that could
     // not, and at the joint between a rail and its lid the two can differ.
     const shapes = body.getShapes();
-    const pieceIndex = struck ? shapes.indexOf(struck) : nearestShapeIndex(shapes, point);
-    const piece = shapes[pieceIndex >= 0 ? pieceIndex : nearestShapeIndex(shapes, point)];
+    const struckIndex = struck ? shapes.indexOf(struck) : -1;
+    const pieceIndex = struckIndex >= 0 ? struckIndex : nearestShapeIndex(shapes, point);
+    const piece = shapes[pieceIndex];
     if (piece?.impermeable) {
       this.releaseChain();
       return;
     }
+    // The surface's outward normal at the bite (for a piece the hook could not
+    // name, back toward the ball), and which way the cuff stands once it has
+    // bitten: the way it ARRIVED, hinge trailing the chain, driven into the face
+    // at whatever angle the throw came in at - unless it is the cuff's BACK
+    // that met the geometry, the hinge pointing into the surface, where no
+    // mouth bit anything and the cuff is set square to the face instead (see
+    // `manacleFacing`).
+    const normal = piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition);
+    const arrived = Vec2.RIGHT.rotated(hook.globalRotation);
+    const facing = arrived.dot(normal) > 0 ? arrived : normal;
     if (piece?.rail) {
       // A RAIL: the cuff closes around the bar rather than biting its face,
       // so the anchor is a clamp on the bar's own authored CURVE, which
@@ -895,10 +994,23 @@ export class BallPlayer extends RigidBody2D {
       // makes as it shuts.
       this.chain.end = RopeClamp.at(body, piece.rail, point, this.globalPosition, [this, hook]);
     } else {
-      // `RopeContact.at` rather than the primary shape: on a compound body
-      // the hook anchors on whichever piece it struck, and the wrap
-      // resolvers walk the piece the contact names (see RopeContact.at).
-      this.chain.end = new RopeAttachment(RopeContact.at(body, point));
+      // The cuff bites at the angle it arrived at, centred on the surface - the
+      // mouth half embedded in the geometry, the hinge half standing proud of
+      // it - and the chain is shackled to the hinge pin, one ring radius from
+      // the bite along the cuff. So the chain's end node is that pin and not
+      // the bite point: the anchor the solver pulls on stands clear of the
+      // surface, on the one part of the cuff that is not inside it, exactly
+      // where the drawn chain ends.
+      //
+      // On the piece the hook struck, named as such rather than resolved from
+      // the pin: a radius off the face, the nearest piece of a compound body
+      // can be the neighbour that face meets, and the wrap resolvers walk the
+      // piece the contact names.
+      const hinge = point.add(facing.mul(MANACLE_HINGE));
+      this.chain.end = new RopeAttachment(
+        new RopeContact(body, hinge.sub(body.globalPosition), pieceIndex),
+      );
+      this.mountCuff(body, point, facing);
     }
     // Regenerate wraps now so the length below is the true wrapped path. The
     // solver (chain.physicsStep) will wrap it this same frame regardless; if we
@@ -908,22 +1020,18 @@ export class BallPlayer extends RigidBody2D {
     this.chain.syncWraps(this.sceneBodies);
     const len = this.chain.getCurrentLength();
     // The manacle clamps shut around the bite point - half in the geometry and
-    // half out of it - with its hinge pointing straight out of the face it
-    // caught, and stays exactly so for as long as it holds. See
-    // `manacleFacing` for why the surface answers for the facing rather than
-    // the throw that arrived at it.
+    // half out of it - facing the way it was driven in, and stays exactly so
+    // for as long as it holds (see `manacleFacing`). The face's normal is kept
+    // beside it: it is the plane the renderers bury the cuff's far half under.
     //
-    // Around a rail the cuff's AXIS is the bar: the facing is the rail's
-    // tangent (either way along it; the cuff is symmetric about its axis),
-    // and a peg with no tangent takes the bite's answer.
+    // Around a rail the facing is read live off the clamp instead (see
+    // `manacleFacing`); what is stored here for a rail is only that there IS
+    // an anchor to face from.
     this.anchorBody = body;
     const clamp = this.chain.end instanceof RopeClamp ? this.chain.end : null;
-    const tangent = clamp?.tangent() ?? null;
     this.anchorOnRail = clamp !== null;
-    this.anchorFacingLocal = (
-      tangent ??
-      (piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition))
-    ).rotated(-body.globalRotation);
+    this.anchorFacingLocal = facing.rotated(-body.globalRotation);
+    this.anchorNormalLocal = normal.rotated(-body.globalRotation);
     // The tolerance here is a SNAP backstop, not a range: it is sized for the
     // ~1 px of solver slop a dangling tip carries when it finally lands (see
     // the constant), and what it rejects is an anchor no throw could have
@@ -968,6 +1076,43 @@ export class BallPlayer extends RigidBody2D {
     this.chain.maxRopeLength = Math.max(this.chain.maxRopeLength, len);
   }
 
+  // The clamped cuff stays in the scene as a PIECE of the body it bit: half of
+  // it stands proud of the face, and the ball is stopped by it exactly as it
+  // would be by anything else bolted there - a ball wound all the way up to its
+  // anchor comes to rest with the hinge on its rim, one ring radius off the
+  // face, rather than passing through the manacle to the face behind it, which
+  // is where the wind-up's whole endgame (the latch, the unwind, the lease) was
+  // written to end. Solid but not rope geometry - the chain is shackled to it,
+  // and a span leaving the hinge is clear of it by construction - and not part
+  // of the body's drawn outline, since the chain renderer draws it at the
+  // cuff's own pose. Mounted AFTER the end contact is made, so the contact's
+  // piece index is the face's and stays so when the cuff is unmounted.
+  //
+  // Not mounted where the ball already STANDS: a point-blank throw bites the
+  // face at the ball's own contact, and a cuff appearing inside the ball would
+  // be a shove the throw never made. There is nothing there for the ball to be
+  // stopped by that it is not already touching.
+  private mountCuff(body: PhysicsBody2D, point: Vec2, normal: Vec2): void {
+    const bar: ShapeTransform = { globalPosition: point, globalRotation: normal.angle(), shape: manacleShape() };
+    for (const own of this.getShapes()) {
+      if (shapeContacts(bar, own).length > 0) return;
+    }
+    const cuff = body.addShape(
+      bar.shape,
+      point.sub(body.globalPosition).rotated(-body.globalRotation),
+      normal.angle() - body.globalRotation,
+    );
+    cuff.wrappable = false;
+    cuff.hidden = true;
+    this.anchorCuff = { body, shape: cuff };
+  }
+
+  private unmountCuff(): void {
+    if (!this.anchorCuff) return;
+    this.anchorCuff.body.removeShape(this.anchorCuff.shape);
+    this.anchorCuff = null;
+  }
+
   // The rest of a thrown hook's wiring: its flight budget and what happens
   // when it runs out of chain.
   private wireDeploy(hook: BallHook): void {
@@ -978,12 +1123,13 @@ export class BallPlayer extends RigidBody2D {
     // then — at the sub-frame point the chain snapped taut, before it can
     // reach (and bounce off, session-339f) anything the chain forbids.
     //
-    // An ATTACH is allowed one hook radius further, and no more: the reach the
-    // player is shown is where the tip stops, so that is the reach an attach
-    // gets. The extra radius is the hook's own body — the sweep is a swept
-    // circle, so a surface the hook's rim would touch at full stretch is
-    // already inside `allowance`, and the radius on top is the width of the
-    // manacle drawn at the end of the chain, not a range bonus.
+    // The budget is measured to the HINGE, where the chain ends, and an
+    // ATTACH gets no allowance beyond it: the reach the player is shown is
+    // where the tip stops with the cuff drawn on the end of it, so that is the
+    // reach an attach gets. The cuff's own body is the forgiveness - the mouth
+    // leads the hinge by `MANACLE_MOUTH`, so a face the mouth can touch with
+    // the hinge at full stretch is bitten, and the sweep of the bar is what
+    // finds it (see the chain-out cap in `BallHook.physicsStep`).
     //
     // It used to be `ATTACH_SNAP_TOLERANCE` (0.2 m), which is the attach
     // callback's snap backstop below — a number sized for ~1 px of solver
@@ -995,7 +1141,9 @@ export class BallPlayer extends RigidBody2D {
     // nothing to predict it by (`session-366f`: seven throws inside 4° of aim
     // at a wall 1.95-2.01 m out on a 1.8 m chain, four stuck, three did not,
     // and the sticking ones anchored further out than the failing ones had
-    // reached).
+    // reached). Then it was one hook radius, for a disc whose anchor was
+    // placed a radius past its centre; the bar carries its reach in its own
+    // shape.
     //
     // The budget exists only while this hook is the deploying one: once it is
     // the tip, the rope solver owns its length.
@@ -1004,11 +1152,12 @@ export class BallPlayer extends RigidBody2D {
       if (!chain || this.hookInFlight !== hook) return null;
       const lastWrap = chain.wraps[chain.wraps.length - 1];
       const prev = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
-      const base = chain.getCurrentLength() - prev.distanceTo(hook.globalPosition);
-      const allowance = BallPlayer.CHAIN_MAX_LENGTH - base;
-      return { prev, allowance, attachAllowance: allowance + hook.radius };
+      const base = chain.getCurrentLength() - prev.distanceTo(hook.hinge);
+      return { prev, allowance: BallPlayer.CHAIN_MAX_LENGTH - base };
     };
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
+    // Free - flying or dangling - the cuff trails the chain, hinge first.
+    hook.facing = () => this.hookFacing(hook);
   }
 
   // A clamped ring has run off the OPEN end of its rail (see `RopeClamp.coast`):
@@ -1024,6 +1173,10 @@ export class BallPlayer extends RigidBody2D {
     const at = clamp.runOffPoint(end);
     const hook = new BallHook();
     hook.globalPosition = at;
+    // Hinge toward the chain, as it will be turned every step from here on.
+    const lastWrap = chain.wraps[chain.wraps.length - 1];
+    const prev = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
+    if (at.distanceTo(prev) > 1e-6) hook.globalRotation = at.directionTo(prev).angle();
     const along = clamp.tangent();
     const carried = clamp.body instanceof PhysicsBody2D ? clamp.body.velocityAtPoint(at) : Vec2.ZERO;
     hook.linearVelocity = carried.add(along ? along.mul(clamp.speed) : Vec2.ZERO);
@@ -1037,7 +1190,8 @@ export class BallPlayer extends RigidBody2D {
     this.anchorBody = null;
     this.anchorOnRail = false;
     this.anchorFacingLocal = null;
-    chain.end = new RopeAttachment(new RopeContact(hook, Vec2.ZERO));
+    this.anchorNormalLocal = null;
+    chain.end = new RopeAttachment(new RopeContact(hook, hook.hingeOffset()));
   }
 
   // (settleAnchorOvershoot removed: anchoring at no less than the as-reached
@@ -1047,9 +1201,11 @@ export class BallPlayer extends RigidBody2D {
   releaseChain(): void {
     if (this.hookInFlight) this.hookInFlight.world?.remove(this.hookInFlight);
     if (this.chainTip) this.chainTip.world?.remove(this.chainTip);
+    this.unmountCuff();
     this.hookInFlight = null;
     this.chainTip = null;
     this.anchorFacingLocal = null;
+    this.anchorNormalLocal = null;
     this.anchorBody = null;
     this.anchorOnRail = false;
     this.chain = null;

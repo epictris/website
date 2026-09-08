@@ -43,7 +43,7 @@ import { circleOverlap } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import type { RopeNode } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
-import { MANACLE_DISC } from "../lib/manacle";
+import { MANACLE_REACH } from "../lib/manacle";
 import { Rope } from "./rope";
 
 // Fixed particle count. Fixed rather than derived from the chain's length so
@@ -357,7 +357,7 @@ export class SlackChain {
     for (let i = 1; i < SEGMENTS; i++) {
       let p = this.pos[i]!;
       for (const s of shapes) {
-        if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_DISC) continue;
+        if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_REACH) continue;
         const e = shapeExtents(s);
         const c = s.globalPosition;
         if (

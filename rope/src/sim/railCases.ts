@@ -38,7 +38,7 @@ import {
   RAIL_KINETIC_FRICTION,
   RAIL_STATIC_FRICTION,
 } from "../lib/rail";
-import { cuffRimDirection, MANACLE_BORE, MANACLE_DISC, railCuffAxis } from "../lib/manacle";
+import { MANACLE_BORE, MANACLE_REACH } from "../lib/manacle";
 import { strokeCurve, STROKE_TOLERANCE } from "../lib/stroke";
 import { cubicAt, pathNodesOf } from "../lib/path";
 import { PX } from "../engine/units";
@@ -391,33 +391,24 @@ function caseClamp(): RailResult {
     clamp.seat(at, 1);
     c.check(`...and back again`, Math.abs(clamp.contact.globalPosition.y - at.y) < 1e-9);
     c.check(`...within the bar (x=${at.x.toFixed(3)})`, Math.abs(at.x) < 0.1);
-    c.check("the cuff's facing is the rail's tangent", rig.ball.manacleOnRail && Math.abs(Math.abs(rig.ball.manacleFacing(1)?.x ?? 0) - 1) < 1e-9);
-    // The ring is drawn hanging in the plane of the chain, so the axis the bar
-    // runs through it on is square to the pull - and, of the two square
-    // directions, the one that runs with the bar, so a cuff never flips end
-    // for end as the ball swings through the plumb.
-    const tangent = new Vec2(1, 0);
-    const plumb = new Vec2(0, 1);
+    // The cuff is a ring seen edge-on hanging from the bar, and its facing is
+    // the way it HANGS - the end of the ring the chain leaves over, where the
+    // hinge is - so under a level bar with the ball plumb below it the hinge
+    // points straight down, and the drawn cuff's centre is the chain's own end
+    // node with the rest point a bore's radius above it. Seated toward the ball
+    // first: the pulls above left the ring hanging from the pull that was not
+    // the ball's, as the game's own settle never would.
+    clamp.seat(rig.ball.globalPosition, Infinity);
+    const facing = rig.ball.manacleFacing(1);
     c.check(
-      "under a level bar a plumb chain leaves the cuff's axis along the bar",
-      railCuffAxis(tangent, plumb).distanceTo(tangent) < 1e-9,
+      `the cuff faces the way it hangs, hinge toward the ball (${facing?.x.toFixed(3)}, ${facing?.y.toFixed(3)})`,
+      rig.ball.manacleOnRail && facing !== null && facing.y > 0.999 && Math.abs(facing.length() - 1) < 1e-9,
     );
-    for (const pull of [new Vec2(0.6, 0.8), new Vec2(-0.6, 0.8), new Vec2(-0.6, -0.8)]) {
-      const axis = railCuffAxis(tangent, pull);
-      c.check(
-        `a pull at (${pull.x}, ${pull.y}) turns the cuff square to it, bar-side (axis ${axis.x.toFixed(2)}, ${axis.y.toFixed(2)})`,
-        Math.abs(axis.dot(pull)) < 1e-9 && axis.dot(tangent) >= 0 && Math.abs(axis.length() - 1) < 1e-9,
-      );
-      // ...and the chain hooks over the END of that ring rather than running to
-      // wherever it happens to hang: a cuff seen edge-on has metal at the two
-      // ends of its long axis and hole everywhere between them, so a link drawn
-      // to a drape's own direction is a link drawn to nothing.
-      const rim = cuffRimDirection(axis, new Vec2(0.9, 0.44));
-      c.check(
-        `...with the chain hooked over the rim end it runs toward (${rim.x.toFixed(2)}, ${rim.y.toFixed(2)})`,
-        Math.abs(rim.dot(axis)) < 1e-9 && rim.dot(new Vec2(0.9, 0.44)) >= 0 && Math.abs(rim.length() - 1) < 1e-9,
-      );
-    }
+    const pose = rig.ball.manaclePose(1);
+    c.check(
+      "...drawn centred on the chain's own end node, clamped around the bar",
+      pose !== null && pose.onRail && pose.clamped && pose.centre.distanceTo(at) < 1e-9,
+    );
     // A bar that ends in the air at both ends is OPEN at both, so the range is
     // the whole bar: the ring runs off either end (see rail-open-end).
     c.check(
@@ -668,8 +659,8 @@ function caseRange(): RailResult {
   c.check("the handle clamps", clamp !== null);
   if (!clamp) return ok("rail-range", false, c.details);
   // The curve runs x = -0.3..0.3, so arc length 0 is its left end; the cuff's
-  // disc meets the lid's face at x = 0.3 when its centre is at 0.3 - MANACLE_DISC.
-  const wantMax = 0.6 - MANACLE_DISC;
+  // bar meets the lid's face at x = 0.3 when its centre is at 0.3 - MANACLE_REACH.
+  const wantMax = 0.6 - MANACLE_REACH;
   c.check(`the range is clipped where the cuff meets the lid (max=${clamp.range.max.toFixed(4)}, want ${wantMax.toFixed(4)})`, Math.abs(clamp.range.max - wantMax) < 1e-6);
   c.check(
     `...and open at the far end, which ends in the air (min=${clamp.range.min}, open=${clamp.range.openMin}/${clamp.range.openMax})`,
@@ -818,7 +809,7 @@ function caseOpenEnd(): RailResult {
   c.check("...becoming the dangling chain tip again", rig.ball.chainTip !== null && rig.clamp === null);
   c.check(
     `...spawned clear of the bar's end (x=${tipAtDrop?.x.toFixed(3)}, end at 0.500)`,
-    tipAtDrop !== null && tipAtDrop.x > 0.5 + MANACLE_DISC,
+    tipAtDrop !== null && tipAtDrop.x > 0.5 + MANACLE_REACH,
   );
   c.check(`...moving at the speed it left with (${tipSpeed.toFixed(2)} m/s)`, tipSpeed > 1);
   c.check("...on the chain the ball still has", rig.ball.chain !== null && rig.ball.chain.end.contact.obj === rig.ball.chainTip);

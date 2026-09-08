@@ -1548,23 +1548,33 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
     }
   }
   // The hook, by the same rule: whether flying, bounced or dangling it is a
-  // solid circle the world may not swallow. An attached hook is removed from
-  // the world, so an anchor legitimately ON a surface never reports here.
+  // solid bar the world may not swallow. An attached hook is removed from the
+  // world, so a cuff legitimately half-buried in what it bit never reports
+  // here.
   for (const hook of level.world.bodies) {
     if (!(hook instanceof BallHook) || !hook.hasShape()) continue;
-    const hs = hook.primaryShape().shape;
-    if (hs.kind !== "circle") continue;
+    const hs = hook.primaryShape();
+    let deepest = 0;
+    let where = "";
     for (const body of level.world.bodies) {
       if (!(body instanceof StaticBody2D) || !body.hasShape()) continue;
-      const ov = bodyOverlapCircle(body, hook.globalPosition, hs.radius);
-      if (ov && ov.depth > HOOK_EMBED_TOLERANCE) {
-        out.push({
-          frame,
-          kind: "hook-embedded",
-          detail: `depth=${(ov.depth * 1000).toFixed(1)}mm in ${body.name || "static"}`,
-        });
-        break;
+      for (const s of body.getShapes()) {
+        const depth =
+          hs.shape.kind === "circle"
+            ? (circleOverlap(hook.globalPosition, hs.shape.radius, s)?.depth ?? 0)
+            : Math.max(0, ...shapeContacts(hs, s).map((c) => c.depth));
+        if (depth > deepest) {
+          deepest = depth;
+          where = body.name || "static";
+        }
       }
+    }
+    if (deepest > HOOK_EMBED_TOLERANCE) {
+      out.push({
+        frame,
+        kind: "hook-embedded",
+        detail: `depth=${(deepest * 1000).toFixed(1)}mm in ${where}`,
+      });
     }
   }
   return out;

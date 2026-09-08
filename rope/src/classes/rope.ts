@@ -43,7 +43,7 @@ import {
   RopeClamp,
   type ClampState,
 } from "../lib/rail";
-import { MANACLE_BORE, MANACLE_DISC } from "../lib/manacle";
+import { MANACLE_BORE, MANACLE_REACH } from "../lib/manacle";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -1406,7 +1406,7 @@ export class Rope {
     // inside the cuff (`session-154f`).
     const cuff = toNode instanceof RopeClamp ? toNode : null;
     const inCuff = (point: Vec2): boolean =>
-      cuff !== null && obj === cuff.body && point.distanceTo(cuff.contact.globalPosition) < MANACLE_DISC;
+      cuff !== null && obj === cuff.body && point.distanceTo(cuff.contact.globalPosition) < MANACLE_REACH;
 
     // The piece of the body this node actually sits on, not merely the body's
     // primary shape: on a compound body those differ, and the tangent walk has
@@ -1676,7 +1676,7 @@ export class Rope {
       const inCuff = (body: CollisionObject2D, point: Vec2): boolean =>
         cuff !== null &&
         body === cuff.body &&
-        point.distanceTo(cuff.contact.globalPosition) < MANACLE_DISC;
+        point.distanceTo(cuff.contact.globalPosition) < MANACLE_REACH;
       const notInPlay = (shape: CollisionShape2D): boolean =>
         shape === span.from.contact.shape ||
         shape === span.to.contact.shape ||

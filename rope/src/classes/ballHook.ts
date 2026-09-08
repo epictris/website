@@ -19,20 +19,24 @@ import {
   type PhysicsBody2D,
 } from "../engine/body";
 import { PX } from "../engine/units";
-import {
-  circleShape,
-  nearestShapeIndex,
-  nearestSurfacePoint,
-} from "../engine/shapes";
-import { bodySweepCircle, circleOverlap } from "../engine/collision";
+import { circleShape, nearestSurfacePoint, shapeWorldVertices, type ShapeTransform } from "../engine/shapes";
+import { bodySweepConvex } from "../engine/collision";
+import { shapeContacts } from "../engine/manifold";
 import { CONTACT_SLOP } from "../engine/world";
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Vec2 } from "../engine/vec2";
-import { MANACLE_DISC } from "../lib/manacle";
+import { MANACLE_HINGE_LOCAL, MANACLE_REACH, manacleShape } from "../lib/manacle";
 
-// What a swept circle met along a path: how far along it (`t`, in units of the
-// swept motion), the piece struck and the contact normal there.
-type SweepHit = { t: number; normal: Vec2; collider: PhysicsBody2D; shape: CollisionShape2D };
+// What the swept cuff met along a path: how far along it (`t`, in units of the
+// swept motion), the piece struck, the contact normal there and the point the
+// two touched at.
+type SweepHit = {
+  t: number;
+  normal: Vec2;
+  point: Vec2;
+  collider: PhysicsBody2D;
+  shape: CollisionShape2D;
+};
 
 export class BallHook extends RigidBody2D {
   // Speed below which a contact is too slow to bother rescaling — the direction
@@ -44,18 +48,10 @@ export class BallHook extends RigidBody2D {
   // the fastest resting hover (gravity's own 0.16 m/s step) and well under
   // the slowest recorded drag the spark stream depends on.
   private static readonly PROBE_DEFLECT_MIN_SPEED = 0.5;
-  // How much harder than a solid steel disc the hook is to SPIN. A hook is
-  // simulated as a circle, and a circle with friction ROLLS: its contact point
-  // is stationary while it turns, so the slip Coulomb friction acts on is
-  // zero, the stiction gate reads a spin far over `STICK_SPIN`, and the hook
-  // trundled down the shallowest hook-proof slope with its friction fully
-  // satisfied. A real manacle is nothing like round - its lugs and the chain
-  // link catch - so rolling resistance is modelled as rotational inertia far
-  // above the disc's: the friction impulse then acts on the slide rather than
-  // being converted into spin, and stiction can park the hook. Nothing else
-  // reads the hook's rotation (the chain pulls at its centre, and the drawn
-  // manacle is oriented by the chain, not the body).
-  private static readonly ROLL_RESISTANCE = 1e4;
+  // The probe's touch tolerance: how far off a surface a resting tip may be
+  // and still count as on it. Deliberately NOT the solver's `CONTACT_SLOP`;
+  // see `probeContact`.
+  private static readonly PROBE_MARGIN = 0.5 * PX;
 
   private attachmentCallbacks: Array<
     (body: PhysicsBody2D, point: Vec2, piece: CollisionShape2D | null) => void
@@ -65,14 +61,17 @@ export class BallHook extends RigidBody2D {
     (point: Vec2, normal: Vec2, vel: Vec2, fromFlight: boolean) => void
   > = [];
   // While the chain is still paying out, its owner budgets the flight: the
-  // wrapped path's last fixed point, how much straight span is left before the
-  // path reaches the chain's absolute length (`allowance`), and how much an
-  // ATTACH may still reach past that (`attachAllowance`, the owner's snap
-  // tolerance folded in). Null once nothing constrains the flight any more
-  // (chain gone, or the hook already converted to the dangling tip). See the
-  // chain-out cap in `physicsStep`.
-  deployLimit: (() => { prev: Vec2; allowance: number; attachAllowance: number } | null) | null =
-    null;
+  // wrapped path's last fixed point and how much straight span is left between
+  // it and the HINGE before the path reaches the chain's absolute length
+  // (`allowance`). Null once nothing constrains the flight any more (chain
+  // gone, or the hook already converted to the dangling tip). See the chain-out
+  // cap in `physicsStep`.
+  deployLimit: (() => { prev: Vec2; allowance: number } | null) | null = null;
+  // Which way the cuff should face - from its centre back along the chain it
+  // hangs from - or null when there is nothing to face (no chain, or a chain
+  // too short to have a direction). Set by the owner; read every step by
+  // `alignToChain`, which is the only thing that turns this body.
+  facing: (() => Vec2 | null) | null = null;
   private armed = true;
   // Still in the straight-line throw, as opposed to the dangling chain tip a
   // hook becomes once the deploy ends. Only the throw gets the blocking-contact
@@ -82,19 +81,31 @@ export class BallHook extends RigidBody2D {
   constructor() {
     super();
     this.name = "BallHook";
-    // The manacle itself: the cuff's own disc, so the shape the sim rests,
-    // bounces and anchors is the shape that is drawn. It used to collide as a
-    // 3 cm circle under a 13 cm drawn cuff, and every millimetre of difference
-    // had to be papered over in the renderers - the cuff sank into whatever the
-    // tip was lying on, and the clearance had to be worked out from the resting
-    // surface's normal to hide it.
-    this.setShape(circleShape(MANACLE_DISC));
+    // The manacle itself: the ring seen edge-on, a bar as long as the ring is
+    // wide and as thick as its lock housing (`lib/manacle`), so the shape the
+    // sim rests, bounces and anchors is the shape that is drawn. It used to
+    // collide as a 3 cm circle under a 13 cm drawn cuff, and every millimetre
+    // of difference had to be papered over in the renderers - the cuff sank
+    // into whatever the tip was lying on, and the clearance had to be worked
+    // out from the resting surface's normal to hide it.
+    //
+    // +x is the hinge end, where the chain is shackled; -x the mouth, which
+    // leads the throw and bites.
+    this.setShape(manacleShape());
     // Solid, but not rope geometry - the same opt-out the ball's mounting loop
     // takes. The chain ENDS on this cuff, so a span reaching it is inside it by
     // construction, and the wrap machinery reads that as the chain having caught
     // on the scene: every throw ended on the frame it was fired. It cost nothing
     // while the chain end was a circle a chain-width wide.
     this.primaryShape().wrappable = false;
+    // The cuff's rotation is DRIVEN, not integrated: every step turns it to
+    // face back along the chain (`alignToChain`), the way a shackle on the end
+    // of a chain trails the chain, so the drawn cuff, the bar the sim collides
+    // and the hinge the chain is measured to cannot come apart. Told to the
+    // contact solver and the rope solver in the vocabulary they already have
+    // for the steered ball - infinite rotational inertia, no torque arm - so
+    // neither spends an impulse on a spin the next step overwrites.
+    this.kinematicRotation = true;
     // Steel, like the chain it ends: a 4 cm head is ~0.26 kg, a two-hundredth
     // of the cast-iron ball throwing it. That ratio is what makes the throw a
     // throw - the hook is what the ball flicks out and reels back, not a second
@@ -107,9 +118,10 @@ export class BallHook extends RigidBody2D {
       { globalPosition: Vec2.ZERO, globalRotation: 0, shape: circleShape(2 * PX) },
       Density.STEEL,
     );
-    this.inertia =
-      ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass) *
-      BallHook.ROLL_RESISTANCE;
+    // The bar's own second moment. Nothing solves against it - the rotation is
+    // driven (above) - but it is what the energy bookkeeping reads, and a real
+    // figure keeps that honest.
+    this.inertia = ShapeGeometry.computeMomentOfInertia(this.primaryShape(), this.mass);
     // Impermeable (hook-proof) surfaces are bounced off rather than anchored to.
     // Very low restitution: the hook barely rebounds — mostly deflects and drops.
     this.restitution = 0.0375;
@@ -126,7 +138,7 @@ export class BallHook extends RigidBody2D {
     // The deploy is a straight line: no gravity until the throw ends (see the
     // file header). `endFlight` restores it.
     this.gravityScale = 0;
-    // A 2 cm circle at up to 12 m/s crosses ten of its own diameters in a step:
+    // A 2 cm bar at up to 12 m/s crosses ten of its own thicknesses in a step:
     // the discrete integrate step is how it ended up inside a compound floor,
     // riding the seam between two convex pieces (session-1085f). The swept
     // attach check above integrate is a gameplay decision, not a collision
@@ -135,14 +147,32 @@ export class BallHook extends RigidBody2D {
     this.continuous = true;
   }
 
-  // The swept-circle radius: what the hook is, geometrically, to every reach
-  // question asked of it — the flight sweep, the snap band, the rest probe, and
-  // the owner's rule for how long an anchored chain may be (see the anchor
-  // placement in `anchorTo`, which is what puts a radius between the budgeted
-  // centre and the anchor on the surface).
-  get radius(): number {
-    const shape = this.primaryShape().shape;
-    return shape.kind === "circle" ? shape.radius : MANACLE_DISC;
+  // The hinge pin - where the chain is shackled and where its end node sits -
+  // as an offset from the cuff's centre in the world, and as a point.
+  hingeOffset(): Vec2 {
+    return MANACLE_HINGE_LOCAL.rotated(this.globalRotation);
+  }
+
+  get hinge(): Vec2 {
+    return this.globalPosition.add(this.hingeOffset());
+  }
+
+  // The bar the cuff collides as, in the world, with its centre at `at` and its
+  // present rotation.
+  private loopAt(at: Vec2): Vec2[] {
+    const bs = this.primaryShape();
+    return shapeWorldVertices({ globalPosition: at, globalRotation: bs.globalRotation, shape: bs.shape });
+  }
+
+  // Turn the cuff to face back along the chain (see `facing`), about its own
+  // centre. Every step, armed or not, before anything measures or sweeps it:
+  // the hinge the chain is budgeted to and the bar the sweep flies both follow
+  // from the rotation, so it has to be settled first. The angular velocity is
+  // held at zero so integration adds nothing to what was set here.
+  private alignToChain(): void {
+    const dir = this.facing?.() ?? null;
+    if (dir !== null && (dir.x !== 0 || dir.y !== 0)) this.globalRotation = dir.angle();
+    this.angularVelocity = 0;
   }
 
   // A weight on the end of the chain and nothing more: it no longer anchors to
@@ -255,10 +285,11 @@ export class BallHook extends RigidBody2D {
   // its tip held by geometry, fed the winch stall a blocked correction every one
   // of those frames and grew from 64 cm to 3.58 m.
   physicsStep(dt: number): void {
+    this.alignToChain();
     if (!this.armed || !this.world) return;
     if (this.attachToBlockingContact()) return;
     const from = this.globalPosition;
-    const r = this.radius;
+    const hinge = this.hinge;
     const step = this.linearVelocity.mul(dt);
     const speed = step.length();
 
@@ -275,53 +306,49 @@ export class BallHook extends RigidBody2D {
     // off a wall it never touched in sub-frame time.
     //
     // Where the chain runs out is a closed-form quadratic against the last
-    // fixed point of the wrapped path, and the two outcomes a surface can have
-    // are cut at DIFFERENT lengths, because they are different promises:
+    // fixed point of the wrapped path, measured to the HINGE - the chain's end
+    // node, where the links are shackled - and it cuts a bite and a bounce
+    // alike: a surface past the chain-out point might as well not exist, for
+    // either. That is the session-339f rule, and it is also all the reach a
+    // bite is allowed, because the cuff's own body is the forgiveness. The
+    // mouth leads the throw a whole `MANACLE_MOUTH` ahead of the pin the chain
+    // is budgeted to, so a face the mouth can touch with the pin at full
+    // stretch is bitten - a throw whose target sits a hand's breadth past full
+    // stretch still sticks rather than stopping dead just short of the ceiling
+    // it was aimed at (a falling thrower widens the span mid-flight, which is
+    // exactly `playtests/ball-hang-at-rest.json`) - and a face the mouth cannot
+    // reach is not, however the frames happen to fall. The cuff the player is
+    // shown on the end of the chain is the reach the player gets, no more.
     //
-    // - An ATTACH may land out to `attachAllowance` — the owner's snap
-    //   tolerance past the chain's length — and anchors at the length it
-    //   actually reached, which is the standing forgiveness rule
-    //   (`ATTACH_SNAP_TOLERANCE`): a throw whose target sits a hand's breadth
-    //   past full stretch still sticks, rather than stopping dead just short
-    //   of the ceiling it was aimed at. A falling thrower widens the span
-    //   mid-flight, so cutting attaches at the bare length broke exactly that
-    //   throw (`playtests/ball-hang-at-rest.json`).
-    // - A BOUNCE is "nothing happened, keep going", and the flight it
-    //   continues is one the chain must genuinely permit — so a hook-proof
-    //   surface past the chain-out point might as well not exist. That is the
-    //   session-339f rule.
-    //
-    // Nothing within reach: the hook is seated at the exact chain-out point
-    // and handed to its owner to become the dangling tip, radial jerk and
-    // all, before integration can move it anywhere the chain forbids.
-    //
-    // A tolerance-capped motion is deliberately NOT extended by the solver's
-    // `CONTACT_SLOP` reach (below): a hook the chain stops short of a surface
-    // is not racing the solver for it — it ends this frame all but stationary
-    // at the chain's end, and the dangling tip's `probeContact` owns whatever
-    // contact its swing brings after that.
+    // Nothing within reach: the hook is seated with its hinge at the exact
+    // chain-out point and handed to its owner to become the dangling tip,
+    // radial jerk and all, before integration can move it anywhere the chain
+    // forbids.
     const limit = this.deployLimit?.() ?? null;
-    const chainOutT = limit ? BallHook.chainOutTime(from, step, limit.prev, limit.allowance) : Infinity;
-    const attachOutT = limit
-      ? BallHook.chainOutTime(from, step, limit.prev, limit.attachAllowance)
-      : Infinity;
-    const slopScale = speed > 0 ? 1 + CONTACT_SLOP / speed : 1;
-    const motionScale = Math.min(slopScale, attachOutT);
+    const chainOutT = limit ? BallHook.chainOutTime(hinge, step, limit.prev, limit.allowance) : Infinity;
+    const motionScale = speed > 0 ? 1 + CONTACT_SLOP / speed : 1;
     const motion = step.mul(motionScale);
 
-    const { anchor, proof } = this.sweepPath(from, motion, r);
+    // Swept to the solver's reach, so a piece the chain forbids but the solver
+    // would act on next frame is at least SEEN (see `convertAtChainOut`); only
+    // what the chain lets the cuff reach then counts.
+    const { anchor, proof } = this.sweepPath(from, motion);
+    const inReach = (hit: SweepHit | null): SweepHit | null =>
+      hit !== null && hit.t * motionScale <= chainOutT ? hit : null;
+    const bite = inReach(anchor);
+    const off = inReach(proof);
     // Reached first decides, and an attach takes the tie.
-    if (anchor && (!proof || anchor.t <= proof.t)) {
-      this.anchorTo(from, motion, anchor, r);
+    if (bite && (!off || bite.t <= off.t)) {
+      this.anchorTo(from, bite);
       return;
     }
     // A bounce only inside the chain's true reach (see the cap above): a
     // hook-proof surface past the chain-out point is never touched. A proof
-    // piece standing between the chain-out point and an attachable surface in
-    // the tolerance band blocks that attach without bouncing — the chain ends
-    // the flight first.
-    if (proof && proof.t * motionScale <= chainOutT) {
-      this.bounce(proof.normal, from.add(motion.mul(proof.t)));
+    // piece standing between the cuff and an attachable surface further along
+    // blocks that attach without bouncing if the chain runs out first — it is
+    // the chain and not the surface that ends the flight.
+    if (off) {
+      this.bounce(off.normal, from.add(motion.mul(off.t)));
       // A bounce does not end the deploy, and the chain does not stretch for
       // it: the deflected remainder of the frame is flown by World.integrate
       // at the bounced velocity, so the chain-out question has to be asked
@@ -339,30 +366,26 @@ export class BallHook extends RigidBody2D {
     }
     // Nothing on the reachable part of the step: if the chain runs out on it,
     // the flight ends here, at the exact point the path reaches the chain's
-    // length — with the snap-tolerance band swept from that point first, so
-    // the forgiveness does not depend on which frame the chain happens to run
-    // out on (`attachInSnapBand`). The reach extends past the step only when a
-    // hook-proof piece is actually ahead (a `proof` hit past the chain's
-    // reach): that is the one case the next frame's integrate can end the
-    // throw the solver's way instead. With nothing ahead, waiting the fraction
-    // of a frame is free.
-    if (this.convertAtChainOut(dt, proof !== null)) return;
+    // length. The reach extends past the step only when a piece is actually
+    // ahead (a hit past the chain's reach, of either kind): that is the one
+    // case the next frame's integrate can end the throw the solver's way
+    // instead - and, for an attachable piece, the one case the blocking-contact
+    // backstop would then anchor a throw to a face the chain never let it
+    // reach. With nothing ahead, waiting the fraction of a frame is free.
+    if (this.convertAtChainOut(dt, proof !== null || anchor !== null)) return;
     this.probeContact();
   }
 
-  // Sweep the hook's circle along `motion` and report the nearest attachable
+  // Sweep the cuff's bar along `motion` and report the nearest attachable
   // piece and the nearest hook-proof one. Two separate questions, for the
   // reason the header gives: a bounce is "nothing happened, keep going" and an
   // attach is the throw being over, so a single earliest-hit scan would let
   // build order decide both. The caller ranks them.
-  private sweepPath(
-    from: Vec2,
-    motion: Vec2,
-    r: number,
-  ): { anchor: SweepHit | null; proof: SweepHit | null } {
+  private sweepPath(from: Vec2, motion: Vec2): { anchor: SweepHit | null; proof: SweepHit | null } {
     let anchor: SweepHit | null = null;
     let proof: SweepHit | null = null;
     if (!this.world) return { anchor, proof };
+    const bar = this.loopAt(from);
     for (const body of this.world.bodies) {
       if (body.removed || body === this || body.name === "Player") continue;
       if (this.exceptions.has(body.id)) continue;
@@ -373,35 +396,41 @@ export class BallHook extends RigidBody2D {
       // The piece the sweep struck answers, not the body: a compound wall may
       // be hook-proof on the face the throw came in at and attachable one piece
       // along, which is the whole point of the flag being per shape.
-      const hit = bodySweepCircle(body, from, motion, r, (s) => !s.impermeable);
+      const hit = bodySweepConvex(body, bar, motion, (s) => !s.impermeable);
       if (hit && hit.t <= 1 && (!anchor || hit.t < anchor.t)) {
-        anchor = { t: hit.t, normal: hit.normal, collider: body, shape: hit.shape };
+        anchor = { t: hit.t, normal: hit.normal, point: hit.point, collider: body, shape: hit.shape };
       }
-      const off = bodySweepCircle(body, from, motion, r, (s) => s.impermeable === true);
+      const off = bodySweepConvex(body, bar, motion, (s) => s.impermeable === true);
       if (off && off.t <= 1 && (!proof || off.t < proof.t)) {
-        proof = { t: off.t, normal: off.normal, collider: body, shape: off.shape };
+        proof = { t: off.t, normal: off.normal, point: off.point, collider: body, shape: off.shape };
       }
     }
     return { anchor, proof };
   }
 
-  // Anchor on the surface itself: one radius from the contact-frame centre
-  // along the (inward) contact normal.
+  // Does the bar, centred at `at` with its present rotation, stand inside
+  // `piece` - genuinely overlapping it, not merely touching?
+  private overlaps(at: Vec2, piece: CollisionShape2D): boolean {
+    const bs = this.primaryShape();
+    const bar: ShapeTransform = { globalPosition: at, globalRotation: bs.globalRotation, shape: bs.shape };
+    return shapeContacts(bar, piece).length > 0;
+  }
+
+  // Anchor on the surface itself, where the bar touched it: the sweep's own
+  // contact point - the mouth's corner meeting a face, or a corner of the
+  // piece meeting the bar's side - projected onto the piece, which for a
+  // point already on it is the point.
   //
-  // That projection is only the surface while the contact-frame centre is
-  // genuinely a radius clear of it, which is what a sweep that travels to
-  // its contact leaves. A sweep that BEGINS inside the piece returns t = 0
-  // (see "rest resolution when a sweep starts embedded"), so the centre is
-  // the hook where it stands and stepping a radius further along the inward
-  // normal buries the anchor - 2 cm inside the pillar in `session-596f`,
-  // which the chain then runs through. There the surface answers for itself,
-  // exactly as `probeContact` has it answer for the same reason.
-  private anchorTo(from: Vec2, motion: Vec2, hit: SweepHit, r: number): void {
-    const contactCenter = from.add(motion.mul(hit.t));
-    const point = circleOverlap(from, r, hit.shape)
-      ? nearestSurfacePoint(hit.shape, from)
-      : contactCenter.sub(hit.normal.mul(r));
-    this.attach(hit.collider, point, hit.shape);
+  // A sweep that BEGINS inside the piece returns t = 0 with the bar's deepest
+  // corner for a point (see "rest resolution when a sweep starts embedded"),
+  // and that corner is inside the geometry. There the surface answers for the
+  // cuff's centre instead, exactly as `probeContact` has it answer for the
+  // same reason: `session-596f` was the disc's version of this, an anchor
+  // placed a radius INTO the pillar along a normal that meant nothing, which
+  // the chain then ran through.
+  private anchorTo(from: Vec2, hit: SweepHit): void {
+    const at = this.overlaps(from, hit.shape) ? from : hit.point;
+    this.attach(hit.collider, nearestSurfacePoint(hit.shape, at), hit.shape);
   }
 
   // End the deploy at the exact point the wrapped path reaches the chain's
@@ -424,73 +453,30 @@ export class BallHook extends RigidBody2D {
   //
   // It is NOT extended without a threat, so a conversion is never made a
   // fraction of a frame early where the alternative is the solver deciding the
-  // throw. The snap tolerance no longer rides on that choice: the band is swept
-  // here, from the chain-out point, before the tip is seated.
+  // throw.
+  //
+  // There is no forgiveness band swept here any more. There used to be one -
+  // an attach was budgeted a hook radius further than the flight, and because
+  // `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, every
+  // straight throw from a stationary player arrived at chain-out on a frame
+  // boundary and a few ULP decided whether a throw got that band at all
+  // (`session-1017f`: 17 throws at one target, 8 stuck, 9 dangled) - so the
+  // band was swept from the chain-out point as a second sweep. The cuff's own
+  // body is now the whole of the forgiveness (see `physicsStep`): the mouth
+  // rides `MANACLE_MOUTH` ahead of the hinge the chain is measured to, inside
+  // the one sweep, on every frame alike, so there is no band to sweep and no
+  // tie for the frame boundary to decide.
   private convertAtChainOut(dt: number, threatAhead: boolean): boolean {
     const limit = this.deployLimit?.() ?? null;
     if (!limit) return false;
-    const from = this.globalPosition;
     const step = this.linearVelocity.mul(dt);
-    const t = BallHook.chainOutTime(from, step, limit.prev, limit.allowance);
+    const t = BallHook.chainOutTime(this.hinge, step, limit.prev, limit.allowance);
     const speed = step.length();
     const reach = threatAhead && speed > 0 ? 1 + CONTACT_SLOP / speed : 1;
     if (t > reach) return false;
-    const seat = from.add(step.mul(t));
-    // The throw is over either way; an attach in the tolerance band is the
-    // better ending, and it is decided before the tip exists.
-    if (this.attachInSnapBand(seat, step, limit)) return true;
-    this.globalPosition = seat;
+    this.globalPosition = this.globalPosition.add(step.mul(t));
     this.endFlight();
     for (const cb of this.chainOutCallbacks) cb();
-    return true;
-  }
-
-  // The snap tolerance, swept where it is earned: from the chain-out point
-  // straight on to `attachAllowance`.
-  //
-  // The band belongs to the chain-out EVENT, not to a frame that happens to
-  // begin at full stretch — and that distinction was a real bug. The flight
-  // sweep caps its motion at `attachOutT`, so it covers the band only on a step
-  // that STARTS at (or past) the chain's length; every earlier step stops one
-  // `CONTACT_SLOP` past its own end, a centimetre short of a 20 cm band.
-  // Reaching such a step needs the step before it to land a hair SHORT of full
-  // stretch, so that this conversion declines and the flight survives a frame.
-  // But `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, so
-  // every straight throw from a stationary player arrives at chain-out
-  // precisely on a frame boundary, and a few ULP of accumulated rounding in the
-  // span decided whether the throw got its forgiveness at all. `session-1017f`
-  // is 17 throws at one target with the wall ~10 cm inside the band: 8 stuck, 9
-  // dangled, successes and failures interleaved across the whole 0.4° spread of
-  // aim (`session-234f` is the same tie over 3 throws). An epsilon cannot fix a
-  // genuine tie - it only moves which throws are unlucky - so the band is swept
-  // here instead, and a flight lasting a whole number of frames stops being a
-  // special case.
-  //
-  // The flight sweep's rules, unchanged: an attach wins a tie, and a hook-proof
-  // piece standing between the chain-out point and an attachable surface blocks
-  // the attach — without bouncing, because it is the chain and not that surface
-  // that ended this flight (the same rule the bounce branch applies to proof
-  // pieces past the chain's reach).
-  private attachInSnapBand(
-    seat: Vec2,
-    step: Vec2,
-    limit: { prev: Vec2; allowance: number; attachAllowance: number },
-  ): boolean {
-    const band = limit.attachAllowance - limit.allowance;
-    const speed = step.length();
-    if (band <= 0 || speed === 0) return false;
-    const dir = step.mul(1 / speed);
-    // Metres, since `dir` is a unit vector: how far along the heading the span
-    // reaches the band's outer edge. Capped at the band's own width as well,
-    // because a grazing path travels much further than that while its span
-    // grows by the tolerance, and distance the chain never pays for is not
-    // forgiveness — it is reach.
-    const outT = BallHook.chainOutTime(seat, dir, limit.prev, limit.attachAllowance);
-    const motion = dir.mul(Math.min(band, outT));
-    const r = this.radius;
-    const { anchor, proof } = this.sweepPath(seat, motion, r);
-    if (!anchor || (proof && proof.t < anchor.t)) return false;
-    this.anchorTo(seat, motion, anchor, r);
     return true;
   }
 
@@ -568,19 +554,19 @@ export class BallHook extends RigidBody2D {
       // The constraint names the piece it formed on, so a compound body anchors
       // on the shape actually struck rather than on whichever is nearest now.
       //
-      // Projected from the hook's CENTRE, not from `c.point`: a manifold point
-      // for a circle sits on the circle's own rim, so projecting it onto the
-      // surface lands up to a diameter to the side of the hook. On a chain
-      // already at full length that reads as path appearing from nowhere - the
-      // anchor came out 28 mm from a hook of radius 20, the taut chain went
-      // slack by 19 mm in one frame, and the ball it had been braking took off
-      // (`session-576f` fails `rope-anchor-kick` on it).
+      // The manifold's own point, projected onto the piece: for a bar that is
+      // the corner of the bar that met the face, or the corner of the piece
+      // that met the bar's side, so the projection lands on the surface where
+      // the two actually touched. (For the disc this used to be, a manifold
+      // point sat on the rim up to a diameter to the side of the hook and had
+      // to be projected from the centre instead - `session-576f` was 19 mm of
+      // path appearing from nowhere on a taut chain.)
       const s = other.getShapes()[c.a === this ? c.shapeB : c.shapeA];
       // Hook-proof pieces are left to `bounce` (see above), and the constraint
       // names the piece, so a wall that is hook-proof on one face and
       // attachable on another is answered per face here too.
       if (s?.impermeable) continue;
-      this.attach(other, s ? nearestSurfacePoint(s, this.globalPosition) : c.point, s ?? null);
+      this.attach(other, s ? nearestSurfacePoint(s, c.point) : c.point, s ?? null);
       return true;
     }
     return false;
@@ -609,31 +595,39 @@ export class BallHook extends RigidBody2D {
     if (!this.armed || !this.world) return;
     const from = this.globalPosition;
     const speed = this.linearVelocity.length();
-    const r = this.radius;
-    const probeR = r + 0.5 * PX;
+    const margin = BallHook.PROBE_MARGIN;
+    const bar = this.primaryShape();
     let proof: { normal: Vec2; depth: number } | null = null;
-    for (const body of this.world.intersectCircle(from, probeR)) {
+    // Candidates by the cuff's bounding circle; what decides is the bar.
+    for (const body of this.world.intersectCircle(from, MANACLE_REACH + margin)) {
       if (body === this || body.name === "Player") continue;
       if (!(body instanceof StaticBody2D || body instanceof RigidBody2D)) continue;
-      // Whichever piece is nearest is the one the tip is resting on, and it is
-      // that piece that decides: hook-proof deflects, anything else anchors.
-      // Asked of the body instead, one hook-proof face would make a whole
-      // compound wall unattachable.
-      const shapes = body.getShapes();
-      const s = shapes[nearestShapeIndex(shapes, from)];
-      if (s?.impermeable) {
+      // The piece the bar stands deepest in is the one the tip is resting on,
+      // and it is that piece that decides: hook-proof deflects, anything else
+      // anchors. Asked of the body instead, one hook-proof face would make a
+      // whole compound wall unattachable.
+      let deepest: { shape: CollisionShape2D; normal: Vec2; depth: number; point: Vec2 } | null = null;
+      for (const s of body.getShapes()) {
+        for (const c of shapeContacts(bar, s, margin)) {
+          if (!deepest || c.depth > deepest.depth) {
+            deepest = { shape: s, normal: c.normal, depth: c.depth, point: c.point };
+          }
+        }
+      }
+      if (!deepest) continue;
+      if (deepest.shape.impermeable) {
         // Remember the deepest hook-proof surface and keep looking: it only
         // deflects if nothing here anchors.
-        const ov = circleOverlap(from, probeR, s);
-        if (ov && (!proof || ov.depth > proof.depth)) proof = ov;
+        if (!proof || deepest.depth > proof.depth) proof = deepest;
         continue;
       }
-      // Anchor ON the surface, exactly as the swept path does, rather than at
-      // the hook's own centre: the probe fires while the hook is up to its own
-      // radius plus the probe margin clear of the geometry, and anchoring at the
-      // centre leaves the chain visibly ending short of the corner it caught and
-      // the contact's `shapeIndex` resolved from a point that is on nothing.
-      this.attach(body, s ? nearestSurfacePoint(s, from) : from, s ?? null);
+      // Anchor ON the surface, exactly as the swept path does, at the point
+      // the bar is touching it, rather than at the hook's own centre: the probe
+      // fires while the bar is up to the probe margin clear of the geometry,
+      // and anchoring at the centre leaves the chain visibly ending short of
+      // the corner it caught and the contact's `shapeIndex` resolved from a
+      // point that is on nothing.
+      this.attach(body, nearestSurfacePoint(deepest.shape, deepest.point), deepest.shape);
       return;
     }
     // Deflect only a hook genuinely MOVING: the probe's seat holds the hook a
@@ -648,8 +642,11 @@ export class BallHook extends RigidBody2D {
     // the mechanic: a skipping or dragged hook keeps its bounce, and with it
     // the spark reports the drag stream is made of (well over this speed in
     // every recorded drag).
+    // A manifold depth is measured from touching (negative inside the margin
+    // band), so the seat is a margin clear of the surface, as the probe's own
+    // reach is.
     if (proof && speed > BallHook.PROBE_DEFLECT_MIN_SPEED) {
-      this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth)));
+      this.bounce(proof.normal, from.add(proof.normal.mul(proof.depth + margin)));
     }
   }
 

@@ -32,7 +32,7 @@ import { PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
 import { CONTACT_SLOP, ContactAudit, World } from "../engine/world";
-import { MANACLE_DISC } from "../lib/manacle";
+import { MANACLE_HINGE, MANACLE_MOUTH, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { MATERIALS, ShapeGeometry } from "../lib/shapeGeometry";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -49,7 +49,7 @@ import {
   type ShapeData,
 } from "../level/levelFormat";
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
-import { RopeContact, RopeWrap } from "../lib/ropeContact";
+import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
 import { shapeCrossesSpan } from "../lib/spanSweep";
 import { Intersections } from "../lib/intersections";
 import { Segment } from "../lib/segment";
@@ -1482,31 +1482,31 @@ function caseHookBlockedAttaches(): ContactResult {
 // then the length check.
 // ---------------------------------------------------------------------------
 function caseChainOut(): ContactResult {
-  const REACH = BallPlayer.CHAIN_MAX_LENGTH; // rim to hook centre, straight up
-  // The manacle's own disc, which is the whole of an attach's forgiveness
-  // (`deployLimit`) and the seat a bounce leaves the hook's centre at. Derived
-  // rather than written down: this case is ABOUT the reach the hook's body
-  // buys, so a literal here is a second opinion on the cuff's size that goes
-  // stale the moment the drawn manacle changes (it did — 20 mm to 53.5 mm, and
-  // every gap below was picked against the old figure).
-  const HOOK_R = MANACLE_DISC;
-  // `throwUp`'s gap is to the FACE, and an attach is budgeted to the hook's
-  // CENTRE, so the two halves of this case are measured a radius apart and it
-  // matters which is which:
+  const REACH = BallPlayer.CHAIN_MAX_LENGTH; // rim to the HINGE, straight up
+  // The manacle's own body, which is the whole of an attach's forgiveness
+  // (`deployLimit`): the mouth leads the hinge the chain is budgeted to by
+  // this much, and it is the mouth that bites or bounces. Derived rather than
+  // written down: this case is ABOUT the reach the hook's body buys, so a
+  // literal here is a second opinion on the cuff's size that goes stale the
+  // moment the drawn manacle changes (it did — 20 mm to 53.5 mm, and every gap
+  // below was picked against the old figure; then the disc became a bar).
+  const MOUTH = MANACLE_MOUTH;
+  // `throwUp`'s gap is to the FACE, and the throw is budgeted to the HINGE, so
+  // both halves of this case are measured the mouth's lead apart:
   //
-  //   BOUNCE  — the rim touches the face, so a hook-proof wall is out of the
-  //             flight's way once it stands one radius past full stretch.
-  //   ATTACH  — the centre may reach one radius past full stretch and the
-  //             anchor is then placed a radius further still, ON the face, so
-  //             an attachable face is in range out to TWO radii (which is
-  //             exactly the `CHAIN_MAX_LENGTH + 2 * hook radius` the anchored
-  //             path is bounded by).
+  //   BOUNCE  — the mouth touches the face, so a hook-proof wall is out of the
+  //             flight's way once it stands the mouth's lead past full stretch.
+  //   ATTACH  — the mouth may touch a face out to the same lead past full
+  //             stretch and the cuff then bites it, so an attachable face is in
+  //             range out to exactly that far - and the anchored path, to the
+  //             hinge one ring radius proud of the face, is bounded by
+  //             `CHAIN_MAX_LENGTH + MANACLE_REACH`.
   //
   // Both were written as literals against a 20 mm cuff (50 mm cleared both
   // bands); at 53.5 mm the same 50 mm is inside both, so the wall was bounced
   // off before chain-out and the "out of range" ceiling was legitimately caught.
-  const BOUNCE_CLEAR = HOOK_R + 0.03;
-  const FACE_BAND = 2 * HOOK_R;
+  const BOUNCE_CLEAR = MOUTH + 0.03;
+  const FACE_BAND = MOUTH;
   const ATTACH_CLEAR = FACE_BAND + 0.03;
 
   // Throw straight up at a ceiling slab whose underside sits `faceGap` beyond
@@ -1556,7 +1556,8 @@ function caseChainOut(): ContactResult {
       world.integrate(DT);
       ball.checkChainReach(world.bodies);
       if (hook && !hook.removed) {
-        const span = ball.globalPosition.add(new Vec2(0, -0.12)).distanceTo(hook.globalPosition);
+        // To the hinge: the chain's end, and what the budget is measured to.
+        const span = ball.globalPosition.add(new Vec2(0, -0.12)).distanceTo(hook.hinge);
         if (span > maxSpan) maxSpan = span;
       }
       if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
@@ -1578,10 +1579,10 @@ function caseChainOut(): ContactResult {
   const dead = past.jerkSpeed < 0.1;
   // The same wall short of full stretch: the cap must not eat a real bounce —
   // the hook reaches the face (span well past the bounce seat) and deflects.
-  // The bounce seats the hook's centre one manacle radius off the face, so the
-  // span it reaches is the face's own distance less that radius.
+  // The bounce seats the cuff with its mouth on the face, so the span the
+  // hinge reaches is the face's own distance less the mouth's lead.
   const proofNear = throwUp(-0.1, true);
-  const bounced = !proofNear.attached && proofNear.maxSpan > REACH - 0.1 - HOOK_R - 0.01;
+  const bounced = !proofNear.attached && proofNear.maxSpan > REACH - 0.1 - MOUTH - 0.01;
   // An attachable ceiling short of full stretch still anchors, and the attach
   // consumes the hook body.
   const near = throwUp(-0.1, false);
@@ -1611,8 +1612,8 @@ function caseChainOut(): ContactResult {
       ` (want <=${(REACH * 1000 + 5).toFixed(0)}mm, never reaches the wall)`,
     `${dead ? "ok  " : "BAD "} jerk leaves ${Number.isNaN(past.jerkSpeed) ? "no conversion" : `${past.jerkSpeed.toFixed(3)} m/s`}` +
       ` on the chain-out frame (want <0.1)`,
-    `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (span ${(proofNear.maxSpan * 1000).toFixed(1)}mm,` +
-      ` want >${mm(REACH - 0.1 - HOOK_R - 0.01)}mm)`,
+    `${bounced ? "ok  " : "BAD "} hook-proof wall inside reach still bounces (hinge span ${(proofNear.maxSpan * 1000).toFixed(1)}mm,` +
+      ` want >${mm(REACH - 0.1 - MOUTH - 0.01)}mm)`,
     `${anchors ? "ok  " : "BAD "} attachable ceiling inside reach still anchors${near.attached ? "" : " — TURNED AWAY"}`,
     `${forgiving ? "ok  " : "BAD "} attachable ceiling ${mm(FACE_BAND - 0.005)}mm past full stretch (inside the ${mm(FACE_BAND)}mm face band)` +
       ` still anchors${tolBand.attached ? "" : " — STOPPED SHORT"}`,
@@ -1621,48 +1622,39 @@ function caseChainOut(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
-// hook-snap-band — an attach gets its tolerance wherever the chain runs out.
+// hook-mouth-band — an attach's forgiveness is the cuff's own mouth, wherever
+// the chain runs out.
 //
-// An attach may land one hook radius past full stretch (`BallPlayer.deployLimit`
-// — the hook's own body, and no range beyond it). That band used to be swept
-// only on a step that BEGAN at or past full stretch, because that is the only
-// step whose motion the sweep caps at `attachOutT` rather than at one
-// `CONTACT_SLOP` past its end. Reaching such a step needs the step before it to
-// stop a hair SHORT of full stretch, so the chain-out conversion declines — but
-// `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, so a straight
-// throw from a stationary player arrives at chain-out precisely on a frame
-// boundary and a few ULP of accumulated rounding in the span decided whether the
-// throw was forgiven at all. `session-1017f` is 17 throws at one target with the
-// wall inside the band of the day: 8 stuck, 9 dangled, the two sets interleaved
-// across the whole 0.4 degrees of aim, and the same wall span appearing in both
-// (`session-234f` is the same tie over 3 throws). An epsilon cannot fix a
-// genuine tie - it only moves which throws are unlucky - so the band is swept at
-// the chain-out EVENT, inside `convertAtChainOut`, before the tip is seated.
-//
-// The rig seeds the last flight step rather than flying the whole throw, because
-// the property is about WHERE in a step the chain runs out and the natural throw
-// can only express the tie itself: from a span of 1.6005 the chain-out lands at
-// t = 0.9975, inside this step and past everything the sweep's own reach covers
-// (1.6005 + 1.05 steps = 1.8105). The ball is frozen (`gravityScale = 0`) so the
-// span is the geometry and not a falling rim.
+// The chain is budgeted to the HINGE, and the mouth leads it by `MANACLE_MOUTH`
+// - so a face the mouth can touch with the hinge at full stretch is bitten, and
+// one a hair further is not, on whatever frame the chain happens to run out.
+// That used to be a separate band swept from the chain-out point, because the
+// flight sweep only covered it on a step that BEGAN at full stretch and
+// `CHAIN_MAX_LENGTH / (HOOK_SPEED * dt)` = 1.8 / 0.2 is exactly 9, so every
+// straight throw from a stationary player arrived at chain-out on a frame
+// boundary and a few ULP decided whether it was forgiven (`session-1017f`, 17
+// throws at one target: 8 stuck, 9 dangled). The bar carries its reach in its
+// own shape now, inside the one sweep, so the frame alignment has nothing left
+// to decide - and this case seeds the last step so the chain runs out INSIDE it
+// rather than at its boundary, which is the alignment the old band existed for.
 // ---------------------------------------------------------------------------
 function caseHookSnapBand(): ContactResult {
   const REACH = BallPlayer.CHAIN_MAX_LENGTH;
-  // The manacle's own disc — the width of the band being tested — read from the
-  // cuff rather than written down, since a literal here is a second opinion on
-  // the hook's size and the two have already come apart once.
-  const HOOK_R = MANACLE_DISC;
-  // The two placements: a hair inside the band, and a hair outside it. Both are
-  // measured from the band's own edge so they cannot drift away from it.
-  const IN = HOOK_R - 0.005;
-  const OUT = HOOK_R + 0.001;
-  // Where the last flight step starts: near enough to full stretch that the
-  // chain runs out inside it, far enough that the sweep's own reach stops short
-  // of the band (see the header).
+  // The mouth's lead over the hinge — the width of the band being tested — read
+  // from the cuff rather than written down, since a literal here is a second
+  // opinion on the hook's size and the two have already come apart once.
+  const MOUTH = MANACLE_MOUTH;
+  // The two placements: a hair inside the mouth's reach at chain-out, and a
+  // hair outside it. Both are measured from the band's own edge so they cannot
+  // drift away from it.
+  const IN = -0.005;
+  const OUT = 0.001;
+  // Where the HINGE starts the last flight step: near enough to full stretch
+  // that the chain runs out inside it.
   const SEED = 1.6005;
 
-  // `gap` is how far past full stretch the ceiling's face stands, measured the
-  // way the throw is budgeted: to the hook's centre at contact.
+  // `gap` is how far past the mouth's reach at chain-out the ceiling's face
+  // stands (negative: inside it).
   const throwAt = (gap: number): { attached: boolean; chainKept: boolean; path: number; t: number } => {
     const world = new World();
     const ball = new BallPlayer(0.12);
@@ -1672,7 +1664,7 @@ function caseHookSnapBand(): ContactResult {
     world.add(ball);
     const rim = ball.globalPosition.add(new Vec2(0, -0.12));
     const ceiling = new StaticBody2D();
-    ceiling.globalPosition = new Vec2(0, rim.y - REACH - gap - HOOK_R - 0.5);
+    ceiling.globalPosition = new Vec2(0, rim.y - REACH - MOUTH - gap - 0.5);
     ceiling.setShape(rectShape(4, 1));
     world.add(ceiling);
 
@@ -1684,11 +1676,12 @@ function caseHookSnapBand(): ContactResult {
     ball.sceneBodies = world.bodies;
     const hook = world.bodies.find((b): b is BallHook => b instanceof BallHook);
     if (!hook) return { attached: false, chainKept: false, path: Number.NaN, t: Number.NaN };
-    hook.globalPosition = rim.add(new Vec2(0, -SEED));
+    // Seat the HINGE at the seed; the body sits a hinge's offset behind it.
+    hook.globalPosition = rim.add(new Vec2(0, -SEED)).sub(hook.hingeOffset());
     hook.linearVelocity = new Vec2(0, -BallPlayer.HOOK_SPEED);
     const limit = hook.deployLimit?.() ?? null;
     const t = limit
-      ? BallHook.chainOutTime(hook.globalPosition, hook.linearVelocity.mul(DT), limit.prev, limit.allowance)
+      ? BallHook.chainOutTime(hook.hinge, hook.linearVelocity.mul(DT), limit.prev, limit.allowance)
       : Number.NaN;
     hook.physicsStep(DT);
     const chain = ball.chain;
@@ -1708,19 +1701,20 @@ function caseHookSnapBand(): ContactResult {
   const forgiven = inBand.attached;
   // ...and not a millimetre more than the hook's own body.
   const honest = !past.attached && past.chainKept;
-  // The anchor is placed on the surface, one radius past the centre the sweep
-  // budgeted, so the path may reach REACH + 2 * HOOK_R — and must not trip the
-  // attach callback's snap backstop, which drops the whole chain (`session-1355f`
-  // read from the game as the chain retracting itself while deploy was held).
-  const bounded = inBand.chainKept && inBand.path <= REACH + 2 * HOOK_R + 1e-6;
+  // The anchor is the hinge, one ring radius proud of the face the mouth
+  // touched, so the path may reach REACH + MANACLE_REACH — and must not trip
+  // the attach callback's snap backstop, which drops the whole chain
+  // (`session-1355f` read from the game as the chain retracting itself while
+  // deploy was held).
+  const bounded = inBand.chainKept && inBand.path <= REACH + MANACLE_REACH + 1e-6;
 
   const passed = midStep && forgiven && honest && bounded;
-  return ok("hook-snap-band — an attach gets its tolerance wherever the chain runs out", passed, [
+  return ok("hook-mouth-band — an attach's forgiveness is the cuff's own mouth, wherever the chain runs out", passed, [
     `${midStep ? "ok  " : "BAD "} chain runs out at t=${inBand.t.toFixed(4)} of the seeded step (want 0.9-1.0)`,
-    `${forgiven ? "ok  " : "BAD "} ceiling ${(IN * 1000).toFixed(0)}mm past full stretch anchors (inside the ${(HOOK_R * 1000).toFixed(0)}mm cuff)${inBand.attached ? "" : " — STOPPED SHORT"}`,
-    `${honest ? "ok  " : "BAD "} ceiling ${(OUT * 1000).toFixed(0)}mm past full stretch does not${past.attached ? " — REACHED PAST THE HOOK'S OWN BODY" : ""}`,
+    `${forgiven ? "ok  " : "BAD "} ceiling ${((MOUTH + IN) * 1000).toFixed(0)}mm past full stretch anchors (inside the ${(MOUTH * 1000).toFixed(0)}mm mouth)${inBand.attached ? "" : " — STOPPED SHORT"}`,
+    `${honest ? "ok  " : "BAD "} ceiling ${((MOUTH + OUT) * 1000).toFixed(0)}mm past full stretch does not${past.attached ? " — REACHED PAST THE HOOK'S OWN BODY" : ""}`,
     `${bounded ? "ok  " : "BAD "} anchored path ${(inBand.path * 1000).toFixed(1)}mm, chain kept` +
-      ` (want <=${((REACH + 2 * HOOK_R) * 1000).toFixed(0)}mm and never dropped)`,
+      ` (want <=${((REACH + MANACLE_REACH) * 1000).toFixed(0)}mm and never dropped)`,
   ]);
 }
 
@@ -1835,11 +1829,14 @@ function caseHookRest(): ContactResult {
     world.add(slab);
 
     const hook = new BallHook();
-    // A radius plus a few mm above the surface at the slab's centre, so the
-    // hook settles rather than arriving with half a metre of fall — or, written
-    // as a literal, starting the cuff a couple of centimetres INSIDE the slab.
+    // Lying along the slope, half its own thickness plus a few mm above the
+    // surface at the slab's centre, so the hook settles rather than arriving
+    // with half a metre of fall — or, written as a literal, starting the cuff a
+    // couple of centimetres INSIDE the slab. Along the slope because that is how
+    // a bar lies on one, and a hook with no chain has nothing else to face.
     const up = new Vec2(0, -1).rotated(angle);
-    hook.globalPosition = slab.globalPosition.add(up.mul(0.5 + hook.radius + 0.005));
+    hook.globalPosition = slab.globalPosition.add(up.mul(0.5 + MANACLE_THICKNESS / 2 + 0.005));
+    hook.globalRotation = angle;
     hook.endFlight();
     world.add(hook);
 
@@ -1906,9 +1903,12 @@ function caseChainOutVsSolver(): ContactResult {
   // slab whose face (normal 30 deg off the chain, pointing back at the hook)
   // passes through that point; `slat` adds the grazing pre-chain-out slat.
   const N30 = new Vec2(0.5, Math.sqrt(3) / 2);
-  // Every distance in this rig is measured from the hook's RIM, so the cuff's
-  // own radius sets where the fan starts and how deep the slat's graze is.
-  const HOOK_R = MANACLE_DISC;
+  // Every distance in this rig is measured from the hook's own EDGE, so the
+  // cuff's dimensions set where the fan starts and how deep the slat's graze
+  // is. The bar flies with its length along the throw, so what it reaches
+  // toward a plane 30 deg off the throw is its half-length along that plane's
+  // normal plus its half-thickness across it.
+  const EXTENT = MANACLE_REACH * Math.cos(Math.PI / 6) + (MANACLE_THICKNESS / 2) * Math.sin(Math.PI / 6);
   const throwFall = (
     faceQ: Vec2 | null,
     slatAt: Vec2 | null,
@@ -1930,10 +1930,10 @@ function caseChainOutVsSolver(): ContactResult {
     }
     if (slatAt) {
       // A thin slat converging on the throw line at ~3 deg, its face passing
-      // through `slatAt` — placed a hook radius less 5 mm off the line by the
-      // caller, so the rising hook\'s rim grazes it by 5 mm whatever the cuff
-      // measures. That is the session-2504f bounce. The 0.02 here is the slat's
-      // own half-width and nothing to do with the hook.
+      // through `slatAt` — placed the bar's half-thickness less 5 mm off the
+      // line by the caller, so the rising bar\'s side grazes it by 5 mm whatever
+      // the cuff measures. That is the session-2504f bounce. The 0.02 here is
+      // the slat's own half-width and nothing to do with the hook.
       const slat = new StaticBody2D();
       slat.globalRotation = 0.05;
       const n = new Vec2(Math.cos(0.05), Math.sin(0.05));
@@ -1973,7 +1973,7 @@ function caseChainOutVsSolver(): ContactResult {
           maxVx = Math.abs(hook.linearVelocity.x);
         }
         if (faceQ) {
-          const gap = hook.globalPosition.sub(faceQ).dot(N30) - HOOK_R;
+          const gap = hook.globalPosition.sub(faceQ).dot(N30) - EXTENT;
           if (gap < minFaceGap) minFaceGap = gap;
         }
       }
@@ -1988,14 +1988,15 @@ function caseChainOutVsSolver(): ContactResult {
   const baseDead = !base.attached && base.convSpeed < 0.1 && base.convPos !== null;
   const P = base.convPos ?? new Vec2(0, -2);
 
-  // Along-path gaps past the chain-out point. The hook's rim reaches an oblique
-  // 30 deg plane `r / cos 30` before the plane crosses the path, so anything
+  // Along-path gaps past the chain-out point, measured from where the deploy
+  // ends (the hook's CENTRE there). The bar's edge reaches an oblique 30 deg
+  // plane `extent / cos 30` before the plane crosses the path, so anything
   // under that is a face the chain genuinely lets the hook touch — a legit
   // bounce, not this case. The fan starts just past it and steps out in 3 mm,
   // derived from the cuff rather than written down: at 20 mm that reach was
   // 23.1 mm and the fan ran 26..38 mm, and every one of those numbers moved
-  // when the manacle became 53.5 mm.
-  const RIM_REACH = HOOK_R / Math.cos(Math.PI / 6);
+  // when the manacle became 53.5 mm, and again when it became a bar.
+  const RIM_REACH = EXTENT / Math.cos(Math.PI / 6);
   const GAPS = [0, 1, 2, 3, 4].map((i) => RIM_REACH + 0.003 + 0.003 * i);
   let worst = 0;
   let contested = 0;
@@ -2019,7 +2020,7 @@ function caseChainOutVsSolver(): ContactResult {
   // sits further out, past even the drifted flight's reach.
   const slatRun = throwFall(
     new Vec2(P.x, P.y - (RIM_REACH + 0.027)),
-    new Vec2(-(HOOK_R - 0.005), P.y + 0.35),
+    new Vec2(-(MANACLE_THICKNESS / 2 - 0.005), P.y + 0.35),
   );
   const grazed = slatRun.maxVx > 0.3;
   const slatDead = !slatRun.attached && slatRun.convSpeed < 1.2;
@@ -3735,13 +3736,26 @@ function caseWoundTight(): ContactResult {
   );
   const spool = Math.abs(chain.lengthPerRadian(level.ball));
   check("the ball ends resting against the slab", touching);
+  // The manacle stands proud of the face it bit, hinge out, and the ball wound
+  // up to it meets the cuff before it meets the face: a bar the ball's own
+  // spin rides up onto while the chain is still winding (tethered, the ball may
+  // climb what it is anchored to - that is the wind-up), until it sits in the
+  // POCKET between the cuff's outer top corner and the face, touching both.
+  // That pocket is where a ball touching the face stands with its rim on that
+  // corner, and it is as high as the ball may end: any higher is the face
+  // being ridden, which is what the unwind's endgame is written to stop.
+  const pocket =
+    MANACLE_THICKNESS / 2 + Math.sqrt(rim * rim - (rim - MANACLE_REACH) * (rim - MANACLE_REACH));
   check(
-    `on the floor (${(Math.abs(at.y - restY) * 1000).toFixed(1)} mm off its resting height, under 2)`,
-    Math.abs(at.y - restY) < 0.002,
+    `in the pocket between the cuff and the face, or lower (${((restY - at.y) * 1000).toFixed(1)} mm up, pocket ${(pocket * 1000).toFixed(1)}, floor 0)`,
+    restY - at.y > -0.002 && restY - at.y < pocket + 0.002,
   );
+  // The hinge pin sits a band's half-width inside the bar's end and half the
+  // bar's thickness under its faces, so a ball touching the cuff has the pin
+  // that far off its rim and no further than the cuff's own thickness.
   check(
-    `with the anchor on its rim (${(anchorOffRim * 1000).toFixed(1)} mm off, under 2)`,
-    Math.abs(anchorOffRim) < 0.002,
+    `with the anchor within the cuff's thickness of its rim (${(anchorOffRim * 1000).toFixed(1)} mm off, under ${(MANACLE_THICKNESS * 1000).toFixed(0)})`,
+    Math.abs(anchorOffRim) < MANACLE_THICKNESS,
   );
   check(
     `the chain never stands more than 1 mm over its length once wound (${(worstOver * 1000).toFixed(2)} mm)`,
@@ -4208,11 +4222,15 @@ function caseHookSparks(): ContactResult {
   check("graze: a skimming throw reports a touch", graze.first > 0);
   // Without this the clause stops testing what it claims the moment the arena
   // shifts: a throw that arrives steeply is the head-on case again, and would
-  // pass the burst clause on the normal component alone.
+  // pass the burst clause on the normal component alone. Stated as an ANGLE
+  // (under 10 degrees off the face) rather than as a bar on `vn`: the bar's
+  // sweep reports the arrival at the throw's own approach, 12 m/s at 0.104 rad
+  // being 1.24 m/s into the face, where the disc's first touch was the solver's
+  // and read 0.38 after it had already killed most of that approach.
   check(
     `graze: it really is oblique - vn ${graze.arrivalVn.toFixed(2)} against vt ` +
       `${graze.arrivalVt.toFixed(2)}`,
-    graze.arrivalVn < 1 && graze.arrivalVt > 8,
+    graze.arrivalVn < 0.18 * graze.arrivalVt && graze.arrivalVt > 8,
   );
   check("graze: it earns a burst", graze.burstFrames.length >= 1);
   check("graze: and only one, on the arrival frame", graze.burstFrames.length === 1);
@@ -5906,6 +5924,7 @@ function caseChainSharedCorner(): ContactResult {
   let jumpAt: number | null = null;
   let lengthened = 0;
   let lengthenedAt: number | null = null;
+  let retied = false;
   for (let f = 1; f * 2 <= cursor.length; f++) {
     const input: FrameInput = {
       ...emptyFrameInput(),
@@ -5914,6 +5933,26 @@ function caseChainSharedCorner(): ContactResult {
     };
     prev = input;
     level.physicsProcess(input, DT);
+    // The recording's anchor was the BITE POINT, on the block's underside. The
+    // manacle now stands proud of the face it bites with its hinge out, so a
+    // bitten chain ends a ring radius below that underside and, swung from
+    // beside the block, clears the corner by that much on every frame of this
+    // recording - the corner it went over at f54 with the anchor on the face.
+    // What this scene asserts is the span sweep's rule, which cares nothing
+    // for how the anchor got where it is (a scene chain's anchor lies on a
+    // face exactly so), so the chain is re-tied to the bite point on the frame
+    // it bites, and the cuff the bite mounted comes off the block.
+    if (!retied && ball.chain && !(ball.chain.end.contact.obj instanceof BallHook)) {
+      retied = true;
+      const chain = ball.chain;
+      const block = chain.end.contact.obj;
+      const bite = chain.end.contact.globalPosition.sub(ball.manacleFacing(1)!.mul(MANACLE_HINGE));
+      const cuff = block.getShapes()[1];
+      if (cuff) block.removeShape(cuff);
+      chain.end = new RopeAttachment(RopeContact.at(block, bite));
+      chain.syncWraps(ball.sceneBodies);
+      chain.maxRopeLength = Math.max(chain.maxRopeLength, chain.getCurrentLength());
+    }
     const p = ball.globalPosition;
     if (lastPos) {
       const d = p.distanceTo(lastPos);
