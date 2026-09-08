@@ -1643,6 +1643,41 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "Mandrake (@mandrake_3d)",
     license: "CC BY 4.0",
   },
+  // A hurricane storm lantern - the pressed-metal kind with a fuel font, a
+  // wire bail over the top and a glass globe around the wick. `lantern` is the
+  // other one: a square carry lantern of caged panes. Rusty and near-black
+  // where that one is brass, so the two are a pair rather than a duplicate.
+  //
+  // 3,050 triangles, so no `simplify`. The 2.08 MB raw was four 1024² maps
+  // (a metallic-roughness PNG at 1.26 MB of it), 238 KB as WebP.
+  //
+  // Scaled, and by arithmetic rather than by eye: the export is 2.75 x 5.87 x
+  // 2.39 in no stated unit, and a real storm lantern is about 38 cm to the top
+  // of a raised bail - so 0.065, which lands it at 18 x 38 x 16 cm with a
+  // 30 cm body. (`lantern` is 50 cm, `bulkhead-lamp` 25 cm.)
+  //
+  // No rotation: it stands up its own y, and its broad face - the globe and
+  // the two frame pillars - is already across x, which is the face the camera
+  // looks at down -z. Its origin is inside the globe, a third of the way up
+  // (the export runs -2.74 to +3.13 about it), so it is placed by its middle
+  // rather than by its base or its bail: 18 cm of lantern hangs below the
+  // point a level puts it on.
+  //
+  // It DOES ship an emission map, on the globe, and it also ships a white
+  // `emissiveFactor` of its own - so the glass reads as lit the moment it
+  // loads and `wakeEmission` leaves it alone (it only lifts a factor that is
+  // exactly black, which is what `bulkhead-lamp` arrived with). What it still
+  // does not do is light the room: that is `VisualData.emissive` on the shape
+  // it is mounted on, as ever.
+  "lantern-rusty": {
+    file: "/meshes/lantern-rusty.glb",
+    sha256: "f535f7ac6b27705b4391843dfdd5c5e89d20922d6fdb93eaeea3a08668cf0254",
+    scale: 0.065, // 2.75 x 5.87 x 2.39 as exported -> 0.18 x 0.38 x 0.16 m
+    source:
+      "https://sketchfab.com/3d-models/old-rusty-lantern-c11fd480023d485f9bbeaae633c868d7",
+    author: "lhaegy.fu",
+    license: "CC BY-NC 4.0",
+  },
   // A barred iron gate with a hinged door - dungeon bars, the kind that close
   // off a corridor. Two meshes as exported (the frame of bars and the door
   // leaf), 3,564 triangles between them, so no `simplify`: like `cage-rusty`

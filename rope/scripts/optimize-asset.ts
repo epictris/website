@@ -66,9 +66,9 @@
 // whose origin moved.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
 // `--center` and `--keep-nodes` are bare flags, so they come out of the argument
@@ -103,7 +103,31 @@ if (!existsSync(input)) {
   process.exit(2);
 }
 
-const before = statSync(input).size;
+// What the raw actually WEIGHS, which for a `.gltf` is not the file: a
+// Sketchfab download is a few KB of JSON beside a `.bin` and a textures
+// directory that are the entire 2 MB of it. Statting the JSON alone reported a
+// 2.08 MB lantern as "0.00 MB -> 0.26 MB (5472%)" - a pipeline that turns out
+// to INFLATE assets, which is the one number this line exists to contradict.
+// A `.glb` has no external resources and this is its own size.
+function rawSize(file: string): number {
+  if (!file.toLowerCase().endsWith(".gltf")) return statSync(file).size;
+  let total = statSync(file).size;
+  const dir = dirname(file);
+  const doc = JSON.parse(readFileSync(file, "utf8")) as {
+    buffers?: { uri?: string }[];
+    images?: { uri?: string }[];
+  };
+  // Only external ones: a data: URI is already counted in the JSON's own bytes,
+  // and a buffer with no `uri` is the GLB payload, which a `.gltf` does not have.
+  for (const r of [...(doc.buffers ?? []), ...(doc.images ?? [])]) {
+    if (!r.uri || r.uri.startsWith("data:")) continue;
+    const resolved = join(dir, decodeURIComponent(r.uri));
+    if (existsSync(resolved)) total += statSync(resolved).size;
+  }
+  return total;
+}
+
+const before = rawSize(input);
 
 // The centring runs FIRST, into a temp file the optimise then reads, so what is
 // published is one file through both steps rather than an optimised prop that is
