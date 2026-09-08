@@ -37,6 +37,7 @@ import {
   slideStep,
   RAIL_KINETIC_FRICTION,
   RAIL_STATIC_FRICTION,
+  RIM_FLIP_LEAN,
 } from "../lib/rail";
 import { MANACLE_BORE, MANACLE_REACH } from "../lib/manacle";
 import { strokeCurve, STROKE_TOLERANCE } from "../lib/stroke";
@@ -381,15 +382,16 @@ function caseClamp(): RailResult {
       `...a bore's radius above the cuff's centre (${(at.distanceTo(clamp.restPoint()) * 100).toFixed(3)} cm, want ${((MANACLE_BORE / 2) * 100).toFixed(3)})`,
       Math.abs(at.distanceTo(clamp.restPoint()) - MANACLE_BORE / 2) < 1e-9,
     );
-    // Pulled from the other side it crosses the bore and rests on the bar's
-    // underside instead - the seat is the pull's answer, not the bar's.
+    // Pulled straight up through the bar it does NOT cross the bore: the ring
+    // never swaps sides of the bar (see `RopeClamp.side`), and a pull square
+    // through it leaves the hang where it was.
     clamp.seat(new Vec2(at.x, -2), 1);
     c.check(
-      `pulled from above, the ring crosses the bore (y=${clamp.contact.globalPosition.y.toFixed(5)})`,
-      Math.abs(clamp.contact.globalPosition.y + 1.2 + clearance) < 1e-9,
+      `pulled from above, the ring stays under the bar (y=${clamp.contact.globalPosition.y.toFixed(5)})`,
+      Math.abs(clamp.contact.globalPosition.y - at.y) < 1e-9 && clamp.side === -1,
     );
     clamp.seat(at, 1);
-    c.check(`...and back again`, Math.abs(clamp.contact.globalPosition.y - at.y) < 1e-9);
+    c.check(`...and hangs there still`, Math.abs(clamp.contact.globalPosition.y - at.y) < 1e-9);
     c.check(`...within the bar (x=${at.x.toFixed(3)})`, Math.abs(at.x) < 0.1);
     // The cuff is a ring seen edge-on hanging from the bar, and its facing is
     // the way it HANGS - the end of the ring the chain leaves over, where the
@@ -877,6 +879,52 @@ function caseJam(): RailResult {
 }
 
 // ---------------------------------------------------------------------------
+// rim - which END of the ring the chain leaves over is state with hysteresis.
+// The rim is a sign, and a sign read off a quantity sitting on zero is noise:
+// a ring jammed square against a lid with the chain running along the bar had
+// its pull within a few thousandths of square to the ring's axis, and the
+// drawn chain hopped the ring's whole length every few frames as the lantern
+// swung (`session-821f`). The law: a pull anywhere inside `RIM_FLIP_LEAN` of
+// square leaves the chain on the end it was on, whichever side of square it
+// is; a pull committed past the band to the other end moves it; a slack
+// chain (the gravity stand-in) moves it nowhere. The ring is frozen (dt 0) so
+// the pulls are read against one hang.
+function caseRim(): RailResult {
+  const c = claims();
+  const rig = new Rig([bar(0, -120, 1000, 1)]);
+  rig.hang(60);
+  const clamp = rig.clamp;
+  c.check("clamped", clamp !== null);
+  if (!clamp) return ok("rail-rim", false, c.details);
+  const rimOf = () => (clamp.rimLocal().dot(clamp.hangLocal()) > 0 ? 1 : -1);
+  const hang = clamp.hangLocal().rotated(clamp.body.globalRotation);
+  const t = clamp.tangent()!;
+  // A pull whose lean against the hang is exactly `lean`, run along the bar
+  // for the rest of it.
+  const pullAt = (lean: number, pulling = true) => {
+    const p = t.mul(Math.sqrt(1 - lean * lean)).add(hang.mul(lean));
+    return clamp.seat(clamp.contact.globalPosition.add(p), 0, pulling);
+  };
+  const inside = RIM_FLIP_LEAN * 0.5;
+  const outside = Math.min(0.999, RIM_FLIP_LEAN * 2);
+  c.check(`hung under the ball the chain leaves over the end toward it (rim ${rimOf()})`, rimOf() === 1);
+  pullAt(-inside);
+  c.check(`a pull leaning ${(-inside).toFixed(3)} against the hang, inside the band, leaves it there (rim ${rimOf()})`, rimOf() === 1);
+  pullAt(0);
+  c.check(`...a pull exactly square to the ring's axis too (rim ${rimOf()})`, rimOf() === 1);
+  pullAt(-outside);
+  c.check(`a pull committed to the other end (lean ${(-outside).toFixed(3)}) re-hooks the chain over it (rim ${rimOf()})`, rimOf() === -1);
+  pullAt(inside);
+  c.check(`...and a pull leaning ${inside.toFixed(3)} back, inside the band, does not undo it (rim ${rimOf()})`, rimOf() === -1);
+  pullAt(1, false);
+  c.check(`a slack chain hanging straight along the far end moves it nowhere (rim ${rimOf()})`, rimOf() === -1);
+  pullAt(outside);
+  c.check(`a real pull past the band brings it back (rim ${rimOf()})`, rimOf() === 1);
+  c.check(`the ring itself never moved (tilt ${clamp.tilt.toFixed(4)})`, clamp.tilt === 0);
+  return ok("rail-rim — the end of the ring the chain leaves over holds inside the band, follows a committed pull, ignores slack", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
 // bend - one authored curve that turns: the ring runs round the bend, crossing
 // from one of the bar's pieces onto the next without noticing.
 // ---------------------------------------------------------------------------
@@ -1052,6 +1100,7 @@ export function runRailCases(): RailResult[] {
     caseFall(),
     caseOpenEnd(),
     caseJam(),
+    caseRim(),
     caseBend(),
     caseFormat(),
   ];

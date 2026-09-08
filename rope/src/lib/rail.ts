@@ -167,6 +167,20 @@ export const RAIL_TILT_RATE = 12;
 // re-seated: a span this short has no direction worth reading.
 const SEAT_EPSILON = 1e-9;
 
+// How far the pull must lean past square to the ring's axis, toward the OTHER
+// end of the ring, before the chain re-hooks over that end: the sine of the
+// angle, so 0.25 is about 15°. The rim decision is a sign, and a sign read off
+// a quantity that sits on zero is noise: a ring jammed square against a lid
+// with the chain running along the bar had its pull within a few thousandths
+// of square, and the drawn chain hopped the ring's whole length every few
+// frames as the lantern swung (`session-821f`, f646 +0.008, f763 -0.004). A
+// ring free to tilt follows the pull to within a frame or two, which puts the
+// lean near 1 and well clear of the band, so in play the band only shows on a
+// jammed ring - which is exactly the ring that should keep its end. A guess to
+// be PLAYED; the law (no flip inside the band, a flip past it, none while
+// slack) is what `cli rails` pins.
+export const RIM_FLIP_LEAN = 0.25;
+
 // The curve's left unit normal for the tangent `t`.
 function leftNormal(t: Vec2): Vec2 {
   return new Vec2(-t.y, t.x);
@@ -248,7 +262,10 @@ export class RopeClamp extends RopeAttachment {
   // between, so the chain is hooked over whichever end runs toward the pull.
   // Decided by the sim's own pull, so the drawn chain and the drape hang from
   // the same point every frame rather than from whichever end the drape's own
-  // last link happened to lean toward.
+  // last link happened to lean toward - and decided with HYSTERESIS
+  // (`RIM_FLIP_LEAN`), only while the chain is pulling: a link threaded through
+  // a ring stays where it is until the pull carries it round to the other end,
+  // and a slack chain moves it nowhere.
   private rimSign: 1 | -1 = 1;
   // The furthest the ring may tilt before the bar's thickness jams it: a ring
   // of inner radius `R` tilted by `a` presents an aperture of `R·cos a` across
@@ -461,7 +478,11 @@ export class RopeClamp extends RopeAttachment {
   // sides (see `side`): it leans as far as the jam lets it toward the pull's
   // run along the bar, and where the pull runs squarely through the bar it
   // stays as it is.
-  seat(toward: Vec2, dt: number): boolean {
+  //
+  // `pulling` says whether `toward` is the chain's own pull or the caller's
+  // stand-in for a slack chain (straight down). The ring hangs toward either;
+  // only a real pull may move the chain to the other end of the ring.
+  seat(toward: Vec2, dt: number, pulling = true): boolean {
     if (this.tiltMax <= 0 || this.curve.total <= 0) return false;
     const pull = toward.sub(this.contact.globalPosition);
     const len = pull.length();
@@ -471,11 +492,14 @@ export class RopeClamp extends RopeAttachment {
     const nRest = leftNormal(t).mul(this.side);
     const along = p.dot(t);
     const away = -p.dot(nRest);
-    // The chain leaves over the end of the ring that runs toward the pull; a
-    // pull square to the ring's axis leaves it on the end it was on.
-    const lean = this.hangLocal().dot(p);
-    if (lean > 1e-9) this.rimSign = 1;
-    else if (lean < -1e-9) this.rimSign = -1;
+    // The chain leaves over the end of the ring that runs toward the pull, and
+    // it re-hooks over the other end only once the pull has committed to it
+    // (`RIM_FLIP_LEAN`): a pull anywhere near square to the ring's axis leaves
+    // the chain on the end it was on, whichever side of square it is.
+    if (pulling) {
+      const lean = this.hangLocal().dot(p);
+      if (lean * this.rimSign < -RIM_FLIP_LEAN) this.rimSign = -this.rimSign as 1 | -1;
+    }
     let target: number;
     if (away >= 0) target = Mathf.clamp(dmath.atan2(along, away), -this.tiltMax, this.tiltMax);
     else if (along !== 0) target = along > 0 ? this.tiltMax : -this.tiltMax;
@@ -488,8 +512,11 @@ export class RopeClamp extends RopeAttachment {
     } else if (target < 0 && !this.range.openMin) {
       target = Math.max(target, -dmath.asin(Mathf.clamp((this.s - this.range.min) / BORE_RADIUS, 0, 1)));
     }
+    // Within a step of the target the ring is AT the target - the closed form
+    // `tilt + (target - tilt)` is an ulp off it in floats, and the jam is an
+    // exact angle.
     const step = RAIL_TILT_RATE * dt;
-    const next = this.tilt + Mathf.clamp(target - this.tilt, -step, step);
+    const next = Math.abs(target - this.tilt) <= step ? target : this.tilt + (target > this.tilt ? step : -step);
     if (next === this.tilt) return false;
     this.tilt = next;
     this.setParam(this.s);

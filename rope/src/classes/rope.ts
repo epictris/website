@@ -2451,7 +2451,7 @@ export class Rope {
     const slack = this.constraintLength - this.calculateRopePathLength();
     const pulling = (coasted.loaded || slack < MANACLE_BORE / 2) && prev !== undefined;
     const toward = pulling ? prev.contact.globalPosition : centre.add(GRAVITY);
-    const seated = clamp.seat(toward, delta);
+    const seated = clamp.seat(toward, delta, pulling);
     if (coasted.moved || seated) this.markPathChanged();
   }
 
