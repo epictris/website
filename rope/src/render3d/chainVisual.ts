@@ -22,7 +22,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "../render/chainMetrics";
-import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { chainEndFacing, cuffRimDirection, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
@@ -128,9 +128,11 @@ export class ChainLayer {
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor. Centred on the chain's own end node, which free IS the hook
         // body and anchored is the point it bit, so the cuff sits half in and
-        // half out of the geometry. Facing the chain while it hangs from it,
-        // frozen on the surface's normal once it is clamped. See the 2D
-        // renderer, whose placement this mirrors.
+        // half out of the geometry, or - clamped around a rail - the point the
+        // ring hangs at, which is a bore's radius below the bar it rests on.
+        // Facing the chain while it hangs from it, frozen on the surface's
+        // normal once it has bitten, and square to the way it hangs once it is
+        // clamped. See the 2D renderer, whose placement this mirrors.
         const at = loopToAnchor[loopToAnchor.length - 1]!;
         const chainDir = chainEndFacing(loopToAnchor, ball.renderLoopDirection(alpha));
         const dir = ball.manacleFacing(alpha) ?? chainDir;
@@ -145,16 +147,18 @@ export class ChainLayer {
         this.path.push(ball.renderPosition(alpha));
         // The links stop ON THE RIM, on whichever side the chain runs: the touch
         // point of a chain laid over a ring, which slides round the ring as the
-        // ball swings.
+        // ball swings - and, around a rail, one of the two ends of a ring that
+        // is edge-on to us, since the rest of it is hole (`cuffRimDirection`).
+        const rim = ball.manacleOnRail ? cuffRimDirection(dir, chainDir) : chainDir;
         trimPathStart(this.path, MANACLE_RADIUS);
-        this.path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
+        this.path[0] = at.add(rim.mul(MANACLE_RADIUS));
         this.tint.set(DEFAULT_CHAIN_COLOR);
         this.lay(this.path);
 
         this.manacle.position.set(at.x, threeY(at.y), 0);
         // Turned about z to face `dir`, and - clamped around a RAIL - turned a
-        // quarter turn about its own x after that, so the ring's axis lies
-        // along the bar (`dir` is then the rail's tangent) and the bar runs
+        // quarter turn about its own x after that, so the ring's axis is `dir`
+        // (which is then square to the way the cuff hangs) and the bar runs
         // through the cuff rather than the cuff standing half inside a face.
         // "ZYX" applies z first, then y about the turned frame, which is the
         // order that reading needs.

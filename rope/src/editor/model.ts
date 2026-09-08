@@ -11,6 +11,8 @@
 // its layer does not use, so nothing meaningless reaches disk.
 
 import { Vec2 } from "../engine/vec2";
+import { MANACLE_BORE } from "../lib/manacle";
+import { strokeCurve } from "../lib/stroke";
 import {
   isConvexLoop,
   nearestOnCircle,
@@ -185,7 +187,23 @@ export type EdShape =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
   | { kind: "poly"; verts: Vec2[] }
-  | { kind: "path"; verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[]; keys: EdPathKey[] };
+  | {
+      kind: "path";
+      verts: Vec2[];
+      handles: { in: Vec2; out: Vec2 }[];
+      keys: EdPathKey[];
+      // How wide the BAR is, for a path on the scene layer - a collision curve,
+      // stroked into the pieces it collides as (`ShapeData`'s `curve`). A
+      // camera path is a line with no thickness and ignores it; the field is
+      // carried anyway rather than made optional, so every path is a
+      // well-formed one and nothing has to ask which layer it is on to know
+      // whether it may be read.
+      width: number;
+    };
+
+// What a curve drawn in the editor starts out as: a bar the manacle's own ring
+// closes around (`MANACLE_BORE`), which is the bar a rail is for.
+export const DEFAULT_CURVE_WIDTH = MANACLE_BORE;
 
 // One node's keyframes: null = this node does not key that field. Metres for
 // the lengths, as everything in the model is.
@@ -534,6 +552,7 @@ export function cloneShape(s: EdShape): EdShape {
       verts: [...s.verts],
       handles: s.handles.map((h) => ({ ...h })),
       keys: s.keys.map((k) => ({ ...k })),
+      width: s.width,
     };
   }
   return { ...s };
@@ -895,6 +914,21 @@ export const NOTE_ARROW_BAND = NOTE_ARROW_THICKNESS * PX;
 function edShape(s: ShapeData): EdShape {
   if (s.kind === "rect") return { kind: "rect", w: s.w, h: s.h };
   if (s.kind === "circle") return { kind: "circle", r: s.r };
+  // A CURVE is the camera path's node list under another name - the same
+  // points and the same tangent handles - plus the width of the bar it strokes
+  // into, so it is edited by the very gestures a camera path is.
+  if (s.kind === "curve") {
+    return {
+      kind: "path",
+      verts: s.verts.map((v) => new Vec2(v.x, v.y)),
+      handles: s.verts.map((v) => ({
+        in: new Vec2(v.inX ?? 0, v.inY ?? 0),
+        out: new Vec2(v.outX ?? 0, v.outY ?? 0),
+      })),
+      keys: s.verts.map(() => NO_KEY()),
+      width: s.width,
+    };
+  }
   return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
 }
 
@@ -1277,6 +1311,8 @@ function fromLevelData(data: LevelData): EdModel {
         for (const f of PATH_KEY_FIELDS) if (v[f] !== undefined) k[f] = v[f]!;
         return k;
       }),
+      // Unused on this layer: a camera path is a line with no thickness.
+      width: DEFAULT_CURVE_WIDTH,
     },
     color: CAMERA_REGION_COLOR,
     opacity: CAMERA_REGION_OPACITY,
@@ -1593,6 +1629,28 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   const shapeOf = (i: EdItem): ShapeData => {
     if (i.shape.kind === "rect") return { kind: "rect", w: i.shape.w, h: i.shape.h };
     if (i.shape.kind === "circle") return { kind: "circle", r: i.shape.r };
+    // A path on the SCENE layer is an authored curve: the same nodes, plus the
+    // width of the bar. (A camera path never reaches here - see above.) A
+    // handle that is zero is written as absent, exactly as a camera path's is,
+    // so a curve of corners stores nothing extra.
+    if (i.shape.kind === "path") {
+      const handles = i.shape.handles;
+      return {
+        kind: "curve",
+        width: i.shape.width,
+        verts: i.shape.verts.map((v, k) => {
+          const h = handles[k];
+          return {
+            x: v.x,
+            y: v.y,
+            ...(h && h.in.x !== 0 ? { inX: h.in.x } : {}),
+            ...(h && h.in.y !== 0 ? { inY: h.in.y } : {}),
+            ...(h && h.out.x !== 0 ? { outX: h.out.x } : {}),
+            ...(h && h.out.y !== 0 ? { outY: h.out.y } : {}),
+          };
+        }),
+      };
+    }
     return { kind: "poly", verts: i.shape.verts.map((v) => ({ x: v.x, y: v.y })) };
   };
 
@@ -1760,8 +1818,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           ...(i.impermeable ? { impermeable: true } : {}),
           // Absent means rope geometry, so only a piece the rope ignores says so.
           ...(i.wrappable ? {} : { wrappable: false }),
-          // Absent means a face the hook bites, so only a rail says so.
-          ...(i.rail ? { rail: true } : {}),
+          // Absent means a face the hook bites, so only a rail says so - and
+          // only a CURVE can be one, so a flag left on a shape of any other
+          // kind (a level authored before rails were curves) is dropped rather
+          // than written for the loader to ignore.
+          ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
           // Written only when the piece is something other than the default
           // 20 cm of oak, so every level authored before materials stays
           // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
@@ -2562,10 +2623,17 @@ const PRIMITIVE_NAME: Record<"rect" | "circle" | "poly", string> = {
 export function shapeArea(item: EdItem): number {
   if (item.shape.kind === "circle") return Math.PI * item.shape.r * item.shape.r;
   if (item.shape.kind === "rect") return item.shape.w * item.shape.h;
-  // An open polyline has none. It is never a piece of a body, so nothing weighs
-  // it - answering zero rather than the signed area of a loop that is not there
-  // is what keeps that true if one ever reaches a mass sum.
-  if (item.shape.kind === "path") return 0;
+  // A CURVE weighs what its bar weighs: the pieces the stroke tiles it with,
+  // which is what the build weighs (`makeShapes`), so the panel's readout and
+  // the body's mass are the one answer. A camera path is not a piece of a body
+  // and nothing weighs it, which its own zero area says.
+  if (item.shape.kind === "path") {
+    if (item.layer === "camera") return 0;
+    return strokeCurve(pathNodes(item), item.shape.width).pieces.reduce(
+      (a, piece) => a + Math.abs(polySignedArea2(piece)) / 2,
+      0,
+    );
+  }
   return Math.abs(polySignedArea2(item.shape.verts)) / 2;
 }
 
@@ -2820,7 +2888,7 @@ export function routePolyline(model: EdModel, item: EdItem): Vec2[] {
 // Where each node landed along the route, in metres of arc length - what a key
 // is read at, and what the panel's placeholders interpolate against.
 export function routeNodeArcLengths(model: EdModel, item: EdItem): number[] {
-  return routeOf(model, item).index.nodeS;
+  return [...routeOf(model, item).index.nodeS];
 }
 
 // The fastest any point of a mover's surface crosses a frame, in metres - the
@@ -2973,7 +3041,17 @@ function outlineSig(i: EdItem): string {
       ? `r${s.w},${s.h}`
       : s.kind === "circle"
         ? `c${s.r}`
-        : `${s.kind === "path" ? "L" : "p"}${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
+        : s.kind === "path"
+          ? // A curve's outline is its nodes, their tangent HANDLES and the
+            // width of the bar - all three are the shape, so an edit to any of
+            // them has to read as one.
+            `L${s.width}:${s.verts
+              .map((v, k) => {
+                const h = s.handles[k];
+                return `${v.x},${v.y},${h?.in.x ?? 0},${h?.in.y ?? 0},${h?.out.x ?? 0},${h?.out.y ?? 0}`;
+              })
+              .join(";")}`
+          : `p${s.verts.map((v) => `${v.x},${v.y}`).join(";")}`;
   return `${i.pos.x},${i.pos.y},${i.rot},${i.bodyId}|${shape}`;
 }
 

@@ -144,16 +144,20 @@ export function ellipseReach(ax: number, ay: number, dir: Vec2): number {
   return 1 / dmath.hypot(dir.x / len / a, dir.y / len / b);
 }
 
+// READONLY throughout: an index is built once and read for ever, and a rail's
+// curve (`RailCurve` in engine/shapes.ts) is one of these under another name -
+// the field names are shared so a curve is passed straight to the functions
+// below rather than restating any of them.
 export interface PolylineIndex {
   // World-space verts in direction-of-travel order.
-  verts: Vec2[];
+  verts: readonly Vec2[];
   // cum[i] = arc length from verts[0] to verts[i]. Same length as `verts`.
-  cum: number[];
+  cum: readonly number[];
   total: number;
   // nodeS[i] = arc length of the i-th AUTHORED node, when the polyline came
   // from `flattenPathNodes` and the caller said so; empty when it did not.
   // It is what a node's keys are placed at along the route.
-  nodeS: number[];
+  nodeS: readonly number[];
 }
 
 export function buildPolylineIndex(

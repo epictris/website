@@ -145,6 +145,13 @@ export class BallHook extends RigidBody2D {
     return shape.kind === "circle" ? shape.radius : MANACLE_DISC;
   }
 
+  // A weight on the end of the chain and nothing more: it no longer anchors to
+  // what it touches. What a ring that has run off the open end of a rail comes
+  // back as (see `BallPlayer.dropFromRail`), until it is thrown again.
+  disarm(): void {
+    this.armed = false;
+  }
+
   // The throw is over — the hook falls from here on. Idempotent, and safe to
   // call for any of the endings: attach, bounce, snag, out of length.
   endFlight(): void {

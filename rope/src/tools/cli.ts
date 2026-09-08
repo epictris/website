@@ -2452,11 +2452,13 @@ async function cmdVines(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-// Rail cases (src/sim/railCases.ts). A rail is a bar the manacle clamps around
-// and slides along, and its behaviour has a closed form - plumb and coasting on
-// a frictionless bar, braked at mu·g with the chain trailing at atan(mu) on one
-// with grip, stuck inside the static cone - so it is asserted as arithmetic,
-// like `spring`; and like `vines` it reaches no invariant, so this is the whole
+// Rail cases (src/sim/railCases.ts). A rail is an authored curve with a width
+// that the manacle clamps around and slides along, and both halves are
+// arithmetic: the STROKE tiles the bar with convex pieces that sum to its own
+// outline, and the SLIDE has a closed form - plumb and coasting on a
+// frictionless bar, braked at mu·g with the chain trailing at atan(mu) on one
+// with grip, stuck inside the static cone. So both are asserted directly, like
+// `spring`; and like `vines` a rail reaches no invariant, so this is the whole
 // of its coverage.
 async function cmdRails(): Promise<void> {
   const { runRailCases } = await import("../sim/railCases");

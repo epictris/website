@@ -72,8 +72,9 @@ import {
   distanceToVine,
   MIN_VINE_LENGTH,
   cloneChain,
-  cloneVine,
   cloneShape,
+  cloneVine,
+  DEFAULT_CURVE_WIDTH,
   convexHull,
   bodyWithinRect,
   defaultCamera,
@@ -168,6 +169,7 @@ import {
   HANDLE_HIT_PX,
   lightPickRadius,
   depthOf,
+  curvePieceCount,
   routeHandlePoints,
   routeMidpoints,
 
@@ -271,7 +273,7 @@ type Tool =
 // because that is what a light is: another kind of scene object, dropped into
 // the same layer and welded into a body with the shape it belongs to.
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
-  scene: ["select", "rect", "circle", "poly", "geometry", "light", "chain", "vine"],
+  scene: ["select", "rect", "circle", "poly", "path", "geometry", "light", "chain", "vine"],
   camera: ["select", "rect", "circle", "poly", "path"],
   notes: ["select", "text", "arrow"],
 };
@@ -1834,6 +1836,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const [k, b] of Object.entries(toolBtns)) {
       b.style.display = tools.includes(k as Tool) ? "" : "none";
     }
+    // The same gesture draws two different things: a camera path is a route the
+    // camera rides, and a scene one is a BAR - the curve a rail's cuff slides
+    // along, stroked out to its width. The button says which.
+    toolBtns.path.textContent = activeLayer === "camera" ? "+ Path" : "+ Curve";
     if (!tools.includes(tool)) setTool("select");
   }
 
@@ -2573,6 +2579,34 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       num(label, (b) => (b.shape.kind === "circle" ? b.shape.r * M2PX : 0), (b, v) => {
         if (b.shape.kind === "circle") b.shape.r = Math.max(1, v) * PX;
       });
+    } else if (items.every((b) => b.shape.kind === "path" && b.layer !== "camera")) {
+      // A CURVE has one size and it is the width of the bar: the line itself is
+      // edited on the canvas, node by node, exactly as a polygon's outline is.
+      num("width", (b) => (b.shape.kind === "path" ? b.shape.width * M2PX : 0), (b, v) => {
+        if (b.shape.kind === "path") b.shape.width = Math.max(1, v) * PX;
+      });
+      // What the curve BUILDS as, for the reason a polygon reports its piece
+      // count: the bar is stroked into the convex pieces that tile it at load
+      // (`lib/stroke.ts`), and a straight bar is one of them however many nodes
+      // it was drawn with - so the number only ever grows where the curve
+      // actually bends.
+      const pieces = (): string => {
+        const counts = items.map((b) =>
+          b.shape.kind === "path" ? curvePieceCount(b.shape) : 0,
+        );
+        return counts.every((c) => c === counts[0]) ? String(counts[0]) : "mixed";
+      };
+      const prow = el("label", "ed-field");
+      prow.textContent = "pieces";
+      const pval = document.createElement("span");
+      pval.textContent = pieces();
+      prow.appendChild(pval);
+      g.appendChild(prow);
+      readouts.push({ el: pval, get: pieces });
+      const hint = el("div", "ed-hint");
+      hint.textContent =
+        "Drag a node to move it, its round grip to bow the curve either side of it (Alt at the press breaks the pair into a corner), an edge midpoint to add a node, Alt+click a node to remove it. The bar is what the curve strokes out at this width, and a rail's cuff rides the line down its middle.";
+      g.appendChild(hint);
     } else if (items.every((b) => b.shape.kind === "poly")) {
       // A polygon has no width or height to type: it is edited on the canvas,
       // vertex by vertex. The panel says so and reports the count, rather than
@@ -2762,7 +2796,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(wrap);
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, where the cuff rides. The cuff stops where it would meet a sibling piece that is not a rail, and passes onto a sibling rail whose centreline meets this one. Solid for everything else. A circle is a peg the ring hangs on without sliding.";
+      "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.";
     g.appendChild(hint);
   }
 
@@ -4175,7 +4209,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
     ) {
       addImpermeableField(g, bodies);
-      addRailField(g, bodies);
+      // Only a CURVE may be a rail: a rail's centreline is the line the author
+      // drew, and there is none to ride on a box or a vertex loop (see
+      // `CollisionObjectData.rail`). Offered elsewhere it is a checkbox that
+      // writes a field the loader ignores.
+      if (bodies.every((b) => b.shape.kind === "path")) addRailField(g, bodies);
       addWrappableField(g, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
@@ -6141,11 +6179,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // hook-proofing below is.
       bounce: DEFAULT_BOUNCE,
       launch: DEFAULT_LAUNCH,
-      // Hook-proof is opt-in: a fresh shape is one the hook can catch, and a
-      // rail is opt-in the same way - a fresh shape is a face, not a bar.
+      // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
       wrappable: true,
-      rail: false,
+      // A fresh CURVE is a rail, and every other fresh shape is a face. Drawing
+      // a bar is what the curve tool is for - a curved wall is the same shape
+      // with the box unticked, one click away either way - and it is the one
+      // shape kind a rail can be at all (see `CollisionObjectData.rail`).
+      rail: t === "path" && activeLayer === "scene",
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,
@@ -6224,6 +6265,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           verts: [new Vec2(-gridStep, 0), new Vec2(gridStep, 0)],
           handles: [ZERO_HANDLE(), ZERO_HANDLE()],
           keys: [NO_KEY(), NO_KEY()],
+          width: DEFAULT_CURVE_WIDTH,
         },
       };
     }
@@ -6365,6 +6407,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       verts: pts.map((p) => p.clone()),
       handles: pts.map(() => ZERO_HANDLE()),
       keys: pts.map(() => NO_KEY()),
+      width: DEFAULT_CURVE_WIDTH,
     };
     if (!setPathVerts(item, pts)) {
       updateTitle();

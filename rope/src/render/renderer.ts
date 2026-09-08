@@ -2,7 +2,7 @@
 // via Godot's scene graph and Debug canvas overlay.
 
 import { Vec2 } from "../engine/vec2";
-import type { ShapeTransform } from "../engine/shapes";
+import type { RailCurve, ShapeTransform } from "../engine/shapes";
 import {
   AnimatableBody2D,
   Area2D,
@@ -29,8 +29,8 @@ import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "./chainMetrics";
-import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
-import { centrelineAt } from "../lib/rail";
+import { chainEndFacing, cuffRimDirection, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { railPolyline } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
 import { drawVines } from "./vines";
@@ -193,29 +193,43 @@ function unionPath(shapes: readonly ShapeTransform[]): Path2D {
   return p;
 }
 
+// The pose of the BODY a mounted piece belongs to, recovered from the piece's
+// own interpolated transform: a rail's curve is stored in the body's frame (as
+// every `RopeContact` position is) and the renderer is handed pieces, so this
+// is what puts the two together. Exact rather than approximate - the mount is
+// the composition this inverts.
+function bodyPoseOf(t: ShapeTransform, piece: CollisionShape2D): { pos: Vec2; rot: number } {
+  const rot = t.globalRotation - piece.localRotation;
+  return { pos: t.globalPosition.sub(piece.localOffset.rotated(rot)), rot };
+}
+
 // A rail's centreline, drawn down the middle of the bar in the steel the
 // hook-proof edge wears: it is where the cuff will sit and slide, and the one
-// thing that says a bar is a rail rather than a thin wall. A peg (a circle, a
-// square) has a centreline of no length and gets a dot.
-function drawRailLine(ctx: CanvasRenderingContext2D, t: ShapeTransform): void {
-  const { a, b } = centrelineAt(t.shape, t.globalPosition, t.globalRotation);
+// thing that says a bar is a rail rather than a thin wall. A bar shorter than
+// it is thick has a centreline of no length - a peg - and gets a dot.
+function drawRailLine(ctx: CanvasRenderingContext2D, curve: RailCurve, pos: Vec2, rot: number): void {
+  const line = railPolyline(curve, pos, rot);
+  const first = line[0];
+  if (!first) return;
   ctx.strokeStyle = RAIL_LINE;
   ctx.fillStyle = RAIL_LINE;
   ctx.lineWidth = PX;
   ctx.setLineDash([]);
-  if (a.distanceTo(b) < 1e-6) {
+  if (curve.total < 1e-6) {
     ctx.beginPath();
-    ctx.arc(a.x, a.y, PX, 0, Math.PI * 2);
+    ctx.arc(first.x, first.y, PX, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
   const cap = ctx.lineCap;
+  const join = ctx.lineJoin;
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
+  line.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
   ctx.stroke();
   ctx.lineCap = cap;
+  ctx.lineJoin = join;
 }
 
 // A world box comfortably containing `shapes` - the outer ring of an even-odd
@@ -295,9 +309,17 @@ function drawCompoundGeometry(
   }
   ctx.setLineDash([]);
   // Rails wear their centreline over the body: it is inside the bar, so no
-  // sibling can be in its way and nothing needs clipping.
+  // sibling can be in its way and nothing needs clipping. Once per CURVE
+  // rather than once per piece - a bar is stroked into several of them and its
+  // line runs the length of the whole thing.
+  const drawn = new Set<RailCurve>();
   for (let i = 0; i < shapes.length; i++) {
-    if (pieces[i]?.rail) drawRailLine(ctx, shapes[i]!);
+    const piece = pieces[i];
+    const curve = piece?.rail;
+    if (!curve || !piece || drawn.has(curve)) continue;
+    drawn.add(curve);
+    const pose = bodyPoseOf(shapes[i]!, piece);
+    drawRailLine(ctx, curve, pose.pos, pose.rot);
   }
 }
 
@@ -338,7 +360,8 @@ function drawGeometryShape(
     ctx.lineWidth = style.width;
     ctx.setLineDash(style.dash);
     ctx.stroke();
-    drawRailLine(ctx, t);
+    const pose = bodyPoseOf(t, piece);
+    drawRailLine(ctx, piece.rail, pose.pos, pose.rot);
     return;
   }
 
@@ -998,9 +1021,11 @@ export function renderBall(
     // point of a chain laid over a ring, which slides round the ring as the ball
     // swings, and which is the only part of the join that moves once the cuff is
     // clamped. Run to the end node instead and the links are drawn straight
-    // through the middle of the cuff.
+    // through the middle of the cuff; run to `chainDir` on a cuff drawn edge-on
+    // around a rail and they are drawn to the hole (see `cuffRimDirection`).
+    const rim = ball.manacleOnRail ? cuffRimDirection(dir, chainDir) : chainDir;
     trimPathStart(path, MANACLE_RADIUS);
-    path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
+    path[0] = at.add(rim.mul(MANACLE_RADIUS));
     drawChainPolyline(ctx, path);
     drawManacle(ctx, at, dir, clamped !== null, ball.manacleOnRail);
   }

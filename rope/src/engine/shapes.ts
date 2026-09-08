@@ -28,6 +28,38 @@ export type Shape =
   // of the edge a→b its Godot orthogonal, (b-a).y, -(b-a).x.
   | { readonly kind: "poly"; readonly verts: readonly Vec2[] };
 
+// A RAIL's centreline: the polyline the manacle's cuff rides, in the BODY's
+// local frame, with the half-width of the bar across it and which piece of the
+// body covers each of its segments.
+//
+// It is what an authored `curve` shape leaves behind once it has been stroked
+// into the convex pieces the engine collides as (`lib/stroke.ts`), and it is
+// held on every one of those pieces (`CollisionShape2D.rail`) - one object
+// shared by all of them, so "which piece did the hook strike" answers "which
+// bar is this" without the pieces having to be walked.
+//
+// The first four fields are `PolylineIndex`'s (`lib/path.ts`), NAME FOR NAME
+// and deliberately: every question asked along a rail - where is `s` metres
+// along it, which way does it run there, where does this point project onto it
+// - is one that module already answers, so a curve is passed straight to
+// `pointAtArcLength`, `tangentAtArcLength` and `projectOntoPolyline` rather
+// than having any of them restated here. They are declared rather than
+// imported because nothing in `engine/` may depend on `lib/`.
+export interface RailCurve {
+  // The centreline's points, in the body's local frame.
+  readonly verts: readonly Vec2[];
+  // cum[i] = arc length from verts[0] to verts[i].
+  readonly cum: readonly number[];
+  readonly total: number;
+  // Arc length of each AUTHORED node, where the polyline came from a node list.
+  readonly nodeS: readonly number[];
+  // Half the bar's width: how far the solid reaches either side of the line.
+  readonly halfWidth: number;
+  // `pieceAt[i]` is the mount index of the piece covering centreline segment
+  // `i`, so where the cuff stands answers which shape its contact names.
+  readonly pieceAt: readonly number[];
+}
+
 export function circleShape(radius: number): Shape {
   return { kind: "circle", radius };
 }

@@ -11,7 +11,7 @@ import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
-import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
+import { PhysicsBody2D, RigidBody2D, type CollisionShape2D } from "../engine/body";
 import { circleShape, nearestShapeIndex } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
 import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "../engine/world";
@@ -606,17 +606,34 @@ export class BallPlayer extends RigidBody2D {
   // Frozen from there. A clamped manacle does not turn as the ball swings around
   // it - it is bolted to what it bit - so the chain's touch point slides round
   // the rim instead (see `chainEndFacing`). It turns only with the body itself.
+  //
+  // A cuff on a RAIL is the exception, and is not frozen at all: it is bolted to
+  // nothing, and a ring resting on a bar hangs in the plane of what is pulling
+  // it, so its axis is read live off the clamp - square to the way the ring
+  // hangs, at the tangent the bar has where the ring has got to
+  // (`RopeClamp.cuffAxisLocal`). The frozen tangent would be the bar's
+  // direction where the hook first STRUCK it, which on a curved handle is not
+  // even the direction it has under the ring any more.
   manacleFacing(alpha: number): Vec2 | null {
+    const clamp = this.railClamp;
+    if (clamp !== null) return clamp.cuffAxisLocal().rotated(clamp.body.renderRotation(alpha));
     const local = this.anchorFacingLocal;
     if (local === null) return null;
     const body = this.anchorBody;
     return body === null ? local : local.rotated(body.renderRotation(alpha));
   }
 
+  // The chain's end as a rail clamp, or null for a bite, a dangling tip or a
+  // hook still in flight.
+  private get railClamp(): RopeClamp | null {
+    const end = this.chain?.end;
+    return end instanceof RopeClamp ? end : null;
+  }
+
   // Is the anchored manacle CLAMPED AROUND A RAIL, rather than bitten into a
-  // face? Then `manacleFacing` is the rail's tangent, the cuff's axis lies
-  // along it, and nothing about the cuff is buried: the bar passes through the
-  // ring. False while the chain end is free, and for every bite.
+  // face? Then `manacleFacing` is the axis the bar runs through the ring on and
+  // nothing about the cuff is buried: the bar passes through it. False while
+  // the chain end is free, and for every bite.
   get manacleOnRail(): boolean {
     return this.anchorOnRail && this.anchorFacingLocal !== null;
   }
@@ -831,112 +848,129 @@ export class BallPlayer extends RigidBody2D {
     // to pass clean through a small body between two looks at it, so it is
     // the one that sweeps (see `Rope.continuous`).
     this.chain.continuous = true;
+    this.chain.onClampRunOff = (clamp, end) => this.dropFromRail(clamp, end);
     this.chainSlack = new SlackChain(this.chain);
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
     // keeps paying out until it reaches max length or snags on geometry.
-    hook.registerAttachmentCallback((body, point, struck) => {
-      this.hookInFlight = null;
-      this.chainTip = null;
-      this.anchorFacingLocal = null;
-      this.anchorBody = null;
-      this.anchorOnRail = false;
-      if (!this.chain) return;
-      // Hook-proof surface: the chain is lost. `BallHook` deflects off one
-      // rather than attaching, so this is a backstop - but it is asked of the
-      // PIECE the hook reached, because a wall may be hook-proof on one face
-      // and attachable on the next and a body-level answer would be wrong for
-      // whichever face it is not about. The hook names the piece it struck;
-      // the nearest piece to the point is the fallback for a path that could
-      // not, and at the joint between a rail and its lid the two can differ.
-      const shapes = body.getShapes();
-      const pieceIndex = struck ? shapes.indexOf(struck) : nearestShapeIndex(shapes, point);
-      const piece = shapes[pieceIndex >= 0 ? pieceIndex : nearestShapeIndex(shapes, point)];
-      if (piece?.impermeable) {
-        this.releaseChain();
-        return;
-      }
-      if (piece?.rail) {
-        // A RAIL: the cuff closes around the bar rather than biting its face,
-        // so the anchor is a clamp on the bar's centreline that slides under
-        // the chain's pull against the rail's friction (see `lib/rail.ts`).
-        // The bite point was on the surface; the cuff's centre is a
-        // half-width in from it, which is the jump the cuff makes as it shuts.
-        this.chain.end = RopeClamp.at(body, shapes.indexOf(piece), point);
-      } else {
-        // `RopeContact.at` rather than the primary shape: on a compound body
-        // the hook anchors on whichever piece it struck, and the wrap
-        // resolvers walk the piece the contact names (see RopeContact.at).
-        this.chain.end = new RopeAttachment(RopeContact.at(body, point));
-      }
-      // Regenerate wraps now so the length below is the true wrapped path. The
-      // solver (chain.physicsStep) will wrap it this same frame regardless; if we
-      // measured the straight span here, clamping to it would leave the wrapped
-      // path over max and the solve would dump the difference into the ball as a
-      // one-frame lurch (session-116f: a 0.9 m/s kick off a resting ball).
-      this.chain.syncWraps(this.sceneBodies);
-      const len = this.chain.getCurrentLength();
-      // The manacle clamps shut around the bite point - half in the geometry and
-      // half out of it - with its hinge pointing straight out of the face it
-      // caught, and stays exactly so for as long as it holds. See
-      // `manacleFacing` for why the surface answers for the facing rather than
-      // the throw that arrived at it.
-      //
-      // Around a rail the cuff's AXIS is the bar: the facing is the rail's
-      // tangent (either way along it; the cuff is symmetric about its axis),
-      // and a peg with no tangent takes the bite's answer.
-      this.anchorBody = body;
-      const clamp = this.chain.end instanceof RopeClamp ? this.chain.end : null;
-      const tangent = clamp?.tangent() ?? null;
-      this.anchorOnRail = clamp !== null;
-      this.anchorFacingLocal = (
-        tangent ??
-        (piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition))
-      ).rotated(-body.globalRotation);
-      // The tolerance here is a SNAP backstop, not a range: it is sized for the
-      // ~1 px of solver slop a dangling tip carries when it finally lands (see
-      // the constant), and what it rejects is an anchor no throw could have
-      // reached — one offered by `probeContact` or by the solver's own
-      // contacts — because that is what would drag the ball to a too-far
-      // anchor. A throw cannot reach it: the flight budget stops an attach one
-      // hook radius past full stretch (see `deployLimit`), so the longest path
-      // a deploy can anchor at is ~1.84 m against this 2.0 m gate.
-      //
-      // It was not always slack: while the flight was ALSO forgiven 0.2 m, the
-      // sweep would accept a hit whose anchor — placed on the surface, a radius
-      // past the centre the sweep had budgeted — landed a few millimetres over
-      // this same 2.0 m, and the chain was then dropped on the anchoring frame.
-      // Eight of the last fourteen throws in `session-1355f` did that, which
-      // reads from the game as the chain retracting itself while the deploy
-      // button is still held.
-      if (len > BallPlayer.CHAIN_MAX_LENGTH + BallPlayer.ATTACH_SNAP_TOLERANCE) {
-        // Attached far beyond the chain's absolute length — snap instead of
-        // letting the solver yank the ball toward a too-far anchor.
-        this.releaseChain();
-        return;
-      }
-      // Anchoring may GROW the length to what the chain reached (NOT clamped
-      // to CHAIN_MAX_LENGTH) and never shrink it. Growing to `len` is what
-      // keeps the constraint satisfied on the anchoring frame (path length <=
-      // maxRopeLength), so the solver injects no correction — no one-frame
-      // lurch/whip/launch into the ball — and the anchor stays exactly where
-      // the hook hit the surface, instead of being dragged inward off the
-      // geometry to hit a shorter target (which floated the anchor in mid-air —
-      // session-601f). The small overshoot past CHAIN_MAX_LENGTH is bounded by
-      // ATTACH_SNAP_TOLERANCE above.
-      //
-      // Never shrink, because a chain that was dangling SLACK when its tip
-      // touched down anchors with that slack still in hand: the chain's length
-      // is what was deployed, and rebasing it to the as-anchored path length
-      // silently retracted the difference — a chain that had reached its full
-      // 1.8 m and then brushed a wall snapped to a 0.5 m straight line on the
-      // attach frame (session-161f). Invisible while the renderer drew straight
-      // spans anyway; the slack drape is what made it a visible teleport. The
-      // inequality constraint is satisfied either way, so keeping the slack
-      // injects nothing.
-      this.chain.maxRopeLength = Math.max(this.chain.maxRopeLength, len);
-    });
+    hook.registerAttachmentCallback((body, point, struck) => this.onHookAttached(hook, body, point, struck));
+    this.wireDeploy(hook);
+  }
 
+  // The chain's end has caught `body` at `point`, on `struck`: anchor there,
+  // or clamp around it if it is a rail, or lose the chain if it is hook-proof.
+  private onHookAttached(
+    hook: BallHook,
+    body: PhysicsBody2D,
+    point: Vec2,
+    struck: CollisionShape2D | null,
+  ): void {
+    this.hookInFlight = null;
+    this.chainTip = null;
+    this.anchorFacingLocal = null;
+    this.anchorBody = null;
+    this.anchorOnRail = false;
+    if (!this.chain) return;
+    // Hook-proof surface: the chain is lost. `BallHook` deflects off one
+    // rather than attaching, so this is a backstop - but it is asked of the
+    // PIECE the hook reached, because a wall may be hook-proof on one face
+    // and attachable on the next and a body-level answer would be wrong for
+    // whichever face it is not about. The hook names the piece it struck;
+    // the nearest piece to the point is the fallback for a path that could
+    // not, and at the joint between a rail and its lid the two can differ.
+    const shapes = body.getShapes();
+    const pieceIndex = struck ? shapes.indexOf(struck) : nearestShapeIndex(shapes, point);
+    const piece = shapes[pieceIndex >= 0 ? pieceIndex : nearestShapeIndex(shapes, point)];
+    if (piece?.impermeable) {
+      this.releaseChain();
+      return;
+    }
+    if (piece?.rail) {
+      // A RAIL: the cuff closes around the bar rather than biting its face,
+      // so the anchor is a clamp on the bar's own authored CURVE, which
+      // slides under the chain's pull against the rail's friction (see
+      // `lib/rail.ts`). The piece names the whole curve, however many pieces
+      // the bar was stroked into. The bite point was on the surface; the
+      // cuff's centre is a half-width in from it, which is the jump the cuff
+      // makes as it shuts.
+      this.chain.end = RopeClamp.at(body, piece.rail, point, this.globalPosition, [this, hook]);
+    } else {
+      // `RopeContact.at` rather than the primary shape: on a compound body
+      // the hook anchors on whichever piece it struck, and the wrap
+      // resolvers walk the piece the contact names (see RopeContact.at).
+      this.chain.end = new RopeAttachment(RopeContact.at(body, point));
+    }
+    // Regenerate wraps now so the length below is the true wrapped path. The
+    // solver (chain.physicsStep) will wrap it this same frame regardless; if we
+    // measured the straight span here, clamping to it would leave the wrapped
+    // path over max and the solve would dump the difference into the ball as a
+    // one-frame lurch (session-116f: a 0.9 m/s kick off a resting ball).
+    this.chain.syncWraps(this.sceneBodies);
+    const len = this.chain.getCurrentLength();
+    // The manacle clamps shut around the bite point - half in the geometry and
+    // half out of it - with its hinge pointing straight out of the face it
+    // caught, and stays exactly so for as long as it holds. See
+    // `manacleFacing` for why the surface answers for the facing rather than
+    // the throw that arrived at it.
+    //
+    // Around a rail the cuff's AXIS is the bar: the facing is the rail's
+    // tangent (either way along it; the cuff is symmetric about its axis),
+    // and a peg with no tangent takes the bite's answer.
+    this.anchorBody = body;
+    const clamp = this.chain.end instanceof RopeClamp ? this.chain.end : null;
+    const tangent = clamp?.tangent() ?? null;
+    this.anchorOnRail = clamp !== null;
+    this.anchorFacingLocal = (
+      tangent ??
+      (piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition))
+    ).rotated(-body.globalRotation);
+    // The tolerance here is a SNAP backstop, not a range: it is sized for the
+    // ~1 px of solver slop a dangling tip carries when it finally lands (see
+    // the constant), and what it rejects is an anchor no throw could have
+    // reached — one offered by `probeContact` or by the solver's own
+    // contacts — because that is what would drag the ball to a too-far
+    // anchor. A throw cannot reach it: the flight budget stops an attach one
+    // hook radius past full stretch (see `deployLimit`), so the longest path
+    // a deploy can anchor at is ~1.84 m against this 2.0 m gate.
+    //
+    // It was not always slack: while the flight was ALSO forgiven 0.2 m, the
+    // sweep would accept a hit whose anchor — placed on the surface, a radius
+    // past the centre the sweep had budgeted — landed a few millimetres over
+    // this same 2.0 m, and the chain was then dropped on the anchoring frame.
+    // Eight of the last fourteen throws in `session-1355f` did that, which
+    // reads from the game as the chain retracting itself while the deploy
+    // button is still held.
+    if (len > BallPlayer.CHAIN_MAX_LENGTH + BallPlayer.ATTACH_SNAP_TOLERANCE) {
+      // Attached far beyond the chain's absolute length — snap instead of
+      // letting the solver yank the ball toward a too-far anchor.
+      this.releaseChain();
+      return;
+    }
+    // Anchoring may GROW the length to what the chain reached (NOT clamped
+    // to CHAIN_MAX_LENGTH) and never shrink it. Growing to `len` is what
+    // keeps the constraint satisfied on the anchoring frame (path length <=
+    // maxRopeLength), so the solver injects no correction — no one-frame
+    // lurch/whip/launch into the ball — and the anchor stays exactly where
+    // the hook hit the surface, instead of being dragged inward off the
+    // geometry to hit a shorter target (which floated the anchor in mid-air —
+    // session-601f). The small overshoot past CHAIN_MAX_LENGTH is bounded by
+    // ATTACH_SNAP_TOLERANCE above.
+    //
+    // Never shrink, because a chain that was dangling SLACK when its tip
+    // touched down anchors with that slack still in hand: the chain's length
+    // is what was deployed, and rebasing it to the as-anchored path length
+    // silently retracted the difference — a chain that had reached its full
+    // 1.8 m and then brushed a wall snapped to a 0.5 m straight line on the
+    // attach frame (session-161f). Invisible while the renderer drew straight
+    // spans anyway; the slack drape is what made it a visible teleport. The
+    // inequality constraint is satisfied either way, so keeping the slack
+    // injects nothing.
+    this.chain.maxRopeLength = Math.max(this.chain.maxRopeLength, len);
+  }
+
+  // The rest of a thrown hook's wiring: its flight budget and what happens
+  // when it runs out of chain.
+  private wireDeploy(hook: BallHook): void {
     // The flight may not outrun the chain (see the chain-out cap in
     // BallHook.physicsStep): each frame the hook budgets its step against what
     // is left of CHAIN_MAX_LENGTH beyond the wrapped path's last fixed point,
@@ -975,6 +1009,35 @@ export class BallPlayer extends RigidBody2D {
       return { prev, allowance, attachAllowance: allowance + hook.radius };
     };
     hook.registerChainOutCallback(() => this.deployTip(BallPlayer.CHAIN_MAX_LENGTH));
+  }
+
+  // A clamped ring has run off the OPEN end of its rail (see `RopeClamp.coast`):
+  // it is loose again, so it goes back to being the dangling chain tip, a body
+  // in the world at the ring's own position with the speed it ran off at, and
+  // the chain goes back to ending at its centre. It stays DISARMED - a manacle
+  // that has slid off a rail is a weight on the end of a chain until it is
+  // thrown again, rather than something that re-catches the bar's end on the
+  // frame after it left it.
+  private dropFromRail(clamp: RopeClamp, end: -1 | 1): void {
+    const chain = this.chain;
+    if (!chain || chain.end !== clamp) return;
+    const at = clamp.runOffPoint(end);
+    const hook = new BallHook();
+    hook.globalPosition = at;
+    const along = clamp.tangent();
+    const carried = clamp.body instanceof PhysicsBody2D ? clamp.body.velocityAtPoint(at) : Vec2.ZERO;
+    hook.linearVelocity = carried.add(along ? along.mul(clamp.speed) : Vec2.ZERO);
+    hook.endFlight();
+    hook.disarm();
+    hook.addCollisionExceptionWith(this);
+    hook.registerAttachmentCallback((body, point, struck) => this.onHookAttached(hook, body, point, struck));
+    this.wireDeploy(hook);
+    this.spawnBody?.(hook);
+    this.chainTip = hook;
+    this.anchorBody = null;
+    this.anchorOnRail = false;
+    this.anchorFacingLocal = null;
+    chain.end = new RopeAttachment(new RopeContact(hook, Vec2.ZERO));
   }
 
   // (settleAnchorOvershoot removed: anchoring at no less than the as-reached

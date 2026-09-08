@@ -4,7 +4,7 @@
 import { Vec2 } from "./vec2";
 import { wrapAngle } from "./mathf";
 import { isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
-import type { Shape, ShapeTransform } from "./shapes";
+import type { RailCurve, Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
 // Live view of a body's collision shape (position/rotation track the body).
@@ -43,15 +43,22 @@ export class CollisionShape2D implements ShapeTransform {
   // Is this surface a RAIL - a thin bar the manacle clamps around rather than
   // bites into, and then slides along? The hook still anchors to it (a rail is
   // attachable; hook-proof wins if both are set), but the anchor is a
-  // `RopeClamp` on the shape's centreline (`lib/rail.ts`) instead of a fixed
-  // point on its face, free to travel along the bar under the chain's pull
-  // against the rail's friction.
+  // `RopeClamp` riding the bar's own CURVE (`lib/rail.ts`) instead of a fixed
+  // point on its face, free to travel along it under the chain's pull against
+  // the rail's friction and to hang in the cuff's bore across it.
+  //
+  // The curve itself rather than a flag, because a rail IS its curve: an
+  // authored `curve` shape is stroked at load into the convex pieces that tile
+  // it (`lib/stroke.ts`), and every one of those pieces holds the same
+  // `RailCurve` object - so a hook that strikes any of them finds the whole
+  // bar, and no piece has to reconstruct a centreline from its own proportions.
+  // Null is every other surface.
   //
   // Per SHAPE for the reason `impermeable` is, and the case it exists for is
   // a body made of both: a hanging lantern whose handles are rails and whose
   // lid, bulb and base are hook-proof. Solid for everything else - the avatar
   // stands on it, bodies collide with it, other chains wrap its corners.
-  rail = false;
+  rail: RailCurve | null = null;
 
   constructor(
     public owner: CollisionObject2D,

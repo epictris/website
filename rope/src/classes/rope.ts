@@ -43,6 +43,7 @@ import {
   RopeClamp,
   type ClampState,
 } from "../lib/rail";
+import { MANACLE_BORE, MANACLE_DISC } from "../lib/manacle";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -394,13 +395,25 @@ export class Rope {
   }
 
   // Metres a clamped end (`RopeClamp`) may still run along its rail this frame
-  // - the slide speed cap's remainder, opened by `beginFrame` and spent by the
-  // slides the length solve's iterations take. Zero for a rope whose frame has
-  // not begun, so a clamp never slides outside a frame.
+  // - opened on the solve's first look at the clamp (see `slideClampedEnd`)
+  // and spent by the slides the length solve's iterations take. Zero for a
+  // rope whose frame has not begun, so a clamp never slides outside a frame.
   private slideBudget = 0;
+  // The frame's step, for the budget above.
+  private frameDelta = 0;
+  // Told when a clamped end has run off the OPEN end of its rail: the owner
+  // turns the ring back into the dangling tip it was before it clamped (see
+  // `settleClamp`). The end has NOT been replaced when this fires; that is the
+  // callback's job.
+  onClampRunOff: ((clamp: RopeClamp, end: -1 | 1) => void) | null = null;
   // Whether this frame has looked at the clamp yet: the first look is the one
   // that decides whether a running ring has come to rest (see `slideClampedEnd`).
   private slideLooked = false;
+  // Whether this frame has hung the clamp yet (see `settleClampSeat`). Its own
+  // flag rather than `slideLooked`'s: a ring hangs whether or not the chain is
+  // taut enough for the length solve to look at it, and the two answers are
+  // settled at different points in the frame.
+  private seatLooked = false;
 
   // Wires hook attachment callbacks; called on construction and after snapshot restore.
   registerHookCallbacks(): void {
@@ -477,8 +490,10 @@ export class Rope {
   beginFrame(delta: number): void {
     this.stalledLength = 0;
     this.topologyJump = 0;
-    this.slideBudget = RAIL_MAX_SLIDE_SPEED * delta;
+    this.slideBudget = 0;
+    this.frameDelta = delta;
     this.slideLooked = false;
+    this.seatLooked = false;
     this.geometryPushAccum = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
@@ -757,6 +772,7 @@ export class Rope {
   // statement about the frame, and running it once per pass would release the
   // lease K times over. See `stepSceneChains`.
   solvePass(bodies: PhysicsBody2D[], delta: number): void {
+    this.settleClamp(delta);
     this.regenerateAndMeasure(bodies);
     const lengthError = this.calculateRopePathLength() - this.constraintLength;
     this.topologyCreditScale =
@@ -1373,11 +1389,24 @@ export class Rope {
     return spans;
   }
 
-  private resolveSelfIntersectionAtStart(fromNode: RopeNode, span: Segment): RopeNode | null {
+  private resolveSelfIntersectionAtStart(
+    fromNode: RopeNode,
+    span: Segment,
+    toNode: RopeNode,
+  ): RopeNode | null {
     const obj = fromNode.contact.obj;
     if (obj instanceof Player && fromNode === this.start) return null;
     if (obj instanceof Hook && fromNode === this.start) return null;
     if (isPassThrough(obj)) return null;
+    // A span that ends on a ring clamped around a rail ends at the ring's
+    // centre, and the chain leaves the ring at its rim: a corner of the same
+    // body inside the cuff's disc is metal the chain is already clear of (see
+    // the same rule in `regeneratePath`). Walking the lantern's base from its
+    // far corner to the near one, 10 mm from the ring's centre, put a wrap
+    // inside the cuff (`session-154f`).
+    const cuff = toNode instanceof RopeClamp ? toNode : null;
+    const inCuff = (point: Vec2): boolean =>
+      cuff !== null && obj === cuff.body && point.distanceTo(cuff.contact.globalPosition) < MANACLE_DISC;
 
     // The piece of the body this node actually sits on, not merely the body's
     // primary shape: on a compound body those differ, and the tangent walk has
@@ -1402,7 +1431,7 @@ export class Rope {
         span.end,
         GenerationDirection.Reversed,
       );
-      if (tangentPoint.distanceTo(span.start) > 5 * PX) {
+      if (tangentPoint.distanceTo(span.start) > 5 * PX && !inCuff(tangentPoint)) {
         return new RopeWrap(
           new RopeContact(obj, tangentPoint.sub(obj.globalPosition), shapeIndex),
           wrapDir,
@@ -1437,7 +1466,10 @@ export class Rope {
         }
       }
       const nextVertex = corners[nextVertexIndex]!;
-      if (Intersections.intersectsPoint(fromShape, span.end) === IntersectionStatus.Separate) {
+      if (
+        Intersections.intersectsPoint(fromShape, span.end) === IntersectionStatus.Separate &&
+        !inCuff(nextVertex)
+      ) {
         return new RopeWrap(
           new RopeContact(obj, nextVertex.sub(obj.globalPosition), shapeIndex),
           wrapDir,
@@ -1450,11 +1482,12 @@ export class Rope {
   private resolveSelfIntersectionAtEnd(toNode: RopeNode, span: Segment): RopeNode | null {
     const obj = toNode.contact.obj;
     if (obj instanceof Hook && toNode === this.end) return null;
-    // A clamp's contact is the cuff's centre, which is INSIDE the rail it is
-    // clamped around, so the span ending on it always overlaps that piece.
-    // That is the chain reaching the bar, not the chain having wound around
-    // its own anchor (the failure this resolver exists for); the bar is thin
-    // and the cuff encircles it, so there is no corner to bend round.
+    // A clamp's contact is the cuff's centre, which is in the bar's BORE -
+    // inside the bar for a push fit, a centimetre under it for a thin one -
+    // so the span ending on it sits on or against the piece it is clamped
+    // around. That is the chain reaching the bar, not the chain having wound
+    // around its own anchor (the failure this resolver exists for); the bar is
+    // thin and the cuff encircles it, so there is no corner to bend round.
     if (toNode instanceof RopeClamp) return null;
     if (isPassThrough(obj)) return null;
 
@@ -1538,7 +1571,7 @@ export class Rope {
       if (span.from instanceof RopeWrap) newNodes.push(span.from);
       if (this.shouldIgnorePathCollisions(span)) continue;
 
-      const startIntersection = this.resolveSelfIntersectionAtStart(span.from, span.span);
+      const startIntersection = this.resolveSelfIntersectionAtStart(span.from, span.span, span.to);
       if (startIntersection instanceof RopeWrap) {
         newNodes.push(startIntersection);
       } else {
@@ -1626,6 +1659,24 @@ export class Rope {
       // wrapped the rotated slab, the vertical post it then cut straight
       // through was invisible, because the post and the slab happen to be one
       // body (`session-358f`).
+      //
+      // A span ending on a CLAMP ends at the centre of a ring threaded on a
+      // bar, and the chain leaves that ring at its rim: a corner of the bar's
+      // body inside the cuff's own disc - the joint of the bar the ring
+      // straddles, the near corner of the lid it hangs beside - is metal the
+      // chain is already clear of, not a corner for it to bend round. Wrapping
+      // the lid 12 mm from the ring's centre gave the chain a last span shorter
+      // than the ring is wide, whose direction the ring's own tilt then
+      // changed, and the ring hunted between that and gravity every frame
+      // (`session-189f`). The CORNER is excluded, not the piece: the far corner
+      // of that same lid is what the chain bends round when the ball winds up
+      // under the lantern, and excluding the piece sent the chain straight
+      // through the lantern's base (`session-154f`).
+      const cuff = span.to instanceof RopeClamp ? span.to : null;
+      const inCuff = (body: CollisionObject2D, point: Vec2): boolean =>
+        cuff !== null &&
+        body === cuff.body &&
+        point.distanceTo(cuff.contact.globalPosition) < MANACLE_DISC;
       const notInPlay = (shape: CollisionShape2D): boolean =>
         shape === span.from.contact.shape ||
         shape === span.to.contact.shape ||
@@ -1695,7 +1746,7 @@ export class Rope {
             );
           } else continue;
 
-          if (tangentPoint.distanceTo(span.span.start) > 5 * PX) {
+          if (tangentPoint.distanceTo(span.span.start) > 5 * PX && !inCuff(body, tangentPoint)) {
             newNodes.push(
               new RopeWrap(
                 new RopeContact(body, tangentPoint.sub(body.globalPosition), shapeIndex),
@@ -1719,7 +1770,8 @@ export class Rope {
               const vertex = corners[i]!;
               if (
                 this.isPointOutsideBoundingStrip(vertex, span.span) ||
-                span.span.calculateWrapDirection(vertex) === wrapDir
+                span.span.calculateWrapDirection(vertex) === wrapDir ||
+                inCuff(body, vertex)
               ) {
                 continue;
               }
@@ -1745,6 +1797,7 @@ export class Rope {
           if (
             vertexIndex !== null &&
             corners[vertexIndex]!.distanceTo(span.span.start) > 5 * PX &&
+            !inCuff(body, corners[vertexIndex]!) &&
             // Grazing-contact gate: a corner this close to the span line
             // bends the rope sub-visibly and adds no physical constraint,
             // but renders as a phantom snag and flip-flops as the contact
@@ -2354,27 +2407,102 @@ export class Rope {
     this.slideBudget = snapshot.slideBudget;
   }
 
-  // Let a clamped end run along its rail under the pull of the span that
-  // reaches it, and say how much of the path's length that took out. The
-  // cuff is massless, so it goes first - to wherever force balance puts it
-  // (see `RopeClamp.slide`) - and the bodies split what is left of the error.
+  // The ring's own frame: let a clamped end run along its rail under its own
+  // weight, or run off the bar's open end, and swing on the point it rests on
+  // toward whatever is pulling it (`RopeClamp.coast`, `RopeClamp.seat`).
+  //
+  // Once a frame, and OUTSIDE the length solve, because a ring hangs and falls
+  // whether or not the chain is taut: a ball resting on the floor under a slack
+  // chain still swings the cuff as it rolls, a ring threaded onto a vertical
+  // bar falls whatever the chain is doing, and the length solve returns before
+  // it ever looks at a clamp when there is no error to correct. It runs before
+  // the path is regenerated, so a ring that has run off the bar is replaced
+  // before the pass reads the path - the node it swings toward is last
+  // frame's, which the cuff cannot tell from this frame's.
+  //
+  // What it swings toward is the node the chain reaches it from while the
+  // chain was pulling on it last frame, and straight down otherwise: a slack
+  // chain's last span has a direction, but not one the ring hangs by.
+  private settleClamp(delta: number): void {
+    if (this.seatLooked) return;
+    const clamp = this.end;
+    if (!(clamp instanceof RopeClamp)) return;
+    this.seatLooked = true;
+    const grip = clamp.body.surfaceFriction;
+    const coasted = clamp.coast(
+      delta,
+      RAIL_STATIC_FRICTION * grip,
+      RAIL_KINETIC_FRICTION * grip,
+      GRAVITY,
+    );
+    if (coasted.ranOff !== 0) {
+      this.markPathChanged();
+      this.onClampRunOff?.(clamp, coasted.ranOff);
+      return;
+    }
+    // "Pulling" with a margin: the ring's own tilt moves its centre by up to
+    // a bore's radius, so a chain exactly at length goes slack by that much as
+    // the ring swings toward the pull, and read as slack-or-not it hunted
+    // between the pull and gravity every frame. Slack by more than the ring
+    // itself can make is a chain that has really gone slack.
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    const centre = clamp.contact.globalPosition;
+    const slack = this.constraintLength - this.calculateRopePathLength();
+    const pulling = (coasted.loaded || slack < MANACLE_BORE / 2) && prev !== undefined;
+    const toward = pulling ? prev.contact.globalPosition : centre.add(GRAVITY);
+    const seated = clamp.seat(toward, delta);
+    if (coasted.moved || seated) this.markPathChanged();
+  }
+
+  // Let a clamped end swing on its rail and run along it under the pull of the
+  // span that reaches it, and say how much of the path's length that took out.
+  // The cuff is massless, so it goes first - to wherever force balance puts it,
+  // hanging from the point of the bar it rests on (`RopeClamp.seat`) and then
+  // running along the bar (`RopeClamp.slide`) - and the bodies split what is
+  // left of the error.
   //
   // The pull is the last span's own direction, from the cuff to whatever node
   // the chain reaches it from: the ball, or a corner the chain bends round on
   // the way. The rail's grip is the body's authored `friction` on the rail
   // coefficients, exactly as a rigid body's contact friction is built.
+  //
+  // Where the ring HANGS is settled before the solve rather than in it (see
+  // `settleClamp`); what this step moves is where along the bar it stands.
+  //
+  // How far it may move in the frame is bounded by what is driving it: the
+  // speed it already had along the bar, the speed of the node pulling it
+  // measured along the bar, and one frame of gravity on top - so a ring under a
+  // ball falling down a vertical bar falls with the ball at `g`, a ring under a
+  // coasting zipline ball keeps pace with it exactly, and a ring a ball has
+  // swung past the static cone slips away at the ball's own speed rather than
+  // leaping to the cone's edge in a frame and dropping the ball off its arc.
+  // `RAIL_MAX_SLIDE_SPEED` caps the lot.
   private slideClampedEnd(): number {
     const clamp = this.end;
-    if (!(clamp instanceof RopeClamp) || this.slideBudget <= 0) return 0;
+    if (!(clamp instanceof RopeClamp)) return 0;
     const nodes = this.path();
     const prev = nodes[nodes.length - 2];
     if (!prev) return 0;
+    // The frame's first look settles the friction state and opens the budget;
+    // every later iteration finds the ring where that look left it (see
+    // `RopeClamp.slide`).
+    const settle = !this.slideLooked;
+    if (settle) {
+      const t = clamp.tangent();
+      const puller = prev.contact.obj;
+      const driving =
+        t && puller instanceof PhysicsBody2D
+          ? Math.abs(puller.velocityAtPoint(prev.contact.globalPosition).dot(t))
+          : 0;
+      const pace = Math.abs(clamp.speed) + driving + GRAVITY.length() * this.frameDelta;
+      this.slideBudget = Mathf.min(pace, RAIL_MAX_SLIDE_SPEED) * this.frameDelta;
+    }
+    this.slideLooked = true;
+    clamp.noteLoaded();
+    if (this.slideBudget <= 0) return 0;
     const before = this.calculateRopePathLength();
     const grip = clamp.body.surfaceFriction;
-    // The frame's first look settles the friction state; every later
-    // iteration finds the ring where that look left it (see `RopeClamp.slide`).
-    const settle = !this.slideLooked;
-    this.slideLooked = true;
     const moved = clamp.slide(
       prev.contact.globalPosition,
       this.slideBudget,

@@ -13,10 +13,12 @@ import { Vec2 } from "../engine/vec2";
 import { shapeVertices } from "../engine/shapes";
 import type { Shape } from "../engine/shapes";
 import type { ShapeData } from "../level/levelFormat";
+import { strokeCurve } from "../lib/stroke";
 import {
   ellipseReach,
   PATH_FLATTEN_STEP,
   pointAtArcLength,
+  pathNodesOf,
   projectOntoPolyline,
   type PolylineIndex,
 } from "../lib/path";
@@ -35,6 +37,12 @@ export function outlineOfShape(s: Shape): Outline {
 export function outlineOfData(s: ShapeData): Outline {
   if (s.kind === "circle") return { kind: "circle", radius: s.r };
   if (s.kind === "poly") return { kind: "poly", verts: s.verts.map((v) => new Vec2(v.x, v.y)) };
+  // A CURVE's outline is its stroke's boundary (`lib/stroke.ts`) - the same
+  // offset of the same simplified centreline the build tiles the bar with, so
+  // the bar that is drawn and the bar that is collided are the one shape.
+  if (s.kind === "curve") {
+    return { kind: "poly", verts: strokeCurve(pathNodesOf(s.verts), s.width).outline };
+  }
   return { kind: "rect", half: new Vec2(s.w / 2, s.h / 2) };
 }
 

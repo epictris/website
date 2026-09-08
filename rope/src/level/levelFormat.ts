@@ -230,6 +230,14 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 // kind rather than being written as a four-vertex poly: every recorded replay
 // was simulated through the rect-specific collision routines.
 //
+// `curve` is the fourth: a cubic Bezier node list with a WIDTH, which is the
+// bar - a rail, a pipe, a handle - that no box or loop of vertices can state
+// without an author placing the boxes by hand. It is stroked at load
+// (`lib/stroke.ts`) into the convex pieces that tile it, the same way a concave
+// polygon is cut into the pieces that tile it, so nothing downstream of the
+// build knows it was ever a curve; and a rail's centreline IS its curve rather
+// than something derived from a shape's proportions (see `lib/rail.ts`).
+//
 // Simple and not convex, which is the one place the two halves of the project
 // disagree about what a polygon is, and deliberately: the ENGINE's polygon is
 // convex without exception (a reflex vertex is unwrappable, see "Convex-only
@@ -248,7 +256,28 @@ export const LEGACY_IMPERMEABLE = "impermeable";
 export type ShapeData =
   | { kind: "rect"; w: number; h: number }
   | { kind: "circle"; r: number }
-  | { kind: "poly"; verts: { x: number; y: number }[] };
+  | { kind: "poly"; verts: { x: number; y: number }[] }
+  | { kind: "curve"; verts: CurveVertData[]; width: number };
+
+// One node of an authored CURVE (`ShapeData`'s `curve`): a point the bar passes
+// through and the cubic tangent handles that shape the two legs meeting at it.
+//
+// The same node the camera path and a body's travel route have
+// (`CameraPathVert`, `MoveNodeData`), down to the field names, because it is
+// the same object and `lib/path.ts` is the one module that flattens any of
+// them: the handles are OFFSETS from (x, y) in the shape's own local frame,
+// `in` points back toward the previous node and `out` toward the next, and an
+// edge whose two facing handles are both absent is a straight one. What a curve
+// does NOT have is keys - a bar is a shape rather than a route, so there is
+// nothing to key along it.
+export interface CurveVertData {
+  x: number;
+  y: number;
+  inX?: number;
+  inY?: number;
+  outX?: number;
+  outY?: number;
+}
 
 // Default shape appearance: dark grey fill at 0.5 opacity (borders always draw
 // fully opaque in the same colour). Applied when a body omits color/opacity.
@@ -357,10 +386,14 @@ export interface CollisionObjectData extends ObjectPlacement {
   // then slides along under the chain's pull against the body's `friction` -
   // a zipline, a pipe, the handle of a hanging lantern. Solid for everything
   // else, exactly as a hook-proof piece is: the avatar stands on it, bodies
-  // collide with it, other chains wrap its corners. The cuff lives on the
-  // shape's centreline (`lib/rail.ts`: a rect's medial axis, a polygon's
-  // principal axis, a circle's centre - a peg the ring hangs on) and stops
-  // where its disc meets a sibling piece that is not a rail.
+  // collide with it, other chains wrap its corners.
+  //
+  // Only a CURVE may be one, and that is the whole of where a rail's centreline
+  // comes from: the cuff rides the authored curve (`lib/rail.ts`), which the
+  // author drew and can see, and stops where its disc meets a piece of the same
+  // body that is not part of that curve. Set on any other shape kind it is
+  // ignored - a bar is a curve with a width, and the medial axis a box or a
+  // vertex loop used to be asked for was a guess at one.
   //
   // Per OBJECT for the reason `impermeable` is, and the case it exists for is
   // a body of both: a lantern whose handles are rails and whose lid, bulb and
@@ -2372,6 +2405,25 @@ function placeInWorld(
 function scaleShape(s: ShapeData, factor: number): ShapeData {
   if (s.kind === "rect") return { kind: "rect", w: s.w * factor, h: s.h * factor };
   if (s.kind === "circle") return { kind: "circle", r: s.r * factor };
+  if (s.kind === "curve") {
+    // A curve's node points, its tangent HANDLES (offsets in the same frame,
+    // so lengths like the points) and the bar's width. Written out the way the
+    // camera path's nodes are, absent handles staying absent: a straight edge
+    // scaled is still a straight edge, and a zero written where nothing was
+    // would change the file for no reason.
+    return {
+      kind: "curve",
+      width: s.width * factor,
+      verts: s.verts.map((v) => ({
+        x: v.x * factor,
+        y: v.y * factor,
+        ...(v.inX !== undefined ? { inX: v.inX * factor } : {}),
+        ...(v.inY !== undefined ? { inY: v.inY * factor } : {}),
+        ...(v.outX !== undefined ? { outX: v.outX * factor } : {}),
+        ...(v.outY !== undefined ? { outY: v.outY * factor } : {}),
+      })),
+    };
+  }
   return { kind: "poly", verts: s.verts.map((v) => ({ x: v.x * factor, y: v.y * factor })) };
 }
 

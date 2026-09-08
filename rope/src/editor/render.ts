@@ -41,8 +41,8 @@ import {
   routePolyline,
 } from "./model";
 import { cubicAt } from "../lib/path";
-import { centrelineAt } from "../lib/rail";
-import { circleShape, rectShape, type Shape } from "../engine/shapes";
+import { curveLine, strokeCurve } from "../lib/stroke";
+import { pathNodesOf } from "../lib/path";
 import {
   DEFAULT_PATH_FALLOFF_X,
   DEFAULT_PATH_FALLOFF_Y,
@@ -487,15 +487,50 @@ export function computeGroupHandles(
 function outlineOf(body: EdItem): Outline {
   if (body.shape.kind === "circle") return { kind: "circle", radius: body.shape.r };
   if (body.shape.kind === "poly") return { kind: "poly", verts: body.shape.verts };
-  // A camera path is an open polyline and has no outline at all - no inside, no
-  // area, nothing to fill. It is drawn by `drawCameraPath` instead, and every
-  // caller here is about a closed shape, so answering its bounding box would be
-  // a rectangle that is not the thing.
   if (body.shape.kind === "path") {
+    // A SCENE path is a curve with a width, and its outline is the bar the
+    // build strokes it into (`lib/stroke.ts`) - the same geometry, so what is
+    // drawn is what plays.
+    if (body.layer !== "camera") return { kind: "poly", verts: strokeOf(body.shape) };
+    // A CAMERA path is an open polyline and has no outline at all - no inside,
+    // no area, nothing to fill. It is drawn by `drawCameraPath` instead, and
+    // every caller here is about a closed shape, so answering its bounding box
+    // would be a rectangle that is not the thing.
     const h = halfExtents(body);
     return { kind: "rect", half: h };
   }
   return { kind: "rect", half: new Vec2(body.shape.w / 2, body.shape.h / 2) };
+}
+
+// The stroke of an authored curve, in the item's own frame.
+function strokeOf(shape: { verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[]; width: number }): Vec2[] {
+  return strokeCurve(curveNodes(shape), shape.width).outline;
+}
+
+// How many convex pieces an authored curve builds as - the same question the
+// polygon panel asks of a concave outline, and the same answer: what the
+// solvers will actually see (`lib/stroke.ts`).
+export function curvePieceCount(shape: {
+  verts: Vec2[];
+  handles: { in: Vec2; out: Vec2 }[];
+  width: number;
+}): number {
+  return strokeCurve(curveNodes(shape), shape.width).pieces.length;
+}
+
+// An editor path's nodes as `lib/path` deals in them: the points and their two
+// handles, which the editor keeps in parallel arrays.
+function curveNodes(shape: { verts: Vec2[]; handles: { in: Vec2; out: Vec2 }[] }) {
+  return pathNodesOf(
+    shape.verts.map((v, i) => ({
+      x: v.x,
+      y: v.y,
+      inX: shape.handles[i]?.in.x,
+      inY: shape.handles[i]?.in.y,
+      outX: shape.handles[i]?.out.x,
+      outY: shape.handles[i]?.out.y,
+    })),
+  );
 }
 
 function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
@@ -505,40 +540,35 @@ function pathBody(ctx: CanvasRenderingContext2D, body: EdItem): void {
 
 // A rail's centreline down the middle of the bar, in the steel a hook-proof
 // edge wears - the same mark the game draws, so an author sees where the cuff
-// will sit and slide. Drawn through the engine's own centreline rule on the
-// item's authored shape, which is what the build mounts; a concave outline is
-// cut into pieces at load and each piece gets its own line there, so the glyph
-// on one is the outline's principal axis rather than its pieces', which is
-// close enough to author against. A peg gets a dot.
+// will sit and slide. It IS the authored curve, simplified exactly as the build
+// simplifies it (`lib/stroke.ts`), so the line on the canvas is the line the
+// ring rides. A bar shorter than it is thick is a peg and gets a dot.
 function drawRailGlyph(ctx: CanvasRenderingContext2D, item: EdItem, worldLine: number): void {
-  const s = item.shape;
-  const shape: Shape | null =
-    s.kind === "rect"
-      ? rectShape(s.w, s.h)
-      : s.kind === "circle"
-        ? circleShape(s.r)
-        : s.kind === "poly" && s.verts.length >= 3
-          ? { kind: "poly", verts: s.verts }
-          : null;
-  if (!shape) return;
-  const { a, b } = centrelineAt(shape, item.pos, item.rot);
+  if (item.shape.kind !== "path") return;
+  const line = curveLine(curveNodes(item.shape), item.shape.width).map((p) =>
+    item.pos.add(p.rotated(item.rot)),
+  );
+  const first = line[0];
+  if (!first) return;
   ctx.strokeStyle = IMPERMEABLE_EDGE;
   ctx.fillStyle = IMPERMEABLE_EDGE;
   ctx.lineWidth = worldLine;
   ctx.setLineDash([]);
-  if (a.distanceTo(b) < 1e-6) {
+  if (line.length < 2) {
     ctx.beginPath();
-    ctx.arc(a.x, a.y, worldLine, 0, Math.PI * 2);
+    ctx.arc(first.x, first.y, worldLine, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
   const cap = ctx.lineCap;
+  const join = ctx.lineJoin;
   ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
+  line.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
   ctx.stroke();
   ctx.lineCap = cap;
+  ctx.lineJoin = join;
 }
 
 // A camera region's buffer zone: the volume grown by `buffer`, which is where
@@ -1751,8 +1781,13 @@ export function drawEditor(
   // which is a rectangle that is not the thing. It is drawn by `drawCameraPath`
   // in the camera pass instead. Camera REGIONS and notes stay in, because they
   // are closed shapes and this is where their fill has always come from.
+  //
+  // A SCENE path stays in too, and it is the reason this is a layer test rather
+  // than a shape one: a curve on the scene layer is a BAR, `outlineOf` answers
+  // the stroke that tiles it, and it is filled and stroked exactly as the shape
+  // it builds as - which is what an author has to see to place a rail at all.
   const geometry = model.items.filter(
-    (i) => i.object === "collision" && i.shape.kind !== "path",
+    (i) => i.object === "collision" && !(i.shape.kind === "path" && i.layer === "camera"),
   );
   const ordered = visibleLayers.has("scene")
     ? [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable))

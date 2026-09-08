@@ -49,9 +49,13 @@ import {
   type LevelData,
   type MoveEase,
   type ObjectPlacement,
+  type CurveVertData,
   type ShapeData,
 } from "./levelFormat";
 import { buildMoveRoute, moverScript, type MoverScript } from "./movers";
+import { strokeCurve } from "../lib/stroke";
+import { pathNodesOf } from "../lib/path";
+import { buildRailCurve } from "../lib/rail";
 import type { CollisionObject2D } from "../engine/body";
 
 // An authored shape as the ENGINE primitives it is made of, each with the
@@ -62,7 +66,8 @@ import type { CollisionObject2D } from "../engine/body";
 // piece's position, so the geometry lands exactly where it was authored while
 // the origin ends up where the physics needs it.
 //
-// A list rather than one shape because an authored polygon may be **concave**,
+// A list rather than one shape because two authored kinds build several. An
+// authored polygon may be **concave**,
 // and the engine's polygon is convex without exception (see "Convex-only
 // polygons; compound bodies" in docs/game-design.md). A concave outline is cut
 // here, at load, into the convex pieces that tile it (`decomposeConvex`), and
@@ -70,9 +75,29 @@ import type { CollisionObject2D } from "../engine/body";
 // to assemble by hand - same seams, same corners, same mass. A convex loop takes
 // the single-piece path it always took, which is what keeps every polygon
 // authored before this bit-identical.
+//
+// An authored CURVE is the second, and it is the same statement about a
+// different kind of geometry the engine has no primitive for: a bar is stroked
+// into the convex quads that tile it (`lib/stroke.ts`), mitred at every joint,
+// so the body a solver sees is the one an author would otherwise have had to
+// assemble out of little rects placed by hand.
 function makeShapes(shape: ShapeData): { shape: Shape; offset: Vec2 }[] {
   if (shape.kind === "rect") return [{ shape: rectShape(shape.w, shape.h), offset: Vec2.ZERO }];
   if (shape.kind === "circle") return [{ shape: circleShape(shape.r), offset: Vec2.ZERO }];
+  if (shape.kind === "curve") {
+    const pieces = strokePieces(shape).pieces;
+    // A curve of one node, of no width, or of nothing but coincident points has
+    // no bar to build - and a body of no shapes has no centre of mass, so it
+    // fails loudly here rather than as a NaN somewhere downstream. The editor
+    // cannot author one (`setPathVerts` requires two distinct points), which
+    // leaves a hand-edited file.
+    if (!pieces.length) {
+      throw new Error(
+        `collision curve builds nothing (${shape.verts.length} nodes, width ${shape.width})`,
+      );
+    }
+    return pieces;
+  }
   const verts = shape.verts.map((v) => new Vec2(v.x, v.y));
   const pieces = decomposeConvex(verts);
   // Empty means the loop crosses itself, so there is no inside to build. The
@@ -256,9 +281,21 @@ interface Piece {
   // same reason: a wheel's rim and its hub are one body and only one of them
   // winds the chain.
   wrappable: boolean;
-  // A rail (`CollisionObjectData.rail`), per piece for the same reason again: a
-  // lantern's handles are rails and its lid is not, and they are one body.
-  rail: boolean;
+  // The RAIL this piece is part of (`CollisionObjectData.rail` on a curve), or
+  // null. Per piece for the same reason again - a lantern's handles are rails
+  // and its lid is not, and they are one body - and the record is SHARED by
+  // every piece the one curve was stroked into, which is what `attachRails`
+  // turns into the `RailCurve` they all carry (see `lib/rail.ts`).
+  rail: RailBuild | null;
+}
+
+// A rail under construction: the bar's centreline in WORLD metres (the frame
+// every piece is built in, before the body's origin is known), the half-width,
+// and which of this object's pieces covers each segment of it.
+interface RailBuild {
+  line: Vec2[];
+  halfWidth: number;
+  pieceAt: number[];
 }
 
 // One collision object as the pieces it builds: one for every kind but a
@@ -271,7 +308,45 @@ interface Piece {
 // to its mass, with the combined centre of mass landing on its centroid.
 function makePieces(body: LevelBodyData, o: CollisionObjectData): Piece[] {
   const world = worldPlacement(body, o);
+  if (o.shape.kind === "curve") {
+    // A CURVE builds the several pieces its stroke tiles it with, and - where
+    // it is a rail - one record shared by all of them (see `Piece.rail`). The
+    // centreline is placed in the world here, with the pieces, because the
+    // body's own origin is not known until they are all mounted.
+    const { pieces, line, halfWidth, pieceAt } = strokePieces(o.shape);
+    const rail: RailBuild | null =
+      o.rail === true && o.impermeable !== true
+        ? {
+            line: line.map((v) => world.pos.add(v.rotated(world.rot))),
+            halfWidth,
+            pieceAt,
+          }
+        : null;
+    return pieces.map((made) => ({ ...makePiece(o, made, world), rail }));
+  }
   return makeShapes(o.shape).map((made) => makePiece(o, made, world));
+}
+
+// An authored curve as the convex pieces that tile it, the centreline they were
+// built from and which piece covers each of its segments - all in the shape's
+// own local frame (`lib/stroke.ts` does the geometry; this is only the shape of
+// the answer the build wants).
+function strokePieces(shape: { verts: CurveVertData[]; width: number }): {
+  pieces: { shape: Shape; offset: Vec2 }[];
+  line: Vec2[];
+  halfWidth: number;
+  pieceAt: number[];
+} {
+  const stroke = strokeCurve(pathNodesOf(shape.verts), shape.width);
+  return {
+    // Each quad is re-centred on its own centroid exactly as a decomposed
+    // polygon's piece is, so the offset the loader removes goes back onto the
+    // piece's position and the bar lands where it was drawn.
+    pieces: stroke.pieces.map((verts) => polyShapeCentred(verts)),
+    line: stroke.line,
+    halfWidth: stroke.halfWidth,
+    pieceAt: [...stroke.pieceAt],
+  };
 }
 
 function makePiece(
@@ -287,7 +362,9 @@ function makePiece(
     rot: world.rot,
     impermeable: o.impermeable === true,
     wrappable: o.wrappable !== false,
-    rail: o.rail === true,
+    // Filled in by `makePieces` for the pieces of a rail curve; a rail flag on
+    // any other shape kind means nothing (see `CollisionObjectData.rail`).
+    rail: null,
     // The piece's own material and thickness, not the body's: they are the one
     // authored property a body does not have just one of, and every sum below -
     // centre of mass, mass, inertia - is written over the pieces precisely so
@@ -325,7 +402,6 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.setShape(only.shape);
     shape.impermeable = only.impermeable;
     shape.wrappable = only.wrappable;
-    shape.rail = only.rail;
     return;
   }
   body.globalPosition = centre;
@@ -335,7 +411,44 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.addShape(p.shape, p.pos.sub(centre), p.rot);
     shape.impermeable = p.impermeable;
     shape.wrappable = p.wrappable;
-    shape.rail = p.rail;
+  }
+}
+
+// Give every piece of a rail the CURVE it is part of, once the body's own
+// origin is settled (`RailCurve`, `lib/rail.ts`).
+//
+// It runs after `buildOne` rather than inside `mountPieces` because the origin
+// is not final there: an authored bearing re-origins the body onto its pivot
+// and a sprung one spawns displaced, and the curve is stored in the body's
+// local frame like every `RopeContact` position, so it has to be taken from the
+// frame the body actually ends up in.
+//
+// `mountPieces` mounts the pieces in order, so piece `i` is mount `i`, and the
+// pieces of one curve arrive in the order the stroke produced them - which is
+// what `pieceAt` indexes.
+function attachRails(body: CollisionObject2D, pieces: Piece[]): void {
+  const mounts = new Map<RailBuild, number[]>();
+  for (let i = 0; i < pieces.length; i++) {
+    const rail = pieces[i]!.rail;
+    if (!rail) continue;
+    const list = mounts.get(rail);
+    if (list) list.push(i);
+    else mounts.set(rail, [i]);
+  }
+  const shapes = body.getShapes();
+  for (const [rail, mounted] of mounts) {
+    const local = rail.line.map((p) =>
+      p.sub(body.globalPosition).rotated(-body.globalRotation),
+    );
+    const curve = buildRailCurve(
+      local,
+      rail.halfWidth,
+      rail.pieceAt.map((i) => mounted[i] ?? mounted[0] ?? 0),
+    );
+    for (const i of mounted) {
+      const shape = shapes[i];
+      if (shape) shape.rail = curve;
+    }
   }
 }
 
@@ -535,6 +648,7 @@ export function buildLevelBodies(
     }
     const pieces = b.objects.filter(isCollisionObject).flatMap((o) => makePieces(b, o));
     const built = buildOne(world, b, pieces, onReset);
+    attachRails(built, pieces);
     bodies.push({
       data: b,
       body: built,

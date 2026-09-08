@@ -24,7 +24,7 @@
 import { Vec2 } from "../engine/vec2";
 import { dmath } from "../engine/dmath";
 import { RigidBody2D, type PhysicsBody2D } from "../engine/body";
-import { circleShape, rectShape, type Shape } from "../engine/shapes";
+import { polyArea, polyShape } from "../engine/shapes";
 import { GRAVITY, World } from "../engine/world";
 import { buildLevelBodies } from "../level/buildBodies";
 import { scaleLevelData, type RawLevelData, type LevelBodyData } from "../level/levelFormat";
@@ -33,13 +33,14 @@ import { BallHook } from "../classes/ballHook";
 import { BallPlayer } from "../classes/ballPlayer";
 import { button, emptyFrameInput, type FrameInput } from "../input/frameInput";
 import {
-  railCentreline,
   RopeClamp,
   slideStep,
   RAIL_KINETIC_FRICTION,
   RAIL_STATIC_FRICTION,
 } from "../lib/rail";
-import { MANACLE_DISC } from "../lib/manacle";
+import { cuffRimDirection, MANACLE_BORE, MANACLE_DISC, railCuffAxis } from "../lib/manacle";
+import { strokeCurve, STROKE_TOLERANCE } from "../lib/stroke";
+import { cubicAt, pathNodesOf } from "../lib/path";
 import { PX } from "../engine/units";
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { isCollisionObject } from "../level/levelFormat";
@@ -89,7 +90,9 @@ function level(bodies: LevelBodyData[], playerX = 0): BallLevel {
 }
 
 // A static rail bar, `w` px long and 3 px thick, centred at (`x`, `y`) px,
-// turned by `rot` radians, with the body's authored friction.
+// turned by `rot` radians, with the body's authored friction. A straight
+// two-node curve, which is what a plain bar is now: one authored line, stroked
+// into the single quad that tiles it.
 function bar(
   x: number,
   y: number,
@@ -104,8 +107,27 @@ function bar(
     y,
     rot,
     friction,
-    objects: [{ type: "collision", shape: { kind: "rect", w, h: 3 }, rail: true }],
+    objects: [
+      {
+        type: "collision",
+        shape: { kind: "curve", width: 3, verts: [{ x: -w / 2, y: 0 }, { x: w / 2, y: 0 }] },
+        rail: true,
+      },
+    ],
     ...extra,
+  } as LevelBodyData;
+}
+
+// A static floor, `w` px wide, whose top surface is `top` px below the origin
+// (positive is down), for a ball that is to stand rather than hang.
+function floor(top: number, w = 600): LevelBodyData {
+  return {
+    kind: "static",
+    x: 0,
+    y: top + 20,
+    rot: 0,
+    friction: 1,
+    objects: [{ type: "collision", shape: { kind: "rect", w, h: 40 } }],
   } as LevelBodyData;
 }
 
@@ -114,6 +136,9 @@ class Rig {
   private prev: FrameInput = emptyFrameInput();
   readonly violations: Violation[] = [];
   private tunnel = new TunnelMonitor();
+  // Where the throw is aimed before the chain clamps: straight up from the
+  // ball unless a case says otherwise (metres, world).
+  throwAt: Vec2 | null = null;
 
   constructor(bodies: LevelBodyData[], playerX = 0) {
     this.level = level(bodies, playerX);
@@ -146,7 +171,7 @@ class Rig {
   // Before that, straight up from the ball, which is where the rail is.
   aimAtAnchor(): Vec2 {
     const clamp = this.clamp;
-    return clamp ? clamp.contact.globalPosition : this.ball.globalPosition.add(new Vec2(0, -1.2));
+    return clamp ? clamp.contact.globalPosition : (this.throwAt ?? this.ball.globalPosition.add(new Vec2(0, -1.2)));
   }
 
   // Throw straight up and hang until the ball has settled under the clamp.
@@ -173,62 +198,128 @@ class Rig {
 }
 
 // ---------------------------------------------------------------------------
-// centreline - the arithmetic every clamp stands on.
+// stroke - the geometry every rail stands on: a curve with a width, as the
+// convex pieces that tile it and the line the cuff rides.
 // ---------------------------------------------------------------------------
-function caseCentreline(): RailResult {
+function caseStroke(): RailResult {
   const c = claims();
-  const near = (a: Vec2, b: Vec2, tol = 1e-9): boolean => a.distanceTo(b) <= tol;
+  const nodes = (
+    verts: { x: number; y: number; inX?: number; inY?: number; outX?: number; outY?: number }[],
+  ) => pathNodesOf(verts);
 
-  const rect = railCentreline(rectShape(1, 0.04));
+  // A straight bar is ONE piece however many nodes it was drawn with: the
+  // flattening's collinear samples are simplified away, so an author who
+  // clicked five times down a wall does not pay for five collision pieces.
+  const straight = strokeCurve(nodes([{ x: -0.5, y: 0 }, { x: 0.5, y: 0 }]), 0.04);
   c.check(
-    `a 1 m × 4 cm rect's centreline is its medial axis, 2 cm in from each end (got ${rect.a.x.toFixed(3)}..${rect.b.x.toFixed(3)})`,
-    near(rect.a, new Vec2(-0.48, 0)) && near(rect.b, new Vec2(0.48, 0)) && rect.halfWidth === 0.02,
+    `a straight 1 m bar is one quad (${straight.pieces.length}) on a two-point line (${straight.line.length})`,
+    straight.pieces.length === 1 && straight.line.length === 2,
   );
-  const tall = railCentreline(rectShape(0.04, 1));
   c.check(
-    "a tall rect's runs along y",
-    near(tall.a, new Vec2(0, -0.48)) && near(tall.b, new Vec2(0, 0.48)),
+    `...1 m x 4 cm of it (area ${polyArea(straight.pieces[0]!).toFixed(5)})`,
+    Math.abs(polyArea(straight.pieces[0]!) - 0.04) < 1e-9 && straight.halfWidth === 0.02,
   );
-  const square = railCentreline(rectShape(0.1, 0.1));
-  c.check("a square is a peg: a centreline of no length", near(square.a, square.b));
-  const circle = railCentreline(circleShape(0.05));
-  c.check("a circle is a peg at its centre", near(circle.a, Vec2.ZERO) && near(circle.b, Vec2.ZERO));
+  const strung = strokeCurve(
+    nodes([{ x: -0.5, y: 0 }, { x: -0.2, y: 0 }, { x: 0.1, y: 0 }, { x: 0.5, y: 0 }]),
+    0.04,
+  );
+  c.check(
+    `a bar drawn with four collinear nodes is still one piece (${strung.pieces.length})`,
+    strung.pieces.length === 1,
+  );
 
-  // A 1 m × 4 cm bar authored as a polygon, turned 30°: the principal axis is
-  // the bar's own, and the medial shortening is the same 2 cm.
-  const angle = Math.PI / 6;
-  const along = new Vec2(dmath.cos(angle), dmath.sin(angle));
-  const across = along.orthogonal();
-  const verts = [
-    along.mul(-0.5).add(across.mul(0.02)),
-    along.mul(-0.5).sub(across.mul(0.02)),
-    along.mul(0.5).sub(across.mul(0.02)),
-    along.mul(0.5).add(across.mul(0.02)),
-  ];
-  const poly = railCentreline({ kind: "poly", verts });
-  const len = poly.b.sub(poly.a).length();
-  const dir = poly.b.sub(poly.a).normalized();
-  const tilt = Math.abs(Math.abs(dir.dot(along)) - 1);
-  c.check(
-    `a polygon bar at 30° gets the bar's own axis (off by ${tilt.toExponential(1)}) at 0.96 m (got ${len.toFixed(4)})`,
-    tilt < 1e-9 && Math.abs(len - 0.96) < 1e-6 && Math.abs(poly.halfWidth - 0.02) < 1e-9,
+  // A bend: the pieces TILE the bar - they meet edge to edge, so their areas
+  // sum to the outline's and neither overlap nor leave a gap, which is what
+  // lets the build weigh a curve exactly as it weighs a decomposed polygon.
+  const bend = strokeCurve(
+    nodes([{ x: -1, y: 0 }, { x: 0, y: 0, outX: 0.5, inX: -0.5 }, { x: 1, y: -1 }]),
+    0.06,
   );
-  // Mitred: the same bar with one end cut at 45°. The axis is still the
-  // bar's, and the clip lands inside the outline.
-  const mitred = railCentreline({
-    kind: "poly",
-    verts: [
-      new Vec2(-0.5, 0.02),
-      new Vec2(-0.5, -0.02),
-      new Vec2(0.5, -0.02),
-      new Vec2(0.46, 0.02),
-    ],
-  });
+  const summed = bend.pieces.reduce((a, p) => a + polyArea(p), 0);
+  const outline = polyArea(bend.outline);
   c.check(
-    `a mitred bar keeps its axis (a.y=${mitred.a.y.toFixed(4)}, b.y=${mitred.b.y.toFixed(4)}) and stays inside the cut end (b.x=${mitred.b.x.toFixed(3)} < 0.48)`,
-    Math.abs(mitred.a.y) < 0.002 && Math.abs(mitred.b.y) < 0.002 && mitred.b.x < 0.48 && mitred.b.x > 0.44,
+    `a bent bar's ${bend.pieces.length} pieces tile it exactly (${summed.toFixed(6)} against the outline's ${outline.toFixed(6)})`,
+    Math.abs(summed - outline) < 1e-6,
   );
-  return ok("rail-centreline — a rect's medial axis, a polygon's principal axis, a circle's centre", c.passed(), c.details);
+  c.check(
+    "...and every one of them is convex",
+    bend.pieces.every((p) => {
+      try {
+        polyShape(p);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  c.check(
+    `...with one piece per segment of the line (${bend.pieceAt.length} of ${bend.line.length - 1})`,
+    bend.pieceAt.length === bend.line.length - 1 &&
+      bend.pieceAt.every((i) => i >= 0 && i < bend.pieces.length),
+  );
+
+  // The line the pieces are built from is the CURVE, to the tolerance the
+  // simplification is allowed: every sample of the authored cubic lies within
+  // it of the polyline the cuff will ride.
+  const a = new Vec2(-1, 0);
+  const b = new Vec2(1, -1);
+  const h = new Vec2(0.5, -0.6);
+  const bow = strokeCurve(
+    nodes([
+      { x: a.x, y: a.y, outX: h.x, outY: h.y },
+      { x: b.x, y: b.y, inX: -h.x, inY: h.y },
+    ]),
+    0.06,
+  );
+  let worst = 0;
+  for (let i = 0; i <= 400; i++) {
+    const p = cubicAt(a, a.add(h), b.add(new Vec2(-h.x, h.y)), b, i / 400);
+    let best = Infinity;
+    for (let k = 0; k + 1 < bow.line.length; k++) {
+      best = Math.min(best, distanceToSegment(p, bow.line[k]!, bow.line[k + 1]!));
+    }
+    worst = Math.max(worst, best);
+  }
+  c.check(
+    `the line follows the cubic to ${(worst * 1000).toFixed(2)} mm (tolerance ${(STROKE_TOLERANCE * 1000).toFixed(0)} mm)`,
+    worst <= STROKE_TOLERANCE + 1e-9,
+  );
+
+  // A right angle is still mitred - the spike is only half again the bar's own
+  // thickness - so an elbow is its two quads and nothing between them.
+  const elbow = strokeCurve(nodes([{ x: -1, y: 0 }, { x: 0, y: 0 }, { x: 0, y: -1 }]), 0.06);
+  const elbowSum = elbow.pieces.reduce((acc, p) => acc + polyArea(p), 0);
+  c.check(
+    `a right-angled elbow mitres into ${elbow.pieces.length} pieces that tile it (${elbowSum.toFixed(6)} against ${polyArea(elbow.outline).toFixed(6)})`,
+    elbow.pieces.length === 2 && Math.abs(elbowSum - polyArea(elbow.outline)) < 1e-6,
+  );
+  // A hairpin is not: past the mitre limit the spike would be longer than the
+  // bar is thick, so the outer side is bevelled and the wedge between the two
+  // quads becomes a piece of its own - which keeps the tiling exact there too.
+  const hairpin = strokeCurve(
+    nodes([{ x: -1, y: 0 }, { x: 0, y: 0 }, { x: -0.8, y: -0.5 }]),
+    0.06,
+  );
+  const hairpinSum = hairpin.pieces.reduce((acc, p) => acc + polyArea(p), 0);
+  c.check(
+    `a hairpin bevels instead (${hairpin.pieces.length} pieces, ${hairpinSum.toFixed(6)} against ${polyArea(hairpin.outline).toFixed(6)})`,
+    hairpin.pieces.length === 3 && Math.abs(hairpinSum - polyArea(hairpin.outline)) < 1e-6,
+  );
+  return ok(
+    "rail-stroke — a curve with a width is the convex pieces that tile it, on the line the cuff rides",
+    c.passed(),
+    c.details,
+  );
+}
+
+// The distance from a point to a segment - the stroke case's own measure of how
+// far the simplified line strays from the curve it came from.
+function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const d = b.sub(a);
+  const len2 = d.lengthSquared();
+  if (len2 < 1e-18) return p.distanceTo(a);
+  const t = Math.min(1, Math.max(0, p.sub(a).dot(d) / len2));
+  return p.distanceTo(a.add(d.mul(t)));
 }
 
 // ---------------------------------------------------------------------------
@@ -271,15 +362,83 @@ function caseClamp(): RailResult {
   c.check("a hook thrown at a rail comes back as a clamp", clamp !== null);
   if (clamp) {
     const at = clamp.contact.globalPosition;
-    c.check(`the anchor is ON the centreline (y=${at.y.toFixed(5)}, want -1.2)`, Math.abs(at.y + 1.2) < 1e-9);
+    // The ring RESTS on the bar: its centre hangs the bore's slack below the
+    // centreline - the ring's inner radius less the bar's own half-width - and
+    // that puts the inside of the ring exactly on the bar's top surface. A
+    // cuff drawn on the centreline instead is a ring welded through the middle
+    // of a bar it is only hanging on.
+    const halfWidth = 1.5 * PX;
+    const clearance = MANACLE_BORE / 2 - halfWidth;
+    c.check(
+      `the ring hangs the bore's slack below the centreline (${((at.y + 1.2) * 100).toFixed(2)} cm, want ${(clearance * 100).toFixed(2)})`,
+      Math.abs(at.y + 1.2 - clearance) < 1e-9,
+    );
+    c.check(
+      `...resting on the bar's top surface (${clamp.restPoint().y.toFixed(5)}, want ${(-1.2 - halfWidth).toFixed(5)})`,
+      clamp.restPoint().distanceTo(new Vec2(at.x, -1.2 - halfWidth)) < 1e-9,
+    );
+    c.check(
+      `...a bore's radius above the cuff's centre (${(at.distanceTo(clamp.restPoint()) * 100).toFixed(3)} cm, want ${((MANACLE_BORE / 2) * 100).toFixed(3)})`,
+      Math.abs(at.distanceTo(clamp.restPoint()) - MANACLE_BORE / 2) < 1e-9,
+    );
+    // Pulled from the other side it crosses the bore and rests on the bar's
+    // underside instead - the seat is the pull's answer, not the bar's.
+    clamp.seat(new Vec2(at.x, -2), 1);
+    c.check(
+      `pulled from above, the ring crosses the bore (y=${clamp.contact.globalPosition.y.toFixed(5)})`,
+      Math.abs(clamp.contact.globalPosition.y + 1.2 + clearance) < 1e-9,
+    );
+    clamp.seat(at, 1);
+    c.check(`...and back again`, Math.abs(clamp.contact.globalPosition.y - at.y) < 1e-9);
     c.check(`...within the bar (x=${at.x.toFixed(3)})`, Math.abs(at.x) < 0.1);
-    c.check("the cuff's axis is the rail's tangent", rig.ball.manacleOnRail && Math.abs(Math.abs(rig.ball.manacleFacing(1)?.x ?? 0) - 1) < 1e-9);
-    c.check("the range is the whole bar", clamp.range.min === 0 && Math.abs(clamp.range.max - (10 - 0.03)) < 1e-9);
+    c.check("the cuff's facing is the rail's tangent", rig.ball.manacleOnRail && Math.abs(Math.abs(rig.ball.manacleFacing(1)?.x ?? 0) - 1) < 1e-9);
+    // The ring is drawn hanging in the plane of the chain, so the axis the bar
+    // runs through it on is square to the pull - and, of the two square
+    // directions, the one that runs with the bar, so a cuff never flips end
+    // for end as the ball swings through the plumb.
+    const tangent = new Vec2(1, 0);
+    const plumb = new Vec2(0, 1);
+    c.check(
+      "under a level bar a plumb chain leaves the cuff's axis along the bar",
+      railCuffAxis(tangent, plumb).distanceTo(tangent) < 1e-9,
+    );
+    for (const pull of [new Vec2(0.6, 0.8), new Vec2(-0.6, 0.8), new Vec2(-0.6, -0.8)]) {
+      const axis = railCuffAxis(tangent, pull);
+      c.check(
+        `a pull at (${pull.x}, ${pull.y}) turns the cuff square to it, bar-side (axis ${axis.x.toFixed(2)}, ${axis.y.toFixed(2)})`,
+        Math.abs(axis.dot(pull)) < 1e-9 && axis.dot(tangent) >= 0 && Math.abs(axis.length() - 1) < 1e-9,
+      );
+      // ...and the chain hooks over the END of that ring rather than running to
+      // wherever it happens to hang: a cuff seen edge-on has metal at the two
+      // ends of its long axis and hole everywhere between them, so a link drawn
+      // to a drape's own direction is a link drawn to nothing.
+      const rim = cuffRimDirection(axis, new Vec2(0.9, 0.44));
+      c.check(
+        `...with the chain hooked over the rim end it runs toward (${rim.x.toFixed(2)}, ${rim.y.toFixed(2)})`,
+        Math.abs(rim.dot(axis)) < 1e-9 && rim.dot(new Vec2(0.9, 0.44)) >= 0 && Math.abs(rim.length() - 1) < 1e-9,
+      );
+    }
+    // A bar that ends in the air at both ends is OPEN at both, so the range is
+    // the whole bar: the ring runs off either end (see rail-open-end).
+    c.check(
+      `the range is the whole bar, open at both ends (${clamp.range.min.toFixed(3)}..${clamp.range.max.toFixed(3)})`,
+      clamp.range.min === 0 && clamp.range.max === 10 && clamp.range.openMin && clamp.range.openMax,
+    );
+    // The ring starts square on the bar, hanging straight down toward the
+    // ball, and never past the angle the bar's thickness jams it at.
+    c.check(`...hanging square (tilt ${((clamp.tilt * 180) / Math.PI).toFixed(2)}°)`, Math.abs(clamp.tilt) < 1e-9);
+    const wantJam = (dmath.acos(halfWidth / (MANACLE_BORE / 2)) * 180) / Math.PI;
+    c.check(
+      `...on a bar it can tilt ${((clamp.tiltMax * 180) / Math.PI).toFixed(1)}° on (want acos(h/R) = ${wantJam.toFixed(1)})`,
+      Math.abs((clamp.tiltMax * 180) / Math.PI - wantJam) < 1e-9,
+    );
   }
   c.check("the hook body is out of the world", !rig.level.world.bodies.some((b) => b instanceof BallHook));
   c.check(`no invariant fired while it hung (${rig.violations.length})`, rig.violations.length === 0);
 
-  // A peg: a circle rail. The ring hangs on it and pivots, and does not slide.
+  // A peg: a bar shorter than it is thick, which has no room for the cuff to
+  // stand anywhere but its middle. The ring hangs on it and pivots, and does
+  // not slide.
   const peg = new Rig([
     {
       kind: "static",
@@ -287,24 +446,47 @@ function caseClamp(): RailResult {
       y: -120,
       rot: 0,
       friction: 1,
-      objects: [{ type: "collision", shape: { kind: "circle", r: 3 }, rail: true }],
+      objects: [
+        {
+          type: "collision",
+          shape: { kind: "curve", width: 6, verts: [{ x: -1, y: 0 }, { x: 1, y: 0 }] },
+          rail: true,
+        },
+      ],
     } as LevelBodyData,
   ]);
   peg.hang(120);
   const pc = peg.clamp;
   c.check("a peg is clamped too", pc !== null);
   if (pc) {
-    c.check(`...at its centre (${pc.contact.globalPosition.x.toFixed(4)}, ${pc.contact.globalPosition.y.toFixed(4)})`, pc.contact.globalPosition.distanceTo(new Vec2(0, -1.2)) < 1e-9);
-    c.check("...with no tangent to slide along", pc.tangent() === null);
+    // 6 px thick against a 7.3 cm bore: the ring has 6.5 mm of slack to hang
+    // in, and no length of bar to hang anywhere ALONG.
+    const pegSeat = new Vec2(0, -1.2 + MANACLE_BORE / 2 - 3 * PX);
+    c.check(`...at its centre (${pc.contact.globalPosition.x.toFixed(4)}, ${pc.contact.globalPosition.y.toFixed(4)})`, pc.contact.globalPosition.distanceTo(pegSeat) < 1e-9);
+    c.check(
+      `...with nowhere to slide to (range ${pc.range.min.toFixed(4)}..${pc.range.max.toFixed(4)})`,
+      pc.range.min === pc.range.max,
+    );
     peg.ball.linearVelocity = new Vec2(1, 0);
     let maxLean = 0;
+    let pegSwing = 0;
+    let pegOffBore = 0;
+    const pegS = pc.s;
     peg.run(120, () => {
       maxLean = Math.max(maxLean, Math.abs(peg.lean()));
+      const rest = pc.restPoint();
+      pegSwing = Math.max(pegSwing, Math.abs(pc.contact.globalPosition.x - rest.x));
+      pegOffBore = Math.max(pegOffBore, Math.abs(pc.contact.globalPosition.distanceTo(rest) - MANACLE_BORE / 2));
     });
     c.check(`kicked, the ball swings on it (${maxLean.toFixed(1)}°)`, maxLean > 10);
-    c.check("...and the anchor never leaves the centre", pc.contact.globalPosition.distanceTo(new Vec2(0, -1.2)) < 1e-9 && pc.s === 0);
+    c.check(`...and the ring never leaves the peg's middle (s=${pc.s.toFixed(4)})`, pc.s === pegS);
+    const wantPegSwing = (MANACLE_BORE / 2) * dmath.sin((maxLean * Math.PI) / 180);
+    c.check(
+      `...the cuff pivoting on the point it rests on (swung ${(pegSwing * 1000).toFixed(2)} mm, want R·sin(${maxLean.toFixed(1)}°) = ${(wantPegSwing * 1000).toFixed(2)}, ${(pegOffBore * 1000).toFixed(6)} um off the bore)`,
+      pegSwing > 0.005 && Math.abs(pegSwing - wantPegSwing) < 5e-4 && pegOffBore < 1e-9,
+    );
   }
-  return ok("rail-clamp — the hook clamps a bar on its centreline, and a peg holds the ring at its centre", c.passed(), c.details);
+  return ok("rail-clamp — the hook clamps a bar on its curve, and a peg holds the ring at its centre", c.passed(), c.details);
 }
 
 // ---------------------------------------------------------------------------
@@ -323,13 +505,39 @@ function caseStick(): RailResult {
   rig.ball.linearVelocity = new Vec2(0.5, 0);
   let maxLean = 0;
   let moved = 0;
+  // The cuff swings on the bar while the ring itself stays put: the point it
+  // rests on never moves off the bar's top surface, the cuff's centre stays a
+  // bore's radius from that point, and what travels is the cuff - the arc it
+  // hangs on, which is what a link laid over a rod does.
+  let swung = 0;
+  let offBore = 0;
+  let offBar = 0;
+  const rest0 = clamp.restPoint();
   rig.run(240, () => {
     maxLean = Math.max(maxLean, Math.abs(rig.lean()));
     moved = Math.max(moved, Math.abs(clamp.s - s0));
+    const rest = clamp.restPoint();
+    swung = Math.max(swung, Math.abs(clamp.contact.globalPosition.x - rest.x));
+    offBore = Math.max(offBore, Math.abs(clamp.contact.globalPosition.distanceTo(rest) - MANACLE_BORE / 2));
+    offBar = Math.max(offBar, rest.distanceTo(rest0));
   });
   const cone = (dmath.atan(RAIL_STATIC_FRICTION) * 180) / Math.PI;
   c.check(`the ball swings (${maxLean.toFixed(1)}°) inside the static cone (${cone.toFixed(1)}°)`, maxLean > 5 && maxLean < cone);
   c.check(`the ring moved by ${moved.toExponential(2)} m (want 0)`, moved === 0);
+  // The swing is the closed form of a pivot: the cuff's centre is a bore's
+  // radius from the point it rests on, so a chain leaning `a` off the bar's
+  // normal carries it `R·sin a` along the bar - and nothing at all if the ring
+  // were spinning about its own centre instead.
+  const wantSwing = (MANACLE_BORE / 2) * dmath.sin((maxLean * Math.PI) / 180);
+  c.check(
+    `...while the cuff PIVOTED on it: swung ${(swung * 1000).toFixed(2)} mm along the bar, want R·sin(${maxLean.toFixed(1)}°) = ${(wantSwing * 1000).toFixed(2)}`,
+    swung > 0.003 && Math.abs(swung - wantSwing) < 5e-4,
+  );
+  c.check(
+    `...on the one point of the bar it rests on, a bore's radius away throughout (worst ${(offBore * 1000).toFixed(6)} um)`,
+    offBore < 1e-9,
+  );
+  c.check(`...which never left the bar's top surface (worst ${(offBar * 1000).toFixed(6)} um)`, offBar < 1e-9);
   c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
   return ok("rail-stick — a pull inside the static cone moves the ring by nothing", c.passed(), c.details);
 }
@@ -440,7 +648,13 @@ function lantern(friction: number): LevelBodyData {
     rot: 0,
     friction,
     objects: [
-      { type: "collision", x: 0, y: 0, shape: { kind: "rect", w: 60, h: 2 }, rail: true },
+      {
+        type: "collision",
+        x: 0,
+        y: 0,
+        shape: { kind: "curve", width: 2, verts: [{ x: -30, y: 0 }, { x: 30, y: 0 }] },
+        rail: true,
+      },
       { type: "collision", x: 40, y: 0, shape: { kind: "rect", w: 20, h: 20 }, impermeable: true },
     ],
   } as LevelBodyData;
@@ -453,20 +667,27 @@ function caseRange(): RailResult {
   const clamp = rig.clamp;
   c.check("the handle clamps", clamp !== null);
   if (!clamp) return ok("rail-range", false, c.details);
-  // The medial axis runs x = -0.29..0.29; the cuff's disc meets the lid's face
-  // at x = 0.3 when its centre is at 0.3 - MANACLE_DISC.
-  const wantMax = 0.3 - MANACLE_DISC + 0.29;
+  // The curve runs x = -0.3..0.3, so arc length 0 is its left end; the cuff's
+  // disc meets the lid's face at x = 0.3 when its centre is at 0.3 - MANACLE_DISC.
+  const wantMax = 0.6 - MANACLE_DISC;
   c.check(`the range is clipped where the cuff meets the lid (max=${clamp.range.max.toFixed(4)}, want ${wantMax.toFixed(4)})`, Math.abs(clamp.range.max - wantMax) < 1e-6);
-  c.check("...and open at the far end", clamp.range.min === 0);
+  c.check(
+    `...and open at the far end, which ends in the air (min=${clamp.range.min}, open=${clamp.range.openMin}/${clamp.range.openMax})`,
+    clamp.range.min === 0 && clamp.range.openMin && !clamp.range.openMax,
+  );
   rig.ball.linearVelocity = new Vec2(2, 0);
   let maxS = -Infinity;
   let stillClamped = true;
-  rig.run(120, () => {
-    maxS = Math.max(maxS, clamp.s);
+  // What meets the lid is the ring's FAR side: the rest point stops the
+  // ring's reach along the bar short of the range's end, and the ring may not
+  // lean into the lid past it.
+  rig.run(60, () => {
+    maxS = Math.max(maxS, clamp.s + clamp.reach());
     if (rig.clamp !== clamp) stillClamped = false;
   });
-  c.check(`the ring reached the lid (max s=${maxS.toFixed(4)})`, Math.abs(maxS - clamp.range.max) < 1e-9);
+  c.check(`the ring reached the lid (max s+reach=${maxS.toFixed(4)})`, Math.abs(maxS - clamp.range.max) < 1e-9);
   c.check("...and never past it", maxS <= clamp.range.max + 1e-12);
+  c.check(`...which is a closed end (openMax=${clamp.range.openMax})`, !clamp.range.openMax);
   c.check("...and is still clamped", stillClamped);
   c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
 
@@ -479,14 +700,200 @@ function caseRange(): RailResult {
 }
 
 // ---------------------------------------------------------------------------
-// joint - the ring crosses from one rail piece onto the next.
+// fall - a ring threaded onto a vertical bar falls the frame it is threaded,
+// under its own weight, whatever the chain is doing.
 // ---------------------------------------------------------------------------
-function caseJoint(): RailResult {
+function caseFall(): RailResult {
   const c = claims();
-  // A: level, x = -200..3 px at y = -120. B: rising 15° to the right from A's
-  // end, 207 px long, its centre a metre right and up the slope.
+  // A 3 m frictionless bar standing on end, x = 0, from y = -50 px down to
+  // -350 px... (y is down, so the bar runs from 0.5 m to 3.5 m above the
+  // origin), with a block welded to its lower end so the ring has somewhere
+  // to stop. The ball stands on a floor 40 cm to the side and throws at the
+  // bar's middle.
+  const upright = bar(0, -200, 300, 0, Math.PI / 2, {
+    objects: [
+      {
+        type: "collision",
+        shape: { kind: "curve", width: 3, verts: [{ x: -150, y: 0 }, { x: 150, y: 0 }] },
+        rail: true,
+      },
+      { type: "collision", x: 160, y: 0, shape: { kind: "rect", w: 20, h: 20 } },
+    ],
+  } as Partial<LevelBodyData>);
+  const rig = new Rig([upright, floor(8)], 40);
+  rig.throwAt = new Vec2(0, -2);
+  let clampedAt = -1;
+  let s0 = 0;
+  const speeds: number[] = [];
+  const sAt: number[] = [];
+  for (let f = 0; f < 120 && clampedAt < 0; f++) {
+    rig.step(rig.aimAtAnchor());
+    const clamp = rig.clamp;
+    if (clamp) {
+      clampedAt = f;
+      s0 = clamp.s;
+    }
+  }
+  const clamp = rig.clamp;
+  c.check(`the hook threads onto the upright (frame ${clampedAt})`, clamp !== null);
+  if (!clamp) return ok("rail-fall", false, c.details);
+  c.check(
+    `...part way up it (s=${s0.toFixed(2)} of ${clamp.length.toFixed(2)}), with the ball standing on the floor`,
+    s0 > 0.5 && s0 < clamp.length - 0.5 && rig.ball.linearVelocity.length() < 0.05,
+  );
+  c.check(
+    `...jammed at the tilt the bar's thickness allows (${((clamp.tilt * 180) / Math.PI).toFixed(1)}° of ${((clamp.tiltMax * 180) / Math.PI).toFixed(1)})`,
+    Math.abs(Math.abs(clamp.tilt) - clamp.tiltMax) < 1e-9,
+  );
+  // The pull is straight along the bar, so no cone can hold the ring and
+  // nothing but the bar's end can stop it: it falls at g from the first frame.
+  const frames = 24;
+  rig.run(frames, () => {
+    speeds.push(clamp.speed);
+    sAt.push(clamp.s);
+  });
+  const t = frames * DT;
+  const want = G * t;
+  const fell = sAt[sAt.length - 1]! - s0;
+  c.check(
+    `it falls from the first frame (${(speeds[0]! * 100).toFixed(1)} cm/s after one)`,
+    speeds[0]! > G * DT * 0.5,
+  );
+  c.check(
+    `...at g: ${speeds[speeds.length - 1]!.toFixed(2)} m/s after ${t.toFixed(2)} s (want ${want.toFixed(2)})`,
+    Math.abs(speeds[speeds.length - 1]! - want) < want * 0.1,
+  );
+  c.check(
+    `...and has fallen ${fell.toFixed(3)} m (want ½gt² = ${(0.5 * G * t * t).toFixed(3)})`,
+    Math.abs(fell - 0.5 * G * t * t) < 0.5 * G * t * t * 0.15,
+  );
+  // Then it lands on the block at the bar's foot and stays there, still on
+  // the bar - that end is not open.
+  let landed = -1;
+  rig.run(90, (f) => {
+    if (landed < 0 && clamp.s + clamp.reach() >= clamp.range.max - 1e-9) landed = f;
+  });
+  c.check(
+    `it lands on the block at the bar's foot, far side first (s=${clamp.s.toFixed(3)} + reach ${clamp.reach().toFixed(3)} = max ${clamp.range.max.toFixed(3)})`,
+    landed >= 0,
+  );
+  c.check(
+    `...and stops there (speed ${clamp.speed.toFixed(3)})`,
+    clamp.speed === 0 && Math.abs(clamp.s + clamp.reach() - clamp.range.max) < 1e-9,
+  );
+  c.check("...still threaded on the bar, which ends in the block", rig.clamp === clamp && !clamp.range.openMax);
+  c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
+  return ok("rail-fall — a ring threaded onto a vertical bar falls at g and lands on the bar's foot", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// open end - a ring driven off the end of a bar that ends in the air is loose:
+// it is the dangling chain tip again, clear of the bar, with the speed it left
+// at, and it catches nothing until it is thrown again.
+// ---------------------------------------------------------------------------
+function caseOpenEnd(): RailResult {
+  const c = claims();
+  // The floor is a metre below the hanging ball, so the ball swings freely
+  // and the loose tip has somewhere to land.
+  const rig = new Rig([bar(0, -120, 100, 0), floor(100)]);
+  rig.hang();
+  const clamp = rig.clamp;
+  c.check("clamped on a short frictionless bar", clamp !== null);
+  if (!clamp) return ok("rail-open-end", false, c.details);
+  c.check(`...open at both ends (${clamp.range.min}..${clamp.range.max})`, clamp.range.openMin && clamp.range.openMax);
+  rig.ball.linearVelocity = new Vec2(2, 0);
+  const drop: { frame: number; at: Vec2 | null; speed: number; maxS: number } = { frame: -1, at: null, speed: 0, maxS: 0 };
+  rig.run(120, (f) => {
+    if (rig.clamp === clamp) drop.maxS = Math.max(drop.maxS, clamp.s);
+    if (drop.frame < 0 && rig.clamp !== clamp) {
+      drop.frame = f;
+      const tip = rig.ball.chainTip;
+      drop.at = tip?.globalPosition ?? null;
+      drop.speed = tip?.linearVelocity.length() ?? 0;
+    }
+  });
+  const { frame: dropped, at: tipAtDrop, speed: tipSpeed, maxS } = drop;
+  c.check(`the ring reaches the bar's end (s=${maxS.toFixed(3)} of ${clamp.length.toFixed(3)})`, maxS === clamp.length);
+  c.check(`...and runs off it (frame ${dropped})`, dropped >= 0);
+  c.check("...becoming the dangling chain tip again", rig.ball.chainTip !== null && rig.clamp === null);
+  c.check(
+    `...spawned clear of the bar's end (x=${tipAtDrop?.x.toFixed(3)}, end at 0.500)`,
+    tipAtDrop !== null && tipAtDrop.x > 0.5 + MANACLE_DISC,
+  );
+  c.check(`...moving at the speed it left with (${tipSpeed.toFixed(2)} m/s)`, tipSpeed > 1);
+  c.check("...on the chain the ball still has", rig.ball.chain !== null && rig.ball.chain.end.contact.obj === rig.ball.chainTip);
+  // Loose, it lands on the floor and lies there: a weight on the end of the
+  // chain, not something that re-catches the bar.
+  rig.run(120);
+  c.check("...and lies on the floor, still the tip", rig.ball.chainTip !== null && rig.clamp === null);
+  c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
+  return ok("rail-open-end — a ring driven off a bar's open end is the dangling tip again", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// jam - the ring swings on the point it rests on toward the pull, and no
+// further than the bar's thickness lets it; pulled from the far side of the
+// bar it rolls over to rest on the other surface.
+// ---------------------------------------------------------------------------
+function caseJam(): RailResult {
+  const c = claims();
+  const rig = new Rig([bar(0, -120, 1000, 1)]);
+  rig.hang(60);
+  const clamp = rig.clamp;
+  c.check("clamped", clamp !== null);
+  if (!clamp) return ok("rail-jam", false, c.details);
+  const halfWidth = 1.5 * PX;
+  const R = MANACLE_BORE / 2;
+  const rest0 = clamp.restPoint();
+  const onSurface = () => Math.abs(clamp.restPoint().y - (-1.2 + halfWidth * clamp.side)) < 1e-9;
+  c.check(`the ring rests on the bar's top surface (y=${rest0.y.toFixed(4)})`, clamp.side === -1 && Math.abs(rest0.y - (-1.2 - halfWidth)) < 1e-9);
+  // Pulled hard along the bar: the ring tilts to the jam and stops there,
+  // still resting on the same point, its centre a bore's radius from it.
+  clamp.seat(new Vec2(5, -1.2), 10);
+  const at = clamp.contact.globalPosition;
+  c.check(
+    `pulled along the bar it jams at ${((clamp.tilt * 180) / Math.PI).toFixed(1)}° (tiltMax ${((clamp.tiltMax * 180) / Math.PI).toFixed(1)})`,
+    clamp.tilt === clamp.tiltMax,
+  );
+  c.check(`...still resting on the same point (${(clamp.restPoint().distanceTo(rest0) * 1000).toFixed(3)} mm off)`, clamp.restPoint().distanceTo(rest0) < 1e-9 && onSurface());
+  c.check(
+    `...its centre a bore's radius from it (${(at.distanceTo(rest0) * 100).toFixed(3)} cm, want ${(R * 100).toFixed(3)})`,
+    Math.abs(at.distanceTo(rest0) - R) < 1e-9,
+  );
+  c.check(`...swung R·sin(a) = ${(R * dmath.sin(clamp.tiltMax) * 1000).toFixed(1)} mm along the bar (${((at.x - rest0.x) * 1000).toFixed(1)})`, Math.abs(at.x - rest0.x - R * dmath.sin(clamp.tiltMax)) < 1e-9);
+  // The swing is bounded in rate: a pull that reverses does not flip the ring
+  // in one frame, it turns it at no more than RAIL_TILT_RATE.
+  const before = clamp.tilt;
+  clamp.seat(new Vec2(-5, -1.2), DT);
+  c.check(
+    `a reversed pull turns it by one frame's worth (${((before - clamp.tilt) * 180 / Math.PI).toFixed(2)}°), not to the other jam`,
+    clamp.tilt < before && clamp.tilt > -clamp.tiltMax,
+  );
+  // Pulled from ABOVE the bar the ring does NOT change sides - it is a ring
+  // on this side of the bar for as long as it is threaded - it stays resting
+  // on the top surface, and a pull straight up through the bar leaves its tilt
+  // where it was.
+  const tiltBefore = clamp.tilt;
+  clamp.seat(new Vec2(clamp.contact.globalPosition.x, -3), 10);
+  c.check(`pulled straight up through the bar it stays on the top surface (side ${clamp.side}, rest y=${clamp.restPoint().y.toFixed(4)})`, clamp.side === -1 && Math.abs(clamp.restPoint().y - (-1.2 - halfWidth)) < 1e-9);
+  c.check(`...with its tilt left as it was (${((clamp.tilt * 180) / Math.PI).toFixed(1)}°)`, clamp.tilt === tiltBefore);
+  // Pulled from above and along the bar it leans as far as the jam lets it
+  // toward the pull's run, still on its side.
+  clamp.seat(new Vec2(clamp.contact.globalPosition.x - 5, -3), 10);
+  c.check(`pulled from above and back along the bar it jams that way (${((clamp.tilt * 180) / Math.PI).toFixed(1)}°, side ${clamp.side})`, clamp.tilt === -clamp.tiltMax && clamp.side === -1);
+  c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
+  return ok("rail-jam — the ring swings on the point it rests on and jams at the bar's thickness", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// bend - one authored curve that turns: the ring runs round the bend, crossing
+// from one of the bar's pieces onto the next without noticing.
+// ---------------------------------------------------------------------------
+function caseBend(): RailResult {
+  const c = claims();
+  // A bar running level from x = -200 px and then rising 15° to the right for
+  // another 200 px of run, as ONE curve with a corner node at the origin.
   const rise = Math.PI / 12;
-  const bLen = 200 / dmath.cos(rise);
   const body: LevelBodyData = {
     kind: "static",
     x: 0,
@@ -494,13 +901,17 @@ function caseJoint(): RailResult {
     rot: 0,
     friction: 0,
     objects: [
-      { type: "collision", x: -98.5, y: 0, shape: { kind: "rect", w: 203, h: 3 }, rail: true },
       {
         type: "collision",
-        x: 100,
-        y: -100 * dmath.tan(rise),
-        rot: -rise,
-        shape: { kind: "rect", w: bLen, h: 3 },
+        shape: {
+          kind: "curve",
+          width: 3,
+          verts: [
+            { x: -200, y: 0 },
+            { x: 0, y: 0 },
+            { x: 200, y: -200 * dmath.tan(rise) },
+          ],
+        },
         rail: true,
       },
     ],
@@ -508,21 +919,38 @@ function caseJoint(): RailResult {
   const rig = new Rig([body], -150);
   rig.hang();
   const clamp = rig.clamp;
-  c.check("clamped on the level bar", clamp !== null && clamp.contact.shapeIndex === 0);
-  if (!clamp) return ok("rail-joint", false, c.details);
+  c.check("clamped on the level stretch", clamp !== null && clamp.contact.shapeIndex === 0);
+  if (!clamp) return ok("rail-bend", false, c.details);
+  c.check(
+    `the bar built as several pieces on one curve (${clamp.body.getShapes().length})`,
+    clamp.body.getShapes().length > 1 &&
+      clamp.body.getShapes().every((sh) => sh.rail === clamp.curve),
+  );
   rig.ball.linearVelocity = new Vec2(2.5, 0);
   let crossedAt = -1;
   rig.run(90, (f) => {
-    if (crossedAt < 0 && clamp.contact.shapeIndex === 1) crossedAt = f;
+    if (crossedAt < 0 && clamp.contact.shapeIndex !== 0) crossedAt = f;
   });
-  c.check(`the ring crossed the joint onto the rising bar (at f${crossedAt})`, crossedAt >= 0);
-  c.check("...and is still on it", rig.clamp === clamp && clamp.contact.shapeIndex === 1);
+  c.check(`the ring ran round the bend onto another piece (at f${crossedAt})`, crossedAt >= 0);
+  c.check("...and is still the same clamp on the same curve", rig.clamp === clamp);
   c.check(`the ball went up the slope (x=${rig.ball.globalPosition.x.toFixed(2)})`, rig.ball.globalPosition.x > 0.5);
+  // On the rising stretch, and hanging the bore's slack UNDER it: the seat is
+  // perpendicular to the bar wherever the ring has got to, so a sloped stretch
+  // carries the ring off the centreline in x as well as in y.
   const anchor = clamp.contact.globalPosition;
-  const expectedY = -1.2 - anchor.x * dmath.tan(rise);
-  c.check(`the anchor is on B's centreline (y=${anchor.y.toFixed(4)}, want ${expectedY.toFixed(4)})`, Math.abs(anchor.y - expectedY) < 2e-3);
+  const corner = new Vec2(0, -1.2);
+  const underLine =
+    (anchor.y - corner.y + anchor.x * dmath.tan(rise)) * dmath.cos(rise);
+  // A ball hanging plumb under a bar that rises at `rise` tilts the ring by
+  // exactly that angle, so its centre hangs `R·cos(rise)` under the point it
+  // rests on, which is itself a half-width above the line.
+  const wantUnder = (MANACLE_BORE / 2) * dmath.cos(rise) - 1.5 * PX;
+  c.check(
+    `the anchor is on the rising stretch (x=${anchor.x.toFixed(3)}) hanging ${(underLine * 100).toFixed(2)} cm under it (want ${(wantUnder * 100).toFixed(2)})`,
+    anchor.x > 0.1 && Math.abs(underLine - wantUnder) < 2e-3,
+  );
   c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
-  return ok("rail-joint — the ring runs off one bar's end onto the next", c.passed(), c.details);
+  return ok("rail-bend — the ring runs round a bend in one authored curve", c.passed(), c.details);
 }
 
 // ---------------------------------------------------------------------------
@@ -531,6 +959,14 @@ function caseJoint(): RailResult {
 // ---------------------------------------------------------------------------
 function caseFormat(): RailResult {
   const c = claims();
+  const curve = (x0: number, x1: number, bow = 0) => ({
+    kind: "curve" as const,
+    width: 4,
+    verts: [
+      { x: x0, y: 0, outX: bow, outY: -bow },
+      { x: x1, y: 0, inX: -bow, inY: -bow },
+    ],
+  });
   const raw = {
     player: { x: 0, y: 0, radius: 8 },
     bodies: [
@@ -540,21 +976,48 @@ function caseFormat(): RailResult {
         y: 0,
         rot: 0,
         objects: [
-          { type: "collision", x: 0, y: 0, shape: { kind: "rect", w: 100, h: 4 }, rail: true },
-          { type: "collision", x: 100, y: 0, shape: { kind: "rect", w: 20, h: 20 } },
-          { type: "collision", x: 200, y: 0, shape: { kind: "rect", w: 100, h: 4 }, rail: true, impermeable: true },
+          { type: "collision", x: 0, y: 0, shape: curve(-50, 50, 20), rail: true },
+          { type: "collision", x: 100, y: 0, shape: { kind: "rect", w: 20, h: 20 }, rail: true },
+          { type: "collision", x: 200, y: 0, shape: curve(-50, 50), rail: true, impermeable: true },
         ],
       },
     ],
   } as RawLevelData;
   const data = scaleLevelData(raw, PX);
   const objs = data.bodies[0]!.objects.filter(isCollisionObject);
-  c.check("scaleLevelData carries `rail` through px -> m", objs[0]!.rail === true && objs[1]!.rail === undefined && objs[2]!.rail === true);
+  const first = objs[0]!.shape;
+  c.check(
+    "scaleLevelData carries `rail` through px -> m",
+    objs[0]!.rail === true && objs[1]!.rail === true && objs[2]!.rail === true,
+  );
+  c.check(
+    `...and scales a curve's points, its handles and its width (${first.kind === "curve" ? `${first.width}, ${first.verts[0]!.outX}` : "not a curve"})`,
+    first.kind === "curve" &&
+      first.width === 0.04 &&
+      Math.abs(first.verts[0]!.x + 0.5) < 1e-12 &&
+      Math.abs((first.verts[0]!.outX ?? 0) - 0.2) < 1e-12 &&
+      Math.abs((first.verts[0]!.outY ?? 0) + 0.2) < 1e-12 &&
+      Math.abs((first.verts[1]!.inX ?? 0) + 0.2) < 1e-12,
+  );
   const world = new World();
   const built = buildLevelBodies(world, data, () => {});
   const shapes = built.bodies[0]!.body!.getShapes();
-  c.check("the build sets `rail` on exactly the pieces that authored it", shapes[0]!.rail && !shapes[1]!.rail && shapes[2]!.rail);
-  // Hook-proof wins: a hook thrown at the third piece is deflected, never clamped.
+  const bowed = shapes.filter((sh) => sh.rail !== null);
+  c.check(
+    `the build gives every piece of the bowed curve the one rail curve it belongs to (${bowed.length} pieces)`,
+    bowed.length > 1 && bowed.every((sh) => sh.rail === bowed[0]!.rail),
+  );
+  // The RECT in the middle authored the flag and is not a curve: there is no
+  // centreline to ride, so the flag means nothing on it.
+  const box = shapes.find((sh) => sh.shape.kind === "rect");
+  c.check("a `rail` flag on a shape that is not a curve is ignored", box !== undefined && box.rail === null);
+  // ...and so is one on a HOOK-PROOF curve: a hook that bounces off a piece
+  // never clamps it.
+  c.check(
+    "a hook-proof curve builds no rail either",
+    shapes.filter((sh) => sh.impermeable).every((sh) => sh.rail === null),
+  );
+  // Hook-proof wins: a hook thrown at the third object is deflected, never clamped.
   const hook = new BallHook();
   hook.globalPosition = new Vec2(2, 0.5);
   hook.linearVelocity = new Vec2(0, -BallPlayer.HOOK_SPEED);
@@ -573,24 +1036,36 @@ function caseFormat(): RailResult {
   // The editor's round trip.
   const rt = modelToDisk(modelFromDisk(raw));
   const rtObjs = rt.bodies[0]!.objects.filter(isCollisionObject);
-  c.check("the editor's modelFromDisk/modelToDisk keeps the flag", rtObjs[0]!.rail === true && rtObjs[1]!.rail === undefined);
+  const rtFirst = rtObjs[0]!.shape;
+  c.check("the editor's modelFromDisk/modelToDisk keeps the flag", rtObjs[0]!.rail === true);
+  c.check(
+    `...and the curve it is on, handles and width included (${rtFirst.kind})`,
+    rtFirst.kind === "curve" &&
+      rtFirst.width === 4 &&
+      rtFirst.verts.length === 2 &&
+      Math.abs((rtFirst.verts[0]!.outX ?? 0) - 20) < 1e-9 &&
+      Math.abs((rtFirst.verts[1]!.inX ?? 0) + 20) < 1e-9,
+  );
   return ok("rail-format — the flag survives the format, the build and the editor, and hook-proof wins", c.passed(), c.details);
 }
 
 export function runRailCases(): RailResult[] {
   return [
-    caseCentreline(),
+    caseStroke(),
     caseSlideStep(),
     caseClamp(),
     caseStick(),
     caseZipline(),
     caseFriction(),
     caseRange(),
-    caseJoint(),
+    caseFall(),
+    caseOpenEnd(),
+    caseJam(),
+    caseBend(),
     caseFormat(),
   ];
 }
 
 // Referenced so a future case can reach for them without re-importing; the
 // suite's rig is the ball level and these are what a bare-world case needs.
-export type { PhysicsBody2D, RigidBody2D, Shape };
+export type { PhysicsBody2D, RigidBody2D };
