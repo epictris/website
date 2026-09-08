@@ -64,6 +64,8 @@ The anchored regime is unchanged.
 The chain end is a contact on the rail body, so the rope solver already treats a rail on a static as a fixed point and a rail on a rigid body (a hanging lantern) as a lever on that body, with every credit, refusal and lease the anchored chain has.
 Sliding is one extra term inside the length solve.
 
+The chain hangs from the ring's RIM, not its centre: the clamp keeps which end of the ring the chain leaves over (`rimSign`, the end toward the pull), the slack drape is pinned at that point (`rimPoint`), and the renderers draw the path as it comes.
+
 ### Sliding
 
 In each iteration of `Rope.resolveLengthConstraint`, before the correction is split among the path bodies, a clamped end is offered the length error to remove by sliding.

@@ -40,8 +40,10 @@ import { PX } from "../engine/units";
 import { GRAVITY } from "../engine/world";
 import { shapeExtents } from "../engine/shapes";
 import { circleOverlap } from "../engine/collision";
-import type { CollisionShape2D, PhysicsBody2D } from "../engine/body";
+import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
 import type { RopeNode } from "../lib/ropeContact";
+import { RopeClamp } from "../lib/rail";
+import { MANACLE_DISC } from "../lib/manacle";
 import { Rope } from "./rope";
 
 // Fixed particle count. Fixed rather than derived from the chain's length so
@@ -170,6 +172,16 @@ export class SlackChain {
   step(bodies: readonly PhysicsBody2D[], delta: number): void {
     const free = this.freePathNodes();
     const freePoints = free.map((n) => n.contact.globalPosition);
+    // Clamped around a rail the chain ends at the centre of a ring, but it is
+    // hooked over the ring's RIM, and that is where it hangs from: the drape
+    // is pinned there (`RopeClamp.rimPoint`), so its last link leaves the end
+    // of the ring the pull runs over rather than being re-pointed at draw time
+    // from a node that was pinned inside the cuff. Re-pointed, the first link
+    // ran from the rim back toward a node a bore's radius from the centre and
+    // flickered with it (`session-407f`).
+    const end = this.chain.end;
+    const clamp = end instanceof RopeClamp ? end : null;
+    if (clamp !== null) freePoints[freePoints.length - 1] = clamp.rimPoint();
 
     if (this.pos.length !== SEGMENTS + 1) {
       // First step: lay the chain along the wrap path it is deployed on, at
@@ -222,10 +234,17 @@ export class SlackChain {
     }
 
     const candidates = this.collectCollisionShapes(bodies);
+    // Clamped around a rail the chain ends at the centre of a ring threaded on
+    // the bar, millimetres from the bar's own surface, and the chain leaves
+    // the ring at its rim: the nodes inside the cuff's disc are metal the bar
+    // is already threaded through, not chain to be pushed out of it. Pushed,
+    // the last few nodes were shoved off the handle every step and the drape
+    // twitched at the cuff for as long as the ball hung still (`session-291f`).
+    const cuff = clamp !== null ? { body: clamp.body, at: clamp.contact.globalPosition } : null;
     for (let iter = 0; iter < ITERATIONS; iter++) {
       this.solveDistances(restLen, iter % 2 === 1);
       this.solveLongRange(restLen, pinA, pinB);
-      if (iter % COLLIDE_EVERY === COLLIDE_EVERY - 1) this.solveCollisions(candidates);
+      if (iter % COLLIDE_EVERY === COLLIDE_EVERY - 1) this.solveCollisions(candidates, cuff);
     }
   }
 
@@ -331,10 +350,14 @@ export class SlackChain {
 
   // Push every interior node out of the scenery. Dead normal restitution and
   // Coulomb-ish tangential friction, both written through the Verlet history.
-  private solveCollisions(shapes: readonly CollisionShape2D[]): void {
+  private solveCollisions(
+    shapes: readonly CollisionShape2D[],
+    cuff: { body: CollisionObject2D; at: Vec2 } | null,
+  ): void {
     for (let i = 1; i < SEGMENTS; i++) {
       let p = this.pos[i]!;
       for (const s of shapes) {
+        if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_DISC) continue;
         const e = shapeExtents(s);
         const c = s.globalPosition;
         if (
@@ -384,7 +407,8 @@ export class SlackChain {
     for (let i = 1; i < SEGMENTS; i++) {
       out.push(this.renderFrom[i]!.lerp(this.pos[i]!, alpha));
     }
-    out.push(chain.end.contact.renderGlobalPosition(alpha));
+    const end = chain.end;
+    out.push(end instanceof RopeClamp ? end.renderRimPoint(alpha) : end.contact.renderGlobalPosition(alpha));
     return out;
   }
 

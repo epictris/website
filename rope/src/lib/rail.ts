@@ -67,7 +67,7 @@ import { buildPolylineIndex, pointAtArcLength, projectOntoPolyline, tangentAtArc
 import { RopeAttachment, RopeContact } from "./ropeContact";
 import { Intersections } from "./intersections";
 import { IntersectionStatus } from "./types";
-import { MANACLE_BORE, MANACLE_DISC } from "./manacle";
+import { MANACLE_BORE, MANACLE_DISC, MANACLE_RADIUS } from "./manacle";
 
 // Rubber on steel, which is what `friction: 1` means everywhere else in the
 // level format (0 = ice, 1 = rubber). The cone test is a pure direction, so
@@ -243,6 +243,13 @@ export class RopeClamp extends RopeAttachment {
   // end: what it is doing when nothing is pulling it (see `coast`), and what
   // it was last observed doing when something was.
   speed = 0;
+  // Which END of the ring the chain leaves over, as a sign on the hang: a ring
+  // seen edge-on has metal at the two ends of its long axis and hole everywhere
+  // between, so the chain is hooked over whichever end runs toward the pull.
+  // Decided by the sim's own pull, so the drawn chain and the drape hang from
+  // the same point every frame rather than from whichever end the drape's own
+  // last link happened to lean toward.
+  private rimSign: 1 | -1 = 1;
   // The furthest the ring may tilt before the bar's thickness jams it: a ring
   // of inner radius `R` tilted by `a` presents an aperture of `R·cos a` across
   // the bar, so `cos a_max = h/R`. Zero for a push fit, which never tilts.
@@ -384,6 +391,32 @@ export class RopeClamp extends RopeAttachment {
     return p.add(t.mul(BORE_RADIUS * dmath.sin(this.tilt))).sub(nRest.mul(across));
   }
 
+  // The way the ring HANGS, in the body's frame: a unit vector from the point
+  // it rests on to its own centre, which is the ring's long axis in this view.
+  hangLocal(): Vec2 {
+    const t = tangentAtArcLength(this.curve, this.s);
+    const nRest = leftNormal(t).mul(this.side);
+    return nRest.mul(-dmath.cos(this.tilt)).add(t.mul(dmath.sin(this.tilt)));
+  }
+
+  // The end of the ring the chain leaves over, as a direction from the ring's
+  // centre in the body's frame (see `rimSign`), and that point in the world:
+  // the ring's mean radius out along it, which is where the drawn chain's last
+  // link is hooked and where the slack drape is pinned.
+  rimLocal(): Vec2 {
+    return this.hangLocal().mul(this.rimSign);
+  }
+
+  rimPoint(): Vec2 {
+    return this.contact.globalPosition.add(this.rimLocal().rotated(this.body.globalRotation).mul(MANACLE_RADIUS));
+  }
+
+  renderRimPoint(alpha: number): Vec2 {
+    return this.contact
+      .renderGlobalPosition(alpha)
+      .add(this.rimLocal().rotated(this.body.renderRotation(alpha)).mul(MANACLE_RADIUS));
+  }
+
   // The point of the bar the ring's inside is resting on, in the world: on the
   // bar's surface, square across from `s`. The cuff's centre is a bore's
   // radius from it along the hang, whatever the pull is doing, and the drawn
@@ -438,6 +471,11 @@ export class RopeClamp extends RopeAttachment {
     const nRest = leftNormal(t).mul(this.side);
     const along = p.dot(t);
     const away = -p.dot(nRest);
+    // The chain leaves over the end of the ring that runs toward the pull; a
+    // pull square to the ring's axis leaves it on the end it was on.
+    const lean = this.hangLocal().dot(p);
+    if (lean > 1e-9) this.rimSign = 1;
+    else if (lean < -1e-9) this.rimSign = -1;
     let target: number;
     if (away >= 0) target = Mathf.clamp(dmath.atan2(along, away), -this.tiltMax, this.tiltMax);
     else if (along !== 0) target = along > 0 ? this.tiltMax : -this.tiltMax;

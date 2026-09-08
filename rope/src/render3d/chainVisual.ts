@@ -22,7 +22,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "../render/chainMetrics";
-import { chainEndFacing, cuffRimDirection, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
 import type { Scene3DLevel } from "./scene";
@@ -133,7 +133,14 @@ export class ChainLayer {
         // Facing the chain while it hangs from it, frozen on the surface's
         // normal once it has bitten, and square to the way it hangs once it is
         // clamped. See the 2D renderer, whose placement this mirrors.
-        const at = loopToAnchor[loopToAnchor.length - 1]!;
+        //
+        // Clamped around a RAIL the chain is hooked over the ring's rim and the
+        // drape already ends there (`SlackChain`), so the cuff is centred on
+        // the chain's own end node and the path is left as it is.
+        const onRail = ball.manacleOnRail;
+        const at = onRail
+          ? ball.chain!.end.contact.renderGlobalPosition(alpha)
+          : loopToAnchor[loopToAnchor.length - 1]!;
         const chainDir = chainEndFacing(loopToAnchor, ball.renderLoopDirection(alpha));
         const dir = ball.manacleFacing(alpha) ?? chainDir;
 
@@ -147,11 +154,12 @@ export class ChainLayer {
         this.path.push(ball.renderPosition(alpha));
         // The links stop ON THE RIM, on whichever side the chain runs: the touch
         // point of a chain laid over a ring, which slides round the ring as the
-        // ball swings - and, around a rail, one of the two ends of a ring that
-        // is edge-on to us, since the rest of it is hole (`cuffRimDirection`).
-        const rim = ball.manacleOnRail ? cuffRimDirection(dir, chainDir) : chainDir;
-        trimPathStart(this.path, MANACLE_RADIUS);
-        this.path[0] = at.add(rim.mul(MANACLE_RADIUS));
+        // ball swings. Around a rail the path already ends on the rim end the
+        // chain is hooked over.
+        if (!onRail) {
+          trimPathStart(this.path, MANACLE_RADIUS);
+          this.path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
+        }
         this.tint.set(DEFAULT_CHAIN_COLOR);
         this.lay(this.path);
 

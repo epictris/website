@@ -29,7 +29,7 @@ import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, trimPathStart, walkChain } from "./chainMetrics";
-import { chainEndFacing, cuffRimDirection, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
+import { chainEndFacing, MANACLE_BAND, MANACLE_RADIUS } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
 import { drawDecor } from "./decor";
@@ -1004,7 +1004,12 @@ export function renderBall(
     // body whose pose was in hand, and it drifted off that body as the hook
     // turned: a manacle resting on the ground was drawn a whole radius below the
     // disc that was doing the resting (session-150f).
-    const at = loopToAnchor[loopToAnchor.length - 1]!;
+    //
+    // Clamped around a RAIL the chain is hooked over the ring's rim and the
+    // drape already ends there (`SlackChain`), so the cuff is centred on the
+    // chain's own end node and the path is left as it is.
+    const onRail = ball.manacleOnRail;
+    const at = onRail ? chain.end.contact.renderGlobalPosition(alpha) : loopToAnchor[loopToAnchor.length - 1]!;
     // Where the chain runs, and which way the cuff faces - the same thing while
     // the cuff is free to hang from the chain, and no longer the same thing once
     // it is clamped: a bolted cuff keeps the facing it bit with and the chain
@@ -1021,13 +1026,14 @@ export function renderBall(
     // point of a chain laid over a ring, which slides round the ring as the ball
     // swings, and which is the only part of the join that moves once the cuff is
     // clamped. Run to the end node instead and the links are drawn straight
-    // through the middle of the cuff; run to `chainDir` on a cuff drawn edge-on
-    // around a rail and they are drawn to the hole (see `cuffRimDirection`).
-    const rim = ball.manacleOnRail ? cuffRimDirection(dir, chainDir) : chainDir;
-    trimPathStart(path, MANACLE_RADIUS);
-    path[0] = at.add(rim.mul(MANACLE_RADIUS));
+    // through the middle of the cuff. Around a rail the path already ends on
+    // the rim end the chain is hooked over.
+    if (!onRail) {
+      trimPathStart(path, MANACLE_RADIUS);
+      path[0] = at.add(chainDir.mul(MANACLE_RADIUS));
+    }
     drawChainPolyline(ctx, path);
-    drawManacle(ctx, at, dir, clamped !== null, ball.manacleOnRail);
+    drawManacle(ctx, at, dir, clamped !== null, onRail);
   }
   if (!overlayOnly) {
     drawBody(ctx, ball, alpha);
