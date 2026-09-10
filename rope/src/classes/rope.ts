@@ -20,7 +20,7 @@ import { Segment } from "../lib/segment";
 import { Intersections, type Intersection } from "../lib/intersections";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeGeneration } from "../lib/ropeGeneration";
-import { cullDetachedNodes } from "../lib/nodeDetachment";
+import { cullDetachedNodes, MIN_WRAP_DEFLECTION } from "../lib/nodeDetachment";
 import {
   shapeCrossesSpan,
   spanMotionBox,
@@ -147,9 +147,6 @@ interface DynamicBody {
 }
 
 export class Rope {
-  // Minimum distance a rect corner must deflect the rope path before it
-  // becomes a wrap node (see the grazing-contact gate in regeneratePath).
-  private static readonly MIN_WRAP_DEFLECTION = 0.005;
   // Newton steps, and halvings per step, for unwindOverLength. One step is the
   // whole correction whenever the local rate holds; the rest cover the contact
   // moving far enough that it stops holding.
@@ -1801,9 +1798,26 @@ export class Rope {
             // but renders as a phantom snag and flip-flops as the contact
             // crosses the line on moving bodies (destabilising detachment).
             // Only a corner that actually deflects the rope becomes a wrap.
-            span.span
-              .getClosestPointOnLine(corners[vertexIndex]!)
-              .distanceTo(corners[vertexIndex]!) > Rope.MIN_WRAP_DEFLECTION &&
+            //
+            // A SWEPT crossing is exempt, and that exemption is the whole
+            // difference between a corner near the line and a body the span has
+            // been through. The gate's argument is about a corner the span
+            // merely passes close to: nothing happened, so nothing need be
+            // recorded. `crossing` is the opposite claim - the sweep watched
+            // this shape pass from one side of the span to the other since the
+            // last regeneration - and its deflection is SMALL EXACTLY WHEN THE
+            // CROSSING IS FRESH, because a shape the span has only just gone
+            // through is still a hair from the line. Gating on that threw the
+            // wrap away on the one frame it was worth having and let the span
+            // finish its pass: `session-2202f` f2093, where the sweep named the
+            // right corner and the right hand at 4.3 mm of deflection, the gate
+            // refused it at 5 mm, and by f2095 the chain was out the far side of
+            // a 10 cm rail sleeper. Seven of the eleven crossings that recording
+            // swept were refused the same way.
+            (crossing !== null ||
+              span.span
+                .getClosestPointOnLine(corners[vertexIndex]!)
+                .distanceTo(corners[vertexIndex]!) > MIN_WRAP_DEFLECTION) &&
             !isSeamVertex(bodyShape, vertexIndex)
           ) {
             newNodes.push(

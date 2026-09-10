@@ -28,6 +28,7 @@ import {
   type CollisionObject2D,
 } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
+import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
 import { shapeContacts } from "../engine/manifold";
 import { circleShape, polyShapeCentred, rectShape, type Shape } from "../engine/shapes";
@@ -49,7 +50,9 @@ import {
   type ShapeData,
 } from "../level/levelFormat";
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
+import { Rope } from "../classes/rope";
 import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
+import { cullDetachedNodes, MIN_WRAP_DEFLECTION } from "../lib/nodeDetachment";
 import { shapeCrossesSpan } from "../lib/spanSweep";
 import { Intersections } from "../lib/intersections";
 import { Segment } from "../lib/segment";
@@ -5833,6 +5836,239 @@ function caseChainSweepSlideOff(): ContactResult {
   );
 }
 
+// chain-graze-gate - a body the sweep watched pass through a span is wrapped
+// however little it has passed by.
+//
+// The grazing gate refuses a corner within `MIN_WRAP_DEFLECTION` of the span's
+// line, and its argument is about a corner the span merely passes CLOSE to:
+// nothing happened, so nothing need be recorded. A swept crossing is the
+// opposite claim, and its deflection is small exactly when the crossing is
+// fresh - a shape the span has only just gone through is still a hair from the
+// line. Gated on that, the wrap was thrown away on the one frame it was worth
+// having: `session-2202f` f2093, where the sweep named the right corner and the
+// right hand at 4.3 mm and the gate refused it at 5, and by f2095 the chain was
+// out the far side of a 10 cm rail sleeper. Seven of the eleven crossings that
+// recording swept were refused the same way.
+//
+// The rig makes that phase certain instead of lucky: a 20 x 10 cm slat CREEPS
+// through a taut chain at 12 cm/s, which is 2 mm a frame, so the first look at
+// which it is across is by construction inside the gate. Asserted as such, or
+// the case could stop being about the gate without saying so. The A/B is the
+// sweep, as every rig in `chain-sweep`: with it the slat is caught and held,
+// without it the monitor reports the pass-through - and with the gate applied
+// to swept crossings the sweep-on run behaves like the sweep-off one, which is
+// what makes this red.
+function caseChainGrazeGate(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // The recording's own geometry: the rail sleeper - a 20 x 10 cm slat at 45
+  // degrees, `levels/ball.json` body 45 - and the chain's two ends at the two
+  // regenerations either side of the crossing. The span is the ball's cuff to
+  // the dangling chain tip, which at f2093 has just reached full stretch.
+  const world = new World();
+  const slat = new StaticBody2D();
+  world.add(slat);
+  slat.addShape(ShapeGeometry.createRectangle(0.2, 0.1), Vec2.ZERO);
+  slat.globalPosition = new Vec2(809, -1142).mul(PX);
+  slat.globalRotation = Mathf.Pi / 4;
+  const cuff = new StaticBody2D();
+  world.add(cuff);
+  cuff.addShape(ShapeGeometry.createCircle(0.001), Vec2.ZERO);
+  const tip = new StaticBody2D();
+  world.add(tip);
+  tip.addShape(ShapeGeometry.createCircle(0.001), Vec2.ZERO);
+
+  const SPANS = {
+    f2092: { a: new Vec2(862.9, -1098.9), b: new Vec2(750.6, -1232.6) },
+    f2093: { a: new Vec2(859.5, -1090.9), b: new Vec2(740.6, -1230.8) },
+  };
+  const place = (s: { a: Vec2; b: Vec2 }): void => {
+    cuff.globalPosition = s.a.mul(PX);
+    tip.globalPosition = s.b.mul(PX);
+  };
+
+  const rope = new Rope(new RopeContact(cuff, Vec2.ZERO), new RopeContact(tip, Vec2.ZERO), [], null);
+  // The ball's chain is the one rope that sweeps, and this is a case about the
+  // sweep's answer being kept.
+  rope.continuous = true;
+  const scene: PhysicsBody2D[] = [slat];
+
+  // f2092: the slat is clear of the span, so nothing is wrapped and this is the
+  // baseline the sweep measures the crossing from.
+  place(SPANS.f2092);
+  rope.syncWraps(scene);
+  const clearBefore = !rope.path().some((n) => n.contact.obj === slat);
+
+  // How far the corner the sweep names stands off the f2093 span - which is the
+  // quantity the gate is written in, and the whole premise of the case.
+  const corners = ShapeGeometry.getGlobalCorners(slat.getShapes()[0]!);
+  const span2093 = new Segment(SPANS.f2093.a.mul(PX), SPANS.f2093.b.mul(PX));
+  const deflection = Math.min(
+    ...corners.map((c) => span2093.getClosestPointOnLine(c).distanceTo(c)),
+  );
+
+  // f2093: the span has swept across the slat's middle. The overlap test alone
+  // sees a sliver; the sweep sees the crossing.
+  place(SPANS.f2093);
+  rope.syncWraps(scene);
+  const wrapped = rope.path().filter((n) => n.contact.obj === slat);
+
+  details.push(
+    `gate = ${(MIN_WRAP_DEFLECTION * 1000).toFixed(1)}mm, the named corner stands ` +
+      `${(deflection * 1000).toFixed(2)}mm off the f2093 span`,
+  );
+  details.push(
+    `f2093 path: ${rope
+      .path()
+      .map((n) => `(${(n.contact.globalPosition.x * 100).toFixed(1)},${(n.contact.globalPosition.y * 100).toFixed(1)})`)
+      .join(" ")}`,
+  );
+
+  check("f2092: the slat is clear of the span, so nothing is wrapped yet", clearBefore);
+  // The premise, asserted so the case cannot quietly stop being about the gate:
+  // the corner the crossing offers is INSIDE the band, which is what the gate
+  // refuses and what makes the wrap below the exemption's doing.
+  check(
+    `the crossing's corner is inside the gate's band (${(deflection * 1000).toFixed(2)}mm of ${(MIN_WRAP_DEFLECTION * 1000).toFixed(1)}mm)`,
+    deflection < MIN_WRAP_DEFLECTION,
+  );
+  check(`f2093: the swept crossing is wrapped anyway (${wrapped.length} node(s) on the slat)`, wrapped.length > 0);
+  check(
+    "...on the corner the sweep named, the one the span crossed by",
+    wrapped.some((n) => n.contact.globalPosition.distanceTo(new Vec2(819.6, -1138.5).mul(PX)) < 0.01),
+  );
+
+  return ok(
+    "chain-graze-gate — a body the sweep watched cross is wrapped however little it has crossed by",
+    passed,
+    details,
+  );
+}
+
+// chain-face-release - a wrap whose bend has gone to zero is a chain lying ON
+// that face, and letting go of it there drops the chain INTO the face.
+//
+// `session-323f` f218. The ball hung on a chain wrapped over the near corner of
+// a rail sleeper - a 20 x 10 cm slat at 45 degrees - and running down the
+// sleeper's long face to the next wrap, which is to say the outgoing span and
+// the face were the same direction to the last digit. A chain resting flat on a
+// face has zero bend at the corner it came over BY CONSTRUCTION, so the release
+// test, a bare sign on that bend with no tolerance at all, fired on float noise:
+// it let go at a bend of +0.0058 degrees and left the span lying in the plane of
+// the face, 0.06 mm from four corners it was neither inside nor outside of.
+// One frame later the sweep found the slat had crossed, re-wrapped it from the
+// FAR side with the opposite hand, and by f232 the chain had the sleeper lassoed
+// on three corners - which pinned the ball against it for 25 frames at zero
+// velocity while the wind-up wound 4 cm of chain and 77 mm of push into it, then
+// tore free at f248 with a 4.6 m/s solve gain and dropped both wraps at once at
+// f254 (`chain-tunnel`, 84 mm beyond the span).
+//
+// Creating a wrap asks the corner for `MIN_WRAP_DEFLECTION` of deflection, so
+// releasing one at zero is not the same threshold with the other sign, it is
+// half a pixel of band in which the chain sits against a face with nothing
+// holding it on either side. The release now waits for the node to be that far
+// the WRONG way, measured as the create gate measures it - the node's distance
+// from the chord its two neighbours draw.
+//
+// The rule is asserted directly rather than through a level, for the reason
+// `cli corners` and `cli tangents` are: it is geometry, and a wrong answer only
+// surfaces as a chain inside a wall several hundred frames later. The three
+// frames are the recording's own, in its own numbers. `session-323f` is the
+// scene end to end, in the committed corpus.
+function caseChainFaceRelease(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // The three culls that matter, in the recording's own numbers: the node the
+  // cull was asked about, and the two path nodes either side of it AS THE CULL
+  // SAW THEM - mid-regeneration, which is a hair from where the frame leaves
+  // them. Read off `session-323f` by logging `shouldDetachNode`'s arguments.
+  // The third is the fixed tree's own f219, whose far node is the extra wrap
+  // that holding the sleeper's corner one more frame produced.
+  const NODE = new Vec2(819.6066, -1138.4645);
+  const TRIPLES: { name: string; prev: Vec2; next: Vec2 }[] = [
+    { name: "f217", prev: new Vec2(827.6078, -1129.3971), next: new Vec2(707.2505, -1250.7764) },
+    { name: "f218", prev: new Vec2(828.4252, -1129.6511), next: new Vec2(707.2505, -1250.7764) },
+    { name: "f219", prev: new Vec2(828.9236, -1130.5365), next: new Vec2(721.3927, -1236.6342) },
+  ];
+
+  const holder = new StaticBody2D();
+  holder.addShape(ShapeGeometry.createRectangle(0.2, 0.1), Vec2.ZERO);
+  const prevBody = new StaticBody2D();
+  prevBody.addShape(ShapeGeometry.createCircle(0.08), Vec2.ZERO);
+  const nextBody = new StaticBody2D();
+  nextBody.addShape(ShapeGeometry.createRectangle(0.2, 0.2), Vec2.ZERO);
+  holder.globalPosition = NODE.mul(PX);
+
+  // `cullDetachedNodes` is the whole of the release path, so the rule is asked
+  // of it rather than of the private predicate underneath.
+  const survives = (t: { prev: Vec2; next: Vec2 }): boolean => {
+    prevBody.globalPosition = t.prev.mul(PX);
+    nextBody.globalPosition = t.next.mul(PX);
+    const kept = cullDetachedNodes(
+      new RopeAttachment(new RopeContact(prevBody, Vec2.ZERO)),
+      new RopeAttachment(new RopeContact(nextBody, Vec2.ZERO)),
+      [new RopeWrap(new RopeContact(holder, Vec2.ZERO), WrapDirection.CounterClockwise)],
+    );
+    return kept.length === 1;
+  };
+  // The bend at the node, and how far the node stands from the chord its two
+  // neighbours draw - which is the quantity BOTH halves of the band are
+  // measured in, and the whole point of the fix.
+  const bend = (t: { prev: Vec2; next: Vec2 }): number =>
+    Mathf.radToDeg(
+      new Segment(t.prev.mul(PX), NODE.mul(PX))
+        .direction()
+        .angleTo(new Segment(NODE.mul(PX), t.next.mul(PX)).direction()),
+    ) * WrapDirection.CounterClockwise;
+  const offset = (t: { prev: Vec2; next: Vec2 }): number => {
+    const chord = new Segment(t.prev.mul(PX), t.next.mul(PX));
+    return chord.getClosestPointOnLine(NODE.mul(PX)).distanceTo(NODE.mul(PX));
+  };
+
+  details.push(`band = ${(MIN_WRAP_DEFLECTION * 1000).toFixed(1)}mm`);
+  for (const t of TRIPLES) {
+    details.push(
+      `  ${t.name}: bend x dir = ${bend(t).toFixed(5)}deg, node ${(offset(t) * 1000).toFixed(3)}mm off the chord`,
+    );
+  }
+
+  // The premise, asserted so the case cannot quietly stop being about the frame
+  // it is written for: f218 is the flat-on-the-face cull, its bend a thousandth
+  // of a degree the wrong way with the node eleven MICRONS off the chord.
+  const [f217, f218, f219] = TRIPLES as [typeof TRIPLES[0], typeof TRIPLES[0], typeof TRIPLES[0]];
+  check(`f217: the chain is still bent the way it is wrapped (${bend(f217).toFixed(3)}deg)`, bend(f217) > 0);
+  check(
+    `f218: the bend has reversed by a thousandth of a degree (${bend(f218).toFixed(5)}) with the node inside the band (${(offset(f218) * 1000).toFixed(3)}mm)`,
+    bend(f218) < 0 && offset(f218) < MIN_WRAP_DEFLECTION,
+  );
+  check(
+    `f219: by the next cull the node is clear of the band (${(offset(f219) * 1000).toFixed(2)}mm)`,
+    bend(f219) < 0 && offset(f219) > MIN_WRAP_DEFLECTION,
+  );
+
+  // The rule itself. The middle one is the fix: on the bare sign of the bend it
+  // reads "release", and releasing there is what put the chain through the slat.
+  check("f217: a wrap bent the way it is wrapped is kept", survives(f217));
+  check("f218: a wrap whose bend has only just reversed is HELD", survives(f218));
+  check("f219: ...and let go once the node is a band the wrong way", !survives(f219));
+
+  return ok(
+    "chain-face-release — a chain lying flat on a face keeps its corner until the corner is a band the wrong way",
+    passed,
+    details,
+  );
+}
+
 // chain-shared-corner - a corner two statics share is the span's own end, not
 // a body passing through it.
 //
@@ -6092,6 +6328,8 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainPostCatch());
   results.push(caseChainSweep());
   results.push(caseChainSweepSlideOff());
+  results.push(caseChainGrazeGate());
+  results.push(caseChainFaceRelease());
   results.push(caseChainSharedCorner());
   results.push(caseChainWedgedEnd());
   results.push(caseHungAnchor());

@@ -5,6 +5,16 @@ import { Segment } from "./segment";
 import { RopeAttachment, RopeNode, RopeWrap } from "./ropeContact";
 import { WrapDirection } from "./types";
 
+// The band, in metres, either side of a surface in which a corner is treated as
+// not deflecting the rope. It is ONE number because it is one band: a corner
+// must deflect the path by this much before it becomes a wrap (the grazing gate
+// in `Rope.regeneratePath`), and a wrap must be this far the wrong way before it
+// is released (`shouldDetachNode` below). Lives here rather than on `Rope`
+// because the release half is here and the create half imports it; a create
+// threshold that does not match its release threshold is the hole both halves
+// exist to close.
+export const MIN_WRAP_DEFLECTION = 0.005;
+
 class PathConstraint {
   constructor(
     public line: Segment,
@@ -61,7 +71,34 @@ class PathNode {
 }
 
 function shouldDetachNode(fromPrevious: Segment, toTarget: Segment, wrap: RopeWrap): boolean {
-  return fromPrevious.direction().angleTo(toTarget.direction()) * (wrap.wrapDir as number) < 0;
+  if (fromPrevious.direction().angleTo(toTarget.direction()) * (wrap.wrapDir as number) >= 0) {
+    return false;
+  }
+  // The other half of the band `MIN_WRAP_DEFLECTION` opens on the create side,
+  // and it has to be the same number with the other sign or the two disagree
+  // about a corner they are both looking at. Creating a wrap asks the corner to
+  // deflect the path by half a pixel; releasing one on the bare SIGN of the bend
+  // lets go the instant the path is straight, which is not the same thing at
+  // all: it leaves half a pixel in which the chain lies against a face with
+  // nothing holding it on either side of that face.
+  //
+  // A chain resting flat along a face lives exactly there. Its bend at the
+  // corner it came over is zero by construction - the outgoing span runs down
+  // the face - so the sign test fires on float noise, the wrap goes, and the
+  // chain is left lying IN the surface. Whichever way the next frame moves is
+  // then which side of the body it ends up on, and a 10 cm slat is thin enough
+  // to be crossed in one step: `session-323f` f218, where the chain let go of a
+  // rail sleeper's near corner at a bend of 0.006 degrees, was through it by
+  // f219, and re-wrapped from the far side with the opposite hand - which
+  // lassoed the sleeper, pinned the ball against it for 25 frames, and let go
+  // of both wraps at once when the solve finally tore it free.
+  //
+  // So the release waits until the node is genuinely on the wrong side by the
+  // width of the band, measured the way the create gate measures it: the node's
+  // distance from the chord its two neighbours draw.
+  const chord = new Segment(fromPrevious.start, toTarget.end);
+  const node = wrap.contact.globalPosition;
+  return chord.getClosestPointOnLine(node).distanceTo(node) > MIN_WRAP_DEFLECTION;
 }
 
 function buildValidPathToTarget(head: PathNode, target: RopeNode, depth = 0): PathNode {

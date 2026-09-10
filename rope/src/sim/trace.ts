@@ -627,8 +627,28 @@ const CHAIN_CREDIT_BOUND_TOLERANCE = 0.6;
 // the corpus (`session-234f` f79), and the pump's per-frame credit sat under
 // that. What distinguishes a pump is that it is re-earned for as long as its
 // cause lasts - 18 consecutive frames on `session-324f`, 11 on `session-307f`
-// - where the corpus never strings more than 2 together. Six is the bar.
-const CHAIN_PUSH_CREDIT_FRAMES = 6;
+// - where the corpus never strung more than 2 together. Six was the bar.
+//
+// IT NO LONGER SEPARATES THE TWO CLASSES, and the number below is housekeeping
+// over what healthy reads rather than a detection threshold. Measured
+// 2026-09-09 by replaying the three artifacts with `separateBallFromPathBodies`
+// disabled, which is the pump this counts: `session-324f` strings **5** frames
+// while the ball and its anchor leave together at 24 m/s, and `session-307f`
+// strings 2 at 9 m/s. Healthy, the same corpus reads 0 on 46 bundles, 1 on 9,
+// and 7 on `session-324f` - so the counter is now HIGHER on the press than on
+// the pump, and no bar drawn on it can tell them apart. What catches the
+// restored pump today is `rope-solve-kick` (7.0 m/s at `session-324f` f181);
+// nothing catches `session-307f`'s at all.
+//
+// Nine clears the measured healthy ceiling of 7 by two and stays two under the
+// shortest run the pump ever gave when the counter did work, so it keeps the
+// corpus honest without pretending to a detection it has lost. The class wants
+// a detector written on what a pump actually is - the ball and the body it is
+// anchored to GAINING SPEED TOGETHER and keeping it, where a press exchanges
+// momentum (`session-324f` f123-129 healthy: the anchor decelerates 2.85 to
+// 0.95 m/s as the ball accelerates 0.65 to 1.71, with the chain's length pinned
+// to a tenth of a pixel) - rather than on how long the credit runs.
+const CHAIN_PUSH_CREDIT_FRAMES = 9;
 // How far over its constraint length the anchored chain may measure before the
 // rope is not being enforced at all - the launch class, a wrap path appearing
 // at full size in one frame (`session-1474f`: half a metre of length error,
