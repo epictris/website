@@ -488,7 +488,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // two ambientCG ships. The deepest relief of any set here (B mean .836,
       // against .95 for `rock-grey` and .9998 for `rusted iron`'s plate) - it is
       // a photogrammetry scan of a broken face, and the depth is why it is the
-      // largest map in the manifest at 734 KB.
+      // largest of the ROCK normals at 734 KB. It was the largest full stop when
+      // this was written; the moss and ground sets added since are all over 2 MB,
+      // so the sentence is kept as a rock-to-rock comparison rather than a claim
+      // about the manifest that goes stale every time a set is added.
       normal: {
         file: "/textures/rock-black-normal.webp",
         sha256: "225ff4f77bf7f83033e532809a4c7dfec09ded2987d06249575112fcd989345c",
@@ -513,6 +516,83 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     metalness: 0,
     fallback: "stone",
     source: "https://ambientcg.com/view?id=Rock035",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
+  // A near-black face that still SHADES, which is the one thing `rock-black`
+  // cannot do. Its albedo means #3B3B3A - neutral where `rock-grey`
+  // is warm (#605B57) and `rock-black` is cool (#101A1D), and the most nearly
+  // achromatic surface in the manifest by an order of magnitude: mean chroma
+  // 0.004, where every other rock is 0.036 to 0.066 and the organics run to 0.30
+  // (measured as max-min of the shipped base map's mean colour - HSL saturation
+  // is the wrong tool here, since its denominator collapses at low lightness and
+  // scores `rock-black` a nonsensical 0.41). So ambientCG's own `moss` tag on
+  // this one oversells a green that is only ever in the crevices.
+  //
+  // The number that places it is the LINEAR albedo, which is what a light
+  // actually has to work with: 0.044, against `rock-black`'s under 0.01. That
+  // entry names charcoal at 0.04 as the thing real enough to compare against,
+  // and this is charcoal - so a wall of it is dark stone that still shades,
+  // where a wall of `rock-black` is a hole with a lamp obliged to sit in shot.
+  // Reach for this first when a room wants to be dark, and keep `rock-black` for
+  // where the dark is meant to be absolute.
+  //
+  // Its relief is the shallow family rather than the deep one (normal B mean
+  // .946, sigma .046 - `rock-grey`'s .95, nothing like `rock-black`'s .836), and
+  // what carries it instead is a diagonal grain of pale fracture lines across an
+  // otherwise even face. That grain is directional, which the other three are
+  // not: a wall of this has a lie to it, and two walls meeting at a corner show
+  // it running two ways. Worth wanting, worth noticing before it is put on
+  // something that reads as a repeat.
+  //
+  // Keyed as a SURFACE for the reason the other rocks are: a set under the
+  // `stone` material's name would re-skin every stone body in every level.
+  // Named for the colour rather than `rock-014`, both to match the rest of the
+  // manifest and because `MESH_ASSETS` already has `rock-1` .. `rock-24` in it -
+  // a texture called `rock-014` beside a prop called `rock-14` is a mistake
+  // waiting to be typed.
+  "rock-charcoal": {
+    maps: {
+      base: {
+        file: "/textures/rock-charcoal-base.webp",
+        sha256: "aaeaeecd2ed47c36767baa505bf02d91f618fac0128255351c1b1d38964d52c7",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
+      // ambientCG ships. ambientCG generated it by height-field photogrammetry,
+      // so the fracture lines are in the surface and not only in the picture -
+      // and at 2046 KB it is in the manifest's top band of normals, which is the
+      // fine even stipple over the whole face rather than the fractures: there is
+      // no flat region anywhere in it for a lossless encoder to spend nothing on.
+      // Every map in that band (moss 2492, mossy ground 2353, forest floor 2263,
+      // factory brick 2071) is one with texture in every texel for the same
+      // reason - a lossless normal costs what its busiest region costs.
+      normal: {
+        file: "/textures/rock-charcoal-normal.webp",
+        sha256: "59149e3383dbb61c7ab6b0709a24bb96f6c40883d69b1765573775d4f5c91a99",
+      },
+      // Red channel alone again (G and B exactly 0), flattened to grey by
+      // `assets:optimize-texture --channel r`. Roughness means .676 - the least
+      // rough of the four rocks, which is the sheen on the fracture faces. No
+      // metallic map and none wanted: the 0 below is a dielectric's, stated
+      // rather than shipped as a black image.
+      roughness: {
+        file: "/textures/rock-charcoal-roughness.webp",
+        sha256: "910a0a3268dd097bb366a34011b4cd0e3e635ef23556e59b6317cbcc65eb0e08",
+      },
+      ao: {
+        file: "/textures/rock-charcoal-ao.webp",
+        sha256: "078019f1abaddd00e6179aa6278db9ce4d3b6feef4f05e7540f95e350658f208",
+      },
+    },
+    // ambientCG states no captured size (its API answers `dimensionX: 0`), so
+    // this is a by-eye number as `rock-grey`'s and `rock-black`'s are - and it is
+    // deliberately the SAME 2 m they both carry, since the three are meant to be
+    // swappable on a wall without its `tileScale` being retuned, and a seam
+    // between rock at 2 m and rock at 1.6 reads as a mistake.
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Rock014",
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
@@ -652,6 +732,76 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
   // particular weathered, rusted piece rather than what iron is, so a set under
   // the material's name would re-skin every steel body in every level as a side
   // effect of dressing the avatar. The avatar asks for it by name instead.
+  // Moss pads with rust-orange needle litter tracing the channels between them:
+  // the ground OUTSIDE, where `mossy ground` is the ground underground. It is the
+  // third set in a family that now has to be told apart on purpose, and the three
+  // differ by RELIEF more than by colour:
+  //
+  //   forest floor   normal B mean .944   flat, and photographed from standing
+  //   mossy ground   normal B mean .833   broken dirt, clods and hollows
+  //   moss           normal B mean .723   cushions, deep enough to cast into
+  //
+  // So this is the one a large floor plane wants. The other two put relief under
+  // a grazing light that a flat span then shows as lumps marching to the horizon,
+  // and at .944 there is nothing here to march - what carries the surface is the
+  // litter pattern rather than the geometry. The other way round for a ledge lip
+  // or a metre of damp wall, which is what `moss` is deep for.
+  //
+  // **The second most chromatic thing this manifest has**, behind `moss` alone,
+  // and worth knowing before it is laid next to anything: mean chroma .268,
+  // against .175 for `mossy ground`, .302 for `moss`, and every rock in the set
+  // between .004 and .066. A floor of it under grey walls
+  // is not a quiet surface with some green in it, it is the colour the eye goes
+  // to. Its own MEAN is olive rather than green though (#6F5B2A, R .435 G .358
+  // B .169) - the needles pull it a long way off the moss - so it reads green in
+  // the patches and khaki across a span, and a level wanting actual green over a
+  // whole surface wants `moss` instead.
+  //
+  // Keyed as a SURFACE like the rest of the ground family: there is no `dirt`
+  // material for it to stand in for, and a shape asks for it by name.
+  "forest-floor": {
+    maps: {
+      base: {
+        file: "/textures/forest-floor-base.webp",
+        sha256: "bd0770d5b37ef7506fa1603c601453de4fc702ccef8bc6e0429d9730bfbde36c",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
+      // ambientCG ships. 2263 KB, in the manifest's top band of normals with the
+      // other two ground sets - a lossless normal costs what its busiest region
+      // costs, and needle litter is busy in every texel it has.
+      normal: {
+        file: "/textures/forest-floor-normal.webp",
+        sha256: "de5db1b02f2fcdc2494b9632c10cb1673c90b0fea52acb0bbaba471473e21b2c",
+      },
+      // Red channel alone (G and B exactly 0), flattened to grey by
+      // `assets:optimize-texture --channel r`. Roughness means .604, and the map
+      // is doing real work rather than sitting near its mean: wet moss and dry
+      // needles are the two ends of it, which is most of what makes this read as
+      // organic rather than as a green rock. No metallic map and none wanted.
+      roughness: {
+        file: "/textures/forest-floor-roughness.webp",
+        sha256: "aecc9098d4340c67c91e71416b4cbc298e9725ba68eeabdd2347769ac87e04ec",
+      },
+      ao: {
+        file: "/textures/forest-floor-ao.webp",
+        sha256: "484a9ca3c9e54ca0c2303a0122212e3a86eabc8036427f807ba6a7181256dc83",
+      },
+    },
+    // ambientCG states no captured size (its API answers `dimensionX: 0`), so
+    // this is a by-eye number - and it is `mossy ground`'s 3 rather than `moss`'s
+    // 1 on the same reasoning the rocks share 2: the two ground surfaces are the
+    // ones that meet on a floor, and a seam between ground at 3 m and ground at 1
+    // reads as a mistake. 3 m also puts the moss pads at roughly half a metre,
+    // which is the size they are, and buys the largest repeat the set can carry -
+    // worth having, since a pattern this high-contrast shows its tiling sooner
+    // than a quiet one does.
+    tile: 3,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Ground068",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   "rusted iron": {
     maps: {
       base: {

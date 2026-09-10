@@ -45,7 +45,11 @@ plain warm grey rock (`rock-grey`):
 - https://ambientcg.com/view?id=Rock060
 near-black cave rock (`rock-black`):
 - https://ambientcg.com/view?id=Rock035
+neutral dark-grey rock with a diagonal fracture grain, dark enough to read as unlit and light enough to still shade, unlike `rock-black` (`rock-charcoal`):
+- https://ambientcg.com/view?id=Rock014
 mossy dirt with moss patches, for ground and floors (`mossy ground`):
 - https://ambientcg.com/view?id=Ground047
 moss cushions, for ledges and damp faces (`moss`):
 - https://ambientcg.com/view?id=Moss002
+moss pads under pine-needle litter, flat enough for a large floor plane where `mossy ground` and `moss` are too deep (`forest-floor`):
+- https://ambientcg.com/view?id=Ground068
