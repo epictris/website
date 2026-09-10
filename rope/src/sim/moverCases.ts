@@ -110,6 +110,10 @@ class Scene {
     for (let i = 0; i < frames; i++) {
       this.frame++;
       const time = this.frame * DT;
+      // The pose the renderer interpolates FROM, snapshotted before anything
+      // moves - where both level drivers take it, and the only place a mover's
+      // drawn position can be judged from (see `captureRenderTransform`).
+      this.world.captureRenderTransforms();
       for (const m of this.movers) {
         m.body.beginMove();
         m.script(m.body, time, DT);
@@ -1118,6 +1122,40 @@ function caseRepeat(): MoverResult {
     worstJumpSpeed === 0 && Math.abs(travellingSpeed - 1) < 1e-6,
   );
 
+  // ...and it is not DRAWN travelling either. The renderer interpolates between
+  // the pose captured at the top of the step and the one the step ended at, so a
+  // jump left uncaptured draws the platform sliding the length of its run over
+  // the one frame it went home - seen mid-level, where it never was
+  // (`session-439f`). Half way through the step is the frame's worst case.
+  const drawn = new Scene(
+    swingLevel([
+      {
+        kind: "static",
+        x: 0,
+        y: 0,
+        rot: 0,
+        moveNodes: [{ x: 0, y: 0 }, { x: 400, y: 0 }],
+        moveMode: "repeat",
+        moveSpeed: 100,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+      },
+    ]),
+  );
+  const platform = drawn.mover();
+  let worstDrawn = 0;
+  let drewBetween = false;
+  for (let f = 1; f <= Math.round(5 / DT); f++) {
+    const was = platform.globalPosition.x;
+    drawn.step();
+    const now = platform.globalPosition.x;
+    const mid = platform.renderPosition(0.5).x;
+    if (now < was - 1e-9) worstDrawn = Math.max(worstDrawn, Math.abs(mid - now));
+    else if (Math.abs(mid - now) > 1e-6) drewBetween = true;
+  }
+  check(`the jump is not drawn as a slide home (${(worstDrawn * 100).toFixed(2)} cm from where it landed)`,
+    worstDrawn === 0);
+  check("...while a travelling frame is still interpolated", drewBetween);
+
   // A body ON it is left where it stood rather than flung after it: the whole
   // reason the frame's velocity is zeroed instead of derived.
   const rider = new Scene({
@@ -1284,22 +1322,28 @@ function caseKeys(): MoverResult {
   // ends of a route to blend toward.
   check("past the last key it holds", Math.abs(moveAngleAt(turned, false, 99) - Math.PI / 2) < 1e-9);
 
-  // ALIGN, which is the same angle taken from the route's own tangent - and
-  // taken as the CHANGE from where the route starts, so a body stands at the
-  // angle it was drawn at on frame zero.
+  // ALIGN, which is the same angle taken from the route's own tangent - as the
+  // TURN since the route's start, so the body leaves its drawn angle the way it
+  // leaves its drawn position.
   const corner = route([new Vec2(4, 0), new Vec2(4, -4)]);
-  check(`aligned, the body faces along the route (${moveAngleAt(corner, true, 0).toFixed(6)})`,
+  check(`aligned, the body starts at the angle it was drawn at (${moveAngleAt(corner, true, 0).toFixed(6)})`,
     Math.abs(moveAngleAt(corner, true, 0)) < 1e-12);
-  // An aligned body's rotation IS the route's direction, not a turn measured
-  // from where the route started - so a route that sets off up a slope puts the
-  // body ON that slope rather than leaving it level and 45 degrees out for the
-  // whole trip. Red against a change-since-the-start implementation, which
-  // answers 0 here and 90 (rather than 45) at the far end.
+  // ...on a SLOPED start too, which is the half the absolute form got wrong: a
+  // platform drawn flat and sent off down a slope (or, the case that shows it,
+  // sent LEFT) is asked to travel, not to be re-aimed, and an absolute tangent
+  // answers -45 here and 180 for the leftward one - a body arriving upside down
+  // having been told only where to go. Red against that implementation, which
+  // answers -45 and -180 rather than 0.
   const sloped = route([new Vec2(4, -4), new Vec2(8, -4)]);
-  check(`...along a SLOPED start too (${((moveAngleAt(sloped, true, 0) * 180) / Math.PI).toFixed(1)}° of -45)`,
-    Math.abs(moveAngleAt(sloped, true, 0) + Math.PI / 4) < 1e-9);
-  check(`...and level where the route levels out (${((moveAngleAt(sloped, true, sloped.total) * 180) / Math.PI).toFixed(1)}°)`,
-    Math.abs(moveAngleAt(sloped, true, sloped.total)) < 1e-9);
+  check(`...along a SLOPED start too (${((moveAngleAt(sloped, true, 0) * 180) / Math.PI).toFixed(1)}° of 0)`,
+    Math.abs(moveAngleAt(sloped, true, 0)) < 1e-12);
+  const leftward = route([new Vec2(-4, 0)]);
+  check(`...and sent LEFT it travels rather than flips (${((moveAngleAt(leftward, true, 2) * 180) / Math.PI).toFixed(1)}° of 0)`,
+    Math.abs(moveAngleAt(leftward, true, 2)) < 1e-12);
+  // What the route TURNS is still the route's own turn: the sloped start levels
+  // out over its second leg, which is 45 degrees of turn from where it set off.
+  check(`...and turns by what the track turns (${((moveAngleAt(sloped, true, sloped.total) * 180) / Math.PI).toFixed(1)}° of 45)`,
+    Math.abs(moveAngleAt(sloped, true, sloped.total) - Math.PI / 4) < 1e-9);
   check(`...and has turned a right angle down the far leg (${moveAngleAt(corner, true, 8).toFixed(4)})`,
     Math.abs(Math.abs(moveAngleAt(corner, true, 8)) - Math.PI / 2) < 1e-9);
   // ...and it turns GRADUALLY. The tangent is the chord across a window rather
@@ -1447,6 +1491,44 @@ function caseKeys(): MoverResult {
   }
   check(`...and turns to the last one as it arrives (${turnedTo.toFixed(4)} of ${(Math.PI / 4).toFixed(4)})`,
     Math.abs(turnedTo - Math.PI / 4) < 1e-3);
+
+  // ...and ALIGN through the same build, which is where the drawn pose has to
+  // survive. A platform drawn at an angle and sent LEFT travels left: it is
+  // being told where to go, not which way to face, and the absolute form
+  // answered this with a body upside down on frame zero.
+  const sentAligned = (dx: number, then?: { x: number; y: number }): Scene =>
+    new Scene(
+      swingLevel([
+        {
+          kind: "static",
+          x: 0,
+          y: 0,
+          rot: 0.3,
+          moveNodes: [{ x: 0, y: 0 }, { x: dx, y: 0 }, ...(then ? [then] : [])],
+          moveSpeed: 100,
+          moveAlign: true,
+          objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
+        },
+      ]),
+    );
+  for (const [way, dx] of [["right", 400], ["left", -400]] as const) {
+    const sc = sentAligned(dx);
+    const cart = sc.mover();
+    check(`an aligned body sent ${way} spawns at the angle it was DRAWN at (${cart.globalRotation.toFixed(6)} of 0.3)`,
+      Math.abs(wrapPi(cart.globalRotation - 0.3)) < 1e-12);
+    sc.step(Math.round(2 / DT));
+    check(`...and holds it down the straight leg (${cart.globalRotation.toFixed(6)})`,
+      Math.abs(wrapPi(cart.globalRotation - 0.3)) < 1e-9);
+  }
+  // The turn itself is untouched: the same body, sent left and then down, has
+  // turned a right angle FROM its drawn angle by the far end. (Compared wrapped,
+  // because a pose is an angle mod 2π - `commitMove` reads the delta the same
+  // way, which is what makes the tangent's own branch cut a non-event.)
+  const bend = sentAligned(-400, { x: -400, y: -400 });
+  const bent = bend.mover();
+  bend.step(Math.round(8 / DT)); // 8 m of track at 1 m/s: the far end
+  check(`...and an aligned body turns a right angle from where it was drawn (${wrapPi(bent.globalRotation - 0.3).toFixed(4)})`,
+    Math.abs(Math.abs(wrapPi(bent.globalRotation - 0.3)) - Math.PI / 2) < 1e-3);
 
   // The keys survive both round trips, which is the half nothing else can see.
   const raw = swingLevel([

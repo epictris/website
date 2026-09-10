@@ -6,6 +6,7 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 import {
+  AnimatableBody2D,
   CollisionObject2D,
   CollisionShape2D,
   currentTransformEpoch,
@@ -1875,7 +1876,7 @@ export class Rope {
     for (const cand of pool) {
       if (cand.body === startObj || cand.body === endObj) continue;
       if (cand.shape === span.from.contact.shape || cand.shape === span.to.contact.shape) continue;
-      const pose = cand.body.isMobile ? (this.lastPoses.get(cand.body) ?? null) : null;
+      const pose = cand.body.isMobile ? this.sweepPose(cand.body) : null;
       const crossing = shapeCrossesSpan(cand.shape, pose, motion, (i) => !isSeamVertex(cand.shape, i));
       if (crossing) (out ??= new Map()).set(cand, crossing);
     }
@@ -1892,9 +1893,32 @@ export class Rope {
       return this.lastExit;
     }
     if (!(obj instanceof PhysicsBody2D) || !obj.isMobile) return node.contact.globalPosition;
-    const pose = this.lastPoses.get(obj);
+    const pose = this.sweepPose(obj);
     if (!pose) return null;
     return pose.position.add(node.contact.position.rotated(pose.rotation));
+  }
+
+  // Where a mobile body was at the last regeneration, for the sweep to place its
+  // points at - and where it IS if it got here by teleporting.
+  //
+  // A `repeat` mover reaching the end of its run is put back at the start
+  // (`moverScript`), and that is not a journey. Swept from the pose the last
+  // regeneration saw, the platform crosses the whole level in one step: every
+  // span hanging over its run reads as crossed, so a player hanging anywhere
+  // along it is caught by a body that was never there and flung (`session-439f`,
+  // 2.3 m/s to 45 m/s on the frame the trolley went home). It is the same delta
+  // `AnimatableBody2D.commitMove` refuses to read as a contact velocity, refused
+  // here for the same reason: the body has not passed through anything, it has
+  // ceased to be where it was.
+  //
+  // `jumped` is true for the whole frame the jump happened on, so every
+  // regeneration in it reads the body as standing still - which it is, having
+  // already been put where it is going before the first of them.
+  private sweepPose(body: PhysicsBody2D): Pose | null {
+    if (body instanceof AnimatableBody2D && body.jumped) {
+      return { position: body.globalPosition, rotation: body.globalRotation };
+    }
+    return this.lastPoses.get(body) ?? null;
   }
 
   private recordSweepBaseline(bodies: readonly PhysicsBody2D[]): void {

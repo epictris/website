@@ -312,32 +312,40 @@ function fract(x: number): number {
   return ((x % 1) + 1) % 1;
 }
 
-// Which way the route has the body facing, `s` metres along it - the angle
-// `moverScript` writes, or ADDS to the pose the body was drawn at when the route
-// does not aim it.
+// How far the route has TURNED the body, `s` metres along it - the angle
+// `moverScript` adds to the pose the body was drawn at.
 //
-// An aligned body's rotation IS the route's own direction, not a turn measured
-// from where it started. That distinction is the whole of the field: `moveAlign`
-// says the track decides which way the body faces, exactly as the route already
-// decides where it is, so the drawn rotation stops being an input to rotation
-// the way the drawn position stopped being an input to position past node zero.
+// Aligned, that is the change in the track's direction since the route's start,
+// not the track's direction itself: `moveAlign` says the body turns with the
+// track, and it turns FROM the angle it was authored at, exactly as it travels
+// from the point it was authored at. Node zero is the body's own origin and the
+// drawn rotation is its own zero, so a mover at time zero stands precisely where
+// and how the file drew it - the same statement every other authored motion here
+// makes (see `moverScript`).
 //
-// It is the one place a mover's pose at time zero is not the pose the file drew,
-// and the alternative is worse. Measured as the change since the start, a cart
-// drawn level on a track that sets off down a 40 degree slope keeps a 40 degree
-// error for the whole route: level at the top where the track is steep, and 80
-// degrees nose-down at the far end where the track is only 40. It would ride
-// beside its rails rather than on them, which is the one thing align is for.
-// A cart drawn ON its track is unmoved either way, because there the two agree -
-// so what the absolute form costs is nothing an author who drew it right can
-// see, and what it buys is that one who did not is corrected onto the rails.
+// The absolute form - an aligned body's rotation IS the tangent - was what this
+// did, and it makes the drawn pose unreadable in the one case that is easiest to
+// author: a platform drawn flat and sent LEFT has a tangent of 180 degrees, so
+// it arrives upside down having been asked to travel, not to flip. The cost of
+// measuring the turn instead is that a cart drawn level on a track that sets off
+// down a 40 degree slope stays 40 degrees off it for the whole route rather than
+// being silently corrected onto its rails - which is a body drawn wrong looking
+// wrong, and is fixed by drawing it on its track.
 //
-// `MoveNodeData.rot` adds on top of whichever it is, which is what makes a key a
-// correction to the track rather than a replacement for it.
+// `MoveNodeData.rot` adds on top, which is what makes a key a correction to the
+// track rather than a replacement for it.
 export function moveAngleAt(route: MoveRoute, align: boolean, s: number): number {
+  return (align ? alignTurnAt(route, s) : 0) + keyValueAt(route.rotKeys, s, 0);
+}
+
+// The track's turn between its start and `s`. Both ends read through the same
+// tangent window, so the start is measured the way every other point is - and a
+// route that sets off along a bow answers the direction it actually leaves in
+// rather than its first chord's.
+function alignTurnAt(route: MoveRoute, s: number): number {
+  const closed = moveModeCloses(route.mode);
   return (
-    (align ? tangentAngleAt(route.index, s, moveModeCloses(route.mode)) : 0) +
-    keyValueAt(route.rotKeys, s, 0)
+    tangentAngleAt(route.index, s, closed) - tangentAngleAt(route.index, 0, closed)
   );
 }
 
@@ -368,10 +376,10 @@ export function moverScript(opts: {
   const { base, restRot, route, swing } = opts;
   return (body, time, dt) => {
     let pos = base;
-    // An ALIGNED route aims the body outright rather than turning it from the
-    // pose it was drawn at (see `moveAngleAt`), so the drawn angle is the base
-    // only where nothing else is aiming it.
-    let rot = route?.align ? 0 : restRot;
+    // The drawn angle is the base whatever the route does, alignment included:
+    // an aligned route turns the body WITH the track rather than aiming it
+    // outright (see `moveAngleAt`), so it composes here like every other motion.
+    let rot = restRot;
     // A `repeat` JUMPS home at the end of its run, and the jump is not motion:
     // read off the transform delta it would be a contact velocity of tens of
     // metres a second, thrown for one frame at whatever is standing on the body.

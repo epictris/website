@@ -874,10 +874,6 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const lead = routeLeadOf(id);
     return lead && lead.route.length > 1 && !orbited() ? lead : null;
   }
-  // ...and the nodes actually picked on it, sorted and with anything past the
-  // route's end dropped: an index outlives the list it indexes only until the
-  // next edit, and reading one that has gone is how a stale set keys the wrong
-  // node.
   // ...and the nodes actually picked on it, sorted, empty for any body but the
   // one they were picked on, and with anything past the route's end dropped: an
   // index outlives the list it indexes only until the next edit, and reading one
@@ -887,6 +883,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return [...routeSel.nodes].filter((i) => i < item.route.length).sort((a, b) => a - b);
   }
   function pickRouteNode(item: EdItem, index: number, add: boolean): void {
+    nudging = false; // a new set of nodes starts a new undo step, as a shape's does
     if (!add || routeSel?.bodyId !== item.bodyId) {
       routeSel = { bodyId: item.bodyId, nodes: new Set([index]) };
       return;
@@ -895,6 +892,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
   function clearRouteSel(): void {
     routeSel = null;
+  }
+  // Whether the pickable route has any node picked out of it. What Delete and
+  // Escape ask, so the two agree about when a keystroke is about the route's
+  // nodes rather than about the body carrying them.
+  function routeNodesPicked(): boolean {
+    const lead = routeEditTarget();
+    return !!lead && selectedRouteNodes(lead).length > 0;
   }
   function setSelection(ids: readonly number[]): void {
     // Every selection this clears has to be in the test, or the early return is
@@ -3280,7 +3284,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
     const hint = el("div", "ed-hint");
     hint.textContent = anySwing || anyRoute
-      ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a node to move it, the small handles between them to add one, Alt+click to remove one, a round grip to bow a leg; the body itself is node zero. Click a node to key its angle or its speed there. Keep the surface speed under 2 cm/frame."
+      ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a node to move it, the small handles between them to add one, Alt+click to remove one, a round grip to bow a leg; the body itself is node zero. Click a node to key its angle or its speed there (Shift picks out several); Delete removes the picked nodes, the arrows nudge them and Esc drops them. Keep the surface speed under 2 cm/frame."
       : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb either, which is what lets a jump be timed against it.";
     g.appendChild(hint);
   }
@@ -6456,6 +6460,39 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     return true;
   }
 
+  // Remove the picked route nodes from the body that carries them. Answers
+  // whether it handled the keystroke, so the caller can fall through to deleting
+  // the BODY when none is picked - the order `deleteSelectedVerts` sets, one
+  // level out: with nodes picked out of a route, Delete is about them, and the
+  // body is one Escape away from being what it means again.
+  //
+  // Node zero is never removed: it IS the body, pinned at the frame origin, so a
+  // route without it is not a route and removing it could only mean removing the
+  // body. A selection naming it removes the OTHERS and leaves it, which is the
+  // answer Alt+click already gives - and a selection of nothing else still
+  // counts as handled, because the alternative is Delete quietly taking the body
+  // while the author was looking at one of its nodes.
+  //
+  // Below two nodes there is no route left to have, so the remainder is dropped
+  // and the body stands still. Alt+click's own rule again, so the last leg
+  // removed by either gesture leaves the same level.
+  function deleteSelectedRouteNodes(): boolean {
+    const lead = routeEditTarget();
+    if (!lead) return false;
+    const picked = selectedRouteNodes(lead);
+    if (!picked.length) return false;
+    const doomed = new Set(picked.filter((i) => i > 0));
+    if (!doomed.size) return true;
+    beginAction();
+    const rest = lead.route.filter((_, i) => !doomed.has(i)).map(cloneRouteNode);
+    lead.route = rest.length > 1 ? rest : [];
+    clearRouteSel();
+    syncEditedBodies([lead]);
+    markDirty();
+    rebuildInspector();
+    return true;
+  }
+
   // Move the picked vertices by one grid cell. Answers whether it handled the
   // keystroke, exactly as `deleteSelectedVerts` does.
   function nudgeSelectedVerts(dir: Vec2, fine: boolean): boolean {
@@ -6474,6 +6511,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const next = item.shape.verts.map((v, i) => (picked.has(i) ? v.add(d) : v));
     if (item.shape.kind === "path") setPathVerts(item, next);
     else setPolyVerts(item, next);
+    markDirty();
+    refreshFields();
+    return true;
+  }
+
+  // Move the picked route nodes by one grid cell, the arrow-key half of what
+  // Delete does to them - and the same answer to the same question, so a picked
+  // node means BOTH keys are about the route rather than about the body.
+  //
+  // Node zero does not move: it is the body's own origin, so nudging it would be
+  // a second, quieter way of moving the body that left every other node behind -
+  // the reason it is not draggable either. A pick that names only node zero
+  // still counts as handled, for the reason Delete's does: falling through would
+  // walk the whole body off while the author was aiming at one of its nodes.
+  //
+  // The step is rotated into the BODY's frame, exactly as a polygon's is into
+  // its shape's, so an arrow moves a node along the world axis it names rather
+  // than along whatever angle the body was drawn at.
+  function nudgeSelectedRouteNodes(dir: Vec2, fine: boolean): boolean {
+    const lead = routeEditTarget();
+    if (!lead) return false;
+    const picked = selectedRouteNodes(lead);
+    if (!picked.length) return false;
+    const moving = new Set(picked.filter((i) => i > 0));
+    if (!moving.size) return true;
+    if (!nudging) {
+      beginAction();
+      nudging = true;
+    }
+    const d = dir.mul(fine ? NUDGE_FINE : gridStep).rotated(-bodyFrameOf(model, lead.bodyId).rot);
+    lead.route = lead.route.map((n, i) => (moving.has(i) ? { ...n, p: n.p.add(d) } : n));
+    syncEditedBodies([lead]);
     markDirty();
     refreshFields();
     return true;
@@ -8211,6 +8280,12 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       else if (selectedVerts.size) {
         selectedVerts.clear();
         rebuildInspector();
+      } else if (routeNodesPicked()) {
+        // ...and a route's picked nodes are that same innermost thing for a body
+        // that travels: dropping them is how Delete and the arrows go back to
+        // meaning the body.
+        clearRouteSel();
+        rebuildInspector();
       } else setSelection([]);
       return;
     }
@@ -8248,9 +8323,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Arrows before the Ctrl block: Ctrl+Arrow is the fine nudge, not a combo.
     const dir = NUDGE_DIRS[e.code];
     if (dir) {
-      // Same rule as Delete: a nudge is about the corners while there are
-      // corners picked, rather than moving the whole shape out from under them.
-      if (!nudgeSelectedVerts(dir, e.ctrlKey || e.metaKey)) {
+      // Same rule as Delete, and in the same order: a nudge is about the
+      // corners while there are corners picked, then about a route's nodes while
+      // there are nodes picked, rather than moving the whole thing out from
+      // under either.
+      if (
+        !nudgeSelectedVerts(dir, e.ctrlKey || e.metaKey) &&
+        !nudgeSelectedRouteNodes(dir, e.ctrlKey || e.metaKey)
+      ) {
         nudgeSelection(dir, e.ctrlKey || e.metaKey);
       }
       e.preventDefault(); // don't scroll the page
@@ -8304,8 +8384,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (e.code === "Delete" || e.code === "Backspace") {
       // Corners before objects: with vertices picked out of a shape, Delete is
       // about them, and the shape itself is one Escape away from being what it
-      // means again.
-      if (!deleteSelectedVerts()) deleteSelected();
+      // means again. A mover's route nodes are the same rule and sit between the
+      // two - they are picked out of a body, so they are asked after the shape's
+      // own corners and before the body itself.
+      if (!deleteSelectedVerts() && !deleteSelectedRouteNodes()) deleteSelected();
       e.preventDefault();
     } else if (e.code === "KeyB") {
       // Spot-check a spot: test the ball from wherever the cursor is, without

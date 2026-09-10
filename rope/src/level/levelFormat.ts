@@ -1030,15 +1030,13 @@ export interface LevelBodyData {
   // a lap would be a body that slows down at an arbitrary point of a circle with
   // nothing there. Absent = `linear`.
   //
-  // `moveAlign` turns the body with the route: an aligned body's rotation IS the
-  // route's own direction, so a minecart noses up and down a curved track with
-  // no keys at all. The track decides which way the body faces, exactly as the
-  // route already decides where it is - so the drawn rotation stops being an
-  // input to rotation, the way the drawn position stopped being an input to
-  // position past node zero, and this is the one place a mover's pose at time
-  // zero is not the pose the file drew (see `moveAngleAt` for why the
-  // alternative is worse). `MoveNodeData.rot` adds to it, as a correction to the
-  // track rather than a replacement for it.
+  // `moveAlign` turns the body with the route, so a minecart noses up and down a
+  // curved track with no keys at all. It is a TURN, measured from the pose the
+  // body was drawn at and applied on top of it: the body leaves its drawn angle
+  // the way it leaves its drawn position, and a platform drawn flat and sent
+  // left travels left rather than arriving upside down (see `moveAngleAt`).
+  // `MoveNodeData.rot` adds to it, as a correction to the track rather than a
+  // replacement for it.
   //
   // A body may swing AND move, and the three motions compose by addition: the
   // route writes where the body is, the route's alignment and rot keys write

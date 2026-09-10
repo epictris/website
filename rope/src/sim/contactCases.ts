@@ -5568,6 +5568,63 @@ function caseChainSweep(): ContactResult {
   check(`drop-stone: nothing tunnels and no invariant fires${firstOther(stoneOn)}`, stoneOn.violations.length === 0);
   check(`drop-stone: without the sweep the stone falls through the chain (tunnel @f${stoneOff.tunnelAt ?? "never"})`, stoneOff.tunnelAt !== null && stoneOff.tunnelAt >= 66 && stoneOff.tunnelAt <= 74);
 
+  // ...and the mirror of it: a body that did NOT travel is not swept at all.
+  //
+  // `session-439f` f320. A `repeat` platform reaching the end of its run is put
+  // back at the start (`moverScript`), and the sweep placed it where the last
+  // regeneration saw it - fifteen metres away - so the whole of its run read as
+  // ground the platform had just crossed. The player hanging over that run was
+  // wrapped onto a body that was never there: the chain went from 1.48 m to
+  // 6.95 m in one frame and the ball from 2.3 m/s to 45. The same rig as the
+  // stone, with the falling body replaced by a platform whose jump home cuts
+  // straight through the taut chain and whose travelled route goes nowhere near
+  // it (up, across three metres overhead, and down again).
+  const jumpData: RawLevelData = {
+    player: { x: 0, y: -20, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 50,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 600, h: 100 } }],
+      },
+      {
+        kind: "static",
+        x: 160,
+        y: -60,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 120 } }],
+      },
+      {
+        kind: "static",
+        x: 250,
+        y: -40,
+        rot: 0,
+        friction: 1,
+        moveNodes: [
+          { x: 0, y: 0 },
+          { x: 0, y: -260 },
+          { x: -350, y: -260 },
+          { x: -350, y: 0 },
+        ],
+        moveMode: "repeat",
+        moveSpeed: 400,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 20, h: 20 } }],
+      },
+    ],
+  } as RawLevelData;
+  const jumpOn = runSweepRig(jumpData, 200, stoneInput, 2, true);
+  details.push(`jump-home sweep on:  ${describe(jumpOn)}`);
+  check(`jump-home: the platform's jump home catches nothing (caught @f${jumpOn.caughtAt ?? "never"})`, jumpOn.caughtAt === null);
+  check(`jump-home: nothing tunnels and no invariant fires${firstOther(jumpOn)}`, jumpOn.violations.length === 0);
+  // The ball is hanging on that chain, so a phantom wrap shows up as a kick:
+  // it swings under its own weight and nothing else, which is well under a
+  // metre a second.
+  check(`jump-home: ...and the ball is not flung (peak ${jumpOn.peakSpeed.toFixed(2)} m/s)`, jumpOn.peakSpeed < 3);
+
   return ok("chain-sweep — the player's chain catches a small body it passes at speed, and the whip that follows is a swing", passed, details);
 }
 

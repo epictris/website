@@ -623,10 +623,11 @@ const LIFT_DATA: RawLevelData = {
     // The handles are what make it a valley instead of a V. All three pairs are
     // HORIZONTAL, so the track leaves level, levels out again at the bottom and
     // arrives level at the far side - and the cart, which is drawn level, is
-    // therefore drawn ON its own rails. `moveAlign` aims it along them, so it
+    // therefore drawn ON its own rails. `moveAlign` turns it with them, so it
     // noses over the lip on the way down and levels out in the dip; a cart drawn
-    // across a track it does not lie on would be snapped onto it at load, which
-    // is what align means and is worth not demonstrating in the worked level.
+    // across a track it does not lie on stays that way for the whole trip (the
+    // turn is measured from the drawn pose, see `moveAngleAt`), which is worth
+    // not demonstrating in the worked level.
     //
     // The bottom node keys a speed of its own, which is the thing keys are for:
     // the cart runs away into the dip at 0.7 m/s and labours out of it at 0.3,

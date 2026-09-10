@@ -570,6 +570,12 @@ export class AnimatableBody2D extends StaticBody2D {
     this.prevPosition = this.globalPosition;
     this.prevRotation = this.globalRotation;
     this.jumped = true;
+    // ...and the RENDER transform with it, for the same reason one step out:
+    // the interpolator draws between the pose captured at the top of the step
+    // and the one the step ended at, so a body that went home in no time at all
+    // is drawn sliding the whole way there over the one frame it was not
+    // travelling - visible in the middle of the level, where it never was.
+    this.captureRenderTransform();
   }
 
   // Derive contact velocities from the per-frame transform delta.

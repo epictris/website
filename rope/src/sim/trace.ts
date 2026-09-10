@@ -5,6 +5,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import {
+  AnimatableBody2D,
   CharacterBody2D,
   PhysicsBody2D,
   RigidBody2D,
@@ -1048,9 +1049,22 @@ export class TunnelMonitor {
     if (TunnelMonitor.onStartShape(chain, node)) return exit;
     const obj = node.contact.obj;
     if (!(obj instanceof PhysicsBody2D) || !obj.isMobile) return node.contact.globalPosition;
-    const pose = this.poses.get(obj);
+    const pose = this.poseOf(obj);
     if (!pose) return null;
     return pose.position.add(node.contact.position.rotated(pose.rotation));
+  }
+
+  // Where a mobile body stood at the last look - and where it IS if it got here
+  // by teleporting. A `repeat` mover put back at the start of its run did not
+  // cross the level to get there, so nothing it passed over is something the
+  // chain passed through (`Rope.sweepPose` makes the same exemption for the
+  // wrap scan, and this monitor has to agree with it or it reports the chain
+  // for not wrapping a body that was never on its path).
+  private poseOf(body: PhysicsBody2D): Pose | null {
+    if (body instanceof AnimatableBody2D && body.jumped) {
+      return { position: body.globalPosition, rotation: body.globalRotation };
+    }
+    return this.poses.get(body) ?? null;
   }
 
   private check(level: BallLevel, chain: Rope, exit: Vec2, end: Vec2): Violation | null {
@@ -1114,7 +1128,7 @@ export class TunnelMonitor {
           s1: from.contact.globalPosition,
           e1: to.contact.globalPosition,
         };
-        const pose = body.isMobile ? (this.poses.get(body) ?? null) : null;
+        const pose = body.isMobile ? this.poseOf(body) : null;
         for (const shape of body.getShapes()) {
           if (!shape.wrappable || this.held.has(shape)) continue;
           const crossing = shapeCrossesSpan(shape, pose, motion, (k) => !isSeamVertex(shape, k));
@@ -1153,7 +1167,7 @@ export class TunnelMonitor {
         // this test draws, so the chord "crosses" the corner the chain was
         // simply resting on as it lifts off (`session-576f` f70).
         if (this.onPath.has(body)) continue;
-        const pose = body.isMobile ? (this.poses.get(body) ?? null) : null;
+        const pose = body.isMobile ? this.poseOf(body) : null;
         const crossing = shapeCrossesSpan(shape, pose, motion, (k) => !isSeamVertex(shape, k));
         if (!crossing) continue;
         if (onPath.has(body)) {
