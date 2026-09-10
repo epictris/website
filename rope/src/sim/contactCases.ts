@@ -5950,6 +5950,106 @@ function caseChainGrazeGate(): ContactResult {
   );
 }
 
+// chain-own-corner - a span reaching an anchor that stands CLEAR of the shape
+// it is anchored to bends round the corner the span cuts, not the vertex the
+// anchor happens to be nearest.
+//
+// `session-206f` f54-f206. The manacle bit the rock's upper-left face a few
+// centimetres below its top-left vertex, so the hinge pin - the chain's end
+// node, one ring radius proud of the bite - stood 4.5 cm off that vertex, and
+// the ball hung below with the taut chain cutting 4-8 cm through the rock's
+// LEFTMOST corner. The scan excludes a span's own endpoint shape and leaves it
+// to the self-intersection resolvers, whose polygon rule walked to the vertex
+// adjacent to the contact - right for a contact ON the loop, and for this one
+// the vertex beside the pin, which bends the chain the wrong way. The cull
+// dropped it at the end of the same regeneration, after the scan had run with
+// the shape excluded, so no path could find the rock and the chain clipped it
+// for 150 frames while the drape, pushed out of the rock it was told to lie
+// through, was drawn stuck along its underside.
+//
+// A contact standing clear of its shape is reached from outside, and the
+// corner such a span bends round is the tangent vertex from its far end - the
+// scan's own construction for a span through scenery. Asserted for both ends
+// of the chain, since the rule has a start half and an end half and the
+// recording only exercises one; the rock, the loop and the pin are the
+// recording's own numbers at f58. `session-206f` is the scene end to end, in
+// the committed corpus.
+function caseChainOwnCorner(): ContactResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // `levels/ball.json` body 20's first piece, in metres; its leftmost vertex is
+  // the corner the chain hangs from, the one after it the vertex beside the pin.
+  const ROCK = [
+    [28, 3.5],
+    [28.05, 3.1],
+    [28.2, 2.9],
+    [28.5, 2.8],
+    [28.8, 3],
+    [29, 3.2],
+    [28.8, 3.6],
+    [28.4, 3.7],
+  ].map(([x, y]) => new Vec2(x!, y!));
+  const CORNER = ROCK[0]!;
+  const BESIDE = ROCK[1]!;
+  const LOOP = new Vec2(28.113568103001334, 4.894670668696965);
+  const PIN = new Vec2(28.014000000000014, 3.0730000000000013);
+
+  const world = new World();
+  const rock = new StaticBody2D();
+  world.add(rock);
+  const made = polyShapeCentred(ROCK);
+  rock.addShape(made.shape, made.offset);
+  const rockShape = rock.getShapes()[0]!;
+  const loop = new StaticBody2D();
+  world.add(loop);
+  loop.addShape(ShapeGeometry.createCircle(0.001), Vec2.ZERO);
+  loop.globalPosition = LOOP;
+
+  // The premise: the pin stands clear of the rock, the straight chain does not,
+  // and the corner it cuts deflects it by more than the grazing gate.
+  const chord = new Segment(LOOP, PIN);
+  const cut = chord.getClosestPointOnLine(CORNER).distanceTo(CORNER);
+  check(
+    `the pin stands ${(PIN.distanceTo(BESIDE) * 1000).toFixed(0)}mm clear of the rock, beside a vertex`,
+    Intersections.intersectsPoint(rockShape, PIN) === IntersectionStatus.Separate,
+  );
+  check(
+    `the straight chain cuts the rock's corner, ${(cut * 1000).toFixed(1)}mm deep (gate ${(MIN_WRAP_DEFLECTION * 1000).toFixed(0)}mm)`,
+    Intersections.intersectsSegment(rockShape, chord) === IntersectionStatus.Overlap && cut > MIN_WRAP_DEFLECTION,
+  );
+
+  const hang = (start: RopeContact, end: RopeContact): string => {
+    const rope = new Rope(start, end, [], null);
+    rope.syncWraps([rock]);
+    const wraps = rope.path().filter((n): n is RopeWrap => n instanceof RopeWrap && n.contact.obj === rock);
+    const at = (p: Vec2): boolean => wraps.some((w) => w.contact.globalPosition.distanceTo(p) < 1e-6);
+    const describe = wraps.map((w) => `(${w.contact.globalPosition.x.toFixed(3)},${w.contact.globalPosition.y.toFixed(3)})`);
+    return `${wraps.length} wrap(s) on the rock ${describe.join(" ")}: corner=${at(CORNER)} beside=${at(BESIDE)}`;
+  };
+  const pin = (): RopeContact => new RopeContact(rock, PIN.sub(rock.globalPosition), 0);
+  const ball = (): RopeContact => new RopeContact(loop, Vec2.ZERO);
+
+  // The recording's chain: the ball's loop to the pin, the pin the span's END.
+  const down = hang(ball(), pin());
+  details.push(`loop -> pin: ${down}`);
+  check("loop -> pin bends round the corner the chain cuts, and only there", down.endsWith("corner=true beside=false"));
+  // The same chain read the other way, the pin the span's START.
+  const up = hang(pin(), ball());
+  details.push(`pin -> loop: ${up}`);
+  check("pin -> loop bends round the same corner, and only there", up.endsWith("corner=true beside=false"));
+
+  return ok(
+    "chain-own-corner - an anchor standing clear of its shape is reached round the corner the span cuts",
+    passed,
+    details,
+  );
+}
+
 // chain-face-release - a wrap whose bend has gone to zero is a chain lying ON
 // that face, and letting go of it there drops the chain INTO the face.
 //
@@ -6329,6 +6429,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainSweep());
   results.push(caseChainSweepSlideOff());
   results.push(caseChainGrazeGate());
+  results.push(caseChainOwnCorner());
   results.push(caseChainFaceRelease());
   results.push(caseChainSharedCorner());
   results.push(caseChainWedgedEnd());

@@ -1435,33 +1435,15 @@ export class Rope {
         );
       }
     } else if (fromShape.shape.kind !== "circle") {
-      // Angles are measured about this SHAPE's centre, not the body's: on a
-      // compound body they differ, and the walk has to be about the piece the
-      // rope is resting on. Identical for the centred single-shape case.
-      const rectCenter = fromShape.globalPosition;
       const corners = ShapeGeometry.getGlobalCorners(fromShape);
-      const n = corners.length;
-      let nextVertexIndex = 0;
-      let minAngle = Infinity;
-      for (let i = 0; i < n; i++) {
-        const vertex = corners[i]!;
-        if (vertex.distanceSquaredTo(fromNode.contact.globalPosition) < 0.01 * PX * PX) {
-          // Already sitting on this vertex: step one place round the loop in the
-          // wrap direction. The step is one *vertex*, not a fixed quarter turn,
-          // which is what makes it right for a loop of any length.
-          nextVertexIndex = Calc.mod(i + (wrapDir as number), n);
-          break;
-        }
-        const angleToVertex = Calc.absoluteAngle(
-          rectCenter.directionTo(fromNode.contact.globalPosition),
-          rectCenter.directionTo(vertex),
-          wrapDir,
-        );
-        if (angleToVertex < minAngle) {
-          minAngle = angleToVertex;
-          nextVertexIndex = i;
-        }
-      }
+      const nextVertexIndex = this.ownCornerToWrap(
+        fromShape,
+        fromNode.contact.globalPosition,
+        wrapDir,
+        span.end,
+        GenerationDirection.Reversed,
+      );
+      if (nextVertexIndex === null) return null;
       const nextVertex = corners[nextVertexIndex]!;
       if (
         Intersections.intersectsPoint(fromShape, span.end) === IntersectionStatus.Separate &&
@@ -1474,6 +1456,77 @@ export class Rope {
       }
     }
     return null;
+  }
+
+  // Which corner of its OWN shape a node's span bends round, for the
+  // self-intersection resolvers: the polygon half of what
+  // `calculateCircleTangentPoint` is for a circle. `contact` is the node's
+  // position, `far` the span's other end, `direction` which end the node is.
+  //
+  // A contact ON the loop - a wrap sitting on a vertex, an attachment on a
+  // face - leaves it along the surface, so the corner is the next vertex round
+  // the loop in the wrap direction: one *vertex*, not a fixed quarter turn,
+  // which is what makes it right for a loop of any length. Angles are measured
+  // about this SHAPE's centre, not the body's: on a compound body they differ,
+  // and the walk has to be about the piece the rope is resting on.
+  //
+  // A contact standing CLEAR of the loop is a different question, and the walk
+  // gives it the wrong answer. A manacle's hinge pin stands one ring radius
+  // proud of the face it bit, and a bite beside a vertex puts the pin 4.5 cm
+  // off that vertex while the chain reaches it from below round the NEXT one:
+  // the walk named the near vertex, which deflects the chain the wrong way and
+  // was culled at the end of the same regeneration, and the cull ran after the
+  // scan had already excluded the shape as the span's own endpoint - so the
+  // rock the chain hung from stayed invisible to every path it could have been
+  // found by, and the taut chain cut 8 cm through its corner for 150 frames
+  // (`session-206f`). A span that reaches its contact from outside is a span
+  // through scenery, and the corner it bends round is the tangent vertex from
+  // its far end - the scan's own construction for a span clean through a
+  // shape, seen from whichever end this node is not.
+  private ownCornerToWrap(
+    shape: CollisionShape2D,
+    contact: Vec2,
+    wrapDir: WrapDirection,
+    far: Vec2,
+    direction: GenerationDirection,
+  ): number | null {
+    if (Intersections.intersectsPoint(shape, contact) === IntersectionStatus.Separate) {
+      // The tangent vertex is the extreme of the loop's fan as seen from `far`,
+      // and which way round the fan is "the wrap side" flips with the end it
+      // is seen from: the chain bends `wrapDir` in path order, which is the
+      // opposite sense looking back from the span's end.
+      const seenFrom =
+        direction === GenerationDirection.Forward
+          ? wrapDir
+          : wrapDir === WrapDirection.Clockwise
+            ? WrapDirection.CounterClockwise
+            : WrapDirection.Clockwise;
+      return RopeGeneration.calculateTangentVertexIndex(shape, seenFrom, far);
+    }
+    const centre = shape.globalPosition;
+    const corners = ShapeGeometry.getGlobalCorners(shape);
+    const n = corners.length;
+    // The node before the span steps forward round the loop, the node after it
+    // steps back to it.
+    const step = -(direction as number) * (wrapDir as number);
+    let nextVertexIndex = 0;
+    let minAngle = Infinity;
+    for (let i = 0; i < n; i++) {
+      const vertex = corners[i]!;
+      if (vertex.distanceSquaredTo(contact) < 0.01 * PX * PX) {
+        nextVertexIndex = Calc.mod(i + step, n);
+        break;
+      }
+      const angleToVertex =
+        direction === GenerationDirection.Forward
+          ? Calc.absoluteAngle(centre.directionTo(vertex), centre.directionTo(contact), wrapDir)
+          : Calc.absoluteAngle(centre.directionTo(contact), centre.directionTo(vertex), wrapDir);
+      if (angleToVertex < minAngle) {
+        minAngle = angleToVertex;
+        nextVertexIndex = i;
+      }
+    }
+    return nextVertexIndex;
   }
 
   private resolveSelfIntersectionAtEnd(toNode: RopeNode, span: Segment): RopeNode | null {
@@ -1513,27 +1566,15 @@ export class Rope {
         );
       }
     } else if (toShape.shape.kind !== "circle") {
-      const rectCenter = toShape.globalPosition;
       const corners = ShapeGeometry.getGlobalCorners(toShape);
-      const n = corners.length;
-      let nextVertexIndex = 0;
-      let minAngle = Infinity;
-      for (let i = 0; i < n; i++) {
-        const vertex = corners[i]!;
-        if (vertex.distanceSquaredTo(toNode.contact.globalPosition) < 0.01 * PX * PX) {
-          nextVertexIndex = Calc.mod(i - (wrapDir as number), n);
-          break;
-        }
-        const angleToVertex = Calc.absoluteAngle(
-          rectCenter.directionTo(vertex),
-          rectCenter.directionTo(toNode.contact.globalPosition),
-          wrapDir,
-        );
-        if (angleToVertex < minAngle) {
-          minAngle = angleToVertex;
-          nextVertexIndex = i;
-        }
-      }
+      const nextVertexIndex = this.ownCornerToWrap(
+        toShape,
+        toNode.contact.globalPosition,
+        wrapDir,
+        span.start,
+        GenerationDirection.Forward,
+      );
+      if (nextVertexIndex === null) return null;
       const nextVertex = corners[nextVertexIndex]!;
       if (Intersections.intersectsPoint(toShape, span.start) === IntersectionStatus.Separate) {
         return new RopeWrap(
