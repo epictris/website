@@ -10,7 +10,7 @@
 // convex loops, which is the same reason the rope solver needs them.
 
 import { Vec2 } from "./vec2";
-import { polyEdgeNormal, shapeVertices } from "./shapes";
+import { polyEdgeNormal, shapeWorldVertices } from "./shapes";
 import type { ShapeTransform } from "./shapes";
 
 export interface Contact {
@@ -52,8 +52,8 @@ function featureId(useB: boolean, refIndex: number, incIndex: number, slot: numb
 }
 
 // A shape's vertex loop in world space.
-function worldVerts(t: ShapeTransform): Vec2[] {
-  return shapeVertices(t.shape).map((v) => t.globalPosition.add(v.rotated(t.globalRotation)));
+function worldVerts(t: ShapeTransform): readonly Vec2[] {
+  return shapeWorldVertices(t);
 }
 
 // Outward world normal of the edge leaving vertex `i`. Rotation preserves

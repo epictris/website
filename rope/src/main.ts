@@ -3,6 +3,7 @@
 import { Vec2 } from "./engine/vec2";
 import { Level } from "./level/level";
 import { BallLevel } from "./level/ballLevel";
+import { SlackChain } from "./classes/slackChain";
 import { LiveInputSource } from "./input/liveInput";
 import { BallInputSource } from "./input/ballInput";
 import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
@@ -410,6 +411,12 @@ let fps = 0;
 // sort a second - and only the HUD is opt-in.
 const perf = new PerfProbe();
 (window as unknown as { __perf: typeof perf.snapshot }).__perf = perf.snapshot;
+// The visual chain drape may not cost gameplay a frame: past this much of a
+// step it stops iterating and the next step picks up the slack (literally).
+// Half a millisecond is 3% of the 60 Hz step and several times what the drape
+// costs on an idle machine, so it bites only when the machine is behind - a
+// throttled tab, a weak laptop - which is exactly when the sim needs the time.
+SlackChain.timeBudgetMs = 0.5;
 // `?hud=1` opens the page with it up; F3 toggles it while playing, because the
 // frames worth looking at are the ones being played rather than the ones after a
 // reload with a different URL.

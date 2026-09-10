@@ -64,8 +64,34 @@ export class RopeContact {
     return this.obj.name;
   }
 
+  // Cached against the body's transform version and the local position's
+  // identity (see `CollisionShape2D.globalPosition` for the contract). A path
+  // is walked node by node many times a frame - every regeneration, every
+  // length measure, every sweep - and nearly every walk finds the bodies where
+  // the last one left them.
+  // The body is part of the key: a rail clamp re-seats its contact on another
+  // body (`RopeClamp`), and `restore` builds a contact without running the
+  // initialisers, which the first miss then fills in.
+  private globalVersion = -1;
+  private globalObj: CollisionObject2D | null = null;
+  private globalFor: Vec2 | null = null;
+  private globalValue: Vec2 = Vec2.ZERO;
+
   get globalPosition(): Vec2 {
-    return this.obj.globalPosition.add(this.position.rotated(this.obj.globalRotation));
+    const obj = this.obj;
+    if (
+      this.globalObj === obj &&
+      this.globalVersion === obj.transformVersion &&
+      this.globalFor === this.position
+    ) {
+      return this.globalValue;
+    }
+    const p = obj.globalPosition.add(this.position.rotated(obj.globalRotation));
+    this.globalObj = obj;
+    this.globalVersion = obj.transformVersion;
+    this.globalFor = this.position;
+    this.globalValue = p;
+    return p;
   }
 
   // `globalPosition` against the body's interpolated render transform. The

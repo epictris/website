@@ -3060,9 +3060,33 @@ function submergedFraction(body: PhysicsBody2D, area: readonly ShapeTransform[])
 // several-shape body now whenever its author drew a notch in it, and testing the
 // first piece alone would leave the rest of a cave's water dry. Every existing
 // area has exactly one shape, so this is the same answer they always gave.
-function areaOverlapsBody(area: readonly ShapeTransform[], body: PhysicsBody2D): boolean {
+// Box-gated: the exact test below only ever says yes for shapes that touch,
+// and two shapes that touch have overlapping bounding boxes, so a pair whose
+// boxes are apart can be skipped without asking. The margin covers the
+// rounding between a box built from a shape's extents and a contact the
+// manifold finds at exactly zero separation; it is far under anything a level
+// authors, so the gate never answers differently from the test it guards.
+// Every area is asked about every body every frame, and the scenery's
+// hundred-odd static bodies were each going through a circle test against
+// each area shape for that - a twenty-fifth of the anchored step on
+// session-392f, for areas nothing was inside.
+const AREA_BOX_MARGIN = 1e-9;
+
+function areaOverlapsBody(area: readonly CollisionShape2D[], body: PhysicsBody2D): boolean {
   for (const a of area) {
-    for (const s of body.getShapes()) if (shapesOverlap(a, s)) return true;
+    const ac = a.globalPosition;
+    const ae = a.extents();
+    for (const s of body.getShapes()) {
+      const sc = s.globalPosition;
+      const se = s.extents();
+      if (
+        Math.abs(ac.x - sc.x) > ae.x + se.x + AREA_BOX_MARGIN ||
+        Math.abs(ac.y - sc.y) > ae.y + se.y + AREA_BOX_MARGIN
+      ) {
+        continue;
+      }
+      if (shapesOverlap(a, s)) return true;
+    }
   }
   return false;
 }

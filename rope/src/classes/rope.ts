@@ -77,6 +77,7 @@ interface WrapCandidate {
 // shape at the same time is what made "is this the surface my span ends on?"
 // answerable by the wrong one.
 function wrappableSurfaces(bodies: readonly PhysicsBody2D[]): WrapCandidate[] {
+  if (surfacesStillValid(bodies)) return surfacesCache!.out;
   const out: WrapCandidate[] = [];
   for (const body of bodies) {
     if (isPassThrough(body)) continue;
@@ -84,7 +85,52 @@ function wrappableSurfaces(bodies: readonly PhysicsBody2D[]): WrapCandidate[] {
       if (shape.wrappable) out.push({ body, shape, shapeIndex });
     });
   }
+  surfacesCache = { bodies, out };
   return out;
+}
+
+// The last list built, kept so the next ask can hand it back. A ball frame
+// regenerates the path a dozen and more times (six scene chains, the coupled
+// sweep, the ball's own step) over the same `bodies`, and every one of them
+// was rebuilding this - three hundred candidate objects a call - to reach the
+// same answer. The list is a function of the bodies array, each body's
+// pass-through state, its shape array and each shape's `wrappable` flag, and
+// `surfacesStillValid` re-reads exactly those before reusing it: the walk is
+// the same one the build does, minus the allocation, so a body that turned
+// solid or grew a shape between two asks rebuilds rather than being missed.
+// Candidates are never written to downstream (`WrapCandidate` is read-only by
+// convention - grep it), so sharing them across calls is safe.
+let surfacesCache: { bodies: readonly PhysicsBody2D[]; out: WrapCandidate[] } | null = null;
+
+// The mobile subset of a surfaces list, filtered once per list rather than
+// once per span (see `sweepSpan`). Keyed on the list's identity, which the
+// cache above keeps stable for as long as the list is valid; mobility is a
+// class property of a body, so the subset cannot go stale while the list is.
+let mobileCache: { of: readonly WrapCandidate[]; out: WrapCandidate[] } | null = null;
+
+function mobileSurfaces(surfaces: readonly WrapCandidate[]): readonly WrapCandidate[] {
+  if (mobileCache !== null && mobileCache.of === surfaces) return mobileCache.out;
+  const out = surfaces.filter((cand) => cand.body.isMobile);
+  mobileCache = { of: surfaces, out };
+  return out;
+}
+
+function surfacesStillValid(bodies: readonly PhysicsBody2D[]): boolean {
+  const cache = surfacesCache;
+  if (cache === null || cache.bodies !== bodies) return false;
+  const out = cache.out;
+  let k = 0;
+  for (const body of bodies) {
+    if (isPassThrough(body)) continue;
+    const shapes = body.getShapes();
+    for (let i = 0; i < shapes.length; i++) {
+      const shape = shapes[i]!;
+      if (!shape.wrappable) continue;
+      const c = out[k++];
+      if (c === undefined || c.body !== body || c.shape !== shape || c.shapeIndex !== i) return false;
+    }
+  }
+  return k === out.length;
 }
 
 // Is this vertex an interior seam of a compound body — a corner that exists only
@@ -1954,8 +2000,12 @@ export class Rope {
         const i = surfaceIndex.get(shape);
         if (i !== undefined) found.push(surfaces[i]!);
       }
-      for (const cand of surfaces) {
-        if (cand.body.isMobile && !found.includes(cand)) found.push(cand);
+      // Every mobile surface, wherever it is: a body's broadphase box is where
+      // it is NOW, and a sweep is about where it was. Taken from the list the
+      // regeneration filtered once rather than re-scanning all three hundred
+      // surfaces for every span; same order, so `found` is the same list.
+      for (const cand of mobileSurfaces(surfaces)) {
+        if (!found.includes(cand)) found.push(cand);
       }
       pool = found;
     } else {

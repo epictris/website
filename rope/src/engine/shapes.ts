@@ -168,7 +168,16 @@ export function shapeVertices(shape: Shape): readonly Vec2[] {
 }
 
 // A vertex shape's loop in the world, under its transform. Empty for a circle.
-export function shapeWorldVertices(t: ShapeTransform): Vec2[] {
+//
+// A live collision shape answers from its per-transform cache (`worldVertices`);
+// a bare transform (a placed shape, a hook's probe) is computed on the spot.
+// The array is shared, so it is read-only to every caller.
+export function shapeWorldVertices(t: ShapeTransform): readonly Vec2[] {
+  if (t.worldVertices) return t.worldVertices();
+  return computeWorldVertices(t);
+}
+
+export function computeWorldVertices(t: ShapeTransform): Vec2[] {
   return shapeVertices(t.shape).map((v) => t.globalPosition.add(v.rotated(t.globalRotation)));
 }
 
@@ -243,12 +252,29 @@ export function nearestShapeIndex(shapes: readonly ShapeTransform[], world: Vec2
 // Outward unit normal of the edge leaving vertex `i` of a vertex loop. The one
 // place the winding contract above is cashed out, so a consumer never has to
 // remember which way round `orthogonal()` goes. Zero for a degenerate edge.
+//
+// Memoised per vertex array. A polygon's local loop is one array for the life
+// of the shape and a world loop is one array per transform (see
+// `CollisionShape2D.worldVertices`), and both are asked for the same edge's
+// normal many times a frame - every plane test, every separating-axis pass -
+// each a subtraction, a square root and two allocations. Same arithmetic, same
+// bits, computed once. Keyed weakly so a transient loop costs nothing to forget.
+const EDGE_NORMALS = new WeakMap<readonly Vec2[], (Vec2 | undefined)[]>();
 export function polyEdgeNormal(verts: readonly Vec2[], i: number): Vec2 {
+  let memo = EDGE_NORMALS.get(verts);
+  if (memo === undefined) {
+    memo = new Array<Vec2 | undefined>(verts.length);
+    EDGE_NORMALS.set(verts, memo);
+  }
+  const hit = memo[i];
+  if (hit !== undefined) return hit;
   const a = verts[i]!;
   const b = verts[(i + 1) % verts.length]!;
   const e = b.sub(a);
   const len = e.length();
-  return len < 1e-12 ? Vec2.ZERO : new Vec2(e.y / len, -e.x / len);
+  const n = len < 1e-12 ? Vec2.ZERO : new Vec2(e.y / len, -e.x / len);
+  memo[i] = n;
+  return n;
 }
 
 // --- corner exposure ---------------------------------------------------------
@@ -436,4 +462,8 @@ export interface ShapeTransform {
   readonly globalPosition: Vec2;
   readonly globalRotation: number;
   readonly shape: Shape;
+  // The vertex loop at this transform, cached against it where the transform
+  // is a live shape's (see `CollisionShape2D.worldVertices`). Optional because
+  // a transform can be a plain placement with no identity to cache on.
+  worldVertices?(): readonly Vec2[];
 }

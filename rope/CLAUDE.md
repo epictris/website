@@ -109,6 +109,13 @@ What that buys is that a bundle recorded in any browser replays bit-exact under 
 `session-1052f` is the measurement: recorded in Chromium, bun left it at f379 before the change and follows it to f932 after, exactly as V8 does.
 What it does not cover is a NaN's payload (not pinned by the spec either, and the sim never produces one) and anything outside the sim that feeds it - the level file's numbers parse identically everywhere (JSON is correctly rounded), and the render side may use whatever `Math` it likes, since nothing there reaches the fixed step.
 
+The same rule - same expression, same bits, computed once - is what the **transform caches** are (2026-09-10, `session-392f`: the ball hanging off a lantern took a 4x-throttled Chromium step to 12 ms, and half of a bun profile was re-deriving world-space positions of bodies that had not moved).
+`CollisionObject2D.transformVersion` is bumped by the only two writes a transform has (the `globalPosition` / `globalRotation` setters), and against it `CollisionShape2D.globalPosition`, `CollisionShape2D.worldVertices` (the loop `shapeWorldVertices`, the manifold and `ShapeGeometry.getGlobalCorners` all hand out - shared and read-only, nobody writes into it) and `RopeContact.globalPosition` keep their last answer, keyed on everything else the answer read (the mount offset, the shape, the contact's body, since a rail clamp re-seats a contact).
+`polyEdgeNormal` memoises per vertex array, which a static local loop is for the life of its shape and a world loop is for the life of its transform.
+`wrappableSurfaces` hands back the last list while a walk over the same bodies finds the same pass-through flags, shape arrays and `wrappable` bits, and `sweepSpan` takes its mobile candidates from that list once instead of scanning all three hundred surfaces per span.
+Every one of these is a cache of a pure function of state that has a version, so the whole corpus replays byte-for-byte across them (`cli bundles`, the same set of drifted-since-recorded bundles before and after), and the anchored step on `session-392f` went from 2.6 to 2.0 ms in bun, 12 to 9.5 ms under the throttle.
+What they cannot do is make the frame cheap: the rest is six hanging chains solved twice a frame with a full path regeneration each, rigid bodies that never sleep being depenetrated against scenery they never touch, and the coupled sweep - all of which is the sim's behaviour and not its arithmetic (see **A settled vine costs nothing** for the one place sleeping has been done).
+
 Godot idioms that were collapsed in the port:
 - `Vector2` value-type semantics → **immutable** `Vec2` (every op returns a new vector).
 - `PhysicsServer2D.BodySetState(Transform/…)` in `Rope` → no-op; the TS `RigidBody2D`
@@ -3888,6 +3895,17 @@ Nothing gates the look (a drape is exactly the kind of thing the suite cannot se
 single-frame interior-node motion beyond what the endpoints moved is ~2 cm (sub-link), floor
 penetration is exactly zero, and the whole sim costs ~0.1 ms a frame inside the 16.7 ms
 budget.
+
+**It is the one simulation allowed to run out of time.**
+"~0.1 ms a frame" was a hanging chain in an empty scene; a wound coil beside the lamp on the ball arena cost 0.88 ms of a 2.9 ms step in bun (`session-417f`, the ball hanging off the lamp), and under a 4x CPU throttle in Chromium that step was 14 ms, which is what turned 144 Hz into 27 Hz the frame the hook took: a step over 16.7 ms puts the catch-up loop two steps behind every rendered frame.
+Nearly all of it was the narrowphase re-reading each candidate shape's extents and world centre on every one of its 756 visits a step (63 nodes x 3 seam rounds x 4 passes), most of them to be rejected by the box test.
+Each survivor of the AABB gate is now read once into a `Candidate` (centre, half-extents grown by the node radius, whether its owner moved this frame, whether it is the cuffed body), the visit is four comparisons, and `carried` / `was` - the identity for a body that did not move, which is the scenery - are skipped for one.
+Bit-identical drape output on `session-417f`, `session-1038f`, `session-291f` and `session-1080f`, and the step halved (0.49 ms in bun).
+
+What is left is bounded rather than optimised: `SlackChain.timeBudgetMs` is a wall-clock budget per step, checked between the Gauss-Seidel blocks (four constraint passes then a collision pass), and once a block ends past it the rest are skipped.
+Every step runs at least one block, so the frame still ends clear of the scenery; a cut step loses convergence - a little stretch in a drape being flung about - and the next step takes it up.
+It is `Infinity` by default, which is what every tool and the self-replay verdict want (a drawn drape that depends on the machine is not a reference frame), and main.ts sets it to 0.5 ms for the live page, several times what the drape costs on an idle machine and 3% of the step, so it bites only when the machine is behind.
+Measured at the 4x throttle: the drape's share of the step fell from ~4 ms to 2 ms with the cache alone and to 1.1 ms with the budget, the floor being that first block; the step is ~10.5 ms on the hang now, and the rest of it is the coupled scene-chain sweep and the depenetration passes, which are the sim's and not the drape's to cut.
 
 ## Sparks
 

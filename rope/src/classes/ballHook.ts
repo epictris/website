@@ -167,7 +167,7 @@ export class BallHook extends RigidBody2D {
 
   // The bar the cuff collides as, in the world, with its centre at `at` and its
   // present rotation.
-  private loopAt(at: Vec2): Vec2[] {
+  private loopAt(at: Vec2): readonly Vec2[] {
     const bs = this.primaryShape();
     return shapeWorldVertices({ globalPosition: at, globalRotation: bs.globalRotation, shape: bs.shape });
   }

@@ -124,7 +124,49 @@ const SEAM_ROUNDS = 3;
 // 0.2 m per step, an order of magnitude inside it.
 const MAX_STEP = 0.5;
 
+// A shape the drape may touch this step, with everything the per-node test
+// reads about it taken ONCE. The narrowphase runs nodes × seam rounds ×
+// collision passes times over this list (63 × 3 × 4 = 756 visits a shape a
+// step), and taking a shape's extents and world centre on every visit was the
+// whole cost of the drape: 0.75 of the 0.88 ms a step it took on session-417f,
+// nearly all of it in `shapeExtents` and `globalPosition` for shapes the box
+// test then rejected. Nothing here can change during a step - the drape moves
+// only its own nodes - so it is read at the top and the visits are four
+// comparisons on numbers.
+interface Candidate {
+  readonly shape: CollisionShape2D;
+  readonly owner: CollisionObject2D;
+  // World centre and axis-aligned half-extents, already grown by the node
+  // radius: a node whose centre is outside this box cannot touch the shape.
+  readonly cx: number;
+  readonly cy: number;
+  readonly ex: number;
+  readonly ey: number;
+  // Whether the owner moved this frame (its captured frame-start pose differs
+  // from its current one). A body that did not move carries a point nowhere,
+  // and `carried` / `was` are the identity for it - skipped rather than
+  // computed, which is most of the scenery on every frame.
+  readonly moving: boolean;
+  // Owned by the body the manacle is cuffed to (see the cuff note in `step`).
+  readonly cuffed: boolean;
+}
+
 export class SlackChain {
+  // Wall-clock budget for one step, milliseconds. The drape is visual only,
+  // so it is the one simulation in the game allowed to do LESS work when the
+  // machine is behind: its step is Gauss-Seidel blocks (constraint passes
+  // then a collision pass), and once a block ends past the budget the rest
+  // are skipped. Every step runs at least one block, so the frame still ends
+  // clear of the scenery; what a cut step loses is convergence - a little
+  // stretch in a drape that is being flung about - and the next step takes it
+  // up. Infinite by default, which is what the tools want (`cli render`,
+  // `cli shot`, the self-replay verdict): a drawn drape that depends on how
+  // fast the machine was is not a reference frame. The live page sets it
+  // (see main.ts). Measured on session-417f under a 4x CPU throttle, a step
+  // that ran to 14 ms with the drape uncapped is the difference between
+  // 144 Hz and 27 Hz on the frame the ball hangs off the lamp.
+  static timeBudgetMs = Infinity;
+
   // Node 0 is pinned where the chain leaves the ball; the last node is pinned
   // at the chain's far end. `prev` is the Verlet history (pos − velocity·dt);
   // `renderFrom` is where each node ENDED the previous step, which is what the
@@ -248,7 +290,6 @@ export class SlackChain {
       }
     }
 
-    const candidates = this.collectCollisionShapes(bodies);
     // Clamped around a rail the chain ends at the centre of a ring threaded on
     // the bar, millimetres from the bar's own surface, and the chain leaves
     // the ring at its rim: the nodes inside the cuff's disc are metal the bar
@@ -256,12 +297,26 @@ export class SlackChain {
     // the last few nodes were shoved off the handle every step and the drape
     // twitched at the cuff for as long as the ball hung still (`session-291f`).
     // A ring on a vine has no such body: the vine is not scenery the drape
-    // collides with at all (see `collectCollisionShapes`).
+    // collides with at all (see `collectCandidates`).
     const cuff = clamp !== null ? { body: clamp.contact.obj, at: clamp.contact.globalPosition } : null;
-    for (let iter = 0; iter < ITERATIONS; iter++) {
-      this.solveDistances(restLen, iter % 2 === 1);
-      this.solveLongRange(restLen, pinA, pinB);
-      if (iter % COLLIDE_EVERY === COLLIDE_EVERY - 1) this.solveCollisions(candidates, cuff);
+    const candidates = this.collectCandidates(bodies, cuff?.body ?? null);
+    // Blocks of COLLIDE_EVERY constraint passes, each ended by a collision
+    // pass, so the last thing a step does is push the nodes clear. The budget
+    // is checked between blocks (see `timeBudgetMs`); the clock is only read
+    // when there is a budget to hold, so a tool's run is the same arithmetic
+    // whatever the machine.
+    const budget = SlackChain.timeBudgetMs;
+    const timed = Number.isFinite(budget);
+    const started = timed ? performance.now() : 0;
+    const blocks = ITERATIONS / COLLIDE_EVERY;
+    for (let block = 0; block < blocks; block++) {
+      for (let k = 0; k < COLLIDE_EVERY; k++) {
+        const iter = block * COLLIDE_EVERY + k;
+        this.solveDistances(restLen, iter % 2 === 1);
+        this.solveLongRange(restLen, pinA, pinB);
+      }
+      this.solveCollisions(candidates, cuff);
+      if (timed && performance.now() - started > budget) break;
     }
   }
 
@@ -272,8 +327,12 @@ export class SlackChain {
   // real chain never wraps either, so the drape resting on one would be a
   // drawing of a collision the level does not contain. The far end's own body
   // (hook / dangling tip) is skipped: the chain threads into it. The AABB gate
-  // keeps the per-node narrowphase to the shapes that could possibly matter.
-  private collectCollisionShapes(bodies: readonly PhysicsBody2D[]): CollisionShape2D[] {
+  // keeps the per-node narrowphase to the shapes that could possibly matter,
+  // and each survivor is read once into a `Candidate` (see there).
+  private collectCandidates(
+    bodies: readonly PhysicsBody2D[],
+    cuffBody: CollisionObject2D | null,
+  ): Candidate[] {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -285,9 +344,10 @@ export class SlackChain {
       if (p.y > maxY) maxY = p.y;
     }
     const margin = NODE_RADIUS + MAX_STEP;
-    const out: CollisionShape2D[] = [];
+    const out: Candidate[] = [];
     for (const body of bodies) {
       if (body.removed || !body.isSolid || body === this.tipBody) continue;
+      let moving: boolean | null = null;
       for (const s of body.getShapes()) {
         if (!s.wrappable) continue;
         const c = s.globalPosition;
@@ -300,7 +360,22 @@ export class SlackChain {
         ) {
           continue;
         }
-        out.push(s);
+        if (moving === null) {
+          const from = body.renderPosition(0);
+          const now = body.globalPosition;
+          moving =
+            from.x !== now.x || from.y !== now.y || body.renderRotation(0) !== body.globalRotation;
+        }
+        out.push({
+          shape: s,
+          owner: body,
+          cx: c.x,
+          cy: c.y,
+          ex: e.x + NODE_RADIUS,
+          ey: e.y + NODE_RADIUS,
+          moving,
+          cuffed: body === cuffBody,
+        });
       }
     }
     return out;
@@ -375,7 +450,7 @@ export class SlackChain {
   // slack chain falling through the lamp); the same held a drape still on any
   // swinging platform it was heaped on.
   private solveCollisions(
-    shapes: readonly CollisionShape2D[],
+    candidates: readonly Candidate[],
     cuff: { body: CollisionObject2D; at: Vec2 } | null,
   ): void {
     for (let i = 1; i < SEGMENTS; i++) {
@@ -387,16 +462,9 @@ export class SlackChain {
       // with no side to have come from.
       for (let round = 0; round < SEAM_ROUNDS; round++) {
         let hit = false;
-        for (const s of shapes) {
-          if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_REACH) continue;
-          const e = shapeExtents(s);
-          const c = s.globalPosition;
-          if (
-            Math.abs(p.x - c.x) > e.x + NODE_RADIUS ||
-            Math.abs(p.y - c.y) > e.y + NODE_RADIUS
-          ) {
-            continue;
-          }
+        for (const c of candidates) {
+          if (Math.abs(p.x - c.cx) > c.ex || Math.abs(p.y - c.cy) > c.ey) continue;
+          if (c.cuffed && cuff !== null && p.distanceTo(cuff.at) < MANACLE_REACH) continue;
           // Where the node started the step, carried along with the body it
           // is being tested against: which side of a face it came from is a
           // question in the body's own frame. Ejected through the shallowest
@@ -405,16 +473,19 @@ export class SlackChain {
           // the chain it was part of then cut straight through the glass,
           // its two neighbours held 11 cm apart on opposite faces by the
           // push-out (`session-1038f` f858-862).
-          const from = SlackChain.carried(s.owner, this.renderFrom[i]!);
-          const ov = circleOverlapFrom(p, NODE_RADIUS, s, from);
+          const from = c.moving
+            ? SlackChain.carried(c.owner, this.renderFrom[i]!)
+            : this.renderFrom[i]!;
+          const ov = circleOverlapFrom(p, NODE_RADIUS, c.shape, from);
           if (!ov) continue;
           hit = true;
           p = p.add(ov.normal.mul(ov.depth));
           // How far the surface under the node moved this step: the body's
           // frame-start pose is its captured render transform (taken at the
           // top of the frame, before anything moved), so the point's motion
-          // is exact for the frame rather than a velocity times dt.
-          const surfaceStep = p.sub(SlackChain.was(s.owner, p));
+          // is exact for the frame rather than a velocity times dt. Zero for
+          // a body that did not move, without asking it.
+          const surfaceStep = c.moving ? p.sub(SlackChain.was(c.owner, p)) : Vec2.ZERO;
           // Static friction first: a contacting node that has only crept this
           // step, against the surface, is put back where the surface carried
           // it (see STICK_STEP).

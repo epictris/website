@@ -3,7 +3,14 @@
 
 import { Vec2 } from "../engine/vec2";
 import { Mathf } from "../engine/mathf";
-import { circleShape, polyArea, polyShape, rectShape, shapeVertices } from "../engine/shapes";
+import {
+  circleShape,
+  polyArea,
+  polyShape,
+  rectShape,
+  shapeVertices,
+  shapeWorldVertices,
+} from "../engine/shapes";
 import type { Shape, ShapeTransform } from "../engine/shapes";
 
 // Ledge candidacy (game-design.md, vertex angles): a vertex is a candidate when
@@ -163,11 +170,8 @@ export const ShapeGeometry = {
   // The placed shape's vertex loop in world space — rect corners or polygon
   // vertices, [] for a circle. Named "corners" for the C# lineage; it is the
   // world-space form of `getLocalVertices` and every wrap/SAT walk uses it.
-  getGlobalCorners(shape: ShapeTransform): Vec2[] {
-    const local = ShapeGeometry.getLocalVertices(shape.shape);
-    const pos = shape.globalPosition;
-    const rot = shape.globalRotation;
-    return local.map((c) => pos.add(c.rotated(rot)));
+  getGlobalCorners(shape: ShapeTransform): readonly Vec2[] {
+    return shapeWorldVertices(shape);
   },
 
   // Ordered local vertex loop for a shape; [] for circles (no vertices).

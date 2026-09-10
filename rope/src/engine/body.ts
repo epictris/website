@@ -3,7 +3,7 @@
 
 import { Vec2 } from "./vec2";
 import { wrapAngle } from "./mathf";
-import { isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
+import { computeWorldVertices, isExposedCorner, shapeExtents, shapeVertices } from "./shapes";
 import type { RailCurve, Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
@@ -134,13 +134,57 @@ export class CollisionShape2D implements ShapeTransform {
     return e;
   }
 
+  // Both caches below key on the owner's `transformVersion`, which every
+  // transform write bumps (the setters above are the only writes), plus the
+  // identity of whatever else the answer reads - the mount offset, the shape -
+  // so a re-mount or a swapped shape misses rather than lies. Same expression,
+  // same bits: the sim's determinism does not see them. What they remove is
+  // the rotation, the two allocations and the trig-slot lookup that the
+  // contact gather, the broadphase sync, the chain sweep and the drape were
+  // each repeating for every shape they looked at, on bodies that mostly had
+  // not moved since the last time they asked.
+  private positionVersion = -1;
+  private positionOffset: Vec2 | null = null;
+  private positionValue: Vec2 = Vec2.ZERO;
+
   get globalPosition(): Vec2 {
-    return this.owner.globalPosition.add(
-      this.localOffset.rotated(this.owner.globalRotation),
-    );
+    const owner = this.owner;
+    if (this.positionVersion === owner.transformVersion && this.positionOffset === this.localOffset) {
+      return this.positionValue;
+    }
+    const p = owner.globalPosition.add(this.localOffset.rotated(owner.globalRotation));
+    this.positionVersion = owner.transformVersion;
+    this.positionOffset = this.localOffset;
+    this.positionValue = p;
+    return p;
   }
   get globalRotation(): number {
     return this.owner.globalRotation + this.localRotation;
+  }
+
+  private verticesVersion = -1;
+  private verticesOffset: Vec2 | null = null;
+  private verticesShape: Shape | null = null;
+  private verticesValue: readonly Vec2[] = [];
+
+  // The vertex loop in world space, one array per transform. Shared with every
+  // caller, so nobody may write into it; `polyEdgeNormal` memoises on it too,
+  // which is what makes a world loop's normals free after the first ask.
+  worldVertices(): readonly Vec2[] {
+    const owner = this.owner;
+    if (
+      this.verticesVersion === owner.transformVersion &&
+      this.verticesOffset === this.localOffset &&
+      this.verticesShape === this.shape
+    ) {
+      return this.verticesValue;
+    }
+    const verts = computeWorldVertices(this);
+    this.verticesVersion = owner.transformVersion;
+    this.verticesOffset = this.localOffset;
+    this.verticesShape = this.shape;
+    this.verticesValue = verts;
+    return verts;
   }
 
   // This shape's vertex `i` in world space. Circles have none.
