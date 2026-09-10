@@ -213,11 +213,18 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
   // the manifest, with no level edited. Name a set something else only when it
   // is a second brick rather than the brick.
   //
-  // CC0, and that is a requirement rather than a preference for anything in this
-  // store: the maps are served from a PUBLIC release, which is a standalone,
-  // reusable copy of the asset however internal the intent - see "The asset
-  // store". A licence that forbids redistributing the files forbids that, so a
-  // licensed set has to stay off this manifest.
+  // CC0 - which is the easiest licence to hold, but not the bar. The bar is
+  // REDISTRIBUTABLE, and it is a requirement rather than a preference for
+  // anything in this store: the maps are served from a PUBLIC release, which is
+  // a standalone, reusable copy of the asset however internal the intent - see
+  // "The asset store". So the test is whether the licence permits handing the
+  // FILE on, not merely using it: CC0 and CC BY both do, and a stock licence
+  // that permits unlimited use in a project while forbidding redistribution of
+  // the bytes (Poliigon's shape) has to stay off this manifest entirely.
+  // A CC BY set is held to one extra thing the CC0 ones are not - `author` is a
+  // person to credit rather than a link - and a non-commercial clause is
+  // acceptable here for reasons that are about this repo rather than about the
+  // pipeline; both are spelled out under "The asset store".
   brick: {
     maps: {
       base: {
@@ -723,15 +730,94 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
-  // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
-  // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
+  // A clipped hedge face: small ovate leaves packed dense enough that no branch
+  // reads through, which is what makes it usable as a WALL rather than as
+  // scattered foliage. The wrapping counterpart to the ground family - `moss`,
+  // `mossy ground` and `forest floor` are all things you land on, and this is
+  // the first green thing a level can stand a body against.
   //
-  // Keyed as a SURFACE rather than under `cast iron` or `steel`, which it is
-  // near enough to be either of. Those two material names are worn by authored
-  // level geometry as well - girders, plate, machinery - and this is a
-  // particular weathered, rusted piece rather than what iron is, so a set under
-  // the material's name would re-skin every steel body in every level as a side
-  // effect of dressing the avatar. The avatar asks for it by name instead.
+  // Keyed as a SURFACE rather than under a material name, like the rest of the
+  // green family and for the plainest possible reason: there is no `hedge`
+  // material for it to stand in for, so a shape asks for it by name. What it
+  // WEIGHS is still whatever `material` the body names, which is the split
+  // working as intended - a hedge-faced block that is structurally stone stays
+  // stone to the sim.
+  hedge: {
+    maps: {
+      base: {
+        file: "/textures/hedge-base.webp",
+        sha256: "969ffadcd692c801d0b955fe08e145f2c2b9db99b88e061b71ba76bdc4d248e3",
+      },
+      // **DIRECTX AS DOWNLOADED, AND FLIPPED HERE.** 3dtextures.me ships one
+      // normal map and states no convention, and this one is DirectX (-Y): its
+      // green channel correlates at -.87 with the height map's row gradient,
+      // where the OpenGL convention this renderer wants correlates POSITIVELY.
+      // Calibrated rather than guessed - ambientCG's Ground068 ships NormalGL
+      // and NormalDX of the same surface, and the same measurement separates
+      // them at +.845/-.845, so the sign is the test and this map sat on the
+      // wrong side of it. Unflipped it lights every leaf from below, which reads
+      // as "the lighting looks off" rather than as a channel mistake, and would
+      // survive any amount of staring at the texture on its own.
+      //
+      // So `assets-src/hedge-001/Hedge_001_Normal_GL.jpg` is the flipped source
+      // the pipeline was run over (`-channel G -negate`), kept beside the raw
+      // for the same reason `--simplify` is recorded on a prop: a flipped map
+      // and a map authored that way are the same file, and without the record
+      // the next person re-optimises the raw and silently ships DirectX again.
+      normal: {
+        file: "/textures/hedge-normal.webp",
+        sha256: "f5f0b7d947f19004bbaaac3ae95160743b0b9975f075456319ec5faae36d4e45",
+      },
+      // Mean .892 over a .58-1.0 range: matte, where foliage should be, with
+      // just enough spread to catch a wet-leaf sheen at grazing angles. Worth
+      // stating because the FIRST candidate for this slot - an AI-generated set
+      // from elsewhere - shipped a roughness map with mean .115, glossier than
+      // this manifest's `ice`, which would have lit a hedge like wet plastic.
+      // A roughness map is a number per texel and nothing about it looks wrong
+      // in a thumbnail, so the band is the thing to measure before believing.
+      roughness: {
+        file: "/textures/hedge-roughness.webp",
+        sha256: "9c4f8bd888b09b2e77ca2e34ac813f33100e0bbe1cd0f80f0a671961be7fa413",
+      },
+      // Doing the work the near-flat normal below cannot: mean .815 dipping to
+      // .31 in the gaps between leaves, which is where a hedge's depth actually
+      // lives. Without it this set reads as a green wall rather than as
+      // something you could push an arm into.
+      ao: {
+        file: "/textures/hedge-ao.webp",
+        sha256: "b7caffe2ed242c01fcd981b2385e56fed3519cd5502ef864fd719faf883ac8a0",
+      },
+      // No metallic map and none wanted - the `metalness` 0 below says it once
+      // rather than as a megabyte of black pixels. The height map the download
+      // also carries has nowhere to go: these are extruded prisms, not
+      // tessellated surfaces, the same reason `brick` drops its displacement.
+    },
+    // 3dtextures.me states no captured size, so this is by eye off the LEAVES,
+    // which is the one thing in the picture with a known real size: they run
+    // about a twenty-fifth of the frame across, and a privet-scale hedge leaf is
+    // 4-5 cm, which puts the frame at roughly 1 m. `VisualData.tile` is the
+    // per-shape override where a level wants a coarser-leaved shrub.
+    tile: 1,
+    metalness: 0,
+    // **The second-flattest normal in the manifest** (B mean .978, behind only
+    // `rusted iron`'s .999), which is a fact worth knowing before lighting a
+    // level around it: there is almost no relief here for a low sun to rake
+    // across, so what carries the surface is the albedo's leaf pattern and the
+    // AO's gaps. That suits a hedge standing as a flat wall and works against
+    // one used as a rounded topiary, where the silhouette has to do all of it.
+    // Lifted a little rather than left at 1, since the map has so little to say.
+    normalScale: 1.4,
+    // `stone` rather than a green, because nothing generated is green: the point
+    // of the fallback is an ordinary wall on a slow connection, and an ordinary
+    // wall is what stone looks like.
+    fallback: "stone",
+    source: "https://3dtextures.me/2022/02/24/hedge-001/",
+    author: "Katsukagi (3dtextures.me)",
+    // CC0, stated site-wide: "All textures on this site are licensed as CC0",
+    // with redistribution called out explicitly ("You can redistribute them").
+    // That clears the store's bar with room to spare - see "The asset store".
+    license: "CC0",
+  },
   // Moss pads with rust-orange needle litter tracing the channels between them:
   // the ground OUTSIDE, where `mossy ground` is the ground underground. It is the
   // third set in a family that now has to be told apart on purpose, and the three
@@ -802,6 +888,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
+  // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
+  //
+  // Keyed as a SURFACE rather than under `cast iron` or `steel`, which it is
+  // near enough to be either of. Those two material names are worn by authored
+  // level geometry as well - girders, plate, machinery - and this is a
+  // particular weathered, rusted piece rather than what iron is, so a set under
+  // the material's name would re-skin every steel body in every level as a side
+  // effect of dressing the avatar. The avatar asks for it by name instead.
   "rusted iron": {
     maps: {
       base: {
