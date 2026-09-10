@@ -46,6 +46,13 @@ export interface ManaclePose {
 }
 
 export class BallPlayer extends RigidBody2D {
+  // The avatar is never put to sleep: input can move it on any frame, and a
+  // player pressing a direction against a ball the engine had stopped
+  // integrating would be the worst frame in the game.
+  override get canSleep(): boolean {
+    return false;
+  }
+
   // Absolute maximum chain length: pay-out stops here, a hook still flying at
   // this length has missed, and an attachment beyond it snaps the chain.
   static readonly CHAIN_MAX_LENGTH = 1.8;

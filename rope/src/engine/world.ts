@@ -115,6 +115,12 @@ const VELOCITY_ITERATIONS = 20;
 // races it loses by less than a centimetre (`session-593f`).
 export const CONTACT_SLOP = 0.01;
 
+// The rest rule's numbers (see `World.settleSleep`): metres and radians, and
+// frames. The vine's own driver keeps a copy of the same three.
+const SLEEP_DRIFT = 0.002;
+const MOVING_DRIFT = 0.05;
+const SLEEP_FRAMES = 30;
+
 // One surface a depenetration pass pushed a body out of: the outward normal it
 // moved the body along, and the body that surface belongs to. A caller that
 // derives velocity from the frame (the ball's chain phase) needs BOTH - the
@@ -672,11 +678,11 @@ export class World {
     if (j >= 0) this.areas.splice(j, 1);
   }
 
-  // Is this body asleep? Only a vine link can be (see `VineLink.asleep`), and it
-  // is asked here rather than at each site so the three places that skip one
-  // cannot drift apart.
+  // Is this body asleep? Any rigid body can be (see `RigidBody2D.asleep`; a vine
+  // link sleeps with its vine), and it is asked here rather than at each site so
+  // the places that skip one cannot drift apart.
   private static isAsleep(body: CollisionObject2D): boolean {
-    return body instanceof VineLink && body.asleep;
+    return body instanceof RigidBody2D && body.asleep;
   }
 
   private matchesMask(body: PhysicsBody2D, mask: number | undefined): boolean {
@@ -946,7 +952,7 @@ export class World {
       if (body instanceof RigidBody2D && !body.removed) {
         // A sleeping body does not integrate: no gravity, no step, nothing to
         // undo. It is settled where it was left and the only thing that can
-        // change that is being woken (see `VineLink.asleep`).
+        // change that is being woken (see `RigidBody2D.asleep`).
         if (World.isAsleep(body)) continue;
         if (body.pivot) {
           // A pivot body turns on a fixed bearing: no gravity step, no
@@ -1175,6 +1181,7 @@ export class World {
         if (body.removed || !body.hasShape()) continue;
         if (!areaOverlapsBody(ashapes, body)) continue;
         if (body instanceof RigidBody2D) {
+          body.wake();
           body.linearVelocity = body.linearVelocity.add(dv);
         } else if (body instanceof CharacterBody2D) {
           // The character's state machine reads this velocity next frame; the
@@ -1238,6 +1245,7 @@ export class World {
         // single step however large `drag` is.
         const keep = 1 / (1 + area.drag * frac * dt);
         if (body instanceof RigidBody2D) {
+          body.wake();
           body.linearVelocity = body.linearVelocity.mul(keep).add(flow.mul(1 - keep));
           // Spin is damped by the same water, at a lower rate: a body tumbling
           // under water is stopped by it, and the ratio is what keeps that
@@ -1663,8 +1671,16 @@ export class World {
         if (bi.removed || !bi.hasShape() || !isSolidTarget(bi)) return;
         if (bj.removed || !bj.hasShape() || !isSolidTarget(bj)) return;
         if (bi.exceptions.has(bj.id)) return;
-        const iLeads =
+        // The lower id leads a rigid pair, unless it is asleep and the other
+        // is not: the gather is done FOR the leading side and a sleeping lead
+        // returns nothing, which would let an awake crate slide through a
+        // sleeping one that happened to have the lower id. Both asleep is the
+        // one pair with nothing to say.
+        let iLeads =
           bi instanceof RigidBody2D && (!(bj instanceof RigidBody2D) || bi.id < bj.id);
+        if (bi instanceof RigidBody2D && bj instanceof RigidBody2D && bi.asleep !== bj.asleep) {
+          iLeads = !bi.asleep;
+        }
         const a = iLeads ? bi : bj;
         const b = iLeads ? bj : bi;
         // Neither side can move: two statics touching is not a contact.
@@ -2264,6 +2280,13 @@ export class World {
     // green across a few changes, and a valuable one: warm-started static
     // manifolds are where Box2D's resting-stack quality actually comes from.
     const constraints = this.collectContacts();
+    // A contact is a push, and a body about to be pushed is awake from here:
+    // the solver credits it velocity this frame, and next frame's integrate
+    // has to carry that rather than skip it. The lead side is awake by
+    // construction (`collectPairContacts`); this is the other one.
+    for (const c of constraints) {
+      if (c.b instanceof RigidBody2D && c.b.asleep) c.b.wake();
+    }
     this.solveContacts(constraints, dt);
     PhaseTrace.mark("contacts", this);
 
@@ -2813,6 +2836,62 @@ export class World {
       }
     }
     return stuck;
+  }
+
+  // --- sleep ---------------------------------------------------------------
+  // The rest window, at the end of every frame, for every body the rule
+  // applies to (`RigidBody2D.canSleep`). The constants are the vine's
+  // (`stepVines`) and mean the same things: a body that has not left the mark
+  // it opened its window on by SLEEP_DRIFT after SLEEP_FRAMES frames is
+  // asleep; one that leaves it by MOVING_DRIFT has clearly been set moving and
+  // starts its window again from where it is, so a swing never waits out a
+  // window before counting as motion. Rotation is measured in radians against
+  // the same numbers: 2 mrad is 2 mm at the end of a metre-long plank, and
+  // 50 mrad is three degrees, which nothing at rest turns through.
+  // `only` narrows the pass to a set of bodies: the build-time chain settle
+  // (`settleChainsAtBuild`) runs the rule over the bodies it is stepping and
+  // nothing else, since a crate that has not yet been integrated against its
+  // floor is not at rest, it is unstarted.
+  settleSleep(only: readonly RigidBody2D[] | null = null): void {
+    for (const body of only ?? this.bodies) {
+      if (!(body instanceof RigidBody2D) || body.removed || body.asleep || !body.canSleep) continue;
+      body.held = false;
+      const drift = Math.max(
+        body.globalPosition.distanceTo(body.sleepMarkPosition),
+        Math.abs(body.globalRotation - body.sleepMarkRotation),
+      );
+      if (drift > MOVING_DRIFT) {
+        body.restartRestWindow();
+        continue;
+      }
+      if (++body.stillFrames < SLEEP_FRAMES) continue;
+      if (drift > SLEEP_DRIFT) {
+        body.restartRestWindow();
+        continue;
+      }
+      body.sleep();
+    }
+  }
+
+  // Wake every sleeping body within a contact's reach of `mover`: a platform
+  // that starts moving carries or drops whatever was resting on it, and a
+  // kinematic body is never the leading side of a contact, so nothing else
+  // would notice. The box is the same one the contact gather uses.
+  wakeTouching(mover: PhysicsBody2D): void {
+    for (const s of mover.getShapes()) {
+      const c = s.globalPosition;
+      const e = s.extents();
+      const cands = this.queryShapes(
+        c.x - e.x - CONTACT_SLOP,
+        c.y - e.y - CONTACT_SLOP,
+        c.x + e.x + CONTACT_SLOP,
+        c.y + e.y + CONTACT_SLOP,
+      );
+      for (const o of cands) {
+        const owner = o.owner;
+        if (owner instanceof RigidBody2D && owner.asleep && owner.canSleep) owner.wake();
+      }
+    }
   }
 
   private notifyAreas(): void {

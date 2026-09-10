@@ -137,6 +137,14 @@ export interface SceneConstraint {
   settle(pushes: readonly BodyPush[]): void;
 }
 
+// How far outside a sleeping chain's box a moving wrap body has to be before
+// its motion is none of the chain's business (see `SceneChain.watchedMoved`).
+// A quarter of a metre: the fastest thing in a level is the hook at 12 m/s,
+// 0.2 m a frame, so a body that could cross the chain's span before the next
+// look is inside this by the time it is looked at. Waking early costs a solve;
+// waking late is the ball passing through a chain it should have bent.
+const WAKE_REACH = 0.25;
+
 export class SceneChain implements SceneConstraint {
   readonly rope: Rope;
   // Authored fill for the links; null = the renderer's own chain colours.
@@ -153,6 +161,21 @@ export class SceneChain implements SceneConstraint {
   // bodies, then anything a span may wrap. Fixed at construction - the rope's
   // ends never re-anchor, and the wrap list is the one it was built with.
   private readonly watchBodies: readonly CollisionObject2D[];
+
+  // Asleep: out of the frame's chain set entirely - not swept, not settled,
+  // not re-solved by the coupled sweep. A chain sleeps when every rigid body on
+  // its path is asleep (`sleepChains`, at the end of the frame, after
+  // `World.settleSleep` has let the bodies decide), and wakes when any of them
+  // wakes or when anything it is watching - an anchor on a mover, a wrap body -
+  // has moved since (`wakeChains`, at the top of the frame). A chain with no
+  // rigid body on it sleeps at once: nothing it could correct can move.
+  //
+  // The lantern was the case: hanging still, it fell 2.7 mm a frame and was
+  // lifted back, so its chain was solved every frame, and again in the coupled
+  // sweep whenever the ball was on anything - 12 of the 15 path regenerations
+  // a frame on `session-392f`, for six chains nobody was touching.
+  asleep = false;
+  private readonly sleptAtVersion: number[];
   // `watchBodies`' transform versions as of the last real solve.
   private readonly solvedAtVersion: number[];
   // Whether that solve moved nothing: no watched body's version changed across
@@ -193,6 +216,138 @@ export class SceneChain implements SceneConstraint {
     this.wrapBodies = wrapBodies;
     this.watchBodies = [a.obj, b.obj, ...wrapBodies];
     this.solvedAtVersion = this.watchBodies.map(() => -1);
+    this.sleptAtVersion = this.watchBodies.map(() => -1);
+  }
+
+  // Every rigid body on the path is asleep (vacuously true of a chain between
+  // two statics). The rope's own path rather than `watchBodies`: a wrap node
+  // the sweep put on a crate is a body the solve moves too.
+  private bodiesAllAsleep(): boolean {
+    for (const node of this.rope.path()) {
+      const body = node.contact.obj;
+      if (body instanceof RigidBody2D && !body.asleep) return false;
+    }
+    return true;
+  }
+
+  // Has anything moved that could move THIS chain? Its two ends and any body
+  // on its path, by moving at all. Any other watched body - the wrap list is
+  // the whole level's wrappable geometry, the ball included, so "any watched
+  // body moved" was true on every frame the ball rolled anywhere - only by
+  // moving into the chain's reach: the box the sleeping chain lies in, grown
+  // by `WAKE_REACH`, against the body's own box. A body that moved somewhere
+  // else is forgotten (its version re-marked) so it is one box test, once.
+  private watchedMoved(): "no" | "carried" | "reached" {
+    const watch = this.watchBodies;
+    let reached = false;
+    for (let i = 0; i < watch.length; i++) {
+      const body = watch[i]!;
+      if (body.transformVersion === this.sleptAtVersion[i]) continue;
+      if (i < 2 || this.onPath(body)) return "carried";
+      if (this.withinReach(body)) reached = true;
+      else this.sleptAtVersion[i] = body.transformVersion;
+    }
+    return reached ? "reached" : "no";
+  }
+
+  private onPath(body: CollisionObject2D): boolean {
+    for (const node of this.rope.path()) if (node.contact.obj === body) return true;
+    return false;
+  }
+
+  private withinReach(body: CollisionObject2D): boolean {
+    for (const s of body.getShapes()) {
+      const c = s.globalPosition;
+      const e = s.extents();
+      if (
+        c.x + e.x >= this.sleptMinX &&
+        c.x - e.x <= this.sleptMaxX &&
+        c.y + e.y >= this.sleptMinY &&
+        c.y - e.y <= this.sleptMaxY
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // The box the chain sleeps in: its path's nodes, grown by `WAKE_REACH`.
+  // Taken once, here, because nothing on a sleeping chain moves.
+  private sleptMinX = 0;
+  private sleptMinY = 0;
+  private sleptMaxX = 0;
+  private sleptMaxY = 0;
+
+  fallAsleep(): void {
+    this.asleep = true;
+    const watch = this.watchBodies;
+    for (let i = 0; i < watch.length; i++) this.sleptAtVersion[i] = watch[i]!.transformVersion;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of this.rope.path()) {
+      const p = node.contact.globalPosition;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    this.sleptMinX = minX - WAKE_REACH;
+    this.sleptMinY = minY - WAKE_REACH;
+    this.sleptMaxX = maxX + WAKE_REACH;
+    this.sleptMaxY = maxY + WAKE_REACH;
+  }
+
+  // Top of the frame. An awake chain wakes any body on it still flagged asleep
+  // - the solve is about to move it, so it has to integrate - which is a no-op
+  // on a body already awake and so never holds one awake (`RigidBody2D.wake`).
+  // A sleeping chain looks for a reason to get up: a body on it that something
+  // woke, or a watched body that moved, in which case the chain's bodies are
+  // woken with it, since an anchor that moved has moved what hangs from it.
+  wakeIfDisturbed(): void {
+    if (!this.asleep) {
+      this.eachBody((body) => body.wake());
+      return;
+    }
+    if (!this.bodiesAllAsleep()) {
+      this.asleep = false;
+      this.eachBody((body) => body.wake());
+      return;
+    }
+    const moved = this.watchedMoved();
+    if (moved === "carried") {
+      this.asleep = false;
+      this.eachBody((body) => body.keepAwake());
+    } else if (moved === "reached") {
+      // Something came near: solve this frame and see. The bodies stay as
+      // they are until the solve says it moved one (`sleepIfSettled`), so a
+      // ball swinging past a row of hanging lanterns costs each a solve on
+      // the frames it is close, not a window of gravity and contacts.
+      this.asleep = false;
+      this.reachWoken = true;
+      this.reachMarks.length = 0;
+      this.eachBody((body) => this.reachMarks.push({ body, version: body.transformVersion }));
+    }
+  }
+
+  private reachWoken = false;
+  private readonly reachMarks: { body: RigidBody2D; version: number }[] = [];
+
+  // End of the frame, after `World.settleSleep`: the chain follows its bodies.
+  // A reach-woken chain first wakes any body its solve moved - a body moved
+  // while flagged asleep has velocity the settle credited it and gravity it
+  // has not been given, and has to integrate from here.
+  sleepIfSettled(): void {
+    if (this.reachWoken) {
+      this.reachWoken = false;
+      for (const m of this.reachMarks) {
+        if (m.body.asleep && m.body.transformVersion !== m.version) m.body.wake();
+      }
+      this.reachMarks.length = 0;
+    }
+    if (this.asleep) return;
+    if (this.bodiesAllAsleep()) this.fallAsleep();
   }
 
   // Open this chain's frame. Once per frame, however many solve passes follow.
@@ -442,6 +597,140 @@ const SWEEP_PROGRESS_EPSILON = 1e-12;
 // player's grapple rope while it is holding a vine link (see `level/vines.ts`),
 // which is the same situation `BallLevel` passes the ball's chain in for. It is
 // forwarded straight to `sweepChains`, which is where the reason lives.
+// The level's two sleep passes over its authored chains (see `SceneChain.asleep`).
+// `wakeChains` runs at the top of the frame, after integration has had its
+// chance to wake a body by contact and before the frame's chain set is built;
+// `sleepChains` runs at the very end, after `World.settleSleep`. `awakeChains`
+// is the set to hand `vineChainSet` as the authored list, rebuilt into the
+// caller's own array so a sleeping level allocates nothing.
+export function wakeChains(chains: readonly SceneChain[]): void {
+  for (const chain of chains) chain.wakeIfDisturbed();
+}
+
+export function sleepChains(chains: readonly SceneChain[]): void {
+  for (const chain of chains) chain.sleepIfSettled();
+}
+
+// Settle the authored chains at build, so a level arrives with its hanging
+// things already asleep - the vine's `settleVinesAtBuild`, for chains. Left to
+// settle live, every lantern in the ball arena swung itself out over the
+// first five seconds of play (180 to 330 frames to sleep on `session-392f`),
+// which is the whole of a short session spent paying for scenery.
+//
+// Only a chain whose every rigid body hangs CLEAR - overlapping no other body
+// and no area, and neither a pivot nor a sprung body, which `World.integrate`
+// steps differently - is settled here, because this loop runs gravity and the
+// chain phase and nothing else: no contacts, no areas. A chain-hung crate
+// resting on a floor would fall through it. Such a chain settles live, as it
+// always did. A chain sharing a body with one that cannot be settled here is
+// left with it: half a system settled is a system solved against bodies
+// nothing is stepping.
+const SETTLE_AT_BUILD_CAP = 600;
+const CLEAR_MARGIN = 0.05;
+
+export function settleChainsAtBuild(world: World, chains: readonly SceneChain[]): void {
+  const clear = new Set<SceneChain>();
+  for (const chain of chains) if (chainClearAtBuild(world, chain)) clear.add(chain);
+  // Close under shared bodies: drop any candidate sharing a body with a chain
+  // that is not one, until nothing changes.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const chain of clear) {
+      for (const other of chains) {
+        if (other === chain || clear.has(other)) continue;
+        let shares = false;
+        chain.eachBody((body) => {
+          if (other.holds(body)) shares = true;
+        });
+        if (shares) {
+          clear.delete(chain);
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+  const candidates = [...clear];
+  if (candidates.length === 0) return;
+  const dt = 1 / 60;
+  const awake: SceneChain[] = [];
+  const bodies: RigidBody2D[] = [];
+  for (let frame = 0; frame < SETTLE_AT_BUILD_CAP; frame++) {
+    awake.length = 0;
+    for (const chain of candidates) if (!chain.asleep) awake.push(chain);
+    if (awake.length === 0) break;
+    bodies.length = 0;
+    const seen = new Set<RigidBody2D>();
+    for (const chain of awake) {
+      chain.eachBody((body) => {
+        if (!seen.has(body)) {
+          seen.add(body);
+          bodies.push(body);
+        }
+      });
+    }
+    // The same step `World.integrate` gives a free body, minus everything a
+    // clear body has no use for.
+    for (const body of bodies) {
+      if (body.asleep) continue;
+      body.linearVelocity = body.linearVelocity.add(GRAVITY.mul(body.gravityScale * dt));
+      body.globalPosition = body.globalPosition.add(body.linearVelocity.mul(dt));
+      body.globalRotation += body.angularVelocity * dt;
+    }
+    stepSceneChains(awake, world, dt);
+    world.settleSleep(bodies);
+    sleepChains(awake);
+  }
+}
+
+function chainClearAtBuild(world: World, chain: SceneChain): boolean {
+  let clear = true;
+  chain.eachBody((body) => {
+    if (!clear) return;
+    if (!body.canSleep || body.pivot || body.spring !== null) {
+      clear = false;
+      return;
+    }
+    for (const s of body.getShapes()) {
+      const c = s.globalPosition;
+      const e = s.extents();
+      const minX = c.x - e.x - CLEAR_MARGIN;
+      const minY = c.y - e.y - CLEAR_MARGIN;
+      const maxX = c.x + e.x + CLEAR_MARGIN;
+      const maxY = c.y + e.y + CLEAR_MARGIN;
+      // Static scenery near a body is allowed: the chain phase's own settle
+      // pushes a chain body out of statics (`settleChainBodies`), so a lantern
+      // hung an inch off its wall settles here as it would live. Anything that
+      // can move - a crate, the ball, a platform - is not, since nothing in
+      // this loop would step it or solve the pair.
+      for (const o of world.queryShapes(minX, minY, maxX, maxY)) {
+        const owner = o.owner;
+        if (owner === body || !(owner instanceof PhysicsBody2D)) continue;
+        if (owner.isMobile || !(owner instanceof StaticBody2D)) clear = false;
+      }
+      for (const area of world.areas) {
+        if (area.removed) continue;
+        for (const a of area.getShapes()) {
+          const ac = a.globalPosition;
+          const ae = a.extents();
+          if (ac.x + ae.x >= minX && ac.x - ae.x <= maxX && ac.y + ae.y >= minY && ac.y - ae.y <= maxY) {
+            clear = false;
+          }
+        }
+      }
+    }
+  });
+  return clear;
+}
+
+export function awakeChains(chains: readonly SceneChain[], into: SceneChain[]): SceneChain[] {
+  into.length = 0;
+  for (const chain of chains) if (!chain.asleep) into.push(chain);
+  return into;
+}
+
 export function stepSceneChains(
   chains: readonly SceneConstraint[],
   world: World,
@@ -449,10 +738,40 @@ export function stepSceneChains(
   extra: CoupledRope | null = null,
 ): void {
   if (chains.length === 0) return;
+  dampChainBodies(chains);
   const before = snapshotChainBodies(chains, null);
   for (const chain of chains) chain.beginFrame(delta);
   sweepChains(chains, extra, delta);
   settleChainBodies(chains, before, world, delta);
+}
+
+// Per-frame velocity retention for a body a scene chain holds. A body on a
+// chain is damped by nothing: a PBD length constraint dissipates nothing, a
+// body hanging in free air touches nothing, and the sweep's tolerance lets the
+// chain lengthen by a fraction of a millimetre a frame, which feeds the swing
+// - the vine's finding (`LINK_DAMPING`), exact for a lantern. Undamped, every
+// lantern in the ball arena swung for ever at 3-60 mm and never reached the
+// rest rule (`session-392f`: six chain-hung bodies awake at frame 300, every
+// one restarting its window at 29). Applied BEFORE the phase's snapshot, for
+// the reason the vine applies it before its own: `settleChainBodies` rewrites
+// a body's velocity as what it had at the top of the phase plus what the
+// phase moved it by. A body the avatar's chain has hold of is left alone -
+// what a swing on a lantern feels like is the ball's chain phase's to decide,
+// and this must not change it - and so is one that is asleep, which has no
+// velocity to lose. Lighter than the vine's 0.98: iron on a chain rings
+// longer than rope, and a bumped lantern still swings for a few seconds.
+const CHAIN_BODY_DAMPING = 0.99;
+
+function dampChainBodies(chains: readonly SceneConstraint[]): void {
+  const seen = new Set<RigidBody2D>();
+  for (const chain of chains) {
+    chain.eachBody((body) => {
+      if (seen.has(body) || body.held || body.asleep || !body.canSleep) return;
+      seen.add(body);
+      body.linearVelocity = body.linearVelocity.mul(CHAIN_BODY_DAMPING);
+      body.angularVelocity *= CHAIN_BODY_DAMPING;
+    });
+  }
 }
 
 // The share of this frame's chain-phase displacement each body may be paid

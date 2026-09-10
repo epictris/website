@@ -39,6 +39,12 @@ type SweepHit = {
 };
 
 export class BallHook extends RigidBody2D {
+  // Never scenery: a hook in flight is the fastest thing in the level, a
+  // dangling tip is held by the chain, and both are removed rather than left.
+  override get canSleep(): boolean {
+    return false;
+  }
+
   // Speed below which a contact is too slow to bother rescaling — the direction
   // of a near-zero velocity is numerical noise, so the glancing factor below
   // would be meaningless.

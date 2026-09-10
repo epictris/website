@@ -28,8 +28,12 @@ import { buildLevelBodies, type LevelVisualSource } from "./buildBodies";
 import type { MoverScript } from "./movers";
 import { collectDecor, type SceneDecor } from "./decor";
 import {
+  awakeChains,
   buildSceneChains,
+  settleChainsAtBuild,
+  sleepChains,
   stepSceneChains,
+  wakeChains,
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
@@ -93,6 +97,7 @@ export class Level {
   // two passes is two constraints spending every frame undoing each other (see
   // `sweepChains`). Rebuilt in place once a frame (see `vineChainSet`).
   private readonly solveSet: SceneConstraint[] = [];
+  private readonly awakeSet: SceneChain[] = [];
   // Render-only: the metre-scaled level as built, and the engine object each
   // authored entry became. It is what lets the 3D renderer hand an authored
   // `visual` to the exact piece of the exact body it decorates (see
@@ -128,6 +133,7 @@ export class Level {
     // door a hand-written `init` hook spawns one through.
     this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
+    settleChainsAtBuild(this.world, this.sceneChains);
     this.vines = buildVines(this.world, data, built);
     // The links go in the rope's candidate list like every other body. They are
     // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
@@ -206,6 +212,15 @@ export class Level {
       m.body.beginMove();
       m.script(m.body, time, delta);
       m.body.commitMove(delta);
+      // A platform that moved this frame wakes whatever rests on it (see the
+      // same step in `BallLevel.physicsProcess`).
+      if (
+        m.body.linearVelocity.x !== 0 ||
+        m.body.linearVelocity.y !== 0 ||
+        m.body.angularVelocity !== 0
+      ) {
+        this.world.wakeTouching(m.body);
+      }
     }
 
     this.player.resolveMouseActions(input);
@@ -213,6 +228,14 @@ export class Level {
     if (input.spawnLargeCircle.pressed) this.spawnCircle(0.4, input.mouseWorldPosition);
 
     this.player.rope?.updateFrameStartDistanceLookup();
+    // Bodies on the rope's path are held awake while they are on it (see the
+    // same step in `BallLevel.physicsProcess`).
+    if (this.player.rope) {
+      for (const node of this.player.rope.path()) {
+        const body = node.contact.obj;
+        if (body instanceof RigidBody2D && body.canSleep) body.keepAwake();
+      }
+    }
     this.player.resolveInput(input, delta);
     // Locomotion and the character sweep (`moveAndCollide`), which is where the
     // grapple avatar's velocity is decided.
@@ -238,7 +261,13 @@ export class Level {
     // before the sweep that has to solve it.
     const held = updateVineLoads(this.vines, this.player.rope);
     stepVines(this.vines);
-    const chains = vineChainSet(this.sceneChains, this.vines, held, this.solveSet);
+    wakeChains(this.sceneChains);
+    const chains = vineChainSet(
+      awakeChains(this.sceneChains, this.awakeSet),
+      this.vines,
+      held,
+      this.solveSet,
+    );
     // Scene chains solve last, after integration has moved the bodies they hold
     // - so the frame ends inside the constraint rather than |v|·dt outside it.
     // A level with no chains does nothing here, which is what keeps every
@@ -263,6 +292,9 @@ export class Level {
         : null,
     );
     PhaseTrace.mark("scene-chains", this.world);
+
+    this.world.settleSleep();
+    sleepChains(this.sceneChains);
 
     this.cameraPosition = this.player.globalPosition;
   }

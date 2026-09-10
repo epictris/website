@@ -288,8 +288,16 @@ export abstract class CollisionObject2D {
     return this.position_;
   }
 
+  // The version moves only when the VALUE does. A frame has several places
+  // that write every rigid body's transform back unconditionally (the winch's
+  // haul rollback, a path restore), and a write of the same number is not a
+  // move: bumping on it woke every sleeping chain in the level on every frame
+  // the ball wound its chain. The object is stored regardless, so the bits a
+  // caller computed (a -0 included) are the bits kept.
   set globalPosition(value: Vec2) {
+    const moved = value.x !== this.position_.x || value.y !== this.position_.y;
     this.position_ = value;
+    if (!moved) return;
     this.transformVersion++;
     transformEpoch++;
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
@@ -300,7 +308,9 @@ export abstract class CollisionObject2D {
   }
 
   set globalRotation(value: number) {
+    const moved = value !== this.rotation_;
     this.rotation_ = value;
+    if (!moved) return;
     this.transformVersion++;
     transformEpoch++;
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
@@ -728,6 +738,74 @@ export class RigidBody2D extends PhysicsBody2D {
   linearVelocity: Vec2 = Vec2.ZERO;
   angularVelocity = 0;
   mass = 1;
+
+  // --- sleep ---------------------------------------------------------------
+  // A body that has gone nowhere for half a second is asleep: skipped by
+  // `World.integrate` (no gravity, no step), by the contact gather as a source,
+  // by every depenetration pass, and - through `SceneChain.asleep` - by the
+  // chain sweep. It costs the frame nothing until something touches it.
+  //
+  // The rule is the vine's (see `stepVines`), because it was arrived at the
+  // hard way there: NET DISPLACEMENT over a window, never velocity. A body
+  // hanging on a chain carries a permanent velocity churn - gravity takes it
+  // 2.7 mm down and the chain solve credits it the lift back, every frame for
+  // ever - so a speed test never sleeps it, and per-frame movement is a limit
+  // cycle about a point it does not leave. `World.settleSleep` runs the window
+  // at the end of every frame; the marks below are where it opened.
+  //
+  // What wakes a body is anything that could move it: a contact from an awake
+  // body (`World.resolveDynamicCollisions`), the avatar's chain reaching it
+  // (the level keeps every body on the rope's path awake), a chain it hangs
+  // from waking (`wakeChains`), a mover it rests on moving
+  // (`World.wakeTouching`), a current or water it is in, and any impulse
+  // (`applyImpulse`). The velocity it slept with is gone: it was the churn it
+  // was put to sleep for not having, and a body woken carrying it would jump.
+  asleep = false;
+  stillFrames = 0;
+  sleepMarkPosition: Vec2 = Vec2.ZERO;
+  sleepMarkRotation = 0;
+
+  // Whether the engine's rest rule applies. The avatar, its hook and the
+  // cannonball are never scenery, and a vine link sleeps with its vine
+  // (`stepVines`) rather than on its own.
+  get canSleep(): boolean {
+    return true;
+  }
+
+  restartRestWindow(): void {
+    this.stillFrames = 0;
+    this.sleepMarkPosition = this.globalPosition;
+    this.sleepMarkRotation = this.globalRotation;
+  }
+
+  // Asleep to awake, the window starting again from here. A no-op on a body
+  // already awake, which is what lets a chain wake its bodies every frame
+  // without holding them awake.
+  wake(): void {
+    if (!this.asleep) return;
+    this.asleep = false;
+    this.restartRestWindow();
+  }
+
+  // Awake, and not going to sleep for at least another window: for a body
+  // something has hold of every frame, like one on the avatar's chain.
+  keepAwake(): void {
+    this.asleep = false;
+    this.held = true;
+    this.restartRestWindow();
+  }
+
+  // Something has hold of this body THIS frame (the avatar's chain, through
+  // `keepAwake`). Read by the chain phase, which leaves a held body's swing
+  // alone (see `dampChainBodies`); cleared by `World.settleSleep` at the end
+  // of every frame.
+  held = false;
+
+  sleep(): void {
+    this.asleep = true;
+    this.linearVelocity = Vec2.ZERO;
+    this.angularVelocity = 0;
+  }
   // Coulomb friction coefficient (μ) for static contacts: tangential impulses
   // (capped at μ × the frame's normal impulse) couple linear and angular
   // motion so sliding becomes rolling. 0 preserves the historical
@@ -955,6 +1033,7 @@ export class RigidBody2D extends PhysicsBody2D {
 
   // Godot ApplyImpulse(impulse, position=offset from centre of mass).
   applyImpulse(impulse: Vec2, position: Vec2 = Vec2.ZERO): void {
+    this.wake();
     this.linearVelocity = this.linearVelocity.add(impulse.mul(this.inverseMass));
     this.angularVelocity += this.inverseInertia * position.cross(impulse);
   }
@@ -1022,13 +1101,20 @@ export class VineLink extends RigidBody2D {
   // every other body here is either scenery that never moves or an avatar that
   // always does. Default false, and nothing but a vine ever sets it, so no other
   // body and no recorded replay can see it.
-  asleep = false;
-
   constructor() {
     super();
     this.name = "VineLink";
     this.passable = true;
   }
+
+  // A link sleeps and wakes with its vine (`stepVines` / `wakeVine`), which is
+  // the only thing that knows the whole vine has settled; the engine's own
+  // rest rule and its wake paths leave the flag to the vine.
+  override get canSleep(): boolean {
+    return false;
+  }
+
+  override wake(): void {}
 
   override get isSolid(): boolean {
     return false;

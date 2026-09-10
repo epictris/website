@@ -2167,6 +2167,9 @@ switch (cmd) {
   case "vines":
     void cmdVines();
     break;
+  case "sleep":
+    void cmdSleep();
+    break;
   case "rails":
     void cmdRails();
     break;
@@ -2452,6 +2455,22 @@ async function cmdVines(): Promise<void> {
     if (!r.passed) failed++;
   }
   console.log(`[vines] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Sleep cases (src/sim/sleepCases.ts). A settled body and a settled chain cost
+// nothing, and the rest rule and every wake path reach no digest and no
+// invariant, so as with the vines this is the whole of their coverage.
+async function cmdSleep(): Promise<void> {
+  const { runSleepCases } = await import("../sim/sleepCases");
+  const results = runSleepCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.passed ? "PASS " : "FAIL "} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (!r.passed) failed++;
+  }
+  console.log(`[sleep] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

@@ -16,6 +16,11 @@ const EXPLOSION_RADIUS = 0.5; // metres
 const EXPLOSION_IMPULSE = 2.5;
 
 export class CannonBall extends RigidBody2D {
+  // A projectile, not scenery: it explodes on arrival rather than settling.
+  override get canSleep(): boolean {
+    return false;
+  }
+
   constructor() {
     super();
     this.name = "CannonBall";

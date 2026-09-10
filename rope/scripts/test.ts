@@ -38,6 +38,7 @@ const steps: Step[] = [
   { name: "spring", cmd: ["bun", "run", CLI, "spring"] },
   { name: "movers", cmd: ["bun", "run", CLI, "movers"] },
   { name: "vines", cmd: ["bun", "run", CLI, "vines"] },
+  { name: "sleep", cmd: ["bun", "run", CLI, "sleep"] },
   { name: "rails", cmd: ["bun", "run", CLI, "rails"] },
   { name: "viscous", cmd: ["bun", "run", CLI, "viscous"] },
   { name: "corners", cmd: ["bun", "run", CLI, "corners"] },

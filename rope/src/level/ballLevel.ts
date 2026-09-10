@@ -37,14 +37,18 @@ import {
   type Vine,
 } from "./vines";
 import {
+  awakeChains,
   buildSceneChains,
+  settleChainsAtBuild,
   CHAIN_TOLERANCE,
   refuseRopeBodiesIntoStatics,
   settleChainBodies,
+  sleepChains,
   snapshotChainBodies,
   snapshotRopeBodies,
   stepSceneChains,
   sweepChains,
+  wakeChains,
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
@@ -89,6 +93,8 @@ export class BallLevel {
   // itself when there is nothing to add, which is what keeps every recorded ball
   // replay bit-for-bit (see `vineChainSet`).
   private readonly solveSet: SceneConstraint[] = [];
+  // The authored chains awake this frame (see `awakeChains`), reused per frame.
+  private readonly awakeSet: SceneChain[] = [];
   // This frame's set, settled once at the top of the frame so both halves of the
   // chain phase solve the same one.
   private frameChains: readonly SceneConstraint[] = [];
@@ -274,6 +280,9 @@ export class BallLevel {
     this.bodies.push(...built.wrapBodies);
     this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
+    // Before the vines, so a vine hung from a lantern is built from where the
+    // lantern comes to rest.
+    settleChainsAtBuild(this.world, this.sceneChains);
     this.vines = buildVines(this.world, data, built);
     for (const vine of this.vines) this.bodies.push(...vine.links);
     // A hook that strikes a link threads onto the whole vine (see
@@ -399,6 +408,15 @@ export class BallLevel {
       m.body.beginMove();
       m.script(m.body, time, delta);
       m.body.commitMove(delta);
+      // A platform that moved this frame wakes whatever rests on it; one
+      // parked at the end of its route lets that settle and sleep.
+      if (
+        m.body.linearVelocity.x !== 0 ||
+        m.body.linearVelocity.y !== 0 ||
+        m.body.angularVelocity !== 0
+      ) {
+        this.world.wakeTouching(m.body);
+      }
     }
 
     // Where the ball was facing before anything this frame turned it — the floor
@@ -426,6 +444,19 @@ export class BallLevel {
     }
     this.bodies = this.bodies.filter((b) => !b.removed);
 
+    // Every body the chain runs over - the anchor it took this frame included,
+    // since the attach above has already put it on the path - is held awake
+    // for as long as it is on the path: the solve moves it every frame, and
+    // what the player does with it next is exactly what a sleeping body could
+    // not answer. Before integration, so the anchor integrates on the frame it
+    // is taken.
+    if (this.ball.chain) {
+      for (const node of this.ball.chain.path()) {
+        const body = node.contact.obj;
+        if (body instanceof RigidBody2D && body.canSleep) body.keepAwake();
+      }
+    }
+
     // Whether the contact solver's spin-traction ramp applies this frame: an
     // anchored chain keeps contact dynamics exactly as they always were (see
     // `RigidBody2D.constraintTethered`). Read before the solve from last
@@ -452,7 +483,15 @@ export class BallLevel {
     // either, so both halves of the chain phase below see the same set.
     this.heldVine = updateVineLoads(this.vines, this.ball.chain);
     stepVines(this.vines);
-    this.frameChains = vineChainSet(this.sceneChains, this.vines, this.heldVine, this.solveSet);
+    // After integration, so a lantern the ball bumped is awake by contact
+    // before its chain asks, and its chain comes into this frame's set.
+    wakeChains(this.sceneChains);
+    this.frameChains = vineChainSet(
+      awakeChains(this.sceneChains, this.awakeSet),
+      this.vines,
+      this.heldVine,
+      this.solveSet,
+    );
 
     // Scene chains solve straight after integration, before the ball's own chain
     // phase opens: whatever they move is then part of the state that phase
@@ -708,7 +747,8 @@ export class BallLevel {
       >();
       if (spinShare > 0) {
         for (const body of this.bodies) {
-          if (body instanceof RigidBody2D && body !== this.ball) {
+          // A sleeping body is not in the solve and cannot be hauled.
+          if (body instanceof RigidBody2D && body !== this.ball && !body.asleep) {
             haulAtSolve.set(body, {
               position: body.globalPosition,
               velocity: body.linearVelocity,
@@ -1354,6 +1394,11 @@ export class BallLevel {
     // the hook. Strictly read-only against the sim (see SlackChain): it moves
     // no body, so every phase mark and invariant above is blind to it.
     this.ball.chainSlack?.step(this.bodies, delta);
+
+    // Last: everything that could move a body this frame has. The bodies
+    // decide first and the chains follow them (see `SceneChain.asleep`).
+    this.world.settleSleep();
+    sleepChains(this.sceneChains);
 
     this.cameraPosition = this.ball.globalPosition;
   }
