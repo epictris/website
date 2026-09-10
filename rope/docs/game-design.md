@@ -167,6 +167,33 @@ It is drawn with a steel line down the bar's middle, where the cuff will sit,
 and the clamped cuff is drawn with its axis along the bar - encircling it -
 rather than half-buried in a face.
 
+### Viscous surfaces
+
+A fourth answer, beside biting, bouncing and clamping: a **viscous** face - mud,
+tar, wet clay - is one the manacle bites as it bites stone, sinks into up to
+the hinge, and then creeps through (`CollisionShape2D.viscosity`, authored as
+`CollisionObjectData.viscosity`; 0 is solid, 1 the reference mud, 2 twice as
+stiff).
+The cuff moves in the direction the chain pulls, at a rate that grows with the
+square of the pull, so a hanging ball draws it slowly toward itself while a
+falling ball caught on it drags it a long way before it is slowed to a hang.
+Once the whole cuff has crept clear of the geometry nothing is gripping it,
+and it drops out as the dangling tip - still armed, so it bites whatever solid
+thing it lands on next, but never again the mud it crept out of until it is
+thrown afresh (it leaves touching that face, and would otherwise sink straight
+back in).
+
+It is a number on the shape for hook-proof's reason - a stone wall with one mud
+patch is one body - and a number rather than a flag because how sticky the mud
+is IS the puzzle: a ceiling that holds for two seconds and one that holds for
+ten are different levels.
+Hook-proof wins where both are set, and a rail wins over it.
+Solid for everything else.
+
+It is drawn with a dash-dot ochre edge, in the same family as hook-proof's
+dashed steel: a face that does something to the hook, and not the thing a plain
+wall does.
+
 ### Decoration
 
 **Decoration** - a shape with its collision switched off (`LevelBodyData.collision: false`) - is the one thing the player sees that carries no glyph, and it is worth being explicit about why the rule above does not reach it.

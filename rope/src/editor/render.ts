@@ -79,6 +79,8 @@ import { decomposeSeams, isSimpleLoop } from "../lib/polygon";
 
 const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
+const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
 export const SELECT = "#f4a460";
 // Marks a shape whose 3D visual is NOT its own outline (see the badge pass): a
 // muted violet, distinct from the selection orange and the hook-proof steel, and
@@ -1833,6 +1835,11 @@ export function drawEditor(
         ctx.strokeStyle = IMPERMEABLE_EDGE;
         ctx.lineWidth = worldLine * 2;
         ctx.setLineDash([5 * PX, 3 * PX]);
+      } else if (m.viscosity > 0) {
+        // Mud: dash-dot ochre, as in game.
+        ctx.strokeStyle = VISCOUS_EDGE;
+        ctx.lineWidth = worldLine * 2;
+        ctx.setLineDash(VISCOUS_DASH);
       } else if (!m.wrappable) {
         // Chain-through: dotted, as a piece the rope passes through - the mark
         // hook-only bodies wear, which are passed through by everything.
@@ -1906,6 +1913,14 @@ export function drawEditor(
       ctx.strokeStyle = IMPERMEABLE_EDGE;
       ctx.lineWidth = worldLine * 2;
       ctx.setLineDash([5 * PX, 3 * PX]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (body.viscosity > 0 && body.object === "collision") {
+      // Viscous: dash-dot ochre border, as in game - mud the cuff creeps
+      // through rather than a face that holds it.
+      ctx.strokeStyle = VISCOUS_EDGE;
+      ctx.lineWidth = worldLine * 2;
+      ctx.setLineDash(VISCOUS_DASH);
       ctx.stroke();
       ctx.setLineDash([]);
     } else if (body.passable || !body.wrappable) {

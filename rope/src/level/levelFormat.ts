@@ -400,6 +400,25 @@ export interface CollisionObjectData extends ObjectPlacement {
   // base are hook-proof. Hook-proof wins where both are set - a hook that
   // bounces off a piece never clamps it.
   rail?: boolean;
+  // VISCOSITY: mud, tar, wet clay. The manacle bites this piece exactly as it
+  // bites any face, but creeps through it in the direction of the chain's
+  // pull at a rate set by how hard the chain pulls and by this number, and
+  // drops out once its mouth has crept clear of the geometry (see
+  // `lib/viscous.ts`). A hanging ball draws it slowly toward itself; a falling
+  // ball caught on it drags it a long way before it is slowed to a hang.
+  // Solid for everything else, exactly as a hook-proof piece is.
+  //
+  // Absent or 0 is an ordinary face. 1 is the reference mud the creep
+  // constants are quoted for, and the number scales the load the law reads:
+  // mud at 2 needs twice the pull for the same creep, at 0.5 half. A number
+  // rather than a flag because how sticky the mud is IS the level design - a
+  // ceiling that holds for two seconds and one that holds for ten are
+  // different puzzles.
+  //
+  // Per OBJECT for the reason `impermeable` is: a stone wall with one mud
+  // patch is one body. Hook-proof wins where both are set, and so does a rail
+  // - a rail is clamped around, not bitten.
+  viscosity?: number;
   // What this piece is made of and how thick it is through z - the dimension the
   // 2D view cannot show. Together they are the piece's mass: its area times
   // `thickness` times the material's density (`MATERIALS` in
@@ -2447,6 +2466,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...(o.impermeable !== undefined ? { impermeable: o.impermeable } : {}),
       ...(o.wrappable !== undefined ? { wrappable: o.wrappable } : {}),
       ...(o.rail !== undefined ? { rail: o.rail } : {}),
+      // A viscosity is a ratio and scales by nothing.
+      ...(o.viscosity !== undefined ? { viscosity: o.viscosity } : {}),
       // A material is a name and scales by nothing; a thickness is a length in
       // z and scales exactly as the two lengths in the plane do.
       ...(o.material !== undefined ? { material: o.material } : {}),

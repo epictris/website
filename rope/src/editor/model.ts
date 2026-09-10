@@ -411,6 +411,13 @@ export interface EdItem {
   // exclusive with `impermeable` in the inspector - a hook-proof rail is a bar
   // the hook bounces off and never clamps.
   rail: boolean;
+  // Viscosity (see `CollisionObjectData.viscosity`): 0 is an ordinary face,
+  // anything above it is mud the manacle bites and then creeps through under
+  // the chain's pull, dropping out once its mouth has crept clear - 1 the
+  // reference mud, 2 twice as stiff. Per SHAPE like the three above, and
+  // mutually exclusive with `impermeable` in the inspector - a hook-proof mud
+  // face is a face the hook never bites.
+  viscosity: number;
   // What the shape is made of, and how thick it is through z - the dimension
   // the 2D view cannot show (see `LevelBodyData.material` / `thickness`). Per
   // SHAPE, so they are the one geometry property `syncBodyProps` leaves alone:
@@ -1142,6 +1149,7 @@ function fromLevelData(data: LevelData): EdModel {
           impermeable: o.impermeable === true,
           wrappable: o.wrappable !== false,
           rail: o.rail === true,
+          viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
           material: materialName(o.material),
           thickness: o.thickness ?? DEFAULT_THICKNESS,
           visual: defaultVisual(),
@@ -1165,6 +1173,7 @@ function fromLevelData(data: LevelData): EdModel {
           impermeable: false,
           wrappable: true,
           rail: false,
+          viscosity: 0,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
           // Its own fill, which decoration carries rather than taking the
@@ -1190,6 +1199,7 @@ function fromLevelData(data: LevelData): EdModel {
           impermeable: false,
           wrappable: true,
           rail: false,
+          viscosity: 0,
           material: DEFAULT_MATERIAL,
           thickness: DEFAULT_THICKNESS,
           visual: defaultVisual(),
@@ -1235,6 +1245,7 @@ function fromLevelData(data: LevelData): EdModel {
     impermeable: false,
     wrappable: true,
     rail: false,
+    viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1322,6 +1333,7 @@ function fromLevelData(data: LevelData): EdModel {
     impermeable: false,
     wrappable: true,
     rail: false,
+    viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1404,6 +1416,7 @@ function lightItem(
     impermeable: false,
     wrappable: true,
     rail: false,
+    viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1464,6 +1477,7 @@ function lightItem(
     impermeable: false,
     wrappable: true,
     rail: false,
+    viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
     material: DEFAULT_MATERIAL,
     thickness: DEFAULT_THICKNESS,
@@ -1823,6 +1837,8 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           // kind (a level authored before rails were curves) is dropped rather
           // than written for the loader to ignore.
           ...(i.rail && i.shape.kind === "path" ? { rail: true } : {}),
+          // Absent means a face that holds the cuff still, so only mud says so.
+          ...(i.viscosity > 0 ? { viscosity: i.viscosity } : {}),
           // Written only when the piece is something other than the default
           // 20 cm of oak, so every level authored before materials stays
           // byte-identical. Per COLLISION OBJECT and nowhere else: a body's
@@ -3305,6 +3321,7 @@ export function emptyModel(): EdModel {
         impermeable: false,
         wrappable: true,
         rail: false,
+        viscosity: 0,
         material: DEFAULT_MATERIAL,
         thickness: DEFAULT_THICKNESS,
         visual: defaultVisual(),

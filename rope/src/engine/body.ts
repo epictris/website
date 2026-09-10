@@ -60,6 +60,30 @@ export class CollisionShape2D implements ShapeTransform {
   // stands on it, bodies collide with it, other chains wrap its corners.
   rail: RailCurve | null = null;
 
+  // How VISCOUS this surface is - mud, tar, wet clay: a face the manacle bites
+  // exactly as it bites any other, but does not hold still in. The cuff creeps
+  // through it in the direction of the chain's pull, at a rate set by how hard
+  // the chain pulls and by this number (`lib/viscous.ts`, `RopeEmbed`): a
+  // hanging ball draws it slowly toward itself, a falling ball caught on it
+  // drags it a long way before the ball is slowed to a hang, and once the
+  // cuff's mouth has crept clear of the geometry there is nothing left holding
+  // it and it drops out. Solid for everything else - the avatar stands on it,
+  // bodies collide with it, other chains wrap its corners.
+  //
+  // Zero - every ordinary surface - is solid. One is the reference mud the
+  // creep constants are quoted for, and the number scales the LOAD the law
+  // reads: mud at 2 needs twice the pull for the same creep, at 0.5 half.
+  //
+  // Per SHAPE for the reason `impermeable` is: a wall of stone with one mud
+  // patch is one body, and which surface the hook reached is a question about
+  // a shape. Hook-proof wins where both are set, as it does over a rail, and
+  // a rail wins over this - a rail is clamped around rather than bitten.
+  viscosity = 0;
+
+  get viscous(): boolean {
+    return this.viscosity > 0;
+  }
+
   constructor(
     public owner: CollisionObject2D,
     public shape: Shape,
@@ -135,11 +159,13 @@ export class CollisionShape2D implements ShapeTransform {
   // cannot expose or bury a corner. Asking per query instead is what let three
   // separate call sites each answer it their own way, and each get it wrong.
   //
-  // Invalidated when the body's shape set changes. Mutating a mounted shape's
-  // `localOffset` / `localRotation` after build would not invalidate it, and
-  // nothing does once the level is running: pieces are placed by `mountPieces`,
-  // and the one thing that moves them afterwards (`reoriginTo`, an off-centre
-  // pivot's bearing) still runs at build, before anything queries the body.
+  // Invalidated when the body's shape set changes, and when a mounted shape is
+  // moved through `moveShape`. Mutating a mounted shape's `localOffset` /
+  // `localRotation` by hand would not invalidate it, and nothing does that:
+  // pieces are placed by `mountPieces`, `reoriginTo` (an off-centre pivot's
+  // bearing) still runs at build, and the one piece that moves while the level
+  // is running - a manacle creeping through a viscous face (`RopeEmbed`) - is
+  // moved through `moveShape`.
   isVertexExposed(i: number): boolean {
     if (this.shape.kind === "circle") return false;
     if (!this.exposedVertices) {
@@ -371,6 +397,20 @@ export abstract class CollisionObject2D {
     this.invalidateExposure();
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
     return s;
+  }
+
+  // Move a shape `addShape` mounted to a new offset in the body's local frame,
+  // keeping its rotation. The one thing that repositions a mounted piece while
+  // the level runs is the manacle creeping through a viscous face
+  // (`RopeEmbed.slip`), and it goes through here so every cache keyed on
+  // where the pieces stand - the corner exposure, the broadphase leaf, the
+  // memoized span list - is told. A shape the body does not carry is a no-op.
+  moveShape(s: CollisionShape2D, localOffset: Vec2): void {
+    if (!this.collisionShapes.includes(s)) return;
+    s.localOffset = localOffset;
+    this.invalidateExposure();
+    bumpTransformEpoch();
+    if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
   }
 
   // Unmount a shape `addShape` mounted. The primary never goes - a body with no

@@ -73,6 +73,14 @@ export class BallHook extends RigidBody2D {
   // `alignToChain`, which is the only thing that turns this body.
   facing: (() => Vec2 | null) | null = null;
   private armed = true;
+  // Pieces this hook does not bite, however armed it is: the viscous faces it
+  // has already crept out of (`shed`). A cuff that drops out of mud is left
+  // touching the face it left, within the probe's margin, and would re-bite
+  // it on the next frame and sink to the hinge again - a three-second hang,
+  // repeated for as long as the tip lay against the face. Left to the contact
+  // solver instead, the face is a wall the tip rests on and slides down. The
+  // rest of the world is bitten as it always was.
+  private readonly shed = new Set<CollisionShape2D>();
   // Still in the straight-line throw, as opposed to the dangling chain tip a
   // hook becomes once the deploy ends. Only the throw gets the blocking-contact
   // backstop below; see `attachToBlockingContact`.
@@ -180,6 +188,20 @@ export class BallHook extends RigidBody2D {
   // back as (see `BallPlayer.dropFromRail`), until it is thrown again.
   disarm(): void {
     this.armed = false;
+  }
+
+  // Never bite `pieces` again: what a cuff that has crept out of a viscous
+  // face comes back with (see `BallPlayer.dropFromMud`), still armed for
+  // everything else. Every attach path - the sweep, the blocking contact and
+  // the resting probe - leaves these to the contact solver, exactly as it
+  // leaves a hook-proof piece, minus the bounce.
+  shedPieces(pieces: Iterable<CollisionShape2D>): void {
+    for (const piece of pieces) this.shed.add(piece);
+  }
+
+  // Attachable to this hook: not hook-proof, and not a face it has shed.
+  private bites(piece: CollisionShape2D): boolean {
+    return !piece.impermeable && !this.shed.has(piece);
   }
 
   // The throw is over — the hook falls from here on. Idempotent, and safe to
@@ -396,7 +418,7 @@ export class BallHook extends RigidBody2D {
       // The piece the sweep struck answers, not the body: a compound wall may
       // be hook-proof on the face the throw came in at and attachable one piece
       // along, which is the whole point of the flag being per shape.
-      const hit = bodySweepConvex(body, bar, motion, (s) => !s.impermeable);
+      const hit = bodySweepConvex(body, bar, motion, (s) => this.bites(s));
       if (hit && hit.t <= 1 && (!anchor || hit.t < anchor.t)) {
         anchor = { t: hit.t, normal: hit.normal, point: hit.point, collider: body, shape: hit.shape };
       }
@@ -562,10 +584,11 @@ export class BallHook extends RigidBody2D {
       // to be projected from the centre instead - `session-576f` was 19 mm of
       // path appearing from nowhere on a taut chain.)
       const s = other.getShapes()[c.a === this ? c.shapeB : c.shapeA];
-      // Hook-proof pieces are left to `bounce` (see above), and the constraint
-      // names the piece, so a wall that is hook-proof on one face and
-      // attachable on another is answered per face here too.
-      if (s?.impermeable) continue;
+      // Hook-proof pieces are left to `bounce` (see above), shed ones to the
+      // solver, and the constraint names the piece, so a wall that is
+      // hook-proof on one face and attachable on another is answered per face
+      // here too.
+      if (s && !this.bites(s)) continue;
       this.attach(other, s ? nearestSurfacePoint(s, c.point) : c.point, s ?? null);
       return true;
     }
@@ -605,9 +628,12 @@ export class BallHook extends RigidBody2D {
       // The piece the bar stands deepest in is the one the tip is resting on,
       // and it is that piece that decides: hook-proof deflects, anything else
       // anchors. Asked of the body instead, one hook-proof face would make a
-      // whole compound wall unattachable.
+      // whole compound wall unattachable. A shed piece is not a candidate at
+      // all: the mud the tip crept out of is nothing to it, and a solid piece
+      // of the same body it is also touching still anchors.
       let deepest: { shape: CollisionShape2D; normal: Vec2; depth: number; point: Vec2 } | null = null;
       for (const s of body.getShapes()) {
+        if (this.shed.has(s)) continue;
         for (const c of shapeContacts(bar, s, margin)) {
           if (!deepest || c.depth > deepest.depth) {
             deepest = { shape: s, normal: c.normal, depth: c.depth, point: c.point };

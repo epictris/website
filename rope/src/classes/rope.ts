@@ -45,6 +45,7 @@ import {
   type ClampState,
 } from "../lib/rail";
 import { MANACLE_BORE } from "../lib/manacle";
+import { RopeEmbed, slipDistance, type EmbedState } from "../lib/viscous";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -132,6 +133,7 @@ export class RopePath {
 interface PathSnapshot {
   bodies: { body: PhysicsBody2D; position: Vec2; rotation: number }[];
   clamp: ClampState | null;
+  embed: EmbedState | null;
   slideBudget: number;
 }
 
@@ -404,6 +406,11 @@ export class Rope {
   // `settleClamp`). The end has NOT been replaced when this fires; that is the
   // callback's job.
   onClampRunOff: ((clamp: RopeClamp, end: -1 | 1) => void) | null = null;
+  // Told when an embedded end's mouth has crept clear of the viscous face it
+  // bit, with the speed it was creeping at: the owner turns the cuff back into
+  // the dangling tip it was before it bit (see `settleEmbed`). As above, the
+  // end has NOT been replaced when this fires.
+  onEmbedDrop: ((embed: RopeEmbed, velocity: Vec2) => void) | null = null;
   // Whether this frame has looked at the clamp yet: the first look is the one
   // that decides whether a running ring has come to rest (see `slideClampedEnd`).
   private slideLooked = false;
@@ -2491,7 +2498,8 @@ export class Rope {
       bodies.push({ body, position: body.globalPosition, rotation: body.globalRotation });
     }
     const clamp = this.end instanceof RopeClamp ? this.end.snapshot() : null;
-    return { bodies, clamp, slideBudget: this.slideBudget };
+    const embed = this.end instanceof RopeEmbed ? this.end.snapshot() : null;
+    return { bodies, clamp, embed, slideBudget: this.slideBudget };
   }
 
   private restorePathBodies(snapshot: PathSnapshot): void {
@@ -2501,6 +2509,10 @@ export class Rope {
     }
     if (snapshot.clamp && this.end instanceof RopeClamp) {
       this.end.restoreState(snapshot.clamp);
+      this.markPathChanged();
+    }
+    if (snapshot.embed && this.end instanceof RopeEmbed) {
+      this.end.restoreState(snapshot.embed);
       this.markPathChanged();
     }
     this.slideBudget = snapshot.slideBudget;
@@ -2525,6 +2537,11 @@ export class Rope {
   private settleClamp(delta: number): void {
     if (this.seatLooked) return;
     const clamp = this.end;
+    if (clamp instanceof RopeEmbed) {
+      this.seatLooked = true;
+      this.settleEmbed(clamp);
+      return;
+    }
     if (!(clamp instanceof RopeClamp)) return;
     this.seatLooked = true;
     const grip = clamp.body.surfaceFriction;
@@ -2546,6 +2563,120 @@ export class Rope {
     }
     const seated = clamp.seat(hang.toward, delta, hang.pulling);
     if (coasted.moved || seated) this.markPathChanged();
+  }
+
+  // The frame's first look at an embedded end (`RopeEmbed`): is the cuff still
+  // held? Its mouth is what grips the face, and a mouth that has crept clear
+  // of every piece of the body it bit is gripping nothing - the cuff drops
+  // out, at the speed it was creeping, and the owner replaces the end with the
+  // dangling tip (`onEmbedDrop`). Once a frame and before the path is
+  // regenerated, as a rail's run-off is, so a dropped cuff is replaced before
+  // the pass reads the path. The frame's creep tally is read here and
+  // cleared, so a cuff that is not pulled on this frame reads as still.
+  private settleEmbed(embed: RopeEmbed): void {
+    const velocity = this.frameDelta > 0 ? embed.slipped.div(this.frameDelta) : Vec2.ZERO;
+    embed.slipped = Vec2.ZERO;
+    if (embed.holding().kind !== "nothing") return;
+    this.markPathChanged();
+    this.onEmbedDrop?.(embed, velocity);
+  }
+
+  // Let an embedded end creep through the viscous face it bit, along the pull
+  // of the span that reaches it, and say how much of the path's length that
+  // took out (see `lib/viscous.ts`).
+  //
+  // The whole frame's creep is decided at the solve's first look, from the
+  // tension the solve is about to apply: the path's over-length and the
+  // effective mass along it are what the correction would be made of, so
+  // `slipDistance` reads them as the force on the anchor and answers how far
+  // the mud lets it move for that force. The share of the error a wrap
+  // appearing or vanishing put there is no tension (`topologyCreditScale`),
+  // so it is taken out of the reading. Later iterations of the same frame find
+  // the budget spent; an undone iteration has it refunded with the pin's
+  // position (`snapshotPathBodies`).
+  //
+  // The creep runs along the LAST span - from the pin toward the node the
+  // chain reaches it from, the ball or a corner on the way - and no further
+  // than that node, nor than the over-length itself: past either the chain
+  // would be slack, and a slack chain is pulling on nothing. The pin is the
+  // node the span ends on, so a creep of `s` along it shortens the path by
+  // exactly `s`.
+  //
+  // A mouth that has crept out of the mud into a SOLID piece of the same body
+  // is stuck fast there and creeps no further; one that has crept clear of
+  // everything is dropped at the next frame's first look (`settleEmbed`).
+  //
+  // A pin that REACHES the node it is pulled toward has crept up to a corner
+  // the chain bends round, and the chain no longer bends there: the node is
+  // rounded - dropped, for the next iteration to pull the pin on toward the
+  // one before it - exactly as a continuous rope's far end rounds a corner
+  // inside a solve (`boundToNode`, `roundEndNode`). Left standing, a pin ON
+  // its wrap node has a pull with no direction, and the cuff sat at the
+  // corner of a mud blob for ever with the ball swinging under it
+  // (`session-332f`, f208 on).
+  private slipEmbeddedEnd(): number {
+    const embed = this.end;
+    if (!(embed instanceof RopeEmbed)) return 0;
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    if (!prev) return 0;
+    if (!this.slideLooked) {
+      this.slideLooked = true;
+      this.slideBudget = 0;
+      const held = embed.holding();
+      if (held.kind === "viscous") {
+        const error = this.calculateRopePathLength() - this.constraintLength;
+        const inverseInertia = this.effectiveInverseInertia(this.generatePathObjects());
+        if (error > 0 && inverseInertia >= 1e-6) {
+          this.slideBudget = slipDistance(
+            error * this.topologyCreditScale,
+            1 / inverseInertia,
+            this.frameDelta,
+            held.viscosity,
+          );
+        }
+      }
+    }
+    if (this.slideBudget <= 0) return 0;
+    const pin = embed.contact.globalPosition;
+    const pull = prev.contact.globalPosition.sub(pin);
+    const reach = pull.length();
+    if (reach < Rope.EMBED_NODE_EPSILON) {
+      this.endReachedNode = true;
+      return 0;
+    }
+    const before = this.calculateRopePathLength();
+    const step = Mathf.min(this.slideBudget, Mathf.min(before - this.constraintLength, reach));
+    if (step <= 0) return 0;
+    if (step >= reach) this.endReachedNode = true;
+    embed.slip(pull.mul(step / reach));
+    this.slideBudget = Mathf.max(this.slideBudget - step, 0);
+    this.markPathChanged();
+    return before - this.calculateRopePathLength();
+  }
+
+  // How close to the node it is pulled toward an embedded pin counts as ON it:
+  // a micron, well under any creep a frame makes and well over float noise.
+  private static readonly EMBED_NODE_EPSILON = 1e-6;
+
+  // The path's summed inverse inertia along the constraint: what one metre of
+  // length correction is divided by to become the correction impulse, and
+  // whose reciprocal is the effective mass the chain's tension acts on. Each
+  // dynamic body on the path contributes its mechanical advantage squared
+  // over its effective inverse mass along the pull, torque arm included.
+  private effectiveInverseInertia(pathObjects: PathObject[]): number {
+    let total = 0;
+    for (const segment of pathObjects) {
+      const dynamicBody = this.getDynamicBodyState(segment.body);
+      if (dynamicBody) {
+        const mechanicalAdvantage = segment.calculateMechanicalAdvantage();
+        const torqueArm = this.calculateTorqueArm(segment);
+        const inverseEffectiveMass =
+          1 / dynamicBody.mass + (torqueArm * torqueArm) / dynamicBody.inertia;
+        total += mechanicalAdvantage * mechanicalAdvantage * inverseEffectiveMass;
+      }
+    }
+    return total;
   }
 
   // Where a clamped end hangs, and whether the chain is what is hanging it:
@@ -2818,28 +2949,20 @@ export class Rope {
     // ball then flies until the chain comes taut again. That is a correction
     // in the sense the iteration loop's guard reads it - the path got shorter
     // - so it is reported as one, with nothing else to split.
-    if (this.slideClampedEnd() !== 0) {
+    // An embedded end creeps through its viscous face before the bodies are
+    // moved, on the same terms (`slipEmbeddedEnd`): the creep is the mud
+    // yielding, which is a correction, and it may take the whole error.
+    if (this.slideClampedEnd() !== 0 || this.slipEmbeddedEnd() !== 0) {
       currentLength = this.calculateRopePathLength();
       if (currentLength <= this.constraintLength) return 0;
     }
 
     const pathObjects = this.generatePathObjects();
     const lengthError = currentLength - this.constraintLength;
-    let totalEffectiveInverseInertia = 0;
-    const dynamicPathObjects: PathObject[] = [];
-
-    for (const segment of pathObjects) {
-      const dynamicBody = this.getDynamicBodyState(segment.body);
-      if (dynamicBody) {
-        dynamicPathObjects.push(segment);
-        const mechanicalAdvantage = segment.calculateMechanicalAdvantage();
-        const torqueArm = this.calculateTorqueArm(segment);
-        const inverseEffectiveMass =
-          1 / dynamicBody.mass + (torqueArm * torqueArm) / dynamicBody.inertia;
-        totalEffectiveInverseInertia +=
-          mechanicalAdvantage * mechanicalAdvantage * inverseEffectiveMass;
-      }
-    }
+    const totalEffectiveInverseInertia = this.effectiveInverseInertia(pathObjects);
+    const dynamicPathObjects = pathObjects.filter(
+      (segment) => this.getDynamicBodyState(segment.body) !== null,
+    );
 
     if (totalEffectiveInverseInertia < 1e-6) return 0;
     const scaledCorrectionImpulse = (lengthError * relaxationFactor) / totalEffectiveInverseInertia;

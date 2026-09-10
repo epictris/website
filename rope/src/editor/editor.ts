@@ -2729,9 +2729,13 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       beginAction();
       for (const b of items) {
         b.impermeable = box.checked;
-        // A hook-proof rail is a bar the hook bounces off and never clamps, so
-        // the two flags are one choice: ticking this unticks the other.
-        if (box.checked) b.rail = false;
+        // A hook-proof rail is a bar the hook bounces off and never clamps, and
+        // a hook-proof mud face is one it never bites, so the flags are one
+        // choice: ticking this unticks the others.
+        if (box.checked) {
+          b.rail = false;
+          b.viscosity = 0;
+        }
       }
       markDirty();
       // The border style is what says a surface is hook-proof, and it is drawn
@@ -2801,6 +2805,49 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "The ball's manacle clamps around this bar and slides along it under the chain's pull, held by the body's friction (a zipline, a pipe, a lantern's handle) - drawn with a steel line down its middle, which is the curve itself and where the cuff rides. The cuff stops a half-width in from each end, and where it would meet a piece of the same body that is not part of this bar. Solid for everything else. A bar shorter than it is thick is a peg the ring hangs on without sliding.";
+    g.appendChild(hint);
+  }
+
+  // Viscosity (see `CollisionObjectData.viscosity`): mud the ball's manacle
+  // bites and then creeps through under the chain's pull, and how stiff it
+  // is. A checkbox to make a face mud at all, with the number beside it while
+  // it is one - ticking it is the common gesture, and the number is the
+  // tuning. Per shape for the reason hook-proof is - a stone wall with one
+  // mud patch is one body - and mutually exclusive with hook-proof, since a
+  // hook-proof mud face is one the hook never bites.
+  function addViscousField(g: HTMLElement, items: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = items.every((b) => b.viscosity > 0);
+    box.indeterminate = !box.checked && items.some((b) => b.viscosity > 0);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of items) {
+        b.viscosity = box.checked ? 1 : 0;
+        if (box.checked) b.impermeable = false;
+      }
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "viscous";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    if (items.every((b) => b.viscosity > 0)) {
+      numField(
+        g,
+        "viscosity",
+        () => shared(items, (b) => b.viscosity),
+        (v) => {
+          for (const b of items) b.viscosity = Math.max(0.01, v);
+        },
+        0.1,
+        items.length > 1,
+      );
+    }
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Mud: the ball's manacle bites this face and then creeps through it in the direction the chain pulls, faster the harder it pulls - a hanging ball draws it slowly toward itself, a falling ball caught on it drags it a long way before it is slowed to a hang - and it drops out once its mouth has crept clear of the geometry. The viscosity is how stiff the mud is: 1 is the reference mud, 2 needs twice the pull for the same creep, 0.5 half. Drawn with a dash-dot ochre edge. Solid for everything else: you can stand on it and the rope still wraps its corners.";
     g.appendChild(hint);
   }
 
@@ -4213,6 +4260,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       bodies.every((b) => (b.kind === "static" || b.kind === "rigid") && !b.passable)
     ) {
       addImpermeableField(g, bodies);
+      addViscousField(g, bodies);
       // Only a CURVE may be a rail: a rail's centreline is the line the author
       // drew, and there is none to ride on a box or a vertex loop (see
       // `CollisionObjectData.rail`). Offered elsewhere it is a checkbox that
@@ -6191,6 +6239,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // with the box unticked, one click away either way - and it is the one
       // shape kind a rail can be at all (see `CollisionObjectData.rail`).
       rail: t === "path" && activeLayer === "scene",
+      viscosity: 0,
       // A fresh shape is 20 cm of oak, which is what every body authored before
       // materials existed is made of.
       material: DEFAULT_MATERIAL,

@@ -19,6 +19,7 @@ import { contactBounce, CONTACT_SLOP, GRAVITY, type ContactConstraint } from "..
 import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
+import { RopeEmbed } from "../lib/viscous";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
@@ -935,6 +936,7 @@ export class BallPlayer extends RigidBody2D {
     // the one that sweeps (see `Rope.continuous`).
     this.chain.continuous = true;
     this.chain.onClampRunOff = (clamp, end) => this.dropFromRail(clamp, end);
+    this.chain.onEmbedDrop = (embed, velocity) => this.dropFromMud(embed, velocity);
     this.chainSlack = new SlackChain(this.chain);
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
@@ -993,6 +995,17 @@ export class BallPlayer extends RigidBody2D {
       // cuff's centre is a half-width in from it, which is the jump the cuff
       // makes as it shuts.
       this.chain.end = RopeClamp.at(body, piece.rail, point, this.globalPosition, [this, hook]);
+    } else if (piece?.viscous) {
+      // A VISCOUS face: bitten as a face below is, pin and cuff and all, but
+      // sunk in the whole way - the pin is the bite point on the surface and
+      // the cuff is buried behind it - and the anchor CREEPS through it under
+      // the chain's pull, dropping out once the cuff has crept clear (see
+      // `lib/viscous.ts`). The cuff is mounted where it lies, one hinge
+      // offset under the surface, and is the embed's to carry along with the
+      // pin: nothing stands proud until it has crept out.
+      const embed = RopeEmbed.at(body, pieceIndex, point, facing);
+      this.chain.end = embed;
+      embed.cuff = this.mountCuff(body, point.sub(facing.mul(MANACLE_HINGE)), facing);
     } else {
       // The cuff bites at the angle it arrived at, centred on the surface - the
       // mouth half embedded in the geometry, the hinge half standing proud of
@@ -1092,10 +1105,10 @@ export class BallPlayer extends RigidBody2D {
   // face at the ball's own contact, and a cuff appearing inside the ball would
   // be a shove the throw never made. There is nothing there for the ball to be
   // stopped by that it is not already touching.
-  private mountCuff(body: PhysicsBody2D, point: Vec2, normal: Vec2): void {
+  private mountCuff(body: PhysicsBody2D, point: Vec2, normal: Vec2): CollisionShape2D | null {
     const bar: ShapeTransform = { globalPosition: point, globalRotation: normal.angle(), shape: manacleShape() };
     for (const own of this.getShapes()) {
-      if (shapeContacts(bar, own).length > 0) return;
+      if (shapeContacts(bar, own).length > 0) return null;
     }
     const cuff = body.addShape(
       bar.shape,
@@ -1105,6 +1118,7 @@ export class BallPlayer extends RigidBody2D {
     cuff.wrappable = false;
     cuff.hidden = true;
     this.anchorCuff = { body, shape: cuff };
+    return cuff;
   }
 
   private unmountCuff(): void {
@@ -1163,25 +1177,60 @@ export class BallPlayer extends RigidBody2D {
   // A clamped ring has run off the OPEN end of its rail (see `RopeClamp.coast`):
   // it is loose again, so it goes back to being the dangling chain tip, a body
   // in the world at the ring's own position with the speed it ran off at, and
-  // the chain goes back to ending at its centre. It stays DISARMED - a manacle
-  // that has slid off a rail is a weight on the end of a chain until it is
-  // thrown again, rather than something that re-catches the bar's end on the
-  // frame after it left it.
+  // the chain goes back to ending at its centre. It comes back DISARMED - a
+  // manacle that has slid off a rail is a weight on the end of a chain until
+  // it is thrown again, rather than something that re-catches the bar's end on
+  // the frame after it left it.
   private dropFromRail(clamp: RopeClamp, end: -1 | 1): void {
     const chain = this.chain;
     if (!chain || chain.end !== clamp) return;
-    const at = clamp.runOffPoint(end);
+    const along = clamp.tangent();
+    this.dropChainEnd(chain, clamp.runOffPoint(end), along ? along.mul(clamp.speed) : Vec2.ZERO).disarm();
+  }
+
+  // The cuff's mouth has crept clear of the viscous face it bit
+  // (`Rope.settleEmbed`): nothing is gripping it any more, so it is the
+  // dangling tip again, leaving at the speed it was creeping at - a hair
+  // under a dead hang, and whatever the catch was dragging it at if it was
+  // ripped out mid-arrest. The cuff that was bolted to the face as a piece of
+  // it goes with it.
+  //
+  // It comes back ARMED, unlike a ring off a rail: a cuff the mud let go of
+  // is still a cuff, and the stone it lands on next is bitten as a missed
+  // throw's dangling tip bites it. What it will not bite again is the mud it
+  // crept out of - it drops out touching that face, within the probe's
+  // margin, and re-biting it on the next frame would bury it to the hinge
+  // for another three seconds, for as long as it lay there (`session-237f`
+  // is the other failure: a tip that had dropped out of `ball.json`'s mud
+  // blob dragged over the rest of the level for sixty frames and anchored to
+  // none of it). The body's viscous pieces are shed, and only those, so a
+  // solid piece of the same body still anchors - and not a hook-proof one,
+  // which the cuff could not have bitten and must go on bouncing off (the
+  // probe deflects off what it is not given to skip).
+  private dropFromMud(embed: RopeEmbed, velocity: Vec2): void {
+    const chain = this.chain;
+    if (!chain || chain.end !== embed) return;
+    this.unmountCuff();
+    const mud = embed.body.getShapes().filter((piece) => piece.viscous && !piece.impermeable);
+    this.dropChainEnd(chain, embed.centre(), velocity).shedPieces(mud);
+  }
+
+  // Replace `chain`'s anchored end with a loose tip at `at`, moving at
+  // `velocity` over and above whatever the body it was anchored to is doing
+  // there: the one thing a cuff run off a rail and a cuff dropped out of mud
+  // both are afterwards. Returned still armed, for the caller to disarm or
+  // to tell what it must not bite.
+  private dropChainEnd(chain: Rope, at: Vec2, velocity: Vec2): BallHook {
+    const anchor = chain.end.contact.obj;
     const hook = new BallHook();
     hook.globalPosition = at;
     // Hinge toward the chain, as it will be turned every step from here on.
     const lastWrap = chain.wraps[chain.wraps.length - 1];
     const prev = lastWrap ? lastWrap.contact.globalPosition : chain.start.contact.globalPosition;
     if (at.distanceTo(prev) > 1e-6) hook.globalRotation = at.directionTo(prev).angle();
-    const along = clamp.tangent();
-    const carried = clamp.body instanceof PhysicsBody2D ? clamp.body.velocityAtPoint(at) : Vec2.ZERO;
-    hook.linearVelocity = carried.add(along ? along.mul(clamp.speed) : Vec2.ZERO);
+    const carried = anchor instanceof PhysicsBody2D ? anchor.velocityAtPoint(at) : Vec2.ZERO;
+    hook.linearVelocity = carried.add(velocity);
     hook.endFlight();
-    hook.disarm();
     hook.addCollisionExceptionWith(this);
     hook.registerAttachmentCallback((body, point, struck) => this.onHookAttached(hook, body, point, struck));
     this.wireDeploy(hook);
@@ -1192,6 +1241,7 @@ export class BallPlayer extends RigidBody2D {
     this.anchorFacingLocal = null;
     this.anchorNormalLocal = null;
     chain.end = new RopeAttachment(new RopeContact(hook, hook.hingeOffset()));
+    return hook;
   }
 
   // (settleAnchorOvershoot removed: anchoring at no less than the as-reached

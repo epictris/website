@@ -287,6 +287,9 @@ interface Piece {
   // every piece the one curve was stroked into, which is what `attachRails`
   // turns into the `RailCurve` they all carry (see `lib/rail.ts`).
   rail: RailBuild | null;
+  // Viscosity (`CollisionObjectData.viscosity`, 0 = solid), per piece for the
+  // same reason once more: a stone wall with one mud patch is one body.
+  viscosity: number;
 }
 
 // A rail under construction: the bar's centreline in WORLD metres (the frame
@@ -365,6 +368,9 @@ function makePiece(
     // Filled in by `makePieces` for the pieces of a rail curve; a rail flag on
     // any other shape kind means nothing (see `CollisionObjectData.rail`).
     rail: null,
+    // A viscosity that is not a positive number - absent, zero, a hand-edited
+    // file's nonsense - is a solid face.
+    viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
     // The piece's own material and thickness, not the body's: they are the one
     // authored property a body does not have just one of, and every sum below -
     // centre of mass, mass, inertia - is written over the pieces precisely so
@@ -402,6 +408,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.setShape(only.shape);
     shape.impermeable = only.impermeable;
     shape.wrappable = only.wrappable;
+    shape.viscosity = only.viscosity;
     return;
   }
   body.globalPosition = centre;
@@ -411,6 +418,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     const shape = body.addShape(p.shape, p.pos.sub(centre), p.rot);
     shape.impermeable = p.impermeable;
     shape.wrappable = p.wrappable;
+    shape.viscosity = p.viscosity;
   }
 }
 

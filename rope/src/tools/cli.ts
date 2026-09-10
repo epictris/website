@@ -2170,6 +2170,9 @@ switch (cmd) {
   case "rails":
     void cmdRails();
     break;
+  case "viscous":
+    void cmdViscous();
+    break;
   case "render3d":
     void cmdRender3d();
     break;
@@ -2181,7 +2184,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2479,6 +2482,34 @@ async function cmdRails(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[rails] ${results.length - failed}/${results.length} cases passed${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Viscous cases (src/sim/viscousCases.ts). A viscous face - mud - is one the
+// manacle bites and then creeps through under the chain's pull, at a power of
+// the load, and drops out of once its mouth has crept clear. The law has a
+// closed form (a hanging ball creeps the cuff at exactly the quoted speed), so
+// it is asserted directly, and like a rail it reaches no invariant, so this is
+// the whole of its coverage.
+async function cmdViscous(): Promise<void> {
+  const { runViscousCases } = await import("../sim/viscousCases");
+  const results = runViscousCases();
+  let failed = 0;
+  let xfail = 0;
+  for (const r of results) {
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (stale) {
+      console.log(`        this case is marked expectedFail but PASSED — delete the marker`);
+    }
+    if (bad) failed++;
+    if (r.expectedFail && !r.passed) xfail++;
+  }
+  const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
+  console.log(`[viscous] ${results.length - failed}/${results.length} cases passed${x}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

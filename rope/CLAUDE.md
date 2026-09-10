@@ -1197,6 +1197,8 @@ bun run src/tools/cli.ts contacts             # rigid-body contact cases (settle
 bun run src/tools/cli.ts spring               # spring-body cases (droop, load and release, per-axis periods, the locks)
 bun run src/tools/cli.ts movers               # scripted-mover cases (the arc, the route, the ease, the rider, the speed bar)
 bun run src/tools/cli.ts vines                # vine cases (the pass-through guards, drape, grab, winch, the load rope)
+bun run src/tools/cli.ts rails                # rail cases (the stroke, the cone, the clamp, the coast, the jam, the catch)
+bun run src/tools/cli.ts viscous              # viscous (mud) cases (the creep law, the hang, the catch, the drop-out, the format)
 bun run src/tools/cli.ts camera               # camera-path geometry, the rule set, and the editor's path round trip
 bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrusion winding, depth order, surface resolution, `visual` round trips
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
@@ -1230,7 +1232,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `viscous`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:
@@ -3750,6 +3752,51 @@ Without it the ball wound all the way up to its anchor passed through the manacl
 With it the ball meets the cuff first and, tethered, rides its spin up onto the bar until it sits in the POCKET between the cuff's outer top corner and the face, touching both, with the pin within the cuff's own thickness of its rim; `wound-tight` asserts that pocket as the ceiling of the climb.
 A bite where the ball already stands mounts nothing: a point-blank throw bites the face at the ball's own contact, and a cuff appearing inside the ball would be a shove the throw never made.
 The rail range and the corners a clamped span ignores still measure with the ring's bounding circle (`MANACLE_REACH`), which for a ring standing square on a bar is conservative by the difference between its length and its thickness: the ring stops that much short of a lid it slides toward, and closing that is a `RopeClamp` change for another day.
+
+## Viscous surfaces
+
+**Viscosity** is a number on the **shape** (`CollisionShape2D.viscosity`, authored as `CollisionObjectData.viscosity`; 0 - every ordinary face - is solid): mud, tar, wet clay.
+The manacle bites a viscous face as it bites stone - driven in at the angle it arrived, chain shackled to the pin, the cuff mounted as a piece of the body (see **The manacle**) - except that it sinks in the WHOLE way: mud does not stop a spike at its middle, so the cuff is buried to the hinge, the pin is the bite point itself on the surface, and nothing stands proud until it has crept out (a design decision, 2026-09-10).
+It then does not hold still: it CREEPS through the face in the direction of the chain's pull, at a rate set by how hard the chain pulls, and once the cuff has crept clear of the geometry nothing is gripping it and it drops out as the dangling tip (`BallPlayer.dropFromMud`, through `Rope.onEmbedDrop`, the mud twin of a rail's run-off).
+Unlike a ring off a rail it comes back ARMED: a cuff the mud let go of is still a cuff, and the stone it lands on next is bitten as a missed throw's dangling tip bites it.
+It was disarmed at first, since the drop shared the rail's `dropChainEnd`, and `session-237f` (2026-09-10) is what that played as: a tip that had crept out of `ball.json`'s mud blob was dragged over the rest of the level for sixty frames and anchored to none of it.
+What it will not bite again is the mud it crept out of (`BallHook.shedPieces`, the body's viscous pieces and only those, so a solid piece of the same body still anchors): it drops out with its mouth a frame of creep past the face, inside the resting probe's margin, and re-bitten there it sinks to the hinge again for another three seconds, for as long as it lies against the face - `viscous-drop` re-embeds on the very next frame without the shed.
+A shed piece is nothing to the sweep, the blocking contact or the probe, and the contact solver has the tip rest on it and slide down it like any wall; a fresh throw is a fresh hook and bites the mud again.
+A hanging ball draws it slowly toward itself; a falling ball caught on it drags it a long way through the mud before it is slowed to a hang, and creeps from there; a ball swinging out from a wall draws it straight out of the face.
+Solid for everything else, and per shape for hook-proof's reason: a stone wall with one mud patch is one body.
+Hook-proof wins where both are set, and a rail wins over it - a rail is clamped around, not bitten.
+The grapple's hook ignores it (a viscous face is a face to that controller); scene chains tied to one are tied.
+
+**The law is a power of the load** (`lib/viscous.ts`, `creepSpeed`): `VISCOUS_CREEP_SPEED` under `VISCOUS_CREEP_LOAD` times `(load / (viscosity · VISCOUS_CREEP_LOAD))^VISCOUS_EXPONENT`.
+The exponent is the shape of the mud and is global - 1 a Newtonian fluid, 2 as shipped, a shear-thinning one - and it exists because linear viscosity cannot do both of the things asked of it: a creep slow enough to hang from for a while makes a hard catch slip barely more than the hang does, the ratio of the two being fixed, while one that gives way under a fall runs away under a hanging ball.
+Squared, a catch at ten times the hanging load creeps a hundred times as fast, which reads as the mud yielding to the shock and then holding.
+The authored viscosity scales the LOAD the law reads, so 1 is the reference mud the constants are quoted for and mud at 2 needs twice the pull for the same creep - a ceiling that holds for two seconds and one that holds for ten are different puzzles, which is why it is a number and not a flag.
+The three constants (3 cm/s, 500 N - about the hanging ball's weight - and 2) are guesses to be played; `cli viscous` pins the law against them rather than them.
+
+**The cuff is massless and the mud has no elasticity, so the slip is solved geometrically inside the length solve** (`Rope.slipEmbeddedEnd`, the seat `slideClampedEnd` has: the top of every iteration of `correctShapePositionAndRotation`, before the bodies split what is left).
+At the frame's first look the solve knows how far over its length the path is and the path's summed inverse inertia (`effectiveInverseInertia`, the same sum the correction is divided by), and together those are the force it is about to apply - `M·e/dt²`, the tension the anchor is under.
+Every metre the anchor creeps toward the pull is a metre the bodies are not corrected by, so the tension left once it has crept `s` is `M·(e−s)/dt²`, and the frame's creep is the root of `s = dt·creepSpeed(M·(e−s)/dt²)` (`slipDistance`, a forty-step bisection of `[0, e]`; the left side rises, the right side falls, so it is unique and never exceeds the error).
+The share of the error a wrap appearing or vanishing put there is no tension and is scaled out (`topologyCreditScale`).
+The budget is the frame's and is spent along the LAST span, from the pin toward the node the chain reaches it from, no further than that node nor than the over-length - past either the chain would be slack and pulling on nothing - and an undone iteration refunds it with the pin's position (`PathSnapshot.embed`).
+A pin that REACHES that node has crept up to a corner the chain bends round, and the chain no longer bends there: the step marks `endReachedNode` and the iteration loop rounds the node (`roundEndNode`, the continuous rope's own corner rounding), so the next iteration pulls the pin on toward the node before it and the cuff creeps round the corner.
+Left standing, a pin on its wrap node has a pull with no direction: the cuff crept along the top face of `ball.json`'s mud blob to the corner the chain bent round and sat there for the rest of the recording while the ball swung under it (`session-332f`, f208 on); `viscous-corner` is the case.
+Solved this way a hanging ball's steady creep is exactly the quoted speed: the ball descends with the cuff, so the frame's error is one frame of creep plus one of gravity, and the tension left once the creep is absorbed is the ball's weight and nothing else - `viscous-law` holds that to a nanometre and `viscous-hang` measures it off the sim at 3.13 cm/s.
+A catch is the same arithmetic with a bigger error: the ball's speed after the catching frame is the slip speed, so it is slowed over the frames the slip takes to decay rather than in one (`viscous-catch`: 5.6 m/s at the bite, 4.6 after one frame, 12.6 cm down the wall in twenty frames against a centimetre of creep).
+
+**What holds the cuff is its buried length** (`RopeEmbed.holding`): the segment from the pin to the mouth - the cuff's whole length for a square bite, and as deep along the arrival direction for a glancing one, since a bite keeps the angle it arrived at.
+The segment and not the mouth alone, because a cuff driven through a slab thinner than itself has its mouth out of the far side from the first frame and is held by the slab it passes through.
+Once a frame and before the path is regenerated (`Rope.settleEmbed`, where a rail's `settleClamp` is) it is asked what it is buried in: a solid piece of the same body - mud that runs into rock - and it is stuck fast there, a bite from then on, since a spike with any of its length in rock does not move; else a viscous piece, and the cuff creeps on; nothing, and it drops.
+The two things this rule decides are worth knowing when authoring: a cuff pulled OUT of a face has only its own length of creep in it (10 cm square, less at an angle), so a ball hanging well out from a mud wall, or a hard catch on a mud ceiling, draws the cuff out in a few seconds, while one pulled ALONG a face rides it for as long as the face lasts.
+Both are the physics of a spike in mud rather than a tuning.
+
+The creeping cuff is the one mounted piece that moves while a level runs, and it moves through `CollisionObject2D.moveShape`, which tells every cache keyed on where the body's pieces stand (the corner exposure, the broadphase leaf, the memoized span list); `RopeEmbed.slip` moves the pin, the cuff and the frame's tally together, and the drawn cuff follows since both renderers centre it on the chain's own end node.
+The facing is frozen at the bite (`anchorFacingLocal`), as it is for stone - a spike dragged through mud is dragged as it stands - and so is the face the 2D renderer buries the far half under, which is right until a cuff creeps round a corner.
+
+Rendering: a dash-dot ochre edge in the game's 2D renderer, the editor and the SVG snapshot, as hook-proof's is dashed steel; the 3D scene draws the authored form.
+The editor offers **viscous** as a checkbox beside hook-proof (mutually exclusive with it, like a rail), with the viscosity in a number field while it is ticked.
+`cli viscous` (`sim/viscousCases.ts`) is the coverage: the law's arithmetic (no load or no viscosity is no creep, the quoted load creeps at the quoted speed, twice the load `2^p` faster, twice the viscosity `2^p` slower, a steady hang slips one frame of creep to a nanometre, a catch slips more than ten hangs' worth and less than the error), the hang (a ball under a mud ceiling creeps the cuff straight down at the law's speed, the ball descending with it, and the cuff drops out as the dangling tip clear of the slab within a factor of two of the mouth's reach over the creep), the catch (a ball falling at 6 m/s caught on a mud wall drags the cuff more than five hangs' worth in twenty frames, is not arrested in a frame, and then hangs creeping at the law's speed), the drop (a cuff that has crept out of a mud ceiling leaves with its mouth inside the probe's margin of the face and does not re-bite it, and bites the stone floor it then falls to as a plain bite), and the number through the format, the build and the editor, with hook-proof winning.
+`MUD_TEST` (`levels/mud-test.json`) is the sandbox: a mud ceiling to hang from until the cuff creeps out, and a stone column beside a tall mud wall to fall past and catch on.
+Nothing about it has been played yet: the constants, the bite depth and the drop-out are all waiting on that.
 
 ## The slack chain drape
 

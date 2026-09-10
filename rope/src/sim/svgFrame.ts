@@ -107,7 +107,8 @@ function bodyColor(b: PhysicsBody2D, piece: CollisionShape2D): { fill: string; s
   const fill = (b as { fillColor?: string }).fillColor ?? "#555555";
   // Impermeable (hook-proof) surfaces get a red stroke so it's clear why a hook
   // bounces off them rather than anchoring.
-  const stroke = piece.impermeable ? "#d0506a" : "#8a8a8a";
+  // ...and viscous (mud) ones an ochre one, for the same reason.
+  const stroke = piece.impermeable ? "#d0506a" : piece.viscous ? "#c9a066" : "#8a8a8a";
   return { fill, stroke };
 }
 

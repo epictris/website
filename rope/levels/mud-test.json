@@ -1,0 +1,154 @@
+{
+ "environment": {
+  "envIntensity": 0.6
+ },
+ "player": {
+  "x": -450,
+  "y": -8,
+  "radius": 8
+ },
+ "bodies": [
+  {
+   "kind": "static",
+   "x": 0,
+   "y": 100,
+   "rot": 0,
+   "color": "#3a3f4a",
+   "opacity": 0.5,
+   "friction": 1,
+   "objects": [
+    {
+     "type": "collision",
+     "shape": {
+      "kind": "rect",
+      "w": 4000,
+      "h": 40
+     }
+    },
+    {
+     "type": "geometry",
+     "shape": {
+      "kind": "rect",
+      "w": 4000,
+      "h": 40
+     },
+     "matchCollision": true
+    }
+   ]
+  },
+  {
+   "kind": "static",
+   "x": -500,
+   "y": 40,
+   "rot": 0,
+   "color": "#444a55",
+   "opacity": 0.5,
+   "friction": 1,
+   "objects": [
+    {
+     "type": "collision",
+     "shape": {
+      "kind": "rect",
+      "w": 400,
+      "h": 80
+     }
+    },
+    {
+     "type": "geometry",
+     "shape": {
+      "kind": "rect",
+      "w": 400,
+      "h": 80
+     },
+     "matchCollision": true
+    }
+   ]
+  },
+  {
+   "kind": "static",
+   "x": -300,
+   "y": -180,
+   "rot": 0,
+   "color": "#6f5233",
+   "opacity": 0.85,
+   "friction": 1,
+   "objects": [
+    {
+     "type": "collision",
+     "shape": {
+      "kind": "rect",
+      "w": 800,
+      "h": 60
+     },
+     "viscosity": 1
+    },
+    {
+     "type": "geometry",
+     "shape": {
+      "kind": "rect",
+      "w": 800,
+      "h": 60
+     },
+     "matchCollision": true
+    }
+   ]
+  },
+  {
+   "kind": "static",
+   "x": 500,
+   "y": -110,
+   "rot": 0,
+   "color": "#444a55",
+   "opacity": 0.5,
+   "friction": 1,
+   "objects": [
+    {
+     "type": "collision",
+     "shape": {
+      "kind": "rect",
+      "w": 60,
+      "h": 420
+     }
+    },
+    {
+     "type": "geometry",
+     "shape": {
+      "kind": "rect",
+      "w": 60,
+      "h": 420
+     },
+     "matchCollision": true
+    }
+   ]
+  },
+  {
+   "kind": "static",
+   "x": 760,
+   "y": -350,
+   "rot": 0,
+   "color": "#6f5233",
+   "opacity": 0.85,
+   "friction": 1,
+   "objects": [
+    {
+     "type": "collision",
+     "shape": {
+      "kind": "rect",
+      "w": 160,
+      "h": 900
+     },
+     "viscosity": 1
+    },
+    {
+     "type": "geometry",
+     "shape": {
+      "kind": "rect",
+      "w": 160,
+      "h": 900
+     },
+     "matchCollision": true
+    }
+   ]
+  }
+ ]
+}

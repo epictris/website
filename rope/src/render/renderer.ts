@@ -66,6 +66,8 @@ const MANACLE = "#7c848e"; // steel cuff band
 const MANACLE_DARK = "#454c55"; // lock housing / hinge shadow
 const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
+const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
+const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
 const RAIL_LINE = "#9db8c6"; // a rail's centreline: the same steel, drawn down the bar
 const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
@@ -171,6 +173,16 @@ function geometryStyle(
       stroke: IMPERMEABLE_EDGE,
       width: 2 * PX,
       dash: [5 * PX, 3 * PX],
+    };
+  }
+  // Viscous (mud): a dash-dot ochre edge, so a face the cuff creeps through
+  // reads differently from one that holds it.
+  if (piece?.viscous) {
+    return {
+      fill: body.fillColor ? hexToRgba(body.fillColor, body.fillOpacity) : null,
+      stroke: VISCOUS_EDGE,
+      width: 2 * PX,
+      dash: VISCOUS_DASH,
     };
   }
   if (body.fillColor) {
@@ -349,6 +361,22 @@ function drawGeometryShape(
     ctx.strokeStyle = IMPERMEABLE_EDGE;
     ctx.lineWidth = 2 * PX;
     ctx.setLineDash([5 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
+
+  // Viscous (mud): authored fill, dash-dot ochre border (see `geometryStyle`).
+  if (piece?.viscous) {
+    const style = geometryStyle(body, piece);
+    pathShape(ctx, t);
+    if (style.fill) {
+      ctx.fillStyle = style.fill;
+      ctx.fill();
+    }
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.width;
+    ctx.setLineDash(style.dash);
     ctx.stroke();
     ctx.setLineDash([]);
     return;

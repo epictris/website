@@ -27,6 +27,10 @@ import ballLevelJson from "../../levels/ball.json";
 // hook-proof (see `lib/rail.ts`). Hand-authored, so `levels/ball.json` - which
 // the editor may have open - is left alone.
 import railTestJson from "../../levels/rail-test.json";
+// The viscous sandbox: a mud ceiling to hang from until the cuff creeps out
+// of it, and a mud wall beside a stone column to fall past and catch on (see
+// `lib/viscous.ts`). Hand-authored, as the rail sandbox is.
+import mudTestJson from "../../levels/mud-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -66,6 +70,8 @@ export const LEVELS: Record<string, LevelSpec> = {
   BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball" },
+  // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
+  MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };
