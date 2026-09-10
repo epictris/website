@@ -496,6 +496,48 @@ export function sweepConvex(
 // Overlap + depenetration (rest resolution when a sweep starts embedded)
 // ---------------------------------------------------------------------------
 
+// `circleOverlap` for a circle that ARRIVED from somewhere: the same answer,
+// except that a centre inside a vertex loop is pushed out through the face it
+// came in by rather than through the shallowest one. `from` is where the
+// circle was before the step, in the target's CURRENT pose (a caller whose
+// target moved carries it along first). The shallowest face is the right
+// minimum translation for a circle that is simply found inside; it is the
+// wrong one for a circle that was pushed in past the middle of a thin piece
+// by something else in its step, which then leaves by the far face and has
+// gone through the piece. A face the circle was outside of before the step is
+// one it can only have come through, so the push-out is the least penetration
+// among those; a circle that was already inside every face falls back to the
+// shallowest, there being nothing to say which way it came.
+export function circleOverlapFrom(
+  p: Vec2,
+  r: number,
+  target: ShapeTransform,
+  from: Vec2,
+): { normal: Vec2; depth: number } | null {
+  const s = target.shape;
+  if (s.kind === "circle") return circleOverlap(p, r, target);
+  const rot = target.globalRotation;
+  const local = toLocal(p, target.globalPosition, rot);
+  const verts = shapeVertices(s);
+  const plane = deepestPlane(local, verts);
+  if (plane.dist > 0) return circleOverlap(p, r, target);
+  const was = toLocal(from, target.globalPosition, rot);
+  let edge = -1;
+  let dist = -Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const n = polyEdgeNormal(verts, i);
+    if (n.x === 0 && n.y === 0) continue;
+    if (n.dot(was.sub(verts[i]!)) <= 0) continue;
+    const d = n.dot(local.sub(verts[i]!));
+    if (d > dist) {
+      dist = d;
+      edge = i;
+    }
+  }
+  if (edge < 0) return circleOverlap(p, r, target);
+  return { normal: toWorldDir(polyEdgeNormal(verts, edge), rot), depth: r - dist };
+}
+
 // If a circle at `p` (radius r) overlaps `target`, return the minimum-translation
 // normal (pointing out of the target) and penetration depth; else null.
 export function circleOverlap(

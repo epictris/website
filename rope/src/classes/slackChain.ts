@@ -8,15 +8,29 @@
 // no positions. Nothing the game measures (replays, invariants, the solver)
 // can see it; deleting it changes pixels only.
 //
-// Model: a fixed-count Verlet particle chain pinned at both ends — the point
-// the chain leaves the ball (the coil's tangent point, or the start contact
-// when nothing is wound on) and the chain's far end (flying hook, dangling
-// tip, or anchor). Equality distance constraints keep the polyline's total
-// length at the chain's REAL length — free wrap-path length plus the slack the
-// solver is not using — so the drawn chain neither stretches when hanging nor
-// shortens when heaped (a heap folds, it does not shrink). Long-range
-// attachments from both pins kill the sag-stretch a few Gauss-Seidel passes
-// leave behind, which is what makes 1.8 m of cast iron read as inextensible.
+// Model: a fixed-count Verlet particle chain pinned at both ends — the
+// mounting loop the chain leaves the ball through (the chain's start contact)
+// and the chain's far end (flying hook, dangling tip, or anchor). Equality
+// distance constraints keep the polyline's total length at the chain's REAL
+// length — the whole wrap path's length plus the slack the solver is not
+// using — so the drawn chain neither stretches when hanging nor shortens when
+// heaped (a heap folds, it does not shrink). Long-range attachments from both
+// pins kill the sag-stretch a few Gauss-Seidel passes leave behind, which is
+// what makes 1.8 m of cast iron read as inextensible.
+//
+// The coil is part of the drape, not a kinematic prefix to it. The solver's
+// coil is the angle of rim between the loop and the TANGENT point toward the
+// next node, which is the right reading of a chain under tension and a fiction
+// for one with length to spare: a slack chain has nothing holding it against
+// the rim, and it hangs from the loop and lies wherever gravity and the
+// scenery put it. Pinned at the tangent point instead, the drape started a
+// quarter turn round the ball from the loop and only the run beyond the
+// tangent had the slack in it, so a ball that had rolled over its own chain
+// drew the chain hugging its underside and climbing its far flank to leave
+// cleanly toward the anchor, with the slack folded into the last span
+// (`session-232f` f200-232). Hanging from the loop, the rim is scenery the
+// drape collides with like any other, and the taut blend below carries the
+// nodes onto the solver's coil exactly as the chain comes tight.
 //
 // Collision is one-way too: nodes are pushed out of every wrappable shape
 // (the same set the rope solver may wrap, so the visual chain respects exactly
@@ -28,20 +42,28 @@
 // of slack), so a renderer that switched from "simulated drape" to "straight
 // spans" the frame the solver went taut would show the chain snapping several
 // centimetres in one frame. Instead the drawn chain is ALWAYS this polyline,
-// and as slack approaches zero every node is blended toward its arc-length
-// position on the straight wrap path — fully there at zero slack, untouched
-// beyond TAUT_BLEND_SLACK. The drawn shape is then a continuous function of
-// the physics state: taut is the limit of almost-taut, and there is no frame
-// on which the representation changes. The length the blend hides is bounded
-// by w·slack, at most a link or two right at the crossover.
+// and every node is held within a SAG BOUND of its arc-length position on the
+// wrap path: the sag a chain with this much slack can hang with, which closes
+// with the square root of the slack and is exactly zero at taut. The drawn
+// shape is then a continuous function of the physics state - taut is the
+// limit of almost-taut, and there is no frame on which the representation
+// changes - and the bound is one a drape never meets on its own, so a chain
+// with room to sag hangs by its own physics and is only ever gathered onto the
+// path as the slack that let it sag is taken up.
+//
+// It was a per-step position lerp toward the path, weighted linearly over the
+// last 10 cm of slack, and that is effectively a switch: a lerp of even a few
+// percent per step moves a node centimetres against gravity's 2.7 mm, so the
+// drape was flattened onto the path - and onto the coil's rim - a full 10 cm
+// of slack early, read as the chain clinging to the ball's flank while the
+// solver still reported 8 cm of slack (`session-232f` f216-232).
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { GRAVITY } from "../engine/world";
 import { shapeExtents } from "../engine/shapes";
-import { circleOverlap } from "../engine/collision";
+import { circleOverlapFrom } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
-import type { RopeNode } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
 import { MANACLE_REACH } from "../lib/manacle";
 import { Rope } from "./rope";
@@ -84,11 +106,19 @@ const ITERATIONS = 16;
 // Constraint iterations between collision resolutions (the final iteration
 // always collides last, so the frame ends clear of the scenery).
 const COLLIDE_EVERY = 4;
-// Slack below which the drawn chain starts blending toward the straight wrap
-// path, metres. See the header: this is the no-teleport mechanism. 10 cm of
-// slack on this chain sags ~26 cm, so the ramp starts while the sag is still
-// an honest drape and finishes exactly at taut.
-const TAUT_BLEND_SLACK = 0.1;
+// How far a node may stray from its arc-length position on the wrap path, as
+// a multiple of sqrt(path length x slack). A shallow chain with slack s over a
+// span L hangs with a sag of sqrt(3·L·s/8), 0.61 of that root, so at 1 the
+// bound stands clear of an honest drape - a heap on the floor included, whose
+// folds stand well inside it at any slack a heap needs - and only shapes the
+// chain as the slack runs out. See the header: this is the no-teleport
+// mechanism. The last millimetre of slack closes the last two centimetres of
+// sag, which is the square root's own slope and what a chain coming tight does.
+const SAG_BOUND_FACTOR = 1;
+// Passes a node is given over the shapes near it to end a collision step
+// clear of all of them (see solveCollisions). Two settles a seam; the third
+// is headroom.
+const SEAM_ROUNDS = 3;
 // A node may not move faster than this, metres per step. Purely a safety
 // fence around the Verlet integration — the hook itself flies at 12 m/s, i.e.
 // 0.2 m per step, an order of magnitude inside it.
@@ -113,33 +143,6 @@ export class SlackChain {
 
   constructor(private readonly chain: Rope) {
     this.tipBody = chain.end.contact.obj as PhysicsBody2D;
-  }
-
-  // How many leading wraps are the coil — chain wound onto the shape the rope
-  // starts on (the ball's rim). Same predicate as Rope.syncCoil: the coil is
-  // kinematic (it rides the ball's rotation), so the drape starts after it.
-  private coilRun(): number {
-    const body = this.chain.start.contact.obj;
-    const shapeIndex = this.chain.start.contact.shapeIndex;
-    const wraps = this.chain.wraps;
-    let run = 0;
-    while (
-      run < wraps.length &&
-      wraps[run]!.contact.obj === body &&
-      wraps[run]!.contact.shapeIndex === shapeIndex
-    ) {
-      run++;
-    }
-    return run;
-  }
-
-  // The free portion of the wrap path: the take-off node (the coil's tangent
-  // point, or the start contact bare), any scene wraps, and the far end.
-  private freePathNodes(): RopeNode[] {
-    const run = this.coilRun();
-    const wraps = this.chain.wraps;
-    const takeoff = run > 0 ? wraps[run - 1]! : this.chain.start;
-    return [takeoff, ...wraps.slice(run), this.chain.end];
   }
 
   // Sample `points` (a polyline) at `count`+1 arc-length fractions. Degenerate
@@ -170,8 +173,9 @@ export class SlackChain {
   // One fixed step. Reads the frame's FINAL body transforms (call it at the
   // end of the physics frame) and moves only this class's own nodes.
   step(bodies: readonly PhysicsBody2D[], delta: number): void {
-    const free = this.freePathNodes();
-    const freePoints = free.map((n) => n.contact.globalPosition);
+    // The wrap path, loop → far end: the start contact, every wrap (the coil's
+    // rim samples included), and the end.
+    const pathPoints = this.chain.path().map((n) => n.contact.globalPosition);
     // Clamped around a rail the chain ends at the centre of a ring, but it is
     // hooked over the ring's RIM, and that is where it hangs from: the drape
     // is pinned there (`RopeClamp.rimPoint`), so its last link leaves the end
@@ -181,29 +185,33 @@ export class SlackChain {
     // flickered with it (`session-407f`).
     const end = this.chain.end;
     const clamp = end instanceof RopeClamp ? end : null;
-    if (clamp !== null) freePoints[freePoints.length - 1] = clamp.rimPoint();
+    if (clamp !== null) pathPoints[pathPoints.length - 1] = clamp.rimPoint();
 
     if (this.pos.length !== SEGMENTS + 1) {
       // First step: lay the chain along the wrap path it is deployed on, at
       // rest relative to the world. During the deploy that path is straight
       // and taut, so this is exact.
-      this.pos = SlackChain.sampleByArc(freePoints, SEGMENTS);
+      this.pos = SlackChain.sampleByArc(pathPoints, SEGMENTS);
       this.prev = this.pos.slice();
       this.renderFrom = this.pos.slice();
     }
 
-    let freeStraightLen = 0;
-    for (let i = 1; i < freePoints.length; i++) {
-      freeStraightLen += freePoints[i - 1]!.distanceTo(freePoints[i]!);
+    // The wrap path's length as the polyline through its nodes. The coil's
+    // samples chord its arc (a quarter of a radian apiece, 0.3% short of the
+    // arc); the solver measures the arc itself, and the difference is well
+    // under a link on a chain wound several turns.
+    let pathLen = 0;
+    for (let i = 1; i < pathPoints.length; i++) {
+      pathLen += pathPoints[i - 1]!.distanceTo(pathPoints[i]!);
     }
     // Slack the solver is not using. The wrap path can run OVER the chain's
     // length (the blocked-length lease), which is simply zero slack here.
     const slack = Math.max(0, this.chain.maxRopeLength - this.chain.getCurrentLength());
-    const targetLen = freeStraightLen + slack;
+    const targetLen = pathLen + slack;
     const restLen = targetLen / SEGMENTS;
 
-    const pinA = freePoints[0]!;
-    const pinB = freePoints[freePoints.length - 1]!;
+    const pinA = pathPoints[0]!;
+    const pinB = pathPoints[pathPoints.length - 1]!;
 
     // Verlet integrate the interior; re-pin the ends to this frame's contacts.
     const gravityStep = GRAVITY.mul(delta * delta);
@@ -222,14 +230,20 @@ export class SlackChain {
     this.prev[SEGMENTS] = this.pos[SEGMENTS]!;
     this.pos[SEGMENTS] = pinB;
 
-    // Almost taut: pull every node toward its arc-length position on the
-    // straight wrap path, all the way there at zero slack. This is the
-    // no-teleport guarantee — see the header.
-    const w = 1 - Math.min(slack / TAUT_BLEND_SLACK, 1);
-    if (w > 0 && freeStraightLen > 1e-9) {
-      const target = SlackChain.sampleByArc(freePoints, SEGMENTS);
+    // The sag bound: every node held within reach of its arc-length position
+    // on the wrap path, the reach closing with the slack and gone at taut.
+    // This is the no-teleport guarantee - see the header - and it is also
+    // what winds the drape onto the coil: the solver's rim samples are part of
+    // the path, so a chain coming tight on a wound ball is drawn round the rim
+    // exactly where the solver says the coil is.
+    if (pathLen > 1e-9) {
+      const bound = SAG_BOUND_FACTOR * Math.sqrt(pathLen * slack);
+      const target = SlackChain.sampleByArc(pathPoints, SEGMENTS);
       for (let i = 1; i < SEGMENTS; i++) {
-        this.pos[i] = this.pos[i]!.lerp(target[i]!, w);
+        const off = this.pos[i]!.sub(target[i]!);
+        const dist = off.length();
+        if (dist <= bound) continue;
+        this.pos[i] = bound > 0 ? target[i]!.add(off.mul(bound / dist)) : target[i]!;
       }
     }
 
@@ -349,61 +363,100 @@ export class SlackChain {
   }
 
   // Push every interior node out of the scenery. Dead normal restitution and
-  // Coulomb-ish tangential friction, both written through the Verlet history.
+  // Coulomb-ish tangential friction, both written through the Verlet history,
+  // and both measured RELATIVE TO THE SURFACE: a node resting on a body that
+  // moves rides it. Measured in world space instead, the static stick held a
+  // node still while the lantern it lay on swung out from under it at
+  // 2.5 cm a frame, and the node dropped through the gap between the handle
+  // and the glass into the lamp's interior (`session-1038f` f858-862, the
+  // slack chain falling through the lamp); the same held a drape still on any
+  // swinging platform it was heaped on.
   private solveCollisions(
     shapes: readonly CollisionShape2D[],
     cuff: { body: CollisionObject2D; at: Vec2 } | null,
   ): void {
     for (let i = 1; i < SEGMENTS; i++) {
       let p = this.pos[i]!;
-      for (const s of shapes) {
-        if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_REACH) continue;
-        const e = shapeExtents(s);
-        const c = s.globalPosition;
-        if (
-          Math.abs(p.x - c.x) > e.x + NODE_RADIUS ||
-          Math.abs(p.y - c.y) > e.y + NODE_RADIUS
-        ) {
-          continue;
+      // Repeated until the node ends clear of every shape. A compound body's
+      // pieces overlap at their seams (the lantern's handle-top piece stands
+      // inside its glass), so a push out of one piece can land inside the
+      // next, and a node left inside at the end of a step starts the next one
+      // with no side to have come from.
+      for (let round = 0; round < SEAM_ROUNDS; round++) {
+        let hit = false;
+        for (const s of shapes) {
+          if (cuff !== null && s.owner === cuff.body && p.distanceTo(cuff.at) < MANACLE_REACH) continue;
+          const e = shapeExtents(s);
+          const c = s.globalPosition;
+          if (
+            Math.abs(p.x - c.x) > e.x + NODE_RADIUS ||
+            Math.abs(p.y - c.y) > e.y + NODE_RADIUS
+          ) {
+            continue;
+          }
+          // Where the node started the step, carried along with the body it
+          // is being tested against: which side of a face it came from is a
+          // question in the body's own frame. Ejected through the shallowest
+          // face instead, a node the constraints had dragged from the top of
+          // the lantern's chimney down past its middle left by the SIDE, and
+          // the chain it was part of then cut straight through the glass,
+          // its two neighbours held 11 cm apart on opposite faces by the
+          // push-out (`session-1038f` f858-862).
+          const from = SlackChain.carried(s.owner, this.renderFrom[i]!);
+          const ov = circleOverlapFrom(p, NODE_RADIUS, s, from);
+          if (!ov) continue;
+          hit = true;
+          p = p.add(ov.normal.mul(ov.depth));
+          // How far the surface under the node moved this step: the body's
+          // frame-start pose is its captured render transform (taken at the
+          // top of the frame, before anything moved), so the point's motion
+          // is exact for the frame rather than a velocity times dt.
+          const surfaceStep = p.sub(SlackChain.was(s.owner, p));
+          // Static friction first: a contacting node that has only crept this
+          // step, against the surface, is put back where the surface carried
+          // it (see STICK_STEP).
+          const step = p.sub(this.renderFrom[i]!).sub(surfaceStep);
+          const st = step.sub(ov.normal.mul(step.dot(ov.normal)));
+          if (st.length() < STICK_STEP) p = p.sub(st);
+          const rel = p.sub(this.prev[i]!).sub(surfaceStep);
+          const vn = ov.normal.mul(rel.dot(ov.normal));
+          const vt = rel.sub(vn);
+          this.prev[i] = p.sub(surfaceStep.add(vt.mul(1 - FRICTION)));
         }
-        const ov = circleOverlap(p, NODE_RADIUS, s);
-        if (!ov) continue;
-        p = p.add(ov.normal.mul(ov.depth));
-        // Static friction first: a contacting node that has only crept this
-        // step is put back where it started along the surface (see STICK_STEP).
-        const step = p.sub(this.renderFrom[i]!);
-        const st = step.sub(ov.normal.mul(step.dot(ov.normal)));
-        if (st.length() < STICK_STEP) p = p.sub(st);
-        const vel = p.sub(this.prev[i]!);
-        const vn = ov.normal.mul(vel.dot(ov.normal));
-        const vt = vel.sub(vn);
-        this.prev[i] = p.sub(vt.mul(1 - FRICTION));
+        if (!hit) break;
       }
       this.pos[i] = p;
     }
   }
 
-  // The full drawn polyline, loop → anchor: the coil (welded to the ball's
-  // render transform, exactly as the span renderer laid it) followed by the
-  // simulated drape. Both simulated ends are re-welded to their contacts'
-  // render transforms so the chain never visibly detaches from the ball or
-  // the manacle between physics steps; the interior interpolates the sim.
+  // Where a world point riding `body` was at the start of the frame, and
+  // where a point that rode it from the start of the frame is now - the
+  // body's frame-start pose is its captured render transform, taken at the
+  // top of the frame before anything moved, so both are exact for the frame
+  // rather than a velocity times dt.
+  private static was(body: CollisionObject2D, p: Vec2): Vec2 {
+    const prevPos = body.renderPosition(0);
+    const prevRot = body.renderRotation(0);
+    return prevPos.add(p.sub(body.globalPosition).rotated(prevRot - body.globalRotation));
+  }
+
+  private static carried(body: CollisionObject2D, q: Vec2): Vec2 {
+    const prevPos = body.renderPosition(0);
+    const prevRot = body.renderRotation(0);
+    return body.globalPosition.add(q.sub(prevPos).rotated(body.globalRotation - prevRot));
+  }
+
+  // The full drawn polyline, loop → anchor: the simulated drape, its two ends
+  // re-welded to their contacts' render transforms so the chain never visibly
+  // detaches from the ball or the manacle between physics steps; the interior
+  // interpolates the sim.
   pathLoopToAnchor(alpha: number): Vec2[] {
     const chain = this.chain;
     if (this.pos.length !== SEGMENTS + 1) {
       // Not stepped yet — fall back to the straight spans.
       return chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
     }
-    const run = this.coilRun();
-    const free = this.freePathNodes();
-    const out: Vec2[] = [];
-    if (run > 0) {
-      out.push(chain.start.contact.renderGlobalPosition(alpha));
-      for (let i = 0; i < run - 1; i++) {
-        out.push(chain.wraps[i]!.contact.renderGlobalPosition(alpha));
-      }
-    }
-    out.push(free[0]!.contact.renderGlobalPosition(alpha));
+    const out: Vec2[] = [chain.start.contact.renderGlobalPosition(alpha)];
     for (let i = 1; i < SEGMENTS; i++) {
       out.push(this.renderFrom[i]!.lerp(this.pos[i]!, alpha));
     }
