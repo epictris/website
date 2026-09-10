@@ -1301,6 +1301,16 @@ export interface VineData {
   // either way the span resists kinking where it is grabbed (see
   // `level/vineBend.ts`).
   stiffness?: number;
+  // How viscous the cord is to the ball's manacle threaded onto it: the ring
+  // creeps along the vine under the chain's pull by the same law a cuff creeps
+  // through mud (`CollisionObjectData.viscosity`, `lib/vineClamp.ts`), and
+  // this scales the load that law reads exactly as mud's does. Absent =
+  // `DEFAULT_VINE_VISCOSITY` (1, the reference mud); 0 is a ring that never
+  // slides. A number and not a flag for mud's reason: a vine a ring slides
+  // down in two seconds and one it rides for a minute are different puzzles.
+  //
+  // Dimensionless, so `scaleLevelData` leaves it alone.
+  viscosity?: number;
   // Optional appearance. Absent = the renderer's own vine colours.
   color?: string;
 }
@@ -2678,6 +2688,8 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // A fraction, like the density a per-metre one: neither is in the file's
     // pixels, so both cross the conversion unchanged.
     ...(v.stiffness !== undefined ? { stiffness: v.stiffness } : {}),
+    // Dimensionless too.
+    ...(v.viscosity !== undefined ? { viscosity: v.viscosity } : {}),
     ...(v.color !== undefined ? { color: v.color } : {}),
   }));
   return {

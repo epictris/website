@@ -276,6 +276,9 @@ export class BallLevel {
     this.sceneChains = buildSceneChains(data, built);
     this.vines = buildVines(this.world, data, built);
     for (const vine of this.vines) this.bodies.push(...vine.links);
+    // A hook that strikes a link threads onto the whole vine (see
+    // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
+    this.ball.vineFor = (link) => this.vines.find((v) => v.links.includes(link)) ?? null;
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 

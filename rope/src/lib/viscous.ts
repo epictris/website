@@ -90,14 +90,29 @@ export function creepSpeed(load: number, viscosity = 1): number {
 // and the right side falls, so the root is unique and a bisection of `[0, e]`
 // finds it; it cannot exceed `e`, since past that the chain would be slack
 // and there would be no tension to drive it at all.
-export function slipDistance(error: number, effectiveMass: number, dt: number, viscosity = 1): number {
-  if (!(error > 0) || !(effectiveMass > 0) || !(dt > 0) || !(viscosity > 0)) return 0;
-  const toLoad = effectiveMass / (dt * dt);
+//
+// `along` is the cosine between the pull and the line the cuff is free to
+// creep on, for a cuff that is LOCKED to a line rather than free in a face -
+// a ring on a vine (`lib/vineClamp.ts`). Only the tension's component along
+// the line drives the creep (the rest is reacted by the line), and a creep of
+// `s` along it relieves only `along·s` of the error, so the root is of
+// `s = dt·creepSpeed(along·M·(e − along·s)/dt²)` over `[0, e/along]`. At 1 -
+// mud, where the creep runs with the pull - the arithmetic is bit for bit the
+// statement above.
+export function slipDistance(
+  error: number,
+  effectiveMass: number,
+  dt: number,
+  viscosity = 1,
+  along = 1,
+): number {
+  if (!(error > 0) || !(effectiveMass > 0) || !(dt > 0) || !(viscosity > 0) || !(along > 0)) return 0;
+  const toLoad = (along * effectiveMass) / (dt * dt);
   let lo = 0;
-  let hi = error;
+  let hi = error / along;
   for (let i = 0; i < SLIP_BISECTIONS; i++) {
     const mid = (lo + hi) * 0.5;
-    const residual = dt * creepSpeed(toLoad * (error - mid), viscosity) - mid;
+    const residual = dt * creepSpeed(toLoad * (error - along * mid), viscosity) - mid;
     if (residual > 0) lo = mid;
     else hi = mid;
   }

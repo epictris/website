@@ -3766,6 +3766,7 @@ A hanging ball draws it slowly toward itself; a falling ball caught on it drags 
 Solid for everything else, and per shape for hook-proof's reason: a stone wall with one mud patch is one body.
 Hook-proof wins where both are set, and a rail wins over it - a rail is clamped around, not bitten.
 The grapple's hook ignores it (a viscous face is a face to that controller); scene chains tied to one are tied.
+The same law moves the ball's manacle along a VINE, locked to the cord rather than free in a face - see **The ring on a vine** under **Vines**.
 
 **The law is a power of the load** (`lib/viscous.ts`, `creepSpeed`): `VISCOUS_CREEP_SPEED` under `VISCOUS_CREEP_LOAD` times `(load / (viscosity · VISCOUS_CREEP_LOAD))^VISCOUS_EXPONENT`.
 The exponent is the shape of the mud and is global - 1 a Newtonian fluid, 2 as shipped, a shear-thinning one - and it exists because linear viscosity cannot do both of the things asked of it: a creep slow enough to hang from for a while makes a hard catch slip barely more than the hang does, the ratio of the two being fixed, while one that gives way under a fall runs away under a hanging ball.
@@ -4443,7 +4444,8 @@ The **ball goes through a vine and its CHAIN catches on one**, and those are two
 different questions with two different answers. The body passes through because a
 link is non-solid like anything else; the chain catches because `BallHook`'s
 three attach paths take a link like any other rigid body, and a vine is a thing
-to hook rather than a thing to bump into. So the load rope is the ball's too:
+to hook rather than a thing to bump into. What the catch then IS - a ring
+threaded onto the cord, sliding down it - is **The ring on a vine** below. So the load rope is the ball's too:
 `updateVineLoads` runs there against `ball.chain` exactly as it runs in `Level`
 against the player's rope, and the coupled sweep takes `settleSet` while a vine
 is held for the same reason.
@@ -4498,6 +4500,44 @@ for the ball on a scene a 3 m vine adds ~940 J to. The control is what says this
 is the level having changed rather than the physics: the same bundle against the
 same level with the vines removed is clean, and a ball left hanging on a vine
 gains nothing. Re-record the bundle, or keep the vines clear of where it throws.
+
+### The ring on a vine
+
+The ball's manacle no longer bites a vine link as it bites a rock (a design decision, 2026-09-10): it THREADS onto the vine as a ring, the cord through its bore, and is a cross between a rail and a viscous face (`lib/vineClamp.ts`, `RopeVineClamp`).
+Like a rail in what holds it: the ring is constrained to the cord until the player lets go of the chain or it slides off the vine's free bottom end - it cannot be pulled off sideways however the ball swings, and a span, having no free end, never lets it off at all.
+Like mud in how it moves: it creeps along the cord under the chain's pull by the viscous law (`creepSpeed`, a power of the load) rather than a rail's Coulomb cone, so a hanging ball draws it slowly down the vine, a falling ball caught on one drags it a long way before it is slowed to a hang, and a ball swinging out sideways barely moves it.
+Only the ball's chain does this; the player's grapple still grabs a link as it always did.
+
+**Where the ring stands is a SEGMENT of the vine's polyline and a FRACTION along it**, the polyline being the anchor, the link centres in order, and a span's second anchor.
+Not an arc length, because a hanging vine's joints run to `VINE_TOLERANCE` and its arc breathes with them, while a fraction of a segment stays put.
+The chain's end contact is on the LINK at the lower end of that segment, offset to the ring's centre, so `updateVineLoads` finds the link the ring hangs from exactly as it found the link a bite was on, and rebuilds the load rope - born at the measured arc, as always - when the ring crosses into the next segment.
+Once a frame, before the path is read (`Rope.settleVineClamp`), the contact is re-derived from the segment and fraction on the current polyline, so the ring rides the cord as the vine swings rather than staying where its link's frame was.
+The offset gives the pull a lever on the link, and a link's spin means nothing (every constraint on it acts at its centre), so the length solve is told the ring's link has no rotational freedom (`Rope.getDynamicBodyState`, the spring body's own statement) and the pull moves it by translation alone - the light body in series that `session-225f` warns of, answered by taking away its one meaningless degree of freedom.
+The ring is a PUSH FIT on the cord, its centre on the line and square to it, rather than the tilting, resting ring a rail carries; what it keeps of the rail's ring is the end the chain leaves over (`rimSign`, with `RIM_FLIP_LEAN`'s hysteresis), which both renderers face the drawn cuff by and the slack drape is pinned to (`ringEnd` is the one question the renderers and `SlackChain` ask of either kind of ring).
+A strike threads on at the point of the line nearest the CUFF's own position when it struck (`BallHook.anchorTo` now puts the hook there before the owner is told), not the bite point: a link's grab circle is fat on purpose (`LINK_GRAB_RADIUS`), and the surface point of it nearest the cuff stands up to a grab radius from the cord, on the segment below the link struck.
+And it threads on no nearer a free end than its own reach: a throw straight up a vine from under it meets the bottom link's grab circle from below, which projects onto the very end of the cord, and a ring on the very end of a rope is off it on the next pull - so it catches the tip of the cord instead, and slides off that.
+
+**The creep is the mud's seat with two differences the line forces** (`Rope.slipVineClampedEnd`, at the top of every iteration of `correctShapePositionAndRotation` beside `slideClampedEnd` and `slipEmbeddedEnd`).
+Only the pull's component ALONG the vine drives it, and a creep along the vine relieves only that component's share of the over-length: `slipDistance` takes an `along` cosine and solves `s = dt·creepSpeed(along·M·(e − along·s)/dt²)`, bit for bit the mud's arithmetic at 1.
+The budget is spent as a walk along the polyline (`RopeVineClamp.creep`), crossing from link to link, stopping a ring's reach short of a closed end (the anchor, a span's far bolt) and running off an open one, and no further than the over-length lets, since past that the chain is slack and pulling on nothing.
+A ring driven off the free end is recorded and acted on at the next frame's first look (`onVineRunOff` → `BallPlayer.dropFromVine`): it comes back as the dangling tip at the ring's own centre, at the speed it was being driven at - the largest refusal in the frame, not their sum, since every iteration asks for the same budget again - and ARMED, as a cuff out of mud is, with the vine it slid off shed (`shedPieces` of its links), because the tip leaves inside the last link's own grab circle and re-caught there would thread on at the end and slide off again next frame.
+
+The tension it reads is the other difference, and it took two attempts.
+The link the ring stands on is a body the length solve may move, but it is held ON the vine by the load rope and the pair chains, which that solve cannot see: read with the link in the effective mass, a 3.75 kg link against a 52 kg ball put the tension at a fourteenth of the truth and the squared law made two hundredths of the creep.
+So the link is left out of the sum (`effectiveInverseInertia`'s `except`), and a ball under a held vine reads as a ball under a fixed anchor.
+That alone still read a third short on a dead hang (2.0 mm of over-length at the first look against the 3.2 the ball's fall and the creep come to, measured), because between one frame's last pass and the next frame's first look the link falls under its own gravity and its vine's pre-sweep leaves it sagging within the joints' tolerance, and the re-seated ring comes down with it; the coupled sweep lifts the link back and corrects the ball for the rest, but by then the budget was decided, and the ring crept at 1.3 cm/s.
+So the first look is FLOORED by what the chain carried last frame: the length solve's summed correction impulse over every pass of the frame (`frameCorrection`, the position-impulse both ends of a rope feel whatever the split, and which the sweep's passes sum to the ball's whole correction), plus the over-length the creep relieved before it (`frameCreepRelief`).
+On a steady hang that is the ball's fall exactly, and the ring creeps at 3.2 cm/s against the law's 3.0; on a catch the first look is the larger by far and stands, so the ball is slowed over the frames the slip takes to decay rather than in one (`ring-catch`: 7.1 m/s at the catch, 5.9 a frame later, 45 cm of vine in twenty frames against a centimetre of hang).
+A new end clears the history, since what the chain carried to a hook in flight says nothing about the ring it has just become.
+
+**How viscous a vine is to the ring is authored per vine** (`VineData.viscosity`, in the vine panel beside the stiffness; default `DEFAULT_VINE_VISCOSITY`, 1, the reference mud, so a ring under a hanging ball creeps at exactly the speed a cuff creeps through `ball.json`'s mud; 0 is a ring that never slides).
+A number and not a flag for mud's reason: a vine a ring slides down in two seconds and one it rides for a minute are different puzzles.
+Dimensionless, so `scaleLevelData` leaves it alone, and the editor writes it only where it is set.
+`ball-steer` pins its vine at 0, because the ball winches itself up the chain for ten seconds there and under that load a ring crept the 60 cm to the free end and off it inside the sweep - the mechanic working, in a case about something else.
+
+`cli vines` carries the coverage: `ring-walk` (the creep as arithmetic on a built vine - across links, stopped a reach short of the anchor, off the free end with the refused drive reported once, and a span closed at both ends), `ring-hang` (a hanging ball draws the ring down at the law's speed, never off the line, the ball descending with it, until it slides off the end as the dangling tip, does not re-catch the vine, and bites the floor it falls to), `ring-swing` (a ball swung 1.3 m out to the side never pulls the ring off the line), `ring-catch` (above), and `format` (the number through px→m, the editor and the bare round trip).
+`cli viscous` `viscous-law` pins the `along` arithmetic: square to the line no creep, at 60° less, along it the mud's own bit for bit.
+Nothing about it has been played yet: the push-fit ring, the thread-on inset, and the drop coming back armed are all waiting on that.
 
 ### Drawing
 

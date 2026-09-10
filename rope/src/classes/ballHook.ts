@@ -452,6 +452,11 @@ export class BallHook extends RigidBody2D {
   // the chain then ran through.
   private anchorTo(from: Vec2, hit: SweepHit): void {
     const at = this.overlaps(from, hit.shape) ? from : hit.point;
+    // The cuff is put where it struck before the owner is told: a callback
+    // that reads the hook's own position - a ring threading onto a vine reads
+    // where the CUFF met the cord (`BallPlayer.onHookAttached`) - would
+    // otherwise read the start of a step the cuff crossed most of.
+    this.globalPosition = at;
     this.attach(hit.collider, nearestSurfacePoint(hit.shape, at), hit.shape);
   }
 

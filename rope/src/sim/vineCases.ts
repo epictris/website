@@ -40,7 +40,11 @@ import { bodyOverlapCircle } from "../engine/collision";
 import { World } from "../engine/world";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
-import { mechanicalEnergy } from "./trace";
+import type { BallPlayer } from "../classes/ballPlayer";
+import { checkBallInvariants, mechanicalEnergy, TunnelMonitor, type Violation } from "./trace";
+import { RopeVineClamp } from "../lib/vineClamp";
+import { VISCOUS_CREEP_SPEED } from "../lib/viscous";
+import { MANACLE_REACH } from "../lib/manacle";
 import { CHAIN_TOLERANCE, VINE_TOLERANCE } from "../level/chains";
 import {
   DEFAULT_VINE_DENSITY,
@@ -695,7 +699,7 @@ function caseFormat(): VineResult {
       },
     ],
     vines: [
-      { anchor: 7, length: 250, spacing: 12, density: 8, stiffness: 0.4, color: "#446622" },
+      { anchor: 7, length: 250, spacing: 12, density: 8, stiffness: 0.4, viscosity: 2, color: "#446622" },
     ],
   };
 
@@ -712,6 +716,8 @@ function caseFormat(): VineResult {
   // A fraction, like the density a per-metre figure: neither is in the file's
   // pixels, and a scaled stiffness would make a pole out of a cord.
   check(`px -> m: stiffness ${mv?.stiffness} crosses unchanged`, mv?.stiffness === 0.4);
+  // Dimensionless too: how viscous the cord is to the ball's ring.
+  check(`px -> m: viscosity ${mv?.viscosity} crosses unchanged`, mv?.viscosity === 2);
 
   // ...and back, which is the trip that catches a field the scaler copies in one
   // direction only.
@@ -727,12 +733,13 @@ function caseFormat(): VineResult {
   const anchorObj = saved.bodies[0]?.objects.find((o) => o.type === "anchor");
   check(
     `editor: saved back as anchor ${sv?.anchor}, length ${sv?.length}, spacing ${sv?.spacing}, ` +
-      `density ${sv?.density}, stiffness ${sv?.stiffness}, colour ${sv?.color}`,
+      `density ${sv?.density}, stiffness ${sv?.stiffness}, viscosity ${sv?.viscosity}, colour ${sv?.color}`,
     sv !== undefined &&
       sv.length === 250 &&
       sv.spacing === 12 &&
       sv.density === 8 &&
       sv.stiffness === 0.4 &&
+      sv.viscosity === 2 &&
       sv.color === "#446622" &&
       anchorObj?.type === "anchor" &&
       sv.anchor === anchorObj.id,
@@ -745,10 +752,11 @@ function caseFormat(): VineResult {
     modelFromDisk({ ...authored, vines: [{ anchor: 7, length: 250 }] }),
   ).vines?.[0];
   check(
-    `editor: an unauthored spacing, density, stiffness and colour stay absent`,
+    `editor: an unauthored spacing, density, stiffness, viscosity and colour stay absent`,
     bare?.spacing === undefined &&
       bare?.density === undefined &&
       bare?.stiffness === undefined &&
+      bare?.viscosity === undefined &&
       bare?.color === undefined,
   );
 
@@ -1124,7 +1132,12 @@ function caseBallSteer(): VineResult {
         ],
       },
     ],
-    vines: [{ anchor: 1, length: 700, spacing: 20 }],
+    // A vine the manacle cannot slide down: the ball winches itself up the
+    // chain for ten seconds here, and under that load a ring on the cord
+    // creeps the 60 cm to the vine's free end and off it well inside the
+    // sweep (see `lib/vineClamp.ts`, and `ring-hang` for the creep itself).
+    // What this case measures is the steering, so the ring is pinned.
+    vines: [{ anchor: 1, length: 700, spacing: 20, viscosity: 0 }],
   };
 
   const level = new BallLevel(data);
@@ -1807,9 +1820,425 @@ function caseSpanGrab(): VineResult {
   return ok("span-grab — a held span holds its arc to BOTH anchors, in millimetres", passed, details);
 }
 
+// ---------------------------------------------------------------------------
+// The ring: the ball's manacle threaded onto a vine (`lib/vineClamp.ts`),
+// which is a rail in what holds it - locked to the cord until the player lets
+// go or it slides off the free bottom end - and mud in how it moves: a creep
+// along the cord whose speed is a power of the load. Like both it reaches no
+// invariant, so the cases are the coverage: the walk along the line
+// (`ring-walk`), the hang (`ring-hang`: a hanging ball draws the ring straight
+// down the vine at the law's speed, the ball descending with it, until it
+// slides off the end as the dangling tip, armed, and bites the floor it then
+// falls to), the lock (`ring-swing`: a swinging ball never pulls the ring off
+// the line), and the catch (`ring-catch`: a falling ball is not arrested in a
+// frame and drags the ring far further than a hang does).
+//
+// Every sim assertion is a BOUND. The creep speed is mud's own constant and
+// is pinned there (`cli viscous`); what is pinned here is that the ring obeys
+// it on a vine, and where it may and may not go.
+// ---------------------------------------------------------------------------
+
+// A ceiling with an anchor on its underside at (0, -4.8 m) and a vine hanging
+// from it, the ball under the vine's free end, and no floor unless a case
+// says: the ball hangs from the frame the ring threads on.
+function ringScene(opts: {
+  vineLength?: number;
+  viscosity?: number;
+  anchor2?: boolean;
+  floorY?: number;
+  ballX?: number;
+  ballY?: number;
+}): RawLevelData {
+  const bodies: LevelBodyData[] = [
+    {
+      kind: "static",
+      x: 0,
+      y: -500,
+      rot: 0,
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 600, h: 40 } },
+        { type: "anchor", id: 1, x: 0, y: 20 },
+      ],
+    },
+  ];
+  if (opts.anchor2) {
+    bodies.push({
+      kind: "static",
+      x: 400,
+      y: -500,
+      rot: 0,
+      objects: [
+        { type: "collision", shape: { kind: "rect", w: 200, h: 40 } },
+        { type: "anchor", id: 2, x: 0, y: 20 },
+      ],
+    });
+  }
+  if (opts.floorY !== undefined) {
+    bodies.push({
+      kind: "static",
+      x: 0,
+      y: opts.floorY,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 3000, h: 40 } }],
+    });
+  }
+  return {
+    player: { x: opts.ballX ?? 0, y: opts.ballY ?? 20, radius: 8 },
+    bodies,
+    vines: [
+      {
+        anchor: 1,
+        ...(opts.anchor2 ? { anchor2: 2 } : {}),
+        length: opts.vineLength ?? 400,
+        spacing: 20,
+        ...(opts.viscosity !== undefined ? { viscosity: opts.viscosity } : {}),
+      },
+    ],
+  };
+}
+
+// The ball driven through the real deploy wiring with the deploy held, the
+// viscous suite's own rig with the ring in the embed's place.
+class RingRig {
+  readonly level: BallLevel;
+  private prev: FrameInput = emptyFrameInput();
+  readonly violations: Violation[] = [];
+  private tunnel = new TunnelMonitor();
+
+  constructor(data: RawLevelData) {
+    this.level = new BallLevel(data);
+  }
+
+  get ball(): BallPlayer {
+    return this.level.ball;
+  }
+
+  get vine(): Vine {
+    return this.level.vines[0]!;
+  }
+
+  get ring(): RopeVineClamp | null {
+    const end = this.level.ball.chain?.end;
+    return end instanceof RopeVineClamp ? end : null;
+  }
+
+  step(aim: Vec2): void {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(true, this.prev.fire),
+      mouseWorldPosition: aim,
+    };
+    this.prev = input;
+    this.level.physicsProcess(input, DT);
+    this.violations.push(...checkBallInvariants(this.level));
+    const tunnel = this.tunnel.push(this.level);
+    if (tunnel) this.violations.push(tunnel);
+  }
+
+  // The aim once threaded on: at the ring, so the chain leaves the loop
+  // radially and nothing winds. Before that, `throwAt` from the ball.
+  aim(throwAt: Vec2): Vec2 {
+    const ring = this.ring;
+    return ring ? ring.contact.globalPosition : this.ball.globalPosition.add(throwAt);
+  }
+
+  // Run up to `frames`, throwing `throwAt` (metres, from the ball) until the
+  // ring is on. Returns the frame it threaded on, or -1.
+  throwUntilRinged(throwAt: Vec2, frames = 120): number {
+    for (let f = 0; f < frames; f++) {
+      this.step(this.aim(throwAt));
+      if (this.ring) return f;
+    }
+    return -1;
+  }
+
+  run(frames: number, throwAt: Vec2, each?: (f: number) => void): void {
+    for (let f = 0; f < frames; f++) {
+      this.step(this.aim(throwAt));
+      each?.(f);
+    }
+  }
+
+  // How far the ring's centre stands off the vine's line: the least distance
+  // to any segment of the polyline through the anchor and the links.
+  ringOffLine(): number {
+    const ring = this.ring;
+    if (!ring) return Infinity;
+    const c = ring.contact.globalPosition;
+    const pts = [this.vine.anchorContact.globalPosition, ...this.vine.links.map((l) => l.globalPosition)];
+    if (this.vine.anchor2Contact) pts.push(this.vine.anchor2Contact.globalPosition);
+    let best = Infinity;
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1]!;
+      const d = pts[k]!.sub(a);
+      const len2 = d.lengthSquared();
+      const f = len2 > 0 ? Math.min(1, Math.max(0, c.sub(a).dot(d) / len2)) : 0;
+      best = Math.min(best, a.add(d.mul(f)).distanceTo(c));
+    }
+    return best;
+  }
+}
+
+function ringClaims(): { check: (claim: string, got: boolean) => void; details: string[]; passed: () => boolean } {
+  const details: string[] = [];
+  let passed = true;
+  return {
+    details,
+    check: (claim, got) => {
+      if (!got) passed = false;
+      details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+    },
+    passed: () => passed,
+  };
+}
+
+function withViolations(c: ReturnType<typeof ringClaims>, rig: RingRig): void {
+  c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
+  for (const v of rig.violations.slice(0, 3)) c.details.push(`      ${v.kind} f${v.frame}: ${v.detail}`);
+}
+
+// ---------------------------------------------------------------------------
+// ring-walk: the creep along the line, as arithmetic on a built vine.
+// ---------------------------------------------------------------------------
+function caseRingWalk(): VineResult {
+  const c = ringClaims();
+  const eps = 1e-9;
+  // A 4 m vine at 20 cm: the anchor at y = -4.8 and links at -4.6 .. -0.8.
+  const hanging = new RingRig(ringScene({})).vine;
+  const ring = RopeVineClamp.at(hanging, new Vec2(0.05, -3.6), new Vec2(1, -3.6));
+  const at = (): Vec2 => ring.contact.globalPosition;
+  c.check(
+    `threads on at the point of the line nearest the strike: (${at().x.toFixed(3)}, ${at().y.toFixed(3)}), on link ${hanging.links.indexOf(ring.link)}`,
+    at().distanceTo(new Vec2(0, -3.6)) < 1e-6 && ring.link === hanging.links[5],
+  );
+  const down = ring.creep(0.5);
+  c.check(
+    `creeps 50 cm down across links: moved ${down.toFixed(4)}, now at y=${at().y.toFixed(4)} on link ${hanging.links.indexOf(ring.link)}, segment ${ring.segment} at ${ring.fraction.toFixed(3)}`,
+    Math.abs(down - 0.5) < eps && at().distanceTo(new Vec2(0, -3.1)) < 1e-6 && ring.link === hanging.links[8],
+  );
+  const up = ring.creep(-10);
+  const anchor = hanging.anchorContact.globalPosition;
+  c.check(
+    `the top is closed: asked up 10 m it stops ${(at().distanceTo(anchor) * 100).toFixed(2)} cm short of the anchor (the ring's reach, ${(MANACLE_REACH * 100).toFixed(2)})`,
+    Math.abs(at().distanceTo(anchor) - MANACLE_REACH) < 1e-6 && Math.abs(up + (1.7 - MANACLE_REACH)) < 1e-6 && !ring.takeRunOff().ranOff,
+  );
+  // The settled vine is longer than its authored 4 m by the sweep's give per
+  // joint, so the arc to its end is measured rather than assumed.
+  let arc = 0;
+  let prevPt = anchor;
+  for (const link of hanging.links) {
+    arc += link.globalPosition.distanceTo(prevPt);
+    prevPt = link.globalPosition;
+  }
+  const off = ring.creep(100);
+  const ran = ring.takeRunOff();
+  const bottom = hanging.links[hanging.links.length - 1]!.globalPosition;
+  c.check(
+    `the bottom is open: asked down 100 m it runs off, left at the last link (${(at().distanceTo(bottom) * 1000).toFixed(3)} mm off) after ${off.toFixed(4)} m of the vine's ${arc.toFixed(4)}, with ${ran.overrun.toFixed(4)} m of the drive refused`,
+    ran.ranOff && at().distanceTo(bottom) < 1e-6 && Math.abs(off - (arc - MANACLE_REACH)) < 1e-6 && Math.abs(ran.overrun - (100 - off)) < 1e-6,
+  );
+  c.check("...and reports it once", !ring.takeRunOff().ranOff);
+  // A span has no free end: 6 m of vine between anchors 4 m apart, and the
+  // ring stops its reach short of either bolt.
+  const span = new RingRig(ringScene({ anchor2: true, vineLength: 600 })).vine;
+  const mid = span.links[Math.floor(span.links.length / 2)]!.globalPosition;
+  const spanRing = RopeVineClamp.at(span, mid, mid.add(new Vec2(0, 1)));
+  spanRing.creep(100);
+  const far = span.anchor2Contact!.globalPosition;
+  const farGap = spanRing.contact.globalPosition.distanceTo(far);
+  const stoppedFar = !spanRing.takeRunOff().ranOff && Math.abs(farGap - MANACLE_REACH) < 1e-6;
+  spanRing.creep(-100);
+  const nearGap = spanRing.contact.globalPosition.distanceTo(span.anchorContact.globalPosition);
+  c.check(
+    `a span is closed at both ends: ${(farGap * 100).toFixed(2)} cm short of the far bolt, ${(nearGap * 100).toFixed(2)} cm short of the near one, never off`,
+    stoppedFar && !spanRing.takeRunOff().ranOff && Math.abs(nearGap - MANACLE_REACH) < 1e-6,
+  );
+  return ok("ring-walk — the ring creeps along the vine's line, stops at a bolt and runs off a free end", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// ring-hang: a hanging ball draws the ring down the vine at the law's speed
+// and off its end.
+// ---------------------------------------------------------------------------
+// A throw straight up a vine's line meets its BOTTOM link first, so the ball
+// stands 70 cm off to the side and throws up at an angle that clears the
+// lower links' grab circles (12 cm, on 20 cm links); which link it catches is
+// then the sweep's to say, and the case reads it.
+const RING_BALL_X = 70;
+const ASIDE = new Vec2(-0.7, -1.5);
+
+function caseRingHang(): VineResult {
+  const c = ringClaims();
+  // The floor is 5 m under the vine's end, for the dropped tip to bite.
+  const rig = new RingRig(ringScene({ floorY: 600, ballX: RING_BALL_X }));
+  const up = ASIDE;
+  const on = rig.throwUntilRinged(up);
+  c.check(`the manacle threads onto the vine (frame ${on})`, on >= 0);
+  const ring = rig.ring;
+  if (!ring) return ok("ring-hang", false, c.details);
+  const startLink = rig.vine.links.indexOf(ring.link);
+  c.check(
+    `...on a link near the bottom, ${(0.2 * (rig.vine.links.length - 1 - startLink)).toFixed(1)} m above the free end (link ${startLink} of ${rig.vine.links.length})`,
+    startLink >= rig.vine.links.length - 6 && startLink < rig.vine.links.length - 1,
+  );
+  // Hung plumb under the ring, at rest, so the window below measures a dead
+  // hang rather than the pendulum the sideways throw would otherwise leave.
+  rig.run(5, up);
+  const len = rig.ball.chain!.maxRopeLength;
+  rig.ball.globalPosition = ring.contact.globalPosition.add(new Vec2(0, len - 0.05));
+  rig.ball.linearVelocity = Vec2.ZERO;
+  rig.ball.angularVelocity = 0;
+  // Let the catch settle - the vine itself was set swinging by it, and a
+  // link is damped to a tenth in about two seconds - then watch a window of
+  // steady hanging.
+  rig.run(120, up);
+  const settledRing = ring.contact.globalPosition;
+  const settledBall = rig.ball.globalPosition;
+  const window = 60;
+  let worstOff = 0;
+  let left = -1;
+  rig.run(window, up, (f) => {
+    if (left < 0 && rig.ring !== ring) left = f;
+    worstOff = Math.max(worstOff, rig.ringOffLine());
+  });
+  c.check(`still on the vine through the window`, left < 0);
+  const crept = ring.contact.globalPosition.sub(settledRing);
+  const rate = crept.y / (window * DT);
+  c.check(
+    `the ring creeps down the vine at the law's speed (${(rate * 100).toFixed(2)} cm/s of ${(VISCOUS_CREEP_SPEED * 100).toFixed(2)})`,
+    Math.abs(rate - VISCOUS_CREEP_SPEED) < VISCOUS_CREEP_SPEED * 0.25,
+  );
+  c.check(`...never off the line by more than ${(worstOff * 1000).toFixed(2)} mm`, worstOff < 0.005);
+  const ballRate = rig.ball.globalPosition.sub(settledBall).y / (window * DT);
+  c.check(
+    `...and the ball descends with it (${(ballRate * 100).toFixed(2)} cm/s)`,
+    Math.abs(ballRate - rate) < VISCOUS_CREEP_SPEED * 0.25,
+  );
+  // Then the ring reaches the free end and slides off, as the dangling tip.
+  const toEnd = rig.vine.links[rig.vine.links.length - 1]!.globalPosition.y - ring.contact.globalPosition.y;
+  const expect = toEnd / VISCOUS_CREEP_SPEED;
+  let dropAt = -1;
+  for (let f = 0; f < Math.ceil(expect / DT) * 2 && dropAt < 0; f++) {
+    rig.step(rig.aim(up));
+    if (rig.ring === null) dropAt = f;
+  }
+  c.check(
+    `it slides off the end ${(dropAt * DT).toFixed(2)} s later (${toEnd.toFixed(2)} m of vine over the creep is ${expect.toFixed(2)} s)`,
+    dropAt >= 0 && dropAt * DT > expect * 0.5 && dropAt * DT < expect * 2,
+  );
+  const tip = rig.ball.chainTip;
+  c.check("...as the dangling tip, with the chain still out", tip !== null && rig.ball.chain !== null);
+  const end = rig.vine.links[rig.vine.links.length - 1]!.globalPosition;
+  c.check(
+    `...at the vine's end (${tip ? (tip.globalPosition.distanceTo(end) * 100).toFixed(1) : "-"} cm from the last link)`,
+    tip !== null && tip.globalPosition.distanceTo(end) < 0.1,
+  );
+  let recaught = -1;
+  rig.run(10, up, (f) => {
+    if (recaught < 0 && rig.ball.chain?.end.contact.obj instanceof VineLink) recaught = f;
+  });
+  c.check(`it does not re-catch the vine it slid off (${recaught < 0 ? "never" : `re-caught ${recaught} frames later`})`, recaught < 0);
+  const vBefore = rig.ball.linearVelocity.y;
+  rig.run(20, up);
+  c.check(
+    `...and the ball falls (${vBefore.toFixed(2)} -> ${rig.ball.linearVelocity.y.toFixed(2)} m/s)`,
+    rig.ball.linearVelocity.y > vBefore + 9.8 * 20 * DT * 0.5,
+  );
+  // Armed: the tip bites the floor it lands on.
+  let landed = -1;
+  for (let f = 0; f < 300 && landed < 0; f++) {
+    rig.step(rig.aim(up));
+    if (rig.ball.chain?.end.contact.obj instanceof StaticBody2D) landed = f;
+  }
+  c.check(`the tip is still armed: it bites the floor it falls to (${landed} frames after the drop)`, landed >= 0);
+  withViolations(c, rig);
+  return ok("ring-hang — a hanging ball draws the ring down the vine at the law's speed and off its end, armed", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// ring-swing: a swinging ball never pulls the ring off the line.
+// ---------------------------------------------------------------------------
+function caseRingSwing(): VineResult {
+  const c = ringClaims();
+  const rig = new RingRig(ringScene({ ballX: RING_BALL_X }));
+  const up = ASIDE;
+  const on = rig.throwUntilRinged(up);
+  c.check(`the manacle threads onto the vine (frame ${on})`, on >= 0);
+  const ring = rig.ring;
+  if (!ring) return ok("ring-swing", false, c.details);
+  rig.run(30, up);
+  // Flung sideways under the vine: the pull turns through a wide angle every
+  // swing and the vine itself swings with it.
+  rig.ball.linearVelocity = rig.ball.linearVelocity.add(new Vec2(-2.5, 0));
+  const startY = ring.contact.globalPosition.y;
+  const frames = 240;
+  let worstOff = 0;
+  let left = -1;
+  let widest = 0;
+  rig.run(frames, up, (f) => {
+    if (left < 0 && rig.ring !== ring) left = f;
+    worstOff = Math.max(worstOff, rig.ringOffLine());
+    widest = Math.max(widest, Math.abs(rig.ball.globalPosition.x));
+  });
+  c.check(`the ball really swings (${(widest * 100).toFixed(0)} cm out to the side)`, widest > 0.4);
+  c.check(`the ring stays on the vine through ${frames} frames of it`, left < 0);
+  c.check(`...and on the LINE: never off it by more than ${(worstOff * 1000).toFixed(2)} mm`, worstOff < 0.005);
+  const crept = ring.contact.globalPosition.y - startY;
+  const hang = VISCOUS_CREEP_SPEED * frames * DT;
+  c.check(
+    `it creeps down while it swings (${(crept * 100).toFixed(2)} cm, a dead hang's ${(hang * 100).toFixed(2)}), and not up`,
+    crept >= 0 && crept < hang * 10,
+  );
+  withViolations(c, rig);
+  return ok("ring-swing — a swinging ball never pulls the ring off the vine's line", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
+// ring-catch: a falling ball caught on a vine drags the ring far further than
+// a hang does before it is slowed to one.
+// ---------------------------------------------------------------------------
+function caseRingCatch(): VineResult {
+  const c = ringClaims();
+  // The vine is two metres longer than the hang's, so the catch has that
+  // much more vine below the ring to drag it down: at 6 m/s a catch near the
+  // free end simply slides off it, which is the physics and not this case's
+  // question.
+  const rig = new RingRig(ringScene({ ballX: RING_BALL_X, vineLength: 600 }));
+  rig.ball.linearVelocity = new Vec2(0, 6);
+  const up = new Vec2(-0.7, -1.65);
+  const on = rig.throwUntilRinged(up, 30);
+  c.check(`the falling ball's manacle threads onto the vine (frame ${on})`, on >= 0);
+  const ring = rig.ring;
+  if (!ring) return ok("ring-catch", false, c.details);
+  const ringAt = ring.contact.globalPosition;
+  const room = rig.vine.links[rig.vine.links.length - 1]!.globalPosition.y - ringAt.y;
+  c.check(`...${(room * 100).toFixed(0)} cm above the free end`, room > 1);
+  const ballSpeed = rig.ball.linearVelocity.length();
+  rig.run(1, up);
+  const after = rig.ball.linearVelocity.length();
+  c.check(
+    `the ball is not arrested in a frame (${ballSpeed.toFixed(2)} -> ${after.toFixed(2)} m/s)`,
+    after > 1,
+  );
+  rig.run(19, up);
+  const dragged = ring.contact.globalPosition.y - ringAt.y;
+  const hangs = VISCOUS_CREEP_SPEED * 20 * DT;
+  c.check(`still on the vine twenty frames on`, rig.ring === ring);
+  c.check(
+    `the catch drags the ring ${(dragged * 100).toFixed(1)} cm down the vine in twenty frames, against ${(hangs * 100).toFixed(2)} cm of hang`,
+    dragged > 5 * hangs,
+  );
+  withViolations(c, rig);
+  return ok("ring-catch — a falling ball caught on a vine drags the ring far further than a hang does", c.passed(), c.details);
+}
+
 export function runVineCases(): VineResult[] {
   return [
     caseFormat(),
+    caseRingWalk(),
+    caseRingHang(),
+    caseRingSwing(),
+    caseRingCatch(),
     caseWeight(),
     caseStiffness(),
     caseLinkContacts(),

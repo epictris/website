@@ -213,6 +213,7 @@ import {
   DEFAULT_VINE_SPACING,
   vineTargetSpacing,
   DEFAULT_VINE_STIFFNESS,
+  DEFAULT_VINE_VISCOSITY,
   LIGHT_LINK_MASS,
   MIN_VINE_DENSITY,
 } from "../level/vines";
@@ -4696,7 +4697,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     );
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire.";
+      "Hangs from one anchor, free at the bottom - or spans between two. The player passes straight through it and the hook grabs it anywhere along its length; it drapes over whatever it lands on. Drag the top handle to move it - along the body it hangs from, or onto another one - and the end handle to set how long it is. SHIFT-drag the end handle onto a body to attach it there and make the vine a span (length stays its own, so a span longer than the gap sags); Shift-drop a span's end over empty space to detach it again. Density is kilograms per metre of cord: it sets how the vine answers a hooked player and what it leans on what it hangs from, not how it falls. Stiffness is how hard it is to bend - 0 is a rope, 1 a pole that holds itself straight and springs back to hanging. On a span the ends are pinned and stiffness presses the drape toward straight: 0 rests in the catenary, 1 reads as a taut wire. The ball's manacle threads onto a vine like a ring and creeps down it under the ball's weight, locked to the cord until it slides off the free end - viscosity sets how slowly, as it does for mud: blank is mud's own, 0 never slides.";
     g.appendChild(hint);
 
     numField(
@@ -4897,6 +4898,31 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (s < 0.85) return "a sapling";
       return "a pole";
     });
+
+    // How viscous the cord is to the ball's manacle threaded onto it - the
+    // ring creeps down the vine under a hanging ball by mud's own law, and
+    // this scales the load that law reads exactly as a mud patch's viscosity
+    // does (see `VineData.viscosity`). Blank is the builder's default, the
+    // reference mud; 0 is a ring that never slides.
+    numField(
+      g,
+      "viscosity",
+      () => {
+        const first = vines[0]!.viscosity;
+        return vines.every((v) => v.viscosity === first) ? (first ?? NaN) : null;
+      },
+      (v) => {
+        for (const vine of vines) vine.viscosity = Math.max(0, v);
+      },
+      0.1,
+      vines.length > 1,
+      {
+        placeholder: `${DEFAULT_VINE_VISCOSITY}`,
+        onEmpty: () => {
+          for (const vine of vines) vine.viscosity = null;
+        },
+      },
+    );
 
     const cw = el("label", "ed-field");
     cw.textContent = "color";
@@ -6098,6 +6124,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       spacing: null,
       density: null,
       stiffness: null,
+      viscosity: null,
       color: null,
     };
     model.vines.push(vine);

@@ -428,6 +428,12 @@ export class RopeClamp extends RopeAttachment {
     return this.contact.globalPosition.add(this.rimLocal().rotated(this.body.globalRotation).mul(MANACLE_RADIUS));
   }
 
+  // That direction in the world, against the body's render transform: the way
+  // the drawn cuff faces (`BallPlayer.manacleFacing`).
+  renderRimDir(alpha: number): Vec2 {
+    return this.rimLocal().rotated(this.body.renderRotation(alpha));
+  }
+
   renderRimPoint(alpha: number): Vec2 {
     return this.contact
       .renderGlobalPosition(alpha)

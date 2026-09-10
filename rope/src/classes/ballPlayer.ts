@@ -11,7 +11,7 @@ import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
-import { PhysicsBody2D, RigidBody2D, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
+import { PhysicsBody2D, RigidBody2D, VineLink, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
 import { circleShape, nearestShapeIndex, type ShapeTransform } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
@@ -20,6 +20,7 @@ import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeAttachment, RopeContact } from "../lib/ropeContact";
 import { RopeClamp } from "../lib/rail";
 import { RopeEmbed } from "../lib/viscous";
+import { ringEnd, RopeVineClamp, type VineLine } from "../lib/vineClamp";
 import type { FrameInput } from "../input/frameInput";
 import { Rope } from "./rope";
 import { SlackChain } from "./slackChain";
@@ -163,6 +164,11 @@ export class BallPlayer extends RigidBody2D {
   // Render-only, like the facing; cleared with it.
   private anchorOnRail = false;
   spawnBody: ((body: PhysicsBody2D) => void) | null = null;
+  // The vine a link belongs to, for a hook that has struck one: the level
+  // owns the vines, and the cuff threads onto the whole cord rather than
+  // biting the link (see `lib/vineClamp.ts`). Null - or a null answer - and
+  // a link is bitten as any rigid body is.
+  vineFor: ((link: VineLink) => VineLine | null) | null = null;
   // Scene bodies for the current frame, set by BallLevel before hooks step, so
   // the hook's attach callback can regenerate the chain's wrap path (the hook
   // fires mid-integration, with no bodies list in hand).
@@ -646,8 +652,8 @@ export class BallPlayer extends RigidBody2D {
   // way the ring hung where the hook first STRUCK, which on a curved handle is
   // not even the way it hangs under the ring any more.
   manacleFacing(alpha: number): Vec2 | null {
-    const clamp = this.railClamp;
-    if (clamp !== null) return clamp.rimLocal().rotated(clamp.body.renderRotation(alpha));
+    const ring = this.ringClamp;
+    if (ring !== null) return ring.renderRimDir(alpha);
     const local = this.anchorFacingLocal;
     if (local === null) return null;
     const body = this.anchorBody;
@@ -679,9 +685,9 @@ export class BallPlayer extends RigidBody2D {
     }
     const dir = this.manacleFacing(alpha);
     if (dir === null) return null;
-    const clamp = this.railClamp;
-    if (clamp !== null) {
-      return { centre: clamp.contact.renderGlobalPosition(alpha), dir, clamped: true, onRail: true, buriedUnder: null };
+    const ring = this.ringClamp;
+    if (ring !== null) {
+      return { centre: ring.contact.renderGlobalPosition(alpha), dir, clamped: true, onRail: true, buriedUnder: null };
     }
     const hinge = chain.end.contact.renderGlobalPosition(alpha);
     const body = this.anchorBody;
@@ -709,11 +715,11 @@ export class BallPlayer extends RigidBody2D {
     return chainEndFacing(path, Vec2.RIGHT.rotated(hook.globalRotation));
   }
 
-  // The chain's end as a rail clamp, or null for a bite, a dangling tip or a
-  // hook still in flight.
-  private get railClamp(): RopeClamp | null {
+  // The chain's end as a ring threaded onto something - a rail clamp or a
+  // vine clamp - or null for a bite, a dangling tip or a hook still in flight.
+  private get ringClamp(): RopeClamp | RopeVineClamp | null {
     const end = this.chain?.end;
-    return end instanceof RopeClamp ? end : null;
+    return end ? ringEnd(end) : null;
   }
 
   // Is the anchored manacle CLAMPED AROUND A RAIL, rather than bitten into a
@@ -937,6 +943,7 @@ export class BallPlayer extends RigidBody2D {
     this.chain.continuous = true;
     this.chain.onClampRunOff = (clamp, end) => this.dropFromRail(clamp, end);
     this.chain.onEmbedDrop = (embed, velocity) => this.dropFromMud(embed, velocity);
+    this.chain.onVineRunOff = (clamp, velocity) => this.dropFromVine(clamp, velocity);
     this.chainSlack = new SlackChain(this.chain);
     // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
     // the hook and scales its speed by how glancing the hit was, and the chain
@@ -986,7 +993,20 @@ export class BallPlayer extends RigidBody2D {
     const normal = piece ? outwardDirection(point, piece) : point.directionTo(this.globalPosition);
     const arrived = Vec2.RIGHT.rotated(hook.globalRotation);
     const facing = arrived.dot(normal) > 0 ? arrived : normal;
-    if (piece?.rail) {
+    const vine = body instanceof VineLink ? (this.vineFor?.(body) ?? null) : null;
+    if (vine !== null) {
+      // A VINE: the cuff threads onto the cord at the point of its line
+      // nearest the strike, and from there creeps along it under the chain's
+      // pull as a cuff creeps through mud, locked to the line (see
+      // `lib/vineClamp.ts`). Where it threads on is read from the CUFF's own
+      // position rather than the bite point: a link's grab circle is fat on
+      // purpose (`LINK_GRAB_RADIUS`, so the sweep cannot slip between links),
+      // and the surface point of that circle nearest the cuff stands up to a
+      // grab radius from the cord, on the segment BELOW the link that was
+      // struck. No cuff is mounted: a link collides with nothing, so a piece
+      // bolted to one would stop nothing either.
+      this.chain.end = RopeVineClamp.at(vine, hook.globalPosition, this.globalPosition);
+    } else if (piece?.rail) {
       // A RAIL: the cuff closes around the bar rather than biting its face,
       // so the anchor is a clamp on the bar's own authored CURVE, which
       // slides under the chain's pull against the rail's friction (see
@@ -1041,8 +1061,7 @@ export class BallPlayer extends RigidBody2D {
     // `manacleFacing`); what is stored here for a rail is only that there IS
     // an anchor to face from.
     this.anchorBody = body;
-    const clamp = this.chain.end instanceof RopeClamp ? this.chain.end : null;
-    this.anchorOnRail = clamp !== null;
+    this.anchorOnRail = ringEnd(this.chain.end) !== null;
     this.anchorFacingLocal = facing.rotated(-body.globalRotation);
     this.anchorNormalLocal = normal.rotated(-body.globalRotation);
     // The tolerance here is a SNAP backstop, not a range: it is sized for the
@@ -1213,6 +1232,20 @@ export class BallPlayer extends RigidBody2D {
     this.unmountCuff();
     const mud = embed.body.getShapes().filter((piece) => piece.viscous && !piece.impermeable);
     this.dropChainEnd(chain, embed.centre(), velocity).shedPieces(mud);
+  }
+
+  // A ring on a vine has slid off the vine's free bottom end
+  // (`Rope.settleVineClamp`): it is the dangling tip again, at the ring's own
+  // centre - the vine collides with nothing, so there is nothing to spawn
+  // clear of - leaving at the speed it was being driven at. ARMED, as a cuff
+  // out of mud is, with the vine it slid off shed: the tip leaves the last
+  // link's centre inside that link's own grab circle, and re-caught there it
+  // would thread on at the very end and slide off again on the next frame.
+  private dropFromVine(clamp: RopeVineClamp, velocity: Vec2): void {
+    const chain = this.chain;
+    if (!chain || chain.end !== clamp) return;
+    const cord = clamp.vine.links.map((link) => link.primaryShape());
+    this.dropChainEnd(chain, clamp.contact.globalPosition, velocity).shedPieces(cord);
   }
 
   // Replace `chain`'s anchored end with a loose tip at `at`, moving at

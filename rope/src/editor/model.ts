@@ -664,6 +664,9 @@ export interface EdVine {
   // real third state, because a vine that never asked for stiffness builds no
   // bend constraints at all and is written to the file without the field.
   stiffness: number | null;
+  // How viscous the cord is to the ball's manacle threaded onto it (see
+  // `VineData.viscosity`). Null = the builder's default, the reference mud.
+  viscosity: number | null;
   // Hex cord colour; null = the renderer's own vine colours.
   color: string | null;
 }
@@ -1558,6 +1561,7 @@ function lightItem(
       spacing: v.spacing ?? null,
       density: v.density ?? null,
       stiffness: v.stiffness ?? null,
+      viscosity: v.viscosity ?? null,
       color: v.color ?? null,
     });
   }
@@ -2039,6 +2043,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(v.spacing !== null ? { spacing: v.spacing } : {}),
       ...(v.density !== null ? { density: v.density } : {}),
       ...(v.stiffness !== null ? { stiffness: v.stiffness } : {}),
+      ...(v.viscosity !== null ? { viscosity: v.viscosity } : {}),
       ...(v.color !== null ? { color: v.color } : {}),
     });
   }

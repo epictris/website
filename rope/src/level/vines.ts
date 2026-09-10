@@ -195,6 +195,15 @@ export const MIN_VINE_DENSITY = 1;
 // it. See the LRA note in `buildOne`.
 const VINE_LRA_GIVE = 0.005;
 
+// How viscous a vine is to the ball's manacle threaded onto it, when it does
+// not say: the reference mud, so a ring on a vine creeps down it under a
+// hanging ball at exactly the speed a cuff creeps through `ball.json`'s mud
+// (see `lib/vineClamp.ts` and `creepSpeed`). Authorable per vine
+// (`VineData.viscosity`) for the reason mud's is per shape: a vine a ring
+// slides down in two seconds and one it rides for a minute are different
+// puzzles. 0 is a ring that never slides.
+export const DEFAULT_VINE_VISCOSITY = 1;
+
 // What a vine hangs at when it does not say: a rope, which is what every vine
 // was before stiffness existed. A vine that does not ask for stiffness builds
 // no bend constraints at all, so it is not merely soft - it is bit-for-bit the
@@ -402,6 +411,9 @@ export interface Vine extends VineCord {
   readonly bends: VineBend[];
   // 0 = a rope, 1 = a pole. As built, so already clamped to that range.
   readonly stiffness: number;
+  // How viscous the cord is to a ring sliding along it (see
+  // `DEFAULT_VINE_VISCOSITY`). As built: never negative.
+  readonly viscosity: number;
   // Anchor-to-first-link, then each adjacent pair. These go into the level's
   // `sceneChains`, which is what buys the whole existing chain phase - the
   // residual-gated alternating sweep, static depenetration with the funded
@@ -569,6 +581,9 @@ function buildOne(
   // negative compliance is a solver that pushes the vine further from straight
   // the harder it is bent.
   const stiffness = Math.min(1, Math.max(0, v.stiffness ?? DEFAULT_VINE_STIFFNESS));
+  // A negative viscosity is a law with no meaning; the floor is a ring that
+  // never slides.
+  const viscosity = Math.max(0, v.viscosity ?? DEFAULT_VINE_VISCOSITY);
 
   // Where the links spawn. A hanging vine goes straight down its full length -
   // there is nothing for it to lie on, a link colliding with nothing - and a
@@ -711,6 +726,7 @@ function buildOne(
     chains,
     bends: buildVineBends(anchorContact, restDir, links, stiffness, spacing, anchor2Contact),
     stiffness,
+    viscosity,
     spacing,
     color,
     lra: null,

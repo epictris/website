@@ -212,6 +212,19 @@ function caseLaw(): ViscousResult {
     slipDistance(catchError, mass, DT, 2) < slipDistance(catchError, mass, DT, 1) &&
       slipDistance(catchError, mass, DT, 0.5) > slipDistance(catchError, mass, DT, 1),
   );
+  // A cuff LOCKED to a line - a ring on a vine - creeps under the tension's
+  // component along the line alone: square to it nothing drives the ring, at
+  // 60° it creeps under half the load, and along it (`along` = 1) the
+  // arithmetic is the mud's own, bit for bit.
+  const half = slipDistance(catchError, mass, DT, 1, 0.5);
+  c.check(
+    `a ring pulled square to its line does not creep, and at 60° creeps ${(half / catchSlip).toFixed(3)} of the mud's slip`,
+    slipDistance(catchError, mass, DT, 1, 0) === 0 && half > 0 && half < catchSlip,
+  );
+  c.check(
+    "...and pulled along it, exactly the mud's",
+    slipDistance(catchError, mass, DT, 1, 1) === catchSlip && slipDistance(hangError, mass, DT, 1, 1) === hangSlip,
+  );
   return ok("viscous-law — the creep is a power of the load, and a hang creeps at the quoted speed", c.passed(), c.details);
 }
 

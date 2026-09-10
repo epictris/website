@@ -46,6 +46,7 @@ import {
 } from "../lib/rail";
 import { MANACLE_BORE } from "../lib/manacle";
 import { RopeEmbed, slipDistance, type EmbedState } from "../lib/viscous";
+import { RopeVineClamp, type VineClampState } from "../lib/vineClamp";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -134,6 +135,7 @@ interface PathSnapshot {
   bodies: { body: PhysicsBody2D; position: Vec2; rotation: number }[];
   clamp: ClampState | null;
   embed: EmbedState | null;
+  ring: VineClampState | null;
   slideBudget: number;
 }
 
@@ -292,6 +294,12 @@ export class Rope {
   set end(value: RopeAttachment) {
     this.end_ = value;
     this.markPathChanged();
+    // A new end carries no tension history: what the chain carried to the
+    // hook in flight says nothing about the ring it has just become.
+    this.frameCorrection = 0;
+    this.lastFrameCorrection = 0;
+    this.frameCreepRelief = 0;
+    this.lastFrameCreepRelief = 0;
   }
 
   get wraps(): RopeWrap[] {
@@ -411,6 +419,24 @@ export class Rope {
   // the dangling tip it was before it bit (see `settleEmbed`). As above, the
   // end has NOT been replaced when this fires.
   onEmbedDrop: ((embed: RopeEmbed, velocity: Vec2) => void) | null = null;
+  // Told when a ring on a vine has slid off the vine's free bottom end, with
+  // the speed it left at: the owner turns it back into the dangling tip (see
+  // `settleVineClamp`). As above, the end has NOT been replaced when this
+  // fires.
+  onVineRunOff: ((clamp: RopeVineClamp, velocity: Vec2) => void) | null = null;
+  // Which way along the vine this frame's creep runs, for a ring on one:
+  // decided with the budget at the solve's first look (`slipVineClampedEnd`).
+  private slideSign: 1 | -1 = 1;
+  // The length solve's summed correction this frame and last, as the
+  // position-impulse the split is made of (`scaledCorrectionImpulse`, kg·m:
+  // every body on the path moved by its inverse inertia times this), and the
+  // over-length a ring on a vine crept away this frame and last. Together the
+  // last frame's pair are the tension the chain actually carried, which is
+  // what a ring on a vine reads its creep from (see `slipVineClampedEnd`).
+  private frameCorrection = 0;
+  private lastFrameCorrection = 0;
+  private frameCreepRelief = 0;
+  private lastFrameCreepRelief = 0;
   // Whether this frame has looked at the clamp yet: the first look is the one
   // that decides whether a running ring has come to rest (see `slideClampedEnd`).
   private slideLooked = false;
@@ -499,6 +525,10 @@ export class Rope {
     this.frameDelta = delta;
     this.slideLooked = false;
     this.seatLooked = false;
+    this.lastFrameCorrection = this.frameCorrection;
+    this.lastFrameCreepRelief = this.frameCreepRelief;
+    this.frameCorrection = 0;
+    this.frameCreepRelief = 0;
     this.geometryPushAccum = null;
     this.leaseAtFrameStart = this.blockedSlack;
     if (!this.blockedLastFrame) {
@@ -2444,6 +2474,7 @@ export class Rope {
       cumulativeCorrectionImpulse += correctionImpulse;
       if (this.endReachedNode) this.roundEndNode();
     }
+    this.frameCorrection += cumulativeCorrectionImpulse;
     return cumulativeCorrectionImpulse;
   }
 
@@ -2499,7 +2530,8 @@ export class Rope {
     }
     const clamp = this.end instanceof RopeClamp ? this.end.snapshot() : null;
     const embed = this.end instanceof RopeEmbed ? this.end.snapshot() : null;
-    return { bodies, clamp, embed, slideBudget: this.slideBudget };
+    const ring = this.end instanceof RopeVineClamp ? this.end.snapshot() : null;
+    return { bodies, clamp, embed, ring, slideBudget: this.slideBudget };
   }
 
   private restorePathBodies(snapshot: PathSnapshot): void {
@@ -2513,6 +2545,10 @@ export class Rope {
     }
     if (snapshot.embed && this.end instanceof RopeEmbed) {
       this.end.restoreState(snapshot.embed);
+      this.markPathChanged();
+    }
+    if (snapshot.ring && this.end instanceof RopeVineClamp) {
+      this.end.restoreState(snapshot.ring);
       this.markPathChanged();
     }
     this.slideBudget = snapshot.slideBudget;
@@ -2540,6 +2576,11 @@ export class Rope {
     if (clamp instanceof RopeEmbed) {
       this.seatLooked = true;
       this.settleEmbed(clamp);
+      return;
+    }
+    if (clamp instanceof RopeVineClamp) {
+      this.seatLooked = true;
+      this.settleVineClamp(clamp);
       return;
     }
     if (!(clamp instanceof RopeClamp)) return;
@@ -2659,14 +2700,138 @@ export class Rope {
   // a micron, well under any creep a frame makes and well over float noise.
   private static readonly EMBED_NODE_EPSILON = 1e-6;
 
+  // The frame's first look at a ring on a vine (`RopeVineClamp`): put it back
+  // on the vine's line where its segment and fraction say it stands - the
+  // links have moved since the last look, and the ring rides the cord rather
+  // than its link's frame - then act on a ring the last creep drove off the
+  // free end, which comes back as the dangling tip at the speed it was being
+  // driven at (`onVineRunOff`), and hang the rim toward what is pulling. Once
+  // a frame and before the path is regenerated, where a rail's `settleClamp`
+  // and a mud embed's `settleEmbed` are, and for the same reason: a ring that
+  // has left the vine is replaced before the pass reads the path.
+  private settleVineClamp(clamp: RopeVineClamp): void {
+    const dt = this.frameDelta;
+    let velocity = dt > 0 ? clamp.slipped.div(dt) : Vec2.ZERO;
+    clamp.slipped = Vec2.ZERO;
+    if (clamp.sync()) this.markPathChanged();
+    const ran = clamp.takeRunOff();
+    if (ran.ranOff) {
+      const t = clamp.tangent();
+      if (t !== null && dt > 0) velocity = velocity.add(t.mul(ran.overrun / dt));
+      this.markPathChanged();
+      this.onVineRunOff?.(clamp, velocity);
+      return;
+    }
+    // Pulling, or slack? The bound is the rail's (`clampHang`): a chain within
+    // a bore's radius of taut can be taut at some hang of the ring; slacker
+    // than that has really gone slack, and a slack chain hangs the rim
+    // nowhere.
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    const slack = this.constraintLength - this.calculateRopePathLength();
+    const pulling = prev !== undefined && slack < MANACLE_BORE / 2;
+    clamp.seat(pulling ? prev.contact.globalPosition : clamp.contact.globalPosition.add(GRAVITY), pulling);
+  }
+
+  // Let a ring on a vine creep along the vine under the pull of the span that
+  // reaches it, and say how much of the path's length that took out - the mud
+  // embed's seat (`slipEmbeddedEnd`), for a cuff LOCKED to a line (see
+  // `lib/vineClamp.ts`).
+  //
+  // Two things differ from the mud, and both are the line's. Only the pull's
+  // component ALONG the vine drives the creep, and a creep along it relieves
+  // only that component's share of the error (`slipDistance`'s `along`), so a
+  // ball hanging plumb under the vine draws the ring straight down it at the
+  // law's speed and a ball swung out sideways barely moves it. And the tension
+  // is read from the bodies the vine does NOT hold: the link the ring stands
+  // on is on the path and the length solve may move it, but the load rope and
+  // the pair chains hold it on the vine, which this solve cannot see - so it
+  // is left out of the effective mass, and a ball under a held vine reads as
+  // a ball under a fixed anchor. Its share of the correction still lands on
+  // it below, and the coupled sweep then argues that out with the vine.
+  //
+  // The error the first look reads is not the whole of the tension, and that
+  // is the other thing the link costs. Between one frame's last pass and the
+  // next frame's first look the link falls under its own gravity and its
+  // vine's own sweep leaves it sagging within the joints' tolerance, and the
+  // ring, re-seated on the line (`settleVineClamp`), comes down with it - so
+  // the first look sees the ball's fall LESS the link's sag, about a third
+  // short on a dead hang (2.0 mm against 3.2, measured), and the squared law
+  // made half the creep of it. The coupled sweep then lifts the link back and
+  // corrects the ball for the rest, but the budget was decided. So the look
+  // is floored by what the chain carried LAST frame: the length solve's
+  // summed correction over every pass, which is the impulse the tension
+  // actually delivered (both ends of a rope feel the same impulse however
+  // the split falls, and the sweep's passes sum to the ball's whole
+  // correction), plus the over-length the creep relieved before it. On a
+  // steady hang that is the ball's fall exactly; on a catch the first look
+  // is the larger by far and stands, so the ball is slowed over the frames
+  // the slip takes to decay rather than in one, as the mud slows it.
+  //
+  // The budget is decided at the frame's first look and spent along the line
+  // - crossing from link to link as it goes, stopping at a closed end, running
+  // off the open one - no further than the over-length lets: past that the
+  // chain would be slack and pulling on nothing. An undone iteration refunds
+  // it with the ring's place on the line (`snapshotPathBodies`).
+  private slipVineClampedEnd(): number {
+    const clamp = this.end;
+    if (!(clamp instanceof RopeVineClamp)) return 0;
+    const nodes = this.path();
+    const prev = nodes[nodes.length - 2];
+    if (!prev) return 0;
+    const t = clamp.tangent();
+    if (t === null) return 0;
+    const pull = prev.contact.globalPosition.sub(clamp.contact.globalPosition);
+    const reach = pull.length();
+    if (reach < Rope.EMBED_NODE_EPSILON) return 0;
+    const along = pull.dot(t) / reach;
+    if (!this.slideLooked) {
+      this.slideLooked = true;
+      this.slideBudget = 0;
+      this.slideSign = along >= 0 ? 1 : -1;
+      const inverseInertia = this.effectiveInverseInertia(this.generatePathObjects(), clamp.link);
+      const seen = (this.calculateRopePathLength() - this.constraintLength) * this.topologyCreditScale;
+      const carried = this.lastFrameCorrection * inverseInertia + this.lastFrameCreepRelief;
+      const error = Mathf.max(seen, carried);
+      if (error > 0 && inverseInertia >= 1e-6 && along !== 0) {
+        this.slideBudget = slipDistance(
+          error,
+          1 / inverseInertia,
+          this.frameDelta,
+          clamp.vine.viscosity,
+          Math.abs(along),
+        );
+      }
+    }
+    if (this.slideBudget <= 0 || along * this.slideSign <= 0) return 0;
+    const before = this.calculateRopePathLength();
+    const over = before - this.constraintLength;
+    if (over <= 0) return 0;
+    const step = Mathf.min(this.slideBudget, over / Math.abs(along));
+    const moved = clamp.creep(this.slideSign * step);
+    if (moved !== 0) {
+      clamp.slipped = clamp.slipped.add(t.mul(moved));
+      this.markPathChanged();
+    }
+    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
+    const relieved = before - this.calculateRopePathLength();
+    this.frameCreepRelief += relieved;
+    return relieved;
+  }
+
   // The path's summed inverse inertia along the constraint: what one metre of
   // length correction is divided by to become the correction impulse, and
   // whose reciprocal is the effective mass the chain's tension acts on. Each
   // dynamic body on the path contributes its mechanical advantage squared
   // over its effective inverse mass along the pull, torque arm included.
-  private effectiveInverseInertia(pathObjects: PathObject[]): number {
+  //
+  // `except` is a body left OUT of the sum: the link a ring on a vine stands
+  // on, which the vine holds and the tension is not spent on (see
+  // `slipVineClampedEnd`).
+  private effectiveInverseInertia(pathObjects: PathObject[], except: PhysicsBody2D | null = null): number {
     let total = 0;
     for (const segment of pathObjects) {
+      if (segment.body === except) continue;
       const dynamicBody = this.getDynamicBodyState(segment.body);
       if (dynamicBody) {
         const mechanicalAdvantage = segment.calculateMechanicalAdvantage();
@@ -2909,6 +3074,24 @@ export class Rope {
           addRotation: () => {},
         };
       }
+      // The LINK a ring on a vine stands on is told the same: the ring's
+      // centre is offset from the link's along the cord, which is a lever,
+      // and a link's spin means nothing (every constraint on it acts at its
+      // centre), so the pull moves it by translation alone rather than
+      // spinning a light body whose spin would carry the ring's contact round
+      // with it (see `lib/vineClamp.ts`).
+      if (this.end_ instanceof RopeVineClamp && body === this.end_.contact.obj) {
+        return {
+          body,
+          inertia: Infinity,
+          mass: body.mass,
+          velocity: body.linearVelocity,
+          addVelocity: (v) => {
+            body.linearVelocity = body.linearVelocity.add(v);
+          },
+          addRotation: () => {},
+        };
+      }
       return {
         body,
         inertia: body.inertia,
@@ -2952,7 +3135,9 @@ export class Rope {
     // An embedded end creeps through its viscous face before the bodies are
     // moved, on the same terms (`slipEmbeddedEnd`): the creep is the mud
     // yielding, which is a correction, and it may take the whole error.
-    if (this.slideClampedEnd() !== 0 || this.slipEmbeddedEnd() !== 0) {
+    // A ring on a vine creeps along the vine on the same terms again
+    // (`slipVineClampedEnd`).
+    if (this.slideClampedEnd() !== 0 || this.slipEmbeddedEnd() !== 0 || this.slipVineClampedEnd() !== 0) {
       currentLength = this.calculateRopePathLength();
       if (currentLength <= this.constraintLength) return 0;
     }

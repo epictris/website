@@ -64,7 +64,7 @@ import { GRAVITY } from "../engine/world";
 import { shapeExtents } from "../engine/shapes";
 import { circleOverlapFrom } from "../engine/collision";
 import type { CollisionObject2D, CollisionShape2D, PhysicsBody2D } from "../engine/body";
-import { RopeClamp } from "../lib/rail";
+import { ringEnd } from "../lib/vineClamp";
 import { MANACLE_REACH } from "../lib/manacle";
 import { Rope } from "./rope";
 
@@ -183,8 +183,9 @@ export class SlackChain {
     // from a node that was pinned inside the cuff. Re-pointed, the first link
     // ran from the rim back toward a node a bore's radius from the centre and
     // flickered with it (`session-407f`).
+    // A ring on a vine hangs the drape from its rim the same way.
     const end = this.chain.end;
-    const clamp = end instanceof RopeClamp ? end : null;
+    const clamp = ringEnd(end);
     if (clamp !== null) pathPoints[pathPoints.length - 1] = clamp.rimPoint();
 
     if (this.pos.length !== SEGMENTS + 1) {
@@ -254,7 +255,9 @@ export class SlackChain {
     // is already threaded through, not chain to be pushed out of it. Pushed,
     // the last few nodes were shoved off the handle every step and the drape
     // twitched at the cuff for as long as the ball hung still (`session-291f`).
-    const cuff = clamp !== null ? { body: clamp.body, at: clamp.contact.globalPosition } : null;
+    // A ring on a vine has no such body: the vine is not scenery the drape
+    // collides with at all (see `collectCollisionShapes`).
+    const cuff = clamp !== null ? { body: clamp.contact.obj, at: clamp.contact.globalPosition } : null;
     for (let iter = 0; iter < ITERATIONS; iter++) {
       this.solveDistances(restLen, iter % 2 === 1);
       this.solveLongRange(restLen, pinA, pinB);
@@ -461,7 +464,8 @@ export class SlackChain {
       out.push(this.renderFrom[i]!.lerp(this.pos[i]!, alpha));
     }
     const end = chain.end;
-    out.push(end instanceof RopeClamp ? end.renderRimPoint(alpha) : end.contact.renderGlobalPosition(alpha));
+    const ring = ringEnd(end);
+    out.push(ring !== null ? ring.renderRimPoint(alpha) : end.contact.renderGlobalPosition(alpha));
     return out;
   }
 
