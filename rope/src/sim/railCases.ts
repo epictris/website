@@ -879,6 +879,122 @@ function caseJam(): RailResult {
 }
 
 // ---------------------------------------------------------------------------
+// catch - the speed a ring is observed at after the length solve has moved it
+// is what the ring did over the WHOLE frame: the step it coasted plus the
+// correction the solve then made to it. A constraint may only take motion out,
+// so a chain going taut ARRESTS a coasting ring; measured as the correction
+// alone over `dt` it launches it instead, and the launch is as large as the
+// coast was. That is a self-sustaining bounce: the ring runs down the bar, the
+// chain catches it, the catch is read as a shove back up the bar, and it runs
+// down again - 8 cm every 16 frames on the lantern's handle in `session-283f`,
+// which is what the ring jittering along its rail was.
+//
+// Driven directly rather than through a level, so the catch is exact: the
+// arithmetic is what is on trial, not a scene that happens to produce one.
+// ---------------------------------------------------------------------------
+function caseCatch(): RailResult {
+  const c = claims();
+  // `caseFall`'s upright: a 3 m bar standing on end with a block welded to its
+  // foot, so gravity runs the ring down it with no cone to hold it whatever
+  // the friction, and it has somewhere to stop rather than running off. The
+  // ball throws at it from a floor to the side.
+  const upright = bar(0, -200, 300, 1, Math.PI / 2, {
+    objects: [
+      {
+        type: "collision",
+        shape: { kind: "curve", width: 3, verts: [{ x: -150, y: 0 }, { x: 150, y: 0 }] },
+        rail: true,
+      },
+      { type: "collision", x: 160, y: 0, shape: { kind: "rect", w: 20, h: 20 } },
+    ],
+  } as Partial<LevelBodyData>);
+  const rig = new Rig([upright, floor(8)], 40);
+  rig.throwAt = new Vec2(0, -2);
+  for (let f = 0; f < 120 && rig.clamp === null; f++) rig.step(rig.aimAtAnchor());
+  const clamp = rig.clamp;
+  c.check("clamped", clamp !== null);
+  if (!clamp) return ok("rail-catch", false, c.details);
+  const mus = RAIL_STATIC_FRICTION;
+  const muk = RAIL_KINETIC_FRICTION;
+
+  // One frame of coasting, then the solve hauls the ring all the way back:
+  // over the frame it went nowhere, so that is the speed it is observed at.
+  clamp.speed = 0;
+  const s0 = clamp.s;
+  clamp.coast(DT, mus, muk, GRAVITY);
+  const fell = clamp.s - s0;
+  c.check(`the ring coasts down the upright (${(fell * 1000).toFixed(2)} mm in a frame)`, fell > 0);
+  clamp.setParam(s0);
+  clamp.noteLoaded();
+  clamp.coast(DT, mus, muk, GRAVITY);
+  c.check(
+    `a catch that puts it back reads as arrested (${clamp.speed.toFixed(4)} m/s), not launched back up the bar (${(-fell / DT).toFixed(3)})`,
+    clamp.speed === 0,
+  );
+
+  // A catch that takes back HALF the step leaves half the step's speed, and
+  // the sign of it is the way the ring actually went.
+  clamp.speed = 0;
+  const s1 = clamp.s;
+  clamp.coast(DT, mus, muk, GRAVITY);
+  const step = clamp.s - s1;
+  clamp.setParam(s1 + step / 2);
+  clamp.noteLoaded();
+  clamp.coast(DT, mus, muk, GRAVITY);
+  c.check(
+    `a catch that takes back half the step leaves half its speed (${clamp.speed.toFixed(4)} m/s of ${(step / DT).toFixed(4)})`,
+    Math.abs(clamp.speed - step / 2 / DT) < 1e-9 && clamp.speed > 0,
+  );
+
+  // ...and a solve that DRIVES the ring further than it was coasting adds to
+  // it, which is the zipline: a ring the ball hauls along keeps the ball's own
+  // pace rather than half of it.
+  clamp.speed = 0;
+  const s2 = clamp.s;
+  clamp.coast(DT, mus, muk, GRAVITY);
+  const drove = clamp.s + 0.01;
+  clamp.setParam(drove);
+  clamp.noteLoaded();
+  clamp.coast(DT, mus, muk, GRAVITY);
+  c.check(
+    `a solve that drives it further is the whole of the motion (${clamp.speed.toFixed(4)} m/s of ${((drove - s2) / DT).toFixed(4)})`,
+    Math.abs(clamp.speed - (drove - s2) / DT) < 1e-9,
+  );
+
+  // The ring nothing catches is untouched by any of this: it falls at g.
+  clamp.speed = 0;
+  const s3 = clamp.s;
+  clamp.coast(DT, mus, muk, GRAVITY);
+  clamp.coast(DT, mus, muk, GRAVITY);
+  c.check(
+    `an uncaught ring still falls at g (${clamp.speed.toFixed(3)} m/s after two frames, want ${(2 * G * DT).toFixed(3)})`,
+    Math.abs(clamp.speed - 2 * G * DT) < 1e-9 && clamp.s > s3,
+  );
+  // ...and the chain does not have to catch it at all to stop it. The rope's
+  // length is an INEQUALITY, so what a taut chain forbids is the motion that
+  // opens it further, and the ring's own weight may not make that motion. A
+  // DIRECTION and not a flag: the other way along the same bar closes the
+  // chain, and nothing about its length has anything to say about that (see
+  // `rail-fall`, where a ring on a vertical bar under a chain at its full
+  // length still falls the length of the bar, because falling shortens it).
+  clamp.speed = 0;
+  const s4 = clamp.s;
+  clamp.coast(DT, mus, muk, GRAVITY, 1);
+  c.check(
+    `a taut chain stops the ring going the way that would open it (s ${clamp.s.toFixed(4)}, speed ${clamp.speed.toFixed(4)})`,
+    clamp.s === s4 && clamp.speed === 0,
+  );
+  clamp.speed = 0;
+  clamp.coast(DT, mus, muk, GRAVITY, -1);
+  c.check(
+    `...and says nothing about the way that closes it (${((clamp.s - s4) * 1000).toFixed(2)} mm)`,
+    clamp.s > s4,
+  );
+  c.check(`no invariant fired (${rig.violations.length})`, rig.violations.length === 0);
+  return ok("rail-catch — a ring the chain catches is arrested by the catch, never launched by it", c.passed(), c.details);
+}
+
+// ---------------------------------------------------------------------------
 // rim - which END of the ring the chain leaves over is state with hysteresis.
 // The rim is a sign, and a sign read off a quantity sitting on zero is noise:
 // a ring jammed square against a lid with the chain running along the bar had
@@ -1100,6 +1216,7 @@ export function runRailCases(): RailResult[] {
     caseFall(),
     caseOpenEnd(),
     caseJam(),
+    caseCatch(),
     caseRim(),
     caseBend(),
     caseFormat(),

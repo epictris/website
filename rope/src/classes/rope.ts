@@ -43,7 +43,7 @@ import {
   RopeClamp,
   type ClampState,
 } from "../lib/rail";
-import { MANACLE_BORE, MANACLE_REACH } from "../lib/manacle";
+import { MANACLE_BORE } from "../lib/manacle";
 import { Player } from "./player";
 import { Hook } from "./hook";
 import { PhaseTrace, type SolveBodyTerm } from "../engine/phaseTrace";
@@ -1405,8 +1405,7 @@ export class Rope {
     // far corner to the near one, 10 mm from the ring's centre, put a wrap
     // inside the cuff (`session-154f`).
     const cuff = toNode instanceof RopeClamp ? toNode : null;
-    const inCuff = (point: Vec2): boolean =>
-      cuff !== null && obj === cuff.body && point.distanceTo(cuff.contact.globalPosition) < MANACLE_REACH;
+    const inCuff = (point: Vec2): boolean => cuff !== null && obj === cuff.body && cuff.covers(point);
 
     // The piece of the body this node actually sits on, not merely the body's
     // primary shape: on a compound body those differ, and the tangent walk has
@@ -1674,9 +1673,7 @@ export class Rope {
       // through the lantern's base (`session-154f`).
       const cuff = span.to instanceof RopeClamp ? span.to : null;
       const inCuff = (body: CollisionObject2D, point: Vec2): boolean =>
-        cuff !== null &&
-        body === cuff.body &&
-        point.distanceTo(cuff.contact.globalPosition) < MANACLE_REACH;
+        cuff !== null && body === cuff.body && cuff.covers(point);
       const notInPlay = (shape: CollisionShape2D): boolean =>
         shape === span.from.contact.shape ||
         shape === span.to.contact.shape ||
@@ -1820,6 +1817,7 @@ export class Rope {
     }
     this.wraps = newNodes;
     this.cullDuplicateNodes();
+    this.cullNodesInCuff();
     this.wraps = cullDetachedNodes(this.start, this.end, this.wraps);
     this.syncCoil();
     this.recordSweepBaseline(bodies);
@@ -2056,6 +2054,28 @@ export class Rope {
         this.markPathChanged();
       }
     }
+  }
+
+  // A corner of the clamp's own body inside the cuff's DISC is not a corner
+  // the chain bends round: the chain leaves the ring at its rim, so the joint
+  // of the bar the ring straddles and the near corner of the lid it hangs
+  // beside are metal it is already clear of. The wrap scan and both
+  // self-intersection resolvers already refuse to be BORN there (`inCuff`),
+  // and this is the same rule standing: the ring swings on the point it rests
+  // on, so a corner it was legally born a millimetre outside the disc is one
+  // the ring can then swing onto.
+  //
+  // Which is what it did: a node born 54 mm from the cuff's centre - the disc
+  // is 53.5 - was 2 mm from it eight frames later, and a last span two
+  // millimetres long has no direction but noise, so the ring hunted a fifth of
+  // a radian either way of it at frame rate for the rest of the recording
+  // (`session-153f`). Born-and-forgotten is not a rule, it is a race.
+  private cullNodesInCuff(): void {
+    const cuff = this.end_;
+    if (!(cuff instanceof RopeClamp)) return;
+    this.wraps = this.wraps.filter(
+      (n) => n.contact.obj !== cuff.body || !cuff.covers(n.contact.globalPosition),
+    );
   }
 
   private cullDuplicateNodes(): void {
@@ -2429,30 +2449,81 @@ export class Rope {
     if (!(clamp instanceof RopeClamp)) return;
     this.seatLooked = true;
     const grip = clamp.body.surfaceFriction;
+    // The hang is decided BEFORE the ring is let go of, because whether the
+    // chain is pulling on it decides both where it hangs and whether it is
+    // free to run down the bar at all.
+    const hang = this.clampHang(clamp);
     const coasted = clamp.coast(
       delta,
       RAIL_STATIC_FRICTION * grip,
       RAIL_KINETIC_FRICTION * grip,
       GRAVITY,
+      hang.blocked,
     );
     if (coasted.ranOff !== 0) {
       this.markPathChanged();
       this.onClampRunOff?.(clamp, coasted.ranOff);
       return;
     }
-    // "Pulling" with a margin: the ring's own tilt moves its centre by up to
-    // a bore's radius, so a chain exactly at length goes slack by that much as
-    // the ring swings toward the pull, and read as slack-or-not it hunted
-    // between the pull and gravity every frame. Slack by more than the ring
-    // itself can make is a chain that has really gone slack.
+    const seated = clamp.seat(hang.toward, delta, hang.pulling);
+    if (coasted.moved || seated) this.markPathChanged();
+  }
+
+  // Where a clamped end hangs, and whether the chain is what is hanging it:
+  // the node the chain reaches the ring from while the chain is pulling on it,
+  // and straight down otherwise - a slack chain's last span has a direction,
+  // but not one the ring hangs by.
+  //
+  // Is the chain PULLING on the ring, or has it really gone slack? The two
+  // answers hang the ring in opposite directions, so this must not be a
+  // question the ring's own hang can change the answer to, or it drives
+  // itself: the ring swings, the swing moves the chain's end, the moved end
+  // crosses the threshold, and the ring swings back (`session-283f`, where it
+  // swept its whole tilt range at `RAIL_TILT_RATE` for the rest of the
+  // recording).
+  //
+  // So the slack is measured to the point the ring RESTS on rather than to
+  // its centre, which takes the tilt out of the measurement entirely - the
+  // rest point is a function of `s` alone. The centre stands exactly a bore's
+  // radius from it whatever the tilt is, so a chain within that of its length
+  // can be taut at SOME hang of the ring, and slack by more than the ring
+  // itself can make is a chain that has really gone slack. That is what
+  // `MANACLE_BORE / 2` means here, and it is the exact bound rather than a
+  // margin: hanging the ring cannot move the chain's end further.
+  //
+  // It is the WHOLE test, too. A `loaded` term beside it - the length solve
+  // moved this ring last frame, so the chain must be pulling on it - is a
+  // second opinion about the same thing, and where the ring sits near the
+  // bound the two disagree: the solve touches it every third or fourth frame,
+  // each of those frames hangs the ring the other way, and the drawn ring
+  // flicks eleven degrees and back for as long as it takes the chain to come
+  // taut (`session-164f`). Measured to the rest point the slack is the better
+  // witness of the two, so it is the only one.
+  clampHang(clamp: RopeClamp): { toward: Vec2; pulling: boolean; blocked: -1 | 0 | 1 } {
     const nodes = this.path();
     const prev = nodes[nodes.length - 2];
     const centre = clamp.contact.globalPosition;
-    const slack = this.constraintLength - this.calculateRopePathLength();
-    const pulling = (coasted.loaded || slack < MANACLE_BORE / 2) && prev !== undefined;
-    const toward = pulling ? prev.contact.globalPosition : centre.add(GRAVITY);
-    const seated = clamp.seat(toward, delta, pulling);
-    if (coasted.moved || seated) this.markPathChanged();
+    // The last span into a clamp is always a chord (the cuff's piece is a
+    // stroke quad, never a coil's circle), so swapping its end for the rest
+    // point is this one substitution rather than a second walk of the path.
+    const prevPos = prev?.contact.globalPosition;
+    const toRest =
+      prevPos === undefined ? 0 : prevPos.distanceTo(centre) - prevPos.distanceTo(clamp.restPoint());
+    const slack = this.constraintLength - this.calculateRopePathLength() + toRest;
+    const pulling = slack < MANACLE_BORE / 2 && prev !== undefined;
+    if (!pulling) return { toward: centre.add(GRAVITY), pulling, blocked: 0 };
+    // Which way along the bar the taut chain will not let the ring go, for the
+    // ring's own weight to respect (see `RopeClamp.coast`). Moving the ring by
+    // `ds` along the bar's tangent changes the last span by `-(p̂·t)·ds`, so
+    // the path LENGTHENS toward increasing arc length exactly when the pull
+    // runs back against it.
+    const toward = prev.contact.globalPosition;
+    const t = clamp.tangent();
+    const pull = toward.sub(centre);
+    const len = pull.length();
+    const blocked: -1 | 0 | 1 =
+      t === null || len === 0 ? 0 : pull.dot(t) < 0 ? 1 : -1;
+    return { toward, pulling, blocked };
   }
 
   // Let a clamped end swing on its rail and run along it under the pull of the

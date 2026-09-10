@@ -445,6 +445,26 @@ export class RopeClamp extends RopeAttachment {
     return this.body.globalPosition.add(local.rotated(this.body.globalRotation));
   }
 
+  // Is `world` a point the ring's own METAL stands on, or can swing onto?
+  // The chain leaves the ring at its rim, so a corner of the bar's body in
+  // here is metal the chain is already clear of rather than a corner for it to
+  // bend round - the joint of the bar the ring straddles, the near corner of
+  // the lid it hangs beside (see `inCuff` and `cullNodesInCuff` in `Rope`).
+  //
+  // Measured from the point the ring RESTS on, and by the ring's reach plus
+  // its swing, so the answer does not depend on the TILT: the ring's centre
+  // travels an arc of a bore's radius about the rest point, and its metal
+  // reaches `MANACLE_REACH` from the centre, so this disc is where the ring
+  // can be at any hang. Asked about the centre instead, the disc swung with
+  // the ring - a corner just outside it was inside it a swing later, so the
+  // corner was born, then culled, then born again, and the ring hunted a
+  // fifth of a radian either way of a two-millimetre span at frame rate
+  // (`session-153f`). A rule whose answer the ring's own hang decides is a
+  // race, however it is written.
+  covers(world: Vec2): boolean {
+    return world.distanceTo(this.restPoint()) < MANACLE_REACH + BORE_RADIUS;
+  }
+
   // The axis the bar runs through the cuff on, in the BODY's frame - the
   // direction the drawn cuff is turned about: the bar's tangent turned by the
   // tilt, which is square to the way the ring hangs, since a ring hangs in the
@@ -541,19 +561,53 @@ export class RopeClamp extends RopeAttachment {
   // runs off, which the result reports for the owner to turn the ring back
   // into a dangling chain tip. An end the length solve has left it pressed
   // against counts the same as one it ran into by itself.
-  coast(dt: number, mus: number, muk: number, gravity: Vec2): CoastResult {
+  //
+  // `blocked` is the direction along the bar a TAUT chain will not let the ring
+  // go (`Rope.clampHang`), or 0 for a chain that is not holding it. The rope's
+  // length is an inequality, so what it forbids is the motion that opens it
+  // further, and the ring's own weight may not make that motion: without the
+  // block, two friction models ran on the same ring in the same frame - this
+  // one against gravity as though nothing held it, and `slide` against the
+  // pull as though gravity were not there - so the ring crept down the bar for
+  // as long as the cone held it and was hauled back the moment the pull leaned
+  // out of the cone. At rest that is a permanent 3 mm sawtooth at a quarter of
+  // frame rate, in the chain's own anchor, which is the whole chain shivering
+  // (`session-153f`).
+  //
+  // A DIRECTION and not a flag, because taut is not held: a ring on a vertical
+  // bar with the ball standing on the floor below it has a chain at its full
+  // length and no tension in it at all, and it falls the length of the bar -
+  // falling SHORTENS that chain's path, so nothing about the length forbids
+  // it. Blocked outright, that ring hung where it was threaded (`cli rails`
+  // `rail-fall`).
+  coast(dt: number, mus: number, muk: number, gravity: Vec2, blocked: -1 | 0 | 1 = 0): CoastResult {
+    // The mark the NEXT observation is measured from: where the ring stood at
+    // the top of this frame, before either this step or the length solve has
+    // moved it. Both moves are the ring's motion and the speed it is observed
+    // at is the whole of it - see the `loaded` branch below.
+    const sAtFrameStart = this.s;
     if (this.loaded) {
       const pressed = this.pressing;
       const ranOff = pressed !== 0 && this.openEnd(pressed) ? pressed : 0;
+      // What the ring actually did last frame, over the WHOLE frame: the step
+      // it coasted plus the correction the length solve then made to it.
+      // Measured from the post-coast mark instead - the solve's correction
+      // alone - a chain going taut reads as launching the ring backwards at
+      // the correction over `dt` rather than as arresting it: a 2 cm pull-back
+      // became 1.3 m/s up the bar, which carried the ring 6 cm past where the
+      // solve had put it, and it slid back down and was caught again, forever
+      // (`session-283f`, an 8 cm bounce every 16 frames on the lantern's
+      // handle). A constraint may only take motion out.
       this.speed = (this.s - this.sAtCoast + (ranOff ? ranOff * this.overrun : 0)) / dt;
       this.loaded = false;
-      this.sAtCoast = this.s;
+      this.sAtCoast = sAtFrameStart;
       this.pressing = 0;
       this.overrun = 0;
       return { moved: false, loaded: true, ranOff };
     }
     this.pressing = 0;
     this.overrun = 0;
+    this.sAtCoast = sAtFrameStart;
     if (this.curve.total <= 0 || this.range.max <= this.range.min) {
       this.speed = 0;
       return { moved: false, loaded: false, ranOff: 0 };
@@ -563,13 +617,15 @@ export class RopeClamp extends RopeAttachment {
     const along = g.dot(t);
     const across = Math.abs(g.cross(t));
     if (this.speed === 0 && Math.abs(along) <= mus * across) {
-      this.sAtCoast = this.s;
       return { moved: false, loaded: false, ranOff: 0 };
     }
     let v = this.speed + along * dt;
     const brake = muk * across * dt;
     v = v > 0 ? Math.max(0, v - brake) : Math.min(0, v + brake);
     v = Mathf.clamp(v, -RAIL_MAX_SLIDE_SPEED, RAIL_MAX_SLIDE_SPEED);
+    // The taut chain will not pay out for this: the ring stops rather than
+    // going where the length solve would only have to haul it back from.
+    if (blocked !== 0 && v * blocked > 0) v = 0;
     let s = this.s + v * dt;
     let ranOff: -1 | 0 | 1 = 0;
     const hi = this.restMax();
@@ -586,7 +642,6 @@ export class RopeClamp extends RopeAttachment {
     this.speed = v;
     const moved = s !== this.s;
     if (moved) this.setParam(s);
-    this.sAtCoast = s;
     return { moved, loaded: false, ranOff };
   }
 
@@ -606,6 +661,7 @@ export class RopeClamp extends RopeAttachment {
   noteLoaded(): void {
     this.loaded = true;
   }
+
 
   // Is the end of the range in `sign`'s direction an open end of the bar?
   private openEnd(sign: -1 | 1): boolean {
