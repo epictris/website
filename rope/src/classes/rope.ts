@@ -2857,14 +2857,54 @@ export class Rope {
     const before = this.calculateRopePathLength();
     const over = before - this.constraintLength;
     if (over <= 0) return 0;
-    const step = Mathf.min(this.slideBudget, over / Math.abs(along));
+    // How far the creep may run: the over-length itself, as the mud's seat
+    // bounds its own slip (`slipEmbeddedEnd`), and NOT divided by `along`.
+    // A creep of `s` along the line takes at most `s` out of the path
+    // (`|along| <= 1`), so `over` is already the distance past which the chain
+    // would be slack and pulling on nothing. The first-order `over / |along|`
+    // that stood here reads "a creep that relieves less may run further",
+    // which is exactly backwards as a bound - the shallower the pull lies to
+    // the cord, the less the geometry holds still over the distance - and it
+    // is unbounded as the pull turns square to the vine, which the design
+    // calls the ordinary case (a ball swung out sideways). The sideways ball
+    // is already answered where it belongs, in the budget: `slipDistance`
+    // takes `along` and the viscous law makes the creep small.
+    //
+    // On `session-322f` f250 a 45 mm over-length at `along = -0.086` asked for
+    // 522 mm, carried the ring three segments up the vine, and LENGTHENED the
+    // path by 498 mm; the solve then re-asked on the bigger error until the
+    // ring stood at the vine's top 1.6 m from the node pulling it, the path
+    // read 3.48 m against a 0.29 m constraint, and the length solve hauled the
+    // ball 1.54 m to fit it - paid back the next frame as 33 m/s.
+    //
+    // The mud's OTHER bound, `reach`, is deliberately not borrowed: the mud's
+    // pin creeps along the pull, so running past the node it is pulled toward
+    // is meaningless, while a ring creeps along the LINE, square to that pull
+    // as often as not. Capping by it starves precisely the case this is about
+    // - a ball wound tight against the ring closes the span to nothing, the
+    // creep that would relieve the error is throttled with it, and the solve
+    // takes the error out by hauling bodies instead (measured: the ring walked
+    // 347 mm up the line and the ball left at 18 m/s on `ring-square`).
+    const step = Mathf.min(this.slideBudget, over);
+    const state = clamp.snapshot();
     const moved = clamp.creep(this.slideSign * step);
-    if (moved !== 0) {
-      clamp.slipped = clamp.slipped.add(t.mul(moved));
-      this.markPathChanged();
-    }
-    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
+    if (moved === 0) return 0;
+    this.markPathChanged();
     const relieved = before - this.calculateRopePathLength();
+    // The line BENDS, so no bound computed at the ring's own segment can
+    // promise the creep shortened the path: crossing a link turns the tangent
+    // under it. The guard is therefore the measurement and not the estimate -
+    // a creep that did not relieve is put back, along with the run-off it
+    // claimed, and the budget it would have spent is left for the pass after
+    // it, which looks from wherever the rest of the solve has since moved the
+    // vine to.
+    if (relieved <= 0) {
+      clamp.restoreState(state);
+      this.markPathChanged();
+      return 0;
+    }
+    clamp.slipped = clamp.slipped.add(t.mul(moved));
+    this.slideBudget = Mathf.max(this.slideBudget - Math.abs(moved), 0);
     this.frameCreepRelief += relieved;
     return relieved;
   }

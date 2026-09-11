@@ -41,7 +41,13 @@ import { World } from "../engine/world";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import type { BallPlayer } from "../classes/ballPlayer";
-import { checkBallInvariants, mechanicalEnergy, TunnelMonitor, type Violation } from "./trace";
+import {
+  CHAIN_OVER_LENGTH_TOLERANCE,
+  checkBallInvariants,
+  mechanicalEnergy,
+  TunnelMonitor,
+  type Violation,
+} from "./trace";
 import { RopeVineClamp } from "../lib/vineClamp";
 import { VISCOUS_CREEP_SPEED } from "../lib/viscous";
 import { MANACLE_REACH } from "../lib/manacle";
@@ -1922,12 +1928,20 @@ class RingRig {
     return end instanceof RopeVineClamp ? end : null;
   }
 
+  // An aim of this case's own, in place of `aim()`'s "at the ring". The ball
+  // winds the chain onto itself by turning to face the aim, so a turning aim
+  // is the winch - which is what draws the ball up onto the ring
+  // (`ring-square`).
+  aimOverride: ((frame: number) => Vec2) | null = null;
+  private frame = 0;
+
   step(aim: Vec2): void {
     const input: FrameInput = {
       ...emptyFrameInput(),
       fire: button(true, this.prev.fire),
-      mouseWorldPosition: aim,
+      mouseWorldPosition: this.aimOverride ? this.aimOverride(this.frame) : aim,
     };
+    this.frame++;
     this.prev = input;
     this.level.physicsProcess(input, DT);
     this.violations.push(...checkBallInvariants(this.level));
@@ -1957,6 +1971,19 @@ class RingRig {
       this.step(this.aim(throwAt));
       each?.(f);
     }
+  }
+
+  // How far along the vine's line the ring stands, as an arc length from the
+  // anchor. This is what a CREEP moves and the vine's own swing does not: the
+  // line turns under the ring, but the ring keeps its place on it.
+  ringArc(): number {
+    const ring = this.ring;
+    if (!ring) return NaN;
+    const pts = [this.vine.anchorContact.globalPosition, ...this.vine.links.map((l) => l.globalPosition)];
+    if (this.vine.anchor2Contact) pts.push(this.vine.anchor2Contact.globalPosition);
+    let arc = 0;
+    for (let k = 1; k < ring.segment; k++) arc += pts[k]!.distanceTo(pts[k - 1]!);
+    return arc + ring.fraction * pts[ring.segment]!.distanceTo(pts[ring.segment - 1]!);
   }
 
   // How far the ring's centre stands off the vine's line: the least distance
@@ -2065,6 +2092,8 @@ function caseRingWalk(): VineResult {
 // lower links' grab circles (12 cm, on 20 cm links); which link it catches is
 // then the sweep's to say, and the case reads it.
 const RING_BALL_X = 70;
+const WIND_RATE = 0.08;
+const WIND_FRAMES = 150;
 const ASIDE = new Vec2(-0.7, -1.5);
 
 function caseRingHang(): VineResult {
@@ -2194,6 +2223,147 @@ function caseRingSwing(): VineResult {
 }
 
 // ---------------------------------------------------------------------------
+// ring-square: a ball winched hard against the ring pulls SQUARE to the cord,
+// and a creep driven by that pull stays inside the over-length it is there to
+// relieve.
+//
+// This is `session-322f` (2026-09-11) written down. The winch draws the ball
+// up until the chain is wound around it and the ring sits on its surface, so
+// the span that reaches the ring is a couple of centimetres long and lies
+// nearly square to the vine - and the creep's bound used to be the over-length
+// divided by the cosine of exactly that angle. At `along = -0.086` a 45 mm
+// over-length bought a 522 mm creep, which carried the ring three segments up
+// the vine, turned the tangent under it and made the path 498 mm LONGER; the
+// solve re-asked on the bigger error until the ring stood at the vine's top
+// 1.6 m from the node pulling it and the path read 3.48 m against a 0.29 m
+// constraint. The length solve hauled the ball 1.54 m to fit that, and the
+// next frame paid it back as 33 m/s - the ball, the vine and all seventeen of
+// its links thrown across the level.
+//
+// The claim is the bound and what it buys: a creep never runs past what the
+// chain has to give, so the ring works DOWN the cord under the pull instead of
+// walking up it, and the path stays on its constraint. The scenario claims
+// come first, because a case that quietly stopped winching the ball onto the
+// ring would pass while testing nothing - which this one did at first. The
+// SWING is what makes it bite: at a 3 m/s kick the old bound is green here,
+// and it takes the 9 m/s one below to earn the budget the failure spent. On
+// the old bound that reads 352 mm of up-walk in a single frame, a ball thrown
+// at 11.4 m/s and 83 invariants; measure it again before loosening the kick.
+// ---------------------------------------------------------------------------
+function caseRingSquare(): VineResult {
+  const c = ringClaims();
+  // A long vine, as `ring-catch` uses: the wound-up ball swings hard, and a
+  // ring near the free end simply slides off it, which is the vine's physics
+  // and not this case's question.
+  const rig = new RingRig(ringScene({ ballX: RING_BALL_X, vineLength: 600 }));
+  const up = ASIDE;
+  const on = rig.throwUntilRinged(up);
+  c.check(`the manacle threads onto the vine (frame ${on})`, on >= 0);
+  const ring = rig.ring;
+  if (!ring) return ok("ring-square", false, c.details);
+  // Turn the aim steadily: the ball follows it, the chain winds onto the ball,
+  // and the winch draws it up until the chain is at its stop and the ring is
+  // sitting on its surface. Then swing it, so the short span left over sweeps
+  // through square to the cord.
+  const spin = (f: number): Vec2 => rig.ball.globalPosition.add(Vec2.RIGHT.rotated(f * WIND_RATE));
+  rig.aimOverride = spin;
+  rig.run(WIND_FRAMES, up, (f) => {
+    if (process.env.RING_SQUARE_PROBE) {
+      const chain = rig.ball.chain;
+      const r = rig.ring;
+      if (chain && r) {
+        const nodes = chain.path();
+        const prev = nodes[nodes.length - 2];
+        const t = r.tangent();
+        const pull = prev && t ? prev.contact.globalPosition.sub(r.contact.globalPosition) : null;
+        console.log(
+          `wind f${f} constraint=${chain.constraintLength.toFixed(4)} len=${chain.getCurrentLength().toFixed(4)}` +
+            ` reach=${pull ? (pull.length() * 1000).toFixed(1) : "-"}mm` +
+            ` along=${pull && t ? (pull.dot(t) / pull.length()).toFixed(3) : "-"}`,
+        );
+      } else console.log(`wind f${f} chain=${!!chain} ring=${!!r}`);
+    }
+  });
+  rig.ball.linearVelocity = rig.ball.linearVelocity.add(new Vec2(-9, 0));
+
+  const chain = rig.ball.chain!;
+  let shortest = Infinity;
+  let squarest = 1;
+  let worstOver = 0;
+  let fastest = 0;
+  let held = 0;
+  const first = rig.ringArc();
+  let was = first;
+  let worstUp = 0;
+  let net = 0;
+  const frames = 240;
+  rig.run(frames, up, () => {
+    // Both bars are read only while the ring is ON: once it has run off the
+    // free end the ball is falling down an open level, and a free fall is not
+    // a throw.
+    if (rig.ring !== ring) return;
+    held++;
+    fastest = Math.max(fastest, rig.ball.linearVelocity.length());
+    const nodes = chain.path();
+    const prev = nodes[nodes.length - 2];
+    const t = ring.tangent();
+    if (prev && t) {
+      const pull = prev.contact.globalPosition.sub(ring.contact.globalPosition);
+      const reach = pull.length();
+      if (reach > 1e-6) {
+        shortest = Math.min(shortest, reach);
+        squarest = Math.min(squarest, Math.abs(pull.dot(t) / reach));
+      }
+    }
+    worstOver = Math.max(worstOver, chain.getCurrentLength() - chain.constraintLength);
+    const arc = rig.ringArc();
+    worstUp = Math.max(worstUp, was - arc);
+    net = arc - first;
+    was = arc;
+  });
+
+  // The scenario: the span really is short and really does come square. A ring
+  // driven off the free end is the vine's own physics and not this case's
+  // question, so the window is however long it is held for - but it has to be
+  // long enough to be a window.
+  c.check(`the ring is held for ${held} of ${frames} frames of it`, held > 60);
+  c.check(
+    `the winch draws the ball onto the ring (the last span closes to ${(shortest * 1000).toFixed(1)} mm)`,
+    shortest < 0.05,
+  );
+  c.check(
+    `...and the pull comes square to the cord (|along| down to ${squarest.toFixed(3)})`,
+    squarest < 0.2,
+  );
+
+  // The bound, and what it is worth. The pull drives the ring DOWN the vine:
+  // the recorded failure ran it 2.2 m the other way, clean up to the anchor,
+  // on an over-length of 45 mm. Walking up the line at all is the signature,
+  // so the bar on it is a link's own length and not a tuned number.
+  c.check(
+    `the ring works down the vine (${(net * 100).toFixed(1)} cm) and never walks up it ` +
+      `(worst ${(worstUp * 1000).toFixed(1)} mm against a ${(DEFAULT_VINE_SPACING * 1000).toFixed(0)} mm link)`,
+    net > 0 && worstUp < DEFAULT_VINE_SPACING,
+  );
+  // ...which is what keeps the path on its constraint. The failure's path read
+  // 3.48 m against a 0.29 m constraint - 3.19 m of over-length, and that is
+  // the length solve's licence to haul the ball 1.54 m and throw it at 33 m/s.
+  // The bar is the invariant's own tolerance, which a swinging wound-up ball
+  // legitimately spends transients against.
+  c.check(
+    `the path stays on its constraint (worst over-length ${(worstOver * 1000).toFixed(1)} mm)`,
+    worstOver < CHAIN_OVER_LENGTH_TOLERANCE,
+  );
+  c.check(`...so the ball is never thrown (peak ${fastest.toFixed(2)} m/s)`, fastest < 8);
+  withViolations(c, rig);
+  return ok(
+    "ring-square — a pull square to the cord creeps the ring no further than the over-length",
+    c.passed(),
+    c.details,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ring-catch: a falling ball caught on a vine drags the ring far further than
 // a hang does before it is slowed to one.
 // ---------------------------------------------------------------------------
@@ -2238,6 +2408,7 @@ export function runVineCases(): VineResult[] {
     caseRingWalk(),
     caseRingHang(),
     caseRingSwing(),
+    caseRingSquare(),
     caseRingCatch(),
     caseWeight(),
     caseStiffness(),

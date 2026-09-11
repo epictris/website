@@ -664,7 +664,7 @@ const CHAIN_PUSH_CREDIT_FRAMES = 9;
 // crush session in the corpus (`477f`, `726f`, `1426f`, all against rigid
 // slabs) sat under 5 cm only while those slabs were being pumped toward the
 // ball (see `CHAIN_PUSH_CREDIT_FRAMES`); cleared as a pair they measure 6-10.
-const CHAIN_OVER_LENGTH_TOLERANCE = 0.25;
+export const CHAIN_OVER_LENGTH_TOLERANCE = 0.25;
 // How much longer than the length it anchored at the ball's chain may get.
 // Nothing pays chain out once it is anchored, so the only source of growth is
 // `Rope.absorbBlockedLength` letting the constraint sit where geometry is
