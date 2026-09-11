@@ -888,6 +888,91 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // Wet brown mud: compact clods, embedded stones, roots and broken sticks,
+  // with footprints pressed into it. The surface the VISCOUS pieces are made of
+  // (`CollisionObjectData.viscosity`, see "Viscous surfaces") - which is the one
+  // thing in this manifest a level was already saying in physics and had no way
+  // to say in pictures: a mud ceiling to hang from and a mud wall to catch on
+  // both wore generated stone, so the only thing marking a face as the stuff a
+  // manacle sinks to the hinge in was the 2D renderer's ochre dash-dot edge, and
+  // in 3D nothing at all.
+  //
+  // The two remain INDEPENDENT and that is deliberate: wearing this does not
+  // make a face viscous (viscosity is a number on the shape, and the renderer
+  // reads no meaning off a texture name), and a viscous face is not obliged to
+  // wear it - tar and wet clay are the same law with a different picture. What
+  // this buys is that the ordinary case can now LOOK like what it does.
+  //
+  // **The quietest organic surface here**, which is what makes it usable over a
+  // whole wall: mean chroma .086, against .175 for `mossy ground`, .268 for
+  // `forest-floor` and .302 for `moss` - so it sits just above the rocks (.004
+  // to .066) rather than with the greens, and a face of it under grey stone is
+  // not the thing the eye goes to. Its albedo mean is #4D4437, and the number
+  // that says a lamp has something to work with is the LINEAR one: .074/.058/
+  // .038, well clear of `rock-black`'s under .01 and near `rock-charcoal`'s
+  // .044, so a mud face shades rather than reading as a hole.
+  //
+  // Relief is the middle band - normal B mean .903, between `rock-grey`'s .95
+  // and `mossy ground`'s .833 - and it is clods and footprints rather than the
+  // deep cushions `moss` carries, so it stands up on a ceiling or a wall seen
+  // edge on without the lumps marching that a grazing light finds in the
+  // deeper ground sets.
+  //
+  // Roughness means .951 with a sigma of .076: almost uniformly matte, which is
+  // what mud photographed damp rather than standing in water is. A level wanting
+  // it WET has the `roughness` multiplier below to pull it down with - that is
+  // the knob, rather than a second set.
+  //
+  // Keyed as a SURFACE like the rest of the ground family, and there is not even
+  // a material name to collide with: no `MaterialName` is "mud", the nearest is
+  // `stone`, which is the fallback for the reason `moss` states - none of the
+  // generated sets is earth, and grey stone turning to mud reads better than the
+  // reverse.
+  mud: {
+    maps: {
+      base: {
+        file: "/textures/mud-base.webp",
+        sha256: "4c14880acbeeb8eea5ef1dd26787a07553283d489ce8f1d59843055b8bf6d42d",
+      },
+      // Poly Haven ships `nor_gl`, the OpenGL convention (+Y up) this renderer
+      // wants; the `nor_dx` alternative would light every clod from the wrong
+      // vertical side. Its source is a JPEG, so this is the q95 lossy encode the
+      // pipeline takes for a lossy source rather than a lossless one - encoding
+      // JPEG ringing losslessly spends bytes preserving artifacts.
+      normal: {
+        file: "/textures/mud-normal.webp",
+        sha256: "943cc0df4884bb3bcc763784d0c7ded46a4fb33057dd577c96985c7365676ce2",
+      },
+      // Red channel alone (G and B exactly 0, measured), flattened to grey by
+      // `assets:optimize-texture --channel r`. No AO in Poly Haven's glTF pack -
+      // it ships diff, nor_gl and rough - and no metallic map is wanted, mud
+      // being a dielectric, so the 0 below is stated rather than shipped as an
+      // image.
+      roughness: {
+        file: "/textures/mud-roughness.webp",
+        sha256: "b6ad3c5d3f2477f31701e664c13c8baee19833d61652378a82404f321123d30f",
+      },
+    },
+    // Poly Haven's own captured size, 1300 mm square
+    // (https://api.polyhaven.com/info/brown_mud_02), so it lands life size with
+    // nothing eyeballed - and unlike `marble cliff`'s 20 m it is inside the band
+    // the game is built at (1.5 to 2 for everything else), so there is no reason
+    // to take the exception.
+    //
+    // It is NOT the ground family's 3, and the difference is worth stating since
+    // mud meets earth on a floor as readily as `forest-floor` meets `mossy
+    // ground`. That 3 is a BY-EYE number ambientCG states no size for, harmonised
+    // across the two sets precisely because both were free choices; this one is
+    // a fact the source publishes, and the field's documented meaning is the
+    // captured size. A shape laying mud against forest floor and wanting the two
+    // to agree says so with `tileScale`, which is what it is for.
+    tile: 1.3,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://polyhaven.com/a/brown_mud_02",
+    author: "Rob Tuytel",
+    license: "CC0",
+  },
   // Pitted, rust-bloomed iron: what the ball, its mounting loop, its chain and
   // the manacle at the far end are forged from (`ballVisual`/`chainVisual`).
   //
