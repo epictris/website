@@ -51,68 +51,146 @@ export interface ExtrudeOptions {
 // repeats it should); this measures ALONG the wall instead, so a repeat is a
 // metre of surface travelled whatever angle the edge runs at.
 //
-// `zOrigin` is where the depth axis reads zero, and it is the offset the caller
-// is about to translate the solid by: `ExtrudeGeometry` builds from z = 0 and
-// the gameplay plane is the MIDDLE of the finished solid, so measuring depth off
-// the raw vertex would anchor a side wall's texture to the solid's back face -
-// and re-authoring a wall's `depth` would then slide the texture on its returns.
-const metreUVs = (zOrigin: number): THREE.UVGenerator => ({
-  generateTopUV(_geometry, vertices, indexA, indexB, indexC) {
-    return [
-      new THREE.Vector2(vertices[indexA * 3]!, vertices[indexA * 3 + 1]!),
-      new THREE.Vector2(vertices[indexB * 3]!, vertices[indexB * 3 + 1]!),
-      new THREE.Vector2(vertices[indexC * 3]!, vertices[indexC * 3 + 1]!),
-    ];
-  },
-  generateSideWallUV(_geometry, vertices, indexA, indexB, indexC, indexD) {
-    const at = (i: number) => ({
-      x: vertices[i * 3]!,
-      y: vertices[i * 3 + 1]!,
-      z: vertices[i * 3 + 2]!,
-    });
-    const a = at(indexA);
-    const b = at(indexB);
-    const c = at(indexC);
-    const d = at(indexD);
-    // The wall runs along a-b in the plane, and the other axis it has is the
-    // depth. Which of the two is u is decided by WHICH WAY THE EDGE RUNS, and
-    // that is what keeps a texture upright: a texture's own u is horizontal, so
-    // handing u to the along-edge distance on a VERTICAL edge maps the picture's
-    // horizontal onto world-vertical and lays every brick on its end. It is the
-    // one thing three's generator gets right and the reason it branches at all.
-    //
-    // Both axes are anchored in the body's own frame rather than at the corner
-    // the quad happens to start from, so a side wall's texture is continuous
-    // with the cap's beside it (the caps are world x/y) and a `tileOffset` means
-    // the same thing on both. Along a diagonal edge that anchoring is exact only
-    // in the direction it is measured; the metre scale is the edge's either way.
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-9) {
-      dx = 1;
-      dy = 0;
-    } else {
-      dx /= len;
-      dy /= len;
-    }
-    // Distance travelled along the edge from a, signed so it grows the way the
-    // world axis it stands in for grows.
-    const along = (p: { x: number; y: number }) =>
-      ((p.x - a.x) * dx + (p.y - a.y) * dy) * (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : Math.sign(dy));
-    const uv =
-      Math.abs(dx) >= Math.abs(dy)
-        ? // A horizontal-ish edge (a floor's top face, a wall's underside): the
-          // along-edge run stands in for world x, and the depth is v.
-          (p: { x: number; y: number; z: number }) =>
-            new THREE.Vector2(a.x + along(p), p.z - zOrigin)
-        : // A vertical-ish edge (a wall's left and right returns): the depth is
-          // u and the along-edge run stands in for world y, which is up.
-          (p: { x: number; y: number; z: number }) =>
-            new THREE.Vector2(p.z - zOrigin, a.y + along(p));
-    return [uv(a), uv(b), uv(c), uv(d)];
-  },
-});
+// `core` is the depth of the straight part of the solid, so the depth axis reads
+// zero at `core / 2` - the offset the caller is about to translate the solid by.
+// `ExtrudeGeometry` builds from z = 0 and the gameplay plane is the MIDDLE of the
+// finished solid, so measuring depth off the raw vertex would anchor a side
+// wall's texture to the solid's back face - and re-authoring a wall's `depth`
+// would then slide the texture on its returns.
+//
+// `bevel` is the chamfer's radius, and it is here because THE CHAMFER IS THE CAP
+// UNROLLED - see `generateSideWallUV`.
+const metreUVs = (core: number, bevel: number): THREE.UVGenerator => {
+  const zOrigin = core / 2;
+  // Where a point on the chamfer sits on the quarter-round, as the angle three
+  // swept to place it: 0 at the ring touching the cap, pi/2 where the round
+  // meets the straight wall. `ExtrudeGeometry` lays its bevel rings out at
+  // `z = bevelThickness * cos(phi)` beyond the core and `bevelSize * (1 - sin
+  // (phi))` in from the outline, and this project asks for the two equal, so the
+  // depth alone recovers the angle.
+  const bevelAngle = (z: number): number => {
+    const beyond = Math.abs(z - zOrigin) - zOrigin;
+    return Math.acos(Math.min(1, Math.max(0, beyond / bevel)));
+  };
+  return {
+    generateTopUV(_geometry, vertices, indexA, indexB, indexC) {
+      return [
+        new THREE.Vector2(vertices[indexA * 3]!, vertices[indexA * 3 + 1]!),
+        new THREE.Vector2(vertices[indexB * 3]!, vertices[indexB * 3 + 1]!),
+        new THREE.Vector2(vertices[indexC * 3]!, vertices[indexC * 3 + 1]!),
+      ];
+    },
+    generateSideWallUV(_geometry, vertices, indexA, indexB, indexC, indexD) {
+      const at = (i: number) => ({
+        x: vertices[i * 3]!,
+        y: vertices[i * 3 + 1]!,
+        z: vertices[i * 3 + 2]!,
+      });
+      const a = at(indexA);
+      const b = at(indexB);
+      const c = at(indexC);
+      const d = at(indexD);
+      // THE CHAMFER IS THE CAP, UNROLLED. A quad whose two rings sit at different
+      // insets is a band of the bevel rather than a piece of the straight wall,
+      // and the depth mapping below is wrong for it twice over: three lays the
+      // quarter-round out so the ring nearest the cap barely advances through z at
+      // all while covering most of the round's arc, so `p.z` compresses that band
+      // to a third of its surface and smears the texture across it - and it
+      // compresses the outer band by a different factor again, so the chamfer
+      // reads as two mismatched stripes rather than as one surface.
+      //
+      // So the band is mapped by rolling it flat into the CAP's plane: a point is
+      // carried outward along its own bevel offset by the difference between the
+      // arc it has travelled and the distance that travel covered in the plane,
+      // `bevel * (phi - sin phi)`, and then wears the cap's own rule. That is an
+      // isometry - the flattened point moves at exactly the rate the surface does,
+      // in every direction - so the texture neither stretches nor bands, and it is
+      // exactly zero at the cap ring, where the cap's own vertices are: the two
+      // meet with no seam at all.
+      //
+      // What is left over lands where the chamfer meets the straight wall, which
+      // is the solid's silhouette. That is where it belongs: the game's camera
+      // looks along the depth axis, so the chamfer is a rim seen nearly face on
+      // and foreshortens to nothing at its outer edge, and a break there is a
+      // break in the pixels the wall was already about to end in. Anchoring the
+      // other way round - continuing the wall's depth mapping inward - puts the
+      // same break in the middle of the rim, in full view.
+      //
+      // `d` shares a contour index with `a` (and `c` with `b`), so the vector
+      // between the two is that vertex's own inset offset - along the CORNER
+      // BISECTOR three placed it on, which is what keeps the two quads meeting
+      // at a corner agreeing about where the texture goes. It is read straight
+      // off the geometry rather than rebuilt, so its length and its sign are
+      // three's and there is no winding or facing to get right: the front rings
+      // run inward as z grows and the back ones outward, and the arithmetic
+      // below carries the sign of each with it.
+      const insetX = d.x - a.x;
+      const insetY = d.y - a.y;
+      if (bevel > 0 && Math.hypot(insetX, insetY) > 1e-9) {
+        const phiA = bevelAngle(a.z);
+        const phiD = bevelAngle(d.z);
+        // The two rings are `bevel * (sin phiD - sin phiA)` of that offset
+        // apart, so dividing by it turns the arc excess into a share of the
+        // vector and the bisector's own length is never needed.
+        const spread = Math.sin(phiD) - Math.sin(phiA);
+        const flat = (
+          p: { x: number; y: number; z: number },
+          fromX: number,
+          fromY: number,
+        ) => {
+          const phi = bevelAngle(p.z);
+          const k = Math.abs(spread) < 1e-12 ? 0 : (phi - Math.sin(phi)) / spread;
+          return new THREE.Vector2(p.x + fromX * k, p.y + fromY * k);
+        };
+        const bcX = c.x - b.x;
+        const bcY = c.y - b.y;
+        return [
+          flat(a, insetX, insetY),
+          flat(b, bcX, bcY),
+          flat(c, bcX, bcY),
+          flat(d, insetX, insetY),
+        ];
+      }
+      // The wall runs along a-b in the plane, and the other axis it has is the
+      // depth. Which of the two is u is decided by WHICH WAY THE EDGE RUNS, and
+      // that is what keeps a texture upright: a texture's own u is horizontal, so
+      // handing u to the along-edge distance on a VERTICAL edge maps the picture's
+      // horizontal onto world-vertical and lays every brick on its end. It is the
+      // one thing three's generator gets right and the reason it branches at all.
+      //
+      // Both axes are anchored in the body's own frame rather than at the corner
+      // the quad happens to start from, so a side wall's texture is continuous
+      // with the cap's beside it (the caps are world x/y) and a `tileOffset` means
+      // the same thing on both. Along a diagonal edge that anchoring is exact only
+      // in the direction it is measured; the metre scale is the edge's either way.
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-9) {
+        dx = 1;
+        dy = 0;
+      } else {
+        dx /= len;
+        dy /= len;
+      }
+      // Distance travelled along the edge from a, signed so it grows the way the
+      // world axis it stands in for grows.
+      const along = (p: { x: number; y: number }) =>
+        ((p.x - a.x) * dx + (p.y - a.y) * dy) * (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : Math.sign(dy));
+      const uv =
+        Math.abs(dx) >= Math.abs(dy)
+          ? // A horizontal-ish edge (a floor's top face, a wall's underside): the
+            // along-edge run stands in for world x, and the depth is v.
+            (p: { x: number; y: number; z: number }) =>
+              new THREE.Vector2(a.x + along(p), p.z - zOrigin)
+          : // A vertical-ish edge (a wall's left and right returns): the depth is
+            // u and the along-edge run stands in for world y, which is up.
+            (p: { x: number; y: number; z: number }) =>
+              new THREE.Vector2(p.z - zOrigin, a.y + along(p));
+      return [uv(a), uv(b), uv(c), uv(d)];
+    },
+  };
+};
 
 // The outline as a three.js Shape, in three's frame (y negated) and wound so the
 // front cap faces the camera.
@@ -218,9 +296,10 @@ export function extrudeOutline(o: Outline, opts: ExtrudeOptions): THREE.ExtrudeG
     bevelSegments: 2,
     curveSegments: CIRCLE_SEGMENTS,
     steps: 1,
-    // The same offset the translate below applies, so the depth axis of a side
-    // wall's UVs reads zero on the gameplay plane.
-    UVGenerator: metreUVs(core / 2),
+    // The core is what the translate below is measured from, so the depth axis
+    // of a side wall's UVs reads zero on the gameplay plane; the bevel is what
+    // says which quads are the chamfer and how far round it each point sits.
+    UVGenerator: metreUVs(core, bevel),
   });
   // `ExtrudeGeometry` builds from z = -bevel to z = core + bevel; the gameplay
   // plane is the middle of the solid, not its back face.

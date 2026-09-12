@@ -588,6 +588,93 @@ function extrusionGeometry(): CaseResult[] {
     pass: Math.abs(spanV - Math.sqrt(5)) < F32,
     detail: `v spans ${spanV.toFixed(5)} m over an edge of ${Math.sqrt(5).toFixed(5)} m (projected extent is 2)`,
   });
+
+  // A CHAMFER IS THE CAP UNROLLED, and both halves of that are invisible to
+  // every check above - the solid is the authored size, contained by its
+  // outline, wound the right way and lit correctly however its rim is tiled.
+  //
+  // Three lays its bevel out as a quarter-round, and the ring nearest the cap
+  // covers most of the arc while advancing almost nothing through z: measuring
+  // the rim by depth therefore compressed that band to 37% of its own surface
+  // and the band beyond it to 90%, so the rim read as two mismatched stripes
+  // smeared round the edge of every bevelled solid in the level.
+  // The same 2 x 1 rect with a vertex half way along its top and bottom edges,
+  // because a bare rect has no vertex that is not a corner. What the rim does AT
+  // a corner is its own question - the outward direction there is the bisector,
+  // which is longer than the edge normal by 1/cos of the turn - and what is
+  // asserted here is the edge, where the two are the same thing.
+  const rim = extrudeOutline(
+    {
+      kind: "poly",
+      verts: [
+        new Vec2(-1, -0.5),
+        new Vec2(0, -0.5),
+        new Vec2(1, -0.5),
+        new Vec2(1, 0.5),
+        new Vec2(0, 0.5),
+        new Vec2(-1, 0.5),
+      ],
+    },
+    { depth: 0.4, bevel: 0.1 },
+  );
+  const bevel = 0.1;
+  const coreHalf = 0.4 / 2 - bevel;
+  // The cap ring and the cap's own vertices are the SAME points, so the seam
+  // between them is whether they carry the same uv. Zero at the join is what
+  // makes the unroll an extension of the cap rather than a second mapping
+  // beside it.
+  const capPlane = coreHalf + bevel;
+  const rp = rim.getAttribute("position");
+  const rt = rim.getAttribute("uv");
+  const capRing: { x: number; y: number; du: number; dv: number }[] = [];
+  for (let i = 0; i < rp.count; i++) {
+    if (Math.abs(Math.abs(rp.getZ(i)) - capPlane) > F32) continue;
+    capRing.push({
+      x: rp.getX(i),
+      y: rp.getY(i),
+      du: rt.getX(i) - rp.getX(i),
+      dv: rt.getY(i) - rp.getY(i),
+    });
+  }
+  const worstSeam = capRing.reduce((m, h) => Math.max(m, Math.abs(h.du), Math.abs(h.dv)), 0);
+  out.push({
+    name: "extrude: a chamfer carries the cap's texture off the face with no seam",
+    pass: capRing.length > 0 && worstSeam < F32,
+    detail: `${capRing.length} vertices on the cap plane, worst uv offset from (x, y) ${worstSeam.toExponential(2)} m`,
+  });
+
+  // ...and past the join the rim is measured by the ARC it travels rather than
+  // by the depth it crosses, which is the half that stops the stretch. Read on
+  // the middle of the top edge, away from the corners, where the outward
+  // direction is the edge's own normal: `v` there is the cap's own y at the
+  // ring, carried outward by the arc swept to reach this point.
+  const rn = rim.getAttribute("normal");
+  const band: { z: number; v: number; want: number }[] = [];
+  for (let i = 0; i < rp.count; i++) {
+    const z = rp.getZ(i);
+    // On the rim of the top strip, and clear of the corners the bisector turns.
+    // A cap's triangles face straight down z and the straight wall's straight
+    // along y, so the rim is exactly what lies between the two - which is also
+    // what takes the junction ring from the last chamfer quad rather than from
+    // the wall quad beside it, those being the two sides of the one seam.
+    if (Math.abs(z) < coreHalf - F32) continue;
+    if (rn.getY(i) < 0.1 || rn.getY(i) > 0.999) continue;
+    if (Math.abs(rp.getX(i)) > F32) continue;
+    const phi = Math.acos(Math.min(1, Math.max(0, (Math.abs(z) - coreHalf) / bevel)));
+    band.push({ z, v: rt.getY(i), want: half.y - bevel + bevel * phi });
+  }
+  const worstArc = band.reduce((m, h) => Math.max(m, Math.abs(h.v - h.want)), 0);
+  const bandSpan = band.length
+    ? Math.max(...band.map((h) => h.v)) - Math.min(...band.map((h) => h.v))
+    : 0;
+  out.push({
+    name: "extrude: a chamfer is tiled by the arc it sweeps, not by the depth it crosses",
+    pass: band.length > 0 && worstArc < F32 && Math.abs(bandSpan - (bevel * Math.PI) / 2) < F32,
+    detail:
+      `${band.length} rim vertices; worst ${worstArc.toExponential(2)} m off the unrolled arc; ` +
+      `v spans ${bandSpan.toFixed(5)} m over an arc of ${((bevel * Math.PI) / 2).toFixed(5)} m ` +
+      `(the depth it crosses is ${bevel.toFixed(5)})`,
+  });
   return out;
 }
 
