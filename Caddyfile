@@ -14,7 +14,7 @@ pool.tris.sh {
 	reverse_proxy pool:8080
 }
 
-rope.tris.sh {
+swing.tris.sh {
 	# The playtest admin page and its API sit behind a password; the game and
 	# the ingest route it posts to stay open. The hash comes from the
 	# ROPE_ADMIN_HASH environment variable (compose.yml), never from this file.
@@ -23,4 +23,10 @@ rope.tris.sh {
 		tris {$ROPE_ADMIN_HASH}
 	}
 	reverse_proxy rope:8080
+}
+
+# The game used to live here. Kept so old links - invite links with ?player=,
+# replay links with ?replay= - still land on the game, query string and all.
+rope.tris.sh {
+	redir https://swing.tris.sh{uri} permanent
 }

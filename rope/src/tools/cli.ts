@@ -2256,12 +2256,12 @@ async function cmdPlaytest(): Promise<void> {
 //
 // Credentials come from rope/.env (bun loads it): ROPE_ADMIN_USER and
 // ROPE_ADMIN_PASSWORD are the basic_auth pair Caddy checks, ROPE_ADMIN_URL the
-// origin (default https://rope.tris.sh). The verdict column is this tree's
+// origin (default https://swing.tris.sh). The verdict column is this tree's
 // replay against the run's sparse digests; a `tree mismatch` row is evidence
 // about a different tree, and the worktree command printed under it is how to
 // replay it exactly.
 async function cmdPull(o: Record<string, string>): Promise<void> {
-  const base = (o.url ?? process.env.ROPE_ADMIN_URL ?? "https://rope.tris.sh").replace(/\/$/, "");
+  const base = (o.url ?? process.env.ROPE_ADMIN_URL ?? "https://swing.tris.sh").replace(/\/$/, "");
   const user = process.env.ROPE_ADMIN_USER;
   const pass = process.env.ROPE_ADMIN_PASSWORD;
   if (!user || !pass) fail("set ROPE_ADMIN_USER and ROPE_ADMIN_PASSWORD in rope/.env");

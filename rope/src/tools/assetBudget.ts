@@ -3,7 +3,7 @@
 //
 // Binary assets are the one thing here that gets worse silently. A level renders
 // identically whether its props are 40 KB or 6 MB, every test stays green, and
-// what changes is how long rope.tris.sh takes to show its first frame and how
+// what changes is how long swing.tris.sh takes to show its first frame and how
 // much of the Git LFS bandwidth quota a month of CI spends - neither of which
 // anybody reads off a build. So the bar is asserted rather than advised, in the
 // suite, next to every other claim this project makes about itself.

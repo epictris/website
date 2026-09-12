@@ -1975,7 +1975,7 @@ The historical late-frame blank flake did not reproduce in 20 consecutive gated 
 
 ## Production playtest recording
 
-Every run played at rope.tris.sh is streamed to the store in `serve.ts` (see
+Every run played at swing.tris.sh is streamed to the store in `serve.ts` (see
 `plans/playtest-recording.md`): the input trace, one world digest a second, the
 tree stamp, and who played it. `src/playtest/recorder.ts` batches sixty frames at
 a time to `/api/playtest/events`; `src/server/store.ts` appends each batch to a

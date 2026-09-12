@@ -1,6 +1,6 @@
 # Production playtest recording
 
-Friends play the ball & chain game at rope.tris.sh.
+Friends play the ball & chain game at swing.tris.sh.
 Every run they play is recorded as the minimum a deterministic replay needs, streamed to the production server as it happens, attributed to the person who played it, and managed from an admin page where runs can be viewed, watched, annotated and deleted.
 Runs are also pulled back to a dev machine to be replayed, scanned and watched with the existing tooling.
 
@@ -89,7 +89,7 @@ The address comes from `X-Forwarded-For`, which Caddy sets to the connecting cli
 The rope container has no published port, so nothing reaches it except through Caddy, and the header can be trusted as-is.
 
 The **nickname** is the admin's, not the player's.
-An invite link `rope.tris.sh/?player=sam` pre-fills `nick` so the first session already reads as Sam, and the admin page lets the name be edited, so a player who arrives without a link is named once and stays named.
+An invite link `swing.tris.sh/?player=sam` pre-fills `nick` so the first session already reads as Sam, and the admin page lets the name be edited, so a player who arrives without a link is named once and stays named.
 Merging two player ids keeps the older id and records the newer as an alias, so old sessions and new sessions list under one name.
 
 Player records live in `players.json`: id, name, aliases, addresses seen with first and last sighting, session count, first and last seen.
@@ -163,7 +163,7 @@ The friends playing have a URL and nothing else, and a key in the URL is frictio
 
 ## The admin page
 
-`rope.tris.sh/admin`, served by `serve.ts` as one static HTML page with inline script that talks to `/api/playtest/admin/*`.
+`swing.tris.sh/admin`, served by `serve.ts` as one static HTML page with inline script that talks to `/api/playtest/admin/*`.
 No framework and no build step: the page is a table, a few filters and a handful of buttons, and it lives in the same image as the game.
 
 **Authentication is Caddy's**, not the app's.
@@ -176,9 +176,9 @@ Setting or rotating it, without logging on to the VM:
 1. Generate the bcrypt hash locally and store it as a GitHub Actions secret in one pipe: `read -s PW && PW="$PW" bun -e 'if (!process.env.PW) throw new Error("empty password"); console.log(await Bun.password.hash(process.env.PW, {algorithm: "bcrypt", cost: 14}))' | gh secret set ROPE_ADMIN_HASH`. Caddy verifies with Go's bcrypt, which accepts the `$2b$` hashes Bun produces, and `read -s` keeps the password out of shell history. The `PW="$PW"` prefix matters: `read` sets a shell variable without exporting it, and without the prefix Bun sees `undefined` and hashes that word, which is exactly what happened on 2026-09-07.
 2. A `Write runtime secrets` step in `deploy.yml`, before `Pull and restart`, pipes `ROPE_ADMIN_HASH='<hash>'` over the existing SSH connection into `/opt/website/.env` under `umask 077`. Stdin rather than a remote `echo`, so the `$` signs in the hash never meet a shell. Single-quoted in the file because compose parses `.env` with dotenv rules and would otherwise read `$2b` and `$14` as variables.
 3. `compose.yml` passes it to the caddy service as `ROPE_ADMIN_HASH=${ROPE_ADMIN_HASH}`; compose reads `.env` from the project directory on its own.
-4. The Caddyfile matches `@admin path /admin /admin/* /api/playtest/admin/*` and applies `basic_auth @admin { tris {$ROPE_ADMIN_HASH} }` inside the `rope.tris.sh` block, ahead of the `reverse_proxy`.
+4. The Caddyfile matches `@admin path /admin /admin/* /api/playtest/admin/*` and applies `basic_auth @admin { tris {$ROPE_ADMIN_HASH} }` inside the `swing.tris.sh` block, ahead of the `reverse_proxy`.
 5. The deploy job's condition gains `|| github.event_name == 'workflow_dispatch'`, because the paths filter sees no changed files on a manual run and would otherwise skip the deploy. `docker compose up -d` recreates caddy whenever its environment changes.
-6. Verify: `curl -sI https://rope.tris.sh/admin` returns 401 and the same with `-u tris` returns 200.
+6. Verify: `curl -sI https://swing.tris.sh/admin` returns 401 and the same with `-u tris` returns 200.
 
 A rotation is step 1 again followed by `gh workflow run deploy.yml`.
 The hash is never committed: the repository is public, and a bcrypt hash of a weak password in a public repo is crackable offline.
@@ -200,7 +200,7 @@ What it shows:
 
 What it does, per run and for a selection:
 
-- **Watch** opens `rope.tris.sh/?replay=run:<id>`.
+- **Watch** opens `swing.tris.sh/?replay=run:<id>`.
   The game page fetches `/api/playtest/admin/runs/<id>` (the browser supplies the realm's credentials), feeds the trace through the existing replay path, and plays it through the real renderer and camera at 1x.
   If the run's `srcHash` differs from the live build's, a toast says so before the first frame and the replay still plays, because a slightly different tree is usually still worth looking at, and the exact answer comes from the worktree replay on the dev machine.
 - **Download** returns the sealed `Recording` JSON, so a single interesting run can be dropped into `playtests/bundles/` by hand.
@@ -285,7 +285,7 @@ It becomes a lookup by the digest's `frame` field, so a sparse bundle compares o
 
 ## Phases
 
-1. **Tree stamp in production.** Build arg, Dockerfile, plugin fallback. Verify with a P download from rope.tris.sh after deploy.
+1. **Tree stamp in production.** Build arg, Dockerfile, plugin fallback. Verify with a P download from swing.tris.sh after deploy.
 2. **Recorder and store.** Client `src/playtest/recorder.ts`, server `src/server/playtest.ts` with the `pid` cookie and address capture, routes in `serve.ts`, bind mount in `compose.yml` and the directory in cloud-init. Behind `?record=1` until the E2E above passes, then on by default in production.
 3. **Admin page.** Caddy `basic_auth` block and the `.env` hash, `src/server/admin.ts`, the page, `?replay=run:<id>` in `main.ts`, trash and purge.
 4. **Review tooling.** Sparse-digest replay, `cli pull` over the export endpoint, `?replay=prod/…` in the dev server, `scan --all` over the pulled corpus.
