@@ -20,8 +20,10 @@ import {
   vineRestPath,
   ED_LAYERS,
   bodyBounds,
+  bearingOf,
   bodyCentroid,
   bodyFrameOf,
+  sweptReach,
   routeWorldPoints,
   bodyMembers,
   halfExtents,
@@ -1395,12 +1397,17 @@ function drawGroupMarks(
 // invisible on a still canvas: a swinging body and a plain wall are the same
 // picture, and so are a platform and the lift it is about to become.
 //
-// Two marks, one per motion (see `LevelBodyData.swingAmp` and `moveNodes`):
+// Three marks, one per motion (see `LevelBodyData.swingAmp`, `spinPeriod` and
+// `moveNodes`):
 //
 //   - a PENDULUM gets a ring at its bearing, and the arc its body sweeps drawn
 //     through the point of it that reaches furthest - which is the part a player
 //     actually meets, and the part an author is placing when they pick an
 //     amplitude;
+//   - a ROTOR gets the same ring and the same swept radius as a whole CIRCLE,
+//     with a barb on it saying which way round it turns - the one half of a
+//     rotor a still canvas cannot show, two blades turning opposite ways being
+//     the same picture;
 //   - a TRAVELLING body gets its route as a polyline with a square at every
 //     waypoint, an arrow along the first leg saying which way it sets off, and a
 //     ring at the closing leg's midpoint when it is a loop.
@@ -1429,20 +1436,22 @@ function drawMoverMarks(
     const frame = bodyFrameOf(model, id);
     const picked = selectedBodyIds.has(id);
 
-    if (lead.swingAmp !== 0 && lead.swingPeriod > 0) {
-      const bearing = lead.pivotAt
-        ? frame.pos.add(lead.pivotAt.rotated(frame.rot))
-        : bodyCentroid(members);
+    if ((lead.swingAmp !== 0 && lead.swingPeriod > 0) || lead.spinPeriod !== 0) {
+      const bearing = bearingOf(model, lead);
       // The arc is drawn at the radius of whatever reaches furthest from the
-      // bearing, which is the swept edge rather than a circle round the middle,
+      // bearing, which is the swept EDGE rather than a circle round the middle,
       // and centred on where the body actually HANGS - the direction from the
       // bearing to its centre of mass. Straight down is only that direction for
       // a body drawn hanging, and a level may perfectly well author one at an
       // angle.
-      let reach = 0;
-      for (const m of members) {
-        if (m.object === "collision") reach = Math.max(reach, m.pos.sub(bearing).length());
-      }
+      //
+      // `sweptReach` is the panel's own measure, so the circle drawn here and
+      // the `cm/frame` the inspector judges it by are the same geometry. Taken
+      // off the shapes' CENTRES instead - which is what this did first - a cross
+      // drawn round its own axle has every piece centred on the bearing and gets
+      // a circle of no radius at all, and an arm-and-plank pendulum's arc is
+      // drawn a third short of the edge that actually sweeps it.
+      const reach = sweptReach(model, lead, bearing);
       const hang = bodyCentroid(members).sub(bearing);
       ctx.strokeStyle = MOVER_MARK;
       ctx.lineWidth = worldLine * 1.5;
@@ -1454,7 +1463,7 @@ function drawMoverMarks(
       ctx.arc(bearing.x, bearing.y, ar / 3, 0, Math.PI * 2);
       ctx.fillStyle = MOVER_MARK;
       ctx.fill();
-      if (reach > 0) {
+      if (reach > 0 && lead.swingAmp !== 0 && lead.swingPeriod > 0) {
         const rest = hang.length() > 1e-9 ? Math.atan2(hang.y, hang.x) : Math.PI / 2;
         ctx.setLineDash([4 * PX, 4 * PX]);
         ctx.lineWidth = worldLine;
@@ -1462,6 +1471,35 @@ function drawMoverMarks(
         ctx.arc(bearing.x, bearing.y, reach, rest - lead.swingAmp, rest + lead.swingAmp);
         ctx.stroke();
         ctx.setLineDash([]);
+      }
+      // A ROTOR sweeps the WHOLE circle rather than an arc of it, so its mark is
+      // the closed one - drawn at the same swept radius, with a barb at the top
+      // of it pointing the way round the period's sign says the body turns. The
+      // direction is the half of a rotor that cannot be read off a still canvas
+      // at all: two blades turning opposite ways are the same picture.
+      if (reach > 0 && lead.spinPeriod !== 0) {
+        ctx.setLineDash([4 * PX, 4 * PX]);
+        ctx.lineWidth = worldLine;
+        ctx.beginPath();
+        ctx.arc(bearing.x, bearing.y, reach, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // The barb sits on the circle straight above the bearing and lies along
+        // it: the tangent there is horizontal, so which way it points is the
+        // whole of what it says. Sized in the same screen-constant `worldLine`
+        // every handle uses, so it reads as an arrowhead at any zoom.
+        // sign. Screen y runs DOWN, so at the top of the circle a positive
+        // rotation carries the surface to the RIGHT, which is the direction the
+        // tip points.
+        const dir = lead.spinPeriod > 0 ? 1 : -1;
+        const tx = bearing.x + dir * 8 * worldLine;
+        const ty = bearing.y - reach;
+        ctx.lineWidth = worldLine * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(tx - dir * 6 * worldLine, ty - 4 * worldLine);
+        ctx.lineTo(tx, ty);
+        ctx.lineTo(tx - dir * 6 * worldLine, ty + 4 * worldLine);
+        ctx.stroke();
       }
     }
 

@@ -501,6 +501,131 @@ const SWING_DATA: RawLevelData = {
 
 export const TEST_SWING: LevelSpec = { data: SWING_DATA };
 
+// Kinematic ROTORS (see `LevelBodyData.spinPeriod`): the same chasm crossed on
+// bodies that go round instead of back and forth, plus the sail that shows what
+// an authored bearing does to one.
+//
+// Three bodies, and each is there for a different half of the mechanic.
+//
+// The two CROSSES are the crossing. Each is four 1.2 m arms on an 11 s turn,
+// bolted through its own centre - no `pivotX`/`pivotY` at all, which is the
+// common case for a rotor and the reason the bearing defaults to the centre of
+// mass: a wheel is drawn round its own axle. They turn OPPOSITE WAYS (the second
+// authors a negative period), which is the whole of what the sign is for, and
+// the second is an eighth of a cycle behind - an eighth because a four-armed
+// cross maps onto itself every quarter turn, so a quarter of a cycle is a phase
+// that cannot be seen.
+//
+// The SAIL is the other half: one 2.4 m plank bolted at its END (`pivotX`/
+// `pivotY` of 0, the body's own origin, exactly as the pendulums above do it),
+// so it sweeps a 2.4 m circle rather than a 1.2 m one and has to turn at half
+// the rate to stay inside the same bar. It is what a rotor looks like when the
+// bearing is not the middle, and it is deliberately the slowest thing here.
+//
+// WHY THEY ARE SLOW, which is the first thing to want to change: a rotor never
+// slows down, so unlike a pendulum - which is at its fastest only as it passes
+// the bottom - its far corner crosses `2π/|period| · radius` every single frame,
+// and that has to stay under about 2 cm (see `MoverScript`). An arm reaching
+// 1.2 m on an 11 s turn is 0.69 m/s, 1.1 cm a frame; the sail reaching 2.4 m
+// needs 22 s for the same figure. Halving a period doubles the number, and
+// `cli movers` `levels` is what says so when it has been spent.
+//
+// Nothing in the level can disturb any of them, which is what makes a turning
+// platform a thing to time a jump against rather than a thing to push: a player
+// landing on an arm, hanging off it or dropping a boulder on it changes the beat
+// by nothing, and steps off carrying the `v + w x r` the arm was handing them.
+const SPIN_DATA: RawLevelData = {
+  // On the lip the crossing leaves from, with both crosses in frame - the beat
+  // has to be readable before it has to be timed.
+  player: { x: -100, y: 20, radius: 8 },
+  bodies: [
+    // The left approach, ending at x = 0 - the lip the crossing leaves from.
+    {
+      kind: "static",
+      x: -500,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The far ledge, starting at x = 5 where the second cross's circle ends.
+    {
+      kind: "static",
+      x: 1000,
+      y: 100,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 1000, h: 40 } }],
+    },
+    // The pit floor, far enough down that a miss is a fall rather than a stumble.
+    {
+      kind: "static",
+      x: 250,
+      y: 800,
+      rot: 0,
+      objects: [{ type: "collision", shape: { kind: "rect", w: 800, h: 40 } }],
+    },
+    // The first cross, turning clockwise on screen. No bearing authored, so it
+    // turns about the centre of mass its own two arms put at its origin, which
+    // is the common case for a rotor: a wheel is drawn round its own axle.
+    //
+    // The two circles are TANGENT rather than overlapping - centres 2.4 m apart,
+    // 1.2 m of reach each - so the blades never scythe through one another. Two
+    // statics would pass through each other in silence, this being a pair of
+    // driven bodies rather than a pair the solver owns, so the clearance is the
+    // author's to keep and there is nothing that would complain if it were not.
+    {
+      kind: "static",
+      x: 130,
+      y: 40,
+      rot: 0,
+      color: "#7a5a3a",
+      spinPeriod: 11,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 240, h: 18 } },
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 18, h: 240 } },
+      ],
+    },
+    // ...and the second, turning the OTHER WAY an eighth of a cycle behind it.
+    //
+    // An EIGHTH rather than the quarter a pair of pendulums would take, and that
+    // is a fact about the shape rather than about the field: a four-armed cross
+    // maps onto itself every quarter turn, so a quarter of a cycle is a phase
+    // offset that cannot be seen. The phase offsets the MOTION, and how much of
+    // one is visible is the body's own symmetry.
+    {
+      kind: "static",
+      x: 370,
+      y: 40,
+      rot: 0,
+      color: "#7a5a3a",
+      spinPeriod: -11,
+      spinPhase: 0.125,
+      objects: [
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 240, h: 18 } },
+        { type: "collision", x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 18, h: 240 } },
+      ],
+    },
+    // The sail: bolted at its end rather than through its middle, so the whole
+    // 2.4 m of it is the swept radius and the turn has to be half the rate. Hung
+    // over the gap between the two crosses, high enough that its circle clears
+    // the tops of theirs.
+    {
+      kind: "static",
+      x: 250,
+      y: -420,
+      rot: 0,
+      color: "#5a6a7a",
+      pivotX: 0,
+      pivotY: 0,
+      spinPeriod: 22,
+      objects: [
+        { type: "collision", x: 120, y: 0, rot: 0, shape: { kind: "rect", w: 240, h: 20 } },
+      ],
+    },
+  ],
+};
+
+export const TEST_SPIN: LevelSpec = { data: SPIN_DATA };
+
 // Bodies that travel a route (see `LevelBodyData.moveNodes`): the shapes a route
 // comes in, side by side, so what each authored field does is a thing you can
 // stand on.

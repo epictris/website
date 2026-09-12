@@ -3047,10 +3047,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   }
 
   // SCRIPTED MOTION, static bodies only: the pendulum on a bearing
-  // (`LevelBodyData.swingAmp`) and the body that travels a route (`moveNodes`).
-  // Both on one panel because they are the same kind of thing - a static the
-  // LEVEL drives rather than one the solver owns - and because they compose on
-  // one body, which is a pendulum hung from a travelling cart.
+  // (`LevelBodyData.swingAmp`), the rotor on the same bearing (`spinPeriod`) and
+  // the body that travels a route (`moveNodes`). All on one panel because they
+  // are the same kind of thing - a static the LEVEL drives rather than one the
+  // solver owns - and because they compose on one body, which is a windmill
+  // bolted to a travelling cart.
   //
   // A static rather than a rigid, and the panel says which by simply not being
   // offered elsewhere: a `rigid` body wanting to turn about a bearing has
@@ -3067,9 +3068,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const bodyIds = new Set(leads.map((b) => b.bodyId));
     const one = bodyIds.size === 1 ? leads[0]! : null;
     const swinging = (b: EdItem): boolean => b.swingAmp !== 0 && b.swingPeriod > 0;
+    const spinning = (b: EdItem): boolean => b.spinPeriod !== 0;
     const travelling = (b: EdItem): boolean => b.route.length > 1 && b.moveSpeed > 0;
     const anySwing = leads.some(swinging);
+    const anySpin = leads.some(spinning);
+    const anyTurn = anySwing || anySpin;
     const anyRoute = leads.some((b) => b.route.length > 1);
+
+    // Three fields below appear and disappear with whether the body turns at all
+    // - the two phases and the bearing they share - so a value typed into any of
+    // the motions has to rebuild the panel rather than only revalue it.
+    const rebuildIfTurnChanged = (): void => {
+      if (leads.some(swinging) !== anySwing || leads.some(spinning) !== anySpin) {
+        rebuildInspector();
+      }
+    };
 
     // Degrees, like every other angle the inspector shows - the model and the
     // file hold radians (see `LevelBodyData.swingAmp`).
@@ -3083,10 +3096,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (v) => {
         for (const b of leads) b.swingAmp = (Math.min(180, Math.max(-180, v)) * Math.PI) / 180;
         syncEditedBodies(leads);
-        // The bearing fields and the speed readout below both turn on whether
-        // this is a pendulum at all, so a value typed in has to rebuild the
-        // panel rather than only revalue it.
-        if (leads.some(swinging) !== anySwing) rebuildInspector();
+        rebuildIfTurnChanged();
       },
       1,
       leads.length > 1,
@@ -3099,7 +3109,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (v) => {
         for (const b of leads) b.swingPeriod = Math.max(0, v);
         syncEditedBodies(leads);
-        if (leads.some(swinging) !== anySwing) rebuildInspector();
+        rebuildIfTurnChanged();
       },
       0.5,
       leads.length > 1,
@@ -3120,8 +3130,42 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         0.125,
         leads.length > 1,
       );
-      addBearingFields(g, leads);
     }
+
+    // The ROTOR: the seconds of one full turn, SIGNED, which is the whole of its
+    // authored motion (see `LevelBodyData.spinPeriod`). Not clamped positive the
+    // way the swing's beat is, because here the sign is the direction and
+    // throwing it away would be a blade that will only turn one way.
+    numField(
+      g,
+      "spin s",
+      () => shared(leads, (b) => b.spinPeriod),
+      (v) => {
+        for (const b of leads) b.spinPeriod = v;
+        syncEditedBodies(leads);
+        rebuildIfTurnChanged();
+      },
+      0.5,
+      leads.length > 1,
+      { placeholder: "still" },
+    );
+    if (anySpin) {
+      numField(
+        g,
+        "spin phase",
+        () => shared(leads, (b) => b.spinPhase),
+        (v) => {
+          for (const b of leads) b.spinPhase = v;
+          syncEditedBodies(leads);
+        },
+        0.125,
+        leads.length > 1,
+      );
+    }
+    // ONE bearing for both, because it is one point: a body that swings and one
+    // that spins turn about the same authored hinge (see `LevelBodyData.pivotX`),
+    // and offering the fields twice would be two names for it.
+    if (anyTurn) addBearingFields(g, leads);
 
     // The route. A speed rather than a duration (see `LevelBodyData.moveSpeed`),
     // in the file's px/s like every other length, so re-drawing a route makes
@@ -3307,7 +3351,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // and the failure is a player shoved through geometry in one corner of one
     // level. Derived from the authored fields rather than measured, so it is
     // live while the fields are being typed into.
-    if (anySwing || leads.some(travelling)) {
+    if (anyTurn || leads.some(travelling)) {
       const speed = (): string => {
         if (!one) return "mixed";
         const cm = peakSurfaceSpeed(model, one) * 100;
@@ -3331,9 +3375,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
 
     const hint = el("div", "ed-hint");
-    hint.textContent = anySwing || anyRoute
+    hint.textContent = anyTurn || anyRoute
       ? "Driven by the level rather than by the solver: nothing in the scene can disturb it, and it carries whatever rides it. A route is drawn on the canvas - drag a node to move it, the small handles between them to add one, Alt+click to remove one, a round grip to bow a leg; the body itself is node zero. Click a node to key its angle or its speed there (Shift picks out several); Delete removes the picked nodes, the arrows nudge them and Esc drops them. Keep the surface speed under 2 cm/frame."
-      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb either, which is what lets a jump be timed against it.";
+      : "A static that MOVES. A swing angle and a beat make it a pendulum about its bearing; a spin time makes it a rotor that turns about the same bearing for ever, negative the other way round; a route drawn on the canvas makes it a platform, travelled there and back, round and round, or run and repeated. Nothing in the level can disturb any of them, which is what lets a jump be timed against it.";
     g.appendChild(hint);
   }
 
@@ -6295,6 +6339,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       swingAmp: 0,
       swingPeriod: 0,
       swingPhase: 0,
+      spinPeriod: 0,
+      spinPhase: 0,
       route: [],
       moveMode: "backAndForth" as const,
       moveSpeed: 0,

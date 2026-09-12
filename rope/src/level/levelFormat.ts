@@ -1004,6 +1004,53 @@ export interface LevelBodyData {
   swingAmp?: number;
   swingPeriod?: number;
   swingPhase?: number;
+  // Static bodies only: a KINEMATIC ROTOR. The body turns about its bearing
+  // (`pivotX`/`pivotY`) at a constant rate and goes ROUND rather than back and
+  // forth - a windmill, a saw blade, a turning gear, a rotating platform the
+  // player rides a quarter turn and steps off.
+  //
+  //   rot(t) = rot + 2π · (t / spinPeriod + spinPhase)
+  //
+  // It is the pendulum's sibling and is driven on exactly the same terms:
+  // nothing in the level can disturb it, it carries whatever rides it, and its
+  // pose is a pure function of the frame. What it is NOT is a `pivot` rigid
+  // spun up to speed - that one is a real bearing, so a player landing on it
+  // slows it, a chain hauls it round and friction is a torque on it. This one
+  // keeps its beat whatever happens to it, which is what a rhythm an author is
+  // timing a jump against has to be. It is also what the hand-written
+  // `addWindmill` builder always did, offered to a FILE - which is the only way
+  // the ball arena can have one, its driver taking no `init` hook.
+  //
+  // `spinPeriod` is the seconds of one full TURN, and its sign is the direction:
+  // 4 turns clockwise on screen every four seconds, -4 the same turn
+  // anticlockwise. One field rather than a rate and a direction because a
+  // rotor's whole authored motion is one number, and the seconds-per-turn half
+  // of the pair is the one that reads next to `swingPeriod` - both are "how long
+  // does a cycle take". 0 or absent = a plain static body, which is every static
+  // authored before the field.
+  //
+  // `spinPhase` is where in the turn the body starts, in CYCLES like every other
+  // phase here: a pair of blades authored at 0 and 0.5 are the half turn apart
+  // an author means, and 0.25 is a quarter turn on from the pose the file drew.
+  //
+  // Neither is a length - a time and an angle in cycles - so both cross
+  // `scaleLevelData` untouched, the split the pendulum's trio already makes.
+  //
+  // The angle is deliberately NOT wrapped into a turn. A rotor's rotation is a
+  // running total, which is what makes the frame's delta the same small number
+  // on the lap boundary as anywhere else - for the contact velocities derived
+  // from it and for the renderer interpolating across the frame, which would
+  // otherwise draw one frame in twenty spinning a whole turn backwards.
+  //
+  // What BOUNDS it is the contact speed, and harder than it bounds a pendulum:
+  // a rotor never slows down, so its fastest point is `2π/|spinPeriod|` times
+  // the distance from the bearing to its farthest corner at EVERY instant, and
+  // a surface has to cross well under about 2 cm a frame (see `MoverScript`).
+  // A 1 m blade is already at the bar on a 5 s turn. The editor's mover panel
+  // reads the figure out live and `cli movers` `levels` measures it on every
+  // mover the registry ships.
+  spinPeriod?: number;
+  spinPhase?: number;
   // Static bodies only: a body that TRAVELS AN AUTHORED ROUTE - a lift, a
   // shuttling platform, a trolley going round and round a loop, a minecart
   // nosing down a track. The same kind of mover the pendulum is and driven the
@@ -1124,6 +1171,20 @@ export function swings(b: LevelBodyData): boolean {
   return b.kind === "static" && (b.swingAmp ?? 0) !== 0 && (b.swingPeriod ?? 0) > 0;
 }
 
+// ...and does it SPIN (see `LevelBodyData.spinPeriod`)? The pendulum's sibling
+// and the same predicate for the same reasons: static only, because a rotor is
+// driven rather than simulated and a rigid body wanting a real bearing has
+// `pivot`; and asked in one place, because a body that spins is built as a
+// different engine class.
+//
+// One field decides it and its SIGN is the direction, so the test is a period
+// that is there and is not zero rather than a positive one - a body authored at
+// -4 s turns anticlockwise, and reading it as "no rotor" would be a level that
+// plays as a wall.
+export function spins(b: LevelBodyData): boolean {
+  return b.kind === "static" && (b.spinPeriod ?? 0) !== 0;
+}
+
 // ...and does it travel a route (see `LevelBodyData.moveNodes`)? A leg and a
 // speed are both needed for there to be a journey: a route with no speed is a
 // body standing at its first node, and a speed with no route is a body with
@@ -1155,20 +1216,21 @@ export function moveNodesOf(b: LevelBodyData): MoveNodeData[] {
   return [{ x: 0, y: 0 }, ...b.movePath.map((p) => ({ x: p.x, y: p.y }))];
 }
 
-// Is this body a scripted mover at all - either of the two ways a level can
-// author one? The predicate the BUILD branches on, since both kinds are the same
+// Is this body a scripted mover at all - any of the three ways a level can
+// author one? The predicate the BUILD branches on, since all three are the same
 // engine class and compose on one body.
 export function isMover(b: LevelBodyData): boolean {
-  return swings(b) || moves(b);
+  return swings(b) || spins(b) || moves(b);
 }
 
-// Does this body turn about a bearing at all - `pivotX`/`pivotY`? The two
-// mountings that have one are the rigid `pivot` and the swinging static, and
-// they share the one pair of fields because it is the one point (see
-// `LevelBodyData.pivotX`). Asked here so the loader, the save and the editor's
-// canvas cannot each decide for themselves which bodies have a bearing to read.
+// Does this body turn about a bearing at all - `pivotX`/`pivotY`? The mountings
+// that have one are the rigid `pivot` and the two statics that turn - the
+// pendulum and the rotor - and they share the one pair of fields because it is
+// the one point (see `LevelBodyData.pivotX`). Asked here so the loader, the save
+// and the editor's canvas cannot each decide for themselves which bodies have a
+// bearing to read.
 export function hasBearing(b: LevelBodyData): boolean {
-  return (b.kind === "rigid" && b.pivot === true) || swings(b);
+  return (b.kind === "rigid" && b.pivot === true) || swings(b) || spins(b);
 }
 
 // A chain strung between two bodies: the same wrap-point rope the grapple and
@@ -2748,6 +2810,10 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(b.swingAmp !== undefined ? { swingAmp: b.swingAmp } : {}),
       ...(b.swingPeriod !== undefined ? { swingPeriod: b.swingPeriod } : {}),
       ...(b.swingPhase !== undefined ? { swingPhase: b.swingPhase } : {}),
+      // ...and the rotor's pair (see `LevelBodyData.spinPeriod`), a time and an
+      // angle in cycles, which is the same rule once more.
+      ...(b.spinPeriod !== undefined ? { spinPeriod: b.spinPeriod } : {}),
+      ...(b.spinPhase !== undefined ? { spinPhase: b.spinPhase } : {}),
       // The route is a list of POINTS with tangent handles, so every one of
       // those is a length, and so is a node's speed key and the body's own
       // speed - a length per second. What is not is the phase (cycles), the

@@ -471,6 +471,13 @@ export interface EdItem {
   swingAmp: number;
   swingPeriod: number;
   swingPhase: number;
+  // Static bodies only: the kinematic rotor (see `LevelBodyData.spinPeriod`).
+  // Seconds of one full turn, SIGNED - the sign is which way round - and a phase
+  // in cycles. A period of 0 is a body that does not spin, which is the same
+  // "absent" the pendulum's zero spells, and the bearing is `pivotAt` again
+  // because it is the same point once more.
+  spinPeriod: number;
+  spinPhase: number;
   // Static bodies only: the route the body travels (see
   // `LevelBodyData.moveNodes`), as the whole node list - NODE ZERO IS THE BODY,
   // pinned at the frame origin, which is what makes the route ride the body
@@ -1124,6 +1131,8 @@ function fromLevelData(data: LevelData): EdModel {
       swingAmp: b.swingAmp ?? 0,
       swingPeriod: b.swingPeriod ?? 0,
       swingPhase: b.swingPhase ?? 0,
+      spinPeriod: b.spinPeriod ?? 0,
+      spinPhase: b.spinPhase ?? 0,
       route: routeIn,
       moveMode: moveModeOf(b),
       moveSpeed: b.moveSpeed ?? 0,
@@ -1267,6 +1276,8 @@ function fromLevelData(data: LevelData): EdModel {
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
+    spinPeriod: 0,
+    spinPhase: 0,
     route: [],
     moveMode: "backAndForth",
     moveSpeed: 0,
@@ -1355,6 +1366,8 @@ function fromLevelData(data: LevelData): EdModel {
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
+    spinPeriod: 0,
+    spinPhase: 0,
     route: [],
     moveMode: "backAndForth",
     moveSpeed: 0,
@@ -1438,6 +1451,8 @@ function lightItem(
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
+    spinPeriod: 0,
+    spinPhase: 0,
     route: [],
     moveMode: "backAndForth",
     moveSpeed: 0,
@@ -1499,6 +1514,8 @@ function lightItem(
     swingAmp: 0,
     swingPeriod: 0,
     swingPhase: 0,
+    spinPeriod: 0,
+    spinPhase: 0,
     route: [],
     moveMode: "backAndForth",
     moveSpeed: 0,
@@ -1756,6 +1773,10 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // turn on it - the trio itself, and the bearing it shares with the pivot.
     const swingsHere =
       lead.kind === "static" && lead.swingAmp !== 0 && lead.swingPeriod > 0;
+    // ...and whether it spins, which is the same question for the rotor's pair
+    // and for the bearing they share (see `LevelBodyData.spinPeriod`). A SIGNED
+    // period, so the test is "not zero" rather than "positive".
+    const spinsHere = lead.kind === "static" && lead.spinPeriod !== 0;
     // ...and whether it travels, the same question for the route's own fields.
     const movesHere = lead.kind === "static" && lead.route.length > 1 && lead.moveSpeed > 0;
     const cos = Math.cos(-origin.rot);
@@ -1934,6 +1955,15 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                   ...(lead.swingPhase ? { swingPhase: lead.swingPhase } : {}),
                 }
               : {}),
+            // The kinematic rotor, on the same terms as the pendulum above: one
+            // period, written only where the body actually turns, with the
+            // phase riding only when it is not the zero saying nothing means.
+            ...(spinsHere
+              ? {
+                  spinPeriod: lead.spinPeriod,
+                  ...(lead.spinPhase ? { spinPhase: lead.spinPhase } : {}),
+                }
+              : {}),
             // The route, on a static body and only where it is actually
             // travelled (see `LevelBodyData.moveNodes`). Its nodes are already in
             // the frame this body is being written in, exactly as the bearing's
@@ -1961,11 +1991,11 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
                   ...(lead.moveAlign ? { moveAlign: true } : {}),
                 }
               : {}),
-            // The BEARING, written for whichever of the two mountings has one.
-            // Its authored point is already in the frame this body is being
-            // written in (`pivotAt` is frame-local, and `origin` above IS
-            // `bodyFrameOf`), so it goes out as it stands.
-            ...((lead.kind === "rigid" && lead.pivot) || swingsHere
+            // The BEARING, written for whichever mounting has one. Its authored
+            // point is already in the frame this body is being written in
+            // (`pivotAt` is frame-local, and `origin` above IS `bodyFrameOf`),
+            // so it goes out as it stands.
+            ...((lead.kind === "rigid" && lead.pivot) || swingsHere || spinsHere
               ? lead.pivotAt
                 ? { pivotX: lead.pivotAt.x, pivotY: lead.pivotAt.y }
                 : {}
@@ -2859,6 +2889,8 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.swingAmp = lead.swingAmp;
     m.swingPeriod = lead.swingPeriod;
     m.swingPhase = lead.swingPhase;
+    m.spinPeriod = lead.spinPeriod;
+    m.spinPhase = lead.spinPhase;
     m.route = lead.route;
     m.moveMode = lead.moveMode;
     m.moveSpeed = lead.moveSpeed;
@@ -2919,23 +2951,24 @@ export function routeNodeArcLengths(model: EdModel, item: EdItem): number[] {
 //
 // Derived rather than measured, so the panel can show it live while the fields
 // are being typed into: a pendulum's fastest point is `amp · 2π/period` times the
-// distance from its bearing to its farthest corner, and a route's is its average
-// speed times what the ease peaks at. A body carrying both is charged for the
-// sum, which is the bound rather than the exact answer - the two peaks need not
-// fall on the same frame - and a bound is the right side to be wrong on here.
+// distance from its bearing to its farthest corner, a rotor's is `2π/|period|`
+// times the same reach at EVERY instant (a rotor never slows down, which is what
+// makes it the harder of the two to author under the bar), and a route's is its
+// average speed times what the ease peaks at. A body carrying several is charged
+// for the sum, which is the bound rather than the exact answer - the peaks need
+// not fall on the same frame - and a bound is the right side to be wrong on here.
 export function peakSurfaceSpeed(model: EdModel, item: EdItem): number {
   let peak = 0;
-  if (item.swingAmp !== 0 && item.swingPeriod > 0) {
-    const frame = bodyFrameOf(model, item.bodyId);
-    const bearing = item.pivotAt
-      ? frame.pos.add(item.pivotAt.rotated(frame.rot))
-      : bodyCentroid(bodyMembers(model.items, item.bodyId));
-    let reach = 0;
-    for (const m of bodyMembers(model.items, item.bodyId)) {
-      if (m.object !== "collision") continue;
-      for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(bearing).length());
+  if ((item.swingAmp !== 0 && item.swingPeriod > 0) || item.spinPeriod !== 0) {
+    // The bearing and the reach are the two motions' shared geometry - they turn
+    // the same body about the same point - so they are measured once.
+    const reach = sweptReach(model, item, bearingOf(model, item));
+    if (item.swingAmp !== 0 && item.swingPeriod > 0) {
+      peak += Math.abs(item.swingAmp) * ((2 * Math.PI) / item.swingPeriod) * reach;
     }
-    peak += Math.abs(item.swingAmp) * ((2 * Math.PI) / item.swingPeriod) * reach;
+    if (item.spinPeriod !== 0) {
+      peak += ((2 * Math.PI) / Math.abs(item.spinPeriod)) * reach;
+    }
   }
   if (item.route.length > 1 && item.moveSpeed > 0) {
     // The route's peak is its FASTEST stretch times what the ease peaks at,
@@ -2982,13 +3015,36 @@ function peakRouteTurnRate(model: EdModel, item: EdItem): number {
 // How far the body's farthest corner sits from the point it turns about, which
 // for a travelling body is its own frame origin.
 function bodyReach(model: EdModel, item: EdItem): number {
-  const frame = bodyFrameOf(model, item.bodyId);
+  return sweptReach(model, item, bodyFrameOf(model, item.bodyId).pos);
+}
+
+// ...and the general form: the radius a body's surface sweeps about `about`, in
+// world metres. The one answer to "how big is the circle this body turns in",
+// shared by the panel's contact-speed readout and by the canvas mark that draws
+// that circle - drawn off a second opinion, the picture and the number it is
+// judged against would be about different geometry.
+//
+// CORNERS rather than the shapes' own centres, which is the difference between
+// the radius the surface sweeps and a radius nothing is at. A rotor is the case
+// that makes it structural rather than a nicety: a cross drawn round its own
+// axle has every piece centred ON the bearing, so a reach taken off the centres
+// is zero and the mark is a circle of no radius at all.
+export function sweptReach(model: EdModel, item: EdItem, about: Vec2): number {
   let reach = 0;
   for (const m of bodyMembers(model.items, item.bodyId)) {
     if (m.object !== "collision") continue;
-    for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(frame.pos).length());
+    for (const c of shapeCorners(m)) reach = Math.max(reach, c.sub(about).length());
   }
   return reach;
+}
+
+// Where a body turns: its authored bearing carried into world metres, or the
+// centre of mass an absent one means (see `LevelBodyData.pivotX`). Asked in one
+// place so the panel, the canvas mark and the build cannot each decide.
+export function bearingOf(model: EdModel, item: EdItem): Vec2 {
+  if (!item.pivotAt) return bodyCentroid(bodyMembers(model.items, item.bodyId));
+  const frame = bodyFrameOf(model, item.bodyId);
+  return frame.pos.add(item.pivotAt.rotated(frame.rot));
 }
 
 // Every point of a shape a rider can meet, in world metres: the corners of a
@@ -3344,6 +3400,8 @@ export function emptyModel(): EdModel {
         swingAmp: 0,
         swingPeriod: 0,
         swingPhase: 0,
+        spinPeriod: 0,
+        spinPhase: 0,
         route: [],
         moveMode: "backAndForth",
         moveAlign: false,

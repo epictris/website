@@ -7,6 +7,7 @@ import { addSlidingPlatform, addWindmill } from "./movers";
 import {
   TEST_BRANCH,
   TEST_LIFT,
+  TEST_SPIN,
   TEST_SWING,
   TEST_MOVERS,
   TEST_SPRING,
@@ -57,6 +58,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   TEST_BRANCH,
   // Two kinematic pendulums to time a crossing against (see `TEST_SWING`).
   TEST_SWING,
+  // Two counter-turning rotors and a sail on an authored bearing (see
+  // `TEST_SPIN`).
+  TEST_SPIN,
   // A lift, a trolley on a loop and an eased shuttle (see `TEST_LIFT`).
   TEST_LIFT,
   // Hanging vines over a chasm, to swing across and to see drape and pool

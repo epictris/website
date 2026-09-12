@@ -37,6 +37,7 @@ import {
   moveModeOf,
   moveNodesOf,
   moves,
+  spins,
   swings,
   isCollisionObject,
   DEFAULT_BODY_COLOR,
@@ -250,8 +251,8 @@ export interface BuiltBodies {
   // bodies rather than into a flat entry list, so a chain names a body and
   // there is nothing left to collapse.
   bodies: BuiltBody[];
-  // The scripted movers the FILE authored: one per swinging body (see
-  // `LevelBodyData.swingAmp`), with its script already closed over the pose it
+  // The scripted movers the FILE authored: one per body that swings, spins or
+  // travels (see `isMover`), with its script already closed over the pose it
   // was built at. Handed back rather than registered, because the mover list is
   // the level driver's - `Level` and `BallLevel` each own the loop that steps it
   // - and the builder has no level to add one to.
@@ -583,13 +584,15 @@ export function settledPivotAngle(rb: RigidBody2D): number {
 }
 
 // The authored motion of a mover, as the one script that drives it: the route it
-// travels and the swing it hangs at, summed (see `moverScript`). Null for a body
-// that authored neither, which `isMover` has already excluded - it is asked
-// again here rather than assumed, so the two cannot drift apart.
+// travels, the swing it hangs at and the turn it spins at, summed (see
+// `moverScript`). Null for a body that authored none of them, which `isMover`
+// has already excluded - it is asked again here rather than assumed, so the two
+// cannot drift apart.
 function authoredMover(b: LevelBodyData, body: AnimatableBody2D): MoverScript | null {
   const travels = moves(b);
   const swinging = swings(b);
-  if (!travels && !swinging) return null;
+  const spinning = spins(b);
+  if (!travels && !swinging && !spinning) return null;
   return moverScript({
     base: body.globalPosition,
     restRot: body.globalRotation,
@@ -597,6 +600,7 @@ function authoredMover(b: LevelBodyData, body: AnimatableBody2D): MoverScript | 
     swing: swinging
       ? { amp: b.swingAmp ?? 0, period: b.swingPeriod ?? 0, phase: b.swingPhase ?? 0 }
       : null,
+    spin: spinning ? { period: b.spinPeriod ?? 0, phase: b.spinPhase ?? 0 } : null,
   });
 }
 
@@ -804,8 +808,9 @@ function buildOne(
   // Hook-proof is not a kind any more - it is a flag `mountPieces` puts on the
   // shapes themselves, so an ordinary static carries it (see `Piece`).
   //
-  // ...and neither is MOVING (see `LevelBodyData.swingAmp` for the pendulum and
-  // `moveNodes` for the travelling body, which may both be on one). A static that
+  // ...and neither is MOVING (see `LevelBodyData.swingAmp` for the pendulum,
+  // `spinPeriod` for the rotor and `moveNodes` for the travelling body, any of
+  // which may be on one). A static that
   // moves is an `AnimatableBody2D`: infinite mass, so nothing in the level
   // disturbs it, with the per-frame contact velocities that let the avatar ride
   // it. It is still a static in every other respect - it collides, it is
@@ -821,8 +826,9 @@ function buildOne(
   // bearing, so a rider inherits the right `v + w x r` at every point of the
   // body with nothing in the contact path knowing there is a pendulum here.
   // Absent, the bearing is the centre of mass `mountPieces` just placed the
-  // origin at, which is a body that spins on the spot.
-  if (swings(b) && (b.pivotX !== undefined || b.pivotY !== undefined)) {
+  // origin at, which is a body that turns on the spot - and is what an authored
+  // rotor usually wants, a wheel being drawn round its own axle.
+  if ((swings(b) || spins(b)) && (b.pivotX !== undefined || b.pivotY !== undefined)) {
     reoriginShapes(sb, worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 }).pos);
   }
   // ...and hook-only is not a kind any more either: a static that nothing but

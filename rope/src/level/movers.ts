@@ -1,7 +1,8 @@
 // Scripted-mover builders shared by hand-written level inits (game-design.md:
 // rects only move on authored paths - these are the authored paths), and the
-// motion of the two the FILE can author: the pendulum on a bearing
-// (`LevelBodyData.swingAmp`) and the body that travels a route (`moveNodes`).
+// motion of the three the FILE can author: the pendulum on a bearing
+// (`LevelBodyData.swingAmp`), the rotor on the same bearing (`spinPeriod`) and
+// the body that travels a route (`moveNodes`).
 //
 // The route's geometry is not here. A route and a camera path are the same
 // object - an authored Bezier curve with a direction, an arc length and
@@ -61,6 +62,25 @@ export type MoverScript = (body: AnimatableBody2D, time: number, dt: number) => 
 function swingOffsetAt(amp: number, period: number, phase: number, time: number): number {
   if (period <= 0) return 0;
   return amp * dmath.sin(2 * Math.PI * (time / period + phase));
+}
+
+// ...and how far a kinematic ROTOR has turned, `time` seconds in: a whole turn
+// every `spinPeriod` seconds, the sign of the period saying which way round (see
+// `LevelBodyData.spinPeriod`).
+//
+// An offset like the swing's and summed the same way, so a rotor mounted on a
+// travelling cart turns while the cart carries it.
+//
+// A RUNNING TOTAL rather than an angle wrapped into a turn, and that is the one
+// thing here worth being deliberate about. The lap boundary would otherwise be
+// the single frame of the motion whose transform delta is a whole turn the
+// wrong way - which is a contact velocity of tens of radians a second thrown at
+// whatever is standing on the blade, and a renderer interpolating one frame in
+// twenty backwards round the bearing. Unwrapped, every frame of a lap is the
+// same small step as every other, which is what a constant rate MEANS.
+function spinOffsetAt(period: number, phase: number, time: number): number {
+  if (period === 0) return 0;
+  return 2 * Math.PI * (time / period + phase);
 }
 
 // A route as the mover travels it: the authored nodes flattened into a polyline
@@ -351,11 +371,11 @@ function alignTurnAt(route: MoveRoute, s: number): number {
 
 // The authored motion of a mover, as the one script that drives it.
 //
-// One script rather than two composed, because the two motions meet on the same
+// One script rather than three composed, because the motions meet on the same
 // field: a route may turn the body (`moveAlign`, `MoveNodeData.rot`) and a
-// pendulum certainly does, and two scripts each WRITING `globalRotation` would
-// mean the later one silently won. The pose is the SUM of what the authored
-// motions ask for, and summing it is the only way to say that.
+// pendulum and a rotor certainly do, and three scripts each WRITING
+// `globalRotation` would mean the last one silently won. The pose is the SUM of
+// what the authored motions ask for, and summing it is the only way to say that.
 //
 // Everything is measured from the pose the body was BUILT at: the route's node
 // zero is the body's own origin and the swing's rest angle is the angle it was
@@ -372,8 +392,9 @@ export function moverScript(opts: {
     align: boolean;
   } | null;
   swing: { amp: number; period: number; phase: number } | null;
+  spin: { period: number; phase: number } | null;
 }): MoverScript {
-  const { base, restRot, route, swing } = opts;
+  const { base, restRot, route, swing, spin } = opts;
   return (body, time, dt) => {
     let pos = base;
     // The drawn angle is the base whatever the route does, alignment included:
@@ -402,6 +423,10 @@ export function moverScript(opts: {
     // put back at the start, and a pose that dropped it for that one frame would
     // be a visible flick.
     if (swing) rot += swingOffsetAt(swing.amp, swing.period, swing.phase, time);
+    // The rotor is written on the same terms and lands on the same field, which
+    // is the whole argument for one script: a blade on a swinging arm turns and
+    // swings, and two scripts would mean the later one silently won.
+    if (spin) rot += spinOffsetAt(spin.period, spin.phase, time);
     body.globalPosition = pos;
     body.globalRotation = rot;
     if (jumped) body.teleported();

@@ -820,6 +820,180 @@ function caseDeterminism(): MoverResult {
 }
 
 // ---------------------------------------------------------------------------
+// spin: a rotor turns at its authored rate, for ever, about a bearing that does
+// not move - and nothing in the level has an opinion about any of it.
+//
+// Five claims, and the middle one is the one that is about the design rather
+// than about the arithmetic:
+//
+//   - the angle is exactly `2π · (t/period + phase)`, and the bearing is
+//     asserted at `=== 0` drift for the pendulum's reason: the body is mounted
+//     ON it, so the script writes a rotation and nothing else;
+//   - the sign of the period is the DIRECTION, and a rotor authored at -P is the
+//     mirror of one at +P to the bit;
+//   - THE LAP HAS NO SEAM. The rotation is a running total rather than an angle
+//     wrapped into a turn, so the frame on which the body passes its start is
+//     the same small step as every other frame - which is what the contact
+//     velocities derived from the transform delta and the renderer interpolating
+//     across the frame both need. Measured as the worst per-frame angular
+//     velocity across several laps against the constant the rate implies;
+//   - an authored bearing is the point that holds still, so a sail bolted at its
+//     end sweeps its whole length rather than wagging about its middle;
+//   - and a lead boulder dropped on it changes the turn by nothing.
+// ---------------------------------------------------------------------------
+const SPIN_PERIOD = 8;
+
+function rotor(opts: { period?: number; phase?: number; x?: number; atEnd?: boolean } = {}): RawLevelData["bodies"][number] {
+  return {
+    kind: "static",
+    x: opts.x ?? 0,
+    y: 0,
+    rot: 0,
+    spinPeriod: opts.period ?? SPIN_PERIOD,
+    ...(opts.phase !== undefined ? { spinPhase: opts.phase } : {}),
+    // A bearing at the body's own origin makes it a sail bolted at its end; with
+    // none, the origin is the centre of mass `mountPieces` placed there, which
+    // is a bar turning about its middle.
+    ...(opts.atEnd ? { pivotX: 0, pivotY: 0 } : {}),
+    objects: [
+      {
+        type: "collision",
+        x: opts.atEnd ? 100 : 0,
+        y: 0,
+        rot: 0,
+        shape: { kind: "rect", w: 200, h: 16 },
+      },
+    ],
+  };
+}
+
+function caseSpin(): MoverResult {
+  const details: string[] = [];
+  let passed = true;
+  const check = (label: string, cond: boolean): void => {
+    details.push(`${cond ? "ok  " : "BAD "} ${label}`);
+    if (!cond) passed = false;
+  };
+
+  // Three laps and a quarter, so the seam is crossed three times.
+  const FRAMES = Math.round((SPIN_PERIOD * 3.25) / DT);
+  const scene = new Scene(swingLevel([rotor(), rotor({ period: -SPIN_PERIOD, x: 400 })]));
+  const body = scene.mover();
+  const bearing = body.globalPosition;
+  const rate = (2 * Math.PI) / SPIN_PERIOD;
+  let worstAngle = 0;
+  let worstBearing = 0;
+  let worstStep = 0;
+  let worstMirror = 0;
+  for (let f = 1; f <= FRAMES; f++) {
+    const was = body.globalRotation;
+    scene.step();
+    const want = rate * (f * DT);
+    worstAngle = Math.max(worstAngle, Math.abs(body.globalRotation - want));
+    worstBearing = Math.max(worstBearing, body.globalPosition.sub(bearing).length());
+    // The per-frame step, taken off the transform rather than off the clock:
+    // this is the number a rider and the interpolator actually see, and a
+    // wrapped angle would make one frame of every lap a whole turn of it.
+    worstStep = Math.max(worstStep, Math.abs(body.globalRotation - was - rate * DT));
+    worstMirror = Math.max(
+      worstMirror,
+      Math.abs(body.globalRotation + scene.mover(1).globalRotation),
+    );
+  }
+  check(`the rotor stands where the rate says (worst ${worstAngle.toExponential(1)} rad)`, worstAngle < 1e-9);
+  check(`...having gone round more than three times (${(body.globalRotation / (2 * Math.PI)).toFixed(2)} turns)`, body.globalRotation > 3 * 2 * Math.PI);
+  check(`its bearing does not move at all (${worstBearing} m)`, worstBearing === 0);
+  check(
+    `every frame of every lap is the same step - no seam (worst ${worstStep.toExponential(1)} rad)`,
+    worstStep < 1e-9,
+  );
+  check(
+    `a negative period is the same turn the other way, to the bit (${worstMirror} rad)`,
+    worstMirror === 0,
+  );
+  // ...and the contact velocity the rider meets is that rate at the rim, which
+  // is the half of the seam claim that leaves the body.
+  const rim = body.globalPosition.add(new Vec2(1, 0));
+  check(
+    `the rim hands out ω × r (${body.velocityAtPoint(rim).y.toFixed(4)} m/s of ${rate.toFixed(4)})`,
+    Math.abs(body.velocityAtPoint(rim).y - rate) < 1e-6,
+  );
+
+  // The PHASE, in cycles: a rotor authored at 0.25 stands a quarter turn on from
+  // the pose the file drew, and its whole motion is the unphased one a quarter
+  // of a period early. The second half is the claim that matters - a phase that
+  // was only an offset at spawn would be a rotor that drifts back into step.
+  const phased = new Scene(swingLevel([rotor({ phase: 0.25 })]));
+  const plain = new Scene(swingLevel([rotor()]));
+  check(
+    `a phase of 0.25 starts a quarter turn on (${(phased.mover().globalRotation / (2 * Math.PI)).toFixed(4)} turns)`,
+    Math.abs(phased.mover().globalRotation - Math.PI / 2) < 1e-12,
+  );
+  const LEAD = Math.round(SPIN_PERIOD / 4 / DT);
+  plain.step(LEAD);
+  let worstPhase = 0;
+  for (let f = 0; f < 600; f++) {
+    phased.step();
+    plain.step();
+    worstPhase = Math.max(
+      worstPhase,
+      Math.abs(phased.mover().globalRotation - plain.mover().globalRotation),
+    );
+  }
+  check(
+    `...and stays exactly a quarter of a period ahead for ever (${worstPhase.toExponential(1)} rad)`,
+    worstPhase < 1e-9,
+  );
+
+  // The authored bearing: a sail bolted at its END sweeps its whole length, so
+  // the far tip traces a circle of the bar's length rather than of half of it,
+  // and the near end stands still.
+  const sail = new Scene(swingLevel([rotor({ atEnd: true })]));
+  const hinge = sail.mover().globalPosition;
+  let farthest = 0;
+  let nearest = Infinity;
+  for (let f = 0; f < Math.round(SPIN_PERIOD / DT); f++) {
+    sail.step();
+    for (const p of surfacePoints(sail.mover())) {
+      farthest = Math.max(farthest, p.sub(hinge).length());
+      nearest = Math.min(nearest, p.sub(hinge).length());
+    }
+  }
+  check(
+    `a sail on an authored bearing sweeps its whole length (${farthest.toFixed(3)} m of 2.00)`,
+    Math.abs(farthest - Math.hypot(2, 0.08)) < 1e-6,
+  );
+  check(
+    `...and its hinged end stays on the hinge (${nearest.toFixed(3)} m)`,
+    Math.abs(nearest - 0.08) < 1e-6,
+  );
+
+  // Undisturbable, the rotor's own version of the claim: a rotor is not a
+  // `pivot` rigid spun up, so a weight landing on it does not slow it.
+  const boulder: RawLevelData["bodies"][number] = {
+    kind: "rigid",
+    x: 0,
+    y: -300,
+    rot: 0,
+    objects: [{ type: "collision", shape: { kind: "circle", r: 60 }, material: "lead" }],
+  };
+  const alone = new Scene(swingLevel([rotor()]));
+  const laden = new Scene(swingLevel([rotor(), boulder]));
+  let worstLaden = 0;
+  for (let f = 0; f < 600; f++) {
+    alone.step();
+    laden.step();
+    worstLaden = Math.max(
+      worstLaden,
+      Math.abs(alone.mover().globalRotation - laden.mover().globalRotation),
+    );
+  }
+  check(`a lead boulder dropped on it slows it by nothing (${worstLaden} rad)`, worstLaden === 0);
+
+  return ok("spin - a rotor keeps its own beat, round and round", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // authored: the fields are READ, scaled, and survive both round trips.
 //
 // The half nothing else can see. A build that ignored one of these produces a
@@ -848,17 +1022,21 @@ function caseAuthored(): MoverResult {
       moveEase: "easeOut",
       objects: [{ type: "collision", shape: { kind: "rect", w: 200, h: 24 } }],
     },
+    // A rotor, authored the way one usually is: a negative period, so the
+    // SIGN has to survive every gate below as well as the magnitude.
+    rotor({ period: -6, phase: 0.2, x: 1000 }),
     // The control: a plain static, which must stay one.
     slab(0, 500, 400, 40),
   ]);
   const scene = new Scene(raw);
   check("a swinging body builds as a mover", scene.bodies[0]?.body instanceof AnimatableBody2D);
   check("a travelling body builds as a mover", scene.bodies[1]?.body instanceof AnimatableBody2D);
+  check("a spinning body builds as a mover", scene.bodies[2]?.body instanceof AnimatableBody2D);
   check(
     "a plain static stays a plain static",
-    scene.bodies[2]?.body instanceof StaticBody2D && !(scene.bodies[2]?.body instanceof AnimatableBody2D),
+    scene.bodies[3]?.body instanceof StaticBody2D && !(scene.bodies[3]?.body instanceof AnimatableBody2D),
   );
-  check(`both are in the mover list and nothing else is (${scene.movers.length})`, scene.movers.length === 2);
+  check(`all three are in the mover list and nothing else is (${scene.movers.length})`, scene.movers.length === 3);
 
   // The scale: two angles, a time and a phase cross untouched; the route's
   // points and the speed are lengths and convert. Asserted as a round trip,
@@ -892,6 +1070,10 @@ function caseAuthored(): MoverResult {
     trip.movePhase === 0.3 && trip.moveEase === "easeOut",
   );
   check(
+    `the rotor's period is a TIME and its phase an angle, so neither scales (${metres.bodies[2]?.spinPeriod} s, ${metres.bodies[2]?.spinPhase})`,
+    metres.bodies[2]?.spinPeriod === -6 && metres.bodies[2]?.spinPhase === 0.2,
+  );
+  check(
     `the route's SPEED is a length per second and converts (${metres.bodies[1]?.moveSpeed?.toFixed(2)} m/s)`,
     Math.abs((metres.bodies[1]?.moveSpeed ?? 0) - 0.9) < 1e-9,
   );
@@ -902,6 +1084,7 @@ function caseAuthored(): MoverResult {
   const saved = modelToDisk(model);
   const savedSwing = saved.bodies.find((b) => b.swingAmp !== undefined);
   const savedMove = saved.bodies.find((b) => b.moveNodes !== undefined);
+  const savedSpin = saved.bodies.find((b) => b.spinPeriod !== undefined);
   check(
     `the editor keeps the pendulum (${savedSwing?.swingAmp}, ${savedSwing?.swingPeriod} s)`,
     Math.abs((savedSwing?.swingAmp ?? 0) - SWING_AMP) < 1e-9 &&
@@ -918,6 +1101,10 @@ function caseAuthored(): MoverResult {
   check(
     `...and its bearing lands on the same point (${bearingNow?.x.toFixed(3)}, ${bearingNow?.y.toFixed(3)})`,
     bearingNow !== null && bearingNow.sub(bearingWas).length() < 1e-6,
+  );
+  check(
+    `the editor keeps the rotor, sign and all (${savedSpin?.spinPeriod} s, phase ${savedSpin?.spinPhase})`,
+    Math.abs((savedSpin?.spinPeriod ?? 0) + 6) < 1e-9 && Math.abs((savedSpin?.spinPhase ?? 0) - 0.2) < 1e-9,
   );
   check(
     `the editor keeps the route (${savedMove?.moveNodes?.length} nodes at ${savedMove?.moveSpeed} px/s, ${savedMove?.moveEase})`,
@@ -1679,6 +1866,7 @@ export function runMoverCases(): MoverResult[] {
   return [
     caseSwingArc(),
     caseSwingPhase(),
+    caseSpin(),
     caseInherit(),
     caseUndisturbable(),
     caseRider(),
