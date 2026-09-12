@@ -742,54 +742,6 @@ export class BallLevel {
       // rollback stays whole, and the load crosses by the ledge hang's
       // mechanism instead (`applyHangLoad`): a bounded weight-sized impulse
       // per frame, which a spring answers with a damped, settled droop.
-      // The rollback's premise - that the winding has no force behind it - is a
-      // statement about winding the frame REFUSES: a ball wound tight against
-      // its anchor, whose turn the unwind hands back, must not leave the anchor
-      // hauled and paid for chain that never wound on (session-215f,
-      // session-265f). It is false of winding that is KEPT. Chain that stays
-      // wound was hauled in by a tension, and a tension has two ends: the haul
-      // that draws the ball up its chain draws the holder down it by the same
-      // impulse, split by the effective masses the solve already split it by.
-      //
-      // Rolling a free holder back and hauling the ball alone against it - the
-      // winch pass below, with every other body on the path held immovable -
-      // treated that holder as a body of infinite mass for exactly the frames
-      // the tension on it was largest. A 21 kg plank hung by its middle from a
-      // post, the 15 kg ball hooked to one end and winding itself up in free
-      // air, was turned toward the ball by 1.3 rad/s a frame in the solve and
-      // handed all of it back by the rollback, every frame for thirty frames,
-      // while the ball was hauled from 2 to 12 m/s round an anchor that would
-      // not answer: the plank swung on at -4 rad/s, barely touched, and the
-      // player was whipped round the end of it (`session-149f` f83-112). The
-      // physical answer is the one the solve had already written - the plank's
-      // swing stops and reverses under the ball's haul, and the ball, sharing
-      // its angular momentum with the plank, is not whipped.
-      //
-      // So a free rigid body a scene chain holds keeps its coupled share, and
-      // neither the rollback nor the winch pass touches it. What separates it
-      // from the holders the rollback still reaches is what answers the haul:
-      // a PIVOT stores it in a frictionless bearing and a SPRING mount in its
-      // spring, both of which the whirl governor and `applyHangLoad` are
-      // written for; a body held by nothing answers only through contacts the
-      // rope solve cannot see, and its share stays the unwind's to refuse; a
-      // VINE LINK is the limit case of a light holder (~0.05 kg against the
-      // ball) whose whole vine the coupled sweep has to be left to apportion
-      // (`session-1260f`, `cli vines` `ball-steer`), and it stays the winch
-      // pass's. A chain-hung body answers the haul the way the plank does -
-      // by moving - and the pair push-out (`separateBallFromPathBodies`) is
-      // what keeps the wound-tight regime honest for it: both bodies hauled
-      // into each other are pushed back by the shares they were hauled by, so
-      // the length the unwind then refuses is the whole of the winding, and
-      // neither is credited a thing. `cli contacts` `hung-anchor` holds the
-      // slingshot side of this line, `cli spring` `winch-anchor-load-hung` the
-      // load side (red on purpose until this landed), `session-149f` is the
-      // recorded artifact and `playtests/rigs/hung-plank-wind.json` the
-      // instrument.
-      const keepsHaul = (body: RigidBody2D): boolean =>
-        !body.pivot &&
-        body.spring === null &&
-        !(body instanceof VineLink) &&
-        solveChains.some((c) => c.holds(body));
       const haulAtSolve = new Map<
         RigidBody2D,
         { position: Vec2; velocity: Vec2; rotation: number; spin: number }
@@ -841,11 +793,92 @@ export class BallLevel {
       // anything else reads the positions (see `separateBallFromPathBodies`).
       const pushedOutOf: PushOut[] = this.separateBallFromPathBodies(delta);
       PhaseTrace.mark("pair-push-out", this.world);
+      // The rollback's premise - that the winding has no force behind it - is a
+      // statement about winding the frame REFUSES: a ball wound tight against
+      // its anchor, whose turn the unwind hands back, must not leave the anchor
+      // hauled and paid for chain that never wound on (session-215f,
+      // session-265f). It is false of winding that is KEPT. Chain that stays
+      // wound was hauled in by a tension, and a tension has two ends: the haul
+      // that draws the ball up its chain draws the holder down it by the same
+      // impulse, split by the effective masses the solve already split it by.
+      //
+      // Rolling a free holder back and hauling the ball alone against it - the
+      // winch pass below, with every other body on the path held immovable -
+      // treated that holder as a body of infinite mass for exactly the frames
+      // the tension on it was largest. A 21 kg plank hung by its middle from a
+      // post, the 15 kg ball hooked to one end and winding itself up in free
+      // air, was turned toward the ball by 1.3 rad/s a frame in the solve and
+      // handed all of it back by the rollback, every frame for thirty frames,
+      // while the ball was hauled from 2 to 12 m/s round an anchor that would
+      // not answer: the plank swung on at -4 rad/s, barely touched, and the
+      // player was whipped round the end of it (`session-149f` f83-112). The
+      // physical answer is the one the solve had already written - the plank's
+      // swing stops and reverses under the ball's haul, and the ball, sharing
+      // its angular momentum with the plank, is not whipped.
+      //
+      // So a free rigid body a scene chain holds keeps its coupled share, and
+      // neither the rollback nor the winch pass touches it. What separates it
+      // from the holders the rollback still reaches is what answers the haul:
+      // a PIVOT stores it in a frictionless bearing and a SPRING mount in its
+      // spring, both of which the whirl governor and `applyHangLoad` are
+      // written for; a body held by nothing answers only through contacts the
+      // rope solve cannot see, and its share stays the unwind's to refuse; a
+      // VINE LINK is the limit case of a light holder (~0.05 kg against the
+      // ball) whose whole vine the coupled sweep has to be left to apportion
+      // (`session-1260f`, `cli vines` `ball-steer`), and it stays the winch
+      // pass's. A chain-hung body answers the haul the way the plank does -
+      // by moving - and the pair push-out (`separateBallFromPathBodies`) is
+      // what keeps the wound-tight regime honest for it: both bodies hauled
+      // into each other are pushed back by the shares they were hauled by, so
+      // the length the unwind then refuses is the whole of the winding, and
+      // neither is credited a thing. `cli contacts` `hung-anchor` holds the
+      // slingshot side of this line, `cli spring` `winch-anchor-load-hung` the
+      // load side (red on purpose until this landed), `session-149f` is the
+      // recorded artifact and `playtests/rigs/hung-plank-wind.json` the
+      // instrument.
+      //
+      // And only in FREE AIR - while nothing on the chain's path is touching
+      // the ball. Riding the body it is wound up to, the ball's winding is
+      // exactly the refused kind, and the pair push-out does not keep that
+      // regime honest on its own: the solve hauled a ball wound tight onto a
+      // hung lamp 94 mm into it in one frame (the aim snapping 0.78 rad), the
+      // separation split the overlap by effective mass at the CONTACT - a
+      // corner, so the lamp's share was 43 mm and 2.5 m/s straight down against
+      // the ball's 37 - the winch pass hauled the ball straight back in, and
+      // the frame ended with the lamp knocked into the scenery beneath it and
+      // the ball credited 2.7 m/s for a haul the lamp had mostly absorbed. Every
+      // frame, for as long as the aim turned: 1 to 7.4 m/s in eight frames and
+      // the lamp 117 mm inside a static (`session-193f` f152-177). That is the
+      // kinematic spin reaching the anchor through the separation instead of
+      // through the solve, which is the whole of what the rollback is for, and
+      // the rollback restoring the lamp's pre-solve state is what undid the
+      // separation's share of it before. So a holder the ball is touching -
+      // by this frame's contact solve, or by the pair separation that has just
+      // run - is rolled back exactly as it always was, and only a holder the
+      // ball is hauling on across open air keeps the reaction.
+      const pathBodies = new Set<CollisionObject2D>();
+      for (const node of this.ball.chain.path()) pathBodies.add(node.contact.obj);
+      const ridingPath =
+        pushedOutOf.length > 0 ||
+        this.world.frameContacts.some(
+          (c) =>
+            c.normalImpulse > 0 &&
+            ((c.a === this.ball && pathBodies.has(c.b)) ||
+              (c.b === this.ball && pathBodies.has(c.a))),
+        );
+      const keepsHaul = (body: RigidBody2D): boolean =>
+        !ridingPath &&
+        !body.pivot &&
+        body.spring === null &&
+        !(body instanceof VineLink) &&
+        solveChains.some((c) => c.holds(body));
       // A FREE rigid holder that a scene chain holds is NOT rolled back: it
       // keeps the coupled solve's share of the haul, which is the reaction to
       // the tension that hauled the ball (see `keepsHaul`).
+      const rolledBack = new Set<RigidBody2D>();
       for (const [body, before] of haulAtSolve) {
         if (keepsHaul(body)) continue;
+        rolledBack.add(body);
         body.globalPosition = body.globalPosition.sub(
           body.globalPosition.sub(before.position).mul(spinShare),
         );
@@ -1352,6 +1385,10 @@ export class BallLevel {
       // a SPRING mount: their answer to a load is a bearing or a spring with a
       // governor of its own (`whirl-anchor`, `winch-load`), and an impulse
       // laid on the bearing here is the whirl's seed spin by another door.
+      // So does a body the spin rollback has just restored: the closing rate
+      // being refused there is the winch's kinematic credit, and handing the
+      // holder a share of it every frame is `session-265f`'s anchor fed the
+      // spin by another door again.
       for (const p of pushedOutOf) {
         const surface = surfaceSpeed(p);
         const into = this.ball.linearVelocity.dot(p.normal) - surface;
@@ -1361,7 +1398,13 @@ export class BallLevel {
         );
         if (into < funded) {
           const other = p.other;
-          if (other instanceof RigidBody2D && !other.asleep && !other.pivot && other.spring === null) {
+          if (
+            other instanceof RigidBody2D &&
+            !other.asleep &&
+            !other.pivot &&
+            other.spring === null &&
+            !rolledBack.has(other)
+          ) {
             const arm = p.point.sub(other.globalPosition).cross(p.normal);
             const effectiveInverseMass =
               this.ball.inverseMass + other.inverseMass + arm * arm * other.inverseInertia;
