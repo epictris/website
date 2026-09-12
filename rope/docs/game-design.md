@@ -342,7 +342,7 @@ is blocked only by statics, so a vine never stacks, never pushes and never fight
 its own constraints through the contact solver. What it costs instead is the
 LINKS: a vine is `length / spacing` bodies and that many constraints, all of them
 swept every frame, which is why the spacing is a cost decision an author makes
-(see **Vines** in `CLAUDE.md`).
+(see `docs/vines.md`).
 
 A chain is **scenery** in what may touch it, and level geometry in what it bends
 around. It is drawn behind the level's geometry, faded, and solved against the

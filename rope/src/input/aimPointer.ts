@@ -34,7 +34,7 @@
 // this machine, the only place the lock is SAFE: locked in a window, Chromium's
 // Wayland pointer location drifts out of the page with the hand's net travel and
 // presses that hit-test onto the caption or a resize border are eaten and
-// delivered as a lone release (CLAUDE.md, "Answered: it is Chromium"). A
+// delivered as a lone release (docs/input-latch.md, "Answered: it is Chromium"). A
 // fullscreen window has no caption and no borders to drift onto.
 
 import { Vec2 } from "../engine/vec2";

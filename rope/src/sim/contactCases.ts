@@ -4039,8 +4039,8 @@ function caseMaterials(): ContactResult {
 // hook-sparks — one report per touch, the arrival's own velocity, a slide
 // reported on every frame of it, and a drag that grinds where a strike pops.
 //
-// Sparks reach no digest and no invariant by construction (see "Sparks" in
-// CLAUDE.md), so a system emitting nothing at all is exactly as green as one
+// Sparks reach no digest and no invariant by construction (see
+// docs/sparks.md), so a system emitting nothing at all is exactly as green as one
 // that works, and every failure this case is written against was found by
 // somebody looking at the game. Each clause is a way it goes quietly wrong:
 //

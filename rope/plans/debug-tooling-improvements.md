@@ -5,7 +5,7 @@
 > Three acceptance criteria could not be met as written, and each is recorded where it belongs rather than quietly dropped:
 > - Phase 1/2/3's acceptance frames on `session-154f`, `session-324f` and `session-239f` are unreachable, because those bundles were recorded before the fixes they document and now diverge from their own recordings far earlier than the named frames. The mechanisms were verified instead on frames that exist: the wound-tight hammer reads `aimSpin=-41.282 refund=0.6692 push=86.06mm` off `session-154f` f81; the diverging solve and the stalled unwind were reproduced with the monotone guard disabled and on `session-477f` around f215 (`window=0.16056 used=0.01557 residual=27.655mm`).
 > - Phase 4's `pushRun 0 | 18` reads `0 | n/a` at `93405ae`: `chainPushCreditFrames` postdates that revision, and `n/a` is the behaviour the phase itself specifies for a metric the reference tree cannot express. `peakV 4.76 | 19.80` is exact.
-> - Phase 7's premise is wrong and this is the finding, not a shortfall: a self-replay cannot see the browser/bun knife-edge, because both of its runs are in the browser. Verified with `PUSH_OUT_MIN_DEPTH` back at 0. See **Determinism & correspondence** in `CLAUDE.md` for what it does cover and what covers the rest.
+> - Phase 7's premise is wrong and this is the finding, not a shortfall: a self-replay cannot see the browser/bun knife-edge, because both of its runs are in the browser. Verified with `PUSH_OUT_MIN_DEPTH` back at 0. See **Determinism & correspondence** in `docs/physics-foundations.md` for what it does cover and what covers the rest.
 >
 > The tooling found a bug on its first day: `playtests/rigs/light-box-anchor.json` is red - the `session-324f` anchor pump against a 1 kg free box, `pushRun 9` against a bar of 6, ball and anchor to 37 m/s. Undiagnosed on purpose; see **What the verification suite cannot see**.
 >
@@ -13,7 +13,7 @@
 >
 > **Was: proposed.**
 > Distilled from the 2026-09-04 session that root-caused the wound-tight anchor pump (`session-324f`), the loop hammer (`session-154f`), the diverging length solve (`session-239f`) and the browser/headless determinism knife-edge, and from a review of where that session leaked time.
-> Every phase names the moment in that session it would have shortened, the acceptance test that proves it, and the `CLAUDE.md` entry it must update before it counts as done.
+> Every phase names the moment in that session it would have shortened, the acceptance test that proves it, and the `docs/` entry it must update before it counts as done.
 
 ## Why
 
@@ -85,7 +85,7 @@ Old bundles lack the fields and every reader must treat a missing field as zero,
 `cli dump playtests/regressions/session-154f.json.gz --from 76 --to 82` shows `aimSpin` around 38 to 41 rad/s, `unwindRefund` around 0.6 rad and `contactPn` of 35 to 41 on body 0 with `contactWith` 34, which is the hammer read straight off the bundle.
 `cli dump session-324f --from 252 --to 270` shows `geometryPush` of 20 to 40 mm a frame beside a `blockedSlack` growing by the same, which is the pump.
 
-**Done when** the **Full-world digests** section of `CLAUDE.md` lists the new fields and says which question each answers.
+**Done when** the **Full-world digests** section of `docs/headless-tooling.md` lists the new fields and says which question each answers.
 
 ## Phase 2: `cli diverge`
 
@@ -110,7 +110,7 @@ The comparison lives in `src/sim/replay.ts` as `firstDivergence(rec, tolerance):
 On a copy of `session-154f` replayed against a tree with `PUSH_OUT_MIN_DEPTH` set to 0 (re-introducing the knife-edge locally), `cli diverge` names f90 and `chain.blockedSlack = 8.33e-3` in its first line and the `pair-push-out` phase of f89 in its trace.
 On the committed tree it reports no divergence for the five bundles recorded on 2026-09-04 after the depth floor landed, or names the frame if one appears.
 
-**Done when** `cli replay`'s summary line carries the first differing field, and **Debugging physics issues** in `CLAUDE.md` names `cli diverge` as the first command to run on a bundle that does not replay.
+**Done when** `cli replay`'s summary line carries the first differing field, and `docs/debugging-physics.md` names `cli diverge` as the first command to run on a bundle that does not replay.
 
 ## Phase 3: the solve is not a black box
 
@@ -268,7 +268,7 @@ On the committed tree a fresh recording downloads `identical: true` and `cli rep
 5. Phase 6 after 4, because `runRig` returns Phase 4's metrics.
 6. Phase 7 last, after 1, 2 and 5.
 
-Each phase is one commit with its `CLAUDE.md` entry, and `bun run test` is green at every commit; the selftest's bit-exactness is the guard that none of the recording changes altered physics.
+Each phase is one commit with its `docs/` entry, and `bun run test` is green at every commit; the selftest's bit-exactness is the guard that none of the recording changes altered physics.
 
 ## Process change that goes with the tooling
 

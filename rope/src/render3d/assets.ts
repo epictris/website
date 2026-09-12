@@ -225,8 +225,8 @@ export interface TextureAsset {
 // wall rather than an invisible one.
 //
 // Every entry is `assets:optimize-texture`d, then `assets:publish`ed, and
-// `cli assets` holds the whole directory to a byte budget; see "The asset store"
-// in CLAUDE.md.
+// `cli assets` holds the whole directory to a byte budget; see
+// docs/asset-store.md.
 export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
   // Keyed as "brick" - the MATERIAL name - which is the whole point of the one
   // namespace: every body already made of brick wears this the moment it is in
@@ -1953,7 +1953,7 @@ export interface MeshAsset {
 // obviously wrong, and never a hole in the level.
 //
 // Every entry is `assets:optimize`d, then `assets:publish`ed, and `cli assets`
-// holds the whole directory to a byte budget; see "The asset store" in CLAUDE.md.
+// holds the whole directory to a byte budget; see docs/asset-store.md.
 // The 24 rocks of one Sketchfab PACK, extracted together into ONE file that
 // they address by node (see `MeshAsset.node` for the argument, and
 // `scripts/extract-mesh.ts` for the command that built it). They are the pack's
@@ -2000,7 +2000,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     bytes: 65276,
     // CC BY, so the author is an obligation rather than a note: the credit has
     // to name the person, and a link to where it was found is not that (see
-    // "Provenance, in the manifest" in CLAUDE.md).
+    // "Provenance, in the manifest" in docs/asset-store.md).
     source: "https://sketchfab.com/3d-models/bulkhead-lamp-game-ready-c7ecba33758a46c78537c1c9e6161aeb",
     author: "andersonmat",
     license: "CC BY 4.0",
@@ -2162,7 +2162,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   // four of each two metres behind a gameplay plane it views almost
   // orthographically - 768k triangles of background scenery, 95% of the whole
   // scene, which the water's transmission pass then draws a SECOND time on every
-  // frame it is visible (see "Water" in CLAUDE.md).
+  // frame it is visible (see docs/water.md).
   //
   // A tenth of the triangles costs 1.5% RMSE on that frame, because the brick
   // relief that reads on screen is in the normal map rather than in the mesh -
@@ -2347,7 +2347,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     bytes: 126300,
     center: true, // exported at its level coordinates, 8.9 m off its own geometry
     // CC BY, so the credit names the person rather than the page (see
-    // "Provenance, in the manifest" in CLAUDE.md). Noted with the entry because
+    // "Provenance, in the manifest" in docs/asset-store.md). Noted with the entry because
     // the file is opaque and this is the one place the question gets asked: the
     // model is ripped from Poppy Playtime (MOB Games - the mesh is named
     // `SM_BarsGate_Level5_A`), so the uploader's CC BY is not theirs to grant,

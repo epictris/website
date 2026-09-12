@@ -2,7 +2,7 @@
 
 > **Status: landed** (phases 0-6), except the two items below.
 > The narrative here is kept as written, because it is the reasoning the change was made
-> from; `CLAUDE.md` (**The contact solver**) is the description of what the code now does.
+> from; `docs/contact-solver.md` is the description of what the code now does.
 >
 > What the plan did not anticipate, both found by measurement:
 >
@@ -26,7 +26,7 @@
 > - **`settle` is red.** A triangle holds a 0.203 deg limit cycle. Pure static path.
 >
 > One number to carry forward: the worst chain-stall run went 18 -> 56 frames against a
-> tolerance of 60 (see **Phase 6** and the stall section in `CLAUDE.md`). The block is real
+> tolerance of 60 (see **Phase 6** and the stall section in `docs/areas-and-friction.md`). The block is real
 > and the tolerance was not moved, but the headroom is thin.
 
 ## The defect
@@ -211,7 +211,7 @@ Stiction is a body-versus-static idea and should stay one.
 Recommended split:
 
 - The **velocity** half of the grip is subsumed by Phase 3: it is already a Coulomb-capped tangential impulse solved at the contact points.
-- The **position pin** stays as it is. (It has since become a *relative* pin, which is what closed `rigid-ramp-hold` - see **The position pin** in `CLAUDE.md`.) It solves a different problem (gravity's per-frame integration step, which no velocity constraint can remove under this engine's integrate-then-solve ordering - see **Deliberate deviations**), and it now correctly anchors a *material* point of the body (`stickLocal`) rather than the body centre or the geometric manifold point.
+- The **position pin** stays as it is. (It has since become a *relative* pin, which is what closed `rigid-ramp-hold` - see **The position pin** in `docs/contact-solver.md`.) It solves a different problem (gravity's per-frame integration step, which no velocity constraint can remove under this engine's integrate-then-solve ordering - see **Deliberate deviations**), and it now correctly anchors a *material* point of the body (`stickLocal`) rather than the body centre or the geometric manifold point.
 - `ungrippedFrames` / `STICK_RELEASE_FRAMES` and the anchor-carry through the depenetration sweep stay unchanged.
 
 The `stuck` return value becomes "did any static constraint for this body stay inside its friction cone", which the pair solver can report directly.
@@ -222,7 +222,7 @@ This engine integrates first (replay-locked, and the rope phase depends on it), 
 
 ### Phase 5: leave the circle path alone at first
 
-`resolveRigidCircle` carried the ball and chain avatar's steering branch and a centred-circle path that was bit-identical to every recorded replay. It has since been folded in as well: what excluding it cost, and what is left of it (`applySteeringGrip`), is under **The contact solver** in `CLAUDE.md`.
+`resolveRigidCircle` carried the ball and chain avatar's steering branch and a centred-circle path that was bit-identical to every recorded replay. It has since been folded in as well: what excluding it cost, and what is left of it (`applySteeringGrip`), is under **The contact solver** in `docs/contact-solver.md`.
 Do not fold it in during this work.
 
 Route **rigid-versus-rigid** contacts through the pair solver and leave **body-versus-static** on the existing routines for the first landing.

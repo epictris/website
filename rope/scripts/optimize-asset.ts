@@ -15,7 +15,7 @@
 //                        needs no separate decoder blob, and the size is close.
 //   --texture-compress webp / --texture-size 1024
 //                        textures at a ceiling of 1k, which is the art style's
-//                        own limit (see "The asset store" in CLAUDE.md).
+//                        own limit (see docs/asset-store.md).
 //                        WebP rather than KTX2 deliberately, for two reasons
 //                        that both have to be paid to make KTX2 worth it: it
 //                        needs the external `ktx` binary at build time, and it
@@ -41,7 +41,7 @@
 // relief is in a normal map, so at a tenth of the triangles the same frame
 // differs by 1.5% RMSE - and the level had 768k triangles of wall in it, which
 // the water's transmission pass then rendered a SECOND time every frame (see
-// "Water" and "The asset store" in CLAUDE.md).
+// docs/water.md and docs/asset-store.md).
 //
 // So `--simplify <ratio>` is opt-in, per asset, and recorded: the ratio lives in
 // that asset's `MESH_ASSETS` entry next to its sha256, which makes it a decision

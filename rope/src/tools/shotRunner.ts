@@ -68,7 +68,7 @@ export function findChromium(): string | null {
 // SwiftShader stays FIRST because it is the reproducible one: it is the same
 // rasteriser on every machine and in CI, where there is no GPU at all, so a
 // grab taken here and a grab taken there are comparable pictures. It is also
-// the slow one - see "Performance claims need real-GPU numbers" in CLAUDE.md.
+// the slow one - see "Performance claims need real-GPU numbers" in docs/debugging-rendering.md.
 //
 // It is no longer guaranteed to exist, which is why there is a second entry.
 // A distribution may ship a chromium whose SwiftShader cannot start (Fedora's

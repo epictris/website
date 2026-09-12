@@ -21,7 +21,7 @@ The recording itself, made on the tree it was recorded on, ends the same episode
 
 ### How it was found
 
-The stall latch was changed on 2026-09-05 to stop it freezing a ball whose chain leaves radially (`session-287f`; see the `point-blank-turn` case in `cli contacts` and the CLAUDE.md paragraph "The latch asks for a chain that WINDS").
+The stall latch was changed on 2026-09-05 to stop it freezing a ball whose chain leaves radially (`session-287f`; see the `point-blank-turn` case in `cli contacts` and the docs/ball-chain.md paragraph "The latch asks for a chain that WINDS").
 The first version of that change gated the latch on the refunded turn being worth at least `CHAIN_TOLERANCE` of chain.
 Frame 283's refund is 2.7 mm, so the latch never fired, the ball kept turning past 13.143 into rotations where the unwind fails again, and `session-611f` ran 25 cm over length at frames 572 to 584.
 The latch now gates on the spool instead (`BallPlayer.STALL_LATCH_SPOOL_SHARE`), which fires at frame 283 and restores the mask.
@@ -106,7 +106,7 @@ At frame 283, with the anchor 18.7 mm off the rim, the length is a slope again (
 
 Three pieces of `src/classes/rope.ts` combine.
 
-1. **The coil is an angle, re-derived each regeneration** (`Rope.syncCoil`, see CLAUDE.md "The coil").
+1. **The coil is an angle, re-derived each regeneration** (`Rope.syncCoil`, see docs/ball-coil-and-hook.md "The coil").
    The tangent point is where a taut line from the next node (here the anchor) touches the ball's circle, and the wind angle runs from the material start point round to that tangent point.
    `syncCoil` has a guard for the degenerate frame:
 
@@ -153,7 +153,7 @@ Things to check while doing it:
 - The very first coil frame (`runLength === 0 && coilWindAngle === null` returns before the guard) is unaffected.
 - `Rope.lengthPerRadian`'s 0.1 mm span skip should probably stay, since with the fix the terminal span is genuinely zero and the coil's leaving span (the last coil node to the anchor) carries the rate.
   Verify the rate is +/-0.12 and never 0 on the fixed replay.
-- `Rope.regenerateAndMeasure` takes its baseline after a coil sync so the coil's ride does not read as a discontinuity (see CLAUDE.md "The coil").
+- `Rope.regenerateAndMeasure` takes its baseline after a coil sync so the coil's ride does not read as a discontinuity (see docs/ball-coil-and-hook.md "The coil").
   A coil that now re-derives on frames it used to skip may change `topologyJump` on those frames; watch `rope-credit-unearned` and `rope-solve-kick` on the corpus.
 - `RopeGeneration.calculateCircleTangentPoint` (`src/lib/ropeGeneration.ts`) is the helper the guard protects; it computes an angle from `fromPoint - center` and will produce something for a point on the rim, so the projection may be as simple as calling it with the projected point.
 
@@ -174,7 +174,7 @@ The measurement is what is wrong; the search and the lease are behaving correctl
 
 ## Related history
 
-- CLAUDE.md "The coil" explains why the coil is an angle and not nodes, and why `regenerateAndMeasure` syncs the coil before its baseline.
-- CLAUDE.md "The latch asks for a chain that WINDS" records the two latch variants tried on 2026-09-05 and why the spool gate won.
+- docs/ball-coil-and-hook.md "The coil" explains why the coil is an angle and not nodes, and why `regenerateAndMeasure` syncs the coil before its baseline.
+- docs/ball-chain.md "The latch asks for a chain that WINDS" records the two latch variants tried on 2026-09-05 and why the spool gate won.
 - `session-475f` (wound all the way up, the stall growing 18 cm to 366 cm) is the original wound-tight runaway the unwind was written for; this bug is the case its own measurement cannot see.
 - `session-394f` is why the unwind is bounded to the frame's window and never spins the ball backwards; keep that bound.

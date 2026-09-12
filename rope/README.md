@@ -62,4 +62,4 @@ through the browser's `Math`:
 bun run src/tools/cli.ts replay session-1234f.json
 ```
 
-See `CLAUDE.md` for architecture and the full tooling reference.
+See `CLAUDE.md` for the map of the project and `docs/` for the architecture and the full tooling reference.

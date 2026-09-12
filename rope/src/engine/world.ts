@@ -1200,7 +1200,7 @@ export class World {
   // on the step it enters. Velocity ONLY, never position: the ball's chain phase
   // turns the position it realises into velocity (`BallLevel.physicsProcess`),
   // so a positional nudge here would be laundered into speed the body was never
-  // given - the mechanism behind several of the chain launches in CLAUDE.md.
+  // given - the mechanism behind several of the chain launches in docs/ball-chain.md.
   //
   // A level with no water areas returns before touching a single body, which is
   // what keeps every recorded replay bit-identical: `submerged` stays 0, and

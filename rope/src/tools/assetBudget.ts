@@ -64,7 +64,7 @@ const ASSET_DIRS = [
 // way.
 export const TOTAL_BUDGET_BYTES = 100 * 1024 * 1024;
 // A single prop this big has not been through `gltf-transform`. The style this
-// game is drawn in (see CLAUDE.md) puts a textured prop at well under 1 MB, so
+// game is drawn in (see docs/asset-store.md) puts a textured prop at well under 1 MB, so
 // 8 MB is not a target to author up to - it is the bar that catches a raw
 // Blender export with 2k PNGs in it before that becomes the habit.
 export const FILE_BUDGET_BYTES = 8 * 1024 * 1024;

@@ -9,7 +9,7 @@
 // is a reproducible picture rather than a representative frame time.
 //
 // So this is read from the LIVE page: `window.__perf` for a scripted read (the
-// claude-in-chrome workflow in CLAUDE.md), `?hud=1` for a human looking at the
+// claude-in-chrome workflow in docs/debugging-rendering.md), `?hud=1` for a human looking at the
 // same numbers on screen.
 //
 // It is render-side only, allocated once, and touches no sim state, so it can

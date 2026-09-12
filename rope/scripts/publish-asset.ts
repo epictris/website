@@ -54,7 +54,7 @@ if (!exists) {
       "--title",
       "Binary assets",
       "--notes",
-      "Props and texture maps for the rope 3D renderer, fetched at build time. Not a release of anything - see rope/CLAUDE.md, The asset store.",
+      "Props and texture maps for the rope 3D renderer, fetched at build time. Not a release of anything - see rope/docs/asset-store.md.",
     ],
     { stdio: "inherit" },
   );

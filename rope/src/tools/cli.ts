@@ -1646,7 +1646,7 @@ function cmdSettle(file: string, o: Record<string, string>): void {
 // It is a number of joules, so it tracks the scene's mass and had to be rescaled
 // when masses became physical (it was 1e-5 when the ball weighed a third of a
 // gram). Anything written in units that carry a mass has that property - see
-// **Mass and materials** in CLAUDE.md.
+// **Mass and materials** in docs/physics-foundations.md.
 const SETTLE_KE_TOLERANCE = 1;
 
 // Anomaly sweep — step 2.5 of the debugging loop: run this before choosing what

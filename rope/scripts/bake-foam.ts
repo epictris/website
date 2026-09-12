@@ -17,7 +17,7 @@
 // The histogram is shaped here, not in the shader: the soft threshold that
 // cuts ribbons with torn edges depends on the mask's value distribution, so
 // the bake normalises, gammas and soft-clips until thresholding behaves. See
-// "Water" in CLAUDE.md for why this stays out of the release asset store for
+// docs/water.md for why this stays out of the release asset store for
 // now (public/water/ is local-only).
 
 import { spawnSync } from "node:child_process";

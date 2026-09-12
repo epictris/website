@@ -61,7 +61,7 @@
 //
 // ImageMagick rather than a Node image library, because it is what this repo
 // already asks for when it converts an SVG snapshot to a PNG (see the debugging
-// loop in CLAUDE.md), it is on any machine that authors assets, and adding a
+// loop in docs/debugging-physics.md), it is on any machine that authors assets, and adding a
 // native image dependency to a project whose only binary is its props would cost
 // more than it saves.
 

@@ -162,7 +162,7 @@ Inside the world-space transform, `ctx.globalCompositeOperation = "lighter"` for
 Each spark is a short streak: a line from `p` to `p - v * STREAK_TIME` (`STREAK_TIME ≈ 0.02 s`), `lineWidth ≈ 0.6 * PX`.
 Colour runs with normalized age, hot to cool: `#fff7d6` (white-yellow) → `#f2a13c` (orange) → `#b3502a` (ember), alpha fading to 0 over the last half of life.
 Palette constants at the top of `sparks.ts` in the renderer's style.
-Every length and speed constant is in metres per the units rule (`CLAUDE.md` "Units"): fixed on-screen sizes are written as `<px> * PX`, velocities in m/s, and the counts/lifetimes are dimensionless/seconds.
+Every length and speed constant is in metres per the units rule (`docs/physics-foundations.md` "Units"): fixed on-screen sizes are written as `<px> * PX`, velocities in m/s, and the counts/lifetimes are dimensionless/seconds.
 
 ### Wiring
 

@@ -1,7 +1,7 @@
 # Plan: render debugging tooling
 
 > **Status: implemented (2026-08-05).**
-> All five phases landed; the discipline half is the **Debugging rendering** section in `rope/CLAUDE.md`, which is the live document.
+> All five phases landed; the discipline half is `rope/docs/debugging-rendering.md`, which is the live document.
 > Four deviations, each with its reason:
 >
 > - **Phase 1's POST transport was never built.** It exists in the plan only to be retired by Phase 2, and the two landed as one arc, so the log comes back over CDP from the start. `vite.config.ts` is untouched and there is no `playtests/_shot-log.json`.
@@ -15,7 +15,7 @@
 > Three separate "works in the headless screenshot, broken live" failures in one afternoon, all traceable to the page console being invisible to `cli shot`;
 > two motion artifacts (foam flashing, wrong advection speed) structurally invisible to single-frame grabs, so the user served as the only detector across nine rejection rounds;
 > and a morning of shader-constant tuning against geometry whose defects (Nyquist-violating sampling, UVs anchored to undisplaced vertices, earcut caps shearing under displacement) were measurable up front and never measured.
-> This plan closes the tooling half; Phase 5 writes the discipline half into `CLAUDE.md`.
+> This plan closes the tooling half; Phase 5 writes the discipline half into the docs (now `docs/debugging-rendering.md`).
 
 ## Ground rules
 
@@ -116,7 +116,7 @@ What lands:
 - **`window.__perf` on the game page**: a render-side probe updated once per second - rolling FPS, frame-time p50/p99 over the last second, `renderer.info.render.calls`/`triangles`, and `renderer.info.programs.length`.
   Read-only, allocated once, no sim access; absent in 2D mode except the FPS/frame-time half.
 - **`?hud=1`**: extends the existing FPS counter with frame ms and draw calls on the overlay canvas, so a human eyeballing the live page sees the same numbers the probe exposes.
-- **A documented live-verification workflow** (lands in the Phase 5 CLAUDE.md section): dev server + the claude-in-chrome extension - navigate to the level, read `window.__perf` by JS evaluation, screenshot on a real GPU, read the live console.
+- **A documented live-verification workflow** (lands in the Phase 5 doc, now `docs/debugging-rendering.md`): dev server + the claude-in-chrome extension - navigate to the level, read `window.__perf` by JS evaluation, screenshot on a real GPU, read the live console.
   This is the channel for FPS claims, tuned-constant sign-off, and anything SwiftShader cannot represent; `cli shot` remains the channel for reproducible geometry/shading evidence.
 
 Acceptance:
@@ -126,9 +126,9 @@ Acceptance:
 
 ## Phase 5: the discipline is written down
 
-`CLAUDE.md` already carries **Debugging physics issues** and its discipline block; both sessions violated the same principles in the render domain because nothing states them there.
+`docs/debugging-physics.md` already carries the physics loop and its discipline block; both sessions violated the same principles in the render domain because nothing states them there.
 
-What lands - a **Debugging rendering** section in `rope/CLAUDE.md`, parallel to the physics one, carrying:
+What lands - a **Debugging rendering** doc (`rope/docs/debugging-rendering.md`), parallel to the physics one, carrying:
 
 - **A headless screenshot without its captured console is not evidence.**
   A shader change is claimed working only with a clean `[page]` log (Phase 1) or a live-browser check (Phase 4 workflow).
