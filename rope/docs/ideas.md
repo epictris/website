@@ -13,3 +13,9 @@
 # Underground:
 - fast-moving subway train requiring you to precisely time falls and move quickly to land on top of train
 - lava pools player dies if they fall in
+
+# Inspiration
+
+**mine exit**
+- https://media.mymythos.org/The-Mine-Archetype-Featured.webp
+- https://media.mymythos.org/The-Mine-Archetype-Mythic-Body.webp
