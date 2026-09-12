@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite";
+import { buildSync } from "esbuild";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +12,8 @@ import { execSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { treeStamp, type TreeStamp } from "./src/sim/treeStamp";
+import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
+import { levelStoredFiles } from "./src/render3d/levelAssets";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
 // `virtual:tree-stamp` and stamped into every exported bundle.
@@ -189,6 +192,108 @@ function editorRoute(): Plugin {
   };
 }
 
+
+// The byte store, and the preload list it reads.
+//
+// TWO THINGS GO INTO THE HEAD OF EVERY PAGE, ahead of anything else:
+//
+//   1. `src/render3d/store.ts`, compiled and inlined as a plain script. It is
+//      what fetches and counts every stored byte, and the app talks to it
+//      through `window.__ropeStore` (see render3d/download.ts).
+//   2. On `index.html` only, the preload list: which files each level needs and
+//      what they weigh, so the store can start fetching before the app exists.
+//
+// INLINED RATHER THAN IMPORTED because vite merges every module script in a page
+// into one entry: loaded as its own `<script type="module" src>` the tag simply
+// disappeared and the code came back inside the 1.14 MB shared chunk, which is
+// the wait it is supposed to start ahead of. As an inline classic script it runs
+// during HTML parsing, so the level's 26 MB is arriving at ~40 ms instead of at
+// 240 ms (production) or 1530 ms (dev server, where vite serves 5.2 MB of
+// unbundled modules). That gap was the whole of the loading bar's empty second.
+//
+// The list is resolved HERE, at config load, because it is a fact about the
+// level files and the asset manifest and both are on disk: a build step cannot
+// build a scene, so `levelStoredFiles` answers the same question by walking the
+// level data (see render3d/levelAssets.ts, and the drift warning it describes).
+//
+// `transformIndexHtml` runs in dev serve and in build alike, so the dev server
+// and the shipped page carry the same thing. Only `index.html` gets a preload
+// list: the editor and `shot.html` build scenes too, but neither is a page
+// anybody waits on, and a preload for a level they may not open would be a
+// download for nothing.
+function storeScript(): Plugin {
+  // One table of files for every level, since levels share surfaces and this is
+  // markup that ships on every page load. ~2 KB gzipped for the whole registry.
+  const build = (): string => {
+    const index = new Map<string, number>();
+    const files: [string, number][] = [];
+    const levels: Record<string, { b: 0 | 1; i: number[] }> = {};
+    for (const [id, spec] of Object.entries(LEVELS)) {
+      levels[id] = {
+        b: spec.controller === "ball" ? 1 : 0,
+        i: levelStoredFiles(spec.data).map((f) => {
+          let at = index.get(f.file);
+          if (at === undefined) {
+            at = files.push([f.file, f.bytes]) - 1;
+            index.set(f.file, at);
+          }
+          return at;
+        }),
+      };
+    }
+    return JSON.stringify({ f: files, l: levels, d: DEFAULT_LEVEL });
+  };
+
+  // Compiled once per config load. `bundle: true` is what turns the module's
+  // `export {}` and its types into a self-contained classic script; it has no
+  // imports, so there is nothing for the bundler to pull in with it.
+  const script = (minify: boolean): string =>
+    buildSync({
+      entryPoints: [join(import.meta.dirname, "src", "render3d", "store.ts")],
+      bundle: true,
+      format: "iife",
+      target: "es2020",
+      minify,
+      write: false,
+    }).outputFiles[0]!.text;
+
+  // Cached for a BUILD only. A dev server lives for hours, and a compile cached
+  // for its lifetime meant an edit to store.ts never reached the page - the one
+  // file on the page that vite is not watching, because it is not in the module
+  // graph. Recompiling per page load is ~10 ms of esbuild on a file with no
+  // imports.
+  let compiled: string | null = null;
+  let isBuild = false;
+
+  return {
+    name: "store-script",
+    configResolved(config) {
+      isBuild = config.command === "build";
+    },
+    transformIndexHtml: {
+      order: "pre",
+      handler(_html, ctx) {
+        const tags: HtmlTagDescriptor[] = [];
+        // The list first: the store reads it on the line that runs it.
+        if (ctx.path.endsWith("/index.html") || ctx.path === "/") {
+          tags.push({
+            tag: "script",
+            attrs: { id: "preload-manifest", type: "application/json" },
+            // Not executable, so a `</script>` inside a filename could not close
+            // it early anyway - but the escape is free and the data comes off
+            // disk.
+            children: build().replace(/</g, "\\u003c"),
+            injectTo: "head",
+          });
+        }
+        if (isBuild) compiled ??= script(true);
+        tags.push({ tag: "script", children: compiled ?? script(false), injectTo: "head" });
+        return tags;
+      },
+    },
+  };
+}
+
 export default defineConfig({
   server: {
     port: 3100,
@@ -219,5 +324,5 @@ export default defineConfig({
       },
     },
   },
-  plugins: [treeStampPlugin(), levelApi(), prodReplays(), editorRoute()],
+  plugins: [treeStampPlugin(), storeScript(), levelApi(), prodReplays(), editorRoute()],
 });

@@ -146,6 +146,27 @@ export function runAssetChecks(): AssetCheck[] {
     detail: stale.length ? stale.join("; ") : `${referenced.size - missing.length} verified`,
   });
 
+  // ...and there are as many of them as the entry says. The manifest's `bytes`
+  // is what the loading bar counts down (see `TextureMap.bytes`), and a stale
+  // one is invisible in play: the page still loads, the bar just stops somewhere
+  // other than the end - or reaches it early and waits. Checked against the same
+  // files the hash is, so a re-published asset cannot take one and leave the
+  // other.
+  const misweighed: string[] = [];
+  for (const asset of stored) {
+    const path = join(PUBLIC_DIR, asset.file.replace(/^\//, ""));
+    if (!files.includes(path)) continue;
+    const got = statSync(path).size;
+    if (got !== asset.bytes) misweighed.push(`${asset.key}: manifest ${asset.bytes}, disk ${got}`);
+  }
+  checks.push({
+    name: "assets: every entry's `bytes` is the size on disk",
+    pass: misweighed.length === 0,
+    detail: misweighed.length
+      ? `run \`bun run assets:publish\` again for the printed line: ${misweighed.join("; ")}`
+      : `${referenced.size - missing.length} verified`,
+  });
+
   // One flat namespace in the release, keyed by basename - so two entries whose
   // files differ only by directory would overwrite each other on publish and
   // then both fetch the same bytes, which is a level quietly wearing the wrong

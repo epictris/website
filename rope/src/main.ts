@@ -42,6 +42,7 @@ import {
 } from "./playtest/protocol";
 import { selfReplayLine, verifySelfReplay } from "./sim/selfReplay";
 import { showToast } from "./render/toast";
+import { LoadingScreen } from "./render/loadingScreen";
 // The tree this page was served from, not the commit the dev server booted at
 // (see src/sim/treeStamp.ts).
 import { commit, dirty, srcHash } from "virtual:tree-stamp";
@@ -57,6 +58,7 @@ const STEP = 1 / 60;
 // that for sim time running slightly slower than the wall while overloaded,
 // which degrades gracefully and recovers instantly.
 const MAX_STEPS_PER_FRAME = 5;
+
 
 // Two canvases stacked on the play frame (see index.html): the WebGL scene
 // underneath, and the 2D one on top carrying everything that is genuinely 2D.
@@ -128,6 +130,13 @@ function resize(): void {
 
 resize();
 window.addEventListener("resize", resize);
+
+// The grey screen `index.html` painted before this module existed, with its bar
+// already filling (the inline store has been downloading since first paint - see
+// render3d/store.ts). All that is left for the app is to wait for the assets and
+// take the screen off: `boot()` at the bottom does the first, and the first
+// drawn frame does the second, so nothing is simulated behind it.
+const loading = new LoadingScreen();
 
 // Replay mode (`?replay=NAME.json`, fetched from the dev server's public dir):
 // feed a recorded session's input stream through the real frame loop instead of
@@ -595,7 +604,83 @@ function frame(now: number): void {
     heapLimitMb,
   });
 
+  // The first frame is also what reveals the level: the loading screen comes off
+  // HERE, after this callback has drawn both canvases, so the removal and the
+  // picture land in the same compositor frame. Taken off in `boot` instead, the
+  // page would show one frame of bare canvas between the bar and the game.
+  if (!revealed) {
+    revealed = true;
+    loading.finish();
+  }
+
   lastCpuMs = performance.now() - cpuT0;
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+
+// Whether the loading screen has been taken off (see the end of `frame`).
+let revealed = false;
+
+// Draw the scene as the first PLAYED frame will draw it, onto the canvas the
+// loading screen is covering.
+//
+// This is what pays a cold frame's costs before anyone is waiting on them.
+// Uploading a level's textures (and generating their mip chains), compiling its
+// programs and sizing its shadow map all happen on first use, and first use used
+// to be the two frames after the download finished: 546 ms of full bar with
+// nothing on screen, on a page whose steady-state frame is 1 ms of draw.
+//
+// SAME CAMERA is the whole of it, and it took three attempts to find. Compiling
+// every program in the scene up front cost 278 ms and saved nothing; uploading
+// every texture up front saved 80 ms of 450. What was actually happening is that
+// the pre-render drew from the camera's INITIAL pose - the origin, because
+// `CameraController` had not run yet - so it warmed whatever happened to be at
+// the origin, and the first real frame, drawn after the controller had put the
+// camera on the avatar, paid the whole cost again for the part of the level that
+// is actually on screen. Running the controller first, against the same follow
+// point the first frame will use, takes the gap under 100 ms - which is the
+// decode of the last file to land, and nothing else.
+function warmFrame(): void {
+  if (!scene3d) return;
+  cameraCtl.update(
+    camera,
+    0,
+    level.cameraRenderPosition(1),
+    level.cameraRules,
+    baseZoom,
+    level.cameraAnchored,
+  );
+  scene3d.render(level, camera, 1);
+}
+
+// Play once the level's assets are in - or once the loading screen has run out
+// of patience with them (see `LoadingScreen.wait`).
+//
+// Nothing this does reaches a screen anybody can see: the loading screen is
+// opaque and covers the page until the first frame of the loop takes it off.
+//
+// The loop starts AFTER the wait rather than running under the screen, because a
+// level stepping behind an opaque rectangle is a run the player never saw: the
+// ball would already be falling, and on a slow connection the first thing handed
+// over could be a dead one. The recorder agrees - its open run is the run that
+// is about to be played.
+async function boot(): Promise<void> {
+  // Warmed on EVERY frame until the level is in, not on a timer. A timer was
+  // written for a slow connection, where there are seconds of waiting to spread
+  // the work across; from localhost the whole window between the app booting and
+  // the last decode landing is about 200 ms, so a 150 ms tick fired once, warmed
+  // a scene that was still mostly fallback textures, and left the real upload to
+  // pile up into one 309 ms frame after the bar was already full.
+  let warming = true;
+  const warmLoop = (): void => {
+    if (!warming) return;
+    warmFrame();
+    requestAnimationFrame(warmLoop);
+  };
+  requestAnimationFrame(warmLoop);
+  await loading.wait();
+  warming = false;
+  // The last arrivals, which no warm frame covered.
+  warmFrame();
+  requestAnimationFrame(frame);
+}
+void boot();

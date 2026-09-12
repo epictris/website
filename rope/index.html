@@ -28,10 +28,69 @@
       #frame canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
       #scene { pointer-events: none; }
       #game { image-rendering: pixelated; cursor: crosshair; touch-action: none; }
+
+      /* The loading screen. It is markup rather than something the game builds,
+         because the wait it covers STARTS BEFORE THE GAME EXISTS: three.js and
+         the level code are a download of their own, and a screen painted by
+         src/render/loadingScreen.ts could only appear once that download had
+         already landed. Here it is on the first paint, and the module inherits
+         it (see `LoadingScreen`) instead of creating it.
+         Over the letterbox bars as well as the frame, so the page is one flat
+         colour while it waits - #1f2430 is the tris.sh background. */
+      #loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.75rem;
+        background: #1f2430;
+        color: #cbccc6;
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.04em;
+        /* No fade. The screen is removed from the DOM in the same animation
+           frame that draws the first frame of the level, so the swap is one
+           compositor frame: bar, then game. A fade would put a quarter of a
+           second of half-lit menu between the two, which is a quarter of a
+           second of nothing happening after the wait is already over. */
+      }
+      /* Square corners and a hairline track: the bar is a terminal's idea of a
+         bar, not a rounded pill. */
+      #loading-track {
+        width: min(320px, 60vw);
+        height: 6px;
+        background: rgba(203, 204, 198, 0.16);
+        overflow: hidden;
+      }
+      /* `--p` is the fraction of the download that has arrived, written by
+         src/render/loadingScreen.ts. It is scaled rather than resized so the bar
+         costs no layout, and the transition is short and LINEAR: it smooths the
+         step between two frames' readings without ever easing ahead of the
+         bytes. Nothing animates on its own - an empty bar means nothing has
+         arrived, which is a thing worth being able to see. */
+      #loading-fill {
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+        transform-origin: left center;
+        transform: scaleX(var(--p, 0));
+        transition: transform 140ms linear;
+      }
+      /* The only movement on the screen is the bar reporting bytes, and the
+         transition is what stops it stepping between readings - but a reader who
+         has asked for no motion gets the steps. */
+      @media (prefers-reduced-motion: reduce) {
+        #loading-fill { transition: none; }
+      }
     </style>
   </head>
   <body>
     <div id="frame"><canvas id="scene"></canvas><canvas id="game"></canvas></div>
+    <div id="loading">
+      <div id="loading-track"><div id="loading-fill"></div></div>
+      <div>Mouse recommended</div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

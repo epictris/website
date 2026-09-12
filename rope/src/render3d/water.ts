@@ -32,13 +32,18 @@
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
 import type { GeometryObjectData } from "../level/levelFormat";
-import { trackPending } from "./assets";
+import { RAW_ASSETS, trackPending } from "./assets";
+import { withDownload } from "./download";
 
 // ---------------------------------------------------------------------------
 // The flipbook
 // ---------------------------------------------------------------------------
 
-const FLIP_URL = "/water/water-normal-flip.webp";
+// Path and weight both off the manifest (`RAW_ASSETS`), which is where the
+// store's facts about a file live - a second copy of the path here is a second
+// thing to forget when the atlas is re-published, and the size is what the
+// loading bar counts down (see download.ts).
+const FLIP = RAW_ASSETS["water-normal-flip"]!;
 const FLIP_COLS = 10;
 const FLIP_ROWS = 6;
 const FLIP_SIZE = 256;
@@ -96,7 +101,11 @@ async function loadFlipbook(tex: THREE.DataArrayTexture): Promise<void> {
   // texture here rides, and it is what the headless grab's virtual clock knows
   // to wait for - a createImageBitmap decode never resolved under it and hung
   // `assetsSettled`, which a screenshot reads as a silently blank page.
-  const image = await new THREE.ImageLoader().loadAsync(FLIP_URL);
+  // Counted on the way past like every other stored file, so the loading
+  // screen's bar covers the atlas too (see render3d/download.ts).
+  const image = await withDownload(FLIP.file, FLIP.bytes, (href) =>
+    new THREE.ImageLoader().loadAsync(href),
+  );
   const canvas = new OffscreenCanvas(image.width, image.height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.drawImage(image, 0, 0);
@@ -127,7 +136,7 @@ async function loadFlipbook(tex: THREE.DataArrayTexture): Promise<void> {
 // ribbons stretched along u, histogram shaped for the shader's soft threshold.
 // One texture, image swapped in when the download lands - the placeholder is a
 // 1x1 black canvas, and `foamReady` gates the effect until then.
-const FOAM_URL = "/water/water-foam.webp";
+const FOAM = RAW_ASSETS["water-foam"]!;
 let foamTexture: THREE.Texture | null = null;
 const foamReady = { value: 0 };
 
@@ -142,7 +151,9 @@ function ensureFoam(): THREE.Texture {
   tex.needsUpdate = true;
   foamTexture = tex;
   void trackPending(
-    new THREE.ImageLoader().loadAsync(FOAM_URL).then((image) => {
+    withDownload(FOAM.file, FOAM.bytes, (href) =>
+      new THREE.ImageLoader().loadAsync(href),
+    ).then((image) => {
       tex.image = image as unknown as HTMLCanvasElement;
       // The image is a different SIZE from the placeholder, and WebGL2 texture
       // storage is immutable once allocated: without a dispose the upload is a

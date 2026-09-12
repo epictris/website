@@ -35,6 +35,7 @@
 // mesh that has not arrived yet never blocks the frame or the sim.
 
 import * as THREE from "three";
+import { withDownload } from "./download";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
 
 // How a surface looks. `tile` is the size of one texture repeat in METRES, which
@@ -81,6 +82,13 @@ export const TEXTURE_SETS: Record<MaterialName, TextureSet> = {
 // should look ordinary, not invisible.
 export const DEFAULT_TEXTURE: MaterialName = "wood";
 
+// The surface the ball, its manacle and every chain link are made of (see
+// `ballVisual`, which wears it, and `levelAssets`, which counts it into a
+// level's download). It is named here rather than there because it is a key of
+// the manifest above and because both readers have to agree about it: a scene
+// with any chain in it loads this set, ball level or not.
+export const IRON_SURFACE = "rusted iron";
+
 export function textureSetName(name: string | undefined): MaterialName {
   if (name !== undefined && (MATERIAL_NAMES as string[]).includes(name)) return name as MaterialName;
   return DEFAULT_TEXTURE;
@@ -120,6 +128,18 @@ const SOLID_ROUGHNESS = 0.8;
 export interface TextureMap {
   file: string;
   sha256: string;
+  // The file's size in bytes, which is what the loading screen's bar is a
+  // fraction OF (see render3d/download.ts). It is stated here rather than read
+  // off the responses because a denominator that arrives with the download is
+  // not a denominator: the browser opens six connections and queues the rest, so
+  // the last file's Content-Length lands near the END of the load, and a bar
+  // measured against what has answered so far races to 60% and then sits still
+  // while the total catches up. Known up front, the bar is simply true.
+  //
+  // Written by `assets:publish` beside the hash and held to the file on disk by
+  // `cli assets`, exactly as `sha256` is - it is the same kind of fact, and one
+  // nobody should be typing by hand.
+  bytes: number;
 }
 
 // A surface made of AUTHORED images rather than generated noise. The five maps
@@ -230,6 +250,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/factory-brick-base.webp",
         sha256: "5a95a794e391636692452711f2d8aa7caf512f4d0b51929e1b7c2ae9cfac4840",
+        bytes: 417536,
       },
       // Poly Haven ships `nor_gl`, which is the OpenGL convention (+Y up) this
       // renderer wants; a `nor_dx` map would light every crack from the wrong
@@ -237,10 +258,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/factory-brick-normal.webp",
         sha256: "3770c43d120a4b3539ce3f6c924602422262d6a831440813048a937e39b9e0a0",
+        bytes: 2121592,
       },
       roughness: {
         file: "/textures/factory-brick-roughness.webp",
         sha256: "14b4965f7d1c70dd5c879e66eeabf258c400f428fcdd7b31bafb7bc83f36303f",
+        bytes: 794668,
       },
       // No AO and no metallic map in this set, which is ordinary: brick is a
       // dielectric, so `metalness` below says so once rather than as 4 MB of
@@ -274,10 +297,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rock-wall-base.webp",
         sha256: "dc7e2bb63a22f71aa629b7c46cff57818e902c6a88e7abc6f28ba7bab31c4875",
+        bytes: 280814,
       },
       normal: {
         file: "/textures/rock-wall-normal.webp",
         sha256: "7641c194d6b94261bd36e1fab4b782fbbf896bd5d7428e41e51543c65f09aa7f",
+        bytes: 626036,
       },
       // Poly Haven ships roughness, metallic and AO packed into one ARM image -
       // R ambient occlusion, G roughness, B metallic - so the two maps this set
@@ -287,10 +312,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rock-wall-roughness.webp",
         sha256: "0874e41efdaa9ba52803358fa7370bd0732a687339a4202297a50872dda022ae",
+        bytes: 142454,
       },
       ao: {
         file: "/textures/rock-wall-ao.webp",
         sha256: "d24e98a7701f3aa60e269f22528f568c3f6f1ed02f635ad73a8cd7da067cc148",
+        bytes: 280940,
       },
     },
     // Poly Haven's own captured size, 1800 mm square
@@ -318,10 +345,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/dark-rock-base.webp",
         sha256: "17c8e322a4ad77197dbed067cac872ea4096ffbe1bd04bf26ff03d530b115abe",
+        bytes: 130738,
       },
       normal: {
         file: "/textures/dark-rock-normal.webp",
         sha256: "27625b2f60e4647cc540c47b766dfe56db6fb2802a6fa47aee22ba29ab3a2bee",
+        bytes: 498022,
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
       // B metallic - so these two are the same download read on two channels,
@@ -331,10 +360,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/dark-rock-roughness.webp",
         sha256: "136c1614ba24f4282374516b027ff341929e7c2079445f86963351b3f228623a",
+        bytes: 194424,
       },
       ao: {
         file: "/textures/dark-rock-ao.webp",
         sha256: "1757cd680741e9aa39c2495ef3858447bc81fb0ab500b4b6d9c927309a996baf",
+        bytes: 249702,
       },
     },
     // Poly Haven's own captured size, 2000.9 mm square
@@ -364,10 +395,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/marble-cliff-base.webp",
         sha256: "91aa212e6a19c22808f9b47fa71c861515f7f4727e1f25630f3a1c353f789d8c",
+        bytes: 398972,
       },
       normal: {
         file: "/textures/marble-cliff-normal.webp",
         sha256: "134407287f0c84b0b4354b9216c2c8cfe0f668b8166462bba460572eb3528489",
+        bytes: 454628,
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
       // B metallic - so these two are the same download read on two channels,
@@ -377,10 +410,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/marble-cliff-roughness.webp",
         sha256: "b9914949526d43247728e8e0dd0092964a4b724a92c7b8efeefa60c2a24c1e44",
+        bytes: 234502,
       },
       ao: {
         file: "/textures/marble-cliff-ao.webp",
         sha256: "2ec77e9f92fa93125d81b0aee3eb0f13ae940c63c53bff40d0ac38abe68a6667",
+        bytes: 144110,
       },
     },
     // 2.5 m, and this is the ONE set where that is not the captured size: Poly
@@ -427,6 +462,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rock-grey-base.webp",
         sha256: "610c0ebadac6a3c32a7e4633a24bde94e0cce3bb5676abcd7797c0b638fbdf49",
+        bytes: 201308,
       },
       // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
       // this renderer wants. Real relief this time rather than the plate
@@ -436,6 +472,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/rock-grey-normal.webp",
         sha256: "9bb2cae517ec7a95f76a8bc3165e3f869ac2ca9a2b19fea8de8ec929f25a1816",
+        bytes: 493156,
       },
       // Both arrive with the number in RED alone (G and B are exactly 0) and
       // are flattened to grey by `assets:optimize-texture --channel r`. There is
@@ -444,10 +481,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rock-grey-roughness.webp",
         sha256: "3c89ac1e58732159e88254532900375cb5d76dd4241e680720c7ac617d9e23e5",
+        bytes: 466574,
       },
       ao: {
         file: "/textures/rock-grey-ao.webp",
         sha256: "9a3c85930b05886492b907ee9365b1f9802fa7f4d51162549a77aacea88e6d95",
+        bytes: 264212,
       },
     },
     // ambientCG states no captured size for this one either (its API answers
@@ -490,6 +529,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rock-black-base.webp",
         sha256: "a7212ba8b820a892af0938bd6d8490cfd171b7e9a9cac3d4ea0bd8b97a50ef17",
+        bytes: 325866,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
       // two ambientCG ships. The deepest relief of any set here (B mean .836,
@@ -502,6 +542,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/rock-black-normal.webp",
         sha256: "225ff4f77bf7f83033e532809a4c7dfec09ded2987d06249575112fcd989345c",
+        bytes: 751398,
       },
       // Red channel alone again (G and B exactly 0), flattened to grey by
       // `assets:optimize-texture --channel r`. No metallic map and none wanted:
@@ -509,10 +550,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rock-black-roughness.webp",
         sha256: "d6b85651a5d353d1ecf73d8b377ecab9264f689ec7ac46783339c8b23fd6c2de",
+        bytes: 384238,
       },
       ao: {
         file: "/textures/rock-black-ao.webp",
         sha256: "972a3621caeb63c2bc0d93c9a386821a86f50f4ce403c3e864d7b334aac55cbe",
+        bytes: 291510,
       },
     },
     // ambientCG states no captured size (`dimensionX: 0`), so this is a by-eye
@@ -563,6 +606,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rock-charcoal-base.webp",
         sha256: "aaeaeecd2ed47c36767baa505bf02d91f618fac0128255351c1b1d38964d52c7",
+        bytes: 268748,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
       // ambientCG ships. ambientCG generated it by height-field photogrammetry,
@@ -576,6 +620,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/rock-charcoal-normal.webp",
         sha256: "59149e3383dbb61c7ab6b0709a24bb96f6c40883d69b1765573775d4f5c91a99",
+        bytes: 2094946,
       },
       // Red channel alone again (G and B exactly 0), flattened to grey by
       // `assets:optimize-texture --channel r`. Roughness means .676 - the least
@@ -585,10 +630,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rock-charcoal-roughness.webp",
         sha256: "910a0a3268dd097bb366a34011b4cd0e3e635ef23556e59b6317cbcc65eb0e08",
+        bytes: 539904,
       },
       ao: {
         file: "/textures/rock-charcoal-ao.webp",
         sha256: "078019f1abaddd00e6179aa6278db9ce4d3b6feef4f05e7540f95e350658f208",
+        bytes: 536412,
       },
     },
     // ambientCG states no captured size (its API answers `dimensionX: 0`), so
@@ -624,6 +671,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/mossy-ground-base.webp",
         sha256: "af3d4fba2b97e607a37b6911a54d9d9facfdcfc2ef1df7e551fcbddce76beae6",
+        bytes: 335850,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
       // ambientCG ships. It arrives as a 16-bit PNG and stays lossless at 2.3 MB
@@ -633,6 +681,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/mossy-ground-normal.webp",
         sha256: "69ca639aac80766a059fd11d7defefc6dc920f8e448208c6367465b9adfe106d",
+        bytes: 2409710,
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. No
@@ -641,10 +690,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/mossy-ground-roughness.webp",
         sha256: "71982d6cbcae79d2c9845ec7863ddb59bd3e729026958ea8264918dcf38ec332",
+        bytes: 663162,
       },
       ao: {
         file: "/textures/mossy-ground-ao.webp",
         sha256: "3811325d773f83cf4e2af46a0fcd2967fe7b321913ccbe17e5be5429f7b32444",
+        bytes: 882340,
       },
     },
     // 3 m, and unlike the other ambientCG sets here that is the CAPTURED size
@@ -683,6 +734,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/moss-base.webp",
         sha256: "dd3ad549240ab7cf2c87be40a61e673976f8d69e5ddb26ec714e709c78428923",
+        bytes: 497796,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
       // two ambientCG ships. The DEEPEST relief in the manifest - B mean .723,
@@ -695,6 +747,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/moss-normal.webp",
         sha256: "3933eb2097951a1353f0487ac1ac5dbf32c1b5e4106d1c026af808b7d21edf42",
+        bytes: 2552434,
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. No
@@ -703,6 +756,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/moss-roughness.webp",
         sha256: "19728aafeb25852e6e2872aea251d53c86975468b9fb2cc6ae9465574df73ccb",
+        bytes: 733710,
       },
       // Shipped rather than left to the generated surface, and it is doing more
       // work here than in any other set: at a mean of .474 it is the darkest AO
@@ -712,6 +766,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       ao: {
         file: "/textures/moss-ao.webp",
         sha256: "bb8890317a9b4c7c986f319ddddd45b90915284f0973be37191202ad4208206d",
+        bytes: 935720,
       },
     },
     // ambientCG states no captured size (`dimensionX: 0`,
@@ -760,6 +815,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/moss-dark-base.webp",
         sha256: "94851a08c9ae3cb2b10166f121db6bc699dcad92117f7f0b275604602af10828",
+        bytes: 484414,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
       // two ambientCG ships. Relief in the middle of the organic band - B mean
@@ -777,6 +833,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/moss-dark-normal.webp",
         sha256: "018eee3510803aa77966baffeb77859377acac62241740e1a044e57ade3675f8",
+        bytes: 2683936,
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. Means
@@ -787,6 +844,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/moss-dark-roughness.webp",
         sha256: "108fa166bdb1a7d71708a9414267074bd549857d1568a3788fe70e23e042c5c9",
+        bytes: 761386,
       },
       // Shipped rather than left to the generated surface. Mean .529 - darker
       // than every set here but `moss`'s .474, and for the same reason a step
@@ -796,6 +854,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       ao: {
         file: "/textures/moss-dark-ao.webp",
         sha256: "282d538ed81c82438f13a12bd3ca41f465615bf00d20bdaac22cf0930236a47b",
+        bytes: 954344,
       },
     },
     // ambientCG states no captured size (`dimensionX: 0`,
@@ -832,6 +891,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/hedge-base.webp",
         sha256: "969ffadcd692c801d0b955fe08e145f2c2b9db99b88e061b71ba76bdc4d248e3",
+        bytes: 358430,
       },
       // **DIRECTX AS DOWNLOADED, AND FLIPPED HERE.** 3dtextures.me ships one
       // normal map and states no convention, and this one is DirectX (-Y): its
@@ -852,6 +912,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/hedge-normal.webp",
         sha256: "f5f0b7d947f19004bbaaac3ae95160743b0b9975f075456319ec5faae36d4e45",
+        bytes: 288716,
       },
       // Mean .892 over a .58-1.0 range: matte, where foliage should be, with
       // just enough spread to catch a wet-leaf sheen at grazing angles. Worth
@@ -863,6 +924,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/hedge-roughness.webp",
         sha256: "9c4f8bd888b09b2e77ca2e34ac813f33100e0bbe1cd0f80f0a671961be7fa413",
+        bytes: 387434,
       },
       // Doing the work the near-flat normal below cannot: mean .815 dipping to
       // .31 in the gaps between leaves, which is where a hedge's depth actually
@@ -871,6 +933,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       ao: {
         file: "/textures/hedge-ao.webp",
         sha256: "b7caffe2ed242c01fcd981b2385e56fed3519cd5502ef864fd719faf883ac8a0",
+        bytes: 412888,
       },
       // No metallic map and none wanted - the `metalness` 0 below says it once
       // rather than as a megabyte of black pixels. The height map the download
@@ -935,6 +998,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/forest-floor-base.webp",
         sha256: "bd0770d5b37ef7506fa1603c601453de4fc702ccef8bc6e0429d9730bfbde36c",
+        bytes: 474950,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
       // ambientCG ships. 2263 KB, in the manifest's top band of normals with the
@@ -943,6 +1007,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/forest-floor-normal.webp",
         sha256: "de5db1b02f2fcdc2494b9632c10cb1673c90b0fea52acb0bbaba471473e21b2c",
+        bytes: 2317924,
       },
       // Red channel alone (G and B exactly 0), flattened to grey by
       // `assets:optimize-texture --channel r`. Roughness means .604, and the map
@@ -952,10 +1017,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/forest-floor-roughness.webp",
         sha256: "aecc9098d4340c67c91e71416b4cbc298e9725ba68eeabdd2347769ac87e04ec",
+        bytes: 701840,
       },
       ao: {
         file: "/textures/forest-floor-ao.webp",
         sha256: "484a9ca3c9e54ca0c2303a0122212e3a86eabc8036427f807ba6a7181256dc83",
+        bytes: 726322,
       },
     },
     // ambientCG states no captured size (its API answers `dimensionX: 0`), so
@@ -1008,6 +1075,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/grass-base.webp",
         sha256: "0130ea73ad7f1a3878e20b051f95616751394034b4e682ba27ef79a65f224d31",
+        bytes: 418896,
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
       // two ambientCG ships. 2315 KB, in the top band with the other three
@@ -1016,6 +1084,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/grass-normal.webp",
         sha256: "c5b64518ffcd8aa39cdbeea0aa9df1d2ff80e42478ca8b42957adbc31837bb0a",
+        bytes: 2371038,
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. Means
@@ -1030,6 +1099,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/grass-roughness.webp",
         sha256: "8d49d642a1a07193e011dbe8ba81d99abee2ca4e67f458b7b14dd328328992d3",
+        bytes: 614476,
       },
       // Shipped rather than left to the generated surface, though it bites less
       // than the mosses' do: mean .727, against .529 and .474, because the leaf
@@ -1039,6 +1109,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       ao: {
         file: "/textures/grass-ao.webp",
         sha256: "bb1ccf8b41d24fc155adca6c4073c352d1f496220187010bd86dc4026237979f",
+        bytes: 961266,
       },
     },
     // ambientCG states no captured size (`dimensionX: 0`,
@@ -1108,6 +1179,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/mud-base.webp",
         sha256: "4c14880acbeeb8eea5ef1dd26787a07553283d489ce8f1d59843055b8bf6d42d",
+        bytes: 359056,
       },
       // Poly Haven ships `nor_gl`, the OpenGL convention (+Y up) this renderer
       // wants; the `nor_dx` alternative would light every clod from the wrong
@@ -1117,6 +1189,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/mud-normal.webp",
         sha256: "943cc0df4884bb3bcc763784d0c7ded46a4fb33057dd577c96985c7365676ce2",
+        bytes: 703092,
       },
       // Red channel alone (G and B exactly 0, measured), flattened to grey by
       // `assets:optimize-texture --channel r`. No AO in Poly Haven's glTF pack -
@@ -1126,6 +1199,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/mud-roughness.webp",
         sha256: "b6ad3c5d3f2477f31701e664c13c8baee19833d61652378a82404f321123d30f",
+        bytes: 384690,
       },
     },
     // Poly Haven's own captured size, 1300 mm square
@@ -1162,6 +1236,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rusted-iron-base.webp",
         sha256: "3a2a9b67cea9f1111d1ac400f37857f60da0da6bb359e5eb519e5b202ca42606",
+        bytes: 195456,
       },
       // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
       // this renderer wants. It is nearly flat (channel means .50/.50/1.00,
@@ -1171,6 +1246,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/rusted-iron-normal.webp",
         sha256: "5a8dd07b7b5dbd56860a4288ef05ebe10269a6e3b3f045eb85ae2da6379b1622",
+        bytes: 23312,
       },
       // The pair that carries the whole look: bare metal is smooth and fully
       // metallic, rust is rough and not metal at all, and having both maps is
@@ -1180,10 +1256,12 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rusted-iron-roughness.webp",
         sha256: "ecd27be47a577056258dac3d8618e6741d9f2a82b6aa1324ed984da2560f0e05",
+        bytes: 285942,
       },
       metallic: {
         file: "/textures/rusted-iron-metallic.webp",
         sha256: "c8ea41878743e6e285cffe02ffdba4ea16bd6f22209bf4a3ee14494bd213ede4",
+        bytes: 179180,
       },
       // No AO map in the set, and nothing to derive one from: an almost flat
       // surface occludes almost nothing.
@@ -1575,7 +1653,10 @@ function loadMaps(name: string, asset: TextureAsset): Promise<LoadedMaps> {
     slots.map(async ([slot, map]): Promise<[Slot, THREE.Texture | null]> => {
       if (!map) return [slot, null];
       try {
-        const tex = await loader.loadAsync(map.file);
+        // Through the byte-counting downloader rather than straight at the URL,
+        // so the loading screen can see this arriving (see download.ts). The
+        // decode is still `TextureLoader`'s, over the bytes it holds.
+        const tex = await withDownload(map.file, map.bytes, (href) => loader.loadAsync(href));
         // The albedo and the emission are COLOUR; the rest are data and must
         // stay linear, or a roughness of 0.5 is read as 0.21 and every authored
         // surface comes out shinier than it was painted.
@@ -1803,6 +1884,18 @@ export interface MeshAsset {
   // given commit meant; the fetch verifies it and fails hard on a mismatch.
   // `bun run assets:publish` prints it.
   sha256: string;
+  // The file's size in bytes, which is what the loading screen's bar is a
+  // fraction OF (see render3d/download.ts). It is stated here rather than read
+  // off the responses because a denominator that arrives with the download is
+  // not a denominator: the browser opens six connections and queues the rest, so
+  // the last file's Content-Length lands near the END of the load, and a bar
+  // measured against what has answered so far races to 60% and then sits still
+  // while the total catches up. Known up front, the bar is simply true.
+  //
+  // Written by `assets:publish` beside the hash and held to the file on disk by
+  // `cli assets`, exactly as `sha256` is - it is the same kind of fact, and one
+  // nobody should be typing by hand.
+  bytes: number;
   // The `--simplify` ratio this prop was decimated at, absent if its geometry
   // was left alone (which is the default - see scripts/optimize-asset.ts).
   //
@@ -1886,6 +1979,7 @@ function rock(node: string): MeshAsset {
     file: "/meshes/rocks.glb",
     node,
     sha256: "e2456ed1bc38d7990beec945c2751e1371f6b78495863f5d874f92229555254c",
+    bytes: 624352,
     source: "https://sketchfab.com/3d-models/pbr-rock-cliffs-pack-8fa6cabbbf0c431a9f5ffe91eb0b9090",
     author: "Maksim Batyrev (@c3posw01)",
     license: "CC BY 4.0",
@@ -1903,6 +1997,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "bulkhead-lamp": {
     file: "/meshes/bulkhead-lamp.glb",
     sha256: "1d9f7e121da014f7bdd06e7f4d67bd411f12f498dbc622a22ceb5106de7836f7",
+    bytes: 65276,
     // CC BY, so the author is an obligation rather than a note: the credit has
     // to name the person, and a link to where it was found is not that (see
     // "Provenance, in the manifest" in CLAUDE.md).
@@ -1946,6 +2041,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   cage: {
     file: "/meshes/cage.glb",
     sha256: "a74b6e26e6de89963b542dce1395509d9519fe1ab83a0dc1b91d6f7814ebc6ee",
+    bytes: 453608,
     simplify: 0.3, // 28,920 -> 8,675 triangles
     source: "https://sketchfab.com/3d-models/cage-7f86e8c4f839424fab8a6d43cdf2b4fc",
     author: "AAA (@BitoRaccoon)",
@@ -1981,6 +2077,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "cage-dungeon": {
     file: "/meshes/cage-dungeon.glb",
     sha256: "8632afc6dada82dcdc32380174c917736cd0b1a0fbf55ea8ca5bea2d1da9e68f",
+    bytes: 264640,
     scale: 0.4, // 2.28 x 5.70 x 2.28 m as exported -> 0.91 x 2.28 x 0.91
     source: "https://sketchfab.com/3d-models/dungeon-cage-34dcb15847ef439eb9f0c991ae1078f8",
     author: "Samuel F. Angrick-Johanns (@oneironauticus)",
@@ -2002,6 +2099,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "cage-rusty": {
     file: "/meshes/cage-rusty.glb",
     sha256: "0ebbe7a821d0910a7d28c1368eccc3eff3c1ce93f699ecff8b9c8ecc687b6a79",
+    bytes: 364104,
     source: "https://sketchfab.com/3d-models/rusty-dungeon-cage-3e404a7e3fec4340b52519942ff229e0",
     author: "Samuel F. Angrick-Johanns (@oneironauticus)",
     license: "CC BY 4.0",
@@ -2021,6 +2119,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "pipe-concrete": {
     file: "/meshes/pipe-concrete.glb",
     sha256: "6b5eed66d54fc1f39660cb07b0e35e78f4450cffba67352d6634f16a76cea158",
+    bytes: 85980,
     rotY: Math.PI / 2,
     source: "https://sketchfab.com/3d-models/concrete-pipe-game-ready-92d1cbc20e8c440aad9be60586d5efa6",
     author: "PT34",
@@ -2044,6 +2143,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "pipe-long": {
     file: "/meshes/pipe-long.glb",
     sha256: "42bb6ae3b07fda693df314a9215d2859210d52f5885421ea00f11a10a1bedd21",
+    bytes: 397192,
     rotY: Math.PI / 2,
     source: "https://sketchfab.com/3d-models/pipe-metalic-metal-14mb-48182e0a4c7943f596dced21a167379b",
     author: "Mehdi Shahsavan (@ahmagh2e)",
@@ -2072,6 +2172,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "sewer-arch": {
     file: "/meshes/sewer-arch.glb",
     sha256: "db582f170e41f459690e3bc9cfb41c44b88b7b47c01ac85ae6a66b59fa92b980",
+    bytes: 616624,
     simplify: 0.1, // 57,885 -> 5,787 triangles
     source:
       "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
@@ -2081,6 +2182,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "sewer-wall": {
     file: "/meshes/sewer-wall.glb",
     sha256: "d1e9d88eee42649cf9ac306766363c3e0dcb435350447593c1ce94013f1122d5",
+    bytes: 786272,
     simplify: 0.1, // 134,041 -> 13,404 triangles
     source:
       "https://sketchfab.com/3d-models/sewer-brick-walls-set-midpoly-ue5-nanite-27143020c0bb4624aaf4f5257fd603bd",
@@ -2114,6 +2216,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "sewer-doorway": {
     file: "/meshes/sewer-doorway.glb",
     sha256: "437af23c1dfa0ba50133843e44def247d0b9294b27dc298ee9e1213a2d292484",
+    bytes: 787756,
     simplify: 0.3, // 56,286 -> 16,884 triangles
     source:
       "https://sketchfab.com/3d-models/sewer-brick-walls-set-2-midpoly-ue5-nanite-5a5ae221432444f898336627dc192567",
@@ -2143,6 +2246,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   lantern: {
     file: "/meshes/lantern.glb",
     sha256: "251bb6dc9d0cf480b950802237c7826f21fba690d41f2f0fc40d74689e559de7",
+    bytes: 271552,
     scale: 0.2, // 0.90 x 2.51 x 0.87 m as exported -> 0.18 x 0.50 x 0.17
     source: "https://sketchfab.com/3d-models/lantern-f0b0ea89f20b4f10bb583c449ae04d9c",
     author: "Mandrake (@mandrake_3d)",
@@ -2177,6 +2281,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "lantern-rusty": {
     file: "/meshes/lantern-rusty.glb",
     sha256: "f535f7ac6b27705b4391843dfdd5c5e89d20922d6fdb93eaeea3a08668cf0254",
+    bytes: 270128,
     scale: 0.065, // 2.75 x 5.87 x 2.39 as exported -> 0.18 x 0.38 x 0.16 m
     source:
       "https://sketchfab.com/3d-models/old-rusty-lantern-c11fd480023d485f9bbeaae633c868d7",
@@ -2204,6 +2309,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "iron-gate": {
     file: "/meshes/iron-gate.glb",
     sha256: "03a875919280ec49f84a592b25f1179c8e1f08826e2adc114eb22b57102d02ed",
+    bytes: 570448,
     rotY: Math.PI / 2,
     source: "https://sketchfab.com/3d-models/dungeonprison-bars-door-410e6acfc4c448d3835929e1b6d6df3a",
     author: "Yukitsu-Senpai",
@@ -2238,6 +2344,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   "metal-bars": {
     file: "/meshes/metal-bars.glb",
     sha256: "c8295b057cb082a3bbc325d3f6f9c52744cf758d4e931cc934b2d2d7ad8687ef",
+    bytes: 126300,
     center: true, // exported at its level coordinates, 8.9 m off its own geometry
     // CC BY, so the credit names the person rather than the page (see
     // "Provenance, in the manifest" in CLAUDE.md). Noted with the entry because
@@ -2255,6 +2362,7 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
     sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",
+    bytes: 151460,
     source:
       "https://sketchfab.com/3d-models/low-poly-closed-barrels-8df46c47099a4b9d9bc4a69edcad1b88",
     author: "Anna Denisova (@Den1121)",
@@ -2327,6 +2435,18 @@ export interface RawAsset {
   // `bun run assets:fetch` like every other stored file.
   file: string;
   sha256: string;
+  // The file's size in bytes, which is what the loading screen's bar is a
+  // fraction OF (see render3d/download.ts). It is stated here rather than read
+  // off the responses because a denominator that arrives with the download is
+  // not a denominator: the browser opens six connections and queues the rest, so
+  // the last file's Content-Length lands near the END of the load, and a bar
+  // measured against what has answered so far races to 60% and then sits still
+  // while the total catches up. Known up front, the bar is simply true.
+  //
+  // Written by `assets:publish` beside the hash and held to the file on disk by
+  // `cli assets`, exactly as `sha256` is - it is the same kind of fact, and one
+  // nobody should be typing by hand.
+  bytes: number;
   // As on `MeshAsset`, and required for the same reasons.
   source: string;
   author: string;
@@ -2342,6 +2462,7 @@ export const RAW_ASSETS: Record<string, RawAsset> = {
   "water-normal-flip": {
     file: "/water/water-normal-flip.webp",
     sha256: "ca1c14cfa3cf1d2afb946668315630411a3a5ab2a55e48781f5594619bc5aef9",
+    bytes: 5068428,
     source:
       "https://textures.pixel-furnace.com (Animated Water Normal Map; via https://blenderartists.org/t/animated-water-normal-map-tileable-looped/673140)",
     author: "Cebbi (Pixel-Furnace)",
@@ -2353,6 +2474,7 @@ export const RAW_ASSETS: Record<string, RawAsset> = {
   "water-foam": {
     file: "/water/water-foam.webp",
     sha256: "da1b8900131770f284ea3ab55977cd98ab65728709d7ca0133d1da37bb927f9f",
+    bytes: 94482,
     source: "scripts/bake-foam.ts (generated in this repository)",
     author: "Tristan Bray",
     license: "CC0",
@@ -2376,6 +2498,18 @@ export interface HdriAsset {
   // `bun run assets:fetch` like every other stored file.
   file: string;
   sha256: string;
+  // The file's size in bytes, which is what the loading screen's bar is a
+  // fraction OF (see render3d/download.ts). It is stated here rather than read
+  // off the responses because a denominator that arrives with the download is
+  // not a denominator: the browser opens six connections and queues the rest, so
+  // the last file's Content-Length lands near the END of the load, and a bar
+  // measured against what has answered so far races to 60% and then sits still
+  // while the total catches up. Known up front, the bar is simply true.
+  //
+  // Written by `assets:publish` beside the hash and held to the file on disk by
+  // `cli assets`, exactly as `sha256` is - it is the same kind of fact, and one
+  // nobody should be typing by hand.
+  bytes: number;
   // What the picker shows, since a manifest key is a slug and a sky is a place.
   label: string;
   // As on `MeshAsset`, and required for the same reasons.
@@ -2388,6 +2522,7 @@ export const HDRI_ASSETS: Record<string, HdriAsset> = {
   "golden-gate-hills": {
     file: "/hdri/golden-gate-hills.hdr",
     sha256: "d989c2b8483a783341137c05ab40d56ab4d803dd321e3cedff37bef6ca6135da",
+    bytes: 1635416,
     label: "Golden Gate hills - open sky, afternoon sun",
     source: "https://polyhaven.com/a/golden_gate_hills (2k EXR, resampled to 1k RGBE)",
     author: "Greg Zaal, Rico Cilliers (Poly Haven)",
@@ -2443,9 +2578,13 @@ export function loadHdri(key: string): Promise<THREE.DataTexture | null> {
   if (!asset) return Promise.resolve(null);
   const cached = hdriCache.get(asset.file);
   if (cached) return cached;
+  // The decoder chunk and the sky itself are fetched at the same time rather
+  // than one after the other: `hdrLoader()` starts the import here, and
+  // `withDownload` starts the download on the call, so the 1.6 MB of sky is
+  // already arriving while the module that will parse it is still on its way.
+  const loading = hdrLoader();
   const p = track(
-    hdrLoader()
-      .then((loader) => loader.loadAsync(asset.file))
+    withDownload(asset.file, asset.bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
       .then((tex) => {
         tex.mapping = THREE.EquirectangularReflectionMapping;
         hdriReady.set(asset.file, tex);
@@ -2531,11 +2670,15 @@ export function wakeEmission(material: THREE.Material | THREE.Material[]): void 
 // is cached is the file AS EXPORTED - no `scale`, no rotation - because those
 // are per ENTRY and two entries may address different nodes of one file with
 // different ones.
-function loadFile(file: string): Promise<THREE.Object3D | null> {
+function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
   const cached = gltfCache.get(file);
   if (cached) return cached;
-  const p = gltfLoader()
-    .then((loader) => loader.loadAsync(file))
+  // Loader chunk and file in parallel, as `loadHdri` does, and the file's bytes
+  // counted on the way past (see download.ts). Every GLB in the store is
+  // self-contained, so a loader handed a `blob:` URL has no sidecar left to
+  // resolve against it.
+  const loading = gltfLoader();
+  const p = withDownload(file, bytes, (href) => loading.then((loader) => loader.loadAsync(href)))
     .then((gltf) => {
       gltf.scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
@@ -2560,7 +2703,7 @@ function loadFile(file: string): Promise<THREE.Object3D | null> {
 export function loadMesh(key: string): Promise<THREE.Object3D | null> {
   const asset = MESH_ASSETS[key];
   if (!asset) return Promise.resolve(null);
-  return loadFile(asset.file).then((root) => {
+  return loadFile(asset.file, asset.bytes).then((root) => {
     if (!root) return null;
     const picked = asset.node === undefined ? root : root.getObjectByName(asset.node);
     if (!picked) {

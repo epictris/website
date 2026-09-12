@@ -1296,7 +1296,7 @@ function surfaceResolution(): CaseResult[] {
   // resolution rule with an empty one. Removed again below, so no other case
   // (and no build) can see it.
   TEXTURE_ASSETS[key] = {
-    maps: { base: { file: "/textures/x-base.webp", sha256: "0" } },
+    maps: { base: { file: "/textures/x-base.webp", sha256: "0", bytes: 1 } },
     tile: 2.5,
     source: "test",
     author: "test",

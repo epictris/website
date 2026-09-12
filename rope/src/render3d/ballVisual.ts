@@ -15,7 +15,7 @@
 
 import * as THREE from "three";
 import { BallPlayer } from "../classes/ballPlayer";
-import { surfaceFor } from "./assets";
+import { IRON_SURFACE, surfaceFor } from "./assets";
 import { orientTo, placeAt, threeY } from "./space";
 
 // How much thicker than the collision radius the mounting loop's ring is drawn.
@@ -33,7 +33,11 @@ const LOOP_TUBE = BallPlayer.LOOP_RADIUS * 0.42;
 // One surface for all of it because it IS one forged assembly: the ball and the
 // chain hanging off it reading as the same metal is most of what makes them look
 // like one object rather than two props that happen to touch.
-export const FORGED = "rusted iron";
+// Named in `assets.ts` beside the manifest it is a key of, because a second
+// reader needs it: the preload list a page starts downloading before the app
+// exists has to account for this surface, and that resolver cannot import this
+// module (it would drag the avatar, the sim and three into a build step).
+export const FORGED = IRON_SURFACE;
 
 // How large that surface is worn on the assembly's SMALL parts. The set's own
 // tile is one repeat over the ball (see its manifest entry), which along the

@@ -1,7 +1,9 @@
 // Upload one optimised asset - a prop or a texture map - to the release store and
 // print the manifest entry it wants. The printing is the point: the `sha256` is what pins a revision of this
 // repo to a specific set of bytes (see fetch-assets.ts), and a hash anybody has
-// to compute by hand is a hash that ends up wrong or omitted.
+// to compute by hand is a hash that ends up wrong or omitted. The same goes for
+// the `bytes` beside it, which is what the loading bar is a fraction of (see
+// `TextureMap.bytes`); `cli assets` holds both to the file on disk.
 //
 //   bun run assets:publish public/meshes/rock.glb
 //
@@ -81,6 +83,7 @@ if (input.includes("water/")) {
   console.log(`  "${stem}": {`);
   console.log(`    file: "/water/${name}",`);
   console.log(`    sha256: "${hash}",`);
+  console.log(`    bytes: ${bytes.length},`);
   console.log(`    source: "<where it came from>",`);
   console.log(`    author: "<who made it>",`);
   console.log(`    license: "<e.g. CC0>",`);
@@ -90,6 +93,7 @@ if (input.includes("water/")) {
   console.log(`  "${stem}": {`);
   console.log(`    file: "/hdri/${name}",`);
   console.log(`    sha256: "${hash}",`);
+  console.log(`    bytes: ${bytes.length},`);
   // The one field no other manifest has: the picker in the editor's Environment
   // panel shows this rather than the key, because a sky is a place.
   console.log(`    label: "<what the sky is, for the editor's picker>",`);
@@ -100,7 +104,7 @@ if (input.includes("water/")) {
 } else if (input.includes("textures/")) {
   const slot = /-(base|normal|roughness|metallic|ao)$/.exec(stem)?.[1] ?? "base";
   console.log(`[assets] TEXTURE_ASSETS map (src/render3d/assets.ts):\n`);
-  console.log(`    ${slot}: { file: "/textures/${name}", sha256: "${hash}" },\n`);
+  console.log(`    ${slot}: { file: "/textures/${name}", sha256: "${hash}", bytes: ${bytes.length} },\n`);
   console.log(`[assets] in a set that also carries \`tile\` (metres per repeat), its`);
   console.log(`[assets] source/author/license, and any of the other four maps.`);
 } else {
@@ -108,6 +112,7 @@ if (input.includes("water/")) {
   console.log(`  "${stem}": {`);
   console.log(`    file: "/meshes/${name}",`);
   console.log(`    sha256: "${hash}",`);
+  console.log(`    bytes: ${bytes.length},`);
   console.log(`    source: "<url the model came from>",`);
   console.log(`    author: "<who made it>",`);
   console.log(`    license: "<e.g. CC0>",`);

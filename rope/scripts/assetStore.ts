@@ -43,6 +43,10 @@ export interface StoredAsset {
   key: string;
   file: string;
   sha256: string;
+  // What the manifest says the file weighs, carried here so `cli assets` can
+  // hold it to the file on disk exactly as it holds the hash (see `TextureMap`
+  // for what the number is for).
+  bytes: number;
 }
 
 export function storedAssets(): StoredAsset[] {
@@ -58,7 +62,7 @@ export function storedAssets(): StoredAsset[] {
   for (const [key, asset] of Object.entries(MESH_ASSETS)) {
     const seen = meshFiles.get(asset.file);
     if (!seen) {
-      meshFiles.set(asset.file, { key, file: asset.file, sha256: asset.sha256 });
+      meshFiles.set(asset.file, { key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
       continue;
     }
     // Two keys naming one file must agree about its bytes. They cannot both be
@@ -75,16 +79,16 @@ export function storedAssets(): StoredAsset[] {
   // The water renderer's raw maps (flipbook, foam) - one file per entry, like a
   // prop; see `RawAsset` for why they are not texture-set slots.
   for (const [key, asset] of Object.entries(RAW_ASSETS)) {
-    out.push({ key, file: asset.file, sha256: asset.sha256 });
+    out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }
   // The captured skies - one file per entry, like a prop.
   for (const [key, asset] of Object.entries(HDRI_ASSETS)) {
-    out.push({ key, file: asset.file, sha256: asset.sha256 });
+    out.push({ key, file: asset.file, sha256: asset.sha256, bytes: asset.bytes });
   }
   for (const [key, asset] of Object.entries(TEXTURE_ASSETS)) {
     const maps = asset.maps;
     for (const [slot, map] of Object.entries(maps)) {
-      if (map) out.push({ key: `${key}.${slot}`, file: map.file, sha256: map.sha256 });
+      if (map) out.push({ key: `${key}.${slot}`, file: map.file, sha256: map.sha256, bytes: map.bytes });
     }
     // Belt and braces: `textureMaps` is what the runtime iterates, so a slot
     // added there and not here would be a file nothing checks.
