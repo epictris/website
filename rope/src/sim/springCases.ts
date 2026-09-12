@@ -1547,7 +1547,7 @@ function caseWinchLoad(): SpringResult {
 
 // winch-anchor-load - a wind-up keeps bearing down on the PLAIN pivot it hangs
 // from; winch-anchor-load-hung - the same statement about a free chain-hung
-// body, which is still open and carries the `expectedFail` marker.
+// body.
 //
 // `winch-load` above is the sprung half of this statement; this is the rest of
 // it. The spin rollback strips an anchor of its share of the length correction
@@ -1567,7 +1567,11 @@ function caseWinchLoad(): SpringResult {
 // read 85 J of unforced gain, and `session-611f`'s floor polygon was tipped
 // into a stalled wound-tight pose - a steady force stands in for a load only
 // where the holder answers it with a bounded state, and a free body does not.
-// The `hung` rig records that half red until the coupled solve carries it.
+// The `hung` rig recorded that half red until the coupled solve carried it,
+// which it now does: a free rigid holder a scene chain holds is no longer
+// rolled back at all (`keepsHaul` in `BallLevel`'s chain phase - the
+// `session-149f` plank), so its share of the correction, the hanging ball's
+// weight included, stands and its settle-derived velocity carries the load.
 //
 // Three rigs, each run twice with identical throws - the aim HELD on the
 // anchor, and the aim WOUND a turn per 2 s - and the anchor's spin measured
@@ -1756,11 +1760,7 @@ function caseWinchAnchorLoad(): SpringResult {
 
 function caseWinchAnchorLoadHung(): SpringResult {
   const r = winchAnchorLoadRigs(["hung"]);
-  return expectedFail(
-    "winch-anchor-load-hung — ...and on a free chain-hung body (open: see the case comment)",
-    r.passed,
-    r.details,
-  );
+  return ok("winch-anchor-load-hung - ...and on a free chain-hung body", r.passed, r.details);
 }
 
 function caseWhirlAnchor(): SpringResult {

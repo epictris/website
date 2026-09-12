@@ -1,0 +1,16 @@
+{
+  "name": "rig-hung-plank-wind",
+  "spawn": { "x": -1.417, "y": -1.377 },
+  "fireAt": { "x": -1.25, "y": -1.66 },
+  "drive": { "kind": "whirl", "period": 26, "frames": 300 },
+  "data": {
+    "player": { "x": -141.7, "y": -137.7, "radius": 8 },
+    "bodies": [
+      { "kind": "static", "x": -190, "y": -325, "rot": 0, "shape": { "kind": "rect", "w": 20, "h": 10 }, "friction": 1.0 },
+      { "kind": "rigid", "x": -192, "y": -170, "rot": 0, "shape": { "kind": "rect", "w": 150, "h": 10 }, "friction": 1.0 }
+    ],
+    "chains": [
+      { "a": { "body": 0, "x": -190, "y": -320 }, "b": { "body": 1, "x": -192, "y": -175 } }
+    ]
+  }
+}

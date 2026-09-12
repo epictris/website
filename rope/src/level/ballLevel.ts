@@ -674,8 +674,9 @@ export class BallLevel {
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
       //
-      // Off EVERY body but the ball, with no exception, and what the frame
-      // then does with the length that rollback re-creates is the whole of the
+      // Off every body but the ball - save the free chain-hung holder, which
+      // keeps its share (see `keepsHaul` above) - and what the frame then does
+      // with the length that rollback re-creates is the whole of the
       // difficulty. Rolling a body back re-breaks a constraint the solve had
       // just satisfied, and the over-length that reappears has to be answered
       // by somebody: by the ball's rotation through the unwind below, or by the
@@ -741,6 +742,54 @@ export class BallLevel {
       // rollback stays whole, and the load crosses by the ledge hang's
       // mechanism instead (`applyHangLoad`): a bounded weight-sized impulse
       // per frame, which a spring answers with a damped, settled droop.
+      // The rollback's premise - that the winding has no force behind it - is a
+      // statement about winding the frame REFUSES: a ball wound tight against
+      // its anchor, whose turn the unwind hands back, must not leave the anchor
+      // hauled and paid for chain that never wound on (session-215f,
+      // session-265f). It is false of winding that is KEPT. Chain that stays
+      // wound was hauled in by a tension, and a tension has two ends: the haul
+      // that draws the ball up its chain draws the holder down it by the same
+      // impulse, split by the effective masses the solve already split it by.
+      //
+      // Rolling a free holder back and hauling the ball alone against it - the
+      // winch pass below, with every other body on the path held immovable -
+      // treated that holder as a body of infinite mass for exactly the frames
+      // the tension on it was largest. A 21 kg plank hung by its middle from a
+      // post, the 15 kg ball hooked to one end and winding itself up in free
+      // air, was turned toward the ball by 1.3 rad/s a frame in the solve and
+      // handed all of it back by the rollback, every frame for thirty frames,
+      // while the ball was hauled from 2 to 12 m/s round an anchor that would
+      // not answer: the plank swung on at -4 rad/s, barely touched, and the
+      // player was whipped round the end of it (`session-149f` f83-112). The
+      // physical answer is the one the solve had already written - the plank's
+      // swing stops and reverses under the ball's haul, and the ball, sharing
+      // its angular momentum with the plank, is not whipped.
+      //
+      // So a free rigid body a scene chain holds keeps its coupled share, and
+      // neither the rollback nor the winch pass touches it. What separates it
+      // from the holders the rollback still reaches is what answers the haul:
+      // a PIVOT stores it in a frictionless bearing and a SPRING mount in its
+      // spring, both of which the whirl governor and `applyHangLoad` are
+      // written for; a body held by nothing answers only through contacts the
+      // rope solve cannot see, and its share stays the unwind's to refuse; a
+      // VINE LINK is the limit case of a light holder (~0.05 kg against the
+      // ball) whose whole vine the coupled sweep has to be left to apportion
+      // (`session-1260f`, `cli vines` `ball-steer`), and it stays the winch
+      // pass's. A chain-hung body answers the haul the way the plank does -
+      // by moving - and the pair push-out (`separateBallFromPathBodies`) is
+      // what keeps the wound-tight regime honest for it: both bodies hauled
+      // into each other are pushed back by the shares they were hauled by, so
+      // the length the unwind then refuses is the whole of the winding, and
+      // neither is credited a thing. `cli contacts` `hung-anchor` holds the
+      // slingshot side of this line, `cli spring` `winch-anchor-load-hung` the
+      // load side (red on purpose until this landed), `session-149f` is the
+      // recorded artifact and `playtests/rigs/hung-plank-wind.json` the
+      // instrument.
+      const keepsHaul = (body: RigidBody2D): boolean =>
+        !body.pivot &&
+        body.spring === null &&
+        !(body instanceof VineLink) &&
+        solveChains.some((c) => c.holds(body));
       const haulAtSolve = new Map<
         RigidBody2D,
         { position: Vec2; velocity: Vec2; rotation: number; spin: number }
@@ -792,7 +841,11 @@ export class BallLevel {
       // anything else reads the positions (see `separateBallFromPathBodies`).
       const pushedOutOf: PushOut[] = this.separateBallFromPathBodies(delta);
       PhaseTrace.mark("pair-push-out", this.world);
+      // A FREE rigid holder that a scene chain holds is NOT rolled back: it
+      // keeps the coupled solve's share of the haul, which is the reaction to
+      // the tension that hauled the ball (see `keepsHaul`).
       for (const [body, before] of haulAtSolve) {
+        if (keepsHaul(body)) continue;
         body.globalPosition = body.globalPosition.sub(
           body.globalPosition.sub(before.position).mul(spinShare),
         );
@@ -835,7 +888,8 @@ export class BallLevel {
       // exists to starve, and `cli spring` `whirl-anchor` goes from 8.6 m/s to
       // 27.3 with the gate removed.
       const winchOwed = [...haulAtSolve.keys()].some(
-        (b) => !b.pivot && b.spring === null && solveChains.some((c) => c.holds(b)),
+        (b) =>
+          !keepsHaul(b) && !b.pivot && b.spring === null && solveChains.some((c) => c.holds(b)),
       );
       if (spinShare > 0 && winchOwed) {
         const heldForWinch = new Set<CollisionObject2D>();
@@ -1279,6 +1333,25 @@ export class BallLevel {
       const gravityStep = GRAVITY.mul(this.ball.gravityScale * delta);
       const surfaceSpeed = (p: PushOut): number =>
         p.other instanceof RigidBody2D ? p.other.linearVelocity.dot(p.normal) : 0;
+      //
+      // And taken as the PAIR it is where the surface is a rigid body. The
+      // refusal removes the closing rate between the ball and the surface, and
+      // a closing rate belongs to two bodies: written onto the ball alone, a
+      // body moving AT the ball hands it that speed and keeps its own, which is
+      // an impulse with one end. A 12.6 kg hung weight the wound-up ball was
+      // riding, pushed back into the ball by the pair separation at 1.3 m/s,
+      // was answered by the ball being sped up 0.44 m/s a frame to keep clear
+      // of it - 40 J over six frames, the aim idle, the ball's spin zero, on a
+      // 52 kg body the weight could not have moved a quarter of that
+      // (`session-239f` f93-98, `energy-gained` at f121). Split by the same
+      // effective masses the pair separation splits its push by - the body's
+      // rotation about the contact in the split, since the pushing edge is as
+      // often a corner as a face - the weight is slowed by what the ball is sped
+      // up, which is the one impulse seen from its two ends. A static surface
+      // has no share and reads exactly as it always did, and so do a PIVOT and
+      // a SPRING mount: their answer to a load is a bearing or a spring with a
+      // governor of its own (`whirl-anchor`, `winch-load`), and an impulse
+      // laid on the bearing here is the whirl's seed spin by another door.
       for (const p of pushedOutOf) {
         const surface = surfaceSpeed(p);
         const into = this.ball.linearVelocity.dot(p.normal) - surface;
@@ -1287,7 +1360,20 @@ export class BallLevel {
           Math.min(gravityStep.dot(p.normal), 0),
         );
         if (into < funded) {
-          this.ball.linearVelocity = this.ball.linearVelocity.sub(p.normal.mul(into - funded));
+          const other = p.other;
+          if (other instanceof RigidBody2D && !other.asleep && !other.pivot && other.spring === null) {
+            const arm = p.point.sub(other.globalPosition).cross(p.normal);
+            const effectiveInverseMass =
+              this.ball.inverseMass + other.inverseMass + arm * arm * other.inverseInertia;
+            const impulse = (funded - into) / effectiveInverseMass;
+            this.ball.linearVelocity = this.ball.linearVelocity.add(
+              p.normal.mul(impulse * this.ball.inverseMass),
+            );
+            other.linearVelocity = other.linearVelocity.sub(p.normal.mul(impulse * other.inverseMass));
+            other.angularVelocity -= arm * impulse * other.inverseInertia;
+          } else {
+            this.ball.linearVelocity = this.ball.linearVelocity.sub(p.normal.mul(into - funded));
+          }
         }
       }
       // Cancelling the component the geometry has already refused (session-537f:

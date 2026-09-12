@@ -1,4 +1,10 @@
 {
+  "chains": [
+    {
+      "a": 1,
+      "b": 2
+    }
+  ],
   "player": {
     "x": 0,
     "y": -100,
@@ -7,8 +13,8 @@
   "bodies": [
     {
       "kind": "static",
-      "x": -179.09090909090887,
-      "y": -285.9090909090908,
+      "x": -190.00000000000003,
+      "y": -325,
       "rot": 0,
       "color": "#555555",
       "opacity": 0.5,
@@ -16,8 +22,6 @@
       "objects": [
         {
           "type": "collision",
-          "x": -10.909090909091157,
-          "y": -39.09090909090915,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -42,8 +46,6 @@
         },
         {
           "type": "geometry",
-          "x": -10.909090909091157,
-          "y": -39.09090909090915,
           "shape": {
             "kind": "poly",
             "verts": [
@@ -68,6 +70,48 @@
           "matchCollision": true,
           "depth": 20,
           "texture": "wood"
+        },
+        {
+          "type": "anchor",
+          "id": 1,
+          "x": 0.26074551119597,
+          "y": 4.999999999999982
+        }
+      ]
+    },
+    {
+      "kind": "rigid",
+      "x": -192.00000000000003,
+      "y": -170.00000000000003,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 150,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 150,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 20,
+          "texture": "wood"
+        },
+        {
+          "type": "anchor",
+          "id": 2,
+          "x": -0.008998430666062873,
+          "y": -5.000000000000004
         }
       ]
     }
