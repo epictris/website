@@ -50,9 +50,11 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **brick** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/factory_brick), CC0
 - **dark rock** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/dark_rock_02), CC0
 - **forest-floor** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Ground068), CC0
+- **grass** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Grass007), CC0
 - **hedge** (4 maps) - "Katsukagi (3dtextures.me)", [source](https://3dtextures.me/2022/02/24/hedge-001/), CC0
 - **marble cliff** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/marble_cliff_05), CC0
 - **moss** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Moss002), CC0
+- **moss-dark** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Moss003), CC0
 - **mossy ground** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Ground047), CC0
 - **mud** (3 maps) - "Rob Tuytel", [source](https://polyhaven.com/a/brown_mud_02), CC0
 - **rock wall** (4 maps) - "Amal Kumar", [source](https://polyhaven.com/a/rock_wall_08), CC0

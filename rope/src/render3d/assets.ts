@@ -730,6 +730,91 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // The same moss a stop darker and a good deal finer: a dense even nap of
+  // small shoots over soft broad swells, where `moss` is discrete cushions with
+  // shadowed gaps between them. The pair is the green family's answer to what
+  // the rocks already have - `rock-grey` and `rock-black` are one surface at two
+  // depths of dark, and so are these - so the choice between them is a lighting
+  // decision rather than a botanical one.
+  //
+  // The number that makes it: LINEAR albedo .055, against `moss`'s .075. That
+  // is a third less light back, and it lands this on `mossy ground`'s .054 -
+  // so a wall of it reads as the shaded side of the same growth the bright set
+  // wears, and the two meeting on a boulder read as one plant turning out of
+  // the sun rather than as two materials. sRGB mean #39571A against `moss`'s
+  // #4A6619, and it is cooler as well as darker (linear B .013 on a G of .104,
+  // where `moss` is .012 on .139): less yellow in it, which is what keeps it
+  // from going khaki under a warm lamp the way `moss` does.
+  //
+  // It is also QUIETER, mean chroma .240 against `moss`'s .302 - which puts it
+  // between `mossy ground` (.174) and `moss`, and makes it the green that can
+  // cover a whole face without becoming the thing the eye goes to. `moss` is
+  // still the one for a patch that is meant to be seen as alive.
+  //
+  // Keyed as a SURFACE like the rest of the green family, and named for the
+  // difference that matters rather than for `moss-003`: the manifest names its
+  // rocks by colour for the same reason, and a texture called `moss-003` next to
+  // `moss` says nothing about which to reach for.
+  "moss-dark": {
+    maps: {
+      base: {
+        file: "/textures/moss-dark-base.webp",
+        sha256: "94851a08c9ae3cb2b10166f121db6bc699dcad92117f7f0b275604602af10828",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
+      // two ambientCG ships. Relief in the middle of the organic band - B mean
+      // .808, sigma .063, between `mossy ground`'s .833 and `moss`'s .723 - and
+      // the shape of it is the difference between the two mosses: `moss` is
+      // domes with deep narrow gaps, this is a fine nap over swells a hand's
+      // width across, so it does not march under a grazing light the way the
+      // deeper set does on a long flat span.
+      //
+      // 2621 KB, the largest map in the manifest, just past `moss`'s 2492. Both
+      // are in the top band for the reason `rock-charcoal` states - a lossless
+      // normal costs what its busiest region costs, and a nap of individual
+      // shoots has no flat texel anywhere in it for the encoder to spend
+      // nothing on.
+      normal: {
+        file: "/textures/moss-dark-normal.webp",
+        sha256: "018eee3510803aa77966baffeb77859377acac62241740e1a044e57ade3675f8",
+      },
+      // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
+      // are, flattened to grey by `assets:optimize-texture --channel r`. Means
+      // .612, within four thousandths of `moss`'s .609, which is the one place
+      // the two sets are interchangeable: it is the same damp plant, and only
+      // the colour and the depth of it differ. No metallic map and none wanted -
+      // the 0 below is a dielectric's, stated rather than shipped as an image.
+      roughness: {
+        file: "/textures/moss-dark-roughness.webp",
+        sha256: "108fa166bdb1a7d71708a9414267074bd549857d1568a3788fe70e23e042c5c9",
+      },
+      // Shipped rather than left to the generated surface. Mean .529 - darker
+      // than every set here but `moss`'s .474, and for the same reason a step
+      // less: the nap closes over its own hollows almost as completely as the
+      // cushions close over theirs. Without it the shoots flatten into one dark
+      // sheet, which on a surface this low in albedo is the whole look gone.
+      ao: {
+        file: "/textures/moss-dark-ao.webp",
+        sha256: "282d538ed81c82438f13a12bd3ca41f465615bf00d20bdaac22cf0930236a47b",
+      },
+    },
+    // ambientCG states no captured size (`dimensionX: 0`,
+    // https://ambientcg.com/api/v2/full_json?id=Moss003 - it is procedural, so
+    // there is no capture to state), which makes this a by-eye number as
+    // `moss`'s is. It is deliberately `moss`'s SAME 1 m, on the reasoning the
+    // three rocks share their 2: the two are meant to be swapped on one face,
+    // or laid either side of an edge, and a seam between moss at 1 m and moss at
+    // 1.6 reads as a mistake. 1 m puts the shoots at roughly 4 cm, which is what
+    // they are, and nothing in the set is a feature - no clump distinct enough
+    // to be recognised twice - so the repeat stays invisible however many times
+    // it runs.
+    tile: 1,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Moss003",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   // A clipped hedge face: small ovate leaves packed dense enough that no branch
   // reads through, which is what makes it usable as a WALL rather than as
   // scattered foliage. The wrapping counterpart to the ground family - `moss`,
@@ -885,6 +970,96 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     metalness: 0,
     fallback: "stone",
     source: "https://ambientcg.com/view?id=Ground068",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
+  // Low green ground cover - fine clover-ish leaf packed edge to edge, with
+  // rosettes and dropped twigs scattered over it. The fourth of the ground
+  // family and the only one of them that is actually GREEN across its whole
+  // span: `mossy ground` is earth with moss in it, `forest-floor` reads khaki
+  // over any distance, and this is lawn. It is what a level's outdoor floor
+  // wants when the point is that the surface is alive rather than that it is
+  // dirt.
+  //
+  // **The most chromatic surface in this manifest**, which takes that title off
+  // `moss`: mean chroma .340, against .302 for `moss`, .268 for `forest-floor`,
+  // .174 for `mossy ground` and .004 to .066 for every rock. It is also the
+  // BRIGHTEST organic here by a distance - linear albedo .121, where `moss` is
+  // .075 and the rest of the ground family sits near .054 - and the two
+  // together are the thing to know before laying it: a floor of this under grey
+  // walls is not a quiet surface with some green in it, it is the light in the
+  // room, and it will throw green into the bounce on everything standing on it.
+  // Put it where the level is meant to open out. `moss-dark` is the surface for
+  // the same plant where the level is meant to close in.
+  //
+  // Its relief is the SHALLOW half of the family - normal B mean .912, sigma
+  // .068, between `forest-floor`'s .944 and `mossy ground`'s .833 - so it takes
+  // a large flat floor plane without the lumps marching to the horizon that the
+  // deep sets show under a grazing light. What carries it instead is the leaf
+  // pattern and the litter, which is the same trade `forest-floor` makes.
+  //
+  // Keyed as a SURFACE like the rest of the ground family: no `MaterialName` is
+  // "grass", the nearest is `stone` (which is the fallback, for the reason
+  // `moss` states - none of the generated sets is green), and a shape asks for
+  // it by name (`visual.texture`). What a grass-faced body WEIGHS is still
+  // whatever `material` it names, which is the split working as intended.
+  grass: {
+    maps: {
+      base: {
+        file: "/textures/grass-base.webp",
+        sha256: "0130ea73ad7f1a3878e20b051f95616751394034b4e682ba27ef79a65f224d31",
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
+      // two ambientCG ships. 2315 KB, in the top band with the other three
+      // ground sets and for the reason `rock-charcoal` states: a lossless normal
+      // costs what its busiest region costs, and every texel of this is leaf.
+      normal: {
+        file: "/textures/grass-normal.webp",
+        sha256: "c5b64518ffcd8aa39cdbeea0aa9df1d2ff80e42478ca8b42957adbc31837bb0a",
+      },
+      // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
+      // are, flattened to grey by `assets:optimize-texture --channel r`. Means
+      // .772, which is a long way above the rest of the ground family - `mossy
+      // ground` .646, `moss-dark` .612, `moss` .609, `forest-floor` .604 - and
+      // is dry leaf against damp, which is most of what stops this reading as a
+      // very bright moss. The two organics rougher than it are `hedge` (.892)
+      // and `mud` (.951), and both are drier or flatter things. A level wanting
+      // it WET has the `roughness` multiplier below to pull it down with. No
+      // metallic map and none wanted: the 0 below is a dielectric's, stated
+      // rather than shipped as an image.
+      roughness: {
+        file: "/textures/grass-roughness.webp",
+        sha256: "8d49d642a1a07193e011dbe8ba81d99abee2ca4e67f458b7b14dd328328992d3",
+      },
+      // Shipped rather than left to the generated surface, though it bites less
+      // than the mosses' do: mean .727, against .529 and .474, because the leaf
+      // lies flat and closes over shallow gaps rather than deep ones. It is
+      // still what separates one blade from the next at a distance where the
+      // normal map has stopped resolving them.
+      ao: {
+        file: "/textures/grass-ao.webp",
+        sha256: "bb1ccf8b41d24fc155adca6c4073c352d1f496220187010bd86dc4026237979f",
+      },
+    },
+    // ambientCG states no captured size (`dimensionX: 0`,
+    // https://ambientcg.com/api/v2/full_json?id=Grass007 - it is procedural, so
+    // there is no capture to state), so this is a by-eye number, and it is the
+    // ground family's 3 rather than `moss`'s 1 on the reasoning `forest-floor`
+    // gives: the grounds are the surfaces that meet on a floor, and a seam
+    // between ground at 3 m and ground at 1 reads as a mistake.
+    //
+    // 3 m is also the number this set needs on its own account, more than the
+    // other two do. Unlike either moss it HAS features - a dozen rosettes and a
+    // scatter of twigs, each recognisable on sight - so its repeat is visible in
+    // a way a uniform nap's never is, and the tile wants to be the largest the
+    // set can carry. At 3 m the rosettes land at roughly 20 cm and the twigs at
+    // 30, which is a plantain clump and a dropped stick: right for ground
+    // litter, and coarse enough that a floor a player runs the length of shows
+    // the pattern two or three times rather than ten.
+    tile: 3,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Grass007",
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },

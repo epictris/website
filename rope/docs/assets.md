@@ -53,3 +53,7 @@ moss cushions, for ledges and damp faces (`moss`):
 - https://ambientcg.com/view?id=Moss002
 moss pads under pine-needle litter, flat enough for a large floor plane where `mossy ground` and `moss` are too deep (`forest-floor`):
 - https://ambientcg.com/view?id=Ground068
+dark fine-napped moss, the shaded counterpart to `moss` (`moss-dark`):
+- https://ambientcg.com/view?id=Moss003
+bright green lawn with rosettes and twig litter, the ground family's one actually-green floor (`grass`):
+- https://ambientcg.com/view?id=Grass007
