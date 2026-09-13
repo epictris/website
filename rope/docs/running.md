@@ -85,6 +85,7 @@ Deploy is hold-to-keep: releasing it drops the chain.
 
 `?toggle_click=true` swaps the mouse's half of that for a two-button toggle, so the two grips can be compared by feel without a rebuild (`TOGGLE_CLICK` in `input/ballInput.ts`).
 A left or middle press attaches the chain and it stays attached with the hand off the button; a right press detaches it.
+Pressing again with the chain already out redeploys it at the current aim, so a re-throw is the same button and not a detach first.
 Only the mouse changes: the pad's RB and the on-screen DEPLOY button stay hold-to-keep, and they merge with the toggle exactly as they always did (the chain is out while any of them says so), so a toggled-on chain is not dropped by a pad button nobody is holding.
 Nothing downstream of the input source knows about the flag - the sim still sees the same `fire` level it would have seen from a held button, so recordings and replays are unaffected.
 

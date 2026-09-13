@@ -3,7 +3,7 @@
 // recent wins:
 //
 //   Mouse:   move to aim (cursor) · hold any button to deploy the chain
-//            (`?toggle_click=true`: left/middle click attaches, right detaches)
+//            (`?toggle_click=true`: left/middle click (re)deploys, right detaches)
 //   Gamepad: left stick aim · RB deploy chain (hold-to-keep) ·
 //            top face button (X on a Pro Controller) restart level
 //   Touch:   on-screen joystick (bottom-left) aim ·
@@ -54,7 +54,11 @@
 // be compared by feel without a rebuild (TOGGLE_CLICK below): the deploy is a
 // state the mouse SETS rather than a button it holds - a left (or middle) press
 // attaches and stays attached with the hand off the button, a right press
-// detaches. Only the mouse changes; the pad's RB and the on-screen DEPLOY button
+// detaches. A press with the chain already out REDEPLOYS it: the same button
+// that threw it throws it again, at wherever the cursor is now, without a
+// detach keystroke in between - the aim has moved, and the reach for the right
+// button to clear the old throw first is a step the hand should not have to
+// take. Only the mouse changes; the pad's RB and the on-screen DEPLOY button
 // stay hold-to-keep, and they merge with the toggle the same way they always
 // did (the chain is out while any of them says so), so a toggled-on chain is not
 // dropped by a pad button nobody is holding.
@@ -83,8 +87,9 @@ import { ButtonLatch } from "./latch";
 // Mouse deploy grip, overridable per session with `?toggle_click=true` so the
 // two can be compared by feel without a rebuild (see the header). Default off:
 // press-and-hold to keep the chain out, release to drop it. On: a left/middle
-// press attaches, a right press detaches, and nothing else moves the state -
-// the hand comes off the button with the chain still out.
+// press deploys (again, if the chain is already out), a right press detaches,
+// and nothing else moves the state - the hand comes off the button with the
+// chain still out.
 // Any value but `false`/`0` reads as on, so a bare `?toggle_click` works too.
 const TOGGLE_CLICK: boolean = ((): boolean => {
   if (typeof location === "undefined") return false;
@@ -177,12 +182,12 @@ export class BallInputSource implements IInputSource {
     // is held while another button is still down, and dropped when the last one
     // comes up.
     // Under the toggle only the downs speak, and which button it was is the
-    // whole message: right detaches, anything else attaches. A press that
-    // repeats what the state already says is not a transition, so the latch
-    // queues nothing for it and a second left click changes nothing.
-    canvas.addEventListener("mousedown", (e) =>
-      this.press(this.mouseButton, TOGGLE_CLICK ? e.button !== RIGHT_BUTTON : true),
-    );
+    // whole message: right detaches, anything else deploys.
+    canvas.addEventListener("mousedown", (e) => {
+      if (!TOGGLE_CLICK) this.press(this.mouseButton, true);
+      else if (e.button === RIGHT_BUTTON) this.press(this.mouseButton, false);
+      else this.redeploy();
+    });
     window.addEventListener("mouseup", (e) => {
       if (!TOGGLE_CLICK) this.press(this.mouseButton, e.buttons !== 0);
     });
@@ -205,6 +210,22 @@ export class BallInputSource implements IInputSource {
   private press(latch: ButtonLatch, level: boolean): void {
     if (this.active()) latch.set(level);
     else latch.reset(level);
+  }
+
+  // Toggle-click deploy: the down of an attaching button, whether or not the
+  // chain is already out. Written as a release followed by a press rather than
+  // a bare press because that is what a redeploy IS downstream - BallPlayer
+  // shoots on a fire edge with no chain and lets go on the opposite one, so the
+  // dropped frame is what lets the next press throw rather than land on a chain
+  // that is already there. The latch plays the two out one per sim step (see
+  // input/latch.ts), so the sim sees exactly the frame pair a hand fast enough
+  // to click twice inside one step would have produced - a hand-thrown
+  // re-click and this are the same stream, and the sim needs no notion of the
+  // flag to read it. From a detached chain the release is not a transition and
+  // queues nothing, leaving the plain attach it always was.
+  private redeploy(): void {
+    this.press(this.mouseButton, false);
+    this.press(this.mouseButton, true);
   }
 
   // Position/cursor aim: the aim offset for wherever the pointer now is. Left
