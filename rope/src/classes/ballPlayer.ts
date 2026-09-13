@@ -66,7 +66,7 @@ export class BallPlayer extends RigidBody2D {
   static readonly ATTACH_SNAP_TOLERANCE = 0.2;
   // Proportional gain steering the loop toward the aim direction (1/s).
   // Stable at 1/60 while gain*dt < 1.
-  static readonly AIM_TURN_GAIN = 15;
+  static readonly AIM_TURN_GAIN = 10;
   // The direction (+1/-1, 0 for none) of a turn the chain refused in full on
   // the last frame that asked for one, latched by `BallLevel` after the
   // unwind and read by the aim steering (see `resolveInput`). Cleared by a
