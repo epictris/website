@@ -224,11 +224,13 @@ export interface MoveNodeData {
 export const LEGACY_IMPERMEABLE = "impermeable";
 
 // A shape as authored on disk. `poly` is a **simple** vertex loop in the
-// object's own local frame, centred on its area centroid (the loader re-centres
-// one that is not, shifting the object's position to compensate, since a body's
-// origin is its centre of mass everywhere in the engine). A rect stays its own
-// kind rather than being written as a four-vertex poly: every recorded replay
-// was simulated through the rect-specific collision routines.
+// object's own local frame, centred on its area centroid or not as the author
+// left it - the loader re-centres every piece it cuts a loop into and puts the
+// removed offset back on that piece's position (`makePieces`), since a body's
+// origin is its centre of mass everywhere in the engine, so where the outline
+// sits in its own frame is the editor's business and not the sim's. A rect stays
+// its own kind rather than being written as a four-vertex poly: every recorded
+// replay was simulated through the rect-specific collision routines.
 //
 // `curve` is the fourth: a cubic Bezier node list with a WIDTH, which is the
 // bar - a rail, a pipe, a handle - that no box or loop of vertices can state

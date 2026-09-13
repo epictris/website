@@ -26,12 +26,17 @@ silently is not the one drawn.
 A selected polygon is then edited vertex by vertex - square handles move a corner, the
 smaller round handles at the edge midpoints insert one and drag it in the same gesture, and
 **Alt+click** on a corner removes it (a triangle is the floor). Every one of those goes
-through `setPolyVerts`, which re-centres the loop on its centroid (so `pos` stays the centre
-of mass, which the rigid-body lever arms assume) and **refuses a result that is not a
+through `setPolyVerts`, which **refuses a result that is not a
 shape** - the vertex being dragged stalls at the last position the loop was simple rather
 than folding the outline through itself. Denting a corner *inward* is not that and is the
 point of the tool; a **camera region** is the one polygon still held convex, since nothing
 cuts one up and both its containment test and its buffer zone read a notch as solid.
+
+**A corner edit moves the corner and nothing else.**
+`setPolyVerts` leaves the item's `pos` exactly where it is, and the shape's origin is placed once - by `centreShapeOrigin`, when the outline is first clicked out, onto the drawn loop's centroid (a curve's onto its node average).
+It used to re-centre on every write, which kept a polygon's origin its own centre of mass and made every corner drag a **move of the object inside its body**: the shape being dragged stayed put on screen while its placement slid by the centroid's own motion, so the inspector's `x`/`y` for it walked away from zero and a `matchCollision` prop - which copies the collision object's placement as well as its outline - walked across the level with them.
+Fitting a collision outline to the mesh it is being fitted *to* moved the mesh, which is the one thing that edit may not do.
+What the re-centring was for is still true and is answered from the outline instead: `shapeCentre` gives a shape's own centre of area (a polygon's centroid, a curve's stroke, a rect's or circle's origin), and `bodyCentroid` weighs the body's pieces at those points, so the point the editor turns a body about is still the one `mountPieces` mounts it at.
 
 ## Picking corners out of a shape
 
@@ -43,7 +48,7 @@ Picked corners draw as **filled** squares against the hollow ones, which is the 
 
 Three things about it are load-bearing.
 
-The offsets a group drag rides at are a difference of two positions **in the shape's own frame**, because `setPolyVerts` re-centres the loop on its centroid every time it is written: the re-centring subtracts the same point from every vertex, so it leaves every difference alone where an absolute local position would drift by the centroid's own motion.
+The offsets a group drag rides at are a difference of two positions **in the shape's own frame**, and that frame stands still through a corner edit (`setPolyVerts` writes the loop and moves nothing), so an offset captured at the press still names the same corner however far the drag goes.
 
 An **index means nothing once the loop it indexes is not the one on screen**, so the set is cleared by every change of selection, by undo/redo, by an Alt+click removal and by `Reverse` on a path - each of which renumbers or replaces the vertices - and read through `selectedVertIndices`, which drops anything past the current end.
 

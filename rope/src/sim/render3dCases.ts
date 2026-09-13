@@ -75,6 +75,9 @@ import {
   modelToDisk,
   toLevelData,
   syncMatchedOutlines,
+  setPolyVerts,
+  bodyCentroid,
+  bodyMembers,
   type EdItem,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
@@ -1126,6 +1129,127 @@ function matchedOutline(): CaseResult[] {
       name: "editor: a match whose partner is deleted is dropped",
       pass: pruned,
       detail: pruned ? "matchId cleared" : `matchId still ${g.matchId}`,
+    },
+  ];
+}
+
+// A CORNER EDIT MOVES THE CORNER AND NOTHING ELSE.
+//
+// `setPolyVerts` used to re-centre the loop on its area centroid and shift the
+// item's `pos` to compensate, which kept a polygon item's origin its own centre
+// of mass. Nothing visibly moved in the shape being dragged - and everything
+// else in its body did: the polygon's placement inside the body slid by the
+// centroid's own motion, so the numbers the inspector shows for it walked away
+// from zero, and a `matchCollision` prop, which copies the collision object's
+// PLACEMENT as well as its outline, walked across the level with them. Fitting a
+// collision outline to the mesh it is being fitted TO moved the mesh, which is
+// the one thing that edit must not do.
+//
+// The other half is what the re-centring was FOR: the editor's idea of where a
+// body turns (`bodyCentroid`) has to be the point the build mounts it at
+// (`mountPieces`), or the canvas draws a body rotating about a point the sim
+// does not have. With the origin free that answer comes off the outline
+// (`shapeCentre`) instead of off `pos`, so both halves are asserted together -
+// nothing moved, and the centre of mass is still right where it was.
+function vertexEditMoves(): CaseResult[] {
+  const square = [
+    { x: -60, y: -60 },
+    { x: 60, y: -60 },
+    { x: 60, y: 60 },
+    { x: -60, y: 60 },
+  ];
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 300,
+        y: -100,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "poly", verts: square } },
+          // The prop being fitted to, at its own offset in the body...
+          { type: "geometry", kind: "mesh", mesh: "rock-13", x: 200, z: 30 },
+          // ...and a matched primitive, which follows the outline by design and
+          // is the piece the placement copy used to drag off its body.
+          {
+            type: "geometry",
+            shape: { kind: "poly", verts: square },
+            matchCollision: true,
+          },
+        ],
+      },
+    ],
+  };
+  const model = modelFromDisk(authored);
+  const sigs = new Map<number, string>();
+  syncMatchedOutlines(model, sigs);
+  const poly = model.items.find((i) => i.object === "collision")!;
+  const prop = model.items.find((i) => i.object === "geometry" && i.visual.kind === "mesh")!;
+  const propBefore = prop.pos.clone();
+
+  // The drag: one corner out by a metre and a half in each axis, written the way
+  // every vertex gesture writes one.
+  if (poly.shape.kind !== "poly") return [{ name: "editor: vertex edit", pass: false, detail: "not a polygon" }];
+  const pulled = poly.shape.verts[0]!.add(new Vec2(-1.5, -1.5));
+  const moved = setPolyVerts(
+    poly,
+    poly.shape.verts.map((v, i) => (i === 0 ? pulled : v)),
+  );
+  syncMatchedOutlines(model, sigs);
+
+  const saved = modelToDisk(model).bodies[0]!;
+  const collision = saved.objects.find(isCollisionObject)!;
+  const matched = saved.objects.find((o) => isGeometryObject(o) && o.matchCollision === true)!;
+  const mesh = saved.objects.find((o) => isGeometryObject(o) && o.mesh !== undefined)!;
+  // An absent x/y IS zero on disk, which is what "it never moved" looks like
+  // here - the body's own origin included.
+  const still =
+    saved.x === 300 &&
+    saved.y === -100 &&
+    (collision.x ?? 0) === 0 &&
+    (collision.y ?? 0) === 0 &&
+    (matched.x ?? 0) === 0 &&
+    (matched.y ?? 0) === 0 &&
+    (mesh.x ?? 0) === 200 &&
+    (mesh.y ?? 0) === 0 &&
+    prop.pos.distanceTo(propBefore) === 0;
+  // ...and the corner really is where it was dragged, or "nothing moved" is a
+  // case that passes on an edit that did not happen.
+  const dragged =
+    moved && poly.shape.kind === "poly" && poly.shape.verts[0]!.distanceTo(pulled) === 0;
+
+  // The centre of mass, now that the origin is not it: the loop runs from -7.5 m
+  // to 0.6 m in each axis about an origin that stayed at the body's own.
+  const world = new World();
+  const built = buildLevelBodies(world, scaleLevelData(modelToDisk(model), PX), () => {});
+  const engine = built.bodies[0]!.body!;
+  const centroid = bodyCentroid(bodyMembers(model.items, poly.bodyId));
+  const agrees = centroid.distanceTo(engine.globalPosition) < 1e-9;
+  const offOrigin = centroid.distanceTo(poly.pos) > 0.1;
+
+  return [
+    {
+      name: "editor: a corner drag moves neither its own object nor anything else in the body",
+      pass: still,
+      detail: still
+        ? "body, collision, matched prop and mesh all where they were authored"
+        : `body (${saved.x}, ${saved.y}), collision (${collision.x ?? 0}, ${collision.y ?? 0}), matched (${matched.x ?? 0}, ${matched.y ?? 0}), mesh (${mesh.x ?? 0}, ${mesh.y ?? 0})`,
+    },
+    {
+      name: "editor: the dragged corner lands exactly where it was put",
+      pass: dragged,
+      detail: dragged
+        ? "corner at the drag's own point, loop accepted"
+        : `accepted ${moved}, corner ${JSON.stringify(poly.shape.kind === "poly" ? poly.shape.verts[0] : null)}`,
+    },
+    {
+      name: "editor: the body's centre of mass is still the point the build mounts it at",
+      pass: agrees && offOrigin,
+      detail:
+        agrees && offOrigin
+          ? `centre of mass ${centroid.distanceTo(poly.pos).toFixed(3)} m off the origin, and the engine agrees`
+          : `editor (${centroid.x.toFixed(3)}, ${centroid.y.toFixed(3)}) vs engine (${engine.globalPosition.x.toFixed(3)}, ${engine.globalPosition.y.toFixed(3)})`,
     },
   ];
 }
@@ -2629,6 +2753,7 @@ export function runRender3dCases(): CaseResult[] {
     ...visualRoundTrip(),
     ...editorRoundTrip(),
     ...matchedOutline(),
+    ...vertexEditMoves(),
     ...pickIndex(),
     ...lightRoundTrip(),
     ...lightRidesBody(),

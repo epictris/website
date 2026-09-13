@@ -184,6 +184,7 @@ An area may not share a body with anything: `World.integrate` tests area overlap
 
 Because a group is one body, it is **selected and moved as one**: clicking any piece selects all of them, a rubber band that touches one piece takes the whole body (`withWholeGroups`), and **Alt+click** reaches past that to a single piece when its own shape needs editing.
 It also **rotates as one**, about the group's area-weighted **centre of mass** - which is where `buildLevelBodies` puts the built body's origin, so the editor's rotation and the body's are the same operation.
+That sum weighs each piece at **its own** centre of area (`shapeCentre`) rather than at its placement: a rect and a circle are centred on their origin, but a polygon's origin is wherever the author left it (a corner edit never moves it - see [editor](editor.md)) and its mass is at its centroid, so weighing placements would put the turning point somewhere no mass is.
 A whole-group selection therefore gets its own rotate knob (placed by the group's extent, since the pieces have their own angles and the body as a whole has none) and its `rot°` field applies a *delta* to the group rather than writing each piece's own angle.
 Every group draws a small centre-of-mass diamond so it is identifiable as one body without being selected first, and a selected one adds a dashed hull and spokes to that centre.
 

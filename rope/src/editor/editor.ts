@@ -135,6 +135,7 @@ import {
   NO_KEY,
   pathDataOf,
   setPolyVerts,
+  centreShapeOrigin,
   scaleShape,
   syncBodyProps,
   syncMatchedOutlines,
@@ -376,8 +377,9 @@ type Drag =
   // `polyMustBeConvex` - and stalls at the last convex position).
   // `others` is the rest of the vertex selection, riding along at a fixed offset
   // from the pressed vertex in the SHAPE's own frame - a difference of two local
-  // positions, which is what survives `setPolyVerts` re-centring the loop on its
-  // centroid, since the re-centring subtracts the same point from both.
+  // positions, and the shape's frame stands still through a corner edit
+  // (`setPolyVerts`), so the offsets a press captured still name the same
+  // corners at the end of the drag.
   | {
       mode: "polyVertex";
       body: EdItem;
@@ -6635,8 +6637,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       return;
     }
     const item = newDrawnItem("poly", drawn[0]!);
-    // `setPolyVerts` re-centres the loop and moves `pos` to the centroid, so the
-    // starting position only has to be somewhere sane in the item's own frame.
+    // The loop is clicked out in WORLD metres, so the item starts at the world
+    // origin and `centreShapeOrigin` below moves `pos` onto the drawn outline's
+    // centroid - the one place a shape's origin is placed for it, and the only
+    // one, since from here on a corner edit leaves `pos` alone.
     item.pos = Vec2.ZERO;
     item.shape = { kind: "poly", verts: drawn.map((h) => h.clone()) };
     // A camera region falls back to the hull here rather than at the draft:
@@ -6645,6 +6649,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       updateTitle();
       return;
     }
+    centreShapeOrigin(item);
     beginAction();
     addAndSelect([item]);
     // Same rules the drag-drawn shapes take: a polygon drawn into a selected
@@ -6659,8 +6664,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // two distinct points, which has no direction.
   function commitPathDraft(pts: readonly Vec2[]): void {
     const item = newDrawnItem("path", pts[0] ?? Vec2.ZERO);
-    // `setPathVerts` re-centres on the vert average and moves `pos` with it, so
-    // the starting position only has to be somewhere sane in the item's frame.
+    // Clicked out in WORLD metres, exactly as a polygon is: the item starts at
+    // the world origin and `centreShapeOrigin` below puts `pos` on the node
+    // average once the nodes are in.
     item.pos = Vec2.ZERO;
     // Every node a corner to begin with: a drawn path is the polyline that was
     // clicked, and smoothing a corner is a handle drag away.
@@ -6675,6 +6681,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       updateTitle();
       return;
     }
+    centreShapeOrigin(item);
     beginAction();
     addAndSelect([item]);
   }
@@ -7124,10 +7131,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     }
     nudging = false; // a new set of corners starts a new undo step
     rebuildInspector();
-    // Offsets in the SHAPE's own frame, taken from the pressed vertex. That is a
-    // difference of two local positions, which is what survives `setPolyVerts`
-    // re-centring the loop on its centroid: the re-centring subtracts the same
-    // point from every vertex, so it leaves every difference alone.
+    // Offsets in the SHAPE's own frame, taken from the pressed vertex. A corner
+    // edit leaves that frame exactly where it is (`setPolyVerts` writes the loop
+    // and moves nothing), so an offset captured at the press still names the
+    // same corner however far the drag goes.
     const lead = verts[index]!;
     const others = selectedVertIndices(item)
       .filter((i) => i !== index)

@@ -155,19 +155,23 @@ export const ED_LAYERS: EdLayer[] = ["scene", "camera", "notes"];
 export type EdObject = "collision" | "geometry" | "light" | "anchor";
 
 // `poly` vertices are metres in the item's own local frame, kept a **simple**
-// outline (one that never crosses itself) and centred on their area centroid —
-// `setPolyVerts` is the one writer, so no edit path can leave either invariant
-// broken. Simple rather than convex: a concave outline is cut into convex pieces
-// by the loader (see "Convex-only polygons; compound bodies" in
-// docs/game-design.md and `polyMustBeConvex` below, which holds a camera region
-// to the older, stricter rule). Centring is what makes the item's `pos` its
-// centre of mass, which every rigid-body lever arm in the engine assumes.
+// outline (one that never crosses itself) - `setPolyVerts` is the one writer, so
+// no edit path can leave that invariant broken. Simple rather than convex: a
+// concave outline is cut into convex pieces by the loader (see "Convex-only
+// polygons; compound bodies" in docs/game-design.md and `polyMustBeConvex`
+// below, which holds a camera region to the older, stricter rule).
+//
+// They are NOT kept centred on their centroid. The origin is the placement the
+// author gave the shape and a corner edit leaves it alone (see `setPolyVerts`);
+// `centreShapeOrigin` puts it on the centroid once, when the shape is drawn, and
+// `shapeCentre` is where "and where is its mass" is answered from the outline.
 //
 // `path` is an OPEN curve, permitted only on the camera layer: a camera path
 // (see `CameraPathData`). It is not a degenerate polygon - it has no inside, no
 // area and no winding, and its node ORDER is its direction of travel, which is
 // the one thing about it that carries meaning. `setPathNodes` is its writer,
-// and it re-centres on the node average rather than on an area centroid, a
+// and it leaves the origin alone exactly as a polygon's does; the node average
+// is what `centreShapeOrigin` places that origin at when the curve is drawn, a
 // curve having no area centroid.
 //
 // `verts` is the points the route passes through and `handles` the cubic Bézier
@@ -2242,27 +2246,66 @@ export function polyMustBeConvex(item: EdItem): boolean {
   return item.layer === "camera";
 }
 
-// The only writer of a polygon's vertices. It re-centres them on their centroid
-// and shifts `pos` to compensate, so the drawn geometry does not move while the
-// origin lands where the physics needs it — and it refuses a loop that is not a
-// shape at all, leaving the outline as it was rather than saving one that
-// crosses itself (or, for a camera region, one that is not convex). Returns
-// whether the edit was accepted.
+// The only writer of a polygon's vertices. It writes the loop AS GIVEN and
+// leaves `pos` exactly where it was - a corner edit changes the outline and
+// nothing else - and it refuses a loop that is not a shape at all, leaving the
+// outline as it was rather than saving one that crosses itself (or, for a
+// camera region, one that is not convex). Returns whether the edit was
+// accepted.
+//
+// IT DOES NOT RE-CENTRE. It used to: the loop was re-centred on its area
+// centroid and `pos` moved to compensate, which kept an item's `pos` its own
+// centre of mass at the price of making every corner drag a MOVE of the object
+// inside its body. Everything else in the body stayed put while the polygon's
+// placement slid out from under it - visibly so for a `matchCollision` prop,
+// which copies the collision object's placement and so walked across the level
+// as its outline was fitted to the mesh it was being fitted TO. `pos` is the
+// placement the author put the shape at; where its mass is, is a question about
+// the outline, and `shapeCentre` derives it (`bodyCentroid` is the one caller
+// that needs it). A shape being CREATED still starts centred - see
+// `centreShapeOrigin`, which the draw gestures call once, at birth.
 export function setPolyVerts(item: EdItem, verts: readonly Vec2[]): boolean {
   if (item.shape.kind !== "poly" || verts.length < 3) return false;
   const ordered = polySignedArea2(verts) >= 0 ? [...verts] : [...verts].reverse();
   if (polyMustBeConvex(item) ? !isConvexLoop(ordered) : !isSimpleLoop(ordered)) return false;
-  const c = polyCentroid(ordered);
-  item.shape.verts = ordered.map((v) => v.sub(c));
-  item.pos = item.pos.add(c.rotated(item.rot));
+  item.shape.verts = ordered.map((v) => v.clone());
   return true;
+}
+
+// Move an item's origin onto its own outline's centre, taking the shift back out
+// of the vertices so nothing drawn moves: `pos` lands on the polygon's area
+// centroid (or a curve's node average), which is where a freshly drawn shape
+// wants its origin - the transform gizmo, the rotate knob and the rot° field all
+// turn the shape about `pos`, and a shape that turns about a corner of itself is
+// not what clicking out an outline asks for.
+//
+// Called at CREATION and nowhere else. Doing it on every write is what made a
+// corner drag move the object (see `setPolyVerts`); doing it once, on a shape
+// that has no placement yet to disturb, costs nothing and is what makes a drawn
+// outline's `pos` mean something.
+export function centreShapeOrigin(item: EdItem): void {
+  const s = item.shape;
+  if (s.kind === "poly") {
+    if (s.verts.length < 3) return;
+    const c = polyCentroid(s.verts);
+    s.verts = s.verts.map((v) => v.sub(c));
+    item.pos = item.pos.add(c.rotated(item.rot));
+    return;
+  }
+  if (s.kind !== "path" || !s.verts.length) return;
+  // A polyline has no area centroid, so the node average is its centre. The
+  // handles are offsets from their own node, so they are untouched by the shift
+  // - which is the reason they are stored as offsets rather than as absolute
+  // control points.
+  const c = s.verts.reduce((a, b) => a.add(b), Vec2.ZERO).div(s.verts.length);
+  s.verts = s.verts.map((v) => v.sub(c));
+  item.pos = item.pos.add(c.rotated(item.rot));
 }
 
 // The only writer of a camera path's vertices, and the mirror of
 // `setPolyVerts` - it drops consecutive duplicates, requires two verts left
-// over, and re-centres `pos` on the vert AVERAGE. A polyline has no area
-// centroid, and the average is what keeps the transform gizmo somewhere
-// sensible on the thing it is transforming.
+// over, and leaves `pos` where it is for the same reason (a node edit is not a
+// move of the curve; `centreShapeOrigin` places the origin once, at creation).
 //
 // There is deliberately no simplicity or convexity rule: a path may cross
 // itself, that being exactly what a switchback is.
@@ -2292,14 +2335,9 @@ export function setPathVerts(
     keptK.push(srcK[i] ? { ...srcK[i]! } : NO_KEY());
   }
   if (kept.length < 2) return false;
-  // Re-centred on the point AVERAGE. The handles are offsets from their own
-  // point, so they are untouched by it - which is the reason they are stored as
-  // offsets rather than as absolute control points.
-  const c = kept.reduce((a, b) => a.add(b), Vec2.ZERO).div(kept.length);
-  item.shape.verts = kept.map((v) => v.sub(c));
+  item.shape.verts = kept;
   item.shape.handles = keptH;
   item.shape.keys = keptK;
-  item.pos = item.pos.add(c.rotated(item.rot));
   return true;
 }
 
@@ -2392,9 +2430,10 @@ export function scaleShape(
     return;
   }
   if (item.shape.kind === "poly" && base.kind === "poly") {
-    // Scaling an outline leaves it exactly as convex or as simple as it was, so
-    // `setPolyVerts` refuses nothing here - it is used for the re-centring,
-    // which keeps `pos` the centroid the rigid-body lever arms assume.
+    // Scaled about the item's own origin, which is where the gizmo's scale
+    // handles pivot too, so the drag and the shape agree about what is standing
+    // still. Scaling an outline leaves it exactly as convex or as simple as it
+    // was, so `setPolyVerts` refuses nothing here.
     setPolyVerts(
       item,
       base.verts.map((v) => new Vec2(v.x * fx, v.y * fy)),
@@ -2774,6 +2813,35 @@ export function shapeMass(item: EdItem): number {
   return prismMass(shapeArea(item), item.thickness, MATERIALS[item.material]);
 }
 
+// Where one item's own mass sits, in world metres - the point the piece (or
+// pieces) it builds into are mounted at, which is NOT its `pos`: a rect and a
+// circle are centred on their origin, but a polygon's origin is wherever the
+// author left it and its mass is at its area centroid, and a curve's is spread
+// along the bar the stroke tiles it with.
+//
+// The same three answers `shapeArea` gives, from the same geometry and in the
+// same order, because the pair is one question: the build weighs every piece it
+// cuts a shape into and mounts the body at their combined centre of mass
+// (`mountPieces`), so anything here that disagreed would be the editor drawing a
+// body turning about a point the sim does not have.
+export function shapeCentre(item: EdItem): Vec2 {
+  const s = item.shape;
+  if (s.kind === "rect" || s.kind === "circle") return item.pos;
+  if (s.kind === "path") {
+    let total = 0;
+    let acc = Vec2.ZERO;
+    for (const piece of strokeCurve(pathNodes(item), s.width).pieces) {
+      const a = Math.abs(polySignedArea2(piece)) / 2;
+      total += a;
+      acc = acc.add(polyCentroid(piece).mul(a));
+    }
+    // A camera path is stroked for its bar all the same (nothing weighs one), and
+    // a degenerate run has no area to weigh: both fall back to the placement.
+    return total > 0 ? toWorld(item, acc.div(total)) : item.pos;
+  }
+  return toWorld(item, polyCentroid(s.verts));
+}
+
 // A group's centre of mass - the point `buildLevelBodies` puts the compound
 // body's origin at, and therefore the point it rotates about. Weighted by mass,
 // not the bounding-box centre: every rigid-body lever arm in the engine is
@@ -2793,12 +2861,15 @@ export function bodyCentroid(items: readonly EdItem[]): Vec2 {
   for (const i of weighed) {
     const a = shapeMass(i);
     total += a;
-    acc = acc.add(i.pos.mul(a));
+    // Each piece weighed where its own mass is (`shapeCentre`), not at its
+    // placement: a polygon's origin is wherever its author left it, and summing
+    // origins would put a body's turning point somewhere no mass is.
+    acc = acc.add(shapeCentre(i).mul(a));
   }
   if (total > 0) return acc.div(total);
   // Degenerate (zero-area) shapes: fall back to the plain mean so the answer is
   // still inside the group rather than NaN.
-  return weighed.reduce((c, i) => c.add(i.pos), Vec2.ZERO).div(Math.max(1, weighed.length));
+  return weighed.reduce((c, i) => c.add(shapeCentre(i)), Vec2.ZERO).div(Math.max(1, weighed.length));
 }
 
 // --- settled ghosts ---------------------------------------------------------
