@@ -67,7 +67,14 @@ stick aim, RB deploy chain, top face button (X on a Pro Controller)
 restart; on touch, the bottom-left on-screen joystick aims (deflect past the
 deadzone to steer the loop, like the left stick) and the bottom-right circular
 DEPLOY button deploys (no touch restart - reload the page).
-Deploy is hold-to-keep: releasing it drops the chain. The touch controls only
+Deploy is hold-to-keep: releasing it drops the chain.
+
+`?toggle_click=true` swaps the mouse's half of that for a two-button toggle, so the two grips can be compared by feel without a rebuild (`TOGGLE_CLICK` in `input/ballInput.ts`).
+A left or middle press attaches the chain and it stays attached with the hand off the button; a right press detaches it.
+Only the mouse changes: the pad's RB and the on-screen DEPLOY button stay hold-to-keep, and they merge with the toggle exactly as they always did (the chain is out while any of them says so), so a toggled-on chain is not dropped by a pad button nobody is holding.
+Nothing downstream of the input source knows about the flag - the sim still sees the same `fire` level it would have seen from a held button, so recordings and replays are unaffected.
+
+The touch controls only
 appear on a coarse primary pointer (`(pointer: coarse)`), so desktop and
 mouse-primary touchscreen laptops get none.
 The OS cursor is hidden on the ball controller; a black **aim reticle** stands in

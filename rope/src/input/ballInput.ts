@@ -2,7 +2,8 @@
 // controller. Keyboard has no bindings here; the aim devices merge, most
 // recent wins:
 //
-//   Mouse:   move to aim (cursor) · click deploy chain (any button)
+//   Mouse:   move to aim (cursor) · hold any button to deploy the chain
+//            (`?toggle_click=true`: left/middle click attaches, right detaches)
 //   Gamepad: left stick aim · RB deploy chain (hold-to-keep) ·
 //            top face button (X on a Pro Controller) restart level
 //   Touch:   on-screen joystick (bottom-left) aim ·
@@ -49,6 +50,15 @@
 // second button to mean, and a hand that has learned to reach for a side button
 // should not find it dead.
 //
+// `?toggle_click=true` swaps that for a two-button toggle, so the two grips can
+// be compared by feel without a rebuild (TOGGLE_CLICK below): the deploy is a
+// state the mouse SETS rather than a button it holds - a left (or middle) press
+// attaches and stays attached with the hand off the button, a right press
+// detaches. Only the mouse changes; the pad's RB and the on-screen DEPLOY button
+// stay hold-to-keep, and they merge with the toggle the same way they always
+// did (the chain is out while any of them says so), so a toggled-on chain is not
+// dropped by a pad button nobody is holding.
+//
 // The stick and the on-screen joystick aim only while deflected past a
 // deadzone, writing a direction at exactly the reach distance; a released
 // stick/joystick sends the ball's own position, which BallPlayer reads as "not
@@ -69,6 +79,20 @@ import { AIM_MODE, AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
 import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
 import { ButtonLatch } from "./latch";
+
+// Mouse deploy grip, overridable per session with `?toggle_click=true` so the
+// two can be compared by feel without a rebuild (see the header). Default off:
+// press-and-hold to keep the chain out, release to drop it. On: a left/middle
+// press attaches, a right press detaches, and nothing else moves the state -
+// the hand comes off the button with the chain still out.
+// Any value but `false`/`0` reads as on, so a bare `?toggle_click` works too.
+const TOGGLE_CLICK: boolean = ((): boolean => {
+  if (typeof location === "undefined") return false;
+  const q = new URLSearchParams(location.search).get("toggle_click");
+  return q !== null && q !== "false" && q !== "0";
+})();
+
+const RIGHT_BUTTON = 2; // MouseEvent.button for the right button (0 left, 1 middle)
 
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
 // The chain's reach. The stick and joystick aim at exactly this distance; motion
@@ -99,7 +123,9 @@ export class BallInputSource implements IInputSource {
   // Latched rather than a plain flag, so a click shorter than a sim step still
   // reaches the next sample (see input/latch.ts).
   // One latch for the whole mouse, not one per button: every button deploys
-  // (see the header), so what matters is whether ANY of them is down.
+  // (see the header), so what matters is whether ANY of them is down - and
+  // under `?toggle_click` the deploy is one state two buttons write, which is
+  // one latch by construction.
   private mouseButton = new ButtonLatch();
   // The cursor mouse aim reads: the real one in `position` mode, the virtual one
   // the pointer lock feeds in the other two (see input/aimPointer.ts).
@@ -135,8 +161,11 @@ export class BallInputSource implements IInputSource {
       this.pointer.update(e);
       // The move carries the button state the browser believes in, so a press
       // or release it never announced as an event is picked up at the next
-      // move rather than never.
-      this.press(this.mouseButton, e.buttons !== 0);
+      // move rather than never. Under the toggle the buttons are edges and not
+      // a level, so there is nothing here to re-read: the deploy is our state,
+      // and a mask saying "no button is down" is the normal resting case of a
+      // chain that is out.
+      if (!TOGGLE_CLICK) this.press(this.mouseButton, e.buttons !== 0);
       // `position` and `cursor` differ only in WHICH cursor this is; both are
       // re-derived per read in `currentAimLocal`, so this write is the seed the
       // other devices hand back to.
@@ -147,11 +176,20 @@ export class BallInputSource implements IInputSource {
     // OF the event and so already without the button just released: the deploy
     // is held while another button is still down, and dropped when the last one
     // comes up.
-    canvas.addEventListener("mousedown", () => this.press(this.mouseButton, true));
-    window.addEventListener("mouseup", (e) => this.press(this.mouseButton, e.buttons !== 0));
-    // The right button deploys now, so the context menu it would otherwise open
-    // is a menu over the game; `auxclick` carries the middle button's own
-    // defaults, which are no more wanted here.
+    // Under the toggle only the downs speak, and which button it was is the
+    // whole message: right detaches, anything else attaches. A press that
+    // repeats what the state already says is not a transition, so the latch
+    // queues nothing for it and a second left click changes nothing.
+    canvas.addEventListener("mousedown", (e) =>
+      this.press(this.mouseButton, TOGGLE_CLICK ? e.button !== RIGHT_BUTTON : true),
+    );
+    window.addEventListener("mouseup", (e) => {
+      if (!TOGGLE_CLICK) this.press(this.mouseButton, e.buttons !== 0);
+    });
+    // The right button plays the game now - it deploys, or under the toggle it
+    // detaches - so the context menu it would otherwise open is a menu over the
+    // game; `auxclick` carries the middle button's own defaults, which are no
+    // more wanted here.
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("auxclick", (e) => e.preventDefault());
 

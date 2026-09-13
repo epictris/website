@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 ```
 
 `?level=NAME` picks a level (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the default and the grapple levels stay 2D.
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?probe3d=1`.
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to attach, right-click to detach), `?probe3d=1`.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.
 Controls, gamepad and touch mapping, the level list and the aim modes: [docs/running.md](docs/running.md).
