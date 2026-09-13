@@ -28,7 +28,7 @@ import {
 import { deepestEmbedding } from "./query";
 import { BallLevel } from "../level/ballLevel";
 import { PIXELS_PER_METER } from "../engine/units";
-import type { RawLevelData } from "../level/levelFormat";
+import { spawnAtCheckpoint, type RawLevelData } from "../level/levelFormat";
 
 export type PlaytestAction =
   | "move_left"
@@ -168,6 +168,14 @@ export interface PlaytestScript {
   // Where the avatar starts, in METRES (the rest of the level format is in
   // scene pixels). Overrides the level's own spawn without editing it.
   spawn?: { x: number; y: number };
+  // ...or the NAME of a spawn the level itself carries (`CheckpointData`, what
+  // `?checkpoint=` asks for). It is the better of the two for a script about an
+  // area of an authored level: a point in metres is a copy of where that area
+  // was when the script was written, and it goes silently stale the first time
+  // the level is re-authored, where a name is re-resolved against the level
+  // every run. `spawn` still wins where a script gives both, being the more
+  // specific of the two.
+  checkpoint?: string;
 }
 
 function inRange(frame: number, from: number, to: number): boolean {
@@ -241,14 +249,19 @@ export function scriptSpec(script: PlaytestScript, specOverride?: LevelSpec): Le
         { data: script.data, controller: script.controller === "ball" ? ("ball" as const) : undefined }
       : LEVELS[script.level]);
   if (!base) throw new Error(`Unknown level: ${script.level}`);
-  if (!script.spawn) return base;
+  // A named spawn is the level's own, so it is applied to the data the same way
+  // the game applies it - by moving `player` before anything is built.
+  const named = script.checkpoint
+    ? { ...base, data: spawnAtCheckpoint(base.data, script.checkpoint) }
+    : base;
+  if (!script.spawn) return named;
   return {
-    ...base,
+    ...named,
     data: {
-      ...base.data,
+      ...named.data,
       // The script speaks metres; the level format is authored in scene pixels.
       player: {
-        ...base.data.player,
+        ...named.data.player,
         x: script.spawn.x * PIXELS_PER_METER,
         y: script.spawn.y * PIXELS_PER_METER,
       },

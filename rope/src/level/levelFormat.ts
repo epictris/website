@@ -1670,6 +1670,70 @@ export interface NoteData {
   size?: number;
 }
 
+// A NAMED SPAWN POINT: `?checkpoint=<name>` starts the run here instead of at
+// `player`, so an area halfway through a level can be played over and over
+// without swinging out to it first - and a killzone reset lands back at the same
+// checkpoint rather than at the level's start, since the app resolves the name
+// once and every rebuilt level is built from the moved spawn.
+//
+// It is a POINT and nothing more: a checkpoint carries no pose, no velocity and
+// no chain state, because the thing it stands for is "start here", which is what
+// `player` already means. A run from a checkpoint is an ordinary run of a level
+// whose spawn has moved, and that is what makes it worth having - a bundle
+// recorded from one replays like any other, since the moved spawn is baked into
+// the data the recording embeds.
+//
+// The name is the URL's, so it is matched trimmed and case-insensitively: a
+// playtester is typing it into an address bar from memory, and `?checkpoint=Vines`
+// failing silently against `vines` would read as the feature being broken.
+export interface CheckpointData {
+  // What `?checkpoint=` names. A blank one is an unfinished edit rather than an
+  // error: it is kept on disk (see `scaleLevelData`) and simply matches nothing,
+  // as does the second of two checkpoints sharing a name - the lookup takes the
+  // first. The editor is where both are reported (see `buildNotesGroup`).
+  name: string;
+  x: number;
+  y: number;
+}
+
+// The checkpoint a name asks for, or null for no name, a blank one, or one the
+// level does not contain. Matching is what `CheckpointData.name` describes.
+export function findCheckpoint(
+  checkpoints: readonly CheckpointData[] | undefined,
+  name: string | null | undefined,
+): CheckpointData | null {
+  const want = name?.trim().toLowerCase();
+  if (!want) return null;
+  return checkpoints?.find((c) => c.name.trim().toLowerCase() === want) ?? null;
+}
+
+// The level with its spawn MOVED to the named checkpoint - the one operation
+// `?checkpoint=` is. It works on the raw (on-disk, pixel) form rather than on a
+// scaled level, because it is applied where a level is chosen and before it is
+// built, so the moved spawn reaches everything downstream that reads
+// `data.player`: the sim, a reset, the 3D camera's first frame and an exported
+// bundle alike.
+//
+// A name that matches nothing leaves the data untouched and says so with the
+// names that would have worked, because the alternative is a playtester staring
+// at the start of the level wondering which half of the URL was wrong.
+export function spawnAtCheckpoint<T extends RawLevelData>(
+  data: T,
+  name: string | null | undefined,
+): T {
+  if (!name?.trim()) return data;
+  const hit = findCheckpoint(data.checkpoints, name);
+  if (!hit) {
+    const known = (data.checkpoints ?? []).map((c) => c.name).join(", ");
+    console.warn(
+      `[checkpoint] no checkpoint named "${name}" in this level; starting at the spawn. ` +
+        (known ? `Known checkpoints: ${known}.` : "This level has no checkpoints."),
+    );
+    return data;
+  }
+  return { ...data, player: { ...data.player, x: hit.x, y: hit.y } };
+}
+
 // The light and air a level is played in (`render3d/environment.ts`). Every
 // field is OPTIONAL and every default is the mood the game already had, so a
 // level authored before this block looks exactly as it did.
@@ -1783,6 +1847,10 @@ export interface LevelData {
   // Editor-only annotations (see NoteData). Never read by the sim or the game
   // renderer, so a level plays identically with or without them.
   notes?: NoteData[];
+  // Named spawn points (see CheckpointData). Read only where a level is chosen,
+  // to move `player` before the level is built, so a level plays identically
+  // with or without them unless `?checkpoint=` asks for one.
+  checkpoints?: CheckpointData[];
   // Chains strung between pairs of bodies (see ChainData). Absent = a level with
   // no chains, which is every level authored before this field.
   chains?: ChainData[];
@@ -1918,6 +1986,7 @@ export interface RawLevelData {
   cameraRegions?: CameraRegionData[];
   cameraPaths?: CameraPathData[];
   notes?: NoteData[];
+  checkpoints?: CheckpointData[];
   chains?: (ChainData | LegacyChainData)[];
   vines?: VineData[];
   environment?: EnvironmentData;
@@ -2726,6 +2795,26 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(n.text !== undefined ? { text: n.text } : {}),
     ...(n.size !== undefined ? { size: n.size * factor } : {}),
   }));
+  // A checkpoint's placement is a length; its name is not.
+  //
+  // Nothing is DROPPED here, unlike the degenerate camera paths above, and the
+  // difference is worth stating because the temptation is real: a blank name can
+  // never be asked for and the second of two sharing a name can never be reached
+  // past the first, so both look like entries with no meaning. They are
+  // unfinished authoring instead - and this function is not only the load, it is
+  // also the SAVE (`modelToDisk`), which the editor runs 750 ms after every
+  // edit. A rule that drops them deletes a marker the author has just placed and
+  // not yet named, silently, while they are still looking at it.
+  //
+  // So the conversion converts, `findCheckpoint` takes the first match (a blank
+  // name matches nothing, since the lookup ignores a blank request), and it is
+  // the editor's panel that says a name is missing or already taken - where the
+  // author is, and while it is still an edit rather than a loss.
+  const checkpoints = data.checkpoints?.map((c) => ({
+    name: c.name,
+    x: c.x * factor,
+    y: c.y * factor,
+  }));
   // A chain's LENGTH is a length; its two anchor ids and its colour are not. The
   // anchor POINTS are no longer here at all - they are objects on their bodies
   // and scale with every other placement, through `scaleObject`.
@@ -2762,6 +2851,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     // else here hands the caller a fresh object.
     ...(data.environment ? { environment: { ...data.environment } } : {}),
     ...(notes ? { notes } : {}),
+    ...(checkpoints ? { checkpoints } : {}),
     ...(chains ? { chains } : {}),
     ...(vines ? { vines } : {}),
     player: {

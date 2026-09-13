@@ -5,6 +5,7 @@
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
 import { LEVELS } from "../level/registry";
+import { spawnAtCheckpoint } from "../level/levelFormat";
 import {
   checkBallInvariants,
   checkInvariants,
@@ -109,11 +110,18 @@ export interface ReplayResult {
 // registry, which won't know the ad-hoc level.
 export function levelFromRecording(rec: Recording): Level | BallLevel {
   if (rec.data) {
-    return rec.controller === "ball" ? new BallLevel(rec.data) : new Level(rec.data);
+    const data = spawnAtCheckpoint(rec.data, rec.checkpoint);
+    return rec.controller === "ball" ? new BallLevel(data) : new Level(data);
   }
   const spec = LEVELS[rec.level];
   if (!spec) throw new Error(`Unknown level: ${rec.level}`);
-  return spec.controller === "ball" ? new BallLevel(spec.data) : new Level(spec.data, spec.init);
+  // A run played from a named spawn is a run of this level with `player` moved,
+  // so the move is re-applied here and the replay steps from the same first
+  // frame the page did (see `Recording.checkpoint`). Moving to a checkpoint
+  // twice is moving to it once, so a self-contained bundle that already carries
+  // the moved spawn is unaffected by the same call above.
+  const data = spawnAtCheckpoint(spec.data, rec.checkpoint);
+  return spec.controller === "ball" ? new BallLevel(data) : new Level(data, spec.init);
 }
 
 // Recorded digests looked up by the frame they describe rather than by their

@@ -81,6 +81,7 @@ import {
   isCollisionObject,
   isAnchorObject,
   isGeometryObject,
+  type CheckpointData,
   type NoteData,
   type ShapeData,
 } from "../level/levelFormat";
@@ -326,11 +327,24 @@ export interface EdLight {
   flicker: number; // 0 (steady) .. 1 (guttering)
 }
 
-// Notes-layer properties (see NoteData). A note is always a rect: for a text
-// note the box holds the wrapped text, for an arrow it is the segment's length
-// and pick band.
+// Notes-layer properties (see NoteData, CheckpointData). A note is always a
+// rect: for a text note the box holds the wrapped text, for an arrow it is the
+// segment's length and pick band, and for a checkpoint it is the marker ring the
+// spawn is drawn as.
+//
+// A CHECKPOINT is on this layer rather than on one of its own because it is the
+// same kind of thing the layer already holds: authoring furniture, drawn only in
+// the editor and never seen in play. What separates it from the two annotations
+// beside it is that a name here can be ASKED FOR (`?checkpoint=NAME` moves the
+// spawn to it), so it is written to `LevelData.checkpoints` rather than to
+// `notes` - the layer is what a thing is edited as, and the list it is written
+// to is what the game does with it.
+//
+// `text` is its NAME, which is the same field doing the same job: the one piece
+// of prose a notes-layer item carries, edited in the same panel and placed with
+// the same caret-in-the-box gesture.
 export interface EdNote {
-  kind: "text" | "arrow";
+  kind: "text" | "arrow" | "checkpoint";
   text: string;
   size: number; // metres, glyph height (text notes)
 }
@@ -576,6 +590,13 @@ export function cloneShape(s: EdShape): EdShape {
 // rather than by corner handles, so the test is shared by picking and drawing.
 export function isArrowNote(item: EdItem): boolean {
   return item.layer === "notes" && item.note.kind === "arrow";
+}
+
+// Is this item a checkpoint marker? A checkpoint is a POINT - a named place to
+// start from - so it has no size to edit and no rotation that means anything,
+// which is the one thing picking, drawing and the handles all have to agree on.
+export function isCheckpointNote(item: EdItem): boolean {
+  return item.layer === "notes" && item.note.kind === "checkpoint";
 }
 
 // The endpoints of an arrow note, in world metres: tail (local -X) to head.
@@ -922,6 +943,21 @@ export const NOTE_DEFAULT_SIZE = new Vec2(2.4, 0.8);
 // Default length of an arrow placed with a click rather than dragged out.
 export const NOTE_DEFAULT_ARROW_LENGTH = 1.2;
 export const NOTE_ARROW_BAND = NOTE_ARROW_THICKNESS * PX;
+
+// The box a checkpoint is picked and drawn by, in metres: the avatar's own
+// diameter, so a marker reads as "the run starts here" and is exactly as big as
+// the spawn marker it stands in for.
+//
+// It is DERIVED rather than authored - built here every time a checkpoint is
+// loaded or placed - because a checkpoint has no size of its own to author and
+// nothing on disk to hold one. That is also why it cannot drift: change the
+// player radius and every marker is the new size the next time the level is
+// opened, where a stored box would keep the old one.
+export const checkpointBox = (playerRadius: number): EdShape => ({
+  kind: "rect",
+  w: playerRadius * 2,
+  h: playerRadius * 2,
+});
 
 // --- conversions ------------------------------------------------------------
 
@@ -1478,15 +1514,19 @@ function lightItem(
   };
 }
 
-  const notes: EdItem[] = (data.notes ?? []).map((n) => ({
+  // One notes-layer item. The layer is loaded from two lists - the annotations
+  // and the checkpoints - which differ in nothing but their box and their
+  // `note`, so they are built through one function rather than through two
+  // copies of a fifty-field literal that would drift apart.
+  const noteItem = (pos: Vec2, rot: number, shape: EdShape, note: EdNote): EdItem => ({
     id: newBodyId(),
     layer: "notes",
     object: "collision",
     bodyId: newBodyId(), // its own body: neither layer is drawn in play
     kind: "static", // unused on this layer; keeps the field total
-    pos: new Vec2(n.x, n.y),
-    rot: n.rot,
-    shape: { kind: "rect", w: n.w, h: n.h },
+    pos,
+    rot,
+    shape,
     color: NOTE_COLOR,
     opacity: NOTE_OPACITY,
     friction: DEFAULT_SURFACE_FRICTION,
@@ -1526,12 +1566,29 @@ function lightItem(
     light: defaultLight(),
     anchorId: 0,
     matchId: 0,
-    note: {
-      kind: n.kind,
-      text: n.text ?? "",
-      size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX,
-    },
-  }));
+    note,
+  });
+
+  const notes: EdItem[] = [
+    ...(data.notes ?? []).map((n) =>
+      noteItem(
+        new Vec2(n.x, n.y),
+        n.rot,
+        { kind: "rect", w: n.w, h: n.h },
+        { kind: n.kind, text: n.text ?? "", size: n.size ?? DEFAULT_NOTE_TEXT_SIZE * PX },
+      ),
+    ),
+    // A checkpoint is a named POINT (see `CheckpointData`): its box is derived
+    // from the avatar it marks the spawn of and it has no rotation, so neither
+    // is read back from disk and neither is written there.
+    ...(data.checkpoints ?? []).map((c) =>
+      noteItem(new Vec2(c.x, c.y), 0, checkpointBox(data.player.radius), {
+        kind: "checkpoint",
+        text: c.name,
+        size: DEFAULT_NOTE_TEXT_SIZE * PX,
+      }),
+    ),
+  ];
   // Chains name their two ends by ANCHOR id, and each anchor is an item above -
   // so the whole of the conversion is looking the two up. A chain naming an
   // anchor the level does not contain (a hand-edited file) is dropped rather
@@ -1725,12 +1782,17 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
     }));
 
-  const notes: NoteData[] = model.items
-    .filter((i) => i.layer === "notes")
+  // The notes layer writes to TWO lists: the annotations the game never reads,
+  // and the checkpoints it reads to place the spawn (see `EdNote`). A checkpoint
+  // is the one item on this layer that is content rather than commentary, so it
+  // is written where the game looks for it rather than smuggled into `notes`.
+  const noteItems = model.items.filter((i) => i.layer === "notes");
+  const notes: NoteData[] = noteItems
+    .filter((i) => i.note.kind !== "checkpoint")
     .map((i) => {
       const h = halfExtents(i);
       return {
-        kind: i.note.kind,
+        kind: i.note.kind === "arrow" ? ("arrow" as const) : ("text" as const),
         x: i.pos.x,
         y: i.pos.y,
         rot: i.rot,
@@ -1741,6 +1803,14 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
         ...(i.note.kind === "text" ? { text: i.note.text, size: i.note.size } : {}),
       };
     });
+  // A checkpoint is a name and a place and nothing else: its marker box is
+  // derived on load (`checkpointBox`) and it has no rotation to keep, so neither
+  // reaches disk. A nameless one is still written - it is an unfinished edit,
+  // not a corruption, and dropping it at a save would delete a marker the author
+  // has placed and not yet named. The load drops it instead, with a warning.
+  const checkpoints: CheckpointData[] = noteItems
+    .filter((i) => i.note.kind === "checkpoint")
+    .map((i) => ({ name: i.note.text, x: i.pos.x, y: i.pos.y }));
 
   // ITEMS BACK INTO BODIES. Items sharing a group id are one body; an ungrouped
   // item is a body of its own. The run is emitted where its FIRST member sits,
@@ -2091,6 +2161,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
     // first time the file is opened.
     ...(model.environment ? { environment: { ...model.environment } } : {}),
     ...(notes.length ? { notes } : {}),
+    ...(checkpoints.length ? { checkpoints } : {}),
     ...(chains.length ? { chains } : {}),
     ...(vines.length ? { vines } : {}),
   };
@@ -2624,7 +2695,7 @@ export function bodyLabel(members: readonly EdItem[]): string {
   if (!first) return "empty";
   if (first.object === "light") return "light";
   if (first.layer === "camera") return "camera";
-  if (first.layer === "notes") return "note";
+  if (first.layer === "notes") return first.note.kind === "checkpoint" ? "checkpoint" : "note";
   return "decor";
 }
 
@@ -2639,7 +2710,13 @@ export function objectLabel(item: EdItem, metresToPx: number): string {
   // A chain's tie point. Hook-only scenery used to share the word as a
   // `BodyKind`; it is the `passable` flag now, so nothing else answers to it.
   if (item.object === "anchor") return `anchor ${item.anchorId}`;
-  if (item.layer === "notes") return item.note.kind === "arrow" ? "arrow" : "text";
+  // A checkpoint is named by the name it is REACHED by (`?checkpoint=vines`),
+  // since that is what tells two of them apart; an unnamed one says so, being a
+  // marker nothing can ask for yet.
+  if (item.layer === "notes") {
+    if (item.note.kind === "checkpoint") return `checkpoint ${item.note.text.trim() || "(unnamed)"}`;
+    return item.note.kind === "arrow" ? "arrow" : "text";
+  }
   if (item.layer === "camera") return item.shape.kind === "path" ? "path" : "region";
   const form =
     item.shape.kind === "rect"

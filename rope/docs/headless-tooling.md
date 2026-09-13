@@ -63,6 +63,8 @@ They drive **either controller**: the ball's actions are the same FrameInput
 fields under its own names (`deploy`, `restart`, `aim`), and a script may carry
 its own `data` (an arena authored inline, as a bundle does) and a `spawn`
 override in metres.
+A script about an area of an AUTHORED level should name a `checkpoint` instead (see [**Checkpoints**](running.md#checkpoints)): a point in metres is a copy of where that area was when the script was written and goes stale the first time the level is re-authored, while a name is re-resolved against the level on every run.
+`spawn` still wins where a script gives both, being the more specific of the two.
 `playtests/ball-*.json` is the mechanic suite that lives on top of that; see
 **What a mechanic test is for** below.
 Invariants checked every frame: NaN, runaway speed, rope-over-length (once

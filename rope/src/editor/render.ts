@@ -28,6 +28,7 @@ import {
   bodyMembers,
   halfExtents,
   isArrowNote,
+  isCheckpointNote,
   collidingBodyIds,
   itemDepth,
   NOTE_COLOR,
@@ -262,6 +263,10 @@ export function computeHandles(cam: Camera, body: EdItem): Handles {
       ends: [worldToScreen(cam, tail), worldToScreen(cam, head)],
     };
   }
+  // A checkpoint is a POINT: its ring is the avatar's size rather than anything
+  // authored (see `checkpointBox`), so there is no corner to drag and no angle
+  // to turn. It is moved, and that is all it has.
+  if (isCheckpointNote(body)) return { ...none, body };
   // Knob sits above the shape's top edge, along the body's own up axis.
   const up = new Vec2(0, -1).rotated(body.rot).normalized();
   if (body.shape.kind === "circle") {
@@ -1229,6 +1234,46 @@ function drawArrowNote(ctx: CanvasRenderingContext2D, item: EdItem, selected: bo
   ctx.fill();
 }
 
+// A checkpoint marker: the SPAWN MARKER's own glyph - a ring at the avatar
+// radius with a crosshair through it - in the notes colour rather than the
+// player blue.
+//
+// The glyph is the spawn's because that is what a checkpoint is (`?checkpoint=`
+// moves `player` here), and the colour is the layer's because the level has
+// exactly one spawn and a second blue ring would read as a second one. A
+// checkpoint is drawn dashed for the same reason every other volume the player
+// passes through is: it is not geometry and must never read as a wall.
+function drawCheckpoint(
+  ctx: CanvasRenderingContext2D,
+  item: EdItem,
+  worldLine: number,
+  selected: boolean,
+): void {
+  const r = halfExtents(item).x;
+  const p = item.pos;
+  if (selected) {
+    ctx.strokeStyle = SELECT;
+    ctx.lineWidth = worldLine * 5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = NOTE_COLOR;
+  ctx.lineWidth = worldLine * 1.5;
+  ctx.setLineDash([6 * PX, 4 * PX]);
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const tick = r * 1.6;
+  ctx.beginPath();
+  ctx.moveTo(p.x - tick, p.y);
+  ctx.lineTo(p.x + tick, p.y);
+  ctx.moveTo(p.x, p.y - tick);
+  ctx.lineTo(p.x, p.y + tick);
+  ctx.stroke();
+}
+
 // A text note's body, drawn in screen space so the glyphs stay crisp, at a size
 // derived from the world glyph height so it still scales with the zoom. The box
 // is drawn in the world pass; this only fills it.
@@ -1826,8 +1871,16 @@ export function drawEditor(
   // than a shape one: a curve on the scene layer is a BAR, `outlineOf` answers
   // the stroke that tiles it, and it is filled and stroked exactly as the shape
   // it builds as - which is what an author has to see to place a rail at all.
+  //
+  // A CHECKPOINT is excluded for the same reason the camera path is: its box is
+  // a pick area rather than a shape (see `checkpointBox`), so filling and haloing
+  // it draws a square that means nothing round a marker that is a ring. It is
+  // drawn, selection and all, by `drawCheckpoint` in the notes pass.
   const geometry = model.items.filter(
-    (i) => i.object === "collision" && !(i.shape.kind === "path" && i.layer === "camera"),
+    (i) =>
+      i.object === "collision" &&
+      !(i.shape.kind === "path" && i.layer === "camera") &&
+      !isCheckpointNote(i),
   );
   const ordered = visibleLayers.has("scene")
     ? [...geometry].sort((a, b) => Number(!a.passable) - Number(!b.passable))
@@ -2258,6 +2311,10 @@ export function drawEditor(
       drawArrowNote(ctx, n, selectedIds.has(n.id));
       continue;
     }
+    if (n.note.kind === "checkpoint") {
+      drawCheckpoint(ctx, n, worldLine, selectedIds.has(n.id));
+      continue;
+    }
     pathBody(ctx, n);
     ctx.fillStyle = paint(hexToRgba(NOTE_COLOR, n.opacity));
     ctx.fill();
@@ -2358,6 +2415,24 @@ export function drawEditor(
   }
   for (const n of notes) {
     if (n.note.kind === "text") drawNoteText(ctx, cam, n);
+    // A checkpoint's NAME is what it is used by, so it is drawn in screen space
+    // beside the marker like a light's readout: a world-space label would shrink
+    // to nothing at the zoom a level is laid out at, which is the zoom the
+    // question "which one is `vines`?" is asked at.
+    else if (n.note.kind === "checkpoint") {
+      const anchor = worldToScreen(cam, n.pos);
+      // Clear of the ring rather than a fixed offset from the centre: the ring
+      // is the avatar's size in WORLD metres, so a fixed offset puts the name
+      // inside it at any zoom worth reading the name at.
+      const ring = halfExtents(n).x * cam.zoom * PIXELS_PER_METER;
+      const named = n.note.text.trim();
+      ctx.font = "11px monospace";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = NOTE_COLOR;
+      ctx.globalAlpha *= named ? 1 : 0.45;
+      ctx.fillText(named || "(unnamed)", anchor.x + ring + 6, anchor.y - ring - 4);
+      ctx.globalAlpha = 1;
+    }
   }
 
   // Handles in screen space so they stay a constant on-screen size. They edit

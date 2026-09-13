@@ -175,6 +175,9 @@ function validateMeta(m: unknown): SessionMeta {
     typeof m.dirty !== "boolean" ||
     !isStr(m.srcHash, 64) ||
     !isStr(m.level, 64) ||
+    // Absent on every page that did not ask for a named spawn, which is most of
+    // them and every one from before checkpoints existed.
+    !(m.checkpoint === undefined || m.checkpoint === null || isStr(m.checkpoint, 64)) ||
     !(m.nick === null || isStr(m.nick, 40)) ||
     !(m.device === "mouse" || m.device === "gamepad" || m.device === "touch") ||
     !isStr(m.ua, 1000) ||
@@ -191,6 +194,7 @@ function validateMeta(m: unknown): SessionMeta {
     dirty: m.dirty,
     srcHash: m.srcHash,
     level: m.level,
+    ...(typeof m.checkpoint === "string" ? { checkpoint: m.checkpoint } : {}),
     nick: m.nick,
     device: m.device,
     ua: m.ua,
@@ -586,6 +590,10 @@ export class PlaytestStore {
     };
     const rec: Recording = {
       level: run.level,
+      // The named spawn the page was loaded at, sealed INTO the run: the level
+      // is named rather than embedded, so this is the only thing that tells a
+      // replay where the run began (see `Recording.checkpoint`).
+      ...(sess.meta.checkpoint ? { checkpoint: sess.meta.checkpoint } : {}),
       git: sess.meta.commit,
       dirty: sess.meta.dirty,
       srcHash: sess.meta.srcHash,

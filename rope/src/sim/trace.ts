@@ -85,6 +85,12 @@ export interface Recording {
   // present, replay builds from `data` instead of looking `level` up.
   controller?: "grapple" | "ball";
   data?: RawLevelData;
+  // The named spawn this run started from (`?checkpoint=`, see
+  // `CheckpointData`). The level is resolved by NAME here, so without it a run
+  // played from a checkpoint would replay from the level's own spawn and diverge
+  // on its first frame - the bundle would be evidence about a different run.
+  // Absent = the level's own spawn, which is every bundle before this field.
+  checkpoint?: string;
   // The held-action mask the level's FIRST frame was stepped from. A serialized
   // frame carries held bits only and the deserializer derives pressed/released
   // by diffing against the previous frame, so a run that begins with a button

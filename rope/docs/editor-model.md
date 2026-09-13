@@ -125,11 +125,12 @@ The inspector drops the whole physics half for a body of pure decoration - no ki
 On disk the same rule holds: `toLevelData` writes no `friction`, `material`, `thickness`, `impermeable` or `force` for decoration, so a migrated panel is byte-stable through a save.
 **Images** (a source, plus `scale` / `crop` / `tile`) remain designed for but not implemented; a decorative shape wearing an authored PBR texture set (see [**Surfaces**](lighting-and-surfaces.md#surfaces)) is most of what they were for.
 
-## Notes
+## Notes and checkpoints
 
-The **notes** layer is authoring commentary: a text box or an arrow, recording *why* a piece of geometry is where it is so that it is not later removed as arbitrary.
-It is the one part of a level file that is deliberately **invisible in play** — notes serialize to `LevelData.notes` (`NoteData` in `levelFormat.ts`), and no runtime path reads that list, so `Level`/`BallLevel` and the game renderer never see it and `▶ Test` shows a scene with nothing added.
-That is also why it is not a `BodyKind`: a note has no collision, nothing wraps it, and it never reaches the sim.
+The **notes** layer is what the player never sees: authoring commentary - a text box or an arrow, recording *why* a piece of geometry is where it is so that it is not later removed as arbitrary - and **checkpoints**, the named places a playtest can be started from.
+Nothing on it is drawn in play, and nothing on it collides, is wrapped or reaches the sim, which is why none of it is a `BodyKind`.
+Notes serialize to `LevelData.notes` (`NoteData` in `levelFormat.ts`) and no runtime path reads that list at all; a checkpoint serializes to `LevelData.checkpoints` (`CheckpointData`), which is read in exactly one place - where a level is chosen, to move `player` before the level is built (see [**Checkpoints**](running.md#checkpoints)).
+The layer is what a thing is **edited** as; the list it is written to is what the game **does** with it.
 
 A note is always a **rectangle** (a circular note has no meaning), so `NoteData` carries `w`/`h` directly rather than a `ShapeData`.
 A text note's box holds its **word-wrapped** text (explicit newlines honoured; a word wider than the box gets its own line rather than being broken mid-identifier, since most of what a note names is an identifier).
@@ -145,6 +146,14 @@ The prose deliberately keeps living in that one textarea rather than gaining a s
 Both paths go through `focusNoteText`, and the placement one has to `preventDefault` its mousedown: the default action moves focus to the document *after* the listener runs, so without it the textarea was blurred the instant it was focused (which is why placement focus never actually worked).
 It is the one canvas press that suppresses the default - every other one must keep it, or clicking the canvas would leave an inspector field focused and the keyboard shortcuts swallowed by it.
 Prose stays a single-selection edit (merging text across a group has no sane meaning) while placement stays group-wide like every other layer.
+
+A **checkpoint** is dropped with `+Checkpoint` (**S**), and it is a named *point*: it has a place, a name, and nothing else.
+It is drawn as the **spawn marker's own glyph** - a ring at the avatar radius with a crosshair through it - in the notes green rather than the player blue, since the level has exactly one spawn and a second blue ring would read as a second one.
+Its ring is derived from `model.player.radius` every time one is loaded or placed (`checkpointBox`) rather than authored, so nothing on disk holds a size that could drift from the avatar it stands for; with no size to author there is no drag to size it with, no corner handles, no rotate knob and no `rot°` field - the press places it and that is the gesture.
+The **name** is `EdNote.text`, the same field a note's prose lives in doing the same job: the one piece of writing the item carries, placed into with the same caret-in-the-field gesture, opened by the same double-click, and undone on the first keystroke for the same reason.
+It is a single-line input rather than a textarea because a name is half of a query string, and it is cleaned of newlines and edge whitespace on the way in so a pasted one is still something that can be typed into an address bar; the panel prints the full `?level=…&checkpoint=…` under it, and says so when a marker is still unnamed.
+The name is matched trimmed and ignoring case at load, and a blank or repeated one is dropped there with a warning - so the editor lets an unnamed marker exist (an unfinished edit, not a corruption: dropping it at a save would delete a marker that had just been placed) while the game refuses to guess what it meant.
+Selecting one and pressing **▶ Test** starts the test from it, through the same spawn override the cursor spot-check (**B**) uses, so a reset during the test and the bundle it exports both come back to the checkpoint.
 
 ## Compound bodies
 

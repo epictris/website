@@ -27,6 +27,10 @@ A saved level ships in the build by being **imported** into `src/level/registry.
 is how `levels/ball.json` backs the `BALL` entry: one file, edited in the editor and bundled
 into production, rather than a hand-copied TS duplicate.
 
+Beside the geometry a level carries a few lists that are not bodies: `cameraRegions` and `cameraPaths` (how it is framed), `notes` (authoring commentary nothing reads), `chains` and `vines` (what is strung between bodies), and **`checkpoints`** - named spawns, each a name and a point, which `?checkpoint=NAME` moves `player` to before the level is built (see [**Checkpoints**](running.md#checkpoints)).
+`scaleLevelData` converts a checkpoint's placement and leaves its name alone, and it **drops nothing**: that function is the editor's save as much as the game's load, so a rule that deleted a blank or repeated name would delete a marker the author had just placed.
+The lookup is what enforces the name instead - trimmed, case-folded, first match wins - and the editor's panel is what reports a name that is missing or already taken.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

@@ -16,6 +16,7 @@ import { PerfProbe } from "./render/perfProbe";
 import { drawPerfHud } from "./render/perfHud";
 import { SparkSystem } from "./render/sparks";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
+import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
   digest,
   digestBall,
@@ -165,8 +166,20 @@ function recordedAim(l: Level | BallLevel, input: FrameInput): Vec2 | null {
   return aim;
 }
 
+// The level as it will be played: `?checkpoint=NAME` moves `player` to the named
+// spawn (see `CheckpointData`), so an area halfway through a level can be
+// played over and over without swinging out to it first.
+//
+// Resolved ONCE, here, rather than per build: the level is rebuilt on every
+// reset, and a warning about a misspelt name printed on each of them would be a
+// console filling up with one mistake. Every level built from it - the first,
+// and every one a killzone reset makes - starts at the same place, which is the
+// whole point of asking for a checkpoint rather than dragging the spawn.
+const checkpoint = params.get("checkpoint");
+const levelData = spawnAtCheckpoint(levelSpec.data, checkpoint);
+
 function makeLevel(): Level | BallLevel {
-  return isBall ? new BallLevel(levelSpec.data) : new Level(levelSpec.data, levelSpec.init);
+  return isBall ? new BallLevel(levelData) : new Level(levelData, levelSpec.init);
 }
 
 let level = makeLevel();
@@ -287,6 +300,9 @@ const recorder = recordWanted
       dirty,
       srcHash,
       level: levelId,
+      // The named spawn this page was opened at, so a run streamed from an
+      // invite link with `?checkpoint=` replays from where it was played.
+      ...(checkpoint ? { checkpoint } : {}),
       nick: playerNick(),
       device: detectDevice(),
       ua: navigator.userAgent,
@@ -326,6 +342,10 @@ window.addEventListener("pageshow", (e) => {
 function downloadRecording(): void {
   const rec: Recording = {
     level: levelId,
+    // A bundle names its level rather than embedding it, so a run from a named
+    // spawn has to say so or its replay starts at the level's own spawn and
+    // diverges on frame 1 (see `Recording.checkpoint`).
+    ...(checkpoint ? { checkpoint } : {}),
     git: commit,
     dirty,
     srcHash,

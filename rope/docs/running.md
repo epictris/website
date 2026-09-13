@@ -50,6 +50,20 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 (see [**Vines**](vines.md)).
 `LEVEL_2` is the grapple arena (the Godot-extracted scene).
 
+## Checkpoints
+
+`?checkpoint=NAME` starts the run at a **named spawn** in the level instead of at its own spawn (`CheckpointData` in `levelFormat.ts`), which is how an area halfway through a level is playtested without swinging out to it first.
+A killzone reset comes back to the same place: the name is resolved once, in `main.ts`, and the level every reset rebuilds is built from the moved `player` - so the whole session is a session of a level whose spawn is somewhere else.
+That is the whole of what a checkpoint is. It carries no pose, no velocity and no chain state, because "start here" is what a spawn already means, and a run from one is an ordinary run of a moved level rather than a second kind of run.
+
+The name is matched **trimmed and ignoring case**, since it is typed into an address bar from memory; one that matches nothing leaves the spawn alone and says so in the console, with the names that would have worked.
+A blank name and a repeat of an earlier one are dropped at load with a warning - neither can be asked for.
+
+Checkpoints are authored in the editor, on the notes layer (see [**Notes and checkpoints**](editor-model.md#notes-and-checkpoints)), and selecting one and pressing **▶ Test** runs the test from it.
+
+A recorded run says which checkpoint it started from: a bundle names its level rather than embedding it, so `Recording.checkpoint` is what keeps a replay from starting at the level's own spawn and diverging on its first frame.
+Production runs carry it in their session metadata (see [**Production recording**](production-recording.md)) and the sealed bundle gets it from there.
+
 ## Ball controls and aim
 
 The chain deploys

@@ -95,6 +95,8 @@ import {
   objectLabel,
   halfExtents,
   isArrowNote,
+  isCheckpointNote,
+  checkpointBox,
   collidingBodyIds,
   itemDepth,
   newItemStyle,
@@ -260,6 +262,7 @@ type Tool =
   | "geometry"
   | "text"
   | "arrow"
+  | "checkpoint"
   | "chain"
   | "vine"
   | "light";
@@ -276,7 +279,7 @@ type Tool =
 const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
   scene: ["select", "rect", "circle", "poly", "path", "geometry", "light", "chain", "vine"],
   camera: ["select", "rect", "circle", "poly", "path"],
-  notes: ["select", "text", "arrow"],
+  notes: ["select", "text", "arrow", "checkpoint"],
 };
 
 // Kinds a chain may be tied to. An area is a region, not a body - nothing hangs
@@ -300,7 +303,7 @@ const EMPTY_HINTS: Record<EdLayer, string> = {
   camera:
     "Camera layer. Click a region, drag to rubber-band select, or pick +Rect / +Circle and drag one out (+Poly clicks out an outline). Tab switches layer.",
   notes:
-    "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out. Notes are editor-only and never appear in play. Tab switches layer.",
+    "Notes layer. +Text drops a box to type into, +Arrow drags a pointer out, +Checkpoint drops a named place to start from - play with ?checkpoint=NAME to spawn there instead of at the level's spawn, or select one and press ▶ Test. None of the three is drawn in play. Tab switches layer.",
 };
 
 // Kinds offered by both kind pickers (toolbar + inspector), in one place so
@@ -312,6 +315,12 @@ const BODY_KINDS: BodyKind[] = ["static", "rigid", "killzone", "force", "water"]
 // drag never reads as a click, large enough that a hand shaking on a mouse
 // button does not turn a selection into a pan.
 const CLICK_SLOP_PX = 4;
+// The smallest a point-like mark may be to aim at, in screen pixels. The spawn
+// marker and a checkpoint are both drawn at the avatar's radius - 16 cm across,
+// which is a handful of pixels at the zoom a level is laid out at - so both take
+// this as the floor on what a click has to land within. Drawn size is unchanged:
+// this is about what can be hit, not about what is seen.
+const SMALL_MARK_PICK_PX = 12;
 // Orbit sensitivity: a drag across a 1600px window is a bit over a half turn,
 // which is enough to see round a prop without a level swinging past under a
 // nudge.
@@ -1568,6 +1577,15 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     lastNow = -1;
     testSparks.reset();
     mode = "test";
+    // AFTER the mode flips, because that is the thing `gizmoSpec` asks about.
+    // The gizmo lives in the SCENE rather than on the overlay, so it is still
+    // drawn once the test takes the canvas - a set of editing arrows hanging in
+    // the middle of the level being played. `gizmoSpec` already answers null in
+    // test mode; what it lacked was anyone to ask it, since the sync runs on the
+    // edit frame loop and a test has its own. Selecting something and pressing
+    // ▶ Test is the ordinary way in now that a checkpoint is tested by being
+    // selected, so the detach happens here, and `stopTest` asks again.
+    syncGizmo();
     root.style.display = "none";
     testBanner.textContent = TEST_BANNER[controller];
     testBanner.style.display = "block";
@@ -1628,6 +1646,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // Leaving the test has to give the cursor back whichever way it was left, or
     // the editor comes back with nothing to click its toolbar with.
     if (document.pointerLockElement === canvas) document.exitPointerLock();
+    // ...and the selection's gizmo comes back with the editor (see startTest).
+    syncGizmo();
   }
 
   // --- DOM ------------------------------------------------------------------
@@ -1700,6 +1720,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     geometry: button("+ Geometry", () => setTool("geometry")),
     text: button("+ Text", () => setTool("text")),
     arrow: button("+ Arrow", () => setTool("arrow")),
+    checkpoint: button("+ Checkpoint", () => setTool("checkpoint")),
     chain: button("+ Chain", () => setTool("chain")),
     vine: button("+ Vine", () => setTool("vine")),
     light: button("+ Light", () => setTool("light")),
@@ -1712,6 +1733,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   toolBtns.vine.title =
     "Press on a body and drag DOWN to hang a vine from it. Shift-drag its end handle onto another body to span between the two. The player passes through a vine and the hook grabs it anywhere along its length.";
   toolBtns.light.title = "Click to drop a light; drag to set how far it reaches";
+  toolBtns.checkpoint.title =
+    "Click to drop a named spawn. Playing with ?checkpoint=NAME starts there instead of at the level's spawn - and stays there over a reset - so an area can be playtested without swinging out to it first. Selecting one and pressing ▶ Test starts the test there.";
   const kindSel = document.createElement("select");
   kindSel.className = "ed-select";
   for (const k of BODY_KINDS) {
@@ -1744,6 +1767,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     toolBtns.geometry,
     toolBtns.text,
     toolBtns.arrow,
+    toolBtns.checkpoint,
     toolBtns.chain,
     toolBtns.vine,
     toolBtns.light,
@@ -1862,9 +1886,25 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   const testRow = el("div", "ed-row");
   bar.appendChild(testRow);
-  const btnTestBall = button("▶ Test Ball", () => startTest("ball"));
-  btnTestBall.title = "Test from the level's spawn (B tests from the cursor)";
-  testRow.append(button("▶ Test Grapple", () => startTest("grapple")), btnTestBall);
+  // Where a ▶ Test starts: the SELECTED CHECKPOINT if one is picked, and
+  // otherwise the level's own spawn.
+  //
+  // A checkpoint is a named place to start from, so selecting one and pressing
+  // Test meaning anything else would be the editor ignoring what is selected.
+  // It is the same override the cursor spot-check uses (`B`), and it goes the
+  // same way into the data the test is built from, so a reset during the test -
+  // and the bundle it exports - comes back to the checkpoint too.
+  function testSpawn(): Vec2 | undefined {
+    const picked = selectedBodies().filter(isCheckpointNote);
+    return picked.length === 1 ? picked[0]!.pos : undefined;
+  }
+  const btnTestBall = button("▶ Test Ball", () => startTest("ball", testSpawn()));
+  btnTestBall.title =
+    "Test from the level's spawn, or from the selected checkpoint (B tests from the cursor)";
+  testRow.append(
+    button("▶ Test Grapple", () => startTest("grapple", testSpawn())),
+    btnTestBall,
+  );
   const snapChk = checkbox("snap 10cm", snapOn, (v) => (snapOn = v));
   testRow.append(snapChk);
   // The screen-edge guarantee, off-switchable for a test and NOWHERE else. The
@@ -2218,13 +2258,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       model.items.filter((i) => i.layer === "scene").map((i) => i.bodyId),
     ).size;
     const lights = model.items.filter((i) => i.object === "light").length;
+    // The notes layer holds two different things (see `EdNote`), so it is
+    // counted as two: "3 notes" that silently included two checkpoints would be
+    // a count of neither.
+    const checkpoints = model.items.filter(isCheckpointNote).length;
     const extra =
       ([
         ["camera", "cam"],
         ["notes", "notes"],
       ] as const)
-        .map(([l, name]) => (count(l) ? ` · ${count(l)} ${name}` : ""))
+        .map(([l, name]) => {
+          const n = l === "notes" ? count(l) - checkpoints : count(l);
+          return n ? ` · ${n} ${name}` : "";
+        })
         .join("") +
+      (checkpoints ? ` · ${checkpoints} checkpoint${checkpoints === 1 ? "" : "s"}` : "") +
       // Lights are counted as OBJECTS now rather than as a layer, which is what
       // they are: a light lives in a body beside the shapes it lights.
       (lights ? ` · ${lights} light${lights === 1 ? "" : "s"}` : "") +
@@ -2504,6 +2552,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       (b) => placement(b).y * M2PX,
       (b, v) => moveRelative(b, "y", v * PX),
     );
+    // A checkpoint is a point: it has a place and nothing else, so the panel
+    // stops at x and y (as the handles do - see `computeHandles`).
+    if (items.some(isCheckpointNote)) return;
     // A circle's rotation is invisible, so it only gets the field where it aims
     // something (a force area's current).
     if (
@@ -5463,12 +5514,14 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     inspector.appendChild(g);
   }
 
-  // The live note textarea, so a freshly placed text note can be typed into
-  // without a trip to the inspector. Null whenever the panel shows no single
-  // text note.
-  let noteText: HTMLTextAreaElement | null = null;
+  // The live note field, so a freshly placed note can be typed into without a
+  // trip to the inspector: a text note's prose textarea, or a checkpoint's name
+  // input - both are the one piece of writing their item is placed FOR, and both
+  // are reached by the same placement and double-click gestures. Null whenever
+  // the panel shows no single item with one.
+  let noteText: HTMLTextAreaElement | HTMLInputElement | null = null;
 
-  // Put the caret in that textarea, at the end of whatever is already written.
+  // Put the caret in that field, at the end of whatever is already written.
   // It is scrolled into view because the inspector is a scrolling stack of
   // per-layer panels, so the note's panel need not be on screen.
   function focusNoteText(): void {
@@ -5517,13 +5570,82 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   function buildNotesGroup(notes: EdItem[]): void {
     const g = el("div", "ed-group");
+    const allCheckpoints = notes.every((n) => n.note.kind === "checkpoint");
     g.appendChild(
-      heading(notes.length === 1 ? `Note #${notes[0]!.id}` : `${notes.length} notes selected`),
+      heading(
+        notes.length === 1
+          ? allCheckpoints
+            ? `Checkpoint #${notes[0]!.id}`
+            : `Note #${notes[0]!.id}`
+          : `${notes.length} ${allCheckpoints ? "checkpoints" : "notes"} selected`,
+      ),
     );
     const hint = el("div", "ed-hint");
-    hint.textContent =
-      "Editor-only: notes record why geometry is placed as it is, so it isn't later removed as arbitrary. They never appear in play.";
+    // The two things this layer holds are used for opposite things, so the hint
+    // says which one is selected rather than describing the layer.
+    hint.textContent = allCheckpoints
+      ? "A named place to start from. Play with ?checkpoint=NAME to spawn here instead of at the level's spawn - a killzone reset comes back here too, so an area can be played over and over. Selecting one and pressing ▶ Test starts the test here. Invisible in play."
+      : "Editor-only: notes record why geometry is placed as it is, so it isn't later removed as arbitrary. They never appear in play.";
     g.appendChild(hint);
+
+    if (allCheckpoints && notes.length === 1) {
+      const n = notes[0]!;
+      const input = document.createElement("input");
+      input.className = "ed-text";
+      input.value = n.note.text;
+      input.placeholder = "name";
+      input.title = "What ?checkpoint= asks for. Matched trimmed and ignoring case.";
+      // The URL this checkpoint is reached by, written out in full: the name is
+      // half of a query string, and a name that has to be assembled by hand into
+      // one is a name that gets mistyped.
+      //
+      // It is also where the two ways a name fails are reported. Nothing on disk
+      // drops either of them (see `scaleLevelData`), because both are ordinary
+      // mid-edit states: a marker is placed before it is named, and a name is
+      // typed one letter at a time past an existing one. The place to say so is
+      // the panel the author is looking at, live.
+      const url = el("div", "ed-hint");
+      const updateUrlHint = (): void => {
+        const named = n.note.text.trim();
+        if (!named) {
+          url.textContent = "Unnamed: nothing can ask for this checkpoint yet.";
+          return;
+        }
+        const twin = model.items.some(
+          (i) =>
+            i !== n && isCheckpointNote(i) && i.note.text.trim().toLowerCase() === named.toLowerCase(),
+        );
+        url.textContent = twin
+          ? `Another checkpoint is already called "${named}", and ?checkpoint= finds the first one. Rename one of them.`
+          : `/?level=${currentName ?? "..."}&checkpoint=${encodeURIComponent(named)}`;
+      };
+      // One undo step per editing session, snapshotted on the first keystroke,
+      // exactly as the note textarea does it and for the same reason: placing a
+      // checkpoint focuses this, and a focus-time snapshot would make the first
+      // Ctrl+Z a visible no-op.
+      let edited = false;
+      input.addEventListener("blur", () => (edited = false));
+      input.addEventListener("input", () => {
+        if (!edited) {
+          beginAction();
+          edited = true;
+        }
+        // A name is a URL parameter, so it is kept to one line: the field is an
+        // input rather than a textarea, and a paste carrying newlines or edge
+        // whitespace is cleaned rather than saved as a name nothing can type.
+        n.note.text = input.value.replace(/\s+/g, " ").trim();
+        markDirty();
+        updateUrlHint();
+      });
+      noteText = input;
+      g.appendChild(input);
+      updateUrlHint();
+      g.appendChild(url);
+    } else if (allCheckpoints) {
+      const many = el("div", "ed-hint");
+      many.textContent = "Select one checkpoint to name it.";
+      g.appendChild(many);
+    }
 
     const allText = notes.every((n) => n.note.kind === "text");
     const allArrows = notes.every((n) => n.note.kind === "arrow");
@@ -6379,6 +6501,20 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         item.pos = start.add(NOTE_DEFAULT_SIZE.mul(0.5));
       }
       return item;
+    }
+    if (t === "checkpoint") {
+      // Dropped ON the click rather than growing from it, and at the avatar's
+      // size: a checkpoint is a named POINT, so where it is placed is the whole
+      // of the gesture and there is nothing for a drag to size (see
+      // `checkpointBox`). It lands unnamed, with the caret in the name field -
+      // the same first act a text note is placed for - because a checkpoint with
+      // no name is one nothing can ask for yet.
+      return {
+        ...base,
+        pos: start,
+        shape: checkpointBox(model.player.radius),
+        note: { ...base.note, kind: "checkpoint", text: "" },
+      };
     }
     if (t === "path") {
       // A placeholder two-vert run; the caller replaces it with the drafted
@@ -7443,7 +7579,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // and disagreeing with its siblings about what the body is.
       syncBodyProps(bodyMembers(model.items, body.bodyId));
       setSelection([body.id]);
-      drag = { mode: "draw", body, start };
+      // A checkpoint has no size to drag out (see `newDrawnItem`), so the press
+      // IS the whole gesture: entering a draw drag would offer a resize that
+      // does nothing and leave the marker's box disagreeing with the avatar it
+      // is drawn at.
+      drag = drawTool === "checkpoint" ? null : { mode: "draw", body, start };
       markDirty();
       rebuildInspector();
       // A text note is placed to be written in, so the caret goes there rather
@@ -7462,7 +7602,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     if (
       !turned &&
       world.distanceTo(model.player.pos) <=
-        Math.max(model.player.radius, 12 / (camera.zoom * PIXELS_PER_METER))
+        Math.max(model.player.radius, SMALL_MARK_PICK_PX * worldLine())
     ) {
       drag = { mode: "movePlayer", grab: model.player.pos.sub(world) };
       return;
@@ -7677,6 +7817,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // outliner.
     if (b.object === "anchor") return false;
     if (b.object === "light") return world.distanceTo(b.pos) <= lightPickRadius(worldLine());
+    // A checkpoint is its RING, and never smaller on screen than a thing can be
+    // aimed at: the ring is the avatar's size in world metres (see
+    // `checkpointBox`), which at the zoom a level is laid out at is a few pixels
+    // across. The level's own spawn marker is picked under exactly this rule.
+    if (isCheckpointNote(b)) return world.distanceTo(b.pos) <= checkpointPickRadius(b);
     if (ray && b.object === "geometry") return ray.has(b.id);
     return pointInBody(b, world);
   }
@@ -7694,9 +7839,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const m = new Vec2(PATH_PICK_HALF_WIDTH, PATH_PICK_HALF_WIDTH);
       return { min: box.min.sub(m), max: box.max.add(m) };
     }
+    if (isCheckpointNote(b)) {
+      const r = new Vec2(checkpointPickRadius(b), checkpointPickRadius(b));
+      return { min: b.pos.sub(r), max: b.pos.add(r) };
+    }
     if (b.object !== "light") return itemBounds(b);
     const r = new Vec2(lightPickRadius(worldLine()), lightPickRadius(worldLine()));
     return { min: b.pos.sub(r), max: b.pos.add(r) };
+  }
+
+  // How close a click has to land to a checkpoint's centre, in world metres:
+  // its ring, or a 12-pixel target when the ring is smaller than that on screen
+  // - the same floor the spawn marker's own pick uses, and for the same reason
+  // (an avatar is 16 cm across, and a level is authored zoomed out).
+  function checkpointPickRadius(b: EdItem): number {
+    return Math.max(halfExtents(b).x, SMALL_MARK_PICK_PX * worldLine());
   }
 
   // Topmost pickable item at a world point (optionally filtered), or null.
@@ -7880,7 +8037,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       if (!pointInBody(b, world)) continue;
       // Only the topmost item under the pointer is considered: a note behind
       // something else is not what was double-clicked.
-      if (b.layer !== "notes" || b.note.kind !== "text") return;
+      // A checkpoint's NAME is opened by the same gesture: it is the one piece
+      // of writing the item carries, as a text note's prose is.
+      if (b.layer !== "notes" || b.note.kind === "arrow") return;
       setSelection([b.id]);
       focusNoteText();
       return;
@@ -8522,6 +8681,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     else if (e.code === "KeyT") setTool("text");
     else if (e.code === "KeyA") setTool("arrow");
     else if (e.code === "KeyK") setTool("chain");
+    // A checkpoint is a named SPAWN, on the letter that says so. `setTool`
+    // refuses a tool the active layer does not offer, so this arms nothing until
+    // the notes layer is the one being edited, exactly as T and A do.
+    else if (e.code === "KeyS") setTool("checkpoint");
     // The lens (see `ViewProjection`), on the letter it is named by.
     else if (e.code === "KeyO")
       setProjection(projection === "orthographic" ? "perspective" : "orthographic");

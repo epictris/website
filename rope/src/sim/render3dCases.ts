@@ -57,6 +57,7 @@ import {
   isAnchorObject,
   isGeometryObject,
   normalizeLevelData,
+  spawnAtCheckpoint,
   type GeometryObjectData,
   type LightObjectData,
   type LevelBodyData,
@@ -2497,6 +2498,122 @@ function chainWrapPoints(): CaseResult[] {
   ];
 }
 
+// CHECKPOINTS: named spawns, reached by `?checkpoint=NAME` (see
+// `CheckpointData`).
+//
+// Three things are worth holding, and all three are silent when they break. The
+// placement is a LENGTH and the name is not, which is the units trap water and
+// the trampoline both set. The editor rewrites the file every 750 ms, so a
+// checkpoint it does not know about is a checkpoint deleted the first time the
+// level is opened - and it must land in `checkpoints` rather than in `notes`,
+// since it is authored on the notes layer beside the annotations. And the
+// lookup is what the URL asks through, so the trimming and the case-folding are
+// the feature rather than a nicety.
+function checkpointFormat(): CaseResult[] {
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: 300,
+        rot: 0,
+        friction: 1,
+        objects: [{ type: "collision", shape: { kind: "rect", w: 300, h: 40 } }],
+      },
+    ],
+    notes: [{ kind: "text", x: 0, y: -100, rot: 0, w: 240, h: 80, text: "why", size: 12 }],
+    checkpoints: [
+      { name: "vines", x: 400, y: -200 },
+      { name: "the gap", x: -800, y: 120 },
+    ],
+  };
+  const list = (d: LevelData): string => JSON.stringify(d.checkpoints);
+  const a = list(scaleLevelData(normalizeLevelData(authored), 1));
+  const b = list(scaleLevelData(scaleLevelData(normalizeLevelData(authored), PX), PIXELS_PER_METER));
+  const scaled = scaleLevelData(normalizeLevelData(authored), PX);
+  const units = scaled.checkpoints?.[0]?.x === 4 && scaled.checkpoints[0]?.name === "vines";
+
+  const saved = modelToDisk(modelFromDisk(authored));
+  const kept =
+    saved.checkpoints?.length === 2 &&
+    saved.checkpoints[1]?.name === "the gap" &&
+    Math.round(saved.checkpoints[1].x) === -800 &&
+    // ...and the annotation beside them is still an annotation: the two share a
+    // layer in the editor and must not share a list on disk.
+    saved.notes?.length === 1 &&
+    saved.notes[0]?.kind === "text";
+
+  // Asked for the way a playtester types it: a different case, with the spaces
+  // a browser leaves on either side of a pasted name.
+  const moved = spawnAtCheckpoint(authored, " The Gap ");
+  const hit = moved.player.x === -800 && moved.player.y === 120 && authored.player.x === 0;
+  const missed = spawnAtCheckpoint(authored, "nowhere");
+  const none = spawnAtCheckpoint(authored, null);
+  const left = missed.player.x === 0 && none.player.x === 0;
+
+  // A name nothing can ask for, and a name that would answer to something
+  // else's request. Both are mid-edit states rather than errors, so the
+  // conversion KEEPS them - this function is the editor's save as well as the
+  // game's load, and dropping one deletes a marker that was placed a moment ago
+  // and not yet named. What they do at the lookup is the assertion: a blank
+  // request matches nothing, and a repeated name keeps meaning the first.
+  const slippy: RawLevelData = {
+    ...authored,
+    checkpoints: [
+      { name: "vines", x: 400, y: -200 },
+      { name: "  ", x: 0, y: 0 },
+      { name: "VINES", x: 999, y: 999 },
+    ],
+  };
+  const slips = scaleLevelData(normalizeLevelData(slippy), 1);
+  const kept3 = slips.checkpoints?.length === 3;
+  const firstWins = spawnAtCheckpoint(slippy, "vines").player.x === 400;
+  const blankAsks = spawnAtCheckpoint(slippy, "   ").player.x === 0;
+  const slipsHandled = kept3 && firstWins && blankAsks;
+
+  return [
+    {
+      name: "level format: a checkpoint round-trips px -> m -> px",
+      pass: a === b,
+      detail: a === b ? "byte-identical" : `\n  authored ${a}\n  round    ${b}`,
+    },
+    {
+      name: "level format: a checkpoint's placement is a length and its name is not",
+      pass: units,
+      detail: units
+        ? "x 400 px -> 4 m, name unchanged"
+        : `x ${scaled.checkpoints?.[0]?.x}, name ${scaled.checkpoints?.[0]?.name}`,
+    },
+    {
+      name: "editor: a checkpoint survives a save, and stays out of the notes",
+      pass: kept,
+      detail: kept
+        ? "2 checkpoints, 1 note"
+        : JSON.stringify({ checkpoints: saved.checkpoints, notes: saved.notes }),
+    },
+    {
+      name: "level format: ?checkpoint= moves the spawn, trimmed and ignoring case",
+      pass: hit,
+      detail: hit
+        ? "' The Gap ' -> (-800, 120), the level itself untouched"
+        : JSON.stringify(moved.player),
+    },
+    {
+      name: "level format: an unknown or absent checkpoint leaves the spawn alone",
+      pass: left,
+      detail: left ? "both start at the level's spawn" : JSON.stringify([missed.player, none.player]),
+    },
+    {
+      name: "level format: a blank or repeated checkpoint name is kept, and asks for nothing",
+      pass: slipsHandled,
+      detail: slipsHandled
+        ? "3 of 3 written; `vines` finds the first, a blank request finds none"
+        : JSON.stringify({ kept: slips.checkpoints?.length, firstWins, blankAsks }),
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...renderNeedsGeometry(),
@@ -2524,5 +2641,6 @@ export function runRender3dCases(): CaseResult[] {
     ...realLevelRoundTrip(),
     ...waterFormat(),
     ...bounceFormat(),
+    ...checkpointFormat(),
   ];
 }

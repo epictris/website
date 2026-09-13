@@ -44,6 +44,13 @@ export interface SessionMeta {
   dirty: boolean;
   srcHash: string;
   level: string;
+  // From `?checkpoint=NAME`, if any: the named spawn every run of this session
+  // started from (see `CheckpointData`). It is the session's rather than the
+  // run's because only a reload can change it, and it is carried at all because
+  // a sealed run names its level rather than embedding it - a run replayed from
+  // the level's own spawn when the page started elsewhere diverges on its first
+  // frame (see `Recording.checkpoint`).
+  checkpoint?: string | null;
   // From `?player=NAME` on the invite link, if any. The admin assigns the name
   // that sticks; this only pre-fills it.
   nick: string | null;
