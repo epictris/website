@@ -71,11 +71,11 @@ export const LEVELS: Record<string, LevelSpec> = {
   // Ball & chain controller in its own authored arena. Any mover in it is one
   // the FILE authored - a swinging body (see `LevelBodyData.swingAmp`) - since
   // the ball driver takes no `init` hook.
-  BALL: { data: ballLevelJson as RawLevelData, controller: "ball" },
+  BALL: { data: ballLevelJson as RawLevelData, controller: "ball", file: "ball" },
   // Rails to clamp and slide along, driven with the ball (see `lib/rail.ts`).
-  RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball" },
+  RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
-  MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball" },
+  MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball", file: "mud-test" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };

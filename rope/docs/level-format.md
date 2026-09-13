@@ -11,8 +11,16 @@ Saving is **automatic** once the model has a name: every edit (including undo/re
 An *unnamed* model never autosaves - the first Save/Save As names the file, and everything after that persists on its own; the title's `*` is therefore a brief in-flight marker, not a standing warning, and an autosave failure shows as `SAVE FAILED` there rather than an alert (a modal mid-drag is worse than the loss it reports).
 New/Load/Delete each cancel a queued write, so it can never land on the wrong name or resurrect a deleted file.
 
-Autosave must not reload the page, and by default it would: `levels/ball.json` is *imported* by `registry.ts`, so writing it invalidates a real module and Vite full-reloads every open page - including the editor doing the writing.
-So `levelApi` implements `handleHotUpdate` and returns `[]` for anything under `levels/`, dropping those files out of HMR entirely (a level is only read at page load anyway; reload by hand to pick one up), and its `PUT` skips writes whose bytes are unchanged so a redundant autosave never even touches the watcher.
+Autosave must not disturb the page, and by default it did something far worse than reload it: **it restarted the dev server**.
+`levels/*.json` is *imported* by `registry.ts`, which `vite.config.ts` imports for the preload list, so every level file is one of Vite's `configFileDependencies` - and a write to a config dependency is a full server restart, decided in `handleHMRUpdate` before any plugin's `handleHotUpdate` is consulted.
+There is no hook that can decline it (the old `handleHotUpdate` returning `[]` never ran), so the only lever is not delivering the event: `server.watch.ignored` drops `levels/*.json` off the watcher entirely.
+
+Nothing else wanted that event.
+A level is read once, at page load; the editor holds the authoritative model in memory and saves *through* `/api/levels`; and `PUT` skips writes whose bytes are unchanged, so a redundant autosave never touches the file at all.
+What did ride on the watcher is picked up at the write instead, which is the better signal anyway - it is the write, not a guess at what a file event meant:
+
+- **Vite's module cache**: `PUT`/`DELETE` invalidate the level's module in every environment's graph, so a hand reload serves the level as saved rather than as transformed at startup. No HMR is sent with it; reload by hand to pick up a level edit.
+- **The preload list**: `storeScript` re-reads a file-backed level off disk per page load (see `LevelSpec.file`), rather than using the copy compiled into the config at startup. A read that lands mid-write falls back to that compiled-in copy.
 
 A saved level ships in the build by being **imported** into `src/level/registry.ts`
 (`resolveJsonModule`; JSON widens string literals, so the spec casts to `LevelData`). That

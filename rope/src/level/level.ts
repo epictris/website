@@ -60,6 +60,12 @@ export interface LevelSpec {
   data: RawLevelData;
   init?: (level: Level) => void;
   controller?: "ball";
+  // The `levels/<file>.json` this level's data was bundled from, for the levels
+  // that are a file the editor owns rather than hand-written TS. `data` is the
+  // file as it stood when the app was compiled; this names the file itself, so
+  // a dev-time reader can go back to disk for what the editor has saved since
+  // (see the preload list in vite.config.ts).
+  file?: string;
 }
 
 export class Level {

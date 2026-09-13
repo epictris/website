@@ -5,6 +5,9 @@ setup:
 run PROJECT="app":
     bun run --cwd {{PROJECT}} dev
 
+swing:
+    bun run --cwd rope dev
+
 check:
     cd app && bun run typecheck && bun run lint
 

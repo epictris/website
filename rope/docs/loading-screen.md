@@ -32,6 +32,7 @@ Inlined it cannot be merged into anything, and `globals.d.ts` keeps the app's si
 
 **The preload list is resolved at build time** by `levelStoredFiles` (`src/render3d/levelAssets.ts`), which answers "what will this level download" by walking the level data - the same question `Scene3D.setLevel` answers by building the scene, asked where there is no canvas to build one on.
 Every level's list is inlined into `index.html` as one shared file table (~2 KB gzipped for the whole registry), keyed by level id, because `?level=` picks the level before the app can.
+In dev it is rebuilt per page load, off the level files as they are on disk *now* (see `LevelSpec.file`), because the editor is saving them and the dev server no longer restarts when it does (see [level-format](level-format.md)).
 `?render=2d` preloads nothing, for the reason it exists: a page that will not build a 3D scene must not fetch 26 MB to not draw it.
 
 Nothing can prove the resolver and the scene agree - they walk the same data by different routes - so the guard is at the other end: the store **warns when a file is asked for that the preload list did not name**, which turns drift into a console line the first time the level is played rather than a bar that stops at 94%.

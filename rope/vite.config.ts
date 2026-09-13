@@ -13,6 +13,7 @@ import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { treeStamp, type TreeStamp } from "./src/sim/treeStamp";
 import { DEFAULT_LEVEL, LEVELS } from "./src/level/registry";
+import type { RawLevelData } from "./src/level/levelFormat";
 import { levelStoredFiles } from "./src/render3d/levelAssets";
 
 // The identity of the SOURCE this server is serving, exposed to the app as
@@ -79,6 +80,25 @@ function levelApi(): Plugin {
     configureServer(server) {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
+      // A level file is in the module graph (registry.ts imports it) but NOT on
+      // the watcher - `server.watch.ignored` keeps level writes from restarting
+      // the server, and invalidation rides on the watcher event that is no
+      // longer delivered. Without this, vite kept serving the JSON module it
+      // transformed at startup and a hand reload showed the level as it was
+      // hours ago. Invalidate on the write instead, which is a better signal
+      // anyway: it is the write, not a guess at what a watcher event meant.
+      //
+      // No HMR is sent with it. The page picks the new module up on its next
+      // load, which is the contract everywhere else here: a level is read once,
+      // when the scene is built.
+      const invalidate = (file: string) => {
+        for (const env of Object.values(server.environments)) {
+          for (const mod of env.moduleGraph.getModulesByFile(file) ?? []) {
+            env.moduleGraph.invalidateModule(mod);
+          }
+        }
+      };
+
       server.middlewares.use("/api/levels", (req, res) => {
         const send = (status: number, body: unknown) => {
           res.statusCode = status;
@@ -113,10 +133,13 @@ function levelApi(): Plugin {
                 const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
                 const text = JSON.stringify(parsed, null, 2) + "\n";
                 // The editor autosaves, so identical writes are common; skipping
-                // them keeps the file's mtime (and the watcher) quiet.
+                // them keeps the file's mtime quiet.
                 const unchanged =
                   existsSync(fileFor(name)) && readFileSync(fileFor(name), "utf8") === text;
-                if (!unchanged) writeFileSync(fileFor(name), text);
+                if (!unchanged) {
+                  writeFileSync(fileFor(name), text);
+                  invalidate(fileFor(name));
+                }
                 send(200, { ok: true, name });
               } catch {
                 send(400, { error: "invalid JSON body" });
@@ -126,7 +149,10 @@ function levelApi(): Plugin {
           }
 
           if (req.method === "DELETE") {
-            if (existsSync(fileFor(name))) rmSync(fileFor(name));
+            if (existsSync(fileFor(name))) {
+              rmSync(fileFor(name));
+              invalidate(fileFor(name));
+            }
             return send(200, { ok: true });
           }
 
@@ -135,15 +161,6 @@ function levelApi(): Plugin {
           return send(500, { error: String(e) });
         }
       });
-    },
-
-    // levels/*.json is imported by src/level/registry.ts (levels/ball.json backs
-    // the BALL entry), so a plain-JSON change would full-reload every open page.
-    // The editor autosaves - reloading it out from under the author on every
-    // write is exactly wrong - so level writes are excluded from HMR entirely.
-    // A level is only read at page load anyway; reload by hand to pick one up.
-    handleHotUpdate(ctx) {
-      if (ctx.file.startsWith(dir + "/")) return [];
     },
   };
 }
@@ -211,10 +228,12 @@ function editorRoute(): Plugin {
 // 240 ms (production) or 1530 ms (dev server, where vite serves 5.2 MB of
 // unbundled modules). That gap was the whole of the loading bar's empty second.
 //
-// The list is resolved HERE, at config load, because it is a fact about the
-// level files and the asset manifest and both are on disk: a build step cannot
-// build a scene, so `levelStoredFiles` answers the same question by walking the
-// level data (see render3d/levelAssets.ts, and the drift warning it describes).
+// The list is resolved HERE, off disk, because it is a fact about the level
+// files and the asset manifest and both are on disk: a build step cannot build a
+// scene, so `levelStoredFiles` answers the same question by walking the level
+// data (see render3d/levelAssets.ts, and the drift warning it describes). A
+// file-backed level is re-read per page load, so a level the editor is saving
+// stays in step without the server restarting under it (see `levelData`).
 //
 // `transformIndexHtml` runs in dev serve and in build alike, so the dev server
 // and the shipped page carry the same thing. Only `index.html` gets a preload
@@ -222,6 +241,26 @@ function editorRoute(): Plugin {
 // anybody waits on, and a preload for a level they may not open would be a
 // download for nothing.
 function storeScript(): Plugin {
+  // A file-backed level's data as it is ON DISK RIGHT NOW, rather than as it was
+  // when this config was loaded (see `LevelSpec.file`). The dev server does not
+  // restart on a level write any more - that restart was the editor's autosave
+  // cycling the server - and it is the one thing that used to keep this list in
+  // step with what the author is editing.
+  //
+  // A write is not atomic, so a read can land mid-write and get half a file;
+  // the compiled-in copy is the answer then, and is at worst as stale as the
+  // list used to be between restarts.
+  const levelData = (spec: { data: RawLevelData; file?: string }): RawLevelData => {
+    if (!spec.file) return spec.data;
+    try {
+      return JSON.parse(
+        readFileSync(join(import.meta.dirname, "levels", `${spec.file}.json`), "utf8"),
+      ) as RawLevelData;
+    } catch {
+      return spec.data;
+    }
+  };
+
   // One table of files for every level, since levels share surfaces and this is
   // markup that ships on every page load. ~2 KB gzipped for the whole registry.
   const build = (): string => {
@@ -231,7 +270,7 @@ function storeScript(): Plugin {
     for (const [id, spec] of Object.entries(LEVELS)) {
       levels[id] = {
         b: spec.controller === "ball" ? 1 : 0,
-        i: levelStoredFiles(spec.data).map((f) => {
+        i: levelStoredFiles(levelData(spec)).map((f) => {
           let at = index.get(f.file);
           if (at === undefined) {
             at = files.push([f.file, f.bytes]) - 1;
@@ -297,6 +336,23 @@ function storeScript(): Plugin {
 export default defineConfig({
   server: {
     port: 3100,
+    watch: {
+      // LEVEL FILES ARE NOT WATCHED AT ALL, and this is what stops the editor's
+      // autosave from restarting the dev server every 750 ms.
+      //
+      // `levels/*.json` is imported by `src/level/registry.ts`, which this
+      // config imports for the preload list - so every level file is one of
+      // vite's `configFileDependencies`, and a write to a config dependency is
+      // a FULL SERVER RESTART (see `handleHMRUpdate`), decided before any
+      // plugin's `handleHotUpdate` is consulted. There is no hook that can
+      // decline it; the only lever is not delivering the event.
+      //
+      // Nothing wants the event either way: a level is read at page load, the
+      // editor holds the authoritative copy in memory and saves THROUGH
+      // /api/levels, and the preload list re-reads the file off disk per page
+      // load (see `storeScript`). Reload by hand to pick up a level edit.
+      ignored: ["**/levels/*.json"],
+    },
     // The playtest store lives in serve.ts, not in Vite. With `bun run serve.ts`
     // beside the dev server, `?record=1` streams into it and /admin shows it.
     proxy: {
