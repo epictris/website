@@ -2039,6 +2039,161 @@ function caseChainOutVsSolver(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// deploy-spent - a throw that is going nowhere is over.
+//
+// A deploy is the hook TRAVELLING OUT. Every other ending had a detector
+// already (the chain running out, a snag on scene geometry, a bite), and the
+// one that did not was the hook simply stopping: `BallHook.bounce` redirects
+// the hook and has never ended the deploy, so a throw that rebounded straight
+// back off a hook-proof wall stayed in flight with nothing left to end it -
+// the chain cannot run out for a hook coming home, and nothing snags. The hook
+// slid down the wall for as long as the button was held, still "deploying".
+//
+// The rule is read off the hook's own motion (`BallPlayer.deploySpent`), so
+// one question covers the rebound, the wedge in a corner and the solver's own
+// cancelled approach alike. What it must NOT do is end a throw that is still
+// a throw: a glancing rebound keeps most of its speed and goes on paying out
+// chain to the end of it, and that half is asserted here beside the other.
+// ---------------------------------------------------------------------------
+function caseDeploySpent(): ContactResult {
+  type WallSpec = { at: Vec2; rot: number; size: [number, number]; proof: boolean };
+  type ThrowRun = {
+    // The frame the hook stopped being the deploying one, however it ended.
+    endFrame: number | null;
+    endLen: number;
+    // What the hook was doing on the last frame it was still the deploying
+    // one, read where `deploySpent` reads it - after integrate, before the
+    // conversion, which strips the outward velocity and turns gravity on and
+    // so says nothing about the throw that was.
+    endSpeed: number;
+    endHoming: boolean;
+    bounceFrame: number | null;
+    attached: boolean;
+  };
+
+  // A throw straight out along +x from a ball at the origin, into `walls`.
+  const throwInto = (walls: WallSpec[], frames = 30): ThrowRun => {
+    const world = new World();
+    const ball = new BallPlayer(0.12);
+    ball.globalPosition = Vec2.ZERO;
+    ball.spawnBody = (b) => world.add(b);
+    world.add(ball);
+    for (const w of walls) {
+      const wall = new StaticBody2D();
+      wall.globalRotation = w.rot;
+      wall.globalPosition = w.at;
+      wall.setShape(rectShape(w.size[0], w.size[1]));
+      wall.primaryShape().impermeable = w.proof;
+      world.add(wall);
+    }
+    const out: ThrowRun = {
+      endFrame: null,
+      endLen: 0,
+      endSpeed: 0,
+      endHoming: false,
+      bounceFrame: null,
+      attached: false,
+    };
+    let watched: BallHook | null = null;
+    let frame = 0;
+    let speed = 0;
+    let homing = false;
+    // The deploy can end inside the hook's own step (the chain-out cap) or in
+    // the reach check after integrate, so it is read at both.
+    const note = (): void => {
+      if (out.endFrame !== null || ball.hookInFlight !== null || ball.chain === null) return;
+      out.endFrame = frame;
+      out.endLen = ball.chain.getCurrentLength();
+      out.endSpeed = speed;
+      out.endHoming = homing;
+    };
+    for (; frame < frames; frame++) {
+      const input = emptyFrameInput();
+      input.mouseWorldPosition = ball.globalPosition.add(new Vec2(1, 0));
+      input.fire = { held: true, pressed: frame === 0, released: false };
+      ball.resolveInput(input);
+      ball.sceneBodies = world.bodies;
+      const hook = ball.hookInFlight ?? ball.chainTip;
+      if (hook !== null && hook !== watched) {
+        watched = hook;
+        hook.registerBounceCallback(() => {
+          out.bounceFrame ??= frame;
+        });
+      }
+      ball.hookInFlight?.physicsStep(DT);
+      note();
+      world.integrate(DT);
+      const flying = ball.hookInFlight;
+      if (flying !== null) {
+        speed = flying.linearVelocity.length();
+        homing = flying.linearVelocity.dot(ball.globalPosition.sub(flying.hinge)) > 0;
+      }
+      ball.checkChainReach(world.bodies);
+      note();
+      if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
+    }
+    out.attached = ball.chain !== null && !(ball.chain.end.contact.obj instanceof BallHook);
+    return out;
+  };
+
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+
+  // Nothing in the way: a 12 m/s throw must survive its whole flight and end
+  // where it always did, at the chain's own length.
+  const open = throwInto([]);
+  check(
+    `open throw ends at chain-out, f${open.endFrame ?? "never"} len ${open.endLen.toFixed(3)}` +
+      ` (want ${BallPlayer.CHAIN_MAX_LENGTH}), still flying at ${open.endSpeed.toFixed(1)} m/s`,
+    open.endFrame !== null &&
+      Math.abs(open.endLen - BallPlayer.CHAIN_MAX_LENGTH) < 0.01 &&
+      open.endSpeed > BallPlayer.HOOK_SPEED - 0.5,
+  );
+
+  // Head-on into a hook-proof wall at 1.2 m: the rebound turns the hook back
+  // at the player, and the deploy is over on that frame. Before the rule it
+  // ran to the end of the rig with the hook sliding down the wall.
+  const back = throwInto([{ at: new Vec2(1.2, 0), rot: 0, size: [0.4, 3], proof: true }]);
+  check(
+    `head-on rebound bounced (f${back.bounceFrame ?? "never"}) and ended the deploy` +
+      ` (f${back.endFrame ?? "never"})`,
+    back.bounceFrame !== null && back.endFrame !== null && back.endFrame <= back.bounceFrame + 1,
+  );
+  check(
+    `it ended coming home (${back.endSpeed.toFixed(2)} m/s at the player), at the length it` +
+      ` reached (${back.endLen.toFixed(3)} m, want 0.5-1.1)`,
+    back.endHoming && back.endLen > 0.5 && back.endLen < 1.1,
+  );
+
+  // A glancing rebound off a slat 20 degrees to the throw is still a throw:
+  // it keeps its speed, keeps paying out, and ends at the chain's length like
+  // the open one.
+  const graze = throwInto([{ at: new Vec2(0.8, -0.26), rot: 0.35, size: [2.0, 0.1], proof: true }]);
+  check(
+    `glancing rebound bounced (f${graze.bounceFrame ?? "never"}) and kept deploying` +
+      ` to f${graze.endFrame ?? "never"} (want > bounce + 2)`,
+    graze.bounceFrame !== null && graze.endFrame !== null && graze.endFrame > graze.bounceFrame + 2,
+  );
+  check(
+    `the glancing throw still reached the chain's length (${graze.endLen.toFixed(3)} m), going out` +
+      ` at ${graze.endSpeed.toFixed(1)} m/s`,
+    !graze.endHoming &&
+      graze.endSpeed > 5 &&
+      Math.abs(graze.endLen - BallPlayer.CHAIN_MAX_LENGTH) < 0.01,
+  );
+
+  // The gate may not pre-empt a bite: the same wall, attachable.
+  const bite = throwInto([{ at: new Vec2(1.2, 0), rot: 0, size: [0.4, 3], proof: false }]);
+  check(`the same wall, attachable, still anchors the throw`, bite.attached);
+
+  return ok("deploy-spent - a throw that is going nowhere is over", passed, details);
+}
+
+// ---------------------------------------------------------------------------
 // area-reach — an area acts on what it actually contains, and on nothing else.
 //
 // Every area query in the world goes through one predicate (`shapesOverlap`),
@@ -6442,6 +6597,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainAttachKeepsLength());
   results.push(caseHookRest());
   results.push(caseChainOutVsSolver());
+  results.push(caseDeploySpent());
   results.push(caseImpulsePairing());
   results.push(casePenetration(sims));
   return results;

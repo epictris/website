@@ -59,6 +59,14 @@ export class BallPlayer extends RigidBody2D {
   // m/s launch speed. The throw is a straight line — the hook carries no
   // gravity until it (or the chain) hits something, or the chain runs out.
   static readonly HOOK_SPEED = 12;
+  // Speed (m/s) under which a deploying hook counts as STOPPED and the throw
+  // is over (`deploySpent`). Nothing slows a flying hook but geometry -
+  // gravity is off for the flight - so a hook down at 4% of its launch speed
+  // has been stopped by something it hit, and a chain paying out that slowly
+  // would take three seconds to reach its length. Well under the slowest
+  // glancing bounce that is still a throw, and over the 0.16 m/s a frame of
+  // gravity gives back to a hook resting on what stopped it.
+  static readonly DEPLOY_MIN_SPEED = 0.5;
   // Attachments longer than max by more than this snap the chain; within it
   // they clamp to max instead. Must cover the dangling state's solver
   // tolerance (~1 px over) — a deployed tip that finally lands attaches at
@@ -895,10 +903,11 @@ export class BallPlayer extends RigidBody2D {
     if (!this.chain || !this.windStallHeld) this.windStall = 0;
   }
 
-  // Called after the hook has flown this frame. Two triggers convert the
+  // Called after the hook has flown this frame. Three triggers convert the
   // flying hook into the dangling chain tip: reaching the absolute max length
-  // (a missed throw), or the deploying chain snagging on scene geometry — it
-  // wraps the corner and the deploy stops there.
+  // (a missed throw), the deploying chain snagging on scene geometry - it
+  // wraps the corner and the deploy stops there - and the throw itself having
+  // stopped going anywhere (`deploySpent`).
   //
   // The max-length trigger is normally the hook's own chain-out cap now (see
   // BallHook.physicsStep), which ends the flight at the sub-frame point the
@@ -914,7 +923,38 @@ export class BallPlayer extends RigidBody2D {
       // Snagged mid-flight: the wrap node is now in the chain, so freeze at the
       // wrapped path length (longer than the straight span was).
       this.deployTip(this.chain.getCurrentLength());
+    } else if (this.deploySpent(this.hookInFlight)) {
+      // The throw is over on its own account: freeze at the length it reached.
+      this.deployTip(this.chain.getCurrentLength());
     }
+  }
+
+  // Is the throw still a throw? A deploy is the hook TRAVELLING OUT, and it is
+  // over the moment the hook's own motion stops saying so: it has been stopped
+  // dead, or it is coming back at the player.
+  //
+  // Read off the hook's velocity after the frame has moved it, so every way a
+  // deploy can die is one question asked in one place - the deflection off a
+  // hook-proof surface (`BallHook.bounce` only redirects the hook; it has never
+  // ended the deploy), the wedge in a corner the bounce leaves it sitting in,
+  // and the solver's own cancellation of an approach it never reported as a
+  // bounce at all. A rebound that keeps the hook going outward is untouched:
+  // that is still a throw, and it goes on paying out chain until it runs out.
+  //
+  // Measured on the hook's velocity and the player's POSITION, not on the rate
+  // the span between them grows. The span's rate is the same statement about a
+  // hook in flight, and a wrong one on the frame the hook is fired: a ball
+  // already travelling faster than HOOK_SPEED along its own aim is separating
+  // from a hook that is flying perfectly well, and a payout-rate test kills
+  // that throw on the frame it leaves the muzzle. The hook overtaking the
+  // player is the honest form of the same case, and it reads as the hook
+  // closing on the player here, which is what this asks.
+  private deploySpent(hook: BallHook): boolean {
+    if (hook.linearVelocity.length() < BallPlayer.DEPLOY_MIN_SPEED) return true;
+    // Sign only, so an unnormalised separation answers it - and a hook exactly
+    // on the ball's centre (it passes through: the two are collision
+    // exceptions) is a zero vector rather than a NaN direction.
+    return hook.linearVelocity.dot(this.globalPosition.sub(hook.hinge)) > 0;
   }
 
   // The chain has stopped paying out mid-flight (hit max, or snagged on scene
@@ -999,9 +1039,12 @@ export class BallPlayer extends RigidBody2D {
     this.chain.onEmbedDrop = (embed, velocity) => this.dropFromMud(embed, velocity);
     this.chain.onVineRunOff = (clamp, velocity) => this.dropFromVine(clamp, velocity);
     this.chainSlack = new SlackChain(this.chain);
-    // A hook-proof surface does not stop the deploy — BallHook.bounce deflects
-    // the hook and scales its speed by how glancing the hit was, and the chain
-    // keeps paying out until it reaches max length or snags on geometry.
+    // A hook-proof surface does not itself stop the deploy — BallHook.bounce
+    // deflects the hook and scales its speed by how glancing the hit was, and
+    // the chain keeps paying out until it reaches max length, snags on
+    // geometry, or the deflection leaves the hook going nowhere: a rebound
+    // that still travels outward is still a throw, and one that comes back at
+    // the player is not (`deploySpent`).
     hook.registerAttachmentCallback((body, point, struck) => this.onHookAttached(hook, body, point, struck));
     this.wireDeploy(hook);
   }

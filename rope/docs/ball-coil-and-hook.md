@@ -194,3 +194,20 @@ straight span has caught on a body other than the ball itself (ball
 self-winding from aiming is not a catch), it keeps the generated wrap node and
 freezes the deploy at the wrapped path length, so the chain wraps the corner
 and stops paying out.
+
+## A throw that is going nowhere is over
+
+The third conversion is the throw simply stopping (`BallPlayer.deploySpent`).
+A deploy is the hook **travelling out**, and every other way one can end had a trigger of its own - the chain running out, a snag on scene geometry, a bite - while the hook being stopped dead or turned around had none.
+`BallHook.bounce` only redirects the hook: it has never ended the deploy, deliberately, because a glancing hit off hook-proof steel is still a throw and must go on paying out chain.
+A head-on rebound is not, and nothing downstream could end it either - the chain cannot run out for a hook coming home, and a hook sliding down the face it bounced off snags nothing.
+So the throw stayed "in flight" for as long as the button was held, the deploy phase outliving the deploy by any number of frames.
+
+The rule is read off the hook's own motion on every frame of the deploy, after integrate: under `DEPLOY_MIN_SPEED` (0.5 m/s, 4% of `HOOK_SPEED`) it has been stopped by something, and a velocity with any component back toward the player is a throw coming home.
+One question then covers the rebound, the wedge in the corner the rebound leaves it sitting in, and the solver's own cancellation of an approach that was never reported as a bounce at all.
+A throw into a hook-proof wall 1 m out now ends on the frame it rebounds, at the 0.78 m it reached, and the hook swings there as the tip it has become - armed, so the surface it drops onto is still bitten.
+
+Measured on the hook's velocity and the player's **position**, not on the rate the span between them grows.
+The span's rate is the same statement about a hook in flight and a wrong one on the frame it is fired: a ball already travelling faster than `HOOK_SPEED` along its own aim is separating from a hook that is flying perfectly well, and a payout-rate test kills that throw at the muzzle.
+The hook being overtaken by the player is the honest form of that case, and it reads here as the hook closing on the player, which is what is asked.
+`cli contacts` `deploy-spent` is the detector: the head-on rebound ends the deploy on its bounce frame, the glancing one (still going out at 10.8 m/s) runs on to the chain's full length, the open throw is untouched at 12 m/s, and the same wall made attachable is still bitten.
