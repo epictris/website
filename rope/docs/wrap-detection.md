@@ -63,3 +63,27 @@ The same geometry with the sweep's floor in place drops the corner wrap that fra
 The bundle diverges in bun from f379 on the libm knife-edge; the fix was measured on V8 (see [**Debugging discipline**](debugging-physics.md#debugging-discipline)), where the tree reproduces the recording bit for bit up to f932 and leaves it there.
 `cli contacts` `chain-shared-corner` is the detector, both halves red without the floor: the recording's block, beam and f931 -> f932 spans asked directly (coincident to noise and not to zero, and not a crossing), with the catch that put the chain over the corner twenty frames earlier as the control (the block's own corner arriving from clear, 6 mm² of commitment, still counter-clockwise at the corner); and the scene end to end, the ball seeded with the recording's state at the shot and steered by its cursor path, where the beam is never on the chain's path, no frame moves the ball more than 10 cm (18.3 without the floor) and none lengthens the path by more than 5 cm (11.3).
 `playtests/regressions/session-1052f.json.gz` is the recording.
+
+## A corner two bodies share releases as one corner
+
+Two bodies meeting at a point is a corner the rope is meant to catch (see [**Convex-only polygons; compound bodies**](game-design.md#convex-only-polygons-compound-bodies)), and it arrives on the path as **one wrap node per body**: `regeneratePath` wraps each body's own corner, and `cullDuplicateNodes` folds only a body's doubled corner, since the second body is a different body.
+The two nodes sit on the same authored point, so the span between them has no length and no direction.
+`cullDetachedNodes` reads the bend at a node from the spans either side of it, and a span with no direction reads as no bend at all: neither node of a shared corner could ever be released, whichever way the rope actually ran.
+
+`session-473f` f384-397 is the finding.
+Two rocks in the ball level share their outer corner, the lower one's top-right and the upper one's bottom-right, with the upper rock's face running straight up from it.
+The ball fell past them with its chain draped over both and swung in under that corner, hanging on a 4 cm tail.
+Winding hauled it up to the corner and round it, the way a ball wound tight to a corner rolls round it, until it pressed against the face above - and now the chain ran from its loop **down** to the corner and straight back up the face past the ball, a hairpin with nothing inside it, the block on the outside of the bend.
+One node there is 1.7 cm off the chord on the wrong side and would have let go; the pair held.
+From then on every turn the player asked for was refused as wound tight (`unwindRefund` 100% from f388), against a corner the chain had already left, and as the aim outran the loop the steering reversed once a revolution and spun the ball back down, reported as not being able to roll the chain up.
+With the corner released, the same span crosses the ball's own disc, the coil takes it, and the wind-up hauls the ball up the face, over the top and home to its anchor (`cli continue --whirl -24` from f362).
+
+`session-485f` f282-470 is the same hairpin where the corner is not quite shared: a rock's bottom-right corner authored 4.5 mm above the ground's top corner under it, the whole chain wound onto a ball pressed against the rock's face, the chain running down round both nodes and back up the face.
+The release test lets a node go once it stands the band's width (`MIN_WRAP_DEFLECTION`, 5 mm) off the chord its neighbours draw, and a neighbour closer than the band cannot witness that: the node is never further from the chord than from the chord's nearer end.
+The ground's node sat 4.4 mm off the chord to the rock's node 4.5 mm away, inside the band for 190 frames, while judged as one corner both nodes stand 12 cm off the chord the coil's exit and the face's top draw.
+
+So two consecutive nodes within the band of each other are **one corner** (`COINCIDENT_NODE_DISTANCE_SQ`, the band squared), and the detachment test takes its incoming direction from the last node not within the band of the head's own position: the last node of such a run is judged on the corner's real incoming span, and once it goes the recursion re-judges the one before it against the real outgoing span, so the corner releases as a whole exactly when one node there would.
+A coincident target records **no obstruction constraint**, because a zero-length line has no side and read as clockwise; releasing a clockwise pair otherwise routed the path back through the node just released, round to the depth cap, which is the cycle the duplicate cull exists to avoid on a single body.
+`cli corners` carries the detectors (`DETACH_CASES`): the recording's f384 and f396 paths, the same pair genuinely wrapped from below and inside the release band, one body's own corner as the control, `session-485f`'s pair 4.5 mm apart, and the mirrored clockwise pair, which is red with the constraint guard alone removed.
+Across the committed corpus the release changes nothing: every bundle diverges where it did, or not at all.
+`playtests/regressions/session-473f.json.gz` and `session-485f.json.gz` are the recordings, each diverging where its pair first lets go.

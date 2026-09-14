@@ -174,7 +174,19 @@ Level scenarios authored against the old 0.2 m reach had to move their targets ~
 At the absolute max length
 (`BallPlayer.CHAIN_MAX_LENGTH`) an unattached hook becomes the dangling chain
 tip: the chain stays deployed at that length (solver-driven swing) until it
-touches a surface and anchors, or is released. A deploying chain
+touches a surface and anchors, is released, or is **reeled all the way in**.
+Rolling winds the chain onto the rim, and against a dangling tip the winch pays for that by hauling the hook in, which is the whole of what reeling a missed throw means.
+The frame the hook's hinge reaches the rim with the path over the chain's length there is nothing left to haul, and the chain is **stowed** (`BallPlayer.stowIfWoundIn`): `Rope.closeCoil` winds the coil to exactly the chain's length and ends the rope there, a material point on the rim, the hook body leaves the world, and the cuff is drawn at the coil's end (`manaclePose`) riding the ball as part of it.
+Stowed, the ball is a free ball carrying its chain: `chainAnchored` and `chainAttached` are both false, so the chain phase skips it as it skips a hook in flight, nothing solves it, and it is no tether.
+Every node of a stowed chain is a material point of the one body, so its length holds still however the ball turns; the end is the last coil node's own point rather than a point beside it, because `spanLength` reads two same-circle nodes as the arc between them in the wrap's sense and a point a float behind its neighbour is a full turn ahead of it.
+`chain-stowed` is the invariant: end on the ball, length within `CONTACT_SLOP` of the chain's.
+It pays back out the moment the ball turns the unwinding way (`unstowIfUnwinding`, `Rope.coilUnwindsWith`): the tip is the dangling hook again, born at the coil's end with the ball's linear velocity - not the rim's, which would sling it - and the coil spools off under it as it wound on.
+Roll the other way again and it is reeled in and stowed on a coil of the opposite hand.
+Before this the coil simply kept growing: the coil is an angle, nothing refuses the ball's rotation on a free tip's account (`spinShare` is zero until the end is fixed, see [**Spin traction on a fresh contact**](ball-rolling.md#spin-traction-on-a-fresh-contact)), so every turn coiled another 0.75 m of chain that did not exist - 1.8 m of chain measuring 3.5 m, drawn wound four times round the ball, `rope-over-length` on every frame from the hook's arrival on (`session-251f` f106, seen in the game as the chain wrapping the ball over and over).
+Refusing the turn instead is the ice `session-315f` reported; a hook left as a body riding the rim of a rolling ball is a 2 cm bar striking the floor once a revolution; and retrieving the chain outright was tried first and read from the game as the chain vanishing mid wind-up (`session-105f-stow`).
+Both halves of the stow test matter: the hinge at the rim alone is a tip that fell back against the ball with the whole chain draped slack, and the over-length alone is a swing going taut, which is next frame's ordinary correction.
+Only a rope that is coil and nothing else is closed: a wrap beyond the coil is real chain lying over the scene, and coiling the whole length onto the ball would pull it through whatever it lay over.
+A dangling tip is also **not a tether**: the free-ball guards (the spin-traction cap and the loop ride) stay on while the chain's end is the ball's own hook, and `session-251f` is the regression for the tree that switched them off for it. A deploying chain
 that snags scene geometry mid-flight also converts to the dangling tip: while
 the hook is in flight the chain is slack (no length solver), so
 `BallPlayer.checkChainReach` runs `Rope.detectSceneCatch` each frame — if the

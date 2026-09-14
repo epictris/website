@@ -300,7 +300,13 @@ export function frameView(level: Level | BallLevel): FrameView {
         // no-rolling regression moved (session-314f).
         w: b.angularVelocity,
         speed: b.linearVelocity.length(),
-        state: b.chainAnchored ? "BallAnchored" : b.chain ? "BallFiring" : "Ball",
+        state: b.chainStowed
+          ? "BallStowed"
+          : b.chainAnchored
+            ? "BallAnchored"
+            : b.chain
+              ? "BallFiring"
+              : "Ball",
         supportBody: supportOf(level.world, b),
       },
       chain: chainView(b.chain, b.chainAnchored, level.chainStallFrames, {

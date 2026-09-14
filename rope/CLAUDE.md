@@ -101,7 +101,7 @@ The ball and chain
 - [ball-coil-and-hook](docs/ball-coil-and-hook.md) - the coil as an angle, how the hook attaches (sweep, blocking contact, seam, reach), the dangling tip and scene catch.
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
-- [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its two exclusions.
+- [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its two exclusions, and how a corner two bodies share lets go.
 - [sparks](docs/sparks.md) - hook and ball sparks on hook-proof steel, render-side by construction.
 
 Rope geometry and surfaces

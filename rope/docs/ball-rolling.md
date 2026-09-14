@@ -87,8 +87,11 @@ Merged, a pair with one press behaves exactly as the single number did, and `bal
 Resolving a press onto a different surface by its COSINE is the tempting near-miss and it was tried: it is what a single force resolved onto a surface would do, and a ball's weight is not that - the floor carries the whole of it and the step in front carries none, so a quarter-credit still funded the face at three times its own press (17 cm of climb against the two-body twin's 9).
 The ramp's RATE stays direction-blind (`rampBite`), because what qualifies a load is that it persists rather than where it points, and what it may now climb to is that direction's own normal impulse.
 
-An **anchored chain switches the whole regime off** (`RigidBody2D.constraintTethered`): the wind-up's climb to its anchor starts on a wall the ball has only just met, funded by its own arrival impact, and the chain machinery - the winch budget, the unwind, the lease - is what polices chain-era traction.
+An **attached chain switches the whole regime off** (`RigidBody2D.constraintTethered`): the wind-up's climb to its anchor starts on a wall the ball has only just met, funded by its own arrival impact, and the chain machinery - the winch budget, the unwind, the lease - is what polices chain-era traction.
 The cap therefore guards exactly the FREE ball, whose wall impact has no chain to answer for it.
+**Attached, and not merely deployed** (`BallPlayer.chainAttached`, the end node on something other than the ball's own hook): a dangling tip is a quarter-kilo weight on a string the ball is holding, the chain phase already charges it nothing (`spinShare` is zero until the end is fixed), and handing the guards over on its account left the ball with neither.
+That was `session-251f`: a missed throw dangling on a hook-proof floor, the ball rolled into a rock at 2.5 m/s, and a 290 N·s arrival impulse spent against the spin launched it 3.3 m/s up the rock's 62 degree face, three times over, until it stood on top of a rock the free ball cannot climb - felt as the chain giving the ball more grip, and as the ball bouncing off the rock instead of stopping at it.
+`ball-roll-wall-dangling` is the pair to `ball-roll-wall`: the same wall, the same stir, the hook thrown into empty air first so the ball meets the wall with the tip dragging behind it, and the same climb bar - 53 cm on the tree that read the tip as a tether, 5 cm now.
 `spin-overdrive` is the invariant: it reads the applied tangential impulse against the same funding arithmetic the cap enforces, so it is zero by construction while the clamp holds and catches any future path that spends spin-funded impulse outside it.
 `ball-roll-wall` is the mechanic test - a ball driven 6 m into a vertical wall rises 26 cm at the old physics and under 5 cm now (`maxClimb`), while still reaching the wall at speed - and `session-773f` (the rolling launch), `session-422f-wall` (the grinding climb) and `session-373f` (the step climb) are the committed regressions.
 
@@ -235,7 +238,7 @@ Against a wall the ball has no weight pressing it on, so every newton the wall p
 Unfenced it climbed 148 cm at 20 rad/s on `loop-wall`'s frictionless floor against an 8 cm bar, and 1.20 m on `ball-roll-wall` against 0.15.
 The line is drawn on the **normal** and not on stiction, which is the tempting one-line test (`applySteeringGrip` asks exactly that): the arena's 32° ramp sits a degree and a half past `STATIC_FRICTION`'s breakaway, so a ball rolling down it was refused a ride while carrying 85% of its weight on the surface, and hopped down the slope exactly as before.
 
-An **anchored chain switches the regime off** entirely (`constraintTethered`), exactly as it does for the spin-traction cap.
+An **attached chain switches the regime off** entirely (`constraintTethered`), exactly as it does for the spin-traction cap - and a dangling tip is not one, for the same reason (see above).
 A ride is a statement about a ball rolling on the ground; a chain gone taut is the one thing in the game that owns where the ball is instead, and the winch budget, the unwind and the lease are what police that era.
 A ride laid over the top of it is a second author of the same quantity, and it read as both bugs it could.
 

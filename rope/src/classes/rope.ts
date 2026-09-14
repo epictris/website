@@ -2190,6 +2190,18 @@ export class Rope {
     // the only one the length solve reads (`generatePathObjects` collapses a run
     // of same-circle wraps into the one that leaves the body); the rest carry the
     // drawn chain round the rim.
+    this.wraps = [...this.sampleCoil(windAngle, wrapDir), ...this.wraps.slice(runLength)];
+  }
+
+  // The coil's nodes for `windAngle` of rope wound in `wrapDir` from the start
+  // point, `COIL_NODE_ARC` apart, the last one at the angle exactly.
+  private sampleCoil(windAngle: number, wrapDir: WrapDirection): RopeWrap[] {
+    const body = this.start.contact.obj;
+    const shape = this.start.contact.shape;
+    const shapeIndex = this.start.contact.shapeIndex;
+    const centre = shape.globalPosition;
+    const radius = shape.shape.kind === "circle" ? shape.shape.radius : 0;
+    const fromDirection = centre.directionTo(this.start.contact.globalPosition);
     const steps = Math.max(1, Math.ceil(windAngle / Rope.COIL_NODE_ARC));
     const coilNodes: RopeWrap[] = [];
     for (let i = 1; i <= steps; i++) {
@@ -2199,7 +2211,54 @@ export class Rope {
         new RopeWrap(new RopeContact(body, point.sub(body.globalPosition), shapeIndex), wrapDir),
       );
     }
-    this.wraps = [...coilNodes, ...this.wraps.slice(runLength)];
+    return coilNodes;
+  }
+
+  // Wind the coil to exactly `length` of rope and end the rope THERE, on the
+  // body it starts on: the whole rope coiled onto the ball, its far end a
+  // material point on the rim at the coil's end (`BallPlayer.stowIfWoundIn`).
+  //
+  // A rope whose two ends share a body has nothing for the solve to do and is
+  // never given to it; what it has is a length, and that length must hold
+  // still. Every node of it is a material point on the one body, so the arcs
+  // between them are what they were however the body turns, and the end is
+  // the last coil node's own point - the same offset, the same arithmetic - so
+  // the final span measures zero and not a full turn: `spanLength` reads two
+  // same-circle nodes as the arc between them in the wrap's sense, and a
+  // point a float behind its neighbour is a turn ahead of it.
+  //
+  // Only a rope that is coil and nothing else may be closed. A wrap beyond the
+  // coil is real rope lying over the scene, and coiling the whole length onto
+  // the ball would pull it through whatever it lay over.
+  closeCoil(length: number): boolean {
+    const wrapDir = this.coilWrapDir;
+    const shape = this.start.contact.shape;
+    if (wrapDir === null || this.coilWindAngle === null) return false;
+    if (shape.shape.kind !== "circle" || shape.shape.radius <= 0) return false;
+    if (this.leadingCoilRun().nodes !== this.wraps.length) return false;
+    const windAngle = length / shape.shape.radius;
+    const coil = this.sampleCoil(windAngle, wrapDir);
+    const last = coil[coil.length - 1]!;
+    this.coilWindAngle = windAngle;
+    this.wraps = coil;
+    this.end = new RopeAttachment(
+      new RopeContact(
+        this.start.contact.obj,
+        last.contact.globalPosition.sub(this.start.contact.obj.globalPosition),
+        this.start.contact.shapeIndex,
+      ),
+    );
+    return true;
+  }
+
+  // Whether turning the start body by `deltaRotation` pays rope OFF the coil.
+  // `syncCoil` measures the wind from the start point's direction to the exit
+  // point's in the wrap's own sense, and `absoluteAngle` runs with increasing
+  // `angle()` for a clockwise wrap and against it otherwise, so a positive turn
+  // of the body - which carries the start point to a greater angle - shortens
+  // a clockwise coil and lengthens a counter-clockwise one.
+  coilUnwindsWith(deltaRotation: number): boolean {
+    return this.coilWrapDir !== null && deltaRotation * (this.coilWrapDir as number) > 0;
   }
 
   // Uncross segments adjacent to corner nodes of oppositely-wrapped shapes.

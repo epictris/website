@@ -4,7 +4,7 @@
 bun run test                                  # THE suite: typecheck + every check below, one exit code
 bun run replay selftest                       # determinism + replay round-trip check (grapple and ball)
 bun run src/tools/cli.ts ledges               # generated ledge-grab matrix (speed × angle × negatives)
-bun run src/tools/cli.ts corners              # corner-exposure geometry cases (compound-body seams)
+bun run src/tools/cli.ts corners              # corner geometry cases (compound-body seams, the release of a corner two bodies share)
 bun run src/tools/cli.ts tangents             # tangent-vertex cases (which corner a wrap node is born on)
 bun run src/tools/cli.ts decompose            # convex decomposition of authored concave outlines (partition, seams, determinism)
 bun run src/tools/cli.ts dmath                # the deterministic libm: bit-exact vectors on this engine + no platform Math in the sim
@@ -35,6 +35,7 @@ bun run src/tools/cli.ts trace session.json --from 192 --to 192 --solve    # ...
 bun run src/tools/cli.ts settle session.json --from 500 --frames 600      # continue with zero input, must rest
 bun run src/tools/cli.ts dump session.json --from 100 --to 200   # digest+input table
 bun run src/tools/cli.ts continue session.json --from 500 --hold left --trace t.jsonl
+bun run src/tools/cli.ts continue session.json --from 362 --hold deploy --whirl -24  # ...the ball's aim circling it, a wind-up (P frames a revolution, negative the other way)
 bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG snapshot of one frame
 bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the REAL renderer, headless
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer

@@ -458,10 +458,18 @@ export class BallLevel {
     }
 
     // Whether the contact solver's spin-traction ramp applies this frame: an
-    // anchored chain keeps contact dynamics exactly as they always were (see
+    // ATTACHED chain keeps contact dynamics exactly as they always were (see
     // `RigidBody2D.constraintTethered`). Read before the solve from last
     // frame's chain state; the regime does not flip mid-press.
-    this.ball.constraintTethered = this.ball.chainAnchored;
+    //
+    // Attached, not merely anchored: a dangling tip is a chain the ball is
+    // holding rather than one holding the ball, and the chain phase below
+    // already charges it nothing (`spinShare` is zero until the end is fixed).
+    // Handing the free-ball guards over on its account left the ball with
+    // neither - `session-251f` rolled a dangling chain into a rock at 2.5 m/s
+    // and was launched 3.3 m/s up its face by a 290 N·s arrival impulse spent
+    // against the spin, three times over, and climbed it.
+    this.ball.constraintTethered = this.ball.chainAttached;
 
     const ballVelocityBeforeContacts = this.ball.linearVelocity;
     // The ball's pose BEFORE the contact solve answers it. Sparks are struck by
@@ -564,11 +572,14 @@ export class BallLevel {
     // slack (Rope.physicsStep's unfurl handling is Player-specific, so the
     // ball controller skips it entirely).
     this.ball.checkChainReach(this.bodies);
+    // A stowed chain pays back out on the frame the ball turns the unwinding
+    // way (see `BallPlayer.unstowIfUnwinding`): the frame's rotation is known
+    // here, and the phase below then solves the dangling tip it has become.
+    this.ball.unstowIfUnwinding(this.ball.globalRotation - ballRotationAtFrameStart);
     // The chain end is "fixed" once it anchors to a surface — before that it is
     // the (in-flight or dangling) BallHook. Catch the false→true transition so
     // the invariant only scrutinises the frame the anchor goes rigid.
-    const endFixed =
-      this.ball.chain !== null && !(this.ball.chain.end.contact.obj instanceof BallHook);
+    const endFixed = this.ball.chainAttached;
     const anchoredThisFrame = endFixed && !this.endWasFixed;
     if (this.ball.chainAnchored && this.ball.chain) {
       const speedBefore = this.ball.linearVelocity.length();
@@ -1515,6 +1526,10 @@ export class BallLevel {
       this.chainPushCreditFrames = 0;
     }
     this.endWasFixed = endFixed;
+    // A dangling tip wound all the way onto the rim is stowed there (see
+    // `BallPlayer.stowIfWoundIn`). After the phase, on its final length, and
+    // before the drape reads a chain whose end has moved onto the ball.
+    this.ball.stowIfWoundIn();
     this.settleBallSparkSpin(ballRotationAtFrameStart, delta);
 
     // The slack chain's visual drape, stepped against the frame's FINAL

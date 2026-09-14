@@ -26,7 +26,7 @@ import { isSeamVertex, type Rope } from "../classes/rope";
 import type { RopeNode } from "../lib/ropeContact";
 import { shapeCrossesSpan, spanMotionBox, type Pose, type SpanMotion } from "../lib/spanSweep";
 import { WrapDirection } from "../lib/types";
-import type { ContactConstraint, World } from "../engine/world";
+import { CONTACT_SLOP, type ContactConstraint, type World } from "../engine/world";
 import type { Level } from "../level/level";
 import type { BallLevel } from "../level/ballLevel";
 import type { RawLevelData } from "../level/levelFormat";
@@ -531,7 +531,13 @@ export function digestBall(level: BallLevel): Digest {
     vy: b.linearVelocity.y,
     ropeLen: b.chain ? b.chain.getCurrentLength() : null,
     maxRope: b.chain ? b.chain.maxRopeLength : null,
-    state: b.chainAnchored ? "BallAnchored" : b.chain ? "BallFiring" : "Ball",
+    state: b.chainStowed
+      ? "BallStowed"
+      : b.chainAnchored
+        ? "BallAnchored"
+        : b.chain
+          ? "BallFiring"
+          : "Ball",
   };
 }
 
@@ -1485,6 +1491,25 @@ export function checkBallInvariants(level: BallLevel): Violation[] {
       });
     }
     if (Number.isNaN(len)) out.push({ frame, kind: "rope-nan", detail: "chain length NaN" });
+    // A stowed chain is the whole chain coiled onto the ball with its end on
+    // the rim (`BallPlayer.stowIfWoundIn`): nothing solves it, so nothing may
+    // move it either - its end stays on the ball and its length stays the
+    // chain's, to the closing's own tolerance. The hazard it watches for is a
+    // final span read as a full turn rather than as nothing (see
+    // `Rope.closeCoil`), which is a metre and a half appearing from nowhere.
+    if (b.chainStowed) {
+      const onBall = b.chain.end.contact.obj === b;
+      const off = Math.abs(len - b.chain.maxRopeLength);
+      if (!onBall || off > CONTACT_SLOP) {
+        out.push({
+          frame,
+          kind: "chain-stowed",
+          detail: onBall
+            ? `stowed chain measures ${len.toFixed(3)} against ${b.chain.maxRopeLength.toFixed(3)}`
+            : "stowed chain's end is not on the ball",
+        });
+      }
+    }
     if (
       level.chainAnchorLength !== null &&
       b.chain.constraintLength > level.chainAnchorLength + CHAIN_GROWTH_TOLERANCE

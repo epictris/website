@@ -148,6 +148,13 @@ export class BallPlayer extends RigidBody2D {
   // dangling tip weight — the chain stays deployed at max length until reeled
   // or released.
   chainTip: BallHook | null = null;
+  // The dangling tip reeled ALL THE WAY IN: the whole chain coiled onto the
+  // ball, its end a material point on the rim, the hook riding there as part
+  // of the coil (no body in the world, drawn from the chain's end). Neither
+  // anchored nor a tether - a free ball carrying its chain - until the ball
+  // turns the unwinding way and the tip is paid back out (`stowIfWoundIn`,
+  // `unstowIfUnwinding`).
+  chainStowed = false;
   // Which way the manacle faces, in the ANCHOR BODY's frame. A clamped manacle
   // is bolted to what it bit: it does not turn at all for as long as it holds,
   // however the chain swings around it afterwards - and it turns with the thing
@@ -631,8 +638,33 @@ export class BallPlayer extends RigidBody2D {
     this.applyLoopRide(this.world?.frameContacts ?? [], dt);
   }
 
+  // The chain is out, the throw is over, and there is a far end for the solve
+  // to work against. False while the chain is STOWED: the whole of it coiled
+  // onto the ball with its end on the rim (`stowIfWoundIn`), where the solve
+  // has nothing to move and the chain phase is skipped entirely, as it is for
+  // a hook still in flight.
   get chainAnchored(): boolean {
-    return this.chain !== null && this.hookInFlight === null;
+    return this.chain !== null && this.hookInFlight === null && !this.chainStowed;
+  }
+
+  // Whether the chain's far end is FIXED to something - a bitten face, a rail
+  // clamp, a mud embed, a vine ring - as opposed to being the ball's own hook,
+  // in flight or dangling. `chainAnchored` is the looser statement (the chain
+  // is out and the throw is over) and it is the right one for the solver to
+  // run; this is the one for every rule that asks whether the CHAIN owns the
+  // ball. A dangling tip is a quarter-kilo weight on a string the ball is
+  // holding: it hauls nothing, refuses nothing, and answers for none of the
+  // ball's motion (see `BallLevel`, `spinShare`). Handing the free-ball guards
+  // over to the chain machinery on its account left the ball with no guard at
+  // all: `session-251f` rolled a dangling chain into a rock and climbed it on
+  // impact-funded spin traction, the wall launch `session-773f` was fixed for,
+  // wearing a chain that held nothing.
+  get chainAttached(): boolean {
+    return (
+      this.chain !== null &&
+      !this.chainStowed &&
+      !(this.chain.end.contact.obj instanceof BallHook)
+    );
   }
 
   // Which way an ANCHORED manacle faces - the way its hinge points - or null
@@ -685,6 +717,21 @@ export class BallPlayer extends RigidBody2D {
       return {
         centre: free.renderPosition(alpha),
         dir: Vec2.RIGHT.rotated(free.renderRotation(alpha)),
+        clamped: false,
+        onRail: false,
+        buriedUnder: null,
+      };
+    }
+    // Stowed: the cuff rides the rim at the coil's end, hinge on the chain's
+    // end node and trailing the chain hinge-first as a free cuff does, faced
+    // back along the coil it lies on.
+    if (this.chainStowed) {
+      const path = chain.path().map((n) => n.contact.renderGlobalPosition(alpha));
+      const hinge = path[path.length - 1]!;
+      const dir = chainEndFacing(path, this.renderPosition(alpha).directionTo(hinge));
+      return {
+        centre: hinge.sub(dir.mul(MANACLE_HINGE)),
+        dir,
         clamped: false,
         onRail: false,
         buriedUnder: null,
@@ -1288,12 +1335,78 @@ export class BallPlayer extends RigidBody2D {
   // length leaves the constraint satisfied, so there is no overshoot to absorb
   // and no anchor to drag off the surface.)
 
+  // A dangling tip reeled ALL THE WAY IN is STOWED: the hook is back at the
+  // rim and there is no chain left to wind, so the whole chain is closed onto
+  // the ball as coil (`Rope.closeCoil`) and the hook rides the rim at its end
+  // as part of it. Called at the end of the chain phase, where the frame's
+  // path length is final.
+  //
+  // Rolling winds the chain onto the rim, and against a dangling tip the winch
+  // pays for that by hauling the hook in - which is the whole of what reeling
+  // a missed throw means. The frame the hook arrives there is nothing left to
+  // haul: the coil is carried as an angle (`Rope.syncCoil`), nothing refuses
+  // the ball's rotation on a free tip's account (`BallLevel`, `spinShare`),
+  // so from there every turn coiled another 0.75 m of chain that did not exist
+  // - 1.8 m of chain measuring 3.5 m, drawn wound four times round the ball,
+  // `rope-over-length` on every frame of it (`session-251f` f106 on). Refusing
+  // the turn instead is the ice `session-315f` reported; a hook left as a body
+  // riding the rim of a rolling ball is a 2 cm bar striking the floor once a
+  // revolution; and retrieving the chain outright was tried and read from the
+  // game as the chain vanishing mid wind-up (`session-105f`).
+  //
+  // Stowed, the chain is a free ball's: no solve, no tether, no hook in the
+  // world. The hook body goes, the chain's end becomes the coil's own last
+  // point, and the cuff is drawn there (`manaclePose`). The chain phase skips
+  // it as it skips a hook in flight, and every node being a material point of
+  // the one body, its length holds still however the ball turns. It is paid
+  // back out the moment the ball turns the other way (`unstowIfUnwinding`).
+  //
+  // Both halves of the test are load-bearing. The hinge at the rim alone is a
+  // tip that fell back against the ball with the whole chain draped slack, and
+  // the over-length alone is a swing going taut, which is next frame's
+  // ordinary correction. Together they say the coil has taken the chain.
+  stowIfWoundIn(): boolean {
+    const hook = this.chainTip;
+    const chain = this.chain;
+    if (hook === null || chain === null) return false;
+    const atRim = hook.hinge.distanceTo(this.globalPosition) <= this.radius + CONTACT_SLOP;
+    const wound = chain.getCurrentLength() - chain.maxRopeLength > CONTACT_SLOP;
+    if (!atRim || !wound) return false;
+    if (!chain.closeCoil(chain.maxRopeLength)) return false;
+    hook.world?.remove(hook);
+    this.chainTip = null;
+    this.chainStowed = true;
+    this.windStall = 0;
+    return true;
+  }
+
+  // A stowed chain pays back out the moment the ball turns the UNWINDING way:
+  // the tip is the dangling hook again, born at the coil's end with the ball's
+  // own velocity, and from there the coil spools off under it exactly as it
+  // wound on. With the ball's linear velocity and not the rim's: the hook was
+  // held at the coil's end, not slung from it, and a tip born at rim speed
+  // leaves the frame with the chain already taut behind it. Called after the
+  // frame's rotation is known and before the chain phase, so the frame that
+  // unstows is solved as the dangling frame it is.
+  unstowIfUnwinding(deltaRotation: number): boolean {
+    const chain = this.chain;
+    if (!this.chainStowed || chain === null) return false;
+    if (!chain.coilUnwindsWith(deltaRotation)) return false;
+    const at = chain.end.contact.globalPosition;
+    this.chainStowed = false;
+    const hook = this.dropChainEnd(chain, at, this.linearVelocity.sub(this.velocityAtPoint(at)));
+    // The hinge on the coil's end, where the chain's length was measured to.
+    hook.globalPosition = at.sub(hook.hingeOffset());
+    return true;
+  }
+
   releaseChain(): void {
     if (this.hookInFlight) this.hookInFlight.world?.remove(this.hookInFlight);
     if (this.chainTip) this.chainTip.world?.remove(this.chainTip);
     this.unmountCuff();
     this.hookInFlight = null;
     this.chainTip = null;
+    this.chainStowed = false;
     this.anchorFacingLocal = null;
     this.anchorNormalLocal = null;
     this.anchorBody = null;

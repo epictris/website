@@ -838,14 +838,15 @@ export class RigidBody2D extends PhysicsBody2D {
   // fades this with speed while the player aims, so reorienting the spin
   // mid-roll cannot shed momentum but can still drive the ball.
   contactBrakeScale = 1;
-  // True while this body is held by an anchored chain (`BallLevel` maintains
-  // it). Another ball-controller device: with the chain anchored, contact spin
+  // True while this body is held by an ATTACHED chain (`BallLevel` maintains
+  // it). Another ball-controller device: with the chain attached, contact spin
   // traction is left exactly as it always was - the wind-up's climb to its
   // anchor starts on a wall the ball has only just met, funded by its arrival
   // impact, and the chain machinery (winch budget, unwind, the lease) is what
   // polices that regime. The spin-traction ramp in `World.solveTangent` guards
   // the FREE ball, whose wall impact has no chain to answer for it
-  // (`session-773f`).
+  // (`session-773f`) - and a ball whose chain is out but DANGLING is that free
+  // ball: nothing on the end of it polices anything (`session-251f`).
   constraintTethered = false;
   // When true, the body's rotation is driven externally (the ball & chain
   // avatar's aim steering overwrites angularVelocity every frame), so contact

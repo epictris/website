@@ -6,7 +6,7 @@
 //   bun run src/tools/cli.ts query     bundle.json [--frame N | --from A --to B]
 //                                      [--every K] [--body ID] [--json]
 //   bun run src/tools/cli.ts continue  bundle.json [--from N] [--hold left,jump|deploy]
-//                                      [--aim X,Y] [--frames M] [--every K]
+//                                      [--aim X,Y | --whirl P] [--frames M] [--every K]
 //                                      [--trace out.jsonl]
 //   bun run src/tools/cli.ts record    [<level>] script.json [--out session.json]
 //   bun run src/tools/cli.ts rig       spec.json [--series] [--save playtests/foo.json]
@@ -292,7 +292,10 @@ function cmdReplay(file: string): void {
 function cmdDump(file: string, o: Record<string, string>): void {
   const rec = loadRecording(file);
   const r = replayRecording(rec);
-  const from = Number(o.from ?? 1);
+  // Digests are one per simulated frame, from frame 1: `--from 0` is the
+  // natural way to ask for the whole run and used to index the row before the
+  // first and crash on it.
+  const from = Math.max(1, Number(o.from ?? 1));
   const to = Number(o.to ?? r.digests.length);
   const every = Number(o.every ?? 4);
   console.log(`[dump] ${file} — level=${r.level} frames=${r.framesRun} (current physics)`);
@@ -513,9 +516,17 @@ function cmdContinue(file: string, o: Record<string, string>): void {
   // origin.
   const aim = o.aim ? o.aim.split(",").map(Number) : null;
   if (aim && (aim.length !== 2 || aim.some(Number.isNaN))) fail("--aim takes x,y in metres");
+  // Or circling the ball: `--whirl P` is the aim one revolution every P frames,
+  // starting where the loop points and leading it round, negative P the other
+  // way - the wind-up, driven the way `cli rig` drives it, for continuing a
+  // recording into the wind the player was asking for. A fixed `--aim` cannot
+  // wind: proportional steering reaches a fixed bearing and stops turning.
+  const whirl = o.whirl === undefined ? 0 : Number(o.whirl);
+  if (o.whirl !== undefined && (!Number.isFinite(whirl) || whirl === 0)) fail("--whirl takes frames per revolution, non-zero");
 
   const level = levelFromRecording(rec);
   const ball = level instanceof BallLevel ? level : null;
+  if (whirl && !ball) fail("--whirl drives the ball controller's aim; this is a grapple recording");
   const de = recordingDeserializer(rec);
   const stuck = new StuckDetector();
   const energy = new EnergyMonitor();
@@ -534,11 +545,20 @@ function cmdContinue(file: string, o: Record<string, string>): void {
     }
   }
 
-  console.log(`[continue] ${file} — level=${rec.level} from=f${from} hold=${holdNames.join("+") || "-"} frames=${frames}`);
+  console.log(
+    `[continue] ${file} — level=${rec.level} from=f${from} hold=${holdNames.join("+") || "-"}` +
+      `${whirl ? ` whirl=${whirl}f/rev` : ""} frames=${frames}`,
+  );
   printTreeStamp(rec);
+  const whirlFrom = whirl ? ball!.ball.loopDirection.angle() : 0;
   for (let i = 0; i < frames; i++) {
     const pos = ball ? ball.ball.globalPosition : (level as Level).player.globalPosition;
-    const aimAt = aim ? new Vec2(aim[0]!, aim[1]!) : pos;
+    const bearing = whirlFrom + (2 * Math.PI * i) / whirl;
+    const aimAt = whirl
+      ? pos.add(new Vec2(Math.cos(bearing), Math.sin(bearing)).mul(5))
+      : aim
+        ? new Vec2(aim[0]!, aim[1]!)
+        : pos;
     const input = de({ h: heldBits, mx: aimAt.x, my: aimAt.y });
     level.physicsProcess(input, 1 / 60);
     const d = ball ? digestBall(ball) : digest(level as Level);
@@ -2054,7 +2074,7 @@ switch (cmd) {
     cmdDump(arg, opts(rest));
     break;
   case "continue":
-    if (!arg) fail("usage: cli continue <bundle.json> [--from N] [--hold a,b] [--aim X,Y] [--frames M] [--every K] [--trace out.jsonl]");
+    if (!arg) fail("usage: cli continue <bundle.json> [--from N] [--hold a,b] [--aim X,Y | --whirl P] [--frames M] [--every K] [--trace out.jsonl]");
     cmdContinue(arg, opts(rest));
     break;
   case "render":
@@ -2532,15 +2552,16 @@ async function cmdViscous(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-// Corner-exposure geometry cases (src/sim/cornerCases.ts). Pure geometry, so it
-// needs no level and runs instantly - and it is what decides whether the rope may
-// bend around a compound body's vertex at all.
+// Corner geometry cases (src/sim/cornerCases.ts). Pure geometry, so it needs no
+// level and runs instantly - and it is what decides whether the rope may bend
+// around a compound body's vertex at all, and when a wrap on a corner two bodies
+// share lets go.
 async function cmdCorners(): Promise<void> {
   const { runCornerCases } = await import("../sim/cornerCases");
   const results = runCornerCases();
   let failed = 0;
   for (const r of results) {
-    console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok ? "" : ` (exposed=${r.got}, want ${r.want})`}`);
+    console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok ? "" : ` (${r.detail})`}`);
     if (!r.ok) failed++;
   }
   console.log(`[corners] ${results.length - failed}/${results.length} cases passed`);

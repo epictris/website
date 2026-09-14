@@ -15,6 +15,36 @@ import { WrapDirection } from "./types";
 // exist to close.
 export const MIN_WRAP_DEFLECTION = 0.005;
 
+// Two consecutive wrap nodes within the band of each other (squared metres)
+// are ONE corner of the path. A vertex two bodies share arrives as one node per
+// body - `Rope.regeneratePath` wraps each body's own corner and
+// `cullDuplicateNodes` folds only a body's doubled corner, since two bodies
+// meeting at a point is a corner the rope is meant to catch (game-design.md,
+// "Convex-only polygons; compound bodies") - on the same authored point, or
+// half a pixel off it where the two were placed by hand.
+//
+// The detachment test below reads the bend at a node from the spans either
+// side of it, and releases a node only once it stands the band's width off the
+// chord its neighbours draw. A neighbour closer than the band cannot witness
+// that: the node is never further from the chord than it is from the nearer
+// end of it. Coincident, the span between the two has no direction and read as
+// no bend at all; a few millimetres apart, the node was always inside the
+// band. Either way neither node of a shared corner could be released,
+// whichever way the rope actually ran.
+//
+// `session-473f` f384-397 is the finding: the ball wound up to a corner two
+// rocks share, rounded it and pressed up against the face above, the chain
+// from its loop now running DOWN to the corner and straight back up past the
+// ball - a hairpin with nothing inside it - and the pair held. Every turn the
+// player asked for was refused as wound tight against a corner the chain had
+// already left, until the aim crossed the loop and spun the ball back down.
+// One node at the same corner released at f320. `session-485f` f282-470 is the
+// same hairpin at a corner authored 4.5 mm apart on a rock and the ground it
+// sits on, with the whole chain wound on: judged against a neighbour 4.5 mm
+// away the corner was 4.4 mm off the chord, under the 5 mm band, for 190
+// frames.
+export const COINCIDENT_NODE_DISTANCE_SQ = MIN_WRAP_DEFLECTION * MIN_WRAP_DEFLECTION;
+
 class PathConstraint {
   constructor(
     public line: Segment,
@@ -44,6 +74,13 @@ class PathConstraints {
     segmentToNext: Segment,
     newNode: PathNode,
   ): void {
+    // A node at the head's own position obstructs nothing: a zero-length line
+    // has no side, so `isConstraintViolated` would read every later span as
+    // passing behind it on the clockwise hand and route the path back through
+    // a node the detachment test had just released, round and round to the
+    // depth cap (the cycle `Rope.cullDuplicateNodes` drops a body's doubled
+    // corner to avoid; a corner two bodies share is the same span).
+    if (segmentToNext.end.distanceSquaredTo(segmentToNext.start) <= COINCIDENT_NODE_DISTANCE_SQ) return;
     if (!this.isConstraintViolated(constraintDir, segmentToNext)) {
       this.constraints.set(constraintDir, new PathConstraint(segmentToNext, newNode));
     }
@@ -101,6 +138,20 @@ function shouldDetachNode(fromPrevious: Segment, toTarget: Segment, wrap: RopeWr
   return chord.getClosestPointOnLine(node).distanceTo(node) > MIN_WRAP_DEFLECTION;
 }
 
+// The nearest node before `head` that does not sit within the band of head's
+// own position, or the path's first node when every node back to it does.
+function distinctPrevious(head: PathNode): PathNode {
+  const at = head.node.contact.globalPosition;
+  let previous = head.previous!;
+  while (
+    previous.previous &&
+    previous.node.contact.globalPosition.distanceSquaredTo(at) <= COINCIDENT_NODE_DISTANCE_SQ
+  ) {
+    previous = previous.previous;
+  }
+  return previous;
+}
+
 function buildValidPathToTarget(head: PathNode, target: RopeNode, depth = 0): PathNode {
   if (head.node === target) return head;
   depth++;
@@ -131,10 +182,17 @@ function buildValidPathToTarget(head: PathNode, target: RopeNode, depth = 0): Pa
     head.constraints.updateConstraint(target.wrapDir, toTarget, newNode);
   }
 
-  // Check if the head node has detached.
+  // Check if the head node has detached. The bend is read from the last node
+  // NOT within the band of the head's own position: a corner two bodies share
+  // is two nodes at one point, and the first of them contributes no direction
+  // (or a few millimetres of one, which is worse: it keeps the second inside
+  // the band for ever). The last node of such a run is judged on the corner's
+  // real incoming span; once it goes, the recursion re-judges the one before
+  // it against the real outgoing span, so the corner releases as a whole
+  // exactly when one node there would.
   if (head.previous && head.node instanceof RopeWrap) {
     const fromPrevious = new Segment(
-      head.previous.node.contact.globalPosition,
+      distinctPrevious(head).node.contact.globalPosition,
       head.node.contact.globalPosition,
     );
     if (shouldDetachNode(fromPrevious, toTarget, head.node)) {
