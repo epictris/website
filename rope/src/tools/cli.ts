@@ -1001,7 +1001,12 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       // `--3d` grabs the frame through the WebGL renderer instead of the 2D one.
       // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
       // grab is otherwise identical and the two can be diffed against each other.
-      (o["3d"] ? "&render=3d" : "");
+      (o["3d"] ? "&render=3d" : "") +
+      // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
+      // the programs and textures three has built and the meshes whose program
+      // was compiled on THAT frame - the mid-play compile a stutter is made of.
+      // `--probe all` first names everything the warm frame left uncompiled.
+      (o.probe !== undefined ? `&probe=${o.probe === "all" ? "all" : "1"}` : "");
     let log: PageLogEntry[] = [];
     try {
       const result = await grab(chromium, {

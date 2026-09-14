@@ -83,3 +83,28 @@ Three things follow, and each replaced a guess:
 
 `shotMain` also reports a **blank 3D frame** as an error (`Scene3D.litFraction()`, read off the drawing buffer), since an empty frame is a valid PNG that every other view calls healthy.
 The historical late-frame blank flake did not reproduce in 20 consecutive gated runs at `--frame 40`, nor under the old runner, so its cause is still unidentified; what exists now is the detector, which is the half that makes the next occurrence loud instead of silent.
+
+## A mid-play stutter is usually a program compiled on first sight
+
+three compiles a material's program, and uploads its textures, the first time a mesh wearing them is DRAWN - inside the frustum, in `renderer.render` - not when the material is made or the level built.
+The warm frame (see [loading-screen](loading-screen.md)) draws from the spawn camera, so a material combination that nothing near the spawn uses is compiled the first time the player scrolls it into view, in the middle of a run.
+
+`session-1697f` (2026-09-14) is the measured case: a hitch about 1.7 s before the bundle was saved.
+The DevTools trace showed a 15 ms `frame` callback at a steady 144 Hz cadence of 1-2 ms frames, and inside it the CPU profile was three's `WebGLProgram` → `getProgramInfoLog` (the link-status wait, ~7 ms) and `texSubImage2D` (~4 ms); the GPU process then ran one 45 ms task where every other in the trace was under 1 ms, the compositor dropped four frames (`STATE_DROPPED`), and the next rAF came 35 ms late.
+`shot --probe` over the bundle named it: at the frame the lantern under the ledge (`lantern-rusty`, body 37) entered the frustum, programs went 11 → 12 and textures 26 → 30 - the scene's ONLY material with an `emissiveMap`, compiled there with its four maps uploaded.
+Nothing physics-side happened on that frame; the hook throw seven frames earlier was a coincidence of where the player was looking (the headless replay, at its own 1920x1080 frustum, reaches the lantern 20 frames sooner, before the throw).
+
+How much of it a session can meet is bounded, and `--probe all` measures the bound: it compiles the whole scene after the warm frame and names what the warm frame missed.
+On BALL that is two materials (the two emissive lamps, `lantern-rusty` and `bulkhead-lamp`), plus the chain's `InstancedMesh` program and its shadow variant on the FIRST THROW of every session (an 11 ms frame at 0.75 s in the same trace, `getProgramInfoLog` again), plus 35 of 55 texture sources, which upload three at a time as each surface set is first seen (about 4 ms each; two such events in 1697f, none of which dropped a frame at 144 Hz).
+Every one of them fires once per session and never twice in the same place; a stutter that repeats where the player already was is a different class.
+
+How to see it: record a bundle, then `cli shot <bundle> --frames 1..N --every 40 --3d --probe`.
+Run probes one at a time: four in parallel on SwiftShader took 20-25 s each instead of 8 and reported no uploads at all, which the same bundles alone contradict.
+It skips the precompile a grab normally does (which would answer "the warm frame" for everything) and logs `probe {frame, programs, textures, fresh}` per drawn frame, `fresh` naming each mesh whose program is new since the previous probe, by program, material maps, world position and parent chain.
+Narrow with a smaller `--every` once the jump is bracketed.
+A texture-count jump without a program jump is the same class one size smaller: a surface set first seen (three textures) uploads without a compile.
+
+The loading-screen doc records that compiling every program up front took nothing off the FIRST frame; that was a different question.
+This is the cost that precompile does remove, and since 2026-09-14 `Scene3D.prewarm` removes it under the loading screen (see [loading-screen](loading-screen.md)): every material's program, one stand-in per shadow-pass variant, every texture, every geometry.
+The stand-ins are the part worth knowing: the shadow pass wears three's own depth and distance materials, reconfigured per caster (side flipped, the caster's map and alpha test carried over) and keyed per object (instancing, instance colour) - and `fog` is in every program's key whether the material uses it or not, so the stand-ins compile with the scene's fog off, as the shadow pass does.
+Verified with `--probe all` over 1697f and 2177f: 13 programs and 55 textures after the prewarm, `pending` 0, and nothing fresh on any frame of either replay - where the lazy runs had compiled two shadow variants on frame 1, the chain's on the first throw and the lantern's on sight.

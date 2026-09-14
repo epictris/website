@@ -181,6 +181,17 @@ function ensureFoam(): THREE.Texture {
 // the same clock (pinnable) the light flicker reads.
 const waterTime = { value: 0 };
 
+// The textures the water shader samples, for the prewarm (see
+// `Scene3D.prewarm`): they ride the material as uniforms rather than as map
+// slots, so a sweep of the scene's materials cannot see them. Empty until the
+// first water material is built.
+export function waterTextures(): THREE.Texture[] {
+  const out: THREE.Texture[] = [];
+  if (flipTexture) out.push(flipTexture);
+  if (foamTexture) out.push(foamTexture);
+  return out;
+}
+
 export function updateWater(seconds: number): void {
   waterTime.value = seconds;
 }

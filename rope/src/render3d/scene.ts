@@ -30,7 +30,7 @@ import type { EnvironmentData } from "../level/levelFormat";
 import type { Camera } from "../render/camera";
 import type { ViewTransform } from "../render/viewport";
 import { GpuTimer } from "../render/gpuTimer";
-import { BodyVisual, pickTagOf } from "./bodyVisuals";
+import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
@@ -46,7 +46,7 @@ import {
   type ViewCamera,
   type ViewProjection,
 } from "./space";
-import { updateWater } from "./water";
+import { updateWater, waterTextures } from "./water";
 
 // What the 3D renderer needs of a level. Deliberately structural rather than
 // `Level | BallLevel`: the editor drives one of these from a model that is
@@ -266,8 +266,9 @@ export class Scene3D {
   // `compile()` nor `compileAsync()` triggers it, and the first `render()` does,
   // synchronously, whether or not `KHR_parallel_shader_compile` is present. A
   // grab that renders before it sets `shotReady` therefore has the diagnostic in
-  // the buffer by then; `compilePrograms` below is what widens that from "every
-  // material drawn this frame" to "every material in the scene".
+  // the buffer by then; the link check at the end of `prewarm` below is what
+  // widens that from "every material drawn this frame" to "every material in
+  // the scene".
   private installShaderErrorReporting(): void {
     this.renderer.debug.checkShaderErrors = true;
     this.renderer.debug.onShaderError = (gl, program, vertexShader, fragmentShader) => {
@@ -280,21 +281,73 @@ export class Scene3D {
     };
   }
 
-  // Force every material in the scene through the compiler AND through the link
-  // check, so a broken program belonging to something off screen - or culled
-  // this frame - is reported before the grab rather than whenever the camera
-  // happens to reach it.
+  // Every cost three defers to FIRST USE, paid here instead - under the loading
+  // screen, where a long frame is nobody's problem. Run once per level, after
+  // the assets have settled and after a warm frame from the camera the first
+  // played frame uses (see `boot` in main.ts). The rule it enforces: nothing
+  // is built, compiled or uploaded on a played frame that could have been
+  // built here.
   //
-  // The sweep is the load-bearing half. `compile()` creates and links the
-  // programs and `compileAsync()` waits for the driver, but neither looks at the
-  // result: three checks the link status in `onFirstUse`, which runs from
-  // `WebGLProgram.getUniforms()`. Asking each program for its uniforms is
-  // therefore what turns a silent failure into the `console.error` above, and
-  // it costs nothing - the answer is cached and the renderer asks for it on the
-  // next frame anyway.
-  async compilePrograms(): Promise<void> {
+  // What three defers, and what pays each one below:
+  //
+  // - A material's PROGRAM is compiled the first time a mesh wearing it is
+  //   drawn inside the frustum. `compile()` over the scene compiles every
+  //   material on every object, visible or not, and `compileAsync()` waits for
+  //   the driver, in parallel where it can.
+  // - The SHADOW PASS wears its own materials: one depth material for spot and
+  //   directional lights and one distance material for point lights, which it
+  //   reconfigures per caster (side, map, alpha test) and keys per object
+  //   (instancing). Each caster variant is therefore a program of its own,
+  //   compiled the first time such a caster is inside a shadow camera - the
+  //   chain, the first time it is thrown near a lamp. `shadowVariants` builds
+  //   one stand-in per variant and compiles them against this scene's lights.
+  // - A TEXTURE is uploaded, and its mip chain generated, the first time a
+  //   material sampling it is drawn. `initTexture` over every texture the
+  //   scene's materials and the water shader sample does it now.
+  // - A GEOMETRY's buffers are uploaded the first time it is drawn. One draw
+  //   of the whole scene with culling off and nothing hidden does that, and is
+  //   also what runs the real shadow pass for every static caster.
+  //
+  // `session-1697f` is the receipt: a lantern wearing the level's only emissive
+  // map scrolled into view 26 s into a run and cost a 15 ms frame plus a 45 ms
+  // GPU-process stall (docs/debugging-rendering.md). `cli shot --probe all`
+  // is the check that nothing is left: over a whole replay after this has run,
+  // the program and texture counts must not move.
+  //
+  // The link check at the end is the diagnostic half. three reads the link
+  // status in `onFirstUse`, from `WebGLProgram.getUniforms()`, so neither
+  // `compile()` nor `compileAsync()` reports a failed program; asking each one
+  // for its uniforms is what turns the failure into the `console.error` of
+  // `installShaderErrorReporting`, and the answer is cached for the frame that
+  // asks next.
+  async prewarm(
+    level: Scene3DLevel,
+    camera: Camera,
+  ): Promise<{ ms: number; programs: number; textures: number }> {
+    const t0 = performance.now();
+    // As a frame would: reconcile the visuals, settle the camera and the
+    // environment, size the shadow maps.
+    this.render(level, camera, 1);
+
     const materials = this.renderer.compile(this.scene, this.camera);
     await this.renderer.compileAsync(this.scene, this.camera);
+
+    const variants = this.shadowVariants();
+    // The shadow pass compiles against an EMPTY scene, so no fog - and fog is
+    // part of a program's key whether or not its material uses it.
+    const fog = this.scene.fog;
+    this.scene.fog = null;
+    try {
+      await this.renderer.compileAsync(variants.scene, this.camera, this.scene);
+    } finally {
+      this.scene.fog = fog;
+      variants.dispose();
+    }
+
+    for (const texture of this.sampledTextures()) this.renderer.initTexture(texture);
+
+    this.drawEverythingOnce();
+
     for (const material of materials) {
       // `WebGLProperties.get` is typed as an opaque bag; what is in it for a
       // material is the program three built for it.
@@ -302,6 +355,144 @@ export class Scene3D {
         currentProgram?: { getUniforms(): unknown };
       };
       props.currentProgram?.getUniforms();
+    }
+    return {
+      ms: performance.now() - t0,
+      programs: this.renderer.info.programs?.length ?? 0,
+      textures: this.renderer.info.memory.textures,
+    };
+  }
+
+  // One stand-in per shadow-pass program the scene can ask for, mirroring how
+  // `WebGLShadowMap.getDepthMaterial` dresses its material for a caster: the
+  // side flipped (a PCF map is drawn from the back faces), the caster's map and
+  // alpha map carried over for the alpha test, and the object's own instancing
+  // reflected in the stand-in's class. Distinct variants only; the program
+  // cache would fold the rest anyway.
+  //
+  // Real geometries are shared so the attribute set matches (a prop with a
+  // second UV set is a different program from an extrusion). The one caster
+  // that cannot be found in the scene is the one the sim spawns mid-play - the
+  // hook, a sandbox rock - drawn as an extrusion wearing the spawned-body
+  // surface (see `BodyVisual`); a box has the same attributes as an extrusion.
+  private shadowVariants(): { scene: THREE.Scene; dispose(): void } {
+    const scene = new THREE.Scene();
+    const owned: THREE.Material[] = [];
+    const spawnedGeometry = new THREE.BoxGeometry(1, 1, 1);
+    let depth = false;
+    let distance = false;
+    this.scene.traverse((o) => {
+      const light = o as THREE.Light;
+      if (!light.isLight || !light.castShadow) return;
+      if ((light as THREE.PointLight).isPointLight) distance = true;
+      else depth = true;
+    });
+    const dispose = (): void => {
+      for (const m of owned) m.dispose();
+      spawnedGeometry.dispose();
+    };
+    if (!depth && !distance) return { scene, dispose };
+
+    const flipped: Record<number, THREE.Side> = {
+      [THREE.FrontSide]: THREE.BackSide,
+      [THREE.BackSide]: THREE.FrontSide,
+      [THREE.DoubleSide]: THREE.DoubleSide,
+    };
+    const seen = new Set<string>();
+    const add = (object: THREE.Mesh, material: THREE.Material): void => {
+      const bag = material as unknown as {
+        map?: THREE.Texture | null;
+        alphaMap?: THREE.Texture | null;
+        alphaTest: number;
+        alphaToCoverage: boolean;
+        shadowSide: THREE.Side | null;
+        side: THREE.Side;
+      };
+      const instanced = (object as THREE.InstancedMesh).isInstancedMesh === true;
+      const coloured = instanced && (object as THREE.InstancedMesh).instanceColor !== null;
+      const side = bag.shadowSide ?? flipped[bag.side] ?? bag.side;
+      const alphaTest = bag.alphaToCoverage ? 0.5 : bag.alphaTest;
+      const attributes = Object.keys(object.geometry.attributes).sort().join(",");
+      const key = [instanced, coloured, side, !!bag.map, !!bag.alphaMap, alphaTest > 0, attributes].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      const standIn = (shadowMaterial: THREE.MeshDepthMaterial | THREE.MeshDistanceMaterial): void => {
+        shadowMaterial.side = side;
+        shadowMaterial.map = bag.map ?? null;
+        shadowMaterial.alphaMap = bag.alphaMap ?? null;
+        shadowMaterial.alphaTest = alphaTest;
+        owned.push(shadowMaterial);
+        const mesh = instanced
+          ? new THREE.InstancedMesh(object.geometry, shadowMaterial, 1)
+          : new THREE.Mesh(object.geometry, shadowMaterial);
+        if (coloured) {
+          (mesh as THREE.InstancedMesh).instanceColor = new THREE.InstancedBufferAttribute(
+            new Float32Array(3),
+            3,
+          );
+        }
+        mesh.castShadow = object.castShadow;
+        mesh.receiveShadow = object.receiveShadow;
+        scene.add(mesh);
+      };
+      if (depth) standIn(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+      if (distance) standIn(new THREE.MeshDistanceMaterial());
+    };
+    this.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.castShadow || !mesh.material) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) add(mesh, m);
+    });
+    const spawned = new THREE.Mesh(spawnedGeometry, surfaceOf({}));
+    spawned.castShadow = true;
+    spawned.receiveShadow = true;
+    add(spawned, spawned.material);
+    return { scene, dispose };
+  }
+
+  // Every texture a played frame could bind: the map slots of every material on
+  // every object, hidden ones included, the sky, the environment, and the
+  // water shader's own uniforms, which no material slot names.
+  private sampledTextures(): Set<THREE.Texture> {
+    const out = new Set<THREE.Texture>();
+    const take = (value: unknown): void => {
+      const texture = value as THREE.Texture | null;
+      // A texture with no image yet would only log; its upload lands with it.
+      if (texture && texture.isTexture && texture.image) out.add(texture);
+    };
+    this.scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.material) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        for (const value of Object.values(m)) take(value);
+      }
+    });
+    take(this.scene.background);
+    take(this.scene.environment);
+    for (const texture of waterTextures()) take(texture);
+    return out;
+  }
+
+  // Draw the scene once as synced by the last `render`, with nothing culled and
+  // nothing hidden, so every geometry's buffers go up and every caster meets
+  // the real shadow pass. Hidden things (the manacle between uses, a prop's
+  // placeholder) are put back exactly as found; the next played frame's sync
+  // would anyway.
+  private drawEverythingOnce(): void {
+    const restore: Array<() => void> = [];
+    this.scene.traverse((o) => {
+      const { visible, frustumCulled } = o;
+      restore.push(() => {
+        o.visible = visible;
+        o.frustumCulled = frustumCulled;
+      });
+      o.visible = true;
+      o.frustumCulled = false;
+    });
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      for (const put of restore) put();
     }
   }
 
@@ -337,6 +528,72 @@ export class Scene3D {
       calls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
       programs: this.renderer.info.programs?.length ?? 0,
+    };
+  }
+
+  // Programs and textures the renderer has built so far, and every mesh whose
+  // program is NEW since the last call - which is the frame three compiled it
+  // on. A program is compiled the first time a mesh wearing it is drawn, not
+  // when its material is made, so a material combination nothing on screen
+  // used until now costs a compile (and its textures an upload) mid-play; this
+  // is how `shot --probe` names the mesh that did it.
+  //
+  // `pending` is the other half of the same question: how many textures the
+  // scene's materials name that the renderer has not uploaded yet, each of
+  // which is an upload waiting for the first frame its mesh is drawn.
+  private readonly probedPrograms = new Set<number>();
+  programProbe(): { programs: number; textures: number; pending: number; fresh: string[] } {
+    const fresh: string[] = [];
+    const MAP_KEYS = ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "aoMap"] as const;
+    // Per SOURCE, not per texture object: `buildSurface` clones its maps per
+    // body, and three uploads a source once and binds every clone to it.
+    const sources = new Set<object>();
+    const uploaded = new Set<object>();
+    this.scene.traverse((obj) => {
+      // Anything drawn: meshes, but also lines and points, which wear a
+      // material and a program of their own without being meshes.
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.material) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        const bag = material as unknown as Record<string, unknown>;
+        for (const k of MAP_KEYS) {
+          const tex = bag[k] as THREE.Texture | undefined;
+          if (!tex) continue;
+          const tp = this.renderer.properties.get(tex) as { __webglTexture?: unknown };
+          sources.add(tex.source);
+          if (tp.__webglTexture !== undefined) uploaded.add(tex.source);
+        }
+        const props = this.renderer.properties.get(material) as {
+          currentProgram?: { id: number; name: string };
+        };
+        const program = props.currentProgram;
+        if (!program || this.probedPrograms.has(program.id)) continue;
+        this.probedPrograms.add(program.id);
+        const maps = MAP_KEYS.filter((k) => bag[k]).join(",");
+        const p = new THREE.Vector3();
+        mesh.getWorldPosition(p);
+        const chain: string[] = [];
+        for (let o: THREE.Object3D | null = mesh; o; o = o.parent) chain.push(o.name || o.type);
+        fresh.push(
+          `${program.name}#${program.id} ${material.type}[${maps}] ` +
+            `at (${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}) via ${chain.join("<")}`,
+        );
+      }
+    });
+    // Programs no scene material wears are three's own: the depth and distance
+    // materials of the shadow pass, compiled per caster variant (map, side,
+    // instancing) the first time such a caster falls inside a shadow camera.
+    for (const program of this.renderer.info.programs ?? []) {
+      if (this.probedPrograms.has(program.id)) continue;
+      this.probedPrograms.add(program.id);
+      fresh.push(`${program.name}#${program.id} (shadow pass)`);
+    }
+    return {
+      programs: this.renderer.info.programs?.length ?? 0,
+      textures: this.renderer.info.memory.textures,
+      pending: sources.size - uploaded.size,
+      fresh,
     };
   }
 

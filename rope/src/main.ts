@@ -659,6 +659,14 @@ let revealed = false;
 // is actually on screen. Running the controller first, against the same follow
 // point the first frame will use, takes the gap under 100 ms - which is the
 // decode of the last file to land, and nothing else.
+//
+// The warm frame covers the FIRST frame. What it cannot cover is everything
+// outside the spawn frustum, which three compiles and uploads on the frame the
+// player first scrolls it into view - a lantern 19 m below the spawn cost a
+// 15 ms frame and a 45 ms GPU stall 26 s into `session-1697f`. That is what
+// `Scene3D.prewarm` pays after the wait, and the load is allowed to take as long
+// as it needs: the rule is that nothing is compiled or uploaded on a played
+// frame that could have been done here.
 function warmFrame(): void {
   if (!scene3d) return;
   cameraCtl.update(
@@ -701,6 +709,14 @@ async function boot(): Promise<void> {
   warming = false;
   // The last arrivals, which no warm frame covered.
   warmFrame();
+  // Then everything the warm frame's camera cannot see (see `Scene3D.prewarm`).
+  // Awaited under the screen: the frame loop, and the run, start after it.
+  if (scene3d) {
+    const warmed = await scene3d.prewarm(level, camera);
+    console.log(
+      `[prewarm] ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
+    );
+  }
   requestAnimationFrame(frame);
 }
 void boot();

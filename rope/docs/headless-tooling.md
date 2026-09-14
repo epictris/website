@@ -40,6 +40,8 @@ bun run src/tools/cli.ts render session.json --frame 65 --out f65.svg   # SVG sn
 bun run src/tools/cli.ts shot session.json --frame 65 --out f65.png     # the REAL renderer, headless
 bun run src/tools/cli.ts shot session.json --frame 65 --3d --out f65.png # ...through the WebGL renderer
 bun run src/tools/cli.ts shot session.json --frames 60..120 --every 10 --3d  # a filmstrip + motion profile
+bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe      # which frame compiled which program, the LAZY way (no prewarm)
+bun run src/tools/cli.ts shot session.json --frames 1..1600 --every 40 --3d --probe all  # after the game's prewarm: anything `fresh` is a stutter it missed
 bun run src/tools/cli.ts shot --diff before.png after.png               # changed-pixel count + highlight
 bun run src/tools/cli.ts chainpath session.json --from 60 --to 70       # chain wrap-node polyline per frame
 bun run src/tools/cli.ts fork session.json --frame 979 --frames 24      # state trace + before/after SVG around a frame

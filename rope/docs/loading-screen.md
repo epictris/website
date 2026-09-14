@@ -55,6 +55,13 @@ Which of those costs it was took three attempts to find, and the two wrong answe
 The actual fault was the CAMERA. The pre-render drew from the camera's initial pose - the origin, since `CameraController` had not run yet - so it warmed whatever happened to be at the origin, and the first real frame, drawn after the controller had put the camera on the avatar, paid the full cost again for the part of the level that is on screen.
 Running the controller first, against the same follow point the first frame uses, took that 546 ms under 100 ms over a throttled connection.
 
+**Then everything the warm frame cannot see.**
+The warm frame covers the first frame and nothing outside the spawn frustum.
+A material combination nothing near the spawn wears (the only `emissiveMap` in the level, on a lantern 19 m below) was compiled, and its maps uploaded, on the first frame the player scrolled it into view - a 15 ms frame plus a 45 ms GPU-process stall, mid-run (`session-1697f`, see [debugging-rendering](debugging-rendering.md#a-mid-play-stutter-is-usually-a-program-compiled-on-first-sight)).
+Since 2026-09-14 `Scene3D.prewarm` runs after the wait and before the loop: every material's program through `compileAsync`, a stand-in per shadow-pass variant compiled against the scene's lights, `initTexture` over every texture the materials and the water shader sample, and one draw of the whole scene unculled so every geometry is uploaded and every static caster meets the real shadow pass.
+The rule it enforces is that nothing is compiled or uploaded on a played frame that could have been done under the bar, and the load is allowed to take what that costs: about 1.4 s on SwiftShader, printed as `[prewarm] N programs, N textures in N ms` on every load.
+The "278 ms and saved nothing" figure above was the answer to a different question - the first frame - and does not argue against this; `cli shot --probe all` is the check that a replay meets nothing new after it.
+
 **Warm on every frame, not on a timer.** The timer was written for a slow connection, where there are seconds of download to spread the work across.
 From localhost there is no such window: the bytes are in at 228 ms and the app does not exist until 700, so a 150 ms tick fired about once, warmed a scene that was still mostly fallback textures, and left the real upload to pile into one 309 ms frame after the bar was already full.
 On every frame it is 82 ms, and it is inside the wait rather than after it.

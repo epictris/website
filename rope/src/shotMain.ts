@@ -129,10 +129,33 @@ if (scene3d) {
   // arrived makes the same command produce different images on different runs,
   // so it is evidence of nothing. Wait for the scene to be dressed, then draw.
   await settleAssets();
-  // Every material through the compiler before the first grab, so a program
-  // belonging to something off screen this frame still reports its errors here
-  // rather than whenever the camera happens to reach it.
-  await scene3d.compilePrograms();
+  // The game's own prewarm before the first grab (see `Scene3D.prewarm`): every
+  // program compiled and link-checked, so one belonging to something off screen
+  // this frame still reports its errors here rather than whenever the camera
+  // happens to reach it.
+  //
+  // `probe=1` is the one reason NOT to: it asks which frame of a run compiled
+  // which program the LAZY way - on the first frame the mesh is drawn - which
+  // is what a build without the prewarm would do. Each drawn frame then logs
+  // `probe {...}` naming the meshes whose program is new (see
+  // `Scene3D.programProbe`).
+  //
+  // `probe=all` is the check on the prewarm itself: it warms as the game does,
+  // probes, then draws the frames as usual - and every `fresh` entry after
+  // that is something the prewarm missed.
+  const probe = q.get("probe");
+  if (probe === "1") {
+    scene3d.render(level, camera, 1);
+    console.log(`probe ${JSON.stringify({ frame: 0, ...scene3d.programProbe() })}`);
+  } else {
+    const warmed = await scene3d.prewarm(level, camera);
+    console.log(
+      `prewarm ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
+    );
+    if (probe === "all") {
+      console.log(`probe ${JSON.stringify({ frame: "all", ...scene3d.programProbe() })}`);
+    }
+  }
 }
 
 // Replay to the first frame wanted, then draw each in turn.
@@ -224,6 +247,9 @@ function drawFrame(frame: number): void {
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
     scene3d.render(level, camera, 1);
+    if (q.get("probe") !== null) {
+      console.log(`probe ${JSON.stringify({ frame, ...scene3d.programProbe() })}`);
+    }
     // A frame that drew nothing is a valid PNG and a lie: `shot --3d` at f35+
     // has come back uniformly blank while the 2D path rendered the same frame
     // fine. Say so where the harness can fail on it.
