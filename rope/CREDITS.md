@@ -61,6 +61,7 @@ asset to its manifest and regenerate, which is what `cli assets` checks.
 - **rock-black** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock035), CC0
 - **rock-charcoal** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock014), CC0
 - **rock-grey** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock060), CC0
+- **rock-wet** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Rock037), CC0
 - **rusted iron** (4 maps) - "ambientCG (Lennart Demes)", [source](https://ambientcg.com/view?id=Metal053B), CC0
 
 ## Environment maps

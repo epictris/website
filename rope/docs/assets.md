@@ -47,6 +47,8 @@ near-black cave rock (`rock-black`):
 - https://ambientcg.com/view?id=Rock035
 neutral dark-grey rock with a diagonal fracture grain, dark enough to read as unlit and light enough to still shade, unlike `rock-black` (`rock-charcoal`):
 - https://ambientcg.com/view?id=Rock014
+wet near-black stratified cliff, algae in the bedding and pale mineral leaks out of the cracks - the gloss sits in the crevices rather than over the whole face (`rock-wet`):
+- https://ambientcg.com/view?id=Rock037
 mossy dirt with moss patches, for ground and floors (`mossy ground`):
 - https://ambientcg.com/view?id=Ground047
 moss cushions, for ledges and damp faces (`moss`):

@@ -650,6 +650,101 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
   },
+  // WET rock: a near-black stratified cliff face with a green algal film in the
+  // bedding and pale mineral leaks running down out of the cracks. It is the
+  // first set here named for a CONDITION rather than for a colour, and that is
+  // the honest name for it - the three above are one rock at three darknesses,
+  // and what separates this one from them is not its hue but that water has
+  // obviously been over it.
+  //
+  // The wetness is in the ROUGHNESS map, which is the only place a still image
+  // can put it. Mean .622, the glossiest surface of the rock family (`rock-
+  // charcoal` .676, `rock-black` .689, `rock-grey` .757), but the mean is not
+  // the point: 9% of its texels are under .5 and they are not scattered over the
+  // face. They lie in the crevices - the map correlates with this set's own AO
+  // at +.63 - and the smoothest tenth of the surface is albedo .229 against a
+  // mean of .126, which is the pale leak streaks. So the shine follows the
+  // DRAINAGE: the seams and the runs under them catch a light and the dry faces
+  // between them do not, which is what wet rock does and what a uniform sheen
+  // (`ice`'s .12, flat everywhere) never reads as. It is also why this set wants
+  // no `roughness` multiplier - scaling it would flatten the one distribution
+  // doing the work.
+  //
+  // Dark, and worth knowing before a room is dressed in it: linear albedo .022,
+  // which is half of `rock-charcoal`'s .044 and twice `rock-black`'s under .01.
+  // That puts it either side of the line that entry draws - it still SHADES,
+  // unlike `rock-black`, but it is not a surface that can carry a room on the
+  // fill alone. sRGB mean #1E211D, and its greenest channel is the MAX, which no
+  // other rock here is (`rock-grey` and `rock wall` are warm, `rock-black` cool,
+  // `rock-charcoal` neutral at chroma .004). The algae is a weak tint at .014
+  // rather than a green surface - `moss` and `moss-dark` are what a level
+  // reaches for when the growth is meant to be the thing you see.
+  //
+  // Keyed as a SURFACE for the reason the other rocks are: a set under the
+  // `stone` material's name would re-skin every stone body in every level. A
+  // shape asks for it by name (`visual.texture`), and naming it does NOT make
+  // the body slippery: this is appearance, and how a body rubs is its own
+  // `friction` (0 = ice, 1 = rubber, default 1 - see `ShapeData.friction`). A
+  // face that is meant to be as slick as it looks says both.
+  "rock-wet": {
+    maps: {
+      base: {
+        file: "/textures/rock-wet-base.webp",
+        sha256: "c4de4b59bdded53042909ed017c8d8e6d28ec1f15463b2caeaeb23d50fdd603c",
+        bytes: 403596,
+      },
+      // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
+      // two ambientCG ships. The DEEPEST relief of any rock in the manifest - B
+      // mean .804, sigma .106, past `rock-black`'s .837 and nothing like the
+      // shallow pair (`rock-grey` .95, `rock-charcoal` .946) - and the shape of
+      // it is strata: shelves a hand deep running one way across the face, not
+      // an even stipple. Directional like `rock-charcoal`'s grain is, so two
+      // walls of it meeting at a corner show the bedding running two ways.
+      //
+      // 738 KB, well under the lossless organics, because ambientCG ships this
+      // set as JPEG: the ringing is already in the pixels, so the pipeline
+      // encodes q95 lossy rather than spending bytes preserving artifacts (see
+      // optimize-texture.ts).
+      normal: {
+        file: "/textures/rock-wet-normal.webp",
+        sha256: "289020dd1d29b0b05d63cd1a605d93fcec00dab1e5e80e285dd656f346e3226f",
+        bytes: 756012,
+      },
+      // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
+      // are, flattened to grey by `assets:optimize-texture --channel r`. No
+      // metallic map and none wanted: the 0 below is a dielectric's, stated
+      // rather than shipped as an image.
+      roughness: {
+        file: "/textures/rock-wet-roughness.webp",
+        sha256: "ca36f23496101504b07bb3e946e990f03e2eb2e21ad6c86943cec9c3cf40bf69",
+        bytes: 438392,
+      },
+      // Shipped rather than left to the generated surface, and here it is load-
+      // bearing twice over: mean .892 (beside `rock-black`'s .895) is a mild map
+      // on its own, but it is what tells the roughness where the crevices are -
+      // the two agree at +.63, and the gloss reading as water in the cracks
+      // rather than as a polished rock depends on the cracks being dark.
+      ao: {
+        file: "/textures/rock-wet-ao.webp",
+        sha256: "feac3312854ebc4cc3a6f11c4fd5111dea13ae74c198df397174841248f6a692",
+        bytes: 312770,
+      },
+    },
+    // ambientCG states no captured size (`dimensionX: 0`,
+    // https://ambientcg.com/api/v2/full_json?id=Rock037), so this is a by-eye
+    // number as the other three rocks' are - and it is deliberately their SAME
+    // 2 m, on the reasoning they already share: the four are meant to be
+    // swapped on a wall without its `tileScale` being retuned, and a seam
+    // between rock at 2 m and rock at 1.6 reads as a mistake. 2 m puts the
+    // bedding shelves about a hand apart and the leak streaks at the length
+    // water actually runs before it spreads.
+    tile: 2,
+    metalness: 0,
+    fallback: "stone",
+    source: "https://ambientcg.com/view?id=Rock037",
+    author: "ambientCG (Lennart Demes)",
+    license: "CC0",
+  },
   // Brown dirt broken by patches of moss, and the first set here that is neither
   // rock nor metal: it is what a level stands ON rather than a face it hangs off,
   // so it is the surface a floor, a ledge top or a buried slab wants when the
