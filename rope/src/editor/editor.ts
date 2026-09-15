@@ -121,6 +121,7 @@ import {
   settledGhosts,
   type SettleGhost,
   pinBodyFrame,
+  originToCentroid,
   setArrowEnds,
   shapeMass,
   polyMustBeConvex,
@@ -4577,6 +4578,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // mass - so the editor's rotation and the engine's are the same operation.
       (v) => rotateItemsAbout(model, members, bodyCentroid(members), rad(v) - origin().rot),
     );
+    // ...and the one thing that can be done TO the frame rather than through it:
+    // put it on the centre of mass, which is where the engine's origin is
+    // whatever the file says and the point the two fields above already turn the
+    // body about. Nothing in the level moves - every object's offset takes up
+    // the step (see `originToCentroid`).
+    //
+    // Offered rather than done automatically, because where a body's origin sits
+    // is the author's: a hinge pinned on the bracket it swings from reads better
+    // than one floating in the middle of the assembly, and nothing downstream
+    // needs the two to agree.
+    const row = el("div", "ed-row");
+    const centre = button("Origin to COM", () => originOntoCentroid(id));
+    centre.disabled = originIsCentred(id);
+    centre.title = centre.disabled
+      ? "This body's origin is already on its centre of mass."
+      : "Move this body's origin onto its centre of mass - the point the engine builds it about - and take up the step in every object's offset. Nothing moves in the level.";
+    row.appendChild(centre);
+    g.appendChild(row);
 
     addBodyProps(g, members);
     inspector.appendChild(g);
@@ -6135,6 +6154,29 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // showing a body and not suddenly a heap of objects.
     if (selectedBodyIds.size) setBodySelection(id);
     else setSelection(members.map((b) => b.id));
+    markDirty();
+    rebuildInspector();
+  }
+
+  // Is this body's origin already where its mass is? Asked exactly as
+  // `originToCentroid` asks it, so the button it greys out and the operation it
+  // guards cannot disagree about whether there is anything to do.
+  const originIsCentred = (id: number): boolean => {
+    const members = bodyMembers(model.items, id);
+    if (!members.length) return true;
+    const d = bodyCentroid(members).sub(bodyFrameOf(model, id).pos);
+    return d.x === 0 && d.y === 0;
+  };
+
+  // Put the body's origin on its centre of mass. Checked BEFORE `beginAction`
+  // rather than after: taking a snapshot pins the frame of every compound body
+  // in the level (`pinCompoundFrames`), so an action that turns out to have
+  // nothing to do has still changed the model and would leave an undo step that
+  // undoes nothing visible.
+  function originOntoCentroid(id: number): void {
+    if (originIsCentred(id)) return;
+    beginAction();
+    originToCentroid(model, id);
     markDirty();
     rebuildInspector();
   }
@@ -9038,6 +9080,12 @@ function injectStyles(): void {
     border-radius: 2px; }
   .ed-btn:hover { background: #343b4d; }
   .ed-btn.active { border-color: #65bddb; color: #65bddb; }
+  /* A control that cannot be used has to LOOK it. Every colour here is set
+     explicitly, so the browser's own disabled greying never lands and a dead
+     field or button was drawn exactly like a live one. */
+  .ed-btn:disabled, .ed-num:disabled, .ed-select:disabled, .ed-text:disabled {
+    opacity: 0.4; cursor: default; }
+  .ed-btn:disabled:hover { background: #2a2f3d; }
   .ed-select, .ed-num { background: #1f2430; color: #cbccc6; border: 1px solid #3c445c;
     font-family: monospace; font-size: 13px; padding: 2px 4px; border-radius: 2px; }
   .ed-num { width: 64px; }

@@ -1103,27 +1103,59 @@ function fromLevelData(data: LevelData): EdModel {
   // finds something to hold. The first COLLISION item, since that is what a
   // chain is bolted to; a body with none is a body a chain cannot name.
   const itemOfBody: (EdItem | null)[] = [];
+  // Filled per body, for the bodies whose frame the file actually states (see
+  // `authoredFrame` below); the rest are left to be derived from their first
+  // object, which is where a body's frame has always been measured from.
+  const bodyFrames = new Map<number, EdBodyFrame>();
   for (const b of data.bodies) {
     const firstOfBody = bodies.length;
     // ONE ITEM PER SCENE OBJECT. Nothing is folded together: a barrel is a body
     // holding a collision box and a mesh, and it arrives here as two items in
     // one body rather than as one item that is secretly both.
     const bodyId = newBodyId();
-    // An authored bearing, carried into the MODEL's body frame - which after a
-    // load is the first object's placement (`bodyFrames` records nothing on
-    // load), not necessarily the frame the file wrote. For an editor-written
-    // file the two coincide, so a level opened and saved untouched stays
-    // byte-stable; a hand-written file whose frame differs gets the same world
-    // point re-measured, which is what the save's re-origining already does to
-    // every object placement.
+    // THE FRAME THIS BODY'S OBJECTS ARE PLACED IN (see `EdModel.bodyFrames`).
+    //
+    // The file states one - it is the body's own `x`/`y`/`rot` - and it is taken
+    // as stated whenever it is not simply where the first object sits. That is
+    // the only reading under which a body whose origin was deliberately put
+    // somewhere no object is survives being reopened: the frame is not in the
+    // model's items, so a load that re-derived it from a member would quietly
+    // move the origin back onto that member and the next autosave would write
+    // the move to disk (`originToCentroid` is what puts one there).
+    //
+    // Where the two DO coincide - every body an editor save has written, whose
+    // first object is at the frame and so carries no offset at all - nothing is
+    // recorded and the frame stays derived, which is what keeps a level opened
+    // and saved untouched byte-stable and what leaves `framedByItself` true for
+    // the body of one object almost every body is.
+    //
+    // (0, 0, 0) IS NOT A STATED FRAME. It is what a body migrated out of a
+    // retired flat entry is given - the objects keep the world placements the
+    // flat entries carried and the body's own origin is left at zero, which is
+    // the only migration that is bit-identical (see `normalizeLevelData`). Read
+    // as stated it would leave such a body measuring from the world origin
+    // instead of from its own shape, so a frame of all zeroes with nothing at it
+    // goes on being re-origined onto the first object as it always was.
+    const filedFrame = { pos: new Vec2(b.x, b.y), rot: b.rot };
+    const leadFrame = b.objects[0] ? worldPlacement(b, b.objects[0]) : filedFrame;
+    const authoredFrame =
+      (b.x !== 0 || b.y !== 0 || b.rot !== 0) &&
+      (filedFrame.pos.x !== leadFrame.pos.x ||
+        filedFrame.pos.y !== leadFrame.pos.y ||
+        filedFrame.rot !== leadFrame.rot);
+    const frame = authoredFrame ? filedFrame : leadFrame;
+    if (authoredFrame) bodyFrames.set(bodyId, frame);
+    // An authored bearing, carried into that frame. For a body whose frame the
+    // file states it is already measured there and comes back unchanged; for one
+    // whose frame is the first object's, the same world point is re-measured
+    // against that object - which is what the save's re-origining already does
+    // to every object placement.
     const pivotAt = (() => {
       // Read for either mounting that HAS a bearing - a rigid `pivot` or a
       // swinging static (see `LevelBodyData.pivotX`) - since the two mean the
       // same point and the model holds one field for it.
       if (!hasBearing(b) || (b.pivotX === undefined && b.pivotY === undefined)) return null;
-      const first = b.objects[0];
-      if (!first) return null;
-      const frame = worldPlacement(b, first);
+      if (!b.objects[0]) return null;
       const bearing = worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 });
       return bearing.pos.sub(frame.pos).rotated(-frame.rot);
     })();
@@ -1137,8 +1169,6 @@ function fromLevelData(data: LevelData): EdModel {
     // is what the file means by writing it at (0, 0) - it is the one node no
     // gesture drags, because moving the body is what moves it.
     const routeIn: EdRouteNode[] = moveNodesOf(b).map((n, i) => {
-      const first = b.objects[0];
-      const frame = first ? worldPlacement(b, first) : { pos: new Vec2(b.x, b.y), rot: b.rot };
       const turn = b.rot - frame.rot;
       return {
         p: i === 0 ? Vec2.ZERO : worldPlacement(b, n).pos.sub(frame.pos).rotated(-frame.rot),
@@ -1649,13 +1679,12 @@ function lightItem(
     items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
     vines,
-    // None recorded on load. A body's frame is derived from its first object
-    // until something is edited (`EdModel.bodyFrames`), which is the origin this
-    // has always re-measured every body against on the way back out - so a level
-    // opened and saved untouched is byte-stable exactly as it was, and a body
-    // migrated out of a retired flat entry is still re-origined onto its shape
-    // rather than left measuring from the (0, 0) the migration gave it.
-    bodyFrames: new Map(),
+    // Only the bodies whose file frame is somewhere no object sits. Everything
+    // else is derived from its first object until something is edited
+    // (`EdModel.bodyFrames`), which is the origin this has always re-measured
+    // against on the way back out - so a level opened and saved untouched is
+    // byte-stable exactly as it was.
+    bodyFrames,
     // Copied rather than shared, since everything else here hands the caller a
     // fresh object, and undo snapshots this by value.
     environment: data.environment ? { ...data.environment } : undefined,
@@ -2936,6 +2965,51 @@ export function bodyFrameOf(model: EdModel, bodyId: number): EdBodyFrame {
 // from one of those pieces is a frame that piece silently moves.
 export function pinBodyFrame(model: EdModel, bodyId: number): void {
   if (!model.bodyFrames.has(bodyId)) model.bodyFrames.set(bodyId, bodyFrameOf(model, bodyId));
+}
+
+// Move a body's ORIGIN onto its centre of mass, without moving the body.
+//
+// Nothing in the world shifts: every object keeps the world placement it had, so
+// what changes is the frame those placements are RECORDED against - each one's
+// offset moves by exactly as much as the origin did, in the other direction, and
+// the file comes out with the body at its centre of mass and its objects hung
+// off that (see `toLevelData`'s `localOf`).
+//
+// It is worth having because the centre of mass is the one point the body is
+// really about: `buildLevelBodies` puts the engine origin there whatever the
+// file says (`mountPieces`), the editor turns a body about it (`bodyCentroid`),
+// and a body's route is a run of offsets from its origin. With the origin left
+// on whichever object happened to be written first, the panel's x and y are a
+// corner of some piece, turning the body walks them, and the drawn route hangs
+// off that corner rather than off the point the platform travels by.
+//
+// Two things are recorded IN the frame and so are carried with it:
+//
+// - THE BEARING (`pivotAt`), which is a world point written as an offset from
+//   the origin. It is re-measured, so the body goes on turning about the same
+//   place in the level.
+// - THE ROUTE, which is NOT: its nodes are offsets from node zero - the origin
+//   itself - and `moverScript` adds the body's pose back, so leaving them alone
+//   is what keeps the travel identical. The drawn route does move, by the same
+//   step the origin did, because it is the path the origin takes and the origin
+//   has moved; what the body does is unchanged, to the bit.
+//
+// Returns whether anything moved, so a caller can leave the undo stack alone for
+// a body already origined on its mass (every rect and circle of one object is).
+export function originToCentroid(model: EdModel, bodyId: number): boolean {
+  const members = bodyMembers(model.items, bodyId);
+  if (!members.length) return false;
+  const frame = bodyFrameOf(model, bodyId);
+  const centre = bodyCentroid(members);
+  const d = centre.sub(frame.pos);
+  if (d.x === 0 && d.y === 0) return false;
+  model.bodyFrames.set(bodyId, { pos: centre, rot: frame.rot });
+  // The bearing back onto the same world point, in the new frame. Written on
+  // every member rather than on the lead alone, because `pivotAt` is a body
+  // property held on each of them and `syncBodyProps` reads them as one.
+  const step = d.rotated(-frame.rot);
+  for (const m of members) if (m.pivotAt) m.pivotAt = m.pivotAt.sub(step);
+  return true;
 }
 
 // Carry the frames of the bodies `items` touches, but only where the WHOLE body

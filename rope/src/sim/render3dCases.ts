@@ -78,6 +78,8 @@ import {
   setPolyVerts,
   bodyCentroid,
   bodyMembers,
+  bodyFrameOf,
+  originToCentroid,
   type EdItem,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
@@ -2040,6 +2042,109 @@ function bodyFrame(): CaseResult[] {
   ];
 }
 
+// The editor's "Origin to COM" (`originToCentroid`): the body's origin moves
+// onto its centre of mass and every object's offset takes up the step, so the
+// level does not move.
+//
+// Asserted across the round trip an author actually performs - press it, autosave,
+// reopen - because the frame is the one thing about a body that is NOT in the
+// model's items. A load that re-derived it from a member would put the origin
+// back on that member, and since the editor rewrites the whole file, the next
+// autosave would write that undo to disk.
+function originToCom(): CaseResult[] {
+  const drawn: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "rigid",
+        x: 100,
+        y: 200,
+        rot: 0,
+        color: "#555555",
+        opacity: 1,
+        friction: 1,
+        // A bearing, because it is the one thing besides an object placement
+        // that is recorded IN the frame and so has to be carried with it.
+        pivot: true,
+        pivotX: 40,
+        pivotY: 0,
+        objects: [
+          // Two equal boxes, so the centre of mass is halfway between them -
+          // 100 px along from the origin the first one sits on.
+          { type: "collision", shape: { kind: "rect", w: 40, h: 40 } },
+          { type: "collision", x: 200, y: 0, shape: { kind: "rect", w: 40, h: 40 } },
+        ],
+      },
+    ],
+  };
+  // Every world point the body states, so a frame move that forgot one shows up:
+  // the objects, and the bearing.
+  const points = (d: RawLevelData): { pos: Vec2; rot: number }[] => {
+    const b = d.bodies[0] as LevelBodyData;
+    return [
+      ...b.objects.map((o) => worldPlacement(b, o)),
+      worldPlacement(b, { x: b.pivotX ?? 0, y: b.pivotY ?? 0 }),
+    ];
+  };
+  const before = modelToDisk(modelFromDisk(drawn));
+
+  const model = modelFromDisk(drawn);
+  const bodyId = model.items[0]!.bodyId;
+  const moved = originToCentroid(model, bodyId);
+  const saved = modelToDisk(model);
+  // The frame the file now states, in pixels: 100 px along from where it was.
+  const body = saved.bodies[0] as LevelBodyData;
+  const onMass = Math.abs(body.x - 200) < 1e-9 && Math.abs(body.y - 200) < 1e-9;
+  const stillThere = points(before).every(
+    (p, i) => p.pos.distanceTo(points(saved)[i]!.pos) < 1e-9,
+  );
+
+  // Reopened, the origin is still on the mass and the file is the same file.
+  const reopened = modelToDisk(modelFromDisk(saved));
+  const survives = JSON.stringify(reopened) === JSON.stringify(saved);
+
+  // ...and pressing it again does nothing, which is what greys the button out.
+  const twice = modelFromDisk(saved);
+  const againId = twice.items[0]!.bodyId;
+  const idempotent = !originToCentroid(twice, againId);
+  const centred = bodyCentroid(bodyMembers(twice.items, againId))
+    .sub(bodyFrameOf(twice, againId).pos)
+    .length();
+
+  return [
+    {
+      name: "editor: Origin to COM puts the body's origin on its centre of mass",
+      pass: moved && onMass,
+      detail:
+        moved && onMass
+          ? "origin moved 100 px onto the mass"
+          : `moved ${moved}, origin now (${body.x.toFixed(3)}, ${body.y.toFixed(3)}) px`,
+    },
+    {
+      name: "editor: ...and every object and bearing stays where it was",
+      pass: stillThere,
+      detail: stillThere
+        ? "offsets took up the step; nothing in the level moved"
+        : points(before)
+            .map((p, i) => `${p.pos.distanceTo(points(saved)[i]!.pos).toFixed(6)} m`)
+            .join(", "),
+    },
+    {
+      name: "editor: ...and the origin is still there when the level is reopened",
+      pass: survives,
+      detail: survives ? "byte-identical through save, load and save" : "the reopen moved it back",
+    },
+    {
+      name: "editor: ...and pressing it again is a no-op",
+      pass: idempotent && centred === 0,
+      detail:
+        idempotent && centred === 0
+          ? "already on the mass, so nothing to undo"
+          : `reported ${!idempotent ? "a move" : "no move"}, off by ${centred.toFixed(9)} m`,
+    },
+  ];
+}
+
 // An emission MAP is where a shape glows, as against how much: another set's
 // map worn over whatever surface the shape has (`VisualData.emissiveTexture`).
 // Two things about it are invisible everywhere else and are asserted here.
@@ -2760,6 +2865,7 @@ export function runRender3dCases(): CaseResult[] {
     ...lightAim(),
     ...lightShadowNear(),
     ...bodyFrame(),
+    ...originToCom(),
     ...emissiveMaps(),
     ...propEmission(),
     ...emissiveMaterials(),
