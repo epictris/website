@@ -115,23 +115,33 @@ The mouse has three aim modes behind `AIM_MODE` in `input/aimPointer.ts`, shared
 by both controllers (default **cursor**, overridable per session with
 `?aim=position` / `?aim=cursor` / `?aim=motion` so the three can be compared by
 feel without a rebuild):
-- **cursor** (default): the aim point is `AimPointer`'s **virtual** cursor's
-  screen position, un-projected through the *current* camera every time it is
-  read (`currentAimLocal`).
+- **cursor** (default): the aim point is `AimPointer`'s cursor's screen position,
+  un-projected through the *current* camera every time it is read
+  (`currentAimLocal`) - the **virtual** cursor in fullscreen, where the lock is
+  held, and the real pointer in a window, where it is not.
   The **PLAY press takes the pointer lock** along with fullscreen (see [**Starting a run**](#starting-a-run)), and clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
   The press asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
   A refused fullscreen gives the lock straight back, since a lock in a *window* is the one thing it is never allowed to be.
   While locked the
   virtual cursor is integrated from `movementX/Y` and held inside the 1920x1080
   play frame, so aim carries on past the edge of the screen.
-  Unlocked it moves by the same travel, read off the real cursor's own steps, and is held inside the same frame - so a window plays like fullscreen and the two differ only in how far the hand can go before the desktop pointer runs out of screen.
-  (It used to *be* the real cursor while unlocked, which made windowed `cursor` and `position` the same picture and left the reticle no way to start anywhere but under the desktop pointer.)
 
-  **The cursor is born above the avatar, on the first mouse move of the page.**
+  **Unlocked there is no virtual cursor at all**: the aim is the real pointer's own position, unseeded and unbounded, which is the picture `position` draws.
+  A window is therefore `position` with the reticle drawn on it, and the modes come apart only in fullscreen.
+  It was briefly the other way - with a seed the cursor travelled by the mouse's steps whether or not the lock was held, so that a window would feel like fullscreen - and what that produced was a windowed game with two pointers and no way to see the one that mattered.
+  Measured on this machine (a probe page driving the real `AimPointer` through CDP): eleven 20 px steps from an unlocked start left the reticle at view (1452, 700) with the real pointer at (985, 738).
+  The press the player aims with lands 467 px from the mark they aimed it by, every step widens the gap, and the pointer they cannot see is the one deciding whether the click reaches the canvas at all - it can be out over the letterbox bars, or off the window, while the reticle sits mid-frame.
+  Bounding the drawn cursor to the frame is what *guarantees* the gap: the real one keeps going where the drawn one may not.
+
+  **The desktop cursor stays hidden either way**, windowed included: the reticle is the ball controller's only pointer, and windowed it is now drawn *on* the real one, so there is a single mark on screen and the clicks land under it.
+  It is hidden rather than shown as a crosshair beneath the ring because two marks for one pointer is what the reticle exists to avoid - and the crosshair the canvas carries in CSS is the grapple controller's, which has no reticle of its own.
+
+  **The virtual cursor is born above the avatar, on the first mouse move of the page.**
   Nothing is drawn before that: the PLAY press takes the desktop cursor off the page, and the reticle appears only once the mouse has actually moved - so a run that has just started shows no cursor at all until the player touches the mouse.
   (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
   A mousemove carrying *no movement* does not count, which is the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off): answering it put a reticle on screen, and a steering command under it, with nobody's hand on the mouse.
-  The first real move seeds the virtual cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball and travels from there - and so does a **click**, because a press throws the chain and a throw with no mark saying where it went reads as a dead button (`AimPointer.reveal`).
+  The first real move seeds the cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball and travels from there - and so does a **click**, because a press throws the chain and a throw with no mark saying where it went reads as a dead button (`AimPointer.reveal`).
+  Both are the *locked* answer: the seed is asked only when there is a virtual cursor to be born, and a press with no move behind it reveals the cursor under the real pointer's own position while unlocked, since `clientX/Y` is live there and it is the point the click was hit-tested at.
 
   **A warp is not a move, and nothing on the event says which it is.**
   Taking the lock, going fullscreen and releasing a click all teleport the cursor, and Chromium reports the teleport as `movementX/Y`.
@@ -162,7 +172,8 @@ feel without a rebuild):
   the media query's `change` and the first click takes it instead; the `change`
   going the other way is what releases it, since no `fullscreenchange` will.
 
-  Windowed the pointer is left alone, for two reasons pointing the same way.
+  Windowed the pointer is left alone - and so, therefore, is the aim, which is
+  read straight off it - for two reasons pointing the same way.
   The window edge is a boundary the player can see and walk back from, and other
   windows are a mouse-move away, so capturing the cursor to fix an edge nobody
   was pushing against costs an Esc for nothing.
@@ -187,14 +198,22 @@ feel without a rebuild):
   Only the second of those is fixed now that the lock is fullscreen-only, which
   is the one that was worth fixing: past the screen edge there is nowhere else
   for the hand to be going.
-  It is the only mode that never touches the pointer, kept so the lock modes can
-  still be compared against the behaviour they replaced.
+  The first is what `cursor` and `motion` now do *too* in a window, on purpose:
+  the fix for a window edge is to stop pushing against it, and the alternative -
+  a drawn cursor that carries on while the real one does not - is two pointers
+  disagreeing.
+  It is the only mode that never touches the pointer even in fullscreen, kept so
+  the lock modes can still be compared against the behaviour they replaced.
 - **motion**: `aimLocal` accumulates each mousemove's delta (metres at the
   current zoom) and is held within the reach.
   It takes the same lock as `cursor`; the difference is only where the bound
   lives, in the world at the reach rather than on screen at the frame.
   The first move (and the first after another device owned aim) seeds `aimLocal`
   from the real cursor position.
+  It is the one mode that still travels in a **window**, where the desktop
+  pointer is visible and can therefore be somewhere else: that is the mode's own
+  definition rather than an oversight, and it is the reason it is opt-in.
+  Compare it fullscreen, where the pointer it would disagree with is gone.
 
 Pointer lock is the only fix for the edges, and only the *first* edge is a
 listener problem: past the screen edge the cursor genuinely stopped moving, so no

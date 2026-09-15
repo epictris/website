@@ -21,20 +21,28 @@
 // dead travel the player cannot see. A virtual cursor never accumulates past its
 // bound, so it moves inward on the very first pixel back.
 //
-// Where the reticle IS the page's cursor - the game hides the OS pointer for
-// the ball controller and draws this in its place - the virtual cursor moves by
-// the mouse's TRAVEL whether or not the lock is held, and is born where the
-// caller says (`seed`) rather than under the desktop pointer. Windowed then
-// feels like fullscreen, both bounded by the play frame. What a travelling
-// cursor gives up is the guarantee that a pointer which left the page and came
-// back somewhere else lands the reticle under itself; it lands a jump of the
-// same size away instead, which is the trade the locked path has always made.
+// THE VIRTUAL CURSOR EXISTS ONLY WHILE THE LOCK IS HELD, which is only in
+// fullscreen (below), and that is the whole of the rule. Unlocked there is a
+// real pointer on the desktop - one the OS is moving, one the browser is
+// hit-testing every click against - and the aim is read straight off it,
+// unseeded and unbounded. Where the reticle IS the page's cursor (the game hides
+// the OS pointer for the ball controller and draws this in its place) the seed
+// says where the virtual one is born, and it is asked only when there is a
+// virtual one to be born.
 //
-// Everywhere the desktop cursor is still VISIBLE - `position` mode, the grapple
-// controller, a test run from the editor - unlocked reading stays exactly what
-// it was: the real cursor, followed outright, unseeded and unbounded. Two
-// pointers that disagree is worse than any edge behaviour, and `position` is
-// kept precisely so the others have something to be compared against.
+// It was briefly the other way: with a seed, the cursor travelled by the mouse's
+// steps whether or not the lock was held, so that a window would feel like
+// fullscreen. What that actually produced was a windowed game with two pointers
+// and no way to see the one that mattered. Measured on this machine, eleven
+// 20 px steps from an unlocked start left the reticle at view (1452, 700) with
+// the real pointer at (985, 738): the press the player aims with lands 467 px
+// from the mark they aimed it by, every step widens the gap, and the pointer
+// they cannot see is the one that decides whether the click reaches the canvas
+// at all - it can be out over the letterbox bars, or off the window, while the
+// reticle sits in the middle of the frame. Bounding the drawn cursor to the
+// frame is what guarantees the gap: the real one keeps going where the drawn one
+// may not. Two pointers that disagree is worse than any edge behaviour, and
+// windowed the edge is one the player can see and walk back from.
 //
 // The lock is taken in FULLSCREEN ONLY, for two reasons that point the same way.
 // Windowed, the cursor is the player's: the window edge is a boundary they can
@@ -60,15 +68,19 @@ import {
 // session with `?aim=position` / `?aim=cursor` / `?aim=motion` so the three can
 // be compared by feel without a rebuild.
 //
-//   cursor (default) - the aim point is the VIRTUAL cursor's screen position,
-//     un-projected through the current camera. That cursor is integrated from
-//     the mouse's own travel and bounded by the play frame, windowed or
-//     fullscreen, so aim carries on past the edge of the screen wherever the
-//     lock is held; and it is born above the avatar rather than under the
-//     desktop pointer (see `AimPointer`'s `seed`).
+//   cursor (default) - the aim point is the cursor's screen position,
+//     un-projected through the current camera. Fullscreen, with the lock held,
+//     that is the VIRTUAL cursor: integrated from the mouse's own travel,
+//     bounded by the play frame, and born above the avatar rather than under the
+//     desktop pointer (see `AimPointer`'s `seed`), so aim carries on past the
+//     edge of the screen. Windowed there is no lock and no virtual cursor, and
+//     this is the real pointer, followed outright - the same picture `position`
+//     draws, which is what a page with a visible-or-not desktop pointer in it
+//     has to draw.
 //   position - the same mapping reading the REAL cursor, and the only mode that
-//     leaves the pointer alone. No lock, and no fix: this is the mode with the
-//     edges in it, kept so the two can still be compared by feel.
+//     leaves the pointer alone even in fullscreen. No lock, and no fix: this is
+//     the mode with the edges in it, kept so the two can still be compared by
+//     feel.
 //   motion   - aim is integrated from the mouse's own travel and bounded in
 //     WORLD space by the chain's reach (ball controller only; the grapple
 //     controller treats it as `cursor`).
@@ -204,17 +216,18 @@ export class AimPointer {
   // `seed` is where the virtual cursor is BORN, in view pixels, and passing one
   // is the statement that THIS RETICLE IS THE PAGE'S CURSOR: the game hides the
   // OS pointer for the ball controller and draws the reticle in its place, so
-  // the reticle may start above the avatar (see `BallInputSource`) and travel by
-  // the mouse's own steps from there, rather than appearing wherever the desktop
-  // pointer had been left with the ball snapping to face it.
+  // once the lock has taken the desktop pointer away the reticle may start above
+  // the avatar (see `BallInputSource`) rather than at the frozen point the
+  // capture happened to be made from, with the ball snapping to face it. It is
+  // asked ONLY while locked; unlocked there is a real pointer to be under and
+  // that is where the aim is, seed or no seed.
   //
-  // Null - the default - is a page that still shows the desktop cursor, where
-  // the aim has to stay UNDER it: no seed, and unlocked the virtual cursor
-  // simply follows the real one, exactly as it always did. That is the grapple
-  // controller (its canvas keeps a crosshair) and every test run from the editor
-  // (its canvas keeps the arrow, and the cursor belongs to the editor around
-  // it). A cursor of our own in either would be a second pointer disagreeing
-  // with the one the player can see.
+  // Null - the default - is a page whose reticle never replaces the pointer at
+  // all: the grapple controller (its canvas keeps a crosshair) and every test
+  // run from the editor (its canvas keeps the arrow, and the cursor belongs to
+  // the editor around it). Those pages read the real cursor unlocked like
+  // everything else, and fall back to it as the birthplace on the rare locked
+  // start with no move behind it.
   constructor(
     private canvas: HTMLCanvasElement,
     private takeLock: boolean,
@@ -378,31 +391,38 @@ export class AimPointer {
     // would put the reticle (and the steering under it) wherever the desktop
     // pointer happened to be sitting when the level loaded.
     if (this.view === null && motion.x === 0 && motion.y === 0) return;
-    // A cursor of our own is one the page has hidden the desktop pointer for
-    // (see `seed`). Without that the aim must stay under the pointer the player
-    // can still see - `position` mode, which is kept for exactly this
-    // comparison, the grapple controller, and a test run from the editor - so
-    // the real cursor is followed outright, unseeded and unbounded.
-    if (!this.takeLock || this.seed === null) {
-      if (!this.locked()) {
-        this.lastMotion = this.view ? real.sub(this.view) : null;
-        this.view = real;
-        return;
-      }
-      // Locked, `clientX/clientY` is frozen wherever the lock was taken, so the
-      // deltas are the only motion there is and the frame is the only bound.
-      this.lastMotion = motion;
-      this.view = clampToFrame((this.view ?? real).add(motion));
+    // UNLOCKED, THERE IS NO VIRTUAL CURSOR: the desktop pointer is still the
+    // one the OS is moving, and it is the one a click lands under, so the aim
+    // is simply read off it - unseeded and unbounded, exactly as `position`
+    // mode has always done it. That covers the grapple controller and a test
+    // run from the editor, where the arrow is visible and a cursor of our own
+    // would be a second pointer disagreeing with it; and it covers a WINDOWED
+    // game, where the arrow is hidden and a cursor of our own is worse still,
+    // because the only pointer the player can see is then the one the browser
+    // is not routing their clicks through.
+    if (!locked) {
+      this.lastMotion = this.view ? real.sub(this.view) : null;
+      this.view = real;
+      // Nothing is integrated here, so nothing can be owed. Dropped rather than
+      // carried, because a debt run up on this path would be paid on the other
+      // one: a press that took no lock withholds a real event of hand travel
+      // that this branch then ignores, and the first LOCKED event after it would
+      // hand that stale 50-odd px back as a jump nobody made.
+      this.withheld = null;
       return;
     }
-    // The virtual cursor moves by the mouse's travel from where it already is -
-    // locked or not, so the windowed feel is the fullscreen one and both are
-    // bounded by the play frame rather than by a window edge. Its FIRST position
-    // is the seed's (the avatar's own head for the ball controller), which is
-    // what makes the first move of a fresh page start from the player rather
-    // than from wherever the pointer had been left.
+    // Locked - which is fullscreen, and only fullscreen (see `requestLock`).
+    // `clientX/clientY` is frozen wherever the lock was taken, so the deltas are
+    // the only motion there is and the play frame is the only bound: the virtual
+    // cursor is what the desktop pointer stopped being, and aim carries on past
+    // the edge of the screen because nothing is tracking an edge any more.
+    //
+    // Its FIRST position is the seed's where there is one (the avatar's own head
+    // for the ball controller, whose reticle IS the page's cursor), so a lock
+    // taken before the mouse has moved starts the aim at the player rather than
+    // at whatever frozen point the pointer was captured from.
     this.lastMotion = motion;
-    this.view = clampToFrame((this.view ?? this.seed() ?? real).add(motion));
+    this.view = clampToFrame((this.view ?? this.seed?.() ?? real).add(motion));
   }
 
   // The virtual cursor in view pixels, or null before the first mousemove.
@@ -419,8 +439,18 @@ export class AimPointer {
   // Nothing for a pointer with no seed (the grapple controller, a test in the
   // editor): there the desktop cursor is the one on screen and it never went
   // anywhere.
-  reveal(): void {
+  //
+  // Where it is born depends on the same thing every other position here does.
+  // UNLOCKED the press itself says where the pointer is - `clientX/clientY` is
+  // live, and it is the point the browser hit-tested the click at - so the
+  // cursor appears under the hand that clicked. Locked, those fields are frozen
+  // at wherever the lock was taken and the seed is the only honest answer.
+  reveal(e: MouseEvent): void {
     if (this.view !== null || this.seed === null) return;
+    if (!this.locked()) {
+      this.view = clientToView(this.canvas, e.clientX, e.clientY);
+      return;
+    }
     const at = this.seed();
     if (at !== null) this.view = clampToFrame(at);
   }

@@ -21,13 +21,15 @@
 //
 // The mouse has three aim modes, chosen by AIM_MODE (input/aimPointer.ts):
 //
-//   cursor (default) — the aim point is AimPointer's VIRTUAL cursor's screen
-//     position, un-projected through the *current* camera every time it is read
-//     (see `currentAimLocal`): the reticle is exactly where the pointer is, a
-//     drawn stand-in for the hidden OS cursor and nothing more, and a camera pan
-//     or ease never moves it. Under pointer lock that cursor is integrated from
-//     the mouse's own deltas and bounded by the play frame, so aim carries on
-//     past the edge of the window and of the screen.
+//   cursor (default) — the aim point is AimPointer's cursor's screen position,
+//     un-projected through the *current* camera every time it is read (see
+//     `currentAimLocal`): the reticle is exactly where the pointer is, a drawn
+//     stand-in for the hidden OS cursor and nothing more, and a camera pan or
+//     ease never moves it. Fullscreen, under pointer lock, that pointer is
+//     VIRTUAL — integrated from the mouse's own deltas and bounded by the play
+//     frame, so aim carries on past the edge of the screen. Windowed there is no
+//     lock and no virtual cursor: the reticle is drawn on the real pointer,
+//     which is the only one the player's clicks are landing under.
 //   position — the same mapping reading the REAL cursor, unbounded. Identical to
 //     `cursor` until the lock is taken, and thereafter the mode that stops
 //     aiming at the edge of the window, and at the edge of the screen in
@@ -40,10 +42,12 @@
 //
 // `cursor` and `motion` take pointer lock on click IN FULLSCREEN (Esc releases
 // it, the next click takes it back); windowed, and in `position` always, the
-// pointer is left alone. See aimPointer.ts for why the lock is the only thing
-// that fixes the boundary, why bounding a virtual cursor costs none of what
-// bounding a real one would, and why the lock is worth having only where the
-// screen edge is the boundary.
+// pointer is left alone - and where the pointer is left alone, it is also what
+// aim reads, so the three modes draw the same picture in a window and differ
+// only in fullscreen. See aimPointer.ts for why the lock is the only thing that
+// fixes the boundary, why bounding a virtual cursor costs none of what bounding
+// a real one would, and why a virtual cursor with a real one still on the
+// desktop beside it is worth less than the edge it fixes.
 //
 // Every mouse button deploys - left, middle, right - rather than the left alone.
 // The chain is the only thing the mouse does here, so there is nothing for a
@@ -213,8 +217,10 @@ export class BallInputSource implements IInputSource {
     canvas.addEventListener("mousedown", (e) => {
       // A press with no cursor on screen yet brings it into being where a move
       // would have (see `AimPointer.reveal`): the press throws the chain, and a
-      // throw with no mark saying where it went reads as a dead button.
-      this.pointer.reveal();
+      // throw with no mark saying where it went reads as a dead button. The
+      // event goes with it because unlocked the press's own position is where
+      // the cursor is.
+      this.pointer.reveal(e);
       if (!TOGGLE_CLICK) this.press(this.mouseButton, true);
       else if (e.button === RIGHT_BUTTON) this.press(this.mouseButton, false);
       else this.redeploy();
