@@ -759,7 +759,11 @@ export interface EdBodyFrame {
 }
 
 export interface EdModel {
-  player: { pos: Vec2; radius: number };
+  // The spawn, and whether the run starts on the anchor (see `SpawnData.hang`).
+  // The flag is carried through the model rather than read off the file,
+  // because the editor writes the level back whole: a field it does not know
+  // about is a field it DELETES the first time a level is opened and autosaved.
+  player: { pos: Vec2; radius: number; hang: boolean };
   items: EdItem[];
   chains: EdChain[];
   vines: EdVine[];
@@ -1675,7 +1679,11 @@ function lightItem(
   }
 
   return {
-    player: { pos: new Vec2(data.player.x, data.player.y), radius: data.player.radius },
+    player: {
+      pos: new Vec2(data.player.x, data.player.y),
+      radius: data.player.radius,
+      hang: data.player.hang === true,
+    },
     items: [...bodies, ...regions, ...camPaths, ...notes],
     chains,
     vines,
@@ -2182,7 +2190,14 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
   }
 
   return {
-    player: { x: model.player.pos.x, y: model.player.pos.y, radius: model.player.radius },
+    player: {
+      x: model.player.pos.x,
+      y: model.player.pos.y,
+      radius: model.player.radius,
+      // Absent rather than false, so a level that does not start on its anchor
+      // is written exactly as it always was.
+      ...(model.player.hang ? { hang: true } : {}),
+    },
     bodies,
     // An empty list is the same as no list, and the absent field keeps levels
     // authored before camera regions (or notes) byte-identical.
@@ -3577,7 +3592,7 @@ export function distanceToVine(model: EdModel, v: EdVine, world: Vec2): number {
 // testable.
 export function emptyModel(): EdModel {
   return {
-    player: { pos: new Vec2(0, -1), radius: 0.08 },
+    player: { pos: new Vec2(0, -1), radius: 0.08, hang: false },
     chains: [],
     vines: [],
     // Nothing stored: a fresh level's one body holds one object, whose placement

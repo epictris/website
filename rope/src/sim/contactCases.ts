@@ -50,6 +50,9 @@ import {
   type ShapeData,
 } from "../level/levelFormat";
 import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "../level/chains";
+// The editor's own round trip, for the spawn flag it would otherwise delete
+// (see `caseSpawnHang`).
+import { modelFromDisk, modelToDisk } from "../editor/model";
 import { Rope } from "../classes/rope";
 import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
 import { cullDetachedNodes, MIN_WRAP_DEFLECTION } from "../lib/nodeDetachment";
@@ -1798,6 +1801,139 @@ function caseChainAttachKeepsLength(): ContactResult {
   return {
     name: "attach-keeps-length",
     passed: attached && slackAtAnchor && kept,
+    details,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// spawn-hang — a spawn that starts the run ON ITS ANCHOR.
+//
+// `SpawnData.hang` throws the chain straight up at build (see
+// `BallPlayer.anchorOverhead`), and this asserts the three halves of it that
+// the playtests cannot: the flag surviving the two trips a level file makes,
+// and the throw finding nothing.
+//
+// The FORMAT half is not ceremony. The flag rides in the file beside numbers
+// that are scaled px -> m, and it is neither a length nor a ratio; and the
+// editor rewrites the whole file every 750 ms a level is open, so a field its
+// model does not carry is deleted from disk before anyone notices it was read -
+// which is the trap the environment block's comment names and the one the rail
+// and viscous suites each check for their own flag.
+//
+// The BUILD half is the dead hang the level opens on, asserted at the length
+// the ball was authored to hang at rather than at one the first frame settled
+// to: the anchor is older than the first frame (`BallLevel` arms `endWasFixed`
+// for it), so nothing sags, nothing lengthens, and nothing has to settle.
+//
+// The NOTHING half is both ways a throw comes home empty - a ceiling out of the
+// chain's reach and one made of hook-proof steel - and the assertion is that
+// neither leaves a chain behind. A throw that finds nothing ends as the
+// dangling tip, and a spawn wearing 1.8 m of chain hanging in the air is not a
+// state any level means to author.
+// ---------------------------------------------------------------------------
+function caseSpawnHang(): ContactResult {
+  const arena = (ceilingY: number, impermeable = false): RawLevelData => ({
+    player: { x: 0, y: 0, radius: 8, hang: true },
+    bodies: [
+      {
+        kind: "static",
+        x: 0,
+        y: ceilingY,
+        rot: 0,
+        objects: [
+          {
+            type: "collision",
+            x: 0,
+            y: 0,
+            shape: { kind: "rect", w: 400, h: 40 },
+            ...(impermeable ? { impermeable: true } : {}),
+          },
+        ],
+        friction: 1,
+      },
+    ],
+  });
+  const details: string[] = [];
+
+  // --- the format ---------------------------------------------------------
+  const scaled = scaleLevelData(arena(-185), PX);
+  const carried = scaled.player.hang === true;
+  const notMinted = scaleLevelData({ player: { x: 0, y: 0, radius: 8 }, bodies: [] }, PX).player.hang === undefined;
+  details.push(`scaleLevelData: carried=${carried} absent stays absent=${notMinted}`);
+  const roundTrip = modelToDisk(modelFromDisk(arena(-185))).player.hang === true;
+  const roundTripClean =
+    modelToDisk(modelFromDisk({ player: { x: 0, y: 0, radius: 8 }, bodies: [] })).player.hang === undefined;
+  details.push(`editor round trip: kept=${roundTrip} absent stays absent=${roundTripClean}`);
+
+  // --- the hang -----------------------------------------------------------
+  const level = new BallLevel(arena(-185));
+  const ball = level.ball;
+  const chain = ball.chain;
+  const spawn = new Vec2(0, 0);
+  const attached = ball.chainAttached;
+  const bornLength = chain?.maxRopeLength ?? Number.NaN;
+  let drift = 0;
+  let maxSpeed = 0;
+  for (let f = 1; f <= 180; f++) {
+    level.physicsProcess(
+      // The ball's own centre is "not aiming", so the loop is left to the
+      // chain rather than steered at the world origin.
+      { ...emptyFrameInput(), mouseWorldPosition: ball.globalPosition },
+      DT,
+    );
+    drift = Math.max(drift, ball.globalPosition.distanceTo(spawn));
+    maxSpeed = Math.max(maxSpeed, ball.linearVelocity.length());
+  }
+  const grew = (ball.chain?.maxRopeLength ?? Number.NaN) - bornLength;
+  details.push(
+    `hang: attached=${attached} length=${bornLength.toFixed(4)} m, after 180f drift=${drift.toFixed(5)} m ` +
+      `maxSpeed=${maxSpeed.toFixed(5)} m/s growth=${grew.toFixed(5)} m`,
+  );
+  // A chain in the plumb of a flat ceiling holds the authored pose exactly:
+  // this is the spawn-at-rest statement, not a settling tolerance.
+  const hangs = attached && drift < 1e-9 && maxSpeed < 1e-9 && Math.abs(grew) < 1e-9;
+
+  // --- the first press re-throws it ---------------------------------------
+  //
+  // The spawn chain is one the player never threw, so a press lands on a chain
+  // that is already there: under hold-to-keep nothing answered it and only the
+  // RELEASE spoke, which reads from the game as the first click detaching the
+  // chain the player is hanging from. A press re-throws instead (the toggle
+  // grip's own meaning - see `resolveInput`), so what the click leaves is a
+  // NEW chain going where the aim points, not an empty hand.
+  const spawnChain = ball.chain;
+  let prev = emptyFrameInput();
+  // Aim off to one side, so a re-throw is distinguishable from the chain that
+  // was hanging straight up.
+  const aimAt = ball.globalPosition.add(new Vec2(1, -1));
+  for (let f = 1; f <= 30; f++) {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      mouseWorldPosition: aimAt,
+      fire: button(f >= 10, prev.fire),
+    };
+    prev = input;
+    level.physicsProcess(input, DT);
+  }
+  const rethrown = ball.chain !== null && ball.chain !== spawnChain;
+  details.push(
+    `first press: chain=${ball.chain === null ? "dropped" : ball.chain === spawnChain ? "the spawn chain, untouched" : "re-thrown"}`,
+  );
+
+  // --- nothing to hang from -----------------------------------------------
+  // 3 m up, against a 1.8 m chain.
+  const far = new BallLevel(arena(-320));
+  const farChain = far.ball.chain === null;
+  // In reach, but steel: the cuff is deflected rather than biting.
+  const steel = new BallLevel(arena(-185, true));
+  const steelChain = steel.ball.chain === null;
+  details.push(`out of reach: chain=${far.ball.chain === null ? "none" : "left behind"}`);
+  details.push(`hook-proof: chain=${steel.ball.chain === null ? "none" : "left behind"}`);
+
+  return {
+    name: "spawn-hang",
+    passed:
+      carried && notMinted && roundTrip && roundTripClean && hangs && rethrown && farChain && steelChain,
     details,
   };
 }
@@ -6595,6 +6731,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainOut());
   results.push(caseHookSnapBand());
   results.push(caseChainAttachKeepsLength());
+  results.push(caseSpawnHang());
   results.push(caseHookRest());
   results.push(caseChainOutVsSolver());
   results.push(caseDeploySpent());

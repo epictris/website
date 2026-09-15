@@ -853,7 +853,11 @@ export class BallPlayer extends RigidBody2D {
     // hook wherever the ball happens to be pointing mid-turn, not at the
     // cursor. A pure rotation teleport: the steering below then sees zero
     // error and writes ~0 angular velocity, so the snap never becomes spin.
-    if (aiming && input.fire.pressed && !this.chain) {
+    // On EVERY firing press, a re-throw of a chain already out included: the
+    // whole point of the re-throw is that it goes where the aim is now (see the
+    // fire handling below), and a snap that skipped it would launch the second
+    // throw along the rate-limited turn's leftovers.
+    if (aiming && input.fire.pressed) {
       this.globalRotation += wrapAngle(toAim.angle() - this.loopDirection.angle());
     }
     if (aiming) {
@@ -898,7 +902,24 @@ export class BallPlayer extends RigidBody2D {
 
     // Hold-to-keep: press shoots, release lets go (matches the grapple
     // controller's fire semantics).
-    if (input.fire.pressed && !this.chain) this.shoot();
+    //
+    // A press with a chain ALREADY OUT re-throws it, and that is the same
+    // statement the toggle grip makes downstream (`BallInputSource.redeploy`
+    // queues a release and a press for exactly this): the button that threw the
+    // chain throws it again, at wherever the aim is now, with no detach
+    // keystroke in between.
+    //
+    // Under hold-to-keep it can only be a chain the player never threw - a
+    // press while the button is down is not an edge, and the toggle's own
+    // redeploy has already dropped the chain a step earlier - so in practice
+    // this is the chain a `hang` spawn opens the level on (see
+    // `anchorOverhead`). Without it the press says nothing and only the release
+    // speaks, which reads from the game as the first click DETACHING the chain
+    // the player was hanging from.
+    if (input.fire.pressed) {
+      if (this.chain) this.releaseChain();
+      this.shoot();
+    }
     if (input.fire.released) this.releaseChain();
     if (!this.chain || !this.windStallHeld) this.windStall = 0;
   }
@@ -990,6 +1011,47 @@ export class BallPlayer extends RigidBody2D {
     this.chainTip = hook;
     this.hookInFlight = null;
     chain.maxRopeLength = targetLength;
+  }
+
+  // START THE LEVEL ON THE ANCHOR: throw the chain straight up and fly the
+  // whole throw at once, so a spawn under a ledge opens the game hanging
+  // instead of standing (see `SpawnData.hang`). Answers whether it caught.
+  //
+  // It is the ORDINARY throw, run with one big step rather than a special
+  // attach path: the ball is turned to face up exactly as a press does
+  // (`resolveInput`), `shoot()` puts the real cuff on the real chain, and one
+  // `BallHook.physicsStep` long enough to cover the chain's reach sweeps the
+  // whole flight. Everything the throw knows then holds at the spawn for free -
+  // the chain-out cap stopping the reach at `CHAIN_MAX_LENGTH`, an attach
+  // beating a hook-proof bounce at a tie, a rail clamped rather than bitten, a
+  // vine threaded as a ring, mud bitten to the hinge - and none of it is
+  // written twice. The step is the reach over the launch speed, so the hook
+  // budgets its flight against the same allowance a throw does; what stops it
+  // is the chain running out, not the step running out.
+  //
+  // A throw that anchors nothing leaves NOTHING: no chain, no dangling tip, and
+  // the facing the ball spawned with. A spawn with clear sky over it would
+  // otherwise open the level with 1.8 m of chain hanging in the air above a
+  // ball that never threw it, which is not a state any level means to author -
+  // and the honest report of "there was nothing up there to hang from" is the
+  // level starting the way it did before the flag.
+  anchorOverhead(): boolean {
+    if (this.chain) return this.chainAttached;
+    const facing = this.globalRotation;
+    // Straight up, through the loop, as a press does it: a pure rotation
+    // teleport before anything has moved, so no spin comes of it.
+    this.globalRotation += wrapAngle(Vec2.UP.angle() - this.loopDirection.angle());
+    this.shoot();
+    const hook = this.hookInFlight;
+    if (hook) hook.physicsStep(BallPlayer.CHAIN_MAX_LENGTH / BallPlayer.HOOK_SPEED);
+    // ATTACHED, not merely anchored: a throw that found nothing ends as the
+    // dangling tip, which is a chain the ball is holding rather than one
+    // holding the ball (see `chainAttached`), and is exactly the case this
+    // drops.
+    if (this.chainAttached) return true;
+    this.releaseChain();
+    this.globalRotation = facing;
+    return false;
   }
 
   private shoot(): void {

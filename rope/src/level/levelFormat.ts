@@ -1837,8 +1837,37 @@ export interface EnvironmentData {
   fogColor?: string;
 }
 
+// WHERE A RUN STARTS, and how. The point is the avatar's centre; `radius` is
+// the avatar it is the centre of (the ball plays a multiple of it - see
+// `BallLevel.BALL_RADIUS_SCALE`).
+//
+// `hang` is the only thing here that is not geometry, and it is a property of
+// the SPAWN rather than of the level or the controller: one arena may open on a
+// ball already on its anchor and the next on one sitting on the floor, and a
+// level that says nothing starts the way every level always has.
+export interface SpawnData {
+  x: number;
+  y: number;
+  radius: number;
+  // Start the ball & chain ALREADY ANCHORED: at build the chain is thrown
+  // straight up from the spawn through the hook's own swept attach, and bites
+  // the first surface within the chain's reach (see
+  // `BallPlayer.anchorOverhead`). The ball then hangs at exactly the length
+  // that throw paid out, so a spawn placed under a ledge opens the level on a
+  // dead hang and one placed off to the side of it opens mid-swing.
+  //
+  // Absent (and false) is the ball on its feet with the chain stowed, which is
+  // what every level authored before this field does - and what a spawn with
+  // nothing overhead within reach gets, since the throw finds nothing to bite.
+  // A ball that starts hanging is authored by MOVING THE SPAWN off the floor:
+  // the flag anchors the chain, it does not lift the ball.
+  //
+  // Ignored by the grapple controller, which has no chain to spawn on.
+  hang?: boolean;
+}
+
 export interface LevelData {
-  player: { x: number; y: number; radius: number };
+  player: SpawnData;
   bodies: LevelBodyData[];
   // Camera-behaviour volumes (see CameraRegionData). Absent = the camera just
   // follows the avatar, which is what every level authored before this field did.
@@ -1981,7 +2010,7 @@ export const LEGACY_BACKGROUND_OPACITY = 1;
 // What a file may contain: either form, in any mixture. Everything downstream of
 // `normalizeLevelData` sees `LevelData` and none of this.
 export interface RawLevelData {
-  player: { x: number; y: number; radius: number };
+  player: SpawnData;
   bodies: (LevelBodyData | LegacyBodyData)[];
   backgrounds?: LegacyBackgroundData[];
   lights?: LegacyLightData[];
@@ -2860,6 +2889,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       x: data.player.x * factor,
       y: data.player.y * factor,
       radius: data.player.radius * factor,
+      // A flag, not a length: it crosses the conversion unchanged, like the
+      // ratios above (see `SpawnData.hang`).
+      ...(data.player.hang ? { hang: true } : {}),
     },
     bodies: data.bodies.map((b) => ({
       kind: b.kind,

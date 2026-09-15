@@ -1809,6 +1809,22 @@ function cmdBundles(dirs: string[]): void {
   let worstDriftFile = "";
   for (const { dir, file } of found) {
     const rec = loadRecording(join(dir, file));
+    // A COMMITTED regression carries its own level. One that names a level
+    // instead is built from whatever that file says today
+    // (`levelFromRecording`), so authoring the level silently rewrites what the
+    // regression is a regression of: moving the ball arena's spawn 60 cm turned
+    // `session-2504f` - the graze-bounce chain-out repro - into a run of
+    // different inputs that gained 38 J and went red, having nothing to do with
+    // the code it guards. The scratch dir is exempt: a bundle straight off the
+    // page is being looked at now, against the level it was just played on.
+    if (dir === BUNDLE_DIRS[0] && !rec.data) {
+      console.log(
+        `FAIL ${file} — no level embedded: a committed regression must carry its own level, ` +
+          `or editing ${rec.level} changes what it asserts`,
+      );
+      failed++;
+      continue;
+    }
     const r = replayRecording(rec);
     const div = r.divergedAtFrame !== null ? ` (diverges @f${r.divergedAtFrame}, maxDrift=${(r.maxDrift * 100).toFixed(1)}px)` : "";
     const g = rec.git ? ` @${rec.git}` : "";

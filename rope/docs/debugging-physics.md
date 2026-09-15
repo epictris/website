@@ -237,6 +237,12 @@ clone can run the same evidence this document argues from. `playtests/bundles/`
 stays gitignored local scratch. Both are replayed by `cli bundles` and by
 `bun run test`.
 
+**A committed regression carries its own level**, and `cli bundles` fails one that does not.
+A bundle that names its level instead is rebuilt from whatever that file says today (`levelFromRecording`), so authoring the level silently rewrites what the regression is a regression *of*.
+`session-2504f` - the graze-bounce chain-out repro - was the one bundle in the corpus without its own geometry, and moving the ball arena's spawn 60 cm to start the level hanging turned it into a run of the same inputs from somewhere else, which gained 38 J and went red on a mechanic it has nothing to say about.
+It was pinned by embedding `levels/ball.json` as it stood the moment before that edit - the level the corpus was green against - and replays to the same frame count and the same 658.8 px drift it always did.
+The scratch dir is exempt: a bundle straight off the page is being read *now*, against the level it was just played on.
+
 Bundle semantics: digest divergence in `cli replay`/`cli bundles` is
 **informational, not failure** — a bundle recorded before a physics fix
 legitimately diverges from the frame the fix first bites; invariants are the

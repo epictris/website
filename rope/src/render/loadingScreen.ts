@@ -9,13 +9,14 @@
 // asked for. A bar drawn by the app cannot move until the app has finished
 // downloading, which is exactly the part of the wait a bar is for.
 //
-// What is left here is the screen's LIFE: how long to wait, and taking it off.
+// What is left here is the screen's LIFE: how long to wait, the PLAY button the
+// wait ends at, and taking the screen off.
 //
 // It is also the whole of the gate: `main.ts` does not start its frame loop
-// until the wait is over, so the level is not stepping - and the player is not
-// falling - behind a screen nobody can see through. That is the one place the
-// game deliberately WAITS for assets; everywhere else a late asset is the
-// design (see `assetsSettled`).
+// until the wait is over and the button is pressed, so the level is not stepping
+// - and the player is not falling - behind a screen nobody can see through. That
+// is the one place the game deliberately WAITS for assets; everywhere else a
+// late asset is the design (see `assetsSettled`).
 
 import { assetsSettled, pendingAssets } from "../render3d/assets";
 import { downloadProgress, endLoadingBar } from "../render3d/download";
@@ -38,6 +39,8 @@ const STALL_POLL_MS = 500;
 
 export class LoadingScreen {
   private readonly root = document.getElementById("loading");
+  private readonly track = document.getElementById("loading-track");
+  private readonly playButton = document.getElementById("play");
 
   // Wait for the assets, but never for ever. Giving up is reported with the
   // names of what was still outstanding, because "the game started with
@@ -65,6 +68,47 @@ export class LoadingScreen {
         pendingAssets().join(", ") || "(nothing named)",
       );
     }
+  }
+
+  // The wait is over: the bar becomes a PLAY button, and this resolves when it
+  // is pressed. `onPlay` runs FIRST and synchronously, inside the click's own
+  // handler, because what it is for is the two things a browser grants only to a
+  // gesture - fullscreen, and through it the pointer lock (see `AimPointer`).
+  // Resolving the promise and letting the caller ask afterwards would hand them
+  // a gesture one microtask stale, which is a rule that holds today and is not
+  // worth standing on.
+  //
+  // The button exists for those two grants rather than for ceremony: the game
+  // wants the screen and the cursor, and there is no way to take either while
+  // the page loads itself. A gate is the honest form of that - the level is
+  // already drawn and warm behind it, so what the press costs is nothing and
+  // what it buys is a game that opens fullscreen with the cursor in hand.
+  //
+  // It takes the TRACK's place, matched to its width, so the screen's one
+  // element does not move: the bar fills, and then it is a button.
+  //
+  // A page with no button in it (an older `index.html`, or the editor's own
+  // host) plays straight away rather than waiting for a press nobody can make.
+  async play(onPlay: () => void): Promise<void> {
+    const button = this.playButton;
+    if (!button) return;
+    this.track?.setAttribute("hidden", "");
+    button.removeAttribute("hidden");
+    // Focused, so Enter and Space start the game too - the button is the only
+    // thing on the page, and reaching for the mouse to press it is exactly what
+    // a player who is about to be handed a pointer lock should not have to do.
+    button.focus();
+    await new Promise<void>((resolve) => {
+      button.addEventListener(
+        "click",
+        () => {
+          onPlay();
+          resolve();
+        },
+        { once: true },
+      );
+    });
+    button.setAttribute("hidden", "");
   }
 
   // Take the screen off the page, with nothing in between. Called from INSIDE

@@ -78,7 +78,7 @@ import {
   type IInputSource,
 } from "./frameInput";
 import { PAD_RB, PAD_Y, readGamepad } from "./gamepad";
-import { screenToWorld, type Camera } from "../render/camera";
+import { screenToWorld, worldToScreen, type Camera } from "../render/camera";
 import { AIM_MODE, AIM_WANTS_LOCK, AimPointer } from "./aimPointer";
 import { PIXELS_PER_METER } from "../engine/units";
 import { BallPlayer } from "../classes/ballPlayer";
@@ -100,6 +100,12 @@ const TOGGLE_CLICK: boolean = ((): boolean => {
 const RIGHT_BUTTON = 2; // MouseEvent.button for the right button (0 left, 1 middle)
 
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
+// Metres above the ball the cursor is born at on a page's first mouse move (see
+// `aimSeed`). Four ball radii and about a third of a dead hang's chain: clear of
+// the avatar so the reticle reads as a cursor of its own rather than a mark on
+// the ball, and near enough that it is plainly the player's own, not something
+// out in the level.
+const AIM_SEED_ABOVE = 0.5;
 // The chain's reach. The stick and joystick aim at exactly this distance; motion
 // aim keeps its reticle within it (position aim is unbounded — it is the cursor).
 const AIM_DISTANCE = BallPlayer.CHAIN_MAX_LENGTH;
@@ -155,13 +161,24 @@ export class BallInputSource implements IInputSource {
   // true forever in the game itself; the editor passes "a test is running", so a
   // click meant for the toolbar between tests does not capture the cursor (see
   // input/aimPointer.ts).
+  // `ownsCursor` is whether the page has hidden the OS pointer and this reticle
+  // stands in for it, which is the game (see `main.ts`) and not the editor: a
+  // test there runs on the editor's own canvas with the arrow still showing, so
+  // its aim must stay under that arrow rather than starting somewhere of its own
+  // (see `AimPointer`'s `seed`).
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private aimOrigin: () => Vec2,
     private active: () => boolean = () => true,
+    ownsCursor = false,
   ) {
-    this.pointer = new AimPointer(canvas, AIM_WANTS_LOCK, active);
+    this.pointer = new AimPointer(
+      canvas,
+      AIM_WANTS_LOCK,
+      active,
+      ownsCursor ? () => this.aimSeed() : null,
+    );
     canvas.addEventListener("mousemove", (e) => {
       this.pointer.update(e);
       // The move carries the button state the browser believes in, so a press
@@ -174,7 +191,17 @@ export class BallInputSource implements IInputSource {
       // `position` and `cursor` differ only in WHICH cursor this is; both are
       // re-derived per read in `currentAimLocal`, so this write is the seed the
       // other devices hand back to.
-      this.aimLocal = AIM_MODE === "motion" ? this.motionAim() : this.cursorAim();
+      // A move the POINTER declined leaves it with no position, and there is no
+      // aim to be taken from one: it declines the browser's "the page moved
+      // under a still cursor" event and the cursor warps the pointer lock
+      // delivers as motion (see `AimPointer.update`), and taking an aim anyway
+      // read the world point at the view's TOP-LEFT CORNER - `cursorAim`'s old
+      // `?? Vec2.ZERO` - as the player's. Stored as an offset from the ball,
+      // that is a reticle pinned to the corner and riding the avatar around,
+      // with the loop steering at it, on a page nobody had touched.
+      const aim = AIM_MODE === "motion" ? this.motionAim() : this.cursorAim();
+      if (aim === null) return;
+      this.aimLocal = aim;
       this.aimSource = "mouse";
     });
     // A down of any button is a deploy. A release reads `e.buttons`, the mask AS
@@ -184,6 +211,10 @@ export class BallInputSource implements IInputSource {
     // Under the toggle only the downs speak, and which button it was is the
     // whole message: right detaches, anything else deploys.
     canvas.addEventListener("mousedown", (e) => {
+      // A press with no cursor on screen yet brings it into being where a move
+      // would have (see `AimPointer.reveal`): the press throws the chain, and a
+      // throw with no mark saying where it went reads as a dead button.
+      this.pointer.reveal();
       if (!TOGGLE_CLICK) this.press(this.mouseButton, true);
       else if (e.button === RIGHT_BUTTON) this.press(this.mouseButton, false);
       else this.redeploy();
@@ -228,26 +259,62 @@ export class BallInputSource implements IInputSource {
     this.press(this.mouseButton, true);
   }
 
+  // Take the pointer lock as part of the press that is taking the page
+  // fullscreen (see `main.ts` and `AimPointer.requestLock`).
+  //
+  // The fullscreen TRANSITION used to be the way in - entering fullscreen is a
+  // gesture of its own, so asking on `fullscreenchange` should need no second
+  // click - and measured in a real browser it never worked at all: Chrome
+  // refuses a lock requested there (`The root document of this element is not
+  // valid for pointer lock`), on a first load and on a refresh alike, so every
+  // run opened with the desktop pointer loose in a fullscreen page until the
+  // player clicked the canvas and the canvas's own handler asked again.
+  //
+  // The press is the gesture a lock is granted to, so the press is what asks.
+  takePointerLock(): void {
+    this.pointer.requestLock(true);
+  }
+
+  // Where the virtual cursor is born, in view pixels: straight above the ball
+  // (see `AimPointer`'s `seed`). Asked once, on the first mouse move of the
+  // page, and answered against the camera as it stands then.
+  //
+  // ABOVE, and not simply "at the ball", because the offset is a direction
+  // before it is a distance: the loop faces the aim, so a cursor born anywhere
+  // else turns the ball to face it on the frame it appears. Up is where the
+  // loop already points - it is where the chain was thrown from, and where a
+  // `hang` spawn's chain still runs - so the aim arrives agreeing with the
+  // avatar and the first hand movement steers from there rather than snapping.
+  private aimSeed(): Vec2 {
+    return worldToScreen(this.camera, this.aimOrigin().add(new Vec2(0, -AIM_SEED_ABOVE)));
+  }
+
   // Position/cursor aim: the aim offset for wherever the pointer now is. Left
   // unbounded — in `position` the cursor is the reticle and cannot be moved to
   // suit us, and in `cursor` the virtual cursor is already held inside the play
   // frame, which is a tighter bound than the reach in every direction the player
   // can see.
-  private cursorAim(): Vec2 {
-    const screen = this.pointer.position() ?? Vec2.ZERO;
+  // NULL while the pointer has no position - before the first move it accepts.
+  // It used to answer `Vec2.ZERO` there, which is not "no aim" but the view's
+  // top-left corner, and every caller took it for an aim (see the mousemove
+  // handler).
+  private cursorAim(): Vec2 | null {
+    const screen = this.pointer.position();
+    if (screen === null) return null;
     return screenToWorld(this.camera, screen.x, screen.y).sub(this.aimOrigin());
   }
 
   // Motion aim: the new aim offset after this mousemove, moved by the mouse's own
   // travel rather than set from the cursor's position.
-  private motionAim(): Vec2 {
+  private motionAim(): Vec2 | null {
     const motion = this.pointer.motion();
     // Taking over from another device (or aiming for the first time) puts the
     // reticle under the real cursor; from there it travels by motion alone.
     if (!motion || !this.aimLocal || this.aimSource !== "mouse") {
       // Locked there is no cursor on screen to seed from, so a held aim stays put.
       if (this.pointer.locked() && this.aimLocal) return this.aimLocal;
-      return clampReach(this.cursorAim());
+      const cursor = this.cursorAim();
+      return cursor === null ? null : clampReach(cursor);
     }
     // Metres per screen pixel at the current zoom, so a given hand movement
     // covers the same on-screen distance whatever the zoom is.

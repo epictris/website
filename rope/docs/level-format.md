@@ -31,6 +31,11 @@ Beside the geometry a level carries a few lists that are not bodies: `cameraRegi
 `scaleLevelData` converts a checkpoint's placement and leaves its name alone, and it **drops nothing**: that function is the editor's save as much as the game's load, so a rule that deleted a blank or repeated name would delete a marker the author had just placed.
 The lookup is what enforces the name instead - trimmed, case-folded, first match wins - and the editor's panel is what reports a name that is missing or already taken.
 
+The `player` block is the spawn (`SpawnData`): a point, the avatar radius, and **`hang`**, which is the only thing in it that is not geometry.
+A spawn with `hang: true` opens the ball & chain run already on its anchor - see [**The spawn anchor**](ball-coil-and-hook.md#the-spawn-anchor) - and one without it starts the ball on the ground, which is every level authored before the field.
+It anchors the chain; it does not lift the ball, so a level that starts hanging is authored by putting the spawn where the ball should *hang*, under something to hang from.
+The editor offers it as `hang` in the Player spawn group, and carries it through the model for the reason the environment block is carried: the editor writes the whole file back, so a field the model does not know about is a field the first autosave *deletes*.
+
 The canonical, hand-editable schema now lives in `src/level/levelFormat.ts` (superset of
 the generated one — adds the `rigid` and `force` kinds, the `cameraRegions` and
 `chains` lists, and bodies made of scene objects); `levelData.ts` stays

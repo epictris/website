@@ -1,6 +1,6 @@
 # The loading screen
 
-A flat `#1f2430` page - the tris.sh background - with a white bar on it and the line *Mouse recommended*, covering the page from the first paint until the level's assets are down.
+A flat `#1f2430` page - the tris.sh background - with a white bar on it and the line *Mouse recommended*, covering the page from the first paint until the level's assets are down and the player presses **PLAY**.
 It is `#loading` in `index.html`, filled by `src/render3d/store.ts` (inlined into the page, ahead of the app), and taken off by `src/render/loadingScreen.ts` from the first frame `main.ts` draws.
 
 **The markup is in the HTML, not built by the game.** The wait it covers starts before the game exists: three.js and the level code are a megabyte of their own, and a screen painted by a module could only appear once that module had arrived - which is most of the way through the thing it was meant to cover.
@@ -38,7 +38,18 @@ In dev it is rebuilt per page load, off the level files as they are on disk *now
 Nothing can prove the resolver and the scene agree - they walk the same data by different routes - so the guard is at the other end: the store **warns when a file is asked for that the preload list did not name**, which turns drift into a console line the first time the level is played rather than a bar that stops at 94%.
 The resolver's 36 files for `BALL` and the 36 the browser actually requests are currently the same 36.
 
-**It is also the gate.** `main.ts` does not call `requestAnimationFrame` until the wait is over, so the level is not stepping behind an opaque rectangle - on a slow connection the ball would be falling, and the first thing handed to the player could be a dead run.
+**It is also the gate, and the gate now ends with a press.**
+When the wait is over the bar is replaced by a **PLAY** button in its own place and at its own width, and `main.ts` waits for the click before starting the loop (`LoadingScreen.play`).
+The button is there for the two things a browser grants only to a gesture, and the click asks for both itself: the pointer lock first, while the gesture is unspent, then fullscreen on `document.documentElement` (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
+Asking for the lock from the `fullscreenchange` the press causes - which reads as though it should work - is refused by Chrome every time, so that order is load-bearing rather than incidental.
+So the level opens filling the screen with the cursor already in hand, instead of windowed with the pointer loose in the desktop.
+It costs nothing to wait for: the level is downloaded, warmed and prewarmed behind the screen before the button ever appears, and the button is focused, so Enter or Space starts the game too.
+A refused fullscreen (or a platform without it) still plays, windowed, with the click-to-lock path the canvas has always had; a page whose HTML has no `#play` in it plays straight away rather than waiting for a press nobody can make.
+**The desktop cursor stays visible until the press, and goes at it.** The screen ends at a button, and a button is aimed at with the pointer the player can see; the press then takes the cursor off the whole page (`hidePointer`, the ball controller only - the grapple controller aims with the OS pointer itself), on top of the `cursor: none` the canvas has carried since the level was chosen and the pointer lock the press takes.
+The page rather than the canvas because the letterbox bars are page too, and a fullscreen window wider than 16:9 is mostly bars.
+So the cursor a player sees over the bar is the one they click PLAY with, it is gone the instant they do, and the next one they see is the game's own - which does not appear until the mouse has actually moved (see [**Ball controls and aim**](running.md#ball-controls-and-aim)).
+
+`main.ts` does not call `requestAnimationFrame` until the wait is over, so the level is not stepping behind an opaque rectangle - on a slow connection the ball would be falling, and the first thing handed to the player could be a dead run.
 This is the one place the game deliberately waits for an asset; everywhere else a late asset is the design and the generated surface is what is drawn until it lands (see `assetsSettled`).
 The wait gives up after **15 s with nothing arriving at all** - a stall, not a wall clock. Nothing in the store is required to draw a level, so a load that never lands costs a slow start and not the session, and the page says in the console which asset it gave up on.
 It was a 30 s ceiling, which is less than the honest download time for 26 MB on anything under 8 Mbit: at 3 Mbit the screen was taken away 36 s in, half the level still arriving, and the player was handed an arena wearing fallback surfaces.

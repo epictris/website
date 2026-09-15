@@ -291,6 +291,36 @@ export class BallLevel {
     this.decor = collectDecor(built);
     this.visualSource = { data, built };
 
+    // A spawn that says so opens the level already on its anchor (see
+    // `SpawnData.hang`). Last of the build, because the throw is swept against
+    // the world as it stands: a chain-hung lantern has come to rest
+    // (`settleChainsAtBuild`) and the vines exist and know which vine each link
+    // belongs to, so the spawn anchor is taken on the same geometry, in the
+    // same poses, that the first frame of play will see.
+    if (data.player.hang) {
+      // The attach callback regenerates the chain's wrap path against the
+      // scene, exactly as it does mid-play (see `physicsProcess`), so the build
+      // has to hand it the bodies first.
+      this.ball.sceneBodies = this.bodies;
+      if (this.ball.anchorOverhead()) {
+        // The anchor is OLDER THAN THE FIRST FRAME, so frame 1 is an ordinary
+        // frame of a chain that already holds the ball, not the frame it
+        // anchored on. The difference is the birth-length re-take below (see
+        // `anchoredThisFrame`): it exists because an anchor taken at the top of
+        // a frame must not charge the ball for the distance it travels during
+        // the rest of that frame, and applied to a spawn anchor it would hand
+        // the chain the first frame's fall - the ball hanging 2.7 mm below the
+        // point the level authored, off a chain 2.7 mm longer than the one it
+        // was built with. Armed here, the solve holds the authored pose
+        // instead: nothing moves, and nothing has to settle.
+        this.endWasFixed = true;
+      } else {
+        console.warn(
+          "[spawn] this level's spawn asks to start hanging, but nothing within the chain's reach is overhead: starting on the ground.",
+        );
+      }
+    }
+
     this.cameraPosition = this.ball.globalPosition;
   }
 

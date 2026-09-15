@@ -211,3 +211,33 @@ Measured on the hook's velocity and the player's **position**, not on the rate t
 The span's rate is the same statement about a hook in flight and a wrong one on the frame it is fired: a ball already travelling faster than `HOOK_SPEED` along its own aim is separating from a hook that is flying perfectly well, and a payout-rate test kills that throw at the muzzle.
 The hook being overtaken by the player is the honest form of that case, and it reads here as the hook closing on the player, which is what is asked.
 `cli contacts` `deploy-spent` is the detector: the head-on rebound ends the deploy on its bounce frame, the glancing one (still going out at 10.8 m/s) runs on to the chain's full length, the open throw is untouched at 12 m/s, and the same wall made attachable is still bitten.
+
+## The spawn anchor
+
+A spawn may say the run **starts on the anchor** rather than on the ground (`SpawnData.hang`, a checkbox in the editor's Player spawn group).
+`BallLevel` builds the level, settles its chains, builds its vines, and then throws: `BallPlayer.anchorOverhead` turns the ball to face straight up exactly as a press does, calls the ordinary `shoot()`, and runs **one** `BallHook.physicsStep` long enough to cover the chain's reach (`CHAIN_MAX_LENGTH / HOOK_SPEED`).
+
+It is the ordinary throw with one big step, and that is the whole design.
+Everything the throw knows then holds at the spawn for nothing: the chain-out cap stopping the reach at 1.8 m, an attach beating a hook-proof bounce at a tie, a rail clamped rather than bitten, a vine threaded as a ring, a viscous face bitten to the hinge.
+A second attach path written for the spawn would be a second copy of all of it, drifting from this one the first time either is touched.
+The step is the reach over the launch speed for the same reason: what ends the flight is the chain running out, not the step running out, so the hook budgets the spawn throw against the same allowance it budgets every other one.
+
+The throw runs **last of the build** because it is swept against the world as it stands - a chain-hung lantern has come to rest (`settleChainsAtBuild`) and the vines exist and know which link belongs to which vine - so the anchor is taken on the same geometry, in the same poses, that the first frame of play will see.
+
+A throw that anchors nothing leaves nothing: no chain, no dangling tip, and the facing the ball spawned with, with a console warning naming the cause.
+The test is `chainAttached` and not `chainAnchored`, which is the distinction a spawn with clear sky over it turns on - a throw that finds nothing ends as the dangling tip, and 1.8 m of chain hanging in the air above a ball that never threw it is not a state any level means to author.
+The honest reading of "there was nothing up there" is the level starting the way it did before the flag.
+
+**The first press re-throws it.** A spawn chain is one the player never threw, so the press arrives with a chain already out - a state hold-to-keep otherwise cannot reach, since a press while the button is down is not an edge and the toggle grip's own redeploy has dropped the chain a step earlier.
+Nothing answered that press, and only the release spoke, so the opening click read as detaching the chain the player was hanging from.
+`resolveInput` now re-throws on any firing press (and snaps the facing to the aim on it, or the second throw would leave along the rate-limited turn's leftovers), which is exactly what `BallInputSource.redeploy` has always meant downstream.
+The `spawn-hang` case asserts the click leaves a NEW chain rather than an empty hand.
+
+The flag anchors the chain; it does not lift the ball.
+The ball hangs at exactly the length the throw paid out, so where the spawn sits is the whole of the authoring: under a ledge is a dead hang, off to one side of it is a level that opens mid-swing, and on the floor is a ball sitting on the floor wearing a chain.
+
+**The anchor is older than the first frame**, and `BallLevel` says so by arming `endWasFixed` at build.
+Frame 1 is then an ordinary frame of a chain that already holds the ball, rather than the frame it anchored on - and the difference is the birth-length re-take (see [**the anchor born this frame**](ball-chain.md)), which exists so that an anchor taken at the top of a frame does not charge the ball for the distance it travels over the rest of it.
+Applied to an anchor that was born before the frame, that rule hands the chain the first frame's fall: the ball settles 2.7 mm - one gravity step - below the point the level authored, on a chain 2.7 mm longer than the one it was built with, and reads one frame of 0.163 m/s on the way.
+Armed, the solve holds the authored pose instead and the level opens at rest in the strong sense: `playtests/ball-spawn-hang.json` reads speed 0.0000, drift 0.0000 and chain growth 0.0000 from frame 1 to frame 300, the same statement `spawn-at-rest` makes for a sprung body.
+`playtests/ball-spawn-hang-out-of-reach.json` is the other half - a ceiling 3 m up over a floor 0.2 m down - and asserts no chain at all, the ball resting where it fell.

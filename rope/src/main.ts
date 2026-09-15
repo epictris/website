@@ -224,10 +224,25 @@ function buildScene(): void {
 buildScene();
 
 const ballInput = isBall
-  ? new BallInputSource(canvas, camera, () => (level as BallLevel).ball.globalPosition)
+  ? new BallInputSource(
+      canvas,
+      camera,
+      () => (level as BallLevel).ball.globalPosition,
+      // Always the one driving: the game has no second mode to be idle in, which
+      // is the editor's case and not this one.
+      () => true,
+      // The canvas hides the OS pointer here (below) and the reticle stands in
+      // for it, so the aim may be born above the avatar and travel from there
+      // (see `AimPointer`). A test run from the editor passes nothing here: the
+      // arrow is still on screen there, and the aim has to stay under it.
+      true,
+    )
   : null;
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
-// so the OS cursor would be a second, misleading pointer — hide it.
+// so the OS cursor would be a second, misleading pointer — hide it. On the
+// CANVAS only: the rest of the page keeps the desktop cursor, because the
+// loading screen ends at a button and a button is aimed at with the pointer the
+// player can see (see `index.html`).
 if (isBall) canvas.style.cursor = "none";
 const liveInput = isBall
   ? null
@@ -680,6 +695,46 @@ function warmFrame(): void {
   scene3d.render(level, camera, 1);
 }
 
+// Fill the screen with the game, from the PLAY press (see `LoadingScreen.play`).
+//
+// The whole document rather than the frame, which is what F11 does and what the
+// viewport already answers to: the frame is sized to fit whatever it is given
+// (see render/viewport.ts), so a fullscreen page is a bigger frame and nothing
+// else. It is also what the pointer lock keys off - `AimPointer` takes the lock
+// on `fullscreenchange` when the fullscreen element contains the canvas, which
+// is the ONE path that needs no second click (entering fullscreen is a gesture
+// of its own), and `document.documentElement` contains everything.
+//
+// A refusal is not an error: a browser that declines fullscreen (or a platform
+// with no such thing) still gets the game, windowed, with the click-to-lock path
+// the canvas has always had.
+function enterFullscreen(): void {
+  if (typeof document === "undefined" || document.fullscreenElement) return;
+  void Promise.resolve(document.documentElement.requestFullscreen?.()).catch(() => {
+    // Refused. The lock the same press has just taken would then be a WINDOWED
+    // capture, which is the one thing it is deliberately never allowed to be
+    // (see `AimPointer`'s header: locked in a window, Chromium's Wayland pointer
+    // drifts out of the page and eats presses), so it goes back.
+    document.exitPointerLock?.();
+  });
+}
+
+// Take the desktop cursor off the whole page, from the PLAY press onward.
+//
+// The canvas has hidden it since the level was chosen, but the canvas is not the
+// page: the letterbox bars either side of the frame kept the arrow, and a
+// fullscreen window that is wider than 16:9 is mostly bars. The press is the
+// right moment for it rather than the load - up to there the screen is a button
+// to be clicked, and after it the game's own reticle is the cursor, appearing on
+// the first mouse MOVE (see `AimPointer`).
+//
+// The ball controller only: the grapple controller aims with the OS pointer
+// itself and draws no reticle, so hiding it there would leave nothing to aim
+// with.
+function hidePointer(): void {
+  if (isBall) document.documentElement.style.cursor = "none";
+}
+
 // Play once the level's assets are in - or once the loading screen has run out
 // of patience with them (see `LoadingScreen.wait`).
 //
@@ -717,6 +772,29 @@ async function boot(): Promise<void> {
       `[prewarm] ${warmed.programs} programs, ${warmed.textures} textures in ${warmed.ms.toFixed(0)} ms`,
     );
   }
+  // Everything is loaded, warm and drawn; what is left is the PRESS (see
+  // `LoadingScreen.play`). The level starts fullscreen with the pointer in hand
+  // because a click is the only thing a browser will grant either to, and the
+  // one click the player has to make anyway is this one.
+  await loading.play(() => {
+    // The lock FIRST, while the press's gesture is unspent and the document is
+    // plainly the focused one: asked any later - from the fullscreen transition
+    // this same press is about to start - Chrome refuses it outright (see
+    // `BallInputSource.takePointerLock`). Fullscreen follows in the same
+    // handler, and hands the lock back if it is refused.
+    ballInput?.takePointerLock();
+    enterFullscreen();
+    hidePointer();
+  });
+  // What the press actually got. The two can come apart - a browser may refuse
+  // either - and "the cursor is still sitting there" is unattributable without
+  // it. Read a beat later because both are asynchronous: the fullscreen
+  // transition and the lock that rides on it land after the click returns.
+  window.setTimeout(() => {
+    console.log(
+      `[play] fullscreen=${document.fullscreenElement !== null} lock=${document.pointerLockElement === canvas}`,
+    );
+  }, 500);
   requestAnimationFrame(frame);
 }
 void boot();

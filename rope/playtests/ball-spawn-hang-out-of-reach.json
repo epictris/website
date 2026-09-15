@@ -1,0 +1,57 @@
+{
+  "level": "ball-spawn-hang-out-of-reach",
+  "controller": "ball",
+  "frames": 120,
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8,
+      "hang": true
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": -320.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 200.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      },
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": 40.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 200.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "frame": 1,
+      "hasRope": false
+    },
+    {
+      "frame": 120,
+      "hasRope": false
+    },
+    {
+      "window": {
+        "from": 40,
+        "to": 120
+      },
+      "maxSpeed": 0.05,
+      "maxDrift": 0.02
+    }
+  ]
+}

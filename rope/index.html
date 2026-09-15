@@ -17,6 +17,11 @@
       /* The play frame is a fixed 16:9, centred and scaled to fit (see
          src/render/viewport.ts); #frame is sized in px by the game, and the
          space left over on the long axis is these letterbox bars. */
+      /* The page keeps the desktop cursor: the loading screen ends at a button,
+         and a button is aimed at with the pointer the player can see. Only the
+         GAME hides it - `main.ts` on the canvas for the ball controller, where
+         the reticle stands in for it (and the pointer lock takes it outright
+         once PLAY has been pressed). */
       html, body { margin: 0; height: 100%; background: #1f2430; overflow: hidden; overscroll-behavior: none; }
       body { display: flex; align-items: center; justify-content: center; }
       #frame { position: relative; }
@@ -83,12 +88,50 @@
       @media (prefers-reduced-motion: reduce) {
         #loading-fill { transition: none; }
       }
+      /* PLAY takes the bar's place once the wait is over (see
+         src/render/loadingScreen.ts). It is a button because it needs a CLICK:
+         fullscreen and the pointer lock are both gestures the browser will only
+         grant to one, so the thing that starts the game is also the thing that
+         hands it the screen and the cursor. Sized to the track it replaces, so
+         the screen's one element stays the same width and in the same place -
+         the bar fills, and then it is a button.
+         A terminal's idea of a button: square, hairline, monospace, the page's
+         own colours, and the caret is the only decoration. */
+      #play {
+        width: min(320px, 60vw);
+        /* Comfortably past the 44px touch target, and the same height the
+           gamepad's own prompts would want. */
+        min-height: 48px;
+        padding: 0.75rem 1rem;
+        border: 1px solid rgba(203, 204, 198, 0.45);
+        background: transparent;
+        color: #cbccc6;
+        font: inherit;
+        /* Wide tracking, but the word as written: the screen's other line is
+           sentence case too, and a CSS-uppercased label is a different word
+           from the one in the markup. */
+        letter-spacing: 0.22em;
+        cursor: pointer;
+        /* It lights up under the pointer, which is how a flat rectangle on a
+           flat screen says it is a button at all. */
+        transition: background-color 120ms linear, border-color 120ms linear;
+      }
+      #play:hover, #play:focus-visible {
+        background: rgba(203, 204, 198, 0.12);
+        border-color: #cbccc6;
+        outline: none;
+      }
+      #play:active { background: rgba(203, 204, 198, 0.2); }
+      @media (prefers-reduced-motion: reduce) {
+        #play { transition: none; }
+      }
     </style>
   </head>
   <body>
     <div id="frame"><canvas id="scene"></canvas><canvas id="game"></canvas></div>
     <div id="loading">
       <div id="loading-track"><div id="loading-fill"></div></div>
+      <button id="play" type="button" hidden>Play</button>
       <div>Mouse recommended</div>
     </div>
     <script type="module" src="/src/main.ts"></script>

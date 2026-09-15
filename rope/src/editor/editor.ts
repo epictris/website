@@ -724,7 +724,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const history: EdModel[] = [];
   const future: EdModel[] = [];
   const snapshot = (m: EdModel): EdModel => ({
-    player: { pos: m.player.pos, radius: m.player.radius },
+    player: { pos: m.player.pos, radius: m.player.radius, hang: m.player.hang },
     items: m.items.map((b) => ({
       ...b,
       shape: cloneShape(b.shape),
@@ -5890,6 +5890,23 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     numField(player, "x", () => model.player.pos.x * M2PX, (v) => (model.player.pos = model.player.pos.withX(v * PX)));
     numField(player, "y", () => model.player.pos.y * M2PX, (v) => (model.player.pos = model.player.pos.withY(v * PX)));
     numField(player, "radius", () => model.player.radius * M2PX, (v) => (model.player.radius = Math.max(1, v) * PX));
+    // Start the run on the anchor rather than on the ground (ball & chain
+    // only). Its own checkbox rather than a field on a body, because the spawn
+    // is not an item: it is the level's, like the environment block below.
+    const hang = el("label", "ed-field");
+    hang.textContent = "hang";
+    const hangBox = document.createElement("input");
+    hangBox.type = "checkbox";
+    hangBox.checked = model.player.hang;
+    hangBox.title =
+      "Start the ball & chain already hanging: at build the chain is thrown straight up from the spawn and bites the first surface within its 1.8 m reach. It anchors the chain, it does not lift the ball - put the spawn where the ball should HANG, under something to hang from. With nothing overhead in reach the level starts on the ground as usual. The grapple controller ignores it.";
+    hangBox.addEventListener("change", () => {
+      beginAction();
+      model.player.hang = hangBox.checked;
+      markDirty();
+    });
+    hang.appendChild(hangBox);
+    player.appendChild(hang);
     inspector.appendChild(player);
 
     buildEnvironmentGroup();

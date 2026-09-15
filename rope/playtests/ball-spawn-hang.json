@@ -1,0 +1,46 @@
+{
+  "level": "ball-spawn-hang",
+  "controller": "ball",
+  "frames": 300,
+  "data": {
+    "player": {
+      "x": 0,
+      "y": 0,
+      "radius": 8,
+      "hang": true
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0.0,
+        "y": -185.0,
+        "rot": 0.0,
+        "shape": {
+          "kind": "rect",
+          "w": 200.0,
+          "h": 40.0
+        },
+        "friction": 1.0
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "frame": 1,
+      "hasRope": true
+    },
+    {
+      "frame": 300,
+      "hasRope": true
+    },
+    {
+      "window": {
+        "from": 1,
+        "to": 300
+      },
+      "maxSpeed": 0.05,
+      "maxDrift": 0.02,
+      "maxChainGrowth": 0.01
+    }
+  ]
+}

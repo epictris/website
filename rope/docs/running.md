@@ -50,11 +50,21 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 (see [**Vines**](vines.md)).
 `LEVEL_2` is the grapple arena (the Godot-extracted scene).
 
+## Starting a run
+
+A page opens on the loading screen, and the level starts on a **PLAY** press: when the assets are in the bar is replaced by a button, and the frame loop begins on the click (see [**The loading screen**](loading-screen.md)).
+The press is what buys fullscreen and, through it, the pointer lock - both are gestures a browser grants only to a click - so the game opens filling the screen with the cursor in hand.
+The button is focused, so Enter or Space works; a refused fullscreen still plays windowed.
+Nothing is waiting on the press but the press: the level is downloaded, warmed and prewarmed behind the screen before the button appears.
+
+A test run from the editor has no loading screen and no gate - it is the editor's canvas and the editor's cursor, and starts the moment ▶ Test is pressed.
+
 ## Checkpoints
 
 `?checkpoint=NAME` starts the run at a **named spawn** in the level instead of at its own spawn (`CheckpointData` in `levelFormat.ts`), which is how an area halfway through a level is playtested without swinging out to it first.
 A killzone reset comes back to the same place: the name is resolved once, in `main.ts`, and the level every reset rebuilds is built from the moved `player` - so the whole session is a session of a level whose spawn is somewhere else.
 That is the whole of what a checkpoint is. It carries no pose, no velocity and no chain state, because "start here" is what a spawn already means, and a run from one is an ordinary run of a moved level rather than a second kind of run.
+It moves the point and nothing else, so a level whose spawn starts on its anchor (`hang`, see [**The spawn anchor**](ball-coil-and-hook.md#the-spawn-anchor)) still throws the chain up from wherever the checkpoint put it - and starts on the ground where there is nothing overhead within reach, which is the same answer the level's own spawn would get there.
 
 The name is matched **trimmed and ignoring case**, since it is typed into an address bar from memory; one that matches nothing leaves the spawn alone and says so in the console, with the names that would have worked.
 A blank name and a repeat of an earlier one are dropped at load with a warning - neither can be asked for.
@@ -82,6 +92,8 @@ restart; on touch, the bottom-left on-screen joystick aims (deflect past the
 deadzone to steer the loop, like the left stick) and the bottom-right circular
 DEPLOY button deploys (no touch restart - reload the page).
 Deploy is hold-to-keep: releasing it drops the chain.
+A press with a chain **already out re-throws it** at wherever the aim is now, which is the toggle grip's meaning under this one too.
+Under hold-to-keep the only chain that can be out when a press arrives is one the player never threw - the chain a `hang` spawn opens the level on (see [**The spawn anchor**](ball-coil-and-hook.md#the-spawn-anchor)) - and without the re-throw the press said nothing and only the release spoke, so the first click read as detaching the chain the player was hanging from.
 
 `?toggle_click=true` swaps the mouse's half of that for a two-button toggle, so the two grips can be compared by feel without a rebuild (`TOGGLE_CLICK` in `input/ballInput.ts`).
 A left or middle press attaches the chain and it stays attached with the hand off the button; a right press detaches it.
@@ -105,14 +117,37 @@ feel without a rebuild):
 - **cursor** (default): the aim point is `AimPointer`'s **virtual** cursor's
   screen position, un-projected through the *current* camera every time it is
   read (`currentAimLocal`).
-  Clicking the canvas takes **pointer lock in fullscreen only** (Esc releases it,
-  the next click takes it back; entering fullscreen through the Fullscreen API
-  takes it without a click, that being a user gesture of its own, and leaving
-  fullscreen by either route gives the pointer back), and while locked the
+  The **PLAY press takes the pointer lock** along with fullscreen (see [**Starting a run**](#starting-a-run)), and clicking the canvas takes it in **fullscreen only** thereafter - Esc releases it and the next click takes it back, and leaving fullscreen by either route gives the pointer back.
+  The press asks for the lock *itself*, first, before requesting fullscreen: asked from the `fullscreenchange` that follows instead - which reads as though it should work, entering fullscreen being a user gesture of its own - Chrome refuses it every time (`The root document of this element is not valid for pointer lock`, measured in a real browser on first loads and refreshes alike), and the game opened fullscreen with the desktop pointer loose in it until the player happened to click the canvas.
+  A refused fullscreen gives the lock straight back, since a lock in a *window* is the one thing it is never allowed to be.
+  While locked the
   virtual cursor is integrated from `movementX/Y` and held inside the 1920x1080
   play frame, so aim carries on past the edge of the screen.
-  Unlocked the virtual cursor *is* the real one, so windowed this mode and
-  `position` are the same picture.
+  Unlocked it moves by the same travel, read off the real cursor's own steps, and is held inside the same frame - so a window plays like fullscreen and the two differ only in how far the hand can go before the desktop pointer runs out of screen.
+  (It used to *be* the real cursor while unlocked, which made windowed `cursor` and `position` the same picture and left the reticle no way to start anywhere but under the desktop pointer.)
+
+  **The cursor is born above the avatar, on the first mouse move of the page.**
+  Nothing is drawn before that: the PLAY press takes the desktop cursor off the page, and the reticle appears only once the mouse has actually moved - so a run that has just started shows no cursor at all until the player touches the mouse.
+  (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
+  A mousemove carrying *no movement* does not count, which is the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off): answering it put a reticle on screen, and a steering command under it, with nobody's hand on the mouse.
+  The first real move seeds the virtual cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball and travels from there - and so does a **click**, because a press throws the chain and a throw with no mark saying where it went reads as a dead button (`AimPointer.reveal`).
+
+  **A warp is not a move, and nothing on the event says which it is.**
+  Taking the lock, going fullscreen and releasing a click all teleport the cursor, and Chromium reports the teleport as `movementX/Y`.
+  Traced with every field an event carries, on a real mouse: a release at `t=3480` was followed one millisecond later by `(1174,98)` and, on the player's next movement 518 ms after that, by `(-1173,-98)`; the Play press gave `(1280,30)` between its lock change and its fullscreen change, and `(-1279,-30)` on the move after.
+  Integrated, that is a reticle that jumps a screen-width and snaps back when the player moves again.
+
+  Three things that trace settles, each of which had been guessed at before it was measured.
+  `clientX/Y` and `screenX/Y` are **frozen** on every locked event, hand moves and warps alike, so the position fields carry no signal.
+  `unadjustedMovement: true` - raw device deltas, which cannot contain a teleport - is refused on this platform, and `pointerrawupdate` reports deltas byte-identical to `mousemove`.
+  And a warp's **size means nothing**: it is however far the cursor was parked from the lock's origin, so the same click delivered 1048 px in one window and 310 px in another, under the fastest hand measured in a third.
+  Every threshold written here before was a bar the bug walked around at a different window size.
+
+  So the rule is causal and has no constants in it (`AimPointer.update`).
+  A non-move event - a button, a lock change, a fullscreen change - re-bases the position Chromium subtracts, so it makes one movement event **suspect**; suspect movement is *withheld* rather than applied, and the first trustworthy event pays back whatever is left over.
+  A warp and the event undoing it both land inside the withheld span and cancel there, so neither is ever drawn, while real hand travel in the same span is deferred by an event or two rather than lost.
+  Lock and fullscreen are compared as **state** inside `update` rather than listened for, because the move carrying a lock's warp is sometimes delivered before `pointerlockchange` and sometimes after it, and a listener counts one change twice in the second case.
+  Above, because the offset is a direction before it is a distance: the loop faces the aim, so a cursor born anywhere else turns the ball to face it the moment it appears - and up is where the loop already points, and where a `hang` spawn's chain still runs.
 
   Fullscreen is detected two ways, because there are two ways in.
   The Fullscreen API sets `document.fullscreenElement`, which must contain the
