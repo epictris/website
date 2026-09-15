@@ -282,6 +282,12 @@ export interface EdCamera {
   bufferRight: number | null;
   bufferTop: number | null;
   bufferBottom: number | null;
+  // How far INSIDE the region its influence fades to nothing, in metres - the
+  // band two rooms at the same priority blend across. Region only; null = 0, a
+  // region at full strength out to its own walls. (A path's band is
+  // `falloffX/falloffY` below and points outward instead, the polyline being
+  // the middle of its claim rather than the edge.)
+  falloff: number | null;
   priority: number;
   // Camera PATH fields (see `CameraPathData`), meaningless on a region and left
   // null there. null = the format's DEFAULT_PATH_RANGE_X/_Y / _LOOKAHEAD.
@@ -851,6 +857,7 @@ export const defaultCamera = (): EdCamera => ({
   bufferRight: null,
   bufferTop: null,
   bufferBottom: null,
+  falloff: null,
   priority: 0,
   rangeX: null,
   rangeY: null,
@@ -1369,6 +1376,7 @@ function fromLevelData(data: LevelData): EdModel {
       bufferRight: r.bufferRight ?? null,
       bufferTop: r.bufferTop ?? null,
       bufferBottom: r.bufferBottom ?? null,
+      falloff: r.falloff ?? null,
       priority: r.priority ?? 0,
       // A region has no corridor and no lookahead.
       rangeX: null,
@@ -1461,6 +1469,8 @@ function fromLevelData(data: LevelData): EdModel {
       bufferRight: null,
       bufferTop: null,
       bufferBottom: null,
+      // A path fades through `falloffX/falloffY`; the scalar band is a region's.
+      falloff: null,
       priority: c.priority ?? 0,
       rangeX: c.rangeX ?? null,
       rangeY: c.rangeY ?? null,
@@ -1820,6 +1830,7 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             ...(i.cam.bufferBottom !== null ? { bufferBottom: i.cam.bufferBottom } : {}),
           }
         : {}),
+      ...(i.cam.falloff !== null ? { falloff: i.cam.falloff } : {}),
       ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
     }));
 

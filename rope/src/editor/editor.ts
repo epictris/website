@@ -5183,6 +5183,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       sideField("buf top", "bufferTop");
       sideField("buf bottom", "bufferBottom");
     }
+    // How far INSIDE the region its influence fades out - the band it blends
+    // with an equal-priority neighbour across. Blank = 0: full strength out to
+    // its own walls, which is what every region authored before the band is.
+    num(
+      "falloff",
+      (b) => (b.cam.falloff ?? NaN) * M2PX,
+      (b, v) => (b.cam.falloff = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: "0",
+        onEmpty: () => {
+          for (const b of regions) b.cam.falloff = null;
+        },
+      },
+    );
+    // Lowest number wins outright; rules tied at it blend (see `ruleWeight`).
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     addActionsRow(g);

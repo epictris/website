@@ -1519,8 +1519,25 @@ export interface CameraRegionData {
   bufferRight?: number;
   bufferTop?: number;
   bufferBottom?: number;
-  // Overlap tie-break: the containing region with the highest priority wins
-  // (later in the list wins a tie). Absent = 0.
+  // Metres (pixels on disk) the region's influence fades out over, measured
+  // INWARD from its own boundary: the camera is fully this region's anywhere
+  // deeper than this, and the weight ramps to nothing at the boundary itself.
+  // Absent = 0, a region at full strength right out to its walls.
+  //
+  // It is the band two rooms BLEND across (see `priority`), and it is inward
+  // rather than outward because the volume an author draws is the extent of the
+  // region's claim: a band outside it would be a second, larger volume that
+  // starts framing the room before the player is in it. Overlap the two rooms
+  // by the width of the band and the cross-fade happens exactly in the overlap.
+  //
+  // A path's `falloffX/falloffY` is the same idea about a corridor, and has to
+  // point the other way: a path's authored geometry is the line at the middle
+  // of its claim rather than the edge of it.
+  falloff?: number;
+  // Which rule wins where several overlap: the LOWEST number in force wins, and
+  // rules tied at that number BLEND (weighted by `falloff`). Absent = 0, so an
+  // unprioritised region blends with every other unprioritised one and a `-1`
+  // takes the camera outright.
   priority?: number;
 }
 
@@ -1634,10 +1651,14 @@ export interface CameraPathData {
   blend?: number;
   // Extra release hysteresis outside `range`; absent = REGION_EXIT_MARGIN.
   buffer?: number;
-  // Overlap tie-break against regions and other paths; absent = 0. Paths are
-  // listed after regions in the rule set, so a path beats a region at equal
-  // priority: the path is the level's primary guide and a region is the local
-  // exception, which says so by outranking it.
+  // Which rule wins against regions and other paths: the LOWEST number in force
+  // wins, and rules tied at that number blend. Absent = 0, so a path and a
+  // region that overlap at the default blend rather than one silencing the
+  // other; a path that must govern the overlap outright says `-1`.
+  //
+  // Two PATHS tied at the winning number cannot blend - the camera rides one
+  // route at a time (see `activeCameraRules`) - and the later of them takes the
+  // seat, which is the one place authoring order still decides anything.
   priority?: number;
 }
 
@@ -2711,8 +2732,8 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
 
 export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData {
   const data = normalizeLevelData(rawData);
-  // A camera region's positions, extents, offsets, locks and buffer are
-  // lengths; viewportScale, blend (seconds) and priority are not.
+  // A camera region's positions, extents, offsets, locks, buffer and falloff
+  // are lengths; viewportScale, blend (seconds) and priority are not.
   const regions = data.cameraRegions?.map((r) => ({
     x: r.x * factor,
     y: r.y * factor,
@@ -2729,6 +2750,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
     ...(r.bufferRight !== undefined ? { bufferRight: r.bufferRight * factor } : {}),
     ...(r.bufferTop !== undefined ? { bufferTop: r.bufferTop * factor } : {}),
     ...(r.bufferBottom !== undefined ? { bufferBottom: r.bufferBottom * factor } : {}),
+    ...(r.falloff !== undefined ? { falloff: r.falloff * factor } : {}),
     ...(r.priority !== undefined ? { priority: r.priority } : {}),
   }));
   // A camera path's placement, verts, range, lookahead and buffer are lengths;

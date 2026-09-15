@@ -30,7 +30,7 @@ Wizard's Castle
 # Camera
 
 The camera is an eased follow of the avatar, reshaped by two kinds of authored thing.
-Both are drawn on the editor's **camera** layer, both are invisible in play, and both are governed by one rule: whichever contains the player wins, ties go to the later one in the file, and the one in force keeps its grip until the player leaves it by its `buffer`.
+Both are drawn on the editor's **camera** layer, both are invisible in play, and both are governed by one rule: the lowest `priority` containing the player wins, everything tied at it shares the camera between them, and whatever is in force keeps its grip until the player leaves it by its `buffer`.
 Every hand-off between them is blended, so nothing ever snaps.
 
 ## Regions
@@ -43,6 +43,9 @@ Both axes locked is a fixed camera, one axis locked is a shaft or a corridor, ne
 Only *leaving* is buffered: a region takes the camera the moment the player is inside it.
 That asymmetry is what makes the field authorable as "how far out of this room I may go without the camera changing its mind" - a swing that leaves through one wall and comes straight back keeps one camera for the whole arc.
 Set it by looking at how far out of the room the arc actually reaches; the editor draws it as a finely dotted outline for exactly that reason.
+
+`falloff` is the band **inside** the region over which its share of the camera ramps away to nothing at its own wall - how it hands over to a room it overlaps, rather than how far it holds on (see [Which one wins](#which-one-wins)).
+The editor draws its inner edge dashed: inside that line the region has the camera to itself, and between there and its wall it is sharing.
 
 A region frames a **place**.
 It cannot say anything about where the player is going next, which in a traversal level is the more common thing to want.
@@ -108,11 +111,18 @@ Author the last few metres of a path with that in mind.
 
 ## Which one wins
 
-Paths are listed after regions, and ties go to the later one, so **a path beats a region at equal priority**.
-That is the right default: the path is the level's primary guide and a region is the local exception.
-A region that must win anyway - a room you want framed a particular way even though the route runs through it - says so by raising its `priority` above the path's.
+**The lowest `priority` wins, and everything tied at it blends.**
+Nothing authors a priority by default, so by default every rule the player is inside shares the camera, weighted by `falloff`; a rule that must govern a place *outright* - a room you want framed a particular way even though the route runs through it - says so by dropping its `priority` below the others', and everything ranked worse goes silent while it holds.
 
-The consequence to author around is the same one regions already have: leaving a higher-priority region drops to whatever contains the player *then*, and if that is the path, the path re-acquires with a fresh projection.
+`falloff` is how a region gives the camera up gracefully: measured **inward** from its own wall, it is the band over which the region's share of the framing ramps from all of it to none.
+Overlap two rooms by exactly the width of their band and the hand-over is an exact cross-fade - the camera sweeps from one framing to the other across the overlap and is never anything else.
+Leave `falloff` at nothing and the room frames right out to its own walls, handing over on the 0.7 s blend instead, which is what every region did before the field existed.
+A room with a band and nothing to overlap fades to the **default camera** on its way out, so a band is something to author where rooms meet rather than on every room.
+
+The consequence to author around is the same one regions already have: leaving a lower-`priority` region drops to whatever contains the player *then*, and if that is the path, the path re-acquires with a fresh projection.
+Two paths never blend with each other - the camera rides one route at a time - so where two tie, the later one in the file takes it.
+
+`?level=CAMERA_TEST` is the sandbox for all of this: two rooms overlapping by their band width, and a priority island past them.
 
 ## The screen edge
 

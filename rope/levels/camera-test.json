@@ -1,0 +1,198 @@
+{
+  "environment": {
+    "envIntensity": 0.6,
+    "hdri": "golden-gate-hills"
+  },
+  "player": {
+    "x": -2000,
+    "y": 0,
+    "radius": 8
+  },
+  "cameraRegions": [
+    {
+      "x": -1500,
+      "y": -300,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 1600,
+        "h": 1400
+      },
+      "lockY": -300,
+      "falloff": 200
+    },
+    {
+      "x": -100,
+      "y": -300,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 1600,
+        "h": 1400
+      },
+      "lockY": 0,
+      "viewportScale": 1.8,
+      "falloff": 200
+    },
+    {
+      "x": 1200,
+      "y": -200,
+      "rot": 0,
+      "shape": {
+        "kind": "rect",
+        "w": 500,
+        "h": 600
+      },
+      "lockX": 1200,
+      "lockY": -200,
+      "viewportScale": 0.7,
+      "priority": -1
+    }
+  ],
+  "bodies": [
+    {
+      "kind": "static",
+      "x": 0,
+      "y": 100,
+      "rot": 0,
+      "color": "#3a3f4a",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 6000,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 6000,
+            "h": 40
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -2300,
+      "y": -80,
+      "rot": 0,
+      "color": "#5a6273",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -900,
+      "y": -80,
+      "rot": 0,
+      "color": "#5a6273",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": -700,
+      "y": -80,
+      "rot": 0,
+      "color": "#5a6273",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 700,
+      "y": -80,
+      "rot": 0,
+      "color": "#5a6273",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 40,
+            "h": 320
+          },
+          "matchCollision": true
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1200,
+      "y": -400,
+      "rot": 0,
+      "color": "#6b5a73",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 600,
+            "h": 40
+          }
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 600,
+            "h": 40
+          },
+          "matchCollision": true
+        }
+      ]
+    }
+  ]
+}

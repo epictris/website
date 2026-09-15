@@ -17,7 +17,8 @@ import { Surface } from "../lib/surface";
 import { SurfaceType } from "../lib/types";
 import type { Level } from "../level/level";
 import {
-  activeCameraRule,
+  activeCameraRules,
+  cameraInfluences,
   pathBandAxes,
   pathHasBand,
   pathLookahead,
@@ -30,7 +31,13 @@ import {
   type CameraRule,
 } from "./cameraController";
 import { pointAtArcLength, projectOntoPolyline } from "../lib/path";
-import { outlineOfData, pathCorridorSweepInto, pathOutline, pathOutlineGrown } from "./shapePath";
+import {
+  outlineOfData,
+  pathCorridorSweepInto,
+  pathOutline,
+  pathOutlineGrown,
+  pathOutlineInset,
+} from "./shapePath";
 
 const GRABBABLE = "#bae67e"; // ayu-mirage green
 const BLOCKED = "#ff4d4d";
@@ -211,18 +218,29 @@ function drawCameraRules(
   level: Level,
   held: HeldCamera | null,
 ): void {
-  // The live rule when the caller has a camera controller to hand; recomputed
+  // The live set when the caller has a camera controller to hand; recomputed
   // only for a caller that has none, where a first-order answer beats nothing.
-  const active = held?.rule ?? activeCameraRule(level.cameraRules, level.cameraPosition);
+  //
+  // More than one rule in force means they are BLENDING, so "the active one" is
+  // not a yes/no any more and the fill is drawn by weight: what a region is
+  // tinted is the share of the framing on screen that belongs to it.
+  const members =
+    held?.members ??
+    cameraInfluences(
+      activeCameraRules(level.cameraRules, level.cameraPosition),
+      level.cameraPosition,
+    );
+  const weightOf = (rule: CameraRule): number | null =>
+    members.find((m) => m.rule === rule)?.weight ?? null;
   for (const rule of level.cameraRules) {
     if (rule.kind === "region") {
-      drawCameraRegion(ctx, rule, rule === active);
+      drawCameraRegion(ctx, rule, weightOf(rule));
     } else {
       drawCameraPath(
         ctx,
         rule,
-        rule === active,
-        rule === held?.rule ? held : null,
+        weightOf(rule) !== null,
+        weightOf(rule) !== null ? held : null,
         level.cameraPosition,
       );
     }
@@ -232,13 +250,19 @@ function drawCameraRules(
 function drawCameraRegion(
   ctx: CanvasRenderingContext2D,
   rule: CameraRule & { kind: "region" },
-  active: boolean,
+  // The share of the camera this region is taking, or null if it is not in
+  // force at all. Zero is a region that is in force and has faded out, which is
+  // a different thing and draws as the faintest fill rather than as none.
+  weight: number | null,
 ): void {
   const r = rule.region;
+  const active = weight !== null;
   ctx.beginPath();
   pathOutline(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape));
   if (active) {
-    ctx.fillStyle = "rgba(199,146,234,0.12)";
+    // A floor under the ramp, so a region holding the camera at no weight still
+    // reads as one of the rules in force rather than as one that has let go.
+    ctx.fillStyle = `rgba(199,146,234,${(0.03 + 0.12 * Math.min(Math.max(weight, 0), 1)).toFixed(3)})`;
     ctx.fill();
   }
   ctx.strokeStyle = CAMERA_REGION;
@@ -258,6 +282,16 @@ function drawCameraRegion(
   ctx.setLineDash([2 * PX, 5 * PX]);
   ctx.stroke();
   ctx.setLineDash([]);
+  // ...and the inner edge of the falloff band, as the editor draws it and as a
+  // path's band edge is drawn: inside it the region is taking the whole camera,
+  // and the ramp between there and its wall is what the fill is showing.
+  if (!r.falloff) return;
+  ctx.beginPath();
+  if (pathOutlineInset(ctx, new Vec2(r.x, r.y), r.rot, outlineOfData(r.shape), r.falloff)) {
+    ctx.setLineDash([3 * PX, 3 * PX]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 // A path draws as its polyline with direction arrowheads, plus the corridor it

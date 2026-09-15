@@ -32,6 +32,11 @@ import railTestJson from "../../levels/rail-test.json";
 // of it, and a mud wall beside a stone column to fall past and catch on (see
 // `lib/viscous.ts`). Hand-authored, as the rail sandbox is.
 import mudTestJson from "../../levels/mud-test.json";
+// The camera sandbox: a flat run through two rooms that overlap by exactly the
+// width of their falloff band (so the hand-over is an exact cross-fade), and a
+// priority island at the end that takes the camera outright. Hand-authored,
+// like the rail and mud sandboxes, so `levels/ball.json` is left alone.
+import cameraTestJson from "../../levels/camera-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -76,6 +81,9 @@ export const LEVELS: Record<string, LevelSpec> = {
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
   MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball", file: "mud-test" },
+  // Camera regions that blend, and a priority island that does not (see
+  // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
+  CAMERA_TEST: { data: cameraTestJson as RawLevelData, controller: "ball", file: "camera-test" },
   // The ball & chain controller in the grapple arena, kept for A/B comparison.
   BALL_LEVEL_2: { data: LEVEL_2, controller: "ball" },
 };

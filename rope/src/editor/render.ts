@@ -62,6 +62,7 @@ import {
   pathOutline,
   pathCorridorSweepInto,
   pathOutlineGrown,
+  pathOutlineInset,
   pathOutlineInto,
   pathOutlineIntoGrown,
   uniformMargin,
@@ -980,6 +981,7 @@ export function cameraRegionLabel(r: EdItem): string {
         : `buf l${px(buf.left)} r${px(buf.right)} t${px(buf.top)} b${px(buf.bottom)}`,
     );
   }
+  if (r.cam.falloff !== null) parts.push(`fade ${px(r.cam.falloff)}`);
   if (r.cam.priority !== 0) parts.push(`p${r.cam.priority}`);
   return parts.length ? `cam · ${parts.join(" · ")}` : "cam · (no effect)";
 }
@@ -2282,6 +2284,21 @@ export function drawEditor(
       ctx.setLineDash([2 * PX, 5 * PX]);
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+    // The inner edge of the falloff band, when one is authored: inside it the
+    // region has the camera outright, and across the band it hands over to
+    // whatever it overlaps. Drawn exactly as a path's band edge is (the same
+    // dash, the same reason) - it is what the region is being overlapped
+    // AGAINST, so it is the line an author lines a neighbour's wall up with.
+    if (r.cam.falloff !== null && r.cam.falloff > 0) {
+      ctx.beginPath();
+      if (pathOutlineInset(ctx, r.pos, r.rot, outlineOf(r), r.cam.falloff)) {
+        ctx.strokeStyle = CAMERA_REGION_COLOR;
+        ctx.lineWidth = worldLine;
+        ctx.setLineDash([3 * PX, 3 * PX]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
     drawLockMarks(ctx, r, worldLine);
   }

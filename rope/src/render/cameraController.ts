@@ -13,9 +13,9 @@
 //     camera toward its target. This is the "not rigidly locked to the player"
 //     part; it is short enough to never feel like the camera is behind.
 //  2. **Region hand-off** (CAMERA_BLEND_TIME, ~0.7 s, per-region override) -
-//     when the governing region changes, the gap between what the outgoing
-//     region wanted and what the incoming one wants is *frozen* at that instant
-//     and smoothstepped to zero on top of the incoming (live) target.
+//     when the SET of regions in force changes, the gap between what the
+//     outgoing set wanted and what the incoming one wants is *frozen* at that
+//     instant and smoothstepped to zero on top of the incoming (live) target.
 //
 // Freezing that delta is the whole point. The camera aims at the correct
 // position for the region it is now in, displaced by a decaying constant, so
@@ -30,7 +30,15 @@
 // incoming target rather than replacing it.
 //
 // A single mechanism covers default→region, region→region and region→default:
-// "no region" is just the null region, whose target is the plain follow point.
+// "no region" is just the plain follow point, which is the share of the camera
+// no rule has claimed.
+//
+// Several regions can govern at once. The lowest `priority` in force wins and
+// everything ranked worse is silenced; rules tied at it BLEND, weighted by how
+// deep inside each one the avatar stands (see `ruleWeight`,
+// `blendCameraTarget`). A hand-off between two sets whose weights have already
+// faded freezes a delta of zero, so a region with a `falloff` band crosses over
+// without using the blend clock at all.
 //
 // On top of those sits one one-sided rule, the ANCHORED EPISODE (see `update`):
 // while the avatar hangs on a taut line the camera does not walk back down the
@@ -361,6 +369,44 @@ export function pointInRegion(r: CameraRegionData, p: Vec2, margin: Margin = 0):
   return true;
 }
 
+// How deep inside its own volume `p` is, in metres: the distance to the nearest
+// point of the region's boundary, POSITIVE inside and negative outside. The
+// same three shapes `pointInRegion` tests, measured rather than answered yes or
+// no, and it agrees with it by construction - the sign flips exactly where the
+// containment does.
+//
+// It is what the blend band is read off (see `ruleWeight`), which is why it
+// has to be a distance and not a margin test: the band is a ramp across the
+// last few metres of the room, so "how far in" is the question, and asking
+// `pointInRegion` at a shrunken margin could only answer it one step at a time.
+//
+// Outside a rect the number is the largest axis overshoot rather than the true
+// Euclidean distance to a corner, because nothing reads the magnitude out
+// there - a weight is clamped to zero the moment the sign is negative.
+export function regionDepth(r: CameraRegionData, p: Vec2): number {
+  if (r.shape.kind === "circle") return r.shape.r - p.distanceTo(new Vec2(r.x, r.y));
+  const l = p.sub(new Vec2(r.x, r.y)).rotated(-r.rot);
+  if (r.shape.kind === "rect") {
+    return Math.min(r.shape.w / 2 - Math.abs(l.x), r.shape.h / 2 - Math.abs(l.y));
+  }
+  // Convex polygon: the distance to the nearest face plane, which for a convex
+  // shape IS the distance to the boundary. Degenerate faces are skipped exactly
+  // as they are in the containment test, and a polygon with none left is
+  // everywhere-inside there, so it is infinitely deep here.
+  const verts = r.shape.verts;
+  let outermost = -Infinity;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % verts.length]!;
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len = Math.hypot(ex, ey);
+    if (len < 1e-9) continue;
+    outermost = Math.max(outermost, (ey * (l.x - a.x) - ex * (l.y - a.y)) / len);
+  }
+  return outermost === -Infinity ? Infinity : -outermost;
+}
+
 
 // A rule governing the camera: one of the two kinds of authored thing that can
 // reshape it. Both are governed by the SAME priority/buffer logic below, which
@@ -483,12 +529,131 @@ export function pathParamsAt(rule: CameraRule & { kind: "path" }, s: number): Pa
   return base;
 }
 
-function rulePriority(r: CameraRule): number {
+// A rule's rank, where the LOWEST number in force wins and rules tied at it
+// blend. Absent = 0, so an unprioritised level is one flat rank whose rules all
+// blend with each other, and authoring a priority is always a statement about
+// beating something rather than about joining it.
+export function rulePriority(r: CameraRule): number {
   return (r.kind === "region" ? r.region.priority : r.path.priority) ?? 0;
+}
+
+// A rule's share of the camera at `p`, 0..1 - how much of the blend it asks
+// for, before the set is normalised (see `blendCameraTarget`).
+//
+// A region with no `falloff` is all-or-nothing: 1 wherever it applies, which is
+// what every region authored before the band existed is, and what keeps a room
+// framed right out to its walls. With a band it ramps from 1 at `falloff`
+// metres inside its boundary down to 0 AT the boundary, so its influence is
+// already spent by the time it stops containing the player and the room it
+// overlaps has taken over by exactly as much.
+//
+// A path's is the complement of its falloff weight, which is the same
+// statement about a corridor: 1 within the range, fading across the band, 0 at
+// the band's outer edge (see `pathFalloffWeight`). The two bands point opposite
+// ways because the authored geometry means opposite things - a region's outline
+// is the edge of its claim and a path's polyline is the middle of one.
+//
+// It is purely positional: it says nothing about whether the rule is in force,
+// which is what lets the hand-off ask what a rule the player has just left
+// would still be asking for (see `update`).
+export function ruleWeight(r: CameraRule, p: Vec2, at: PathStanding | null = null): number {
+  if (r.kind === "path") {
+    const st = at ?? pathStanding(r.index, p);
+    return 1 - pathFalloffWeight(pathParamsAt(r, st.s), st.off);
+  }
+  const falloff = r.region.falloff ?? 0;
+  if (falloff <= 0) return 1;
+  return smoothstep(Math.min(Math.max(regionDepth(r.region, p) / falloff, 0), 1));
+}
+
+// One rule's claim on the camera: the rule and the share it asks for.
+export interface CameraInfluence {
+  rule: CameraRule;
+  weight: number;
+}
+
+// The rules in force paired with their weights, for a player at `p`. `seatAt`
+// is the standing against the path in the set, when the caller has a better one
+// than a fresh global projection (the controller always does).
+export function cameraInfluences(
+  members: readonly CameraRule[],
+  p: Vec2,
+  seatAt: PathStanding | null = null,
+): CameraInfluence[] {
+  return members.map((rule) => ({
+    rule,
+    weight: ruleWeight(rule, p, rule.kind === "path" ? seatAt : null),
+  }));
+}
+
+// The camera the blend asks for: every influence's own target, weighted, with
+// whatever share is left over going to the plain follow.
+//
+// The leftover share is what makes a band fade a lone room out to the default
+// camera rather than to nothing, and it is the same mechanism a path's falloff
+// band already was - so a path in its band and a region in its band now do the
+// literally identical thing, and a path that is the only rule in force blends
+// exactly as it did before there was a blend at all.
+//
+// Weights summing past 1 (two regions with no band, fully overlapping) are
+// NORMALISED rather than clipped, so that case is an even average of the two
+// instead of an arbitrary winner. Under 1 they are not, because the difference
+// is the plain follow's share and normalising it away is what would make a band
+// mean nothing.
+//
+// Position blends linearly and zoom GEOMETRICALLY, as every zoom blend here
+// does: 1 -> 4 through 2, not through 2.5.
+export function blendCameraTarget(
+  influences: readonly CameraInfluence[],
+  follow: Vec2,
+  baseZoom: number,
+  // The committed lead origin, for the path in the set; ignored by regions.
+  s = 0,
+): CameraTarget {
+  let total = 0;
+  for (const i of influences) total += Math.max(0, i.weight);
+  const scale = total > 1 ? 1 / total : 1;
+  const plain = Math.max(0, 1 - total);
+  let pos = follow.mul(plain);
+  let logZoom = plain * Math.log(baseZoom);
+  for (const i of influences) {
+    const w = Math.max(0, i.weight) * scale;
+    if (w <= 0) continue;
+    const t = cameraRuleTarget(i.rule, follow, baseZoom, s);
+    pos = pos.add(t.pos.mul(w));
+    logZoom += w * Math.log(Math.max(1e-9, t.zoom));
+  }
+  return { pos, zoom: Math.exp(logZoom) };
+}
+
+// The one rule doing most of the framing, for a caller that can only draw or
+// assert about one (the debug overlay's label, the cases). Ties go to the later
+// rule, which is the only thing authoring order decides beside the path seat.
+export function dominantRule(influences: readonly CameraInfluence[]): CameraRule | null {
+  let best: CameraInfluence | null = null;
+  for (const i of influences) if (!best || i.weight >= best.weight) best = i;
+  return best?.rule ?? null;
 }
 
 function ruleBlend(r: CameraRule | null): number | undefined {
   return r === null ? undefined : r.kind === "region" ? r.region.blend : r.path.blend;
+}
+
+// How long a hand-off between two SETS takes: the blend authored by whatever
+// joined, and failing that by whatever left. Entering a rule uses its own blend
+// and leaving one back to the default uses the blend of the rule being left, so
+// a hand-off feels symmetric; a set that gains and loses a rule at once is a
+// crossing into the room being entered, so the joiner is asked first.
+function setBlend(from: readonly CameraRule[], to: readonly CameraRule[]): number {
+  for (const r of to) if (!from.includes(r) && ruleBlend(r) !== undefined) return ruleBlend(r)!;
+  for (const r of from) if (!to.includes(r) && ruleBlend(r) !== undefined) return ruleBlend(r)!;
+  return CAMERA_BLEND_TIME;
+}
+
+// Are these the same rules, in any order? What decides whether the camera has
+// changed hands and the frozen-delta hand-off has to fire.
+function sameRules(a: readonly CameraRule[], b: readonly CameraRule[]): boolean {
+  return a.length === b.length && a.every((r) => b.includes(r));
 }
 
 // How far along the path the camera leads, for a route heading in `dir`.
@@ -694,46 +859,65 @@ function ruleHolds(r: CameraRule, p: Vec2, held: PathStanding | null): boolean {
   return at.off.length() <= pathRelease(pathParamsAt(r, at.s), at.off);
 }
 
-// The rule governing the camera for an avatar at `p`. Highest `priority` among
-// the rules containing it wins; a tie goes to the later one, so the authoring
-// order breaks it. `current` (the rule in force last frame) keeps its grip
-// anywhere inside its own buffer zone, unless a rule of strictly higher
-// priority has taken over.
+// The standing the controller is tracking against the path it is riding: the
+// seat, and where the player is against it. The windowed projection is stateful
+// and the grip, the weight and the lead are all measured from it, so the
+// controller passes it in rather than anything here recomputing a global answer
+// that means something else.
+export interface HeldSeat {
+  seat: CameraRule & { kind: "path" };
+  at: PathStanding;
+}
+
+// The rules governing the camera for an avatar at `p` - the SET, since equal
+// rank blends.
 //
-// Entering is deliberately *not* buffered: a rule takes over the moment the
-// avatar is inside it, and only giving it up is delayed. That asymmetry is what
+// A rule is a candidate if it contains the player, or if it was in force last
+// frame (`current`) and still holds by its buffer. The lowest `priority` among
+// the candidates is the rank in force, and every candidate at that rank is in
+// the set; anything ranked worse is silenced outright, which is what makes
+// priority the escape hatch rather than a second kind of blend.
+//
+// Entering is deliberately *not* buffered: a rule joins the set the moment the
+// avatar is inside it, and only leaving is delayed. That asymmetry is what
 // makes the buffer authorable as "how far out of this room I may stray without
 // the camera changing its mind" — a swing that leaves through one wall and
 // comes straight back keeps one camera for the whole arc, where a buffer on
-// entry would instead grab the region early from outside.
+// entry would instead grab the region early from outside. A region that wants
+// to hand over gradually as the player crosses into its neighbour authors a
+// `falloff` band and lets the WEIGHT do it, which is a different question from
+// the grip and is why they are different fields.
 //
-// Priority still overrides the grip, and is the escape hatch for the case a
-// wide buffer creates: a small, deliberately-framed volume sitting inside a big
-// buffered one needs some way to take the camera, and saying so explicitly is
-// better than shrinking the buffer until the overlap happens to work out.
-export function activeCameraRule(
+// Two PATHS cannot both be in the set: the camera rides one route at a time -
+// the projection, the lead deadband and the branch window are all state about
+// one polyline - so among tied paths the seat goes to the one already ridden,
+// and to the last in the list otherwise.
+export function activeCameraRules(
   rules: readonly CameraRule[],
   p: Vec2,
-  current: CameraRule | null = null,
-  // The standing against the WINDOWED projection on `current`, when `current`
-  // is a path. The controller is the only thing that has it, so it passes it
-  // in rather than this recomputing a global answer that means something else.
-  currentHeld: PathStanding | null = null,
-): CameraRule | null {
-  let best: CameraRule | null = null;
-  for (const r of rules) {
-    if (!ruleContains(r, p)) continue;
-    if (!best || rulePriority(r) >= rulePriority(best)) best = r;
-  }
-  if (
-    current &&
-    rules.includes(current) &&
-    ruleHolds(current, p, currentHeld) &&
-    (!best || rulePriority(best) <= rulePriority(current))
-  ) {
-    return current;
-  }
-  return best;
+  current: readonly CameraRule[] = [],
+  held: HeldSeat | null = null,
+): CameraRule[] {
+  const candidates = rules.filter(
+    (r) =>
+      ruleContains(r, p) ||
+      (current.includes(r) && ruleHolds(r, p, r === held?.seat ? held.at : null)),
+  );
+  if (candidates.length === 0) return [];
+  let rank = Infinity;
+  for (const r of candidates) rank = Math.min(rank, rulePriority(r));
+  const members = candidates.filter((r) => rulePriority(r) === rank);
+  const paths = members.filter((r) => r.kind === "path");
+  if (paths.length < 2) return members;
+  const seat = held && paths.includes(held.seat) ? held.seat : paths[paths.length - 1]!;
+  return members.filter((r) => r.kind === "region" || r === seat);
+}
+
+// The one rule doing most of the framing where the avatar stands, for a caller
+// that has no controller to ask (the debug overlay drawing a level nobody is
+// playing). A first-order answer: no grip, no seat, no history.
+export function activeCameraRule(rules: readonly CameraRule[], p: Vec2): CameraRule | null {
+  return dominantRule(cameraInfluences(activeCameraRules(rules, p), p));
 }
 
 // Where the camera wants to be under a given rule, for an avatar at `follow`.
@@ -753,9 +937,6 @@ export function cameraRuleTarget(
   follow: Vec2,
   baseZoom: number,
   s = 0,
-  // The falloff weight (see `pathFalloffWeight`), resolved by the controller
-  // from the avatar's true projection. Zero for a region and for null.
-  w = 0,
 ): CameraTarget {
   if (!rule) return { pos: follow, zoom: baseZoom };
   if (rule.kind === "path") {
@@ -768,18 +949,15 @@ export function cameraRuleTarget(
     // gradient would pump the zoom every half-swing; read here, the buffer
     // absorbs it exactly as it absorbs the lead.
     const params = pathParamsAt(rule, s);
-    const pathPos = pointAtArcLength(rule.index, s + pathLeadAlong(rule, s, params));
-    const pathZoom = baseZoom / Math.max(0.01, params.viewportScale);
-    // Through the falloff band the target is interpolated toward the NULL
-    // rule's - the plain follow at the base zoom - so lookahead, viewport
-    // scale and everything else the path asks for fade together, and at the
-    // band's outer edge the two targets are identical: the release delta is
-    // zero by construction. The zoom interpolates geometrically like every
-    // zoom blend here, so it reads as even.
-    if (w <= 0) return { pos: pathPos, zoom: pathZoom };
+    // This is the target at FULL strength, everywhere in the corridor. Through
+    // the falloff band the path asks for less of it and the plain follow takes
+    // the rest (see `ruleWeight` and `blendCameraTarget`), so lookahead,
+    // viewport scale and everything else the path wants fade together and the
+    // release delta is zero by construction - the same fade as before, moved
+    // out to where every rule's fade now happens.
     return {
-      pos: pathPos.add(follow.sub(pathPos).mul(w)),
-      zoom: lerpZoom(pathZoom, baseZoom, w),
+      pos: pointAtArcLength(rule.index, s + pathLeadAlong(rule, s, params)),
+      zoom: baseZoom / Math.max(0.01, params.viewportScale),
     };
   }
   const region = rule.region;
@@ -1029,10 +1207,16 @@ export function clampToEdge(camera: Camera, zoom: number, follow: Vec2, pos: Vec
 
 // The camera state the debug overlay draws (see `CameraController.held`).
 export interface HeldCamera {
+  // Every rule in force, with the share of the camera each is taking. More than
+  // one means they are blending, and a weight is exactly how much of the
+  // framing on screen belongs to that rule.
+  members: readonly CameraInfluence[];
+  // The one taking the largest share - what the overlay names and fills
+  // brightest. Null when the camera is the plain follow.
   rule: CameraRule | null;
-  // The avatar's projection along a held path, and the deadbanded arc length
-  // the lookahead is actually taken from. Both meaningless unless `rule` is a
-  // path.
+  // The avatar's projection along the path in force, and the deadbanded arc
+  // length the lookahead is actually taken from. Both meaningless unless a path
+  // is in the set.
   s: number;
   leadS: number;
   // The edge constraint, when it is what is holding the camera this frame:
@@ -1057,8 +1241,12 @@ export class CameraController {
   private zoom = 1;
   private started = false;
 
-  // The rule in force last frame.
-  private rule: CameraRule | null = null;
+  // The rules in force last frame, with the weights they were blended at.
+  private members: CameraInfluence[] = [];
+
+  // The path among them, if any: the one route the camera is riding, and what
+  // all the path tracking state below is about (see `activeCameraRules`).
+  private seat: (CameraRule & { kind: "path" }) | null = null;
 
   // Path tracking, alongside the smoothing state and reset with it by `snap()`.
   // `pathS` is last frame's projection along the held path and `lastFollow` is
@@ -1142,12 +1330,13 @@ export class CameraController {
   private s = 1;
   private dur = CAMERA_BLEND_TIME;
 
-  // The rule actually in force, for the debug overlay. It cannot be recomputed
-  // there: the grip depends on which rule held the camera last frame, so a
-  // recomputed answer disagrees with the camera for the whole width of the
-  // buffer, which is exactly what the overlay is opened to see.
+  // The rule doing most of the framing, for a caller that wants one name for
+  // what the camera is doing. It cannot be recomputed outside: the grip depends
+  // on which rules held the camera last frame, so a recomputed answer disagrees
+  // with the camera for the whole width of the buffer, which is exactly what
+  // the overlay is opened to see.
   get activeRule(): CameraRule | null {
-    return this.rule;
+    return dominantRule(this.members);
   }
 
   // What the overlay needs to draw the rule in force, in one object so the
@@ -1157,7 +1346,8 @@ export class CameraController {
   // where the overlay is opened to look.
   get held(): HeldCamera {
     return {
-      rule: this.rule,
+      members: this.members,
+      rule: dominantRule(this.members),
       s: this.pathS,
       leadS: this.pathLeadS,
       edge: this.edge,
@@ -1226,7 +1416,8 @@ export class CameraController {
     if (!this.started) {
       // A snap is history-free: there is no incumbent to keep a grip, and no
       // tracked projection or committed lead to continue from.
-      this.rule = null;
+      this.members = [];
+      this.seat = null;
       this.pathS = 0;
       this.pathLeadS = 0;
       this.latchX = null;
@@ -1247,18 +1438,24 @@ export class CameraController {
     // the windowed projection rather than to the global closest point. The
     // offset is the same displacement as a vector, which is what the range and
     // falloff ellipses are resolved along.
-    const heldPath = this.rule?.kind === "path" ? this.trackPath(this.rule, follow, dt) : null;
-    const heldOffset =
-      this.rule?.kind === "path" && heldPath
-        ? follow.sub(pointAtArcLength(this.rule.index, heldPath.s))
-        : null;
+    const seat = this.seat;
+    const heldPath = seat ? this.trackPath(seat, follow, dt) : null;
+    const heldOffset = heldPath ? follow.sub(pointAtArcLength(seat!.index, heldPath.s)) : null;
+    const heldSeat: HeldSeat | null =
+      seat && heldPath && heldOffset ? { seat, at: { s: heldPath.s, off: heldOffset } } : null;
 
-    const next = activeCameraRule(
+    const nextRules = activeCameraRules(
       rules,
       follow,
-      this.rule,
-      heldPath && heldOffset ? { s: heldPath.s, off: heldOffset } : null,
+      this.members.map((m) => m.rule),
+      heldSeat,
     );
+    // The path in the new set - at most one, by construction (see
+    // `activeCameraRules`), which is what lets one seat's worth of tracking
+    // state serve the whole blend.
+    const nextSeat = (nextRules.find((r) => r.kind === "path") ?? null) as
+      | (CameraRule & { kind: "path" })
+      | null;
 
     // Acquiring a path is unbuffered and history-free, exactly as entering a
     // region is: a path that was not the incumbent is projected onto globally.
@@ -1283,28 +1480,27 @@ export class CameraController {
     // than snaps. The challenge cannot fire on the ridden branch itself: a
     // global answer inside the window IS the windowed answer, so the two
     // distances agree and cannot sit on opposite sides of the range.
-    let proj =
-      next?.kind !== "path"
-        ? null
-        : next === this.rule
-          ? heldPath!
-          : projectOntoPolyline(next.index, follow);
-    let offset =
-      next?.kind !== "path"
-        ? null
-        : next === this.rule
-          ? heldOffset!
-          : follow.sub(pointAtArcLength(next.index, proj!.s));
+    let proj = !nextSeat
+      ? null
+      : nextSeat === seat
+        ? heldPath!
+        : projectOntoPolyline(nextSeat.index, follow);
+    let offset = !nextSeat
+      ? null
+      : nextSeat === seat
+        ? heldOffset!
+        : follow.sub(pointAtArcLength(nextSeat.index, proj!.s));
     let branchJump = false;
     if (
-      next?.kind === "path" &&
-      next === this.rule &&
+      nextSeat &&
+      nextSeat === seat &&
       offset!.length() >
-        pathRange(pathParamsAt(next, proj!.s), offset!) + pathParamsAt(next, proj!.s).buffer
+        pathRange(pathParamsAt(nextSeat, proj!.s), offset!) +
+          pathParamsAt(nextSeat, proj!.s).buffer
     ) {
-      const g = projectOntoPolyline(next.index, follow);
-      const goff = follow.sub(pointAtArcLength(next.index, g.s));
-      if (goff.length() <= pathRange(pathParamsAt(next, g.s), goff)) {
+      const g = projectOntoPolyline(nextSeat.index, follow);
+      const goff = follow.sub(pointAtArcLength(nextSeat.index, g.s));
+      if (goff.length() <= pathRange(pathParamsAt(nextSeat, g.s), goff)) {
         proj = g;
         offset = goff;
         branchJump = true;
@@ -1316,35 +1512,39 @@ export class CameraController {
     // (a branch jump included) is history-free, so the band starts centred on
     // the avatar rather than holding an offset earned somewhere else on the
     // route.
-    const leadS =
-      next?.kind !== "path"
-        ? 0
-        : next === this.rule && !branchJump
-          ? committedLeadS(
-              s,
-              this.pathLeadS,
-              // Measured where the BAND currently sits, not where the avatar
-              // is: the band is the thing being sized, and on a bend the two
-              // are different directions. Its width is keyable, so it is read
-              // there too.
-              pathLookaheadBuffer(
-                pathParamsAt(next, this.pathLeadS),
-                tangentAt(next.index, this.pathLeadS),
-              ),
-              anchored,
-            )
-          : s;
+    const leadS = !nextSeat
+      ? 0
+      : nextSeat === seat && !branchJump
+        ? committedLeadS(
+            s,
+            this.pathLeadS,
+            // Measured where the BAND currently sits, not where the avatar
+            // is: the band is the thing being sized, and on a bend the two
+            // are different directions. Its width is keyable, so it is read
+            // there too.
+            pathLookaheadBuffer(
+              pathParamsAt(nextSeat, this.pathLeadS),
+              tangentAt(nextSeat.index, this.pathLeadS),
+            ),
+            anchored,
+          )
+        : s;
 
-    // The falloff weight, from the avatar's TRUE displacement off the route -
-    // the windowed one while held, so at a switchback the weight is about the
-    // branch they are actually on, exactly as the grip is.
-    const w = next?.kind !== "path" ? 0 : pathFalloffWeight(pathParamsAt(next, s), offset!);
-
-    const target = cameraRuleTarget(next, follow, baseZoom, leadS, w);
+    // Each rule's share of the camera. A path's is read from the avatar's TRUE
+    // displacement off the route - the windowed one while held, so at a
+    // switchback the weight is about the branch they are actually on, exactly
+    // as the grip is.
+    const members = cameraInfluences(
+      nextRules,
+      follow,
+      proj && offset ? { s: proj.s, off: offset } : null,
+    );
+    const target = blendCameraTarget(members, follow, baseZoom, leadS);
 
     if (!this.started) {
       this.started = true;
-      this.rule = next;
+      this.members = members;
+      this.seat = nextSeat;
       this.pathS = s;
       this.pathLeadS = leadS;
       this.offset = Vec2.ZERO;
@@ -1363,7 +1563,7 @@ export class CameraController {
       return;
     }
 
-    if (next !== this.rule || branchJump || releasing) {
+    if (!sameRules(nextRules, this.members.map((m) => m.rule)) || branchJump || releasing) {
       // The discrepancy is measured between the two *targets*, not against
       // where the camera is: aiming at the camera's own position would drop its
       // velocity to nothing for an instant, which reads as a hitch. Taken this
@@ -1389,24 +1589,35 @@ export class CameraController {
       // origin, and the pin over the top of it - so the delta frozen here is
       // exactly what the release gave up, and the camera leaves the pin at the
       // blend's pace rather than the follow lag's.
-      const prev = cameraRuleTarget(
-        this.rule,
+      //
+      // The OUTGOING set is re-weighted here rather than reusing last frame's
+      // weights, for the same reason its targets are re-evaluated: both sides
+      // of the delta have to be what the two sets ask for at this instant, or
+      // the frozen gap is one that never existed. A rule leaving a set it had
+      // already faded out of therefore freezes nothing at all - which is the
+      // whole point of a `falloff` band, and why a blended hand-off is
+      // invisible where a bandless one needs the full cross-fade.
+      const prev = blendCameraTarget(
+        cameraInfluences(
+          this.members.map((m) => m.rule),
+          follow,
+          heldSeat?.at ?? null,
+        ),
         follow,
         baseZoom,
         this.pathLeadS,
-        this.rule?.kind === "path" && heldPath && heldOffset
-          ? pathFalloffWeight(pathParamsAt(this.rule, heldPath.s), heldOffset)
-          : 0,
       );
       const rest = 1 - smoothstep(this.s);
       this.offset = this.latched(prev.pos.add(this.offset.mul(rest))).sub(target.pos);
       this.zoomRatio = (prev.zoom * this.zoomRatio ** rest) / target.zoom;
       this.s = 0;
-      // Entering a rule uses its blend; leaving one back to the default uses
-      // the blend of the rule being left, so a handoff feels symmetric.
-      this.dur = ruleBlend(next) ?? ruleBlend(this.rule) ?? CAMERA_BLEND_TIME;
-      this.rule = next;
+      this.dur = setBlend(
+        this.members.map((m) => m.rule),
+        nextRules,
+      );
     }
+    this.members = members;
+    this.seat = nextSeat;
     this.pathS = s;
     this.pathLeadS = leadS;
     this.lastFollow = follow;

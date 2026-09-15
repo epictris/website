@@ -298,6 +298,88 @@ export function pathOutlineGrown(
   ctx.restore();
 }
 
+// The outline SHRUNK by `inset` - the inner edge of a camera region's falloff
+// band, which is where its weight reaches 1.
+//
+// The counterpart of `pathOutlineGrown`, and it follows `regionDepth` exactly
+// as that one follows `pointInRegion`: a circle by its radius, a rect per axis,
+// and a convex polygon by pulling every face plane in. A polygon's corners are
+// MITRED here where an outward offset fillets them, because an inward offset's
+// corner is where the two pulled-in planes meet - there is no arc to round, and
+// the depth test is the distance to the nearest face plane, which is what that
+// intersection is.
+//
+// Answers false when the shape collapses at that inset: a band wider than the
+// room has no inner edge, so there is nothing to draw and the caller skips it
+// rather than drawing an inside-out shape.
+export function pathOutlineInset(
+  ctx: CanvasRenderingContext2D,
+  center: Vec2,
+  rot: number,
+  o: Outline,
+  inset: number,
+): boolean {
+  if (inset <= 0) return false;
+  if (o.kind === "circle") {
+    if (o.radius - inset <= 0) return false;
+    ctx.arc(center.x, center.y, o.radius - inset, 0, Math.PI * 2);
+    return true;
+  }
+  if (o.kind === "rect") {
+    if (o.half.x - inset <= 0 || o.half.y - inset <= 0) return false;
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    ctx.rotate(rot);
+    ctx.rect(
+      -(o.half.x - inset),
+      -(o.half.y - inset),
+      (o.half.x - inset) * 2,
+      (o.half.y - inset) * 2,
+    );
+    ctx.restore();
+    return true;
+  }
+  // Convex polygon: clip it by each face's plane pulled inward, which is the
+  // intersection of the half-planes `regionDepth` measures against.
+  const n = o.verts.length;
+  let poly = o.verts;
+  for (let i = 0; i < n && poly.length >= 3; i++) {
+    const a = o.verts[i]!;
+    const e = o.verts[(i + 1) % n]!.sub(a);
+    const len = e.length();
+    if (len < 1e-9) continue;
+    const nrm = new Vec2(e.y / len, -e.x / len); // outward, per the winding contract
+    const depth = (p: Vec2): number => -p.sub(a).dot(nrm) - inset; // >= 0 is kept
+    const next: Vec2[] = [];
+    for (let j = 0; j < poly.length; j++) {
+      const p = poly[j]!;
+      const q = poly[(j + 1) % poly.length]!;
+      const dp = depth(p);
+      const dq = depth(q);
+      if (dp >= 0) next.push(p);
+      if (dp >= 0 !== dq >= 0) next.push(p.add(q.sub(p).mul(dp / (dp - dq))));
+    }
+    poly = next;
+  }
+  // Area rather than a vertex count: the clip leaves collinear points behind
+  // when the opposite planes meet, so a band exactly as wide as the shape comes
+  // back as a line with enough vertices to look like a polygon.
+  let area = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i]!;
+    const q = poly[(i + 1) % poly.length]!;
+    area += p.x * q.y - q.x * p.y;
+  }
+  if (poly.length < 3 || Math.abs(area) < 1e-9) return false;
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(rot);
+  poly.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.closePath();
+  ctx.restore();
+  return true;
+}
+
 // The boundary of a camera path's corridor: everything whose displacement from
 // its closest point on the route lies inside the ellipse the route carries
 // THERE, pathed as one closed loop in world coordinates. `axesAt` answers the

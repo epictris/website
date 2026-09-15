@@ -26,14 +26,15 @@ The default framing puts the avatar **dead centre** for both controllers — the
 Two smoothings run at deliberately different timescales:
 
 - **Follow lag** (`CAMERA_FOLLOW_TAU`, 0.15 s) — an exponential ease of the camera toward its target, `1 - exp(-dt/tau)` so a 60 Hz and a 144 Hz display behave identically. This is the "not rigidly locked to the player" part.
-- **Region hand-off** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) - when the governing region changes, the gap between what the outgoing region wanted and what the incoming one wants is **frozen** at that instant and smoothstepped to zero on top of the incoming target, which goes on being evaluated live.
+- **Region hand-off** (`CAMERA_BLEND_TIME`, 0.7 s, per-region `blend` override) - when the set of rules in force changes, the gap between what the outgoing set wanted and what the incoming one wants is **frozen** at that instant and smoothstepped to zero on top of the incoming target, which goes on being evaluated live.
 
 Freezing that delta is the point of the mechanism.
 The camera aims at the *correct* position for the region it is now in, displaced by a decaying constant, so two very different configurations that happen to agree at the crossing hand over invisibly - the delta is simply zero.
 Cross-fading the two *live* targets instead, as this used to, keeps the outgoing region tracking the avatar for the whole blend, so its decaying share hauls the camera off the correct position and then lets it snap back: rubber banding whose size has nothing to do with how far apart the two cameras actually are.
 The delta is measured between the two targets rather than against where the camera *is*: aiming the camera at its own position would drop its velocity to nothing for a frame, which reads as a hitch.
 Taken this way the aim point is unchanged on the crossing frame, so the camera carries its follow lag straight through and only the delta decays; a hand-off interrupted part-way folds its remainder into the new delta, so that case is continuous too.
-One mechanism therefore covers default→region, region→region and region→default: "no region" is just the null region, whose target is the plain follow point.
+One mechanism therefore covers default→region, region→region and region→default: "no region" is just the plain follow, which is the share of the camera no rule has claimed (see [Blending](#blending)).
+A hand-off between two sets whose weights have already faded freezes a delta of zero, so a region with a `falloff` band crosses over without using this mechanism at all.
 `CameraController.snap()` drops the easing for one frame (level start and reset), where easing in from the last frame's position would be a swoop across the level.
 
 ## Render interpolation
@@ -62,10 +63,35 @@ zoom     = baseZoom / viewportScale
 
 Per-axis locking is what makes one primitive cover all three asks: both axes locked is a fixed camera, one axis locked is a shaft or corridor that pins one and follows the other, neither locked is an offset follow.
 `offsetX/offsetY` only apply to the axes that still follow, and `viewportScale` is *how much world is on screen* (2 = twice as much, zoomed out), so it divides the zoom and blends geometrically — 1→4 passes through 2, not 2.5.
-The containing region with the highest `priority` wins (later in the list breaks a tie), and the region in force keeps its grip until the avatar leaves it by its **`buffer`** - `REGION_EXIT_MARGIN` (15 cm) when it authors none, which is sized for jitter alone: without that much hysteresis, hovering on a boundary re-triggers the cross-fade every frame and the camera stutters.
-Regions are invisible in play, so the **debug overlay** (L) draws every volume and fills the active one: a camera that offsets, zooms or pins otherwise has no on-screen cause.
-It takes that region from the controller rather than recomputing it, because the grip depends on which region held the camera last frame - a recomputed answer disagrees with the camera across the whole width of the buffer, which is exactly what the overlay is opened to see.
-The active region's buffer draws with it, as a finely dotted outline: the region holds the camera out to there, so without it a region that refuses to let go looks like a bug.
+Which regions are in force is `priority` and the buffer (below); the region in force keeps its grip until the avatar leaves it by its **`buffer`** - `REGION_EXIT_MARGIN` (15 cm) when it authors none, which is sized for jitter alone: without that much hysteresis, hovering on a boundary re-triggers the cross-fade every frame and the camera stutters.
+Regions are invisible in play, so the **debug overlay** (L) draws every volume and fills the ones in force: a camera that offsets, zooms or pins otherwise has no on-screen cause.
+The fill is by **weight**, so what a region is tinted is the share of the framing on screen that belongs to it, and two regions blending look like it.
+It takes the set from the controller rather than recomputing it, because the grip depends on which regions held the camera last frame - a recomputed answer disagrees with the camera across the whole width of the buffer, which is exactly what the overlay is opened to see.
+Each active region's buffer draws with it, as a finely dotted outline: the region holds the camera out to there, so without it a region that refuses to let go looks like a bug.
+Nothing is drawn at the inner edge of a `falloff` band, deliberately: the weight is a ramp rather than a boundary, and a line across it would suggest a place the camera changes character, which is the one thing the smoothstep exists to avoid.
+
+## Blending
+
+Several rules can govern the camera at once, and the camera is the **weighted blend** of what each of them asks for (`activeCameraRules`, `ruleWeight`, `blendCameraTarget`).
+
+**Priority decides who is even in the conversation.** The lowest `priority` in force wins and everything ranked worse is silenced outright; rules tied at that number blend with each other.
+Lowest-wins reads as ranking rather than as a score, and 0 being the default means authoring a priority is always a statement about beating something rather than about joining it.
+The silencing is deliberately absolute - a priority is the escape hatch for a framing that must not be diluted (a boss arena inside a region that covers the whole level), and a priority that only *weighted* a rule would be a second, weaker kind of blend with nothing to distinguish it from the first.
+
+**Weight decides how much of the camera each of them gets.** A region's weight is 1 wherever it applies, unless it authors a **`falloff`** band: then it ramps from 1 at `falloff` metres inside its boundary down to 0 at the boundary itself, smoothstepped.
+The band is measured **inward** because the volume an author draws is the extent of the region's claim - a band outside it would be a second, larger volume that starts framing the room before the player is in it, which is exactly what the buffer is careful not to be.
+A path's `falloffX/falloffY` is the same idea pointing the other way, and has to: a path's authored geometry is the line at the middle of its claim rather than the edge of it.
+
+Whatever share the rules do not claim goes to the **plain follow** - the avatar at the base zoom - which is what makes a lone room with a band fade out to the default camera rather than to nothing, and is the mechanism a path's falloff band already was.
+Weights summing past 1 (two bandless regions overlapping) are **normalised**, so that case is an even average rather than an arbitrary winner; under 1 they are not, because the difference is the plain follow's share and normalising it away is what would make a band mean nothing.
+Positions blend linearly and zooms geometrically, as every zoom blend here does.
+
+The authoring rule that falls out of it: **overlap two rooms by the width of their band and the hand-over is an exact cross-fade.**
+`smoothstep(t) + smoothstep(1-t) = 1`, so across an overlap exactly as wide as the band the two weights sum to 1 everywhere - no share leaks back to the plain follow on the way across, and the camera sweeps from one room's framing to the other's without stopping, reversing, or needing the hand-off blend at all.
+A room that must frame right out to its own walls authors no band and hands over the old way, through the frozen delta.
+
+Only **one path** can be in the set: the projection, the lead deadband and the branch window are all state about one polyline, so among tied paths the seat goes to the one already being ridden, and to the last in the list otherwise.
+That is the only thing authoring order still decides; regions tied at the winning rank all blend, however they are ordered.
 
 ## Buffer
 
@@ -74,16 +100,19 @@ A player on one attachment point crosses a boundary twice a swing and hands the 
 It is pure geometry - no easing, no filtering, no rope state - so it behaves identically at any swing speed and any frame rate, and an author sets it by looking at how far out of the room the arc actually reaches.
 
 Only *leaving* is buffered.
-A region takes the camera the moment the avatar is inside it, so the buffer reads as "how far out of this room I may stray without the camera changing its mind" rather than as a second, larger volume that grabs the camera early from outside.
-That asymmetry is also what keeps a buffer from fighting its neighbour: two adjoining regions with wide buffers hand over on whichever one the avatar is actually standing in, since only the current one's buffer is ever consulted.
+A region joins the set the moment the avatar is inside it, so the buffer reads as "how far out of this room I may stray without the camera changing its mind" rather than as a second, larger volume that grabs the camera early from outside.
+
+A buffer holds a region **in the set**, which at equal priority means it blends with whatever the avatar has actually crossed into rather than shutting it out.
+Swinging out of room A into room B, the camera is both of them for as long as the arc stays inside A's buffer, and the blend is a constant while it does - the weights do not depend on which way the swing is going, so there is nothing to flip twice a swing, which is the thing the buffer exists to prevent.
+What it no longer does is keep the camera *purely* A's out there; an author who wants that says so with `priority`, and one who wants the crossing itself to be gradual says so with `falloff`.
 
 A **rect** region may state one buffer per side instead - `bufferLeft`, `bufferRight`, `bufferTop`, `bufferBottom` - because a room is rarely symmetrical and the arc out of one usually reaches far past one wall and barely past the other, which a single number can only cover by being that wide in all four directions (and a buffer that wide is a region that will not let go).
 Sides are the region's **own**, in its local frame - left/right are ∓x and top/bottom are ∓y, so a rotated region's "top" turns with it - and each falls back to `buffer`, which falls back to `REGION_EXIT_MARGIN`, so authoring one side leaves the other three exactly as they were and every level authored before the fields loads unchanged.
 A circle has no sides and a polygon's growth is a signed-distance offset with no axis to hang them on (see `pathOutlineGrown`), so both ignore the fields and take `buffer` alone; the editor offers them to rects only rather than showing four controls that do nothing.
 `pathOutlineGrown` grows a rect per side for the same reason it grew it per axis before - that is literally what `pointInRegion` tests - so the dotted outline in the editor and the overlay is exactly the volume the region holds by, which is the whole point of drawing it while it is being authored by eye.
 
-`priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
-The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - the buffer belongs to the region currently in force, and the island became that region on entry, so the enclosing region's buffer is no longer what is holding.
+`priority` still overrides the grip, and is the escape hatch a wide buffer needs: a small, deliberately-framed volume sitting inside a big buffered one has no other way to take the camera *alone*, and saying so explicitly beats shrinking the buffer until the overlap happens to work out.
+The consequence to author around is that leaving that priority island drops to whatever contains the avatar *then* - a buffer belongs to the rules in force, and the island silenced the enclosing region on entry, so the enclosing region's buffer is not what is holding on the way out.
 
 ## The screen-edge guarantee
 
@@ -222,3 +251,11 @@ It draws the **pin** in the same amber, as a dashed line right across the frame 
 An author tuning a lock or a lookahead has to be able to see the framing that rule is actually ASKING for, and that question is unanswerable while the answer is being silently corrected.
 It is an instrument rather than a level property, so it lives on the controller and is written to no file; the game constructs its controller and never touches the switch.
 `cli camera` asserts both halves of it - the same walk held on screen with it on and not held with it off - since a toggle connected to nothing passes any test that only checks one side.
+
+## What green cannot see here
+
+**`cli shot` cannot see the camera at all.** `shot.html` pins the view on the avatar (`camera.position = level.cameraRenderPosition(1)`, `zoom` from `?zoom=` or `BALL_ZOOM`) and never constructs a `CameraController`, because it exists to inspect the SIM and a camera that framed the avatar would put a body 20 m away off the side of every grab.
+So a filmstrip of a hand-off shows the avatar dead centre with the world scrolling past whatever the rules do, and its motion profile reads zero changed pixels for a camera move over a resting avatar.
+
+What covers it instead: `cli camera` for the rules, the weights and a controller ride; a bun script driving `CameraController.update` over a real level file (`scaleLevelData` + `buildCameraRules`) when the question is about an authored level rather than about the mechanism; and a person in a browser for the rest, which is where a camera is judged anyway.
+`?level=CAMERA_TEST` exists for exactly that, and the editor's ▶ Test runs the real controller on the level being authored.

@@ -6,9 +6,10 @@ A region frames a *place* and cannot say anything about where the player is goin
 
 It is deliberately **not** a region with a funny shape.
 A region is a closed volume tested by containment and a path is an open directed polyline tested by distance, so forcing one to impersonate the other would leave every shape helper (`pointInRegion`, `pathOutlineGrown`, the convexity rule) half-lying.
-The two are instead generalised into one **rule set** (`CameraRule`, built once per level by `buildCameraRules`), because `activeCameraRegion`'s priority/buffer logic - highest priority wins, later author order breaks a tie, the incumbent keeps its grip inside a grown margin unless strictly outranked, entering is never buffered - is exactly what a path needs too.
-`activeCameraRule` is that same function with two kinds of containment in it; `cameraRuleTarget` is `cameraRegionTarget` with a path arm.
-Paths are listed **after** regions so a path beats a region at equal priority: the path is the level's primary guide and a region is the local exception, which says so with `priority`.
+The two are instead generalised into one **rule set** (`CameraRule`, built once per level by `buildCameraRules`), because `activeCameraRegion`'s priority/buffer logic - the lowest priority in force wins, rules tied at it blend, the incumbent keeps its grip inside a grown margin unless outranked, entering is never buffered - is exactly what a path needs too.
+`activeCameraRules` is that same function with two kinds of containment in it; `cameraRuleTarget` is `cameraRegionTarget` with a path arm.
+A path and a region that overlap at the same priority therefore **blend** (see [Blending](camera.md#blending)), each taking the share its own falloff band leaves it, rather than one silencing the other on author order; a path that must govern the overlap outright says so with `priority`.
+Two **paths** cannot blend - the projection, the lead deadband and the branch window are all state about one polyline - so among tied paths the seat goes to the one already ridden, and to the last in the list otherwise.
 
 **Direction is the design**, and the lookahead never flips.
 The path is directed by its vert order and always leads toward increasing arc length, so even when the player backtracks the screen keeps arguing for the authored way.
@@ -118,7 +119,9 @@ The retired scalar `range` / `falloff` are folded into both axes by `scaleLevelD
 
 The falloff is the band OUTSIDE the range the path lets go over, and it exists because crossing the range used to swap the rule outright - the camera aiming down the route one frame and at the avatar the next, with the hand-off blend able to smooth that over but never make it small.
 
-Through the band `pathFalloffWeight` interpolates the path's target toward the **null rule's** - the plain follow at the base zoom - smoothstepped from 0 at the range ellipse to 1 at the band's outer ellipse (both resolved along the player's own offset direction, above), so lookahead, viewport scale and everything else the path asks for fade together and by the band's outer edge the two targets are **identical**: the release delta is exactly zero and the boundary stops existing perceptually.
+Through the band `pathFalloffWeight` gives away the path's share of the camera, smoothstepped from 0 at the range ellipse to 1 at the band's outer ellipse (both resolved along the player's own offset direction, above).
+What it gives it away *to* is whatever else is in force there and, failing that, the **plain follow** at the base zoom (`blendCameraTarget`), so lookahead, viewport scale and everything else the path asks for fade together and by the band's outer edge the path is asking for nothing: the release delta is exactly zero and the boundary stops existing perceptually.
+The weight is the path's arm of the blend every rule now goes through, and a path alone in the set blends exactly as it did when the fade was built into `cameraRuleTarget`.
 Smoothstep rather than linear so the weight is C1 at both edges - a kink in the target is a step in the camera's velocity, which reads as the camera catching on an invisible line.
 A zero falloff (both axes) means no band at all: the path keeps its full grip out to the release and the hand-off blend covers the swap, which is the pre-band behaviour.
 
@@ -127,7 +130,10 @@ The trade accepted with the weight: the avatar's screen position is no longer pe
 
 The weight is measured against the avatar's offset from their TRUE projection rather than from the deadbanded point the lead is taken from: this is about where they actually are relative to the route, which is the quantity the range is measured in - and while held it is the WINDOWED projection's offset, so at a switchback the fade is about the branch being ridden, exactly as the grip is.
 The band extends the grip (`pathRelease` is the band's ellipse grown by `buffer` on both axes) but NOT the acquisition, which stays the core range - a graceful exit rather than a wider entrance, the same asymmetry the buffer already has.
-Widening the acquisition to the band looks free (the weight is ~1 out there, so grabbing changes nothing on screen) and is not: a path acquired at zero influence still WINS the rule tie-break, so it would silently override a region the player is standing in with what amounts to the plain follow.
+Widening the acquisition to the band looks free (the weight is ~0 out there, so grabbing changes nothing on screen) and is not.
+The original reason it was refused - a path acquired at zero influence would still win the tie-break and silently override a region the player is standing in - stopped applying when equal ranks began to blend: at zero weight it would now contribute nothing to the target.
+What remains is that acquiring **commits state**: a fresh global projection, a re-centred lead deadband, and the one path seat, which no other path can share while it is held.
+Taking all of that out where the path is contributing nothing is state committed to a route the player is not riding, and the seat is the part that cannot be undone quietly.
 
 `cli camera` asserts the claim the whole thing is for, and all three cases are red without the weight: the weight's shape (0 inside, 1 outside, flat at both edges), the target interpolation with the null rule's target reached identically at the band's edge, and a controller ride in which the camera travels essentially nothing after the release fires.
 
@@ -163,7 +169,7 @@ The challenge cannot fire on the ridden branch itself, by construction rather th
 The whole thing stays **render-side and wall-clock driven**, so recorded replays and `cli selftest` are bit-identical: nothing here touches the sim.
 A level with no `cameraPaths` reduces to a regions-only rule set and every code path is what it was.
 
-`cli camera` (`src/sim/cameraCases.ts`) is the suite: the pure geometry (projection, arc length, the switchback), the controller (leading, backtracking, release, re-acquire, no snap at a hand-off, the path-beats-region tie-break), and the editor's `modelFromDisk`/`modelToDisk` round trip, which is the half nothing else can see - the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read.
+`cli camera` (`src/sim/cameraCases.ts`) is the suite: the pure geometry (projection, arc length, the switchback), the controller (leading, backtracking, release, re-acquire, no snap at a hand-off, priority and the blend), and the editor's `modelFromDisk`/`modelToDisk` round trip, which is the half nothing else can see - the editor rewrites the whole file every 750 ms, so a dropped field is gone from disk before anyone notices it was read.
 
 In the **editor** a path is a camera-layer item whose `EdShape` is `{ kind: "path" }` - an open curve carrying its points and one handle pair each, `setPathVerts` its one writer (drops consecutive duplicates, requires two verts, re-centres `pos` on the point AVERAGE, a curve having no area centroid; handles are offsets from their own point, so the re-centring leaves them alone).
 It is drawn with `+ Path`, a run of clicks finished with Enter or a double-click, and edited by exactly the vertex handles a polygon has minus the wrap.

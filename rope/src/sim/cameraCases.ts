@@ -31,16 +31,22 @@ import {
   softEdgeOffset,
   cameraRuleTarget,
   activeCameraRule,
+  activeCameraRules,
+  blendCameraTarget,
+  cameraInfluences,
+  regionDepth,
+  ruleWeight,
   PATH_KEY_FIELDS,
   pathParamsAt,
   pathParamsOf,
   pathRangeAxes,
   type CameraRule,
+  type CameraInfluence,
 } from "../render/cameraController";
 import type { CameraPathData, CameraRegionData, RawLevelData } from "../level/levelFormat";
 import { scaleLevelData } from "../level/levelFormat";
 import { modelFromDisk, modelToDisk, reversePathVerts } from "../editor/model";
-import { pathCorridorSweepInto } from "../render/shapePath";
+import { outlineOfData, pathCorridorSweepInto, pathOutlineInset } from "../render/shapePath";
 import {
   buildPolylineIndex,
   cubicAt,
@@ -206,6 +212,10 @@ function ride(
   pos: Vec2;
   zoom: number;
   rule: CameraRule | null;
+  // Every rule in force, with its share - `rule` is only the largest of them,
+  // so a case about whether a rule still HOLDS asks this and a case about what
+  // the camera mostly is asks that.
+  members: readonly CameraInfluence[];
   s: number;
   leadS: number;
   edge: { centre: Vec2; reach: Vec2 } | null;
@@ -221,6 +231,7 @@ function ride(
       pos: cam.position,
       zoom: cam.zoom,
       rule: held.rule,
+      members: held.members,
       s: held.s,
       leadS: held.leadS,
       edge: held.edge,
@@ -525,22 +536,242 @@ export function runCameraCases(): CameraResult[] {
       ];
     }),
 
-    run("rule-path-beats-region-at-equal-priority", () => {
-      // Listing paths after regions makes the tie-break favour the path: it is
-      // the level's primary guide and a region is the local exception, which
-      // says so by outranking it.
+    runFacts("rule-priority-is-lowest-wins", () => {
+      // The LOWEST number in force takes the camera outright and everything
+      // ranked worse is silenced - a region and a path overlapping, so the
+      // claim covers both kinds rather than only regions against each other.
       const inside = new Vec2(5, 0.5);
       const overlapping: CameraRegionData = { ...ROOM, y: 0, lockY: 0 };
-      const tie = buildCameraRules([overlapping], [RIDE]);
-      const outranked = buildCameraRules([{ ...overlapping, priority: 1 }], [RIDE]);
+      const bad: string[] = [];
+      const wins = buildCameraRules([{ ...overlapping, priority: -1 }], [RIDE]);
+      const set = activeCameraRules(wins, inside);
+      if (set.length !== 1 || set[0] !== wins[0]) bad.push("a -1 region did not silence a 0 path");
+      const loses = buildCameraRules([{ ...overlapping, priority: 1 }], [RIDE]);
+      const set2 = activeCameraRules(loses, inside);
+      if (set2.length !== 1 || set2[0] !== loses[1]) bad.push("a 1 region was not silenced by a 0 path");
+      // ...and it is the NUMBER, not the sign: 1 beats 2 exactly as -1 beats 0.
+      const both = buildCameraRules(
+        [
+          { ...overlapping, priority: 1 },
+          { ...overlapping, priority: 2 },
+        ],
+        [],
+      );
+      const set3 = activeCameraRules(both, inside);
+      if (set3.length !== 1 || set3[0] !== both[0]) bad.push("2 was not silenced by 1");
+      return bad;
+    }),
+
+    run("rule-equal-priority-blends", () => {
+      // Tied rules SHARE the camera rather than one of them winning by where it
+      // sits in the file: two rooms that both contain the player, with nothing
+      // to choose between them, put the camera exactly between what each asks
+      // for - and the zoom geometrically between, as every zoom blend here.
+      const a: CameraRegionData = {
+        x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 8 },
+        lockX: -10, lockY: 0, viewportScale: 1,
+      };
+      const b: CameraRegionData = { ...a, x: 6, lockX: 10, viewportScale: 4 };
+      const rules = buildCameraRules([a, b], []);
+      const p = new Vec2(3, 0); // in the overlap, 1 m inside each
+      const inf = cameraInfluences(activeCameraRules(rules, p), p);
+      const t = blendCameraTarget(inf, p, BASE_ZOOM);
       return [
-        { label: "path wins the tie", got: activeCameraRule(tie, inside) === tie[1] ? 1 : 0, want: 1 },
-        {
-          label: "a higher-priority region wins",
-          got: activeCameraRule(outranked, inside) === outranked[0] ? 1 : 0,
-          want: 1,
-        },
+        { label: "both rules in force", got: inf.length, want: 2 },
+        { label: "each asks for all of it", got: inf[0]!.weight + inf[1]!.weight, want: 2 },
+        // Normalised to an even average rather than one of them clipped away.
+        { label: "target x", got: t.pos.x, want: 0 },
+        // The geometric mean of base/1 and base/4.
+        { label: "zoom", got: t.zoom, want: BASE_ZOOM / 2 },
       ];
+    }),
+
+    run("rule-falloff-band-weights-by-depth", () => {
+      // A region's band is measured INWARD from its own boundary: full strength
+      // deeper than the band, nothing at the wall, smoothstepped between - and
+      // flat at both ends, because a kink in the weight is a step in the
+      // camera's velocity.
+      const r: CameraRegionData = {
+        x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 8 }, falloff: 2, lockX: 0, lockY: 0,
+      };
+      const rule = buildCameraRules([r], [])[0]!;
+      const w = (x: number): number => ruleWeight(rule, new Vec2(x, 0));
+      const h = 0.01;
+      return [
+        { label: "deep inside", got: w(0), want: 1 },
+        { label: "at the band's inner edge", got: w(2), want: 1 },
+        { label: "half way through", got: w(3), want: 0.5 },
+        { label: "at the wall", got: w(4), want: 0 },
+        { label: "outside", got: w(5), want: 0 },
+        { label: "flat at the inner edge", got: (w(2) - w(2 - h)) / h, want: 0, tol: 0.01 },
+        { label: "flat at the wall", got: (w(4) - w(4 - h)) / h, want: 0, tol: 0.01 },
+        // No band authored is the pre-band behaviour: all of it, everywhere.
+        { label: "no band, at the wall", got: ruleWeight(buildCameraRules([{ ...r, falloff: undefined }], [])[0]!, new Vec2(4, 0)), want: 1 },
+      ];
+    }),
+
+    runFacts("rule-overlap-of-the-band-width-cross-fades-exactly", () => {
+      // The authoring rule the band is for: overlap two rooms by the width of
+      // their band and the hand-over is an exact cross-fade - the weights sum
+      // to 1 across the whole overlap (smoothstep is symmetric about its
+      // middle), so no share of the camera leaks back to the plain follow on
+      // the way across, and the target sweeps from one room's framing to the
+      // other's without ever stopping or reversing.
+      const a: CameraRegionData = {
+        x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 8 },
+        lockX: -10, lockY: 0, falloff: 2,
+      };
+      const b: CameraRegionData = { ...a, x: 6, lockX: 10 };
+      const rules = buildCameraRules([a, b], []);
+      const bad: string[] = [];
+      let last = -Infinity;
+      for (let x = 2; x <= 4; x += 0.05) {
+        const p = new Vec2(x, 0);
+        const inf = cameraInfluences(activeCameraRules(rules, p), p);
+        const sum = inf.reduce((t, i) => t + i.weight, 0);
+        if (Math.abs(sum - 1) > 1e-9) bad.push(`weights sum to ${sum} at x=${x.toFixed(2)}`);
+        const t = blendCameraTarget(inf, p, BASE_ZOOM);
+        if (t.pos.x < last - 1e-9) bad.push(`target reversed at x=${x.toFixed(2)}`);
+        last = t.pos.x;
+      }
+      // ...and it really did travel the whole way between the two framings.
+      const at = (x: number): number => {
+        const p = new Vec2(x, 0);
+        return blendCameraTarget(cameraInfluences(activeCameraRules(rules, p), p), p, BASE_ZOOM).pos.x;
+      };
+      if (Math.abs(at(2) - -10) > 1e-9) bad.push(`entering the overlap is ${at(2)}, want -10`);
+      if (Math.abs(at(4) - 10) > 1e-9) bad.push(`leaving the overlap is ${at(4)}, want 10`);
+      if (Math.abs(at(3) - 0) > 1e-9) bad.push(`the middle is ${at(3)}, want 0`);
+      return bad;
+    }),
+
+    runFacts("rule-banded-handover-needs-no-blend", () => {
+      // What the band is worth: walking across the overlap the rules in force
+      // change twice - B joins, then A leaves - and neither change moves the
+      // target at all, because each happens at zero weight. The gap the
+      // hand-off would have to freeze is therefore zero, and the camera crosses
+      // without one. The same walk with no band is the comparison: there the
+      // set changes are metres, and the cross-fade is all that hides them.
+      const a: CameraRegionData = {
+        x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 8 },
+        lockX: 0, lockY: -3, falloff: 2,
+      };
+      const b: CameraRegionData = { ...a, x: 6, lockY: 3 };
+      const walk: Vec2[] = [];
+      for (let i = 0; i <= 200; i++) walk.push(new Vec2(-1 + i * 0.04, 0));
+      const bad: string[] = [];
+      // The biggest one-frame move of the TARGET over the walk - where a set
+      // change shows up as a step, before the camera's own ease hides it.
+      const worstJump = (rules: readonly CameraRule[]): number => {
+        let worst = 0;
+        let prev: Vec2 | null = null;
+        for (const p of walk) {
+          const t = blendCameraTarget(cameraInfluences(activeCameraRules(rules, p), p), p, BASE_ZOOM);
+          if (prev) worst = Math.max(worst, t.pos.distanceTo(prev));
+          prev = t.pos;
+        }
+        return worst;
+      };
+      const banded = worstJump(buildCameraRules([a, b], []));
+      const bandless = worstJump(
+        buildCameraRules([{ ...a, falloff: undefined }, { ...b, falloff: undefined }], []),
+      );
+      // The target crosses 6 m of lock over the 2 m overlap, at 4 cm a frame:
+      // 12 cm a frame averaged, and 18 at the middle of the crossing, where
+      // smoothstep runs at 1.5x the linear rate. Anything above that is a set
+      // change showing through rather than the cross-fade itself.
+      if (banded > 0.19) bad.push(`banded target jumped ${banded.toFixed(4)} m in one frame`);
+      // Bandless, the join is half the gap between the two locks, at once.
+      if (bandless < 2.9) bad.push(`bandless target only jumped ${bandless.toFixed(4)} m`);
+      // ...and the set really did change twice on the way across.
+      const out = ride(buildCameraRules([a, b], []), walk, false);
+      const changes = out.filter(
+        (o, i) => i > 0 && o.members.length !== out[i - 1]!.members.length,
+      ).length;
+      if (changes !== 2) bad.push(`the set changed ${changes} times, want a join and a leave`);
+      return bad;
+    }),
+
+    runFacts("rule-band-outline-is-the-zone-tested", () => {
+      // The inner edge of the band, as the editor and the overlay draw it, is
+      // exactly where the weight reaches 1 - the same one-source rule the
+      // buffer outline follows. Drawn at the origin unrotated, so what the sink
+      // records is world coordinates and the depth can be measured straight off
+      // it. A band wider than the room has no inner edge and draws nothing,
+      // which is the case that would otherwise be an inside-out shape (or, for
+      // a circle, a negative radius the canvas throws on).
+      const bad: string[] = [];
+      let rect: number[] | null = null;
+      let radius: number | null = null;
+      const pts: Vec2[] = [];
+      const sink = {
+        save: () => {}, restore: () => {}, translate: () => {}, rotate: () => {},
+        beginPath: () => {}, closePath: () => {},
+        moveTo: (x: number, y: number) => void pts.push(V(x, y)),
+        lineTo: (x: number, y: number) => void pts.push(V(x, y)),
+        rect: (x: number, y: number, w: number, h: number) => void (rect = [x, y, w, h]),
+        arc: (_x: number, _y: number, r: number) => void (radius = r),
+      } as unknown as CanvasRenderingContext2D;
+      const at = (r: CameraRegionData, inset: number): boolean =>
+        pathOutlineInset(sink, V(r.x, r.y), r.rot, outlineOfData(r.shape), inset);
+
+      const box: CameraRegionData = { x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 4 } };
+      if (!at(box, 0.5)) bad.push("a rect with room for its band drew nothing");
+      if (rect === null) bad.push("the rect outline was not drawn as a rect");
+      else if (Math.abs(rect[2]! - 7) > 1e-9 || Math.abs(rect[3]! - 3) > 1e-9) {
+        bad.push(`rect inset to ${rect[2]}x${rect[3]}, want 7x3`);
+      }
+      if (at(box, 2)) bad.push("a band as wide as the rect's half-height still drew");
+
+      const disc: CameraRegionData = { x: 0, y: 0, rot: 0, shape: { kind: "circle", r: 5 } };
+      if (!at(disc, 2) || radius === null || Math.abs(radius! - 3) > 1e-9) {
+        bad.push(`circle inset to ${String(radius)}, want 3`);
+      }
+      if (at(disc, 5)) bad.push("a band as wide as the circle still drew");
+
+      const poly: CameraRegionData = {
+        x: 0, y: 0, rot: 0,
+        shape: { kind: "poly", verts: [V(-4, -2), V(4, -2), V(4, 2), V(-4, 2)] },
+      };
+      pts.length = 0;
+      if (!at(poly, 0.5)) bad.push("a polygon with room for its band drew nothing");
+      for (const p of pts) {
+        // Every drawn point is exactly one band-width in from the boundary,
+        // which is the claim: inside this line the region wants all of it.
+        if (Math.abs(regionDepth(poly, p) - 0.5) > 1e-9) {
+          bad.push(`a band outline point sits ${regionDepth(poly, p).toFixed(4)} m in, want 0.5`);
+          break;
+        }
+      }
+      if (at(poly, 2)) bad.push("a band as wide as the polygon still drew");
+      return bad;
+    }),
+
+    runFacts("rule-region-depth-is-the-distance-to-the-boundary", () => {
+      // The band is read off a real distance, so it means the same thing in
+      // every shape a region can be - and in a ROTATED one, where the depth is
+      // measured in the region's own frame.
+      const bad: string[] = [];
+      const at = (r: CameraRegionData, x: number, y: number): number => regionDepth(r, V(x, y));
+      const circle: CameraRegionData = { x: 0, y: 0, rot: 0, shape: { kind: "circle", r: 5 } };
+      if (Math.abs(at(circle, 0, 0) - 5) > 1e-9) bad.push("circle centre is not its radius deep");
+      if (Math.abs(at(circle, 3, 0) - 2) > 1e-9) bad.push("circle depth is not r - |p - c|");
+      if (at(circle, 6, 0) >= 0) bad.push("outside the circle did not come back negative");
+      const rect: CameraRegionData = { x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 8, h: 4 } };
+      if (Math.abs(at(rect, 0, 0) - 2) > 1e-9) bad.push("rect depth is not to its NEAREST wall");
+      if (Math.abs(at(rect, 3, 0) - 1) > 1e-9) bad.push("rect depth off centre is wrong");
+      if (at(rect, 0, 3) >= 0) bad.push("outside the rect did not come back negative");
+      // The same rect turned a quarter turn: its "near wall" turns with it.
+      const turned: CameraRegionData = { ...rect, rot: Math.PI / 2 };
+      if (Math.abs(at(turned, 0, 3) - 1) > 1e-9) bad.push("a rotated rect measured in world axes");
+      // A convex polygon: the distance to the nearest face plane.
+      const poly: CameraRegionData = {
+        x: 0, y: 0, rot: 0,
+        shape: { kind: "poly", verts: [V(-4, -2), V(4, -2), V(4, 2), V(-4, 2)] },
+      };
+      if (Math.abs(at(poly, 0, 0) - 2) > 1e-9) bad.push("polygon centre depth is wrong");
+      if (at(poly, 0, 5) >= 0) bad.push("outside the polygon did not come back negative");
+      return bad;
     }),
 
     run("rule-set-without-paths-is-regions-only", () => {
@@ -652,6 +883,63 @@ export function runCameraCases(): CameraResult[] {
       if (!out) return ["the path did not survive the round trip at all"];
       const extra = Object.keys(out).filter((k) => !["x", "y", "rot", "verts"].includes(k));
       return extra.length ? [`wrote unauthored fields: ${extra.join(", ")}`] : [];
+    }),
+
+    runFacts("editor-region-round-trip", () => {
+      // The same guarantee for a REGION, and for the same reason: the editor
+      // rewrites the whole file 750 ms after any edit, so a field it does not
+      // carry through `EdItem` is gone from disk before anyone notices it was
+      // read. Every camera field a region can author, in disk pixels.
+      const authored: RawLevelData = {
+        player: { x: 0, y: 0, radius: 20 },
+        bodies: [],
+        cameraRegions: [
+          {
+            x: 100,
+            y: -40,
+            rot: 0.25,
+            shape: { kind: "rect", w: 300, h: 200 },
+            offsetX: 30,
+            offsetY: -20,
+            viewportScale: 1.5,
+            lockX: 80,
+            lockY: 60,
+            blend: 0.3,
+            buffer: 40,
+            bufferLeft: 10,
+            bufferRight: 20,
+            bufferTop: 30,
+            bufferBottom: 50,
+            falloff: 70,
+            priority: -1,
+          },
+        ],
+      };
+      const out = modelToDisk(modelFromDisk(authored)).cameraRegions?.[0];
+      if (!out) return ["the region did not survive the round trip at all"];
+      const want = authored.cameraRegions![0]!;
+      const bad: string[] = [];
+      for (const k of [
+        "x", "y", "rot", "offsetX", "offsetY", "viewportScale", "lockX", "lockY",
+        "blend", "buffer", "bufferLeft", "bufferRight", "bufferTop", "bufferBottom",
+        "falloff", "priority",
+      ] as const) {
+        if (Math.abs((out[k] ?? NaN) - (want[k] ?? NaN)) > 1e-6) {
+          bad.push(`${k} ${String(out[k])} != ${String(want[k])}`);
+        }
+      }
+      // A region with nothing authored writes nothing, so a re-save stays
+      // byte-stable rather than becoming a diff of defaults.
+      const bare = modelToDisk(
+        modelFromDisk({
+          player: { x: 0, y: 0, radius: 20 },
+          bodies: [],
+          cameraRegions: [{ x: 0, y: 0, rot: 0, shape: { kind: "rect", w: 100, h: 100 } }],
+        }),
+      ).cameraRegions?.[0];
+      const extra = Object.keys(bare ?? {}).filter((k) => !["x", "y", "rot", "shape"].includes(k));
+      if (extra.length) bad.push(`wrote unauthored fields: ${extra.join(", ")}`);
+      return bad;
     }),
 
     runFacts("editor-without-paths-is-unchanged", () => {
@@ -1073,8 +1361,12 @@ export function runCameraCases(): CameraResult[] {
       // zoom, as every zoom blend here is).
       const path: CameraPathData = { ...RIDE, falloffX: 2, falloffY: 2, viewportScale: 2 };
       const rule = buildCameraRules([], [path])[0]!;
-      const at = (dist: number): { pos: Vec2; zoom: number } =>
-        cameraRuleTarget(rule, new Vec2(5, dist), BASE_ZOOM, 5, pathFalloffWeight(pathParamsOf(path), V(0, dist)));
+      // Through the blend, which is where the fade lives: the path asks for its
+      // own weight and the plain follow takes the leftover share.
+      const at = (dist: number): { pos: Vec2; zoom: number } => {
+        const p = new Vec2(5, dist);
+        return blendCameraTarget(cameraInfluences([rule], p), p, BASE_ZOOM, 5);
+      };
       const boundary = at(1);
       const mid = at(2);
       const edge = at(3);
@@ -1131,14 +1423,21 @@ export function runCameraCases(): CameraResult[] {
       const rel = pathRelease(pathParamsOf(path), V(0, 1));
       if (Math.abs(rel - 3.15) > 1e-9) bad.push(`release at ${rel}, want 3.15`);
       // Ride out from the route and check where it lets go.
+      // Ride out from the route and check where it lets go. The path is in
+      // force as long as it is one of the rules in the blend - through the band
+      // it is fading out, and the room it is fading into is the larger share
+      // long before the grip ends, so this asks membership rather than which
+      // rule is dominant.
+      const holds = (o: { members: readonly CameraInfluence[] }): boolean =>
+        o.members.some((m) => m.rule === rules[1]);
       const held = ride(rules, [new Vec2(5, 0), new Vec2(5, 2.5), new Vec2(5, 3.1)]);
-      if (held[1]!.rule !== rules[1]) bad.push("let go inside the falloff band");
-      if (held[2]!.rule !== rules[1]) bad.push("let go inside the jitter buffer");
+      if (!holds(held[1]!)) bad.push("let go inside the falloff band");
+      if (!holds(held[2]!)) bad.push("let go inside the jitter buffer");
       const gone = ride(rules, [new Vec2(5, 0), new Vec2(5, 3.5)]);
-      if (gone[1]!.rule === rules[1]) bad.push("still holding past the release distance");
+      if (holds(gone[1]!)) bad.push("still holding past the release distance");
       // ...and coming from outside, the band is not a wider acquisition.
       const inward = ride(rules, [new Vec2(5, 6), new Vec2(5, 2.5)]);
-      if (inward[1]!.rule === rules[1]) bad.push("acquired the path from inside the falloff band");
+      if (holds(inward[1]!)) bad.push("acquired the path from inside the falloff band");
       return bad;
     }),
 
