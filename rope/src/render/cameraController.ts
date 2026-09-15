@@ -110,23 +110,50 @@ export const PATH_TRACK_SLACK_SPEED = 5;
 // a room in it. They are tuned together and are what every one of them means:
 //
 //   CAMERA_EDGE_MARGIN     where the avatar may never go.
-//   CAMERA_EDGE_EASE       how far in from there the override starts.
-//   CAMERA_EDGE_SMOOTHING  how long a correction takes, in seconds.
+//   CAMERA_EDGE_INNER_X/Y  where the override holds them, per axis.
+//   CAMERA_EDGE_SMOOTHING  how fast it corrects toward that, in seconds.
 //   CAMERA_LATCH_BUFFER    how much of it a PINNED axis ignores.
 //
 // Three of them are fractions of the frame, so they mean the same thing at any
 // zoom, and the smoothing is a clock. `edgeReach` turns the first two into the
-// distances a given camera actually allows, `softEdgeOffset` is the curve
-// between them, `edgeTakeUp` is the clock, and `latchBuffer` is the fourth in
-// metres. The last belongs to the anchored latch rather than to the band, and
-// is declared beside them because it is tuned against them.
+// distances a given camera actually allows - `innerReach` is the inner one -
+// `edgeOffset` is where the override wants the avatar held, `edgeTakeUp` is the
+// clock, and `latchBuffer` is the last in metres. The last belongs to the
+// anchored latch rather than to the guarantee, and is declared beside them
+// because it is tuned against them.
+//
+// The law is a WINDOW, a rate, and a floor, in that order:
+//
+//   Inside the inner margin the guarantee is not there at all and the level's
+//   framing is honoured exactly. Outside it the camera is moved until the
+//   avatar is AT the inner margin - not near it, at it - and the only question
+//   the parameters answer is how fast. The floor is what that correction may
+//   never be outrun past.
+//
+// The inner margin is therefore where the avatar RESTS whenever the framing in
+// force would have put them further out, and the distance between it and the
+// floor is transient headroom rather than a second framing: it is the room the
+// correction is allowed to still be working in, and `edgeTakeUp` spends it
+// faster the less of it is left.
+//
+// An asymptotic give-way used to live between the two - the override started at
+// the inner line and handed the ground over on an exponential, so the avatar
+// settled somewhere between the two lines that depended on how much the rule
+// was asking for. It is gone because that is exactly what a minimum distance
+// from the edge may not do: a framing that asked for a little was held near the
+// inner line and one that asked for a lot rode near the floor, so the same
+// parameter read as a different margin in every room (measured on
+// `session-368f`: 19.7% of the frame from the edge under a path asking for 1.68
+// m, 26.7% under a region asking for 0.88 m). The smoothness it was there for
+// belongs to the clock and is delivered by it - see CAMERA_EDGE_SMOOTHING, and
+// `edge-window-has-no-velocity-step`, which is the same measurement without it.
 //
 // The override runs in two places, which is what makes it smooth (see
-// `CameraController.softEdge` and `holdEdge`): the band shapes what the camera
-// is AIMING at, so the camera answers it through its own follow ease and its
-// velocity turns over instead of reversing, and the same band plus the hard
-// floor is then applied to where the camera actually IS, because an aim can be
-// outrun and the guarantee may not be.
+// `CameraController.softEdge` and `holdEdge`): the window shapes what the
+// camera is AIMING at, so the camera answers it through its own follow ease and
+// its velocity turns over instead of reversing, and the same window plus the
+// hard floor is then applied to where the camera actually IS, because an aim
+// can be outrun and the guarantee may not be.
 
 // How much of the frame the avatar may never enter, as a fraction of the FULL
 // width and height, on every axis and under every rule.
@@ -143,45 +170,44 @@ export const PATH_TRACK_SLACK_SPEED = 5;
 // 9.6 x 5.4 m a 1080p frame shows at GRAPPLE_ZOOM.
 //
 // It is the absolute floor rather than the point the override engages at - see
-// CAMERA_EDGE_EASE, which is where it starts and what makes reaching this one
-// a limit the avatar approaches rather than a line they are held on.
-export const CAMERA_EDGE_MARGIN = 0.05;
+// CAMERA_EDGE_INNER_X/Y, which is where the avatar is actually held. Reaching
+// this one at all means the correction was outrun, which is a launch or a
+// hand-off and not ordinary play.
+//
+// At 0 the floor is the frame's own edge, so the guarantee is "the avatar's
+// centre is on screen" and the avatar themselves is half off it. Anything
+// larger is a real keep-out, and it may not exceed the inner margin.
+export const CAMERA_EDGE_MARGIN = 0;
 
-// How much FURTHER into the frame the guarantee starts easing itself in, as the
-// same kind of fraction of the full width and height. Together the two say
-// where the override begins (`CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE` in from
-// the edge) and where the avatar may never go (`CAMERA_EDGE_MARGIN`), and the
-// band between them is what the override is spread over.
+// The target minimum distance from the edge of the frame, per axis, as a
+// fraction of that axis's own full extent - measured from the EDGE, like the
+// margin, rather than inward from it.
 //
-// A bare clamp is a discontinuity in the camera's VELOCITY, which is the one
-// thing a camera may not have. Up to the boundary the camera is easing toward
-// whatever the level asked for; one frame later it is rigidly locked to the
-// avatar, moving at exactly their speed. Nothing about the position jumps -
-// that is what makes it hard to see coming - but the change of speed reads as
-// the camera being caught and dragged, and it happens again every time a swing
-// crosses back out.
+// This is the one of the four a player can see. Whenever the framing in force
+// would put the avatar closer to the edge than this, the camera is moved until
+// they are exactly here, so it is where the avatar sits during every excursion
+// the guarantee answers: at 0.2 vertically, a fifth of the frame's height up
+// from the bottom, whatever the rule was asking for and however far past it the
+// avatar went.
 //
-// Eased in over a band, `softEdgeOffset` hands the same amount of ground over
-// gradually: the camera gives way a little at the near edge and is fully
-// carried by the avatar deep in the band, so the two regimes are joined by a
-// ramp rather than by a step. Nothing about the guarantee itself is weakened -
-// the avatar stays strictly inside `CAMERA_EDGE_MARGIN` throughout, and rather
-// further inside it than the bare clamp ever left them.
+// Two numbers rather than one because a fraction of the axis is not a distance:
+// the frame is 16:9, so the same value is an inset 78% deeper in METRES across
+// than down. Held equal as fractions the inset reads as proportional to the
+// frame; held equal in metres - 0.1125 across to 0.2 down - it reads as a
+// uniform border, which is 216 px on all four sides of a 1080p frame. The pair
+// is the interim either way: the unit this wants is one distance, stated as a
+// fraction of the frame's HEIGHT on both axes, which is what
+// CAMERA_LATCH_BUFFER already does.
 //
-// Sized against the margin it softens rather than against the frame: at 0.15 to
-// the margin's 0.05 the override begins 20% in from the edge and the band is
-// 1.44 m wide horizontally and 81 cm vertically on the 9.6 x 5.4 m a 1080p
-// frame shows at GRAPPLE_ZOOM. How much of that the avatar actually spends is
-// CAMERA_EDGE_SMOOTHING's, not this one's - the band is the room the take-up
-// has to work in, and a narrow one is answered by the barrier instead.
-//
-// Set it to 0 and this is exactly the bare clamp again, which is what makes it
-// the parameter to turn down when the ease is felt as the camera giving way too
-// early - as against turning the smoothing down, which keeps the band and makes
-// the handover inside it crisper.
-export const CAMERA_EDGE_EASE = 0.15;
+// It is bounded BELOW by the margin (a target inside the floor is the floor)
+// and above by half the frame, where `edgeReach` returns 0 and the camera is
+// pinned to the avatar - at which point the level has no framing left to
+// author, which is the sign it has been set far too deep. 0.2 leaves the
+// authored framing 60% of the frame to work in.
+export const CAMERA_EDGE_INNER_X = 0.1125;
+export const CAMERA_EDGE_INNER_Y = 0.2;
 
-// How long the override takes to give the band's pull, seconds - the third of
+// How long the override takes to give the window's pull, seconds - the third of
 // the three, and the one that makes the correction a RATE rather than a
 // distance.
 //
@@ -195,22 +221,41 @@ export const CAMERA_EDGE_EASE = 0.15;
 //
 // So the pull is given at a speed set by how much of it is still owed - see
 // `edgeTakeUp`, which is where the law is - and this is the constant in it: the
-// seconds a correction takes when the band has room for it, self-shortening to
-// nothing as the room runs out. Deeper past the boundary is corrected faster,
+// seconds a correction takes when there is headroom for it, self-shortening to
+// nothing as the room runs out. Deeper past the margin is corrected faster,
 // the correction fades out as it finishes rather than ending, and the floor is
 // never reached at all.
 //
 // What it buys is measured rather than argued. Worst camera ACCELERATION and
 // JERK - which is what "harsh" is - over two recorded swings and a walk out of
-// a locked room, in m/s² and m/s³:
+// a locked room, in m/s² and m/s³. These four were measured with the old
+// asymptotic give-way in place, and what they settle is how the pull is
+// DELIVERED, which the window did not change:
 //
 //                                   118f          137f          walking out
-//   bare clamp (EASE = 0)      127 / 8044    103 / 6148     288 / 17280
-//   the band, given outright    65 / 4412     25 /  972      36 /   886
-//   the band, on a held pull   141 / 8479     26 /  972      30 /   278
-//   the band, at this rate     19 / 1462      17 /  972      14 /   179
+//   bare clamp, outright       127 / 8044    103 / 6148     288 / 17280
+//   the pull, given outright    65 / 4412     25 /  972      36 /   886
+//   the pull, on a held pull   141 / 8479     26 /  972      30 /   278
+//   the pull, at this rate      19 / 1462      17 /  972      14 /   179
 //
-// The third row is the design this replaced, and its 118f column is the reason:
+// Dropping the give-way for the window was measured the same way, on
+// `session-368f`, against the give-way at the tuning it was last played at:
+//
+//                                accel    jerk    where the avatar sat
+//   the give-way (ease 0.4 y)      33     1823    11.3% .. 28.5% from the edge
+//   the window (inner 0.2 y)       43     2347    14.5% .. 24.2%
+//
+// The spread in where the avatar sits nearly halves and what is left of it is a
+// correction still running rather than a different framing per room; the
+// correction is about a third firmer, because the demand is now the whole
+// excess rather than a fraction of it. This constant is the knob for that, and
+// it is monotone in both directions on that session - 0.10 s reads 50 / 2735
+// and rides to 15.6%, this 0.15 s reads 43 / 2347 and 14.5%, 0.20 s reads
+// 39 / 2126 and 13.8%, 0.30 s reads 34 / 1873 and 12.8%. Softer is calmer and
+// rides deeper, and the floor is what bounds how deep.
+//
+// The third row of the first table is the design the rate replaced, and its
+// 118f column is the reason:
 // a pull held across frames goes stale when the geometry turns under it, and
 // there it made the override HARSHER THAN THE BARE CLAMP it exists to soften
 // (see `edgeAxis`). What is left in the last row is not the override at all -
@@ -218,19 +263,52 @@ export const CAMERA_EDGE_EASE = 0.15;
 // the lookahead deadband letting go, both of which are steps in the target's
 // velocity that this has nothing to do with.
 //
-// It is bounded ABOVE by the band and the speeds in play: past what the band
-// can absorb the rate rides the barrier and the camera is turned over hard
-// instead of being carried, so much longer than a fifth of a second is a sign
-// the BAND is too narrow for the speeds rather than that this is too long.
+// It is bounded ABOVE by the headroom and the speeds in play: past what the
+// headroom can absorb the rate rides the barrier and the camera is turned over
+// hard instead of being carried, so much longer than a fifth of a second is a
+// sign the INNER MARGIN is too close to the floor for the speeds rather than
+// that this is too long.
 //
-// A SHAPE knob was tried here first and removed. The family
+// A SHAPE knob was tried on the give-way first and removed, and is worth not
+// re-inventing even though the curve it shaped is gone. The family
 // `1 - (1+uk)**(-1/k)` holds the curve's two end conditions for every `k` and
 // looks like a free choice of tail, but its curvature at the join is `-(1+k)`:
 // a longer tail is a SHARPER bend exactly where the override engages, so the
 // knob ran the wrong way and every value of it was worse than `k = 0` (23, 29,
 // 44, 77 m/s² of peak acceleration for k = 0.01, 1, 4, 20 on `session-137f`).
 // What it was reaching for is a delay, and a delay is a clock.
-export const CAMERA_EDGE_SMOOTHING = 0.15;
+export const CAMERA_EDGE_SMOOTHING = 0.3;
+
+// An EXPONENT on that headroom term was tried here and rejected by play, and
+// this is the note that stops it being re-invented a third time.
+//
+// The argument for it is a good one. The rate is divided by the headroom the
+// demand has eaten, so the time constant shrinks in proportion to the gap left
+// to the floor - but the distance to close shrinks with it, so a correction
+// takes about as long from anywhere: on the locked-room step an avatar a
+// centimetre from the floor is answered at 29 m/s and still takes 0.87 s, the
+// same 0.87 s as one a tenth of the way in. Squaring the term makes the rate
+// outrun the distance, so the camera would give way softly while there was room
+// and close outright when there was not:
+//
+//   depth into the headroom     as it is      squared
+//   10%                        1.02 m/s      1.06 m/s
+//   75%                       11.87 m/s     22.58 m/s
+//   99%                       28.87 m/s     63.35 m/s, 0.52 s not 0.87 s
+//
+// Played, the flat one is better, and the numbers say why it might be: what the
+// exponent buys is all in the last quarter of the headroom, which ordinary play
+// never reaches (`session-368f` spends a quarter of it at its worst). What it
+// costs is paid everywhere - the correction's character changes with depth, so
+// the camera answers the same excursion differently depending on how far the
+// framing in force had already pushed the avatar, and a camera that is one
+// thing at one depth and another thing at another is the complaint the window
+// itself was written to fix.
+//
+// The flat-in-time reading is the one to keep: a correction takes about as long
+// whatever provoked it, and the only thing that changes near the floor is that
+// it is not allowed to take that long - the headroom term is still there, still
+// divides, and still diverges, which is what makes the floor unreachable.
 
 // How much of what the band asks for a PINNED axis simply ignores, as a
 // fraction of the frame's HEIGHT.
@@ -292,9 +370,9 @@ export const CAMERA_LATCH_BUFFER = 0.02;
 // How long the pin's buffer takes to open, in seconds - machinery rather than a
 // knob, and the reason is in `latchOpenX`: it exists so the buffer arrives as a
 // ramp instead of as a step. Half a second is long enough that a pin born deep
-// in the band costs a couple of m/s^2 rather than a hundred, and short enough
-// to be fully open before the second arc of any swing, which is the first one
-// it has anything to do.
+// past the margin costs a couple of m/s^2 rather than a hundred, and short
+// enough to be fully open before the second arc of any swing, which is the
+// first one it has anything to do.
 const LATCH_OPEN_TAU = 0.5;
 
 // The pin's buffer in metres, for a camera at a given zoom.
@@ -1008,8 +1086,8 @@ function tangentAt(index: PolylineIndex, s: number): Vec2 {
 
 // How far the camera centre may be from the follow point, per axis, before the
 // avatar enters the band `margin` names at the edge of the frame. The default
-// is the guarantee's own keep-out; `CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE` is
-// where the override starts easing in.
+// is the guarantee's own keep-out; `innerReach` is the inner margin the
+// override holds the avatar to.
 //
 // Zero when the margin is wider than half the frame, which pins the camera on
 // the avatar rather than inverting the clamp and shoving it out the far side.
@@ -1022,63 +1100,67 @@ export function edgeReach(camera: Camera, zoom: number, margin = CAMERA_EDGE_MAR
   );
 }
 
-// The offset from the follow point the camera is actually allowed, for one it
-// WANTS of `d` (both distances, so per axis and unsigned).
+// The inner margin as a distance, per axis - `edgeReach` with each axis's own
+// inner fraction in place of the floor's. The one place the two fractions are
+// paired, so a call site asks for "the inner reach" rather than restating which
+// number goes on which axis.
 //
-// Inside `soft` the camera is left alone. Past it the excess is handed over on
-// an exponential whose length scale is the band itself, so the offset climbs
-// toward `hard` and never past it:
-//
-//   a(d) = soft + (hard - soft) * (1 - exp(-(d - soft) / (hard - soft)))
-//
-// The exponential is the shape because both of its end conditions matter: the
-// slope at `soft` is exactly 1, so the override costs nothing at the moment it
-// engages, and the slope decays to 0, so the camera arrives at being carried by
-// the avatar rather than being caught by them. A smoothstep across the band
-// satisfies the second and not the first - it is flat where it starts, so it
-// takes the whole of the first millimetre's excess and the step is back, moved
-// inward.
-//
-// It has no shape parameter, and CAMERA_EDGE_SMOOTHING says why one was tried
-// here and moved to the clock instead.
-//
-// It is asymptotic for the same reason it is C1 at the join: a curve that met
-// `hard` at a finite distance and had slope 1 where it started would have to
-// make the ground up somewhere in between, which means giving way FASTER than
-// the avatar moves. Approaching it is the stronger guarantee anyway - across
-// everything a swing reaches the avatar is strictly inside the keep-out band
-// rather than sitting exactly on its line, which is where the bare clamp used
-// to hold them. (Far enough out the arithmetic does land on the line, which is
-// the bare clamp's own answer for a launch and is the right one.)
-//
-// A zero-width band is the bare clamp, exactly, which is what makes
-// CAMERA_EDGE_EASE = 0 a real setting rather than a division by zero.
-export function softEdgeOffset(d: number, soft: number, hard: number): number {
-  if (d <= soft) return d;
-  const band = hard - soft;
-  if (band <= 0) return Math.min(d, hard);
-  return soft + band * (1 - Math.exp(-(d - soft) / band));
+// Never past the floor: an inner margin authored inside the margin would invert
+// the window, and the answer to that is that the floor is the target.
+export function innerReach(camera: Camera, zoom: number): Vec2 {
+  const hard = edgeReach(camera, zoom);
+  return new Vec2(
+    Math.min(hard.x, edgeReach(camera, zoom, CAMERA_EDGE_INNER_X).x),
+    Math.min(hard.y, edgeReach(camera, zoom, CAMERA_EDGE_INNER_Y).y),
+  );
 }
 
-// How much the band wants the camera pulled in on one axis, in metres: the
-// offset it has less the offset it is allowed. Zero anywhere inside `soft`.
-export function edgePull(away: number, soft: number, hard: number): number {
-  return away <= soft ? 0 : away - softEdgeOffset(away, soft, hard);
+// The offset from the follow point the camera is allowed to REST at, for one it
+// wants of `d` (both distances, so per axis and unsigned).
+//
+// The window, and all of it: inside the inner margin the camera keeps the
+// offset it asked for, outside it the offset is the inner margin exactly. There
+// is no third regime, and that is the property the whole guarantee is built to
+// have - a minimum distance from the edge that reads the same in every room,
+// under every rule, at every speed the correction can keep up with.
+//
+// What this does NOT say is when the camera gets there. Applied outright it is
+// a bare clamp and a step in the camera's velocity; the controller gives it
+// over `edgeTakeUp`'s clock instead, and the clock is where every claim about
+// smoothness now lives. The two were confused in an earlier design (an
+// exponential give-way between this line and the floor), and the cost of
+// confusing them is in CAMERA_EDGE_INNER_X/Y: a give-way expressed as distance
+// makes where the avatar rests a function of how much the rule was asking for,
+// which is the one thing a minimum distance may not be.
+//
+// The floor is not this function's business. It is applied last and to the
+// camera's position rather than to the offset it would like (see `edgeAxis`),
+// because what the floor answers is the correction being outrun, and an offset
+// that was never granted cannot be outrun.
+export function edgeOffset(d: number, inner: number): number {
+  return Math.min(d, inner);
+}
+
+// How much the window wants the camera pulled in on one axis, in metres: the
+// offset it has less the offset it may rest at. Zero anywhere inside the inner
+// margin, and the whole of the excess outside it.
+export function edgePull(away: number, inner: number): number {
+  return Math.max(0, away - edgeOffset(away, inner));
 }
 
 // One axis of the guarantee, and the whole of what makes it a delayed override
 // rather than an immediate one.
 //
 // It has NO STATE, and that is the whole of the design. What it returns is a
-// function of this frame's geometry alone: how far past the band's inner line
-// the point is, and how much of the band is left between where the band wants
-// it and the floor it may not pass (see `edgeTakeUp`, which is the rate law).
+// function of this frame's geometry alone: how far past the inner margin the
+// point is, and how much room is left between that margin and the floor it may
+// not pass (see `edgeTakeUp`, which is the rate law).
 //
 // A carried pull was tried here first and is the thing to not re-invent. The
 // argument for it is obvious - the override should not arrive all at once, so
 // hold how much of it has been given and take up the rest over a clock - and
 // the flaw is that the pull is a DISPLACEMENT held against a geometry that
-// moves. A swing turns and the band stops asking within a handful of frames
+// moves. A swing turns and the window stops asking within a handful of frames
 // while the held pull is still most of its old size, so the camera goes on
 // being dragged for a third of a second after the reason for it has gone, and
 // then whatever bounds the pull cuts the remainder off in one frame. That is
@@ -1089,13 +1171,16 @@ export function edgePull(away: number, soft: number, hard: number): number {
 //
 // Nothing is lost by dropping it, because the CAMERA POSITION is already the
 // integrator this wants. Applied to `this.pos` every frame (see `holdEdge`), a
-// fraction of the demand per frame IS a first-order approach to the band's
-// curve - the accumulation happens in the thing being corrected, where it
+// fraction of the demand per frame IS a first-order approach to the inner
+// margin - the accumulation happens in the thing being corrected, where it
 // cannot go stale, and the correction fades out with the demand that drives it
-// because it is nothing but that demand.
+// because it is nothing but that demand. That approach is also the whole of
+// why the window may be a hard clamp: what the avatar sees is the camera
+// easing them back to the inner margin over the clock, and what it settles on
+// when they stop is the margin itself.
 //
 // Applied to an AIM, which is rebuilt from the rule every frame and is not
-// state, the same fraction would be a permanent weakening of the band rather
+// state, the same fraction would be a permanent weakening of the window rather
 // than a delay - so `softEdge` asks for the whole of it there. The exception is
 // a latched axis, where the pin IS state and accumulates exactly as the
 // position does.
@@ -1117,7 +1202,7 @@ export function edgePull(away: number, soft: number, hard: number): number {
 export function edgeAxis(
   pos: number,
   follow: number,
-  soft: number,
+  inner: number,
   hard: number,
   dt: number,
   slack = 0,
@@ -1125,9 +1210,9 @@ export function edgeAxis(
   const d = pos - follow;
   const away = Math.abs(d);
   const side = Math.sign(d);
-  const demand = edgePull(away, soft, hard) - slack;
-  // Nothing asked for, but the FLOOR is not the band's to forgive: `slack` can
-  // exceed what the band asks anywhere inside the line (see
+  const demand = edgePull(away, inner) - slack;
+  // Nothing asked for, but the FLOOR is not the window's to forgive: `slack`
+  // can exceed what the window asks anywhere inside the line (see
   // CAMERA_LATCH_BUFFER), and an early return that skipped the clamp would let
   // a wide enough buffer disarm the one rule a level may not opt out of.
   if (demand <= 0) return away <= hard ? { pos, pull: 0 } : { pos: follow + side * hard, pull: 0 };
@@ -1135,7 +1220,7 @@ export function edgeAxis(
   return { pos: follow + side * Math.min(away - pull, hard), pull };
 }
 
-// What fraction of the band's `demand` to give this frame: the rate law, and
+// What fraction of the window's `demand` to give this frame: the rate law, and
 // the answer to "how fast should the override correct".
 //
 // It is a rate set by the ERROR rather than a fixed delay, and the two are not
@@ -1154,40 +1239,44 @@ export function edgeAxis(
 //
 //   - at the moment the override engages the demand is zero and so is the
 //     correction: nothing starts, it grows;
-//   - twice as far past the boundary is corrected twice as fast (and rather
-//     more than twice, since the band's own curve is quadratic where it
-//     starts), so a shallow incursion is barely answered and a deep one is
-//     answered hard;
+//   - twice as far past the inner margin is corrected exactly twice as fast,
+//     so a shallow incursion is barely answered and a deep one is answered
+//     hard;
 //   - and the correction fades out as it finishes rather than ending, because
 //     the thing driving it is the thing being consumed. There is no arrival and
 //     no release, which is what a stateless rate buys over a held pull (see
 //     `edgeAxis`): nothing is carried, so there is nothing to discard.
 //
-// `headroom` is what stops it ever being too late: the metres left between
-// where the band wants the camera and the floor it may not pass. The rate is
+// `headroom` is what stops it ever being too late: the metres left between the
+// inner margin the camera is being pulled to and the floor it may not pass -
+// the window's width, less whatever a latched axis is ignoring. The rate is
 // divided by how much of that headroom the demand has eaten, so it diverges as
 // the last of it goes. The camera cannot reach the floor - it is turned over
 // harder and harder as it approaches, and the harder that is, the more the
 // avatar was outrunning it, which is exactly when a hard correction is what the
-// player asked for. Deep in the band the override is therefore its own
-// undelayed self, and at the edge of engagement it is at its gentlest.
+// player asked for. Deep in the window the override is therefore its own
+// undelayed self, and at the inner margin itself it is at its gentlest.
 //
-// It is also what makes where the avatar ends up a property of the BAND rather
-// than of how fast they were going: walked out of a locked room at 3, 4.8, 9
-// and 18 m/s, the camera settles between 0.916 and 0.930 of the floor.
+// It is also what decides how far past the inner margin a SUSTAINED excursion
+// rides, which is the one thing the window does not fix by itself: a steady
+// outward speed settles where the correction matches it, so the faster the
+// avatar is leaving the more of the headroom is in use. Stopping ends it - the
+// demand is the excess and nothing else, so the camera closes the last of it
+// and rests the avatar exactly on the inner margin (see
+// `edge-window-rests-on-the-inner-margin`).
 //
 // `Infinity` (a snap, and an aim that wants the band applied outright) and a
 // smoothing of 0 both answer 1, which is the whole of the demand at once.
 export function edgeTakeUp(demand: number, headroom: number, dt: number): number {
   if (CAMERA_EDGE_SMOOTHING <= 0) return 1;
-  const urgency = demand > 0 && headroom > 0 ? Math.min(demand / headroom, 1) : 0;
-  if (urgency >= 1) return 1;
-  const rate = 1 / (CAMERA_EDGE_SMOOTHING * (1 - urgency));
+  const used = demand > 0 && headroom > 0 ? Math.min(demand / headroom, 1) : 0;
+  if (used >= 1) return 1;
+  const rate = 1 / (CAMERA_EDGE_SMOOTHING * (1 - used));
   return 1 - Math.exp(-Math.max(0, dt) * rate);
 }
 
 // The camera position nearest `pos` that the frame guarantee allows, for an
-// avatar at `follow`, with the whole of the band's pull taken up at once.
+// avatar at `follow`, with the whole of the window's pull taken up at once.
 //
 // Applied to where the camera ACTUALLY IS rather than to what it is aiming at:
 // a target the avatar can outrun is not a guarantee, and outrunning the ease is
@@ -1198,10 +1287,10 @@ export function edgeTakeUp(demand: number, headroom: number, dt: number): number
 // itself gives the same pull over a clock instead (see `edgeTakeUp`).
 export function clampToEdge(camera: Camera, zoom: number, follow: Vec2, pos: Vec2): Vec2 {
   const hard = edgeReach(camera, zoom);
-  const soft = edgeReach(camera, zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
+  const inner = innerReach(camera, zoom);
   return new Vec2(
-    edgeAxis(pos.x, follow.x, soft.x, hard.x, Infinity).pos,
-    edgeAxis(pos.y, follow.y, soft.y, hard.y, Infinity).pos,
+    edgeAxis(pos.x, follow.x, inner.x, hard.x, Infinity).pos,
+    edgeAxis(pos.y, follow.y, inner.y, hard.y, Infinity).pos,
   );
 }
 
@@ -1221,10 +1310,10 @@ export interface HeldCamera {
   leadS: number;
   // The edge constraint, when it is what is holding the camera this frame:
   // where the camera centre is, how far from the follow point the avatar may
-  // ever be (`reach`), and where the override started easing in (`soft`). Null
+  // ever be (`reach`), and the inner margin it is being held to (`inner`). Null
   // whenever nothing is being overridden, so the overlay drawing it at all
   // means the camera is being held back rather than following.
-  edge: { centre: Vec2; reach: Vec2; soft: Vec2 } | null;
+  edge: { centre: Vec2; reach: Vec2; inner: Vec2 } | null;
   // The frame-edge latch, per axis: where the clamp last forced the camera
   // during the anchored episode in force, and null on an axis it has not.
   // Non-null on an axis means the camera is PINNED there rather than aiming at
@@ -1262,7 +1351,7 @@ export class CameraController {
 
   // Set on any frame the edge clamp actually moved the camera (see
   // `clampToEdge`), for the debug overlay and for nothing else.
-  private edge: { centre: Vec2; reach: Vec2; soft: Vec2 } | null = null;
+  private edge: { centre: Vec2; reach: Vec2; inner: Vec2 } | null = null;
 
   // The FRAME-EDGE LATCH: per axis, where the edge clamp forced the camera
   // during the anchored episode in force, and null on an axis it never did.
@@ -1295,8 +1384,9 @@ export class CameraController {
   //
   // The buffer cannot simply switch on with the pin. A pin is born wherever the
   // override happened to be when the anchor was taken, which on a swing already
-  // at the edge of the frame is deep in the band, and taking a tenth of a metre
-  // of demand away in one frame is a step in the camera's VELOCITY - the one
+  // at the edge of the frame is deep past the margin, and taking a tenth of a
+  // metre of demand away in one frame is a step in the camera's VELOCITY - the
+  // one
   // thing it may not have (measured on `session-546f`: 112 m/s^2 on the frame
   // after the anchor, against 26 without). It opens on the same clock the
   // band's own rate uses, and closes the same way when the pin is dropped.
@@ -1649,10 +1739,10 @@ export class CameraController {
     // turns over rather than reversing; the HARD half is applied last and to
     // where the camera actually IS, because a target the avatar can outrun is
     // not a guarantee and outrunning the ease is exactly what a launch does.
-    // The pin buffer opens and closes on the band's own clock rather than with
+    // The pin buffer opens and closes on the window's own clock rather than with
     // the pin (see `latchOpenX`). Advanced before the guarantee runs and from
     // LAST frame's pins, so the frame a pin is born carries no buffer at all -
-    // which is what makes a pin born deep in the band cost nothing.
+    // which is what makes a pin born deep past the margin cost nothing.
     const open = 1 - Math.exp(-Math.max(0, dt) / LATCH_OPEN_TAU);
     this.latchOpenX += ((this.latchX === null ? 0 : 1) - this.latchOpenX) * open;
     this.latchOpenY += ((this.latchY === null ? 0 : 1) - this.latchOpenY) * open;
@@ -1719,10 +1809,10 @@ export class CameraController {
       return aim;
     }
     const hard = edgeReach(camera, this.zoom);
-    const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
+    const inner = innerReach(camera, this.zoom);
     const buffer = latchBuffer(camera, this.zoom);
-    const x = edgeAxis(aim.x, follow.x, soft.x, hard.x, ...this.pinnedAsk(this.latchX, this.latchOpenX, dt, buffer));
-    const y = edgeAxis(aim.y, follow.y, soft.y, hard.y, ...this.pinnedAsk(this.latchY, this.latchOpenY, dt, buffer));
+    const x = edgeAxis(aim.x, follow.x, inner.x, hard.x, ...this.pinnedAsk(this.latchX, this.latchOpenX, dt, buffer));
+    const y = edgeAxis(aim.y, follow.y, inner.y, hard.y, ...this.pinnedAsk(this.latchY, this.latchOpenY, dt, buffer));
     this.aimPullX = x.pull;
     this.aimPullY = y.pull;
     return new Vec2(x.pos, y.pos);
@@ -1742,7 +1832,7 @@ export class CameraController {
   // This is where the SMOOTHING lives, and it is the one place a fraction of
   // the demand per frame means a delay rather than a weakening: `this.pos` is
   // carried to the next frame, so the fractions accumulate in it and what the
-  // camera performs is a first-order approach to the band's curve. Nothing
+  // camera performs is a first-order approach to the inner margin. Nothing
   // beside the position holds any of it (see `edgeAxis`).
   //
   // Clamping `this.pos` rather than only what is handed to the Camera is what
@@ -1755,15 +1845,15 @@ export class CameraController {
       return pos;
     }
     const reach = edgeReach(camera, this.zoom);
-    const soft = edgeReach(camera, this.zoom, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE);
+    const inner = innerReach(camera, this.zoom);
     const buffer = latchBuffer(camera, this.zoom);
-    const hx = edgeAxis(pos.x, follow.x, soft.x, reach.x, dt, buffer * this.latchOpenX);
-    const hy = edgeAxis(pos.y, follow.y, soft.y, reach.y, dt, buffer * this.latchOpenY);
+    const hx = edgeAxis(pos.x, follow.x, inner.x, reach.x, dt, buffer * this.latchOpenX);
+    const hy = edgeAxis(pos.y, follow.y, inner.y, reach.y, dt, buffer * this.latchOpenY);
     const clamped = new Vec2(hx.pos, hy.pos);
     const engaged = this.aimPullX > 0 || this.aimPullY > 0;
     this.edge =
       engaged || clamped.x !== pos.x || clamped.y !== pos.y
-        ? { centre: clamped, reach, soft }
+        ? { centre: clamped, reach, inner }
         : null;
     return clamped;
   }

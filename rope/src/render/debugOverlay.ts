@@ -454,11 +454,14 @@ export function drawDebugOverlay(
 // and drawing the box every frame would make it furniture rather than a
 // diagnosis: seeing it at all means the avatar is against the constraint.
 //
-// Two boxes, because the constraint has two boundaries (see CAMERA_EDGE_EASE):
-// the inner one is where the override starts easing in, drawn finely, and the
-// outer one is the line the avatar may never cross. The avatar between them is
-// the override working; the avatar hard against the outer one is the framing
-// being asked for having run out of room, which is the thing to re-tune.
+// Two boxes, because the constraint has two boundaries (see
+// CAMERA_EDGE_INNER_X/Y): the inner one is the margin the override holds the
+// avatar to, drawn finely, and the outer one is the line they may never cross.
+// The avatar ON the inner box is the override at rest - where every excursion
+// ends up - and the avatar between the boxes is a correction still running,
+// which is the avatar leaving faster than the clock is answering. Hard against
+// the outer one is the correction outrun outright, which is the thing to
+// re-tune.
 function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | null): void {
   const edge = held?.edge;
   if (!edge) return;
@@ -466,10 +469,10 @@ function drawEdgeConstraint(ctx: CanvasRenderingContext2D, held: HeldCamera | nu
   ctx.lineWidth = 1 * PX;
   ctx.setLineDash([3 * PX, 5 * PX]);
   ctx.strokeRect(
-    edge.centre.x - edge.soft.x,
-    edge.centre.y - edge.soft.y,
-    edge.soft.x * 2,
-    edge.soft.y * 2,
+    edge.centre.x - edge.inner.x,
+    edge.centre.y - edge.inner.y,
+    edge.inner.x * 2,
+    edge.inner.y * 2,
   );
   ctx.lineWidth = 1.5 * PX;
   ctx.setLineDash([10 * PX, 6 * PX]);

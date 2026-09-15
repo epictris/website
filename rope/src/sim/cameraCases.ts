@@ -17,7 +17,6 @@ import { Vec2 } from "../engine/vec2";
 import type { Camera } from "../render/camera";
 import {
   buildCameraRules,
-  CAMERA_EDGE_EASE,
   CAMERA_EDGE_MARGIN,
   CAMERA_FOLLOW_TAU,
   CameraController,
@@ -28,7 +27,8 @@ import {
   pathFalloffWeight,
   pathRange,
   pathRelease,
-  softEdgeOffset,
+  edgeOffset,
+  innerReach,
   cameraRuleTarget,
   activeCameraRule,
   activeCameraRules,
@@ -1073,45 +1073,42 @@ export function runCameraCases(): CameraResult[] {
       ];
     }),
 
-    run("edge-eases-in-over-the-soft-band", () => {
-      // The curve itself (see `softEdgeOffset`). Everything the band claims is
-      // a statement about it, and the rides below are about what it does to a
-      // camera once it is applied to the aim.
-      const soft = 3;
+    run("edge-window-holds-at-the-inner-margin", () => {
+      // The window itself (see `edgeOffset`). It has one job and the whole of
+      // the guarantee's visible behaviour is that job: inside the inner margin
+      // the framing is untouched, outside it the avatar is held AT the margin,
+      // and there is no third regime in between for the rule in force to push
+      // them around in.
+      //
+      // The old design had one - an exponential give-way from the inner line to
+      // the floor - and what it cost is the reason this case is written as an
+      // equality: where the avatar rested depended on how much the framing was
+      // asking for, so the same parameter read as a different margin in every
+      // room (`session-368f`: 19.7% of the frame under a path asking 1.68 m,
+      // 26.7% under a region asking 0.88 m).
+      const inner = 3;
       const hard = 4;
-      const band = hard - soft;
-      const a = (d: number): number => softEdgeOffset(d, soft, hard);
-      const h = 1e-6;
-      const slope = (d: number): number => (a(d + h) - a(d - h)) / (2 * h);
+      const a = (d: number): number => edgeOffset(d, inner);
       let rising = 1;
-      let inside = 1;
-      for (let d = 0; d < 60; d += 0.01) {
-        if (a(d + 0.01) < a(d)) rising = 0;
-        if (a(d) > hard) inside = 0;
-      }
+      for (let d = 0; d < 60; d += 0.01) if (a(d + 0.01) < a(d)) rising = 0;
       return [
-        { label: "below the band the camera is untouched", got: a(2.5), want: 2.5 },
-        { label: "at the band's near edge, still untouched", got: a(soft), want: soft },
-        // The two end conditions that make it a ramp rather than a step: it
-        // costs nothing where it engages, and it stops responding where the
-        // avatar is carrying the camera outright. A smoothstep satisfies the
-        // second and not the first.
-        { label: "and it engages at zero cost", got: slope(soft + h), want: 1, tol: 1e-4 },
-        { label: "far in, the avatar carries the camera", got: slope(soft + 20 * band), want: 0, tol: 1e-3 },
+        { label: "inside the margin the camera is untouched", got: a(2.5), want: 2.5 },
+        { label: "at the margin itself, still untouched", got: a(inner), want: inner },
+        // The equality the whole thing exists for, at three depths that the old
+        // curve would have answered with three different offsets.
+        { label: "just outside it, held at the margin", got: a(inner + 0.01), want: inner },
+        { label: "a metre outside it, the same margin", got: a(inner + 1), want: inner },
+        { label: "and off the screen entirely, the same margin", got: a(inner + 40), want: inner },
         { label: "monotone", got: rising, want: 1 },
-        { label: "never past the line, at any distance", got: inside, want: 1 },
-        { label: "and the line is its limit", got: a(soft + 40 * band), want: hard, tol: 1e-3 },
-        // Inside it for anything a swing reaches, which is the guarantee made
-        // with room to spare rather than met exactly.
-        { label: "and inside it across the band", got: a(soft + 4 * band) < hard ? 1 : 0, want: 1 },
-        // A zero-width band is the bare clamp, which is what makes turning the
-        // ease off a real setting rather than a division by zero.
-        { label: "no band is the bare clamp", got: softEdgeOffset(9, hard, hard), want: hard },
+        // The floor is not the window's business (see `edgeAxis`), and the
+        // margin is inside it by construction, so nothing here can reach it.
+        { label: "never past the floor", got: a(inner + 40) <= hard ? 1 : 0, want: 1 },
       ];
     }),
 
-    run("edge-soft-band-has-no-velocity-step", () => {
-      // What the band is FOR. A bare clamp is a discontinuity in the camera's
+    run("edge-window-has-no-velocity-step", () => {
+      // What the CLOCK is for, and the reason the window is allowed to be a
+      // bare clamp. A bare clamp is a discontinuity in the camera's
       // velocity: up to the line it is easing toward the lock and one frame
       // later it is travelling at exactly the avatar's speed. Nothing about the
       // position jumps, which is what makes it hard to see coming, and it is
@@ -1128,7 +1125,7 @@ export function runCameraCases(): CameraResult[] {
       const worstStep = Math.max(...v.map((x, i) => (i ? Math.abs(x - v[i - 1]!) : 0)));
       return [
         // The bare clamp puts the whole of the avatar's own speed into one
-        // frame; spread over the band it arrives over a dozen or so.
+        // frame; given over the clock it arrives over a dozen or so.
         { label: "worst change of camera speed in a frame", got: worstStep < speed / 4 ? 1 : 0, want: 1 },
         // ...and the camera does end up carried at exactly the avatar's speed,
         // or the case would pass by the override never engaging at all.
@@ -1136,7 +1133,7 @@ export function runCameraCases(): CameraResult[] {
         // The guarantee itself is untouched: strictly inside the line the whole
         // way, which the bare clamp only ever managed by sitting on it.
         {
-          label: "the avatar is never in the edge band",
+          label: "the avatar is never past the floor",
           got: out.filter((o, i) => Math.abs(walk[i]!.x - o.pos.x) >= edgeReach(stubCamera(), BASE_ZOOM).x).length,
           want: 0,
         },
@@ -1191,7 +1188,7 @@ export function runCameraCases(): CameraResult[] {
       // clock, so the avatar is allowed further toward the line while it does.
       // That is the delay - the camera gives ground later and less abruptly -
       // and its cost is the headroom it spends, which is why it is bounded by
-      // the band rather than by taste.
+      // the room between the inner margin and the floor rather than by taste.
       const path: CameraPathData = {
         ...SWING_RIDE,
         lookaheadX: 2.5,
@@ -1204,7 +1201,7 @@ export function runCameraCases(): CameraResult[] {
       for (let i = 0; i < 400; i++) walk.push(new Vec2(11 + 5 * Math.sin(i / 45), 0));
       const out = ride(rules, walk, true, () => true);
       const hard = edgeReach(stubCamera(), BASE_ZOOM).x;
-      const soft = edgeReach(stubCamera(), BASE_ZOOM, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE).x;
+      const inner = innerReach(stubCamera(), BASE_ZOOM).x;
       const maxOff = Math.max(...out.map((o, i) => Math.abs(o.pos.x - walk[i]!.x)));
       return [
         // Undelayed the same swing peaks at 3.36 m of offset; taken up over the
@@ -1213,37 +1210,41 @@ export function runCameraCases(): CameraResult[] {
         // ...and not so much further that the floor has to catch them, which
         // is the bound on how long the take-up may be for a given band.
         { label: "but never as far as the line", got: maxOff < hard ? 1 : 0, want: 1 },
-        { label: "and the band is what it is spending", got: maxOff > soft ? 1 : 0, want: 1 },
+        { label: "and the headroom is what it is spending", got: maxOff > inner ? 1 : 0, want: 1 },
       ];
     }),
 
     run("edge-correction-scales-with-the-error", () => {
       // How fast the override corrects is set by how much there is to correct,
-      // which is what makes it a rate and not a delay. Twice as far past the
-      // boundary is answered by MORE than twice the correction - the band's own
-      // curve is quadratic where it starts - so a shallow incursion is barely
-      // answered and a deep one is answered hard, and neither needs a different
-      // setting to feel right.
-      const soft = 3;
+      // which is what makes it a rate and not a delay. The demand is now the
+      // excess over the inner margin exactly, so twice as far past it is twice
+      // the demand - and answered by MORE than twice the correction, because
+      // the rate itself rises with how much of the headroom that demand has
+      // eaten. A shallow incursion is barely answered and a deep one is
+      // answered hard, and neither needs a different setting to feel right.
+      const inner = 3;
       const hard = 4;
       // Two incursions over one frame, one twice the depth of the other.
-      const shallow = edgeAxis(soft + 0.1, 0, soft, hard, DT).pull;
-      const deep = edgeAxis(soft + 0.2, 0, soft, hard, DT).pull;
-      // ...and one deep enough that the band is nearly spent, where the rate
-      // has to rise without bound or the floor is reachable.
-      const spent = edgeAxis(soft + 3, 0, soft, hard, DT).pull;
+      const shallow = edgeAxis(inner + 0.1, 0, inner, hard, DT).pull;
+      const deep = edgeAxis(inner + 0.2, 0, inner, hard, DT).pull;
+      // ...and one deep enough that the headroom is spent, where the rate has
+      // to rise without bound or the floor is reachable.
+      const spent = edgeAxis(inner + 3, 0, inner, hard, DT).pull;
       return [
         { label: "a deeper incursion is corrected faster", got: deep > 2 * shallow ? 1 : 0, want: 1 },
-        // Both are still small next to the frame - the point is the ratio, not
-        // that either of them is a lurch.
-        { label: "and neither is a lurch", got: deep < 0.02 ? 1 : 0, want: 1 },
-        // Out where the band has nothing left to give, the whole of it is taken
-        // at once: that is the floor being unreachable rather than clamped.
-        { label: "and a spent band is answered in full", got: spent, want: edgePull(soft + 3, soft, hard), tol: 1e-9 },
+        // Both are still a small part of what they are answering - the point
+        // is the ratio between them, not that either is a lurch. A frame at
+        // this depth gives 13% of the demand, which is the clock: the whole of
+        // it arrives over CAMERA_EDGE_SMOOTHING, not at once.
+        { label: "and neither is a lurch", got: deep < 0.2 * 0.2 ? 1 : 0, want: 1 },
+        // Out where the headroom has nothing left to give, the whole demand is
+        // taken at once: that is the floor being unreachable rather than
+        // clamped.
+        { label: "and a spent headroom is answered in full", got: spent, want: edgePull(inner + 3, inner), tol: 1e-9 },
         // The rate is zero where the override engages, so there is no step in
         // the camera's velocity at the boundary - the correction grows out of
         // nothing rather than starting.
-        { label: "and nothing at all is done at the boundary", got: edgeAxis(soft, 0, soft, hard, DT).pull, want: 0 },
+        { label: "and nothing at all is done at the margin", got: edgeAxis(inner, 0, inner, hard, DT).pull, want: 0 },
       ];
     }),
 
@@ -1252,13 +1253,14 @@ export function runCameraCases(): CameraResult[] {
       // held on it moves at exactly the avatar's speed and stops dead the frame
       // they come back inside, which is the one genuinely harsh thing the
       // guarantee can do. The take-up's rate rises without bound as the last of
-      // the band goes, so the camera is turned before it arrives there instead.
+      // the headroom goes, so the camera is turned before it arrives there.
       //
       // Asserted across a stroll, a hard run and a launch, because a take-up
       // that merely happens to be fast enough for one speed is the bug this
       // replaces.
       const rules = buildCameraRules([LOCKED_ROOM], []);
       const hard = edgeReach(stubCamera(), BASE_ZOOM).x;
+      const inner = innerReach(stubCamera(), BASE_ZOOM).x;
       const worst = [0.05, 0.08, 0.15, 0.3].map((speed) => {
         const walk: Vec2[] = [];
         for (let i = 0; i < 200; i++) walk.push(new Vec2(i * speed, 0));
@@ -1267,13 +1269,63 @@ export function runCameraCases(): CameraResult[] {
       });
       return [
         { label: "frames spent on the floor, at any speed", got: worst.filter((w) => w >= hard).length, want: 0 },
-        // ...and every one of them comes near it and stops at very nearly the
-        // same place, over a sixfold spread of speed. That is the rate rising
-        // with the error: the faster the avatar outruns the camera the harder
-        // it is answered, so where they end up is a property of the BAND rather
-        // than of how fast they were going.
-        { label: "and every speed comes near", got: Math.min(...worst) / hard, want: 1, tol: 0.15 },
-        { label: "and they all stop in the same place", got: Math.max(...worst) - Math.min(...worst) < 0.1 ? 1 : 0, want: 1 },
+        // How far past the inner margin a SUSTAINED excursion rides is the one
+        // thing the window does not fix by itself: the correction settles where
+        // its rate matches the speed it is answering, so the faster the avatar
+        // leaves the more of the headroom is in use. That is the rate law being
+        // a rate - and it is bounded, which is the claim that matters. Over a
+        // sixfold spread of speed, 3 to 18 m/s, it spends 23%, 34%, 51% and 61%
+        // of the headroom, so a quarter of it is still unspent at a launch.
+        //
+        // Bounded loosely on purpose: how deep a given speed rides is
+        // CAMERA_EDGE_SMOOTHING's to move, and what may not move is that the
+        // floor is not reached.
+        { label: "every speed is past the margin", got: worst.filter((w) => w > inner).length, want: 4 },
+        { label: "and faster rides deeper", got: worst.every((w, i) => i === 0 || w > worst[i - 1]!) ? 1 : 0, want: 1 },
+        { label: "and even a launch keeps a fifth of the headroom", got: Math.max(...worst) < inner + 0.8 * (hard - inner) ? 1 : 0, want: 1 },
+      ];
+    }),
+
+    run("edge-window-rests-on-the-inner-margin", () => {
+      // The constraint the whole law is for, and the one the old asymptotic
+      // band could not make: whenever the avatar is closer to the edge than the
+      // inner margin, the camera moves until they are EXACTLY on it - not near
+      // it, and not somewhere that depends on how far out the framing wanted
+      // them or how fast they got there.
+      //
+      // A locked room walked out of at three very different speeds and then
+      // stood still in, so what is measured is where each excursion comes to
+      // rest rather than how deep it went.
+      const rules = buildCameraRules([LOCKED_ROOM], []);
+      const inner = innerReach(stubCamera(), BASE_ZOOM).x;
+      const rest = [0.05, 0.15, 0.3].map((speed) => {
+        const walk: Vec2[] = [];
+        for (let i = 0; i < 120; i++) walk.push(new Vec2(i * speed, 0));
+        // Two seconds of standing still, which is an age next to the 0.15 s
+        // clock and is deliberately not the moment after the avatar stops.
+        for (let i = 0; i < 120; i++) walk.push(new Vec2(119 * speed, 0));
+        const out = ride(rules, walk);
+        return {
+          moving: Math.abs(walk[119]!.x - out[119]!.pos.x),
+          settled: Math.abs(walk[239]!.x - out[239]!.pos.x),
+          oneSecond: Math.abs(walk[179]!.x - out[179]!.pos.x),
+        };
+      });
+      return [
+        // Each of them was somewhere different while it was running...
+        { label: "a stroll and a launch ride differently", got: rest[2]!.moving > rest[0]!.moving ? 1 : 0, want: 1 },
+        // ...and all three come to rest in the same place, which is the margin
+        // itself rather than a place the law happens to like.
+        { label: "the stroll rests on the margin", got: rest[0]!.settled, want: inner, tol: 1e-6 },
+        { label: "the run rests on the margin", got: rest[1]!.settled, want: inner, tol: 1e-6 },
+        { label: "the launch rests on the margin", got: rest[2]!.settled, want: inner, tol: 1e-6 },
+        // And it is the clock that takes them there rather than a snap: the
+        // last of the correction runs at the slowest the rate law goes, so a
+        // second of standing still is inside a tenth of a millimetre and the
+        // rest closes from there. Stated loosely on purpose - the exact residual
+        // is CAMERA_EDGE_SMOOTHING's to move, and what this case is about is
+        // that it converges on the margin rather than near it.
+        { label: "and a second is within a tenth of a millimetre", got: rest[2]!.oneSecond, want: inner, tol: 1e-4 },
       ];
     }),
 
@@ -1813,15 +1865,14 @@ export function runCameraCases(): CameraResult[] {
       const after = out.slice(60);
       const steps = after.map((o, i, arr) => (i ? Math.abs(o.pos.x - arr[i - 1]!.pos.x) : 0));
       const hard = edgeReach(stubCamera(), BASE_ZOOM).x;
-      const soft = edgeReach(stubCamera(), BASE_ZOOM, CAMERA_EDGE_MARGIN + CAMERA_EDGE_EASE).x;
+      const inner = innerReach(stubCamera(), BASE_ZOOM).x;
       const offset = 6 - out[59]!.pos.x;
       return [
-        // Held by the override and pinned there: inside the band, so the
-        // override is doing the holding, and strictly short of the line the
-        // avatar may never cross - which the soft ramp approaches and never
-        // reaches, where the bare clamp used to sit them exactly on it.
-        { label: "the override is engaged", got: offset > soft ? 1 : 0, want: 1 },
-        { label: "and holds short of the line", got: offset < hard ? 1 : 0, want: 1 },
+        // Held by the override and pinned there: the avatar stood still long
+        // enough for the correction to finish, so they are AT the inner margin
+        // rather than somewhere between it and the line they may never cross.
+        { label: "the override holds them on the inner margin", got: offset, want: inner, tol: 1e-9 },
+        { label: "and short of the line", got: offset < hard ? 1 : 0, want: 1 },
         { label: "the pin is dropped", got: after[after.length - 1]!.latch.x === null ? 1 : 0, want: 1 },
         { label: "and the camera comes back to the lock", got: after[after.length - 1]!.pos.x, want: 0, tol: 0.01 },
         // None of the gap crossed at the follow lag's pace, which would put
@@ -1856,7 +1907,7 @@ export function runCameraCases(): CameraResult[] {
         { label: "the guarantee hauled the camera back", got: swinging[79]!.pos.x - swinging[139]!.pos.x > 4 ? 1 : 0, want: 1 },
         // Not zero any more: the override is still engaged where it let go, so
         // it goes on gently giving the avatar room and then gently taking the
-        // pull back (see CAMERA_EDGE_EASE and CAMERA_EDGE_SMOOTHING). Stated
+        // pull back (see CAMERA_EDGE_INNER_X/Y and CAMERA_EDGE_SMOOTHING). Stated
         // against the roll rather than as a distance, since what separates them
         // is following the avatar versus settling - a seventh of it, measured.
         {
