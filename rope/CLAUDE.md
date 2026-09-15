@@ -23,7 +23,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 ```
 
 `?level=NAME` picks a level (`src/level/registry.ts`); `BALL` (the ball & chain controller, 3D) is the default and the grapple levels stay 2D.
-`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`.
+`?render=2d|3d`, `?hud=1` (F3 in play), `?aim=cursor|position|motion`, `?toggle_click=true` (click to deploy/redeploy, right-click to detach), `?probe3d=1`, `?retract=1` (the released chain reels in, still being judged).
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.
@@ -101,6 +101,7 @@ The ball and chain
 - [ball-coil-and-hook](docs/ball-coil-and-hook.md) - the coil as an angle, how the hook attaches (sweep, blocking contact, seam, reach), the dangling tip and scene catch.
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
+- [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
 - [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its two exclusions, and how a corner two bodies share lets go.
 - [sparks](docs/sparks.md) - hook and ball sparks on hook-proof steel, render-side by construction.
 

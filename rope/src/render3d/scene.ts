@@ -34,6 +34,7 @@ import { BodyVisual, pickTagOf, surfaceOf } from "./bodyVisuals";
 import { BallVisual } from "./ballVisual";
 import { ChainLayer } from "./chainVisual";
 import { VineLayer } from "./vineVisual";
+import type { ChainRetract } from "../render/chainRetract";
 import { configureRenderer, Environment } from "./environment";
 import { LightRig } from "./lights";
 import {
@@ -772,6 +773,9 @@ export class Scene3D {
     camera: Camera,
     alpha: number,
     orbit: CameraOrbit = NO_ORBIT,
+    // The released chain reeling back into the ball, if one is (see
+    // render/chainRetract.ts); session state the host keeps, like the sparks.
+    retract: ChainRetract | null = null,
   ): void {
     const rect = this.viewportRect;
     if (rect) {
@@ -824,7 +828,7 @@ export class Scene3D {
 
     for (const visual of this.bodies.values()) visual.sync(alpha);
 
-    this.chains.sync(level, alpha);
+    this.chains.sync(level, alpha, retract);
     this.vines.sync(level.vines ?? NO_VINES, alpha);
     this.ballVisual?.sync(alpha);
     // After the visuals are synced and before the frame is drawn: a highlight is

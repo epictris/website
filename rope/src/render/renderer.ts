@@ -29,6 +29,7 @@ import type { Camera } from "./camera";
 import type { ViewTransform } from "./viewport";
 import type { HeldCamera } from "./cameraController";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "./chainMetrics";
+import type { ChainRetract } from "./chainRetract";
 import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { railPolyline } from "../lib/rail";
 import { drawTrainingGrid } from "./trainingGrid";
@@ -712,7 +713,7 @@ export function render(
 // has ever been wrong; this function is only how a link is painted on a canvas.
 function drawChainPolyline(
   ctx: CanvasRenderingContext2D,
-  points: Vec2[],
+  points: readonly Vec2[],
   // Link colours. The defaults are the forged-iron pair the ball & chain hangs
   // on; an authored scene chain passes its own, darkened for the narrow links so
   // the alternation still reads as interlocking loops.
@@ -941,6 +942,10 @@ export function renderBall(
   overlayOnly = false,
   // See `render`: the hook's sparks, drawn in both render modes.
   sparks: SparkSystem | null = null,
+  // The chain reeling back in after a release (see render/chainRetract.ts):
+  // drawn where the chain is, so with the chain it belongs to the 3D scene
+  // under `overlayOnly`.
+  retract: ChainRetract | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -1031,6 +1036,14 @@ export function renderBall(
     // drifted off that body as the hook turned (session-150f).
     const pose = ball.manaclePose(alpha);
     if (pose) drawManacle(ctx, pose.centre, pose.dir, pose.buriedUnder);
+  }
+  // A released chain reeling back in, laid from its reeled end so the links
+  // slide home with it, the cuff riding that end (see render/chainRetract.ts).
+  // Never beside a chain that is out: a new throw deletes it.
+  const reeling = overlayOnly ? null : retract?.resolve(alpha);
+  if (reeling) {
+    drawChainPolyline(ctx, reeling.path);
+    drawManacle(ctx, reeling.centre, reeling.dir, null);
   }
   if (!overlayOnly) {
     drawBody(ctx, ball, alpha);

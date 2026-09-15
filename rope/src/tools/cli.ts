@@ -1002,6 +1002,9 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
       // grab is otherwise identical and the two can be diffed against each other.
       (o["3d"] ? "&render=3d" : "") +
+      // `--retract` turns on the released chain's reel-in, as `?retract=1`
+      // does in the game (see docs/chain-retract.md).
+      (o.retract ? "&retract=1" : "") +
       // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
       // the programs and textures three has built and the meshes whose program
       // was compiled on THAT frame - the mid-play compile a stutter is made of.
@@ -2107,7 +2110,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--at X,Y] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":

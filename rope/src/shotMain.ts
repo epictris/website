@@ -24,6 +24,8 @@
 // costs the shipped app nothing.
 import { render, renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
+import { ChainRetract } from "./render/chainRetract";
+import { NO_ORBIT } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
@@ -165,12 +167,17 @@ if (scene3d) {
 // draw the same shower - which is what keeps `--diff` and the filmstrip's
 // changed-pixel counts meaningful with sparks on screen.
 const sparks = new SparkSystem();
+// The released chain reeling back in (see render/chainRetract.ts), driven at
+// the fixed step for the same reason.
+// Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
+const chainRetract = q.get("retract") !== null ? new ChainRetract() : null;
 let simFrame = 0;
 const advanceTo = (target: number): void => {
   for (; simFrame < target; simFrame++) {
     level.physicsProcess(de(rec.frames[simFrame]!), 1 / 60);
     sparks.ingest(level.sparkEvents);
     sparks.advance(1 / 60);
+    chainRetract?.observe(level instanceof BallLevel ? level : null, 1 / 60);
   }
 };
 
@@ -246,7 +253,7 @@ function drawFrame(frame: number): void {
     // Measured from the first frame rather than from frame 0, so a single grab
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
-    scene3d.render(level, camera, 1);
+    scene3d.render(level, camera, 1, NO_ORBIT, chainRetract);
     if (q.get("probe") !== null) {
       console.log(`probe ${JSON.stringify({ frame, ...scene3d.programProbe() })}`);
     }
@@ -261,7 +268,7 @@ function drawFrame(frame: number): void {
     }
   }
   if (isBall) {
-    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, sparks);
+    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, sparks, chainRetract);
   } else {
     render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null, sparks);
   }

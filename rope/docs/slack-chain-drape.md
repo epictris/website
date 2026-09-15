@@ -5,6 +5,7 @@ A deployed ball chain with length to spare no longer draws as straight spans: `S
 Verlet particle chain pinned at the mounting loop the chain leaves the ball through (the
 chain's start contact) and at the far end (flying hook, dangling tip, or anchor).
 It sags in a catenary, drapes over the ball and the scenery, and heaps on the floor.
+When the chain is let go the same drape carries on as the reel that hauls it back in, stepped by the render side from there: [chain-retract](chain-retract.md).
 
 **The coil is part of the drape, not a kinematic prefix to it.**
 The solver's coil is the angle of rim between the loop and the tangent point toward the next node, which is the right reading of a chain under tension and a fiction for one with length to spare: nothing holds a slack chain against the rim, so it hangs from the loop and lies wherever gravity and the scenery put it, and the ball's own rim is scenery the drape collides with like any other.

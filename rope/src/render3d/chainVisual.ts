@@ -22,6 +22,7 @@ import { Vec2 } from "../engine/vec2";
 import { BallPlayer } from "../classes/ballPlayer";
 import { PX } from "../engine/units";
 import { CHAIN_LINK_LEN, CHAIN_LINK_W, walkChain } from "../render/chainMetrics";
+import type { ChainRetract } from "../render/chainRetract";
 import { MANACLE_BAND, MANACLE_RADIUS, MANACLE_REACH, MANACLE_THICKNESS } from "../lib/manacle";
 import { FORGED_SMALL, forgedMetal } from "./ballVisual";
 import { threeY } from "./space";
@@ -101,8 +102,9 @@ export class ChainLayer {
     this.scene.add(this.mesh);
   }
 
-  // Every chain on the level, laid this frame.
-  sync(level: Scene3DLevel, alpha: number): void {
+  // Every chain on the level, laid this frame. `retract` is the released chain
+  // reeling back into the ball, if one is (see render/chainRetract.ts).
+  sync(level: Scene3DLevel, alpha: number, retract: ChainRetract | null = null): void {
     this.count = 0;
     this.manacle.visible = false;
 
@@ -142,19 +144,19 @@ export class ChainLayer {
 
         // The manacle at the far end - the flying hook, the dangling tip, or the
         // anchor - wherever the sim says it is (`BallPlayer.manaclePose`).
-        // Turned about z to face `dir` with its hinge, then a quarter turn about
-        // its own x, so the ring's axis lies in the gameplay plane square to
-        // the chain and the ring is seen edge-on: a shackle trailing its chain,
-        // a cuff driven half into the face it bit, or a ring with the bar of a
-        // rail through it. "ZXY" applies z first, then x about the turned
-        // frame, which is the order that reading needs.
         const pose = ball.manaclePose(alpha);
-        if (pose) {
-          this.manacle.position.set(pose.centre.x, threeY(pose.centre.y), 0);
-          this.manacle.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(pose.dir.y), pose.dir.x), "ZXY");
-          this.manacle.visible = true;
-        }
+        if (pose) this.placeManacle(pose.centre, pose.dir);
       }
+    }
+
+    // A released chain reeling back into the ball, laid from its reeled end so
+    // the links slide home with it, the cuff riding that end. Never beside a
+    // chain that is out - a new throw deletes it - so the one manacle serves.
+    const reeling = retract?.resolve(alpha);
+    if (reeling) {
+      this.tint.set(DEFAULT_CHAIN_COLOR);
+      this.lay(reeling.path);
+      this.placeManacle(reeling.centre, reeling.dir);
     }
 
     // A chain longer than the buffer truncates for one frame and the buffer is
@@ -184,6 +186,19 @@ export class ChainLayer {
       this.mesh.setMatrixAt(i, this.m);
       this.mesh.instanceColor?.setXYZ(i, this.tint.r, this.tint.g, this.tint.b);
     });
+  }
+
+  // The manacle at `centre`, its hinge pointing along `dir`. Turned about z to
+  // face `dir` with its hinge, then a quarter turn about its own x, so the
+  // ring's axis lies in the gameplay plane square to the chain and the ring is
+  // seen edge-on: a shackle trailing its chain, a cuff driven half into the
+  // face it bit, or a ring with the bar of a rail through it. "ZXY" applies z
+  // first, then x about the turned frame, which is the order that reading
+  // needs.
+  private placeManacle(centre: Vec2, dir: Vec2): void {
+    this.manacle.position.set(centre.x, threeY(centre.y), 0);
+    this.manacle.rotation.set(Math.PI / 2, 0, Math.atan2(threeY(dir.y), dir.x), "ZXY");
+    this.manacle.visible = true;
   }
 
   clear(): void {

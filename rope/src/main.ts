@@ -15,6 +15,8 @@ import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
 import { drawPerfHud } from "./render/perfHud";
 import { SparkSystem } from "./render/sparks";
+import { ChainRetract } from "./render/chainRetract";
+import { NO_ORBIT } from "./render3d/space";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
 import { spawnAtCheckpoint } from "./level/levelFormat";
 import {
@@ -188,6 +190,12 @@ let level = makeLevel();
 // fed the sim's per-frame events, advanced on the render clock, and cleared
 // with the level.
 const sparks = new SparkSystem();
+// The released chain reeling back in (see render/chainRetract.ts): the same
+// shape as the sparks - it watches the sim each step, runs on the render
+// clock, and is cleared with the level.
+// Behind `?retract=1` while it is being judged: off, a released chain
+// vanishes as it always did.
+const chainRetract = params.get("retract") !== null ? new ChainRetract() : null;
 
 // Runs this page has played: the input trace stamps its events with it, so a
 // click can be laid beside the frames of the run it landed in.
@@ -198,6 +206,7 @@ function reset(): void {
   resets++;
   // A restart must not carry the dead level's embers.
   sparks.reset();
+  chainRetract?.reset();
   level.onReset = reset;
   // A reset builds a new level, so it builds a new scene: every extrusion in it
   // belongs to bodies that no longer exist.
@@ -434,6 +443,7 @@ if (replayName) {
     level = levelFromRecording(rec);
     level.onReset = reset;
     sparks.reset();
+    chainRetract?.reset();
     buildScene();
     cameraCtl.snap();
     replayFrames = frames;
@@ -522,6 +532,9 @@ function frame(now: number): void {
     // Drained inside the catch-up loop rather than after it: a frame that runs
     // several steps would otherwise silently drop every caught-up step's events.
     sparks.ingest(level.sparkEvents);
+    // Likewise per step, so a chain let go and re-thrown across two steps of
+    // one render frame is seen as both rather than as nothing having changed.
+    chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
     const serialized = serializeInput(frameInput);
     lastHeld = serialized.h;
     if (level !== stepped) {
@@ -584,7 +597,7 @@ function frame(now: number): void {
   // interpolated state at the same `alpha` and the same camera, so they are one
   // picture rather than two that agree most of the time.
   const draw3dT0 = performance.now();
-  scene3d?.render(level, camera, alpha);
+  scene3d?.render(level, camera, alpha, NO_ORBIT, chainRetract);
   const draw3dMs = performance.now() - draw3dT0;
 
   const draw2dT0 = performance.now();
@@ -599,6 +612,7 @@ function frame(now: number): void {
       alpha,
       scene3d !== null,
       sparks,
+      chainRetract,
     );
   } else {
     render(
