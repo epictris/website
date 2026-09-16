@@ -20,6 +20,9 @@ A level is read once, at page load; the editor holds the authoritative model in 
 What did ride on the watcher is picked up at the write instead, which is the better signal anyway - it is the write, not a guess at what a file event meant:
 
 - **Vite's module cache**: `PUT`/`DELETE` invalidate the level's module in every environment's graph, so a hand reload serves the level as saved rather than as transformed at startup. No HMR is sent with it; reload by hand to pick up a level edit.
+  The API is not the only author, though - a hand edit, a `git checkout` or a script writes the file without coming through it - so the plugin keeps a **watcher of its own** (`fs.watch` on `levels/`) that invalidates the same module.
+  It is not Vite's watcher, so the event still never reaches `handleHMRUpdate` and a level write still cannot restart the server.
+  Without it the two windows disagreed and neither was wrong: the editor re-reads the file per load and showed the edit, while the game held the module transformed at startup and went on opening a level the file had not held for hours.
 - **The preload list**: `storeScript` re-reads a file-backed level off disk per page load (see `LevelSpec.file`), rather than using the copy compiled into the config at startup. A read that lands mid-write falls back to that compiled-in copy.
 
 A saved level ships in the build by being **imported** into `src/level/registry.ts`

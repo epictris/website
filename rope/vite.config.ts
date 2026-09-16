@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  watch,
   writeFileSync,
 } from "node:fs";
 import { execSync } from "node:child_process";
@@ -98,6 +99,23 @@ function levelApi(): Plugin {
           }
         }
       };
+
+      // The API is not the only way a level is written. A hand edit, a `git
+      // checkout`, a tool - none of them come through here, and none of them
+      // reach vite's watcher either, so the module graph kept a copy from
+      // startup and the GAME went on opening a level the file had not held for
+      // hours while the editor (which reads the file per load, through the GET
+      // above) showed the new one: two windows, the same level, different
+      // worlds. A watcher of our OWN closes that, and it is not vite's: the
+      // event never reaches `handleHMRUpdate`, so a level write still cannot
+      // restart the server (see `server.watch.ignored`).
+      //
+      // No HMR is sent, as above - the page picks the module up on its next
+      // load.
+      watch(dir, (_event, name) => {
+        if (typeof name !== "string" || !name.endsWith(".json")) return;
+        invalidate(join(dir, name));
+      });
 
       server.middlewares.use("/api/levels", (req, res) => {
         const send = (status: number, body: unknown) => {

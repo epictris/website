@@ -137,12 +137,16 @@ feel without a rebuild):
   **The desktop cursor stays hidden either way**, windowed included: the reticle is the ball controller's only pointer, and windowed it is now drawn *on* the real one, so there is a single mark on screen and the clicks land under it.
   It is hidden rather than shown as a crosshair beneath the ring because two marks for one pointer is what the reticle exists to avoid - and the crosshair the canvas carries in CSS is the grapple controller's, which has no reticle of its own.
 
-  **The virtual cursor is born above the avatar, on the first mouse move of the page.**
-  Nothing is drawn before that: the PLAY press takes the desktop cursor off the page, and the reticle appears only once the mouse has actually moved - so a run that has just started shows no cursor at all until the player touches the mouse.
+  **The run opens with a reticle, never without one.**
+  The PLAY press is itself a position - `clientX/Y` is live on it, and the hand that made it is pointing at something - so the press that starts the level is the level's first aim (`AimPointer.reveal`, called from the document-level press listener because the press lands on the loading screen's button rather than on the canvas).
+  Windowed, that is where the hidden desktop pointer is, and the ball opens the level facing it.
+  Locked, the desktop pointer has just been taken away and that point is no longer where anything is, so the `pointerlockchange` that confirms the capture re-seeds the cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball - the birthplace a virtual cursor has always had, now taken at the moment of the lock instead of on the first move after it.
+  It re-seeds only while the aim is still the game's own: once the player has moved the mouse, the reticle is theirs, and a re-lock after an Esc leaves it where they put it.
   (Up to the press the desktop cursor is untouched: the gate is a button, and a button is aimed at with the pointer the player can see.)
-  A mousemove carrying *no movement* does not count, which is the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off): answering it put a reticle on screen, and a steering command under it, with nobody's hand on the mouse.
-  The first real move seeds the cursor `AIM_SEED_ABOVE` (0.5 m) straight above the ball and travels from there - and so does a **click**, because a press throws the chain and a throw with no mark saying where it went reads as a dead button (`AimPointer.reveal`).
-  Both are the *locked* answer: the seed is asked only when there is a virtual cursor to be born, and a press with no move behind it reveals the cursor under the real pointer's own position while unlocked, since `clientX/Y` is live there and it is the point the click was hit-tested at.
+
+  **A mousemove carrying *no movement* is a position, not a move** - the one a browser sends when the page shifts under a stationary pointer (the loading screen coming off, the fullscreen transition).
+  Unlocked it is answered, because unlocked the reticle stands on the real pointer and where that pointer is sitting is exactly what the event says.
+  Locked it is refused, because there `clientX/Y` is frozen at the point the capture was made from: answering it would drag the virtual cursor - and the steering under it - off to wherever the desktop pointer happened to be when the lock was taken.
 
   **A warp is not a move, and nothing on the event says which it is.**
   Taking the lock, going fullscreen and releasing a click all teleport the cursor, and Chromium reports the teleport as `movementX/Y`.

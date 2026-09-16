@@ -104,8 +104,9 @@ const TOGGLE_CLICK: boolean = ((): boolean => {
 const RIGHT_BUTTON = 2; // MouseEvent.button for the right button (0 left, 1 middle)
 
 const AIM_DEADZONE = 0.3; // left-stick deflection before it counts as aiming
-// Metres above the ball the cursor is born at on a page's first mouse move (see
-// `aimSeed`). Four ball radii and about a third of a dead hang's chain: clear of
+// Metres above the ball the virtual cursor is born at when the lock takes the
+// desktop one away (see `aimSeed`).
+// Four ball radii and about a third of a dead hang's chain: clear of
 // the avatar so the reticle reads as a cursor of its own rather than a mark on
 // the ball, and near enough that it is plainly the player's own, not something
 // out in the level.
@@ -282,8 +283,9 @@ export class BallInputSource implements IInputSource {
   }
 
   // Where the virtual cursor is born, in view pixels: straight above the ball
-  // (see `AimPointer`'s `seed`). Asked once, on the first mouse move of the
-  // page, and answered against the camera as it stands then.
+  // (see `AimPointer`'s `seed`). Asked when the lock takes the desktop pointer
+  // away - and answered against the camera as it stands then - since that is
+  // the moment the aim stops being a real cursor's and becomes ours to place.
   //
   // ABOVE, and not simply "at the ball", because the offset is a direction
   // before it is a distance: the loop faces the aim, so a cursor born anywhere

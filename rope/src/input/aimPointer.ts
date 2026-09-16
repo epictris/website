@@ -168,14 +168,27 @@ function clampToFrame(v: Vec2): Vec2 {
 }
 
 export class AimPointer {
-  // The virtual cursor, in view pixels. Null until the first mousemove that
-  // actually MOVED: no pointer has been seen, which is not the same as one at
-  // the top-left corner - and not the same as one the browser mentioned. A page
-  // whose content moves under a stationary pointer (the loading screen coming
-  // off, a resize) is told so with a mousemove carrying no movement at all, and
-  // taking that for the player's first aim put a reticle on screen, and a
-  // steering command under it, with nobody's hand on the mouse.
+  // The virtual cursor, in view pixels. Null until a pointer has been SEEN,
+  // which is not the same as one at the top-left corner.
+  //
+  // Unlocked, any event carrying live `clientX/clientY` has seen one: the
+  // desktop pointer is where it says it is whether or not it moved to get
+  // there, and the game has hidden it, so the reticle drawn here is the only
+  // mark of where the player's hand is pointing. A page whose content moves
+  // under a stationary pointer (the loading screen coming off, a resize, the
+  // fullscreen transition) is told so with a mousemove carrying no movement at
+  // all, and that event is where the run's first aim comes from.
+  //
+  // LOCKED there is no such pointer - `clientX/clientY` is frozen at the point
+  // the capture was made from - so a motionless event says nothing, and the
+  // virtual cursor is born at the seed instead (see `seed` and the
+  // `pointerlockchange` handler).
   private view: Vec2 | null = null;
+  // Whether a mouse MOVE has ever been folded in. Until one has, wherever the
+  // cursor is is this class's own doing - the seed, or the press that opened
+  // the run - and the lock may move it; after one it is the player's aim and
+  // nothing may move it but them.
+  private moved = false;
   // How far it moved on the last mousemove, in view pixels.
   private lastMotion: Vec2 | null = null;
   // The real cursor as of the last mousemove, in view pixels. Unlocked, the
@@ -242,8 +255,17 @@ export class AimPointer {
     // not the lock is ever taken, because the press is a press either way. Lock
     // and fullscreen changes are NOT listened for - they are compared as state
     // in `update`, where the ordering cannot double-count them.
-    const suspicious = (): void => {
+    const suspicious = (e: MouseEvent): void => {
       this.suspect++;
+      // A press is a POSITION as well as a warp, and the press that starts the
+      // run is the only one the game gets before the level is on screen: it is
+      // made on the loading screen's Play button rather than on the canvas, so
+      // the canvas's own `reveal` never sees it (see input/ballInput.ts). Taken
+      // here, the ball opens the level facing the hand that started it rather
+      // than facing nowhere until the mouse is next moved. `reveal` is a no-op
+      // where the reticle is not the page's cursor, and on every press after
+      // the cursor exists.
+      this.reveal(e);
     };
     document.addEventListener("mousedown", suspicious, true);
     document.addEventListener("mouseup", suspicious, true);
@@ -285,6 +307,19 @@ export class AimPointer {
     // carries `movementX/Y` and nothing is lost.
     document.addEventListener("pointerlockchange", () => {
       this.lastReal = null;
+      // The lock has just taken the desktop pointer away, so an aim read off it
+      // - the Play press, made by a hand that is no longer pointing at anything
+      // the page can see - is not where anything is any more. The virtual
+      // cursor is re-born at the seed instead, which is where a locked one
+      // always belongs (see `seed`), and the run still opens WITH a reticle
+      // rather than with none until the first move.
+      //
+      // Only while the aim is still this class's own: once the player has
+      // moved, the reticle is theirs, and a re-lock after an Esc may not jerk
+      // it back over the avatar.
+      if (!this.locked() || this.moved || this.seed === null) return;
+      const at = this.seed();
+      if (at !== null) this.view = clampToFrame(at);
     });
   }
 
@@ -385,12 +420,21 @@ export class AimPointer {
     // a jump against (the `pointerlockchange` reset above is the other half of
     // this, for the transition the events do not announce).
     this.lastReal = this.locked() ? null : real;
-    // A mousemove that did not move. The browser sends one whenever the page
-    // moves under a stationary pointer, and before the first real move there is
-    // no cursor yet - so this one is not the player aiming, and answering it
-    // would put the reticle (and the steering under it) wherever the desktop
-    // pointer happened to be sitting when the level loaded.
-    if (this.view === null && motion.x === 0 && motion.y === 0) return;
+    // A mousemove that did not move, before there is a cursor to move. The
+    // browser sends one whenever the page moves under a stationary pointer, and
+    // LOCKED it says nothing at all: `clientX/clientY` is the frozen capture
+    // point, so answering it would put the virtual cursor (and the steering
+    // under it) wherever the desktop pointer happened to be sitting when the
+    // lock was taken, rather than at the seed it is born at.
+    //
+    // UNLOCKED the same event is the answer to "where is the pointer" - the one
+    // the OS is moving and the browser hit-tests clicks against - and the game
+    // has hidden it, so this is the page's one chance to draw its reticle where
+    // the player's hand actually is without waiting for them to move it.
+    if (this.view === null && locked && motion.x === 0 && motion.y === 0) return;
+    // Travel is the player saying where they want to aim; a position is only
+    // where their hand already was (see `moved`).
+    if (motion.x !== 0 || motion.y !== 0) this.moved = true;
     // UNLOCKED, THERE IS NO VIRTUAL CURSOR: the desktop pointer is still the
     // one the OS is moving, and it is the one a click lands under, so the aim
     // is simply read off it - unseeded and unbounded, exactly as `position`

@@ -739,8 +739,9 @@ function enterFullscreen(): void {
 // page: the letterbox bars either side of the frame kept the arrow, and a
 // fullscreen window that is wider than 16:9 is mostly bars. The press is the
 // right moment for it rather than the load - up to there the screen is a button
-// to be clicked, and after it the game's own reticle is the cursor, appearing on
-// the first mouse MOVE (see `AimPointer`).
+// to be clicked, and after it the game's own reticle is the cursor - drawn from
+// this press onward, which is itself the aim the run opens on (see
+// `AimPointer.reveal`).
 //
 // The ball controller only: the grapple controller aims with the OS pointer
 // itself and draws no reticle, so hiding it there would leave nothing to aim
