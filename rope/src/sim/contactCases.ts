@@ -1389,6 +1389,83 @@ function caseGripReseed(sims: Sim[]): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// grip-roll-phase: a gripping ball moves by what its velocity said, even while
+// its roll is changing every frame.
+//
+// The steered grip's pin advances its anchor by the intended roll and removes
+// whatever else has crept in. "The intended roll" has a frame in it: the grip
+// writes a velocity at the END of a frame and the integrator spends it at the
+// top of the NEXT one, so on the frame the pin runs, the step the ball has just
+// taken was paid for by the PREVIOUS frame's roll (`RigidBody2D.gripRollTan`).
+// Advancing by the roll being written now compares a position against a
+// displacement that has not happened yet, and the pin then applies the whole
+// difference as a teleport.
+//
+// It is invisible while the roll is steady, because then the two are the same
+// number - and a steered ball's roll is never steady, because the aim rewrites
+// it every frame. So it is the ripple of whatever the player is doing with the
+// aim, turned into position. `ball-roll-wall` stirs a 45 degree step every two
+// frames; the proportional aim tracking that staircase rippled the spin between
+// exactly the two values used here, and the pin moved the ball -9.0 / +8.1 mm a
+// frame for the length of the run, with no velocity change to show for any of it.
+//
+// The measurement is the one thing a teleport cannot survive: a frame's
+// displacement must be what the velocity at the START of that frame said. The
+// floor is flat and level, so gravity contributes nothing along x and the whole
+// of the x motion is the roll. By the spent roll the residual is the contact
+// damp's 1% of a step (about 0.5 mm); by the roll being written it is the
+// ripple's own 8.6 mm, which is the gap the bar sits in.
+//
+// This is deliberately NOT a bar on how far the ball gets. Both phases roll the
+// ball at the same average rate, and the per-frame distances are the same two
+// numbers in a different order, so every position-shaped measurement reads the
+// same on both - which is most of why this survived as long as it did.
+// ---------------------------------------------------------------------------
+function caseGripRollPhase(sims: Sim[]): ContactResult {
+  const sim = new Sim("grip-roll-phase");
+  sims.push(sim);
+  sim.addStatic(rectShape(12, 1), new Vec2(0, 0.5));
+  const ball = new BallPlayer(0.12);
+  ball.globalPosition = new Vec2(-4, -0.12);
+  sim.world.add(ball);
+  ball.kinematicRotation = true;
+
+  // The two spins `ball-roll-wall` actually rippled between, so the case is
+  // sized by a measured number rather than a round one.
+  const RIPPLE = [25.7028, 21.419];
+  ball.angularVelocity = RIPPLE[0]!;
+
+  let worstErr = 0;
+  let worstFrame = 0;
+  let prevX = ball.globalPosition.x;
+  let prevVx = ball.linearVelocity.x;
+  sim.step(180, (n) => {
+    const moved = ball.globalPosition.x - prevX;
+    // Skip the opening frames: the ball is settling onto the floor and taking
+    // its first grip, and a re-seeding anchor legitimately moves it.
+    if (n > 20) {
+      const err = Math.abs(moved - prevVx * DT);
+      if (err > worstErr) {
+        worstErr = err;
+        worstFrame = n;
+      }
+    }
+    prevX = ball.globalPosition.x;
+    prevVx = ball.linearVelocity.x;
+    ball.kinematicRotation = true;
+    ball.angularVelocity = RIPPLE[n % 2]!;
+  });
+
+  const travelled = ball.globalPosition.x + 4;
+  const good = worstErr < 0.002 && travelled > 5;
+  return ok("grip-roll-phase — a gripping ball moves by what its velocity said", good, [
+    `${worstErr < 0.002 ? "ok  " : "BAD "} worst step vs its own velocity ${(worstErr * 1000).toFixed(2)}mm` +
+      ` @f${worstFrame} (want <2mm; the ripple is 8.6mm)`,
+    `${travelled > 5 ? "ok  " : "BAD "} ...and it is still rolling: travelled ${travelled.toFixed(2)}m (want >5)`,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // hook-blocked-attaches — the hook anchors to anything the solver stops it on.
 //
 // A `BallHook` decides for itself, before it moves, whether the step ahead ends
@@ -7000,6 +7077,7 @@ export function runContactCases(): ContactResult[] {
     caseLoopRide(sims),
     caseLoopWall(sims),
     caseGripReseed(sims),
+    caseGripRollPhase(sims),
   ];
   ContactAudit.enabled = false;
   results.push(caseMaterials());
