@@ -855,6 +855,16 @@ export class RigidBody2D extends PhysicsBody2D {
   // the wasted impulse is what let a steered ball slide instead of braking.
   // Default false keeps every other body — and recorded replays — unchanged.
   kinematicRotation = false;
+  // How much of a kinematic spin's traction the contact solve may fund this
+  // frame, 0..1. A steered ball's spin is written before the frame knows
+  // whether the chain will refuse it, and the contact solve sells the whole
+  // ask as roll before the unwind hands the refused part back
+  // (`session-315f`'s ice, `roll-unfunded`'s rule: a rotation the chain
+  // refuses may not have funded traction). The driver sets this to the share
+  // of last frame's ask that STAYED wound, so a wound-tight ball asks on and
+  // gets no drive for it; 1 for every body that is not steered, which keeps
+  // every recorded replay bit-identical (the cone is multiplied by exactly 1).
+  spinDriveShare = 1;
   // When true, World.integrate advances the body's position by a swept motion
   // against static geometry (earliest time of impact across every circle shape
   // the body carries) instead of the discrete `pos += v*dt` step, so the body

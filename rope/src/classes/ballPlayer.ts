@@ -841,6 +841,16 @@ export class BallPlayer extends RigidBody2D {
       brake =
         BallPlayer.AIM_BRAKE_MIN +
         (1 - BallPlayer.AIM_BRAKE_MIN) * dmath.exp(-speed / BallPlayer.AIM_BRAKE_DECAY_SPEED);
+      // The fade protects momentum the SPIN earned - reorienting the aim
+      // mid-roll must not shed it. Travel a refused spin did not fund is not
+      // that: a braced ball wound tight against a stool going over the top
+      // of it was hauled out from under the stool by its own share of the
+      // chain's correction and, aiming, could not be braked - 3 m/s along
+      // the floor with two thirds of every turn refunded, read as the stool
+      // shoving the ball away (`session-184f` f72-96). So the fade is undone
+      // by the share the chain refused last frame (`spinDriveShare`): at a
+      // share of 1 nothing is added and the brake is what it always was.
+      brake += (1 - brake) * (1 - this.spinDriveShare);
     }
     this.contactBrakeScale = brake;
     // While aiming, the steering below drives rotation kinematically. Flag it so
@@ -922,6 +932,8 @@ export class BallPlayer extends RigidBody2D {
     }
     if (input.fire.released) this.releaseChain();
     if (!this.chain || !this.windStallHeld) this.windStall = 0;
+    // A chain that is gone refused nothing (see `spinDriveShare`).
+    if (!this.chain) this.spinDriveShare = 1;
   }
 
   // Called after the hook has flown this frame. Three triggers convert the

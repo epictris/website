@@ -474,6 +474,10 @@ interface SolverContact {
   // True when the kinematically spun body on this contact is held by an
   // anchored chain - that regime keeps legacy traction, so the ramp is off.
   readonly tethered: boolean;
+  // The spun body's `spinDriveShare`: how much of its spin's drive the cone
+  // may fund this frame. 1 for everything but a steered ball whose chain
+  // refused part of last frame's turn.
+  readonly spinKept: number;
   readonly key: string;
 }
 
@@ -1946,6 +1950,11 @@ export class World {
           invEffN,
         sustained: sustainedAlong(prevLoads.get(`${c.a.id}:${c.b.id}`), c.normal),
         tethered,
+        spinKept: c.a.kinematicRotation
+          ? c.a.spinDriveShare
+          : bRigid !== null && bRigid.kinematicRotation
+            ? bRigid.spinDriveShare
+            : 1,
         key: `${c.a.id}:${c.b.id}:${c.shapeA}:${c.shapeB}:${c.featureId}`,
       });
     }
@@ -2151,7 +2160,22 @@ export class World {
   private solveTangent(s: SolverContact): void {
     if (s.friction <= 0 || s.invEffT <= 1e-9) return;
     const { c } = s;
-    const vt = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(s.tangent);
+    let vt = c.a.velocityAtPoint(c.point).sub(c.b.velocityAtPoint(c.point)).dot(s.tangent);
+    // The slip friction answers is the one the spin the chain let STAND last
+    // frame makes, not the spin the aim wrote (`spinDriveShare`, 1 unless the
+    // driver says otherwise): a ball wound tight against a body it is braced
+    // to keeps asking for a turn the unwind hands back whole, and the solve
+    // sold every frame of it as roll before the refund came - 0.4 m/s along
+    // the floor with zero spin, the stool it was hooked to shoving it along
+    // (`session-518f` f109-490, `roll-unfunded` x3). Taken off the SLIP and
+    // not off the cone: cutting the cone on the drive side was tried first
+    // and left the ball unable to resist a push the other way - a stool going
+    // over the top of it shoved it out from under at 3 m/s, friction having
+    // nothing to say (`session-184f` f72-96). With the refused share out of
+    // the slip the cone stays whole and holds the ball against the push, and
+    // what is left of the spin drives what it honestly can. Guarded so a share
+    // of 1 leaves the slip bit-identical.
+    if (s.spinKept !== 1) vt -= s.spinSlip * (1 - s.spinKept);
     // The cone is asymmetric only for an aiming ball: `contactBrakeScale` fades
     // impulses that oppose its travel so reorienting the spin mid-roll cannot
     // shed momentum, while impulses that drive it still land in full. Written on
@@ -2728,7 +2752,15 @@ export class World {
         : body.staticFriction * other.surfaceFriction;
       const rContact = point.sub(body.globalPosition);
       const surfV = other.velocityAtPoint(point);
-      const wCrossR = new Vec2(-body.angularVelocity * rContact.y, body.angularVelocity * rContact.x);
+      // The spin the roll is written for is the share the chain let stand last
+      // frame (`spinDriveShare`, 1 unless a driver says otherwise): a ball
+      // wound tight against a body it is braced to asks for a turn every frame
+      // and gets it handed back whole by the unwind, and this pin sold each of
+      // them as 0.4 m/s of roll before the refund came, the stool it was
+      // hooked to shoving it along the floor at zero spin (`session-518f`).
+      // At a share of 1 the product is the spin itself, to the bit.
+      const spin = body.angularVelocity * body.spinDriveShare;
+      const wCrossR = new Vec2(-spin * rContact.y, spin * rContact.x);
       const relV = body.linearVelocity.add(wCrossR).sub(surfV);
       const slipTan = relV.sub(normal.mul(relV.dot(normal)));
       const g = GRAVITY.mul(body.gravityScale);
@@ -3057,9 +3089,21 @@ function spinFabricatedNormal(
   restitution: number,
   invEffN: number,
 ): number {
+  // Sized from the spin the chain let STAND (`spinDriveShare`, 1 unless the
+  // driver says otherwise). A refused spin fabricates nothing, and counting it
+  // took the whole of a braced ball's floor friction away exactly when the
+  // stool going over the top of it was pressing it into the floor: the loop
+  // read as driven in at the full ask, the cone read as fabricated to the last
+  // newton, and the ball was hauled out from under the stool with `Pt` at
+  // zero against a `Pn` of 26 (`session-184f` f90). At a share of 1 the
+  // product is the spin itself.
   let vn = 0;
-  if (spinsOffCentre(c.a, c.shapeA)) vn += c.a.angularVelocity * rA.cross(c.normal);
-  if (bRigid && spinsOffCentre(bRigid, c.shapeB)) vn -= bRigid.angularVelocity * rB.cross(c.normal);
+  if (spinsOffCentre(c.a, c.shapeA)) {
+    vn += c.a.angularVelocity * c.a.spinDriveShare * rA.cross(c.normal);
+  }
+  if (bRigid && spinsOffCentre(bRigid, c.shapeB)) {
+    vn -= bRigid.angularVelocity * bRigid.spinDriveShare * rB.cross(c.normal);
+  }
   // Only a spin pressing INTO the surface fabricates anything; one lifting the
   // shape away has already cost the contact its impulse rather than bought it.
   const approach = Math.max(0, -vn);

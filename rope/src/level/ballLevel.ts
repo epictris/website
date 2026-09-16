@@ -1423,6 +1423,16 @@ export class BallLevel {
           return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
         });
         const spool = Math.abs(this.ball.chain.lengthPerRadian(this.ball));
+        // The share of this ask that STAYED wound is what next frame's contact
+        // solve may sell as roll (`RigidBody2D.spinDriveShare`). The unwind
+        // runs after the contacts, so the frame that refuses a turn has
+        // already sold it; the next frame does not. Floored the way the latch
+        // is: an ask under `STALL_EPSILON` of chain is a converged aim's
+        // residual, not a refusal (`session-379f`), and buys its drive whole.
+        this.ball.spinDriveShare =
+          asked * spool >= BallLevel.STALL_EPSILON
+            ? Math.max(0, 1 - refunded / asked)
+            : 1;
         if (braced) this.ball.windStall = 0;
         if (
           asked * spool >= BallLevel.STALL_EPSILON &&
@@ -1433,6 +1443,9 @@ export class BallLevel {
         ) {
           this.ball.windStall = Math.sign(this.aimSpin);
         }
+      } else {
+        // Nothing anchored refuses a turn, so nothing withholds its drive.
+        this.ball.spinDriveShare = 1;
       }
       PhaseTrace.mark("unwind", this.world);
       // The unwind just turned the ball, and the ball is not only a circle — it

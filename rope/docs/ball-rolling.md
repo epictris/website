@@ -21,6 +21,19 @@ it advances every frame and exists only to remove that one frame of creep.
 than `STICK_RELEASE_FRAMES` of flight, which is the only way to make the grip
 lapse and return with the anchor still held.
 
+It rolls for the spin the chain let **stand**, not the spin the aim wrote (`RigidBody2D.spinDriveShare`, 2026-09-16).
+The aim's spin is written before the frame knows whether the chain will refuse it, and both the pin here and the Coulomb cone in `solveTangent` sold the whole ask as roll before the unwind handed the refused part back - which is `session-315f`'s ice and the rule `roll-unfunded` states, a rotation the chain refuses may not have funded traction.
+For a long time the wind-stall latch hid it: wound tight, the steering stopped asking, so there was nothing to sell.
+A braced ball never latches (see [ball-chain](ball-chain.md)), and `session-518f` is what the sale costs without it: the ball on the floor with a stool hooked to it and balanced against it, the aim asking 3.4 rad/s every frame and the unwind refunding every frame of it whole, the grip driving the centre to rim speed regardless - 0.4 m/s along the floor at zero spin for four hundred frames, the stool riding along, `roll-unfunded` firing three times.
+So `BallLevel` hands the ball the share of each frame's ask that stayed wound, one frame late (the unwind runs after the contacts; the frame that refuses a turn has already sold it, the next does not), floored at `STALL_EPSILON` of chain so a converged aim's residual buys its drive whole (`session-379f`).
+Everywhere the contact solve reads the spin as a fact about the surface, it reads the kept share of it instead: the pin's roll here, the slip `solveTangent` answers, the normal impulse `spinFabricatedNormal` charges an off-centre loop with, and the aim's brake fade - at a share of exactly 1 each product is the spin itself, so every body that is not steered and every recorded replay are bit-identical.
+Three of those four were found one at a time on the same afternoon, and the order matters because the first attempt was the wrong shape.
+Cutting the CONE on the spin's drive side was tried first and left the ball unable to resist a push the other way: a stool going over the top of the ball shoved it out from under at 3 m/s with friction having nothing to say (`session-184f` f72-96, reported as the ball rapidly sliding opposite the roll).
+Taken off the slip instead, the cone stays whole and holds the ball against the push, and what is left of the spin drives what it honestly can - 1.7 m/s.
+The aim's brake fade protects momentum the spin earned, and travel a refused spin did not fund is not that, so the fade is undone by the refused share - 1.6 m/s.
+And the loop, spun into the floor at the full ask, read as having fabricated the whole of a 26 N s normal impulse the stool's weight had really put there, so the cone read as zero: sized by the kept spin, friction held, and the ball drifts 15 cm while the stool goes over and lands on its far side.
+`session-518f` holds the ball to the millimetre for three hundred frames with the stool balanced on it.
+
 It grips **scenery** as it grips the world, and for a long time it did not.
 `applyStaticGrip` declines a `kinematicRotation` body on purpose - a steered
 anchor has to advance by the roll rather than hold a point still - and this
