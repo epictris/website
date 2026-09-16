@@ -2846,6 +2846,9 @@ export class World {
       // ADVANCES by the intended roll (rollTan*dt). The steered roll is preserved
       // exactly while the gravity drift on top is removed; at omega = 0 the anchor
       // is static and the ball simply holds.
+      //
+      // "The intended roll" is LAST frame's, because that is the one the step
+      // being measured was taken with (`RigidBody2D.gripRollTan`).
       body.stickNormal = normal;
       // The steered ball anchors its own CENTRE rather than a contact point: the
       // grip drives the centre so the contact is stationary, so the centre is
@@ -2868,7 +2871,13 @@ export class World {
       // millimetre.
       const continuous = body.stickBody === other && body.ungrippedFrames === 0;
       const held = continuous ? body.stickAnchorWorld() : null;
-      const advanced = held === null ? body.globalPosition : held.add(rollRelTan.mul(dt));
+      // By the roll the integrator SPENT, which is the one the grip wrote last
+      // frame, and not the one being written now: a frame of phase, and on a
+      // steered ball a frame of phase is the aim's own ripple applied as
+      // position (see `RigidBody2D.gripRollTan`).
+      const advanced =
+        held === null ? body.globalPosition : held.add(body.gripRollTan.mul(dt));
+      body.gripRollTan = rollRelTan;
       // The anchor is an ALONG-SURFACE position and nothing else: the correction
       // below projects its normal component straight back out, so that component
       // says nothing about anything - and left to run it does not stay small.

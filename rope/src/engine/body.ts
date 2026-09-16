@@ -1026,6 +1026,25 @@ export class RigidBody2D extends PhysicsBody2D {
   // any velocity, and by the end of the frame the chain phase and the
   // depenetration sweep have moved the body again for reasons of their own.
   gripPinCorrection: Vec2 = Vec2.ZERO;
+  // The along-surface roll the steered grip wrote LAST frame, relative to the
+  // surface (`World.applySteeringGrip`), and the displacement the integrator
+  // then actually applied.
+  //
+  // The anchor advances by this rather than by the roll the grip is writing now,
+  // and the difference is a whole frame of phase. The grip writes a velocity at
+  // the END of a frame and the integrator spends it at the top of the NEXT one,
+  // so on the frame the pin runs, the step the ball has just taken was paid for
+  // by the previous frame's roll; advancing the anchor by this frame's is
+  // comparing a position against a displacement that has not happened yet, and
+  // the pin then teleports the body by the whole difference.
+  //
+  // Invisible while the roll is steady, because then the two are the same
+  // number. The steered ball's roll is never steady - the aim writes it every
+  // frame - so it is the ripple of whatever the player is doing with the aim,
+  // resolved into position: `ball-roll-wall` stirs a 45 degree step every two
+  // frames, the spin rippled 25.7 / 21.4 rad/s under it, and the pin moved the
+  // ball -9.0 / +8.1 mm a frame for the length of the run.
+  gripRollTan: Vec2 = Vec2.ZERO;
   // The surface normal the grip took hold along, or null when not gripped. It is
   // what splits the depenetration sweep's correction into the part the anchor
   // must follow (out of the surface) and the part it must not (along it, which

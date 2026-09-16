@@ -100,8 +100,17 @@ It was reported from the game as the ball jittering side to side for a third of 
 `grip-pin-buzz` is the detector, and it reads the teleport rather than the offset behind it.
 The offset is the tempting quantity - it is the state that goes wrong - but its honest one-frame value is whatever the ball's own normal motion is, which over the corpus reaches the ball's full radius on a contact hopping to the next face, so a bar on it is a bar on nothing.
 The teleport is what the pin *did*, and its legitimate size is the one frame of gravity creep the pin exists to remove: a fraction of a millimetre.
-It is measured as a RUN (5 mm, 8 frames running) because that is what separates the buzz from the honest one-frame events around it - a grip resuming, a face changing under the contact.
-A correction earned once is over in a frame or two; this one is re-earned every frame for as long as the grip holds, which is the same shape `roll-unfunded` is written in and for the same reason.
+It is measured as a run of REVERSALS (5 mm, 6 frames running) rather than as a magnitude, because magnitude alone says nothing here: the pin is what enforces roll-without-slip in position, so a ball rolling fast has it making up a genuine centimetre a frame for as long as the roll lasts.
+What separates that from a buzz is the sign. A correction that means something points the same way while its cause lasts; one that reverses frame on frame is the pin putting the ball back and then taking it away again, and no real mismatch behaves like that.
+
+The fifth thing about the anchor is that it advances by the roll the integrator SPENT - the one the grip wrote last frame - and not by the roll being written now.
+Between those two is a whole frame of phase: the grip writes a velocity at the end of a frame, the integrator spends it at the top of the next, so on the frame the pin runs, the step the ball has just taken was paid for by the previous frame's roll.
+Advancing by this frame's compares a position against a displacement that has not happened yet, and the pin then applies the entire difference as a teleport.
+
+That is invisible while the roll is steady, because then the two are the same number, and the steered ball's roll is never steady - the aim rewrites it every frame.
+So it is the ripple of whatever the player is doing with the aim, resolved into position.
+`ball-roll-wall` is where it was measured: the rig stirs a 45 degree step every two frames, the proportional aim tracking that staircase rippled the spin 25.70 / 21.42 rad/s under it, and the pin moved the ball -9.0 / +8.1 mm a frame, alternating, for the length of the run - found by `grip-pin-buzz` on the tree that had just fixed `session-214f`, which is a different cause with the same shape and on a STATIC floor, where nothing about the anchor's normal drift applies.
+By the spent roll the same run sits at -0.43 / -0.51 mm, one sign, which is the contact damp's 1% of the step and a correction with a cause behind it.
 
 ## Spin traction on a fresh contact
 

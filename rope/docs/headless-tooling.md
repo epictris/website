@@ -180,10 +180,15 @@ with a normal its own teleport was flipping: a self-sustaining 6 cm buzz for 23
 frames, under a `vx` that stayed smooth at 0.5 m/s, which is why `scan` read the
 run as clean and the digest table - every fourth frame, to a tenth of a metre -
 showed nothing (see [**The steered ball's grip**](ball-rolling.md#the-steered-balls-grip)).
-It is a RUN rather than a magnitude because a grip resuming or a contact hopping
-to the next face of a compound body earns a real correction for a frame or two,
-where this one is re-earned every frame for as long as the grip holds - the same
-distinction `roll-unfunded` draws, for the same reason.
+It counts REVERSALS rather than magnitude, because the pin is what enforces
+roll-without-slip in position and a fast roll has it making up a genuine
+centimetre a frame: what says a correction is wrong is not its size but its
+direction flipping frame on frame, which is the pin putting the ball back and
+then taking it away again.
+It found a second cause with the same shape on the tree that fixed the first -
+the anchor advancing by the roll being written this frame instead of the one the
+integrator spent last frame, a frame of phase that turns the aim's own ripple
+into +-9 mm a frame on a flat static floor (`ball-roll-wall`).
 
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
