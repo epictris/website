@@ -13,6 +13,7 @@ import {
   digest,
   digestBall,
   EnergyMonitor,
+  GripPinMonitor,
   RollMonitor,
   TunnelMonitor,
   kineticEnergy,
@@ -510,6 +511,7 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
   const violations: Violation[] = [];
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
+  const gripPin = new GripPinMonitor();
   const tunnel = new TunnelMonitor();
   const stateFirstFrame = new Map<string, number>();
 
@@ -527,6 +529,8 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     if (ev) violations.push(ev);
     const rv = roll.push(level);
     if (rv) violations.push(rv);
+    const gv = gripPin.push(level);
+    if (gv) violations.push(gv);
     const tv = tunnel.push(level);
     if (tv) violations.push(tv);
   }

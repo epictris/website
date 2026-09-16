@@ -2408,8 +2408,12 @@ export class World {
       // millimetre at a time.
       if (stuck) {
         body.ungrippedFrames = 0;
-      } else if (++body.ungrippedFrames > STICK_RELEASE_FRAMES) {
-        body.releaseStick();
+      } else {
+        // The pin reading belongs to the frame the grip ran on, and a body that
+        // did not grip this frame has none: left standing it would be last
+        // frame's answer to a question nobody asked (see `gripPinCorrection`).
+        body.gripPinCorrection = Vec2.ZERO;
+        if (++body.ungrippedFrames > STICK_RELEASE_FRAMES) body.releaseStick();
       }
     }
 
@@ -2864,12 +2868,37 @@ export class World {
       // millimetre.
       const continuous = body.stickBody === other && body.ungrippedFrames === 0;
       const held = continuous ? body.stickAnchorWorld() : null;
+      const advanced = held === null ? body.globalPosition : held.add(rollRelTan.mul(dt));
+      // The anchor is an ALONG-SURFACE position and nothing else: the correction
+      // below projects its normal component straight back out, so that component
+      // says nothing about anything - and left to run it does not stay small.
+      // The anchor is a material point of the SURFACE, and a rolling ball is not
+      // one: it rides the surface at its own radius while the point the anchor
+      // names is carried wherever the surface's own rotation takes it, so the two
+      // separate along the normal by a couple of millimetres a frame, for as long
+      // as the grip holds, with nothing anywhere reconciling them. On the tilting
+      // stool of `session-214f` that reached 314 mm after 170 gripped frames.
+      //
+      // A stale normal offset is harmless only while the normal itself is still.
+      // `d - n(d.n)` resolves it against THIS frame's contact normal, so once the
+      // normal starts to wobble - which it does as a ball rolls over a seam, and
+      // as this one did at 0.1 rad a frame - the projection hands back |d| times
+      // that wobble as TANGENT, and the pin applies it in full, with no velocity
+      // change to show for it: 30 mm a frame, alternating with the wobble, which
+      // moved the ball and flipped the contact back. That is a self-sustaining
+      // 6 cm buzz, and it is what `session-214f` was recorded for.
+      //
+      // So the offset is re-seated to the ball's own every frame. The pin already
+      // behaves as though it were zero; this makes it so, and leaves the
+      // along-surface anchor - the whole of what this pin holds - untouched.
       body.setStickAnchor(
         other,
-        held === null ? body.globalPosition : held.add(rollRelTan.mul(dt)),
+        advanced.add(normal.mul(body.globalPosition.sub(advanced).dot(normal))),
       );
       const d = body.globalPosition.sub(body.stickAnchorWorld()!);
-      body.globalPosition = body.globalPosition.sub(d.sub(normal.mul(d.dot(normal))));
+      const correction = d.sub(normal.mul(d.dot(normal)));
+      body.gripPinCorrection = correction;
+      body.globalPosition = body.globalPosition.sub(correction);
       stuck.add(body.id);
     };
 

@@ -1008,6 +1008,93 @@ export class RollMonitor {
   }
 }
 
+// How large a REVERSING steered-grip pin correction counts, and how many in a
+// row make a buzz.
+//
+// Magnitude alone says nothing here, and that is the whole difficulty: the pin
+// is what enforces roll-without-slip in position, so a ball rolling fast has it
+// making up a genuine mismatch of a centimetre a frame, every frame, for as long
+// as the roll lasts - `ball-roll-wall` sustains 9.0 mm for the length of the run
+// and is the mechanic working exactly as written.
+//
+// What separates that from a buzz is the SIGN. A correction that means something
+// points the same way while its cause lasts; one that reverses frame on frame is
+// the pin putting the ball back where it was and then taking it away again, and
+// no mismatch behaves like that. In `session-214f` the corrections ran
+// -28.7, +30.3, -32.0, +33.4 mm, strictly alternating for 23 frames - because
+// the teleport was itself flipping the contact normal that produced it.
+//
+// 5 mm is an order above the gravity creep the pin exists to remove and well
+// under the reversal a rolling ball's own noise can produce; 6 frames is three
+// full cycles of a thing that needs two frames to show its shape at all.
+const GRIP_PIN_CORRECTION = 0.005;
+const GRIP_PIN_FRAMES = 6;
+
+// The steered ball's grip anchor may not drift out of the surface it grips.
+//
+// The anchor holds an ALONG-SURFACE position: the pin projects its normal
+// component straight back out (`d - n(d.n)`), so that component is not a
+// quantity anything reads, and for a long time nothing kept it honest either.
+// It is a material point of the SURFACE, and a rolling ball is not one - it
+// rides the surface at its own radius while the anchor goes wherever the
+// surface's rotation carries the point it names - so against a turning rigid
+// body the two separate along the normal a couple of millimetres a frame, for as
+// long as the grip holds.
+//
+// That is harmless exactly while the contact normal is still, and the normal is
+// never still for long: `d - n(d.n)` resolves the offset against THIS frame's
+// normal, so a wobble of `dtheta` hands back `|d| * dtheta` as TANGENT and the
+// pin applies it in full, as a position, with no velocity change to show for it.
+// On the tilting stool of `session-214f` the offset reached 314 mm, the normal
+// wobbled 0.1 rad a frame as the ball crossed a seam, and the ball was teleported
+// 30 mm a frame, alternating - which moved it and flipped the contact back, so
+// the buzz sustained itself: 6 cm peak to peak for 23 frames, at a reported
+// velocity that stayed smooth at 0.5 m/s the whole way through.
+//
+// So this reads the offset rather than the teleport. The teleport is a
+// consequence and needs the normal to move before it appears at all, where the
+// offset is the state that makes it possible and is measurable on every gripped
+// frame - and it is zero by construction while the re-seat holds, which is the
+// same shape `spin-overdrive` has.
+//
+// Zero on any frame the steered grip did not run, so a ball in the air says
+// nothing either way.
+export class GripPinMonitor {
+  private run = 0;
+  private worst = 0;
+  private prev: Vec2 = Vec2.ZERO;
+
+  push(level: BallLevel): Violation | null {
+    const corr = level.ball.gripPinCorrection;
+    const moved = corr.length();
+    // Against the PREVIOUS frame's correction, so the run counts reversals and
+    // not frames: a pin pulling the same way twice has a cause, whatever its
+    // size.
+    const reversed = corr.dot(this.prev) < 0;
+    this.prev = corr;
+    if (moved <= GRIP_PIN_CORRECTION || !reversed) {
+      this.run = 0;
+      this.worst = 0;
+      return null;
+    }
+    this.run++;
+    this.worst = Math.max(this.worst, moved);
+    if (this.run <= GRIP_PIN_FRAMES) return null;
+    const run = this.run;
+    const worst = this.worst;
+    this.run = 0;
+    this.worst = 0;
+    return {
+      frame: level.frame,
+      kind: "grip-pin-buzz",
+      detail:
+        `the steered grip's pin teleported the ball along the surface and straight ` +
+        `back again for ${run} frames running, worst ${(worst * 1000).toFixed(1)} mm, ` +
+        `with no velocity change to show for any of it`,
+    };
+  }
+}
+
 // ---- chain-tunnel detector -------------------------------------------------
 // The chain may not pass THROUGH a body it could have wrapped. Between the end
 // of one frame and the end of the next, every span of the chain sweeps a

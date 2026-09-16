@@ -163,6 +163,28 @@ against a faded bound of 11.60 and a cone of 15.32 (`session-477f` f170).
 The load-bearing contact is also chosen *before* the bound question is asked
 rather than from among the contacts that pass it, or a ball skidding on its rim is
 measured at whatever grazing touch its mounting loop happens to have.
+Ball runs also carry **`grip-pin-buzz`** (`GripPinMonitor`): the steered ball's
+position pin may not teleport the ball more than 5 mm along the surface for more
+than 8 frames running.
+The pin is a position correction with no velocity behind it, and what it is for
+is the ONE frame of gravity creep integration slides in underneath a gripping
+ball - a fraction of a millimetre.
+Its anchor is a material point of the surface, held in that surface's frame, and
+the ball riding the surface is not one, so against a turning rigid body the two
+separate along the normal a couple of millimetres a frame; the pin resolves that
+offset against each frame's own contact normal, so once the offset is large and
+the normal starts to move, `|offset|` times the wobble comes back as pure TANGENT
+and is applied in full.
+At 314 mm out, `session-214f`'s ball was teleported 30 mm a frame, alternating
+with a normal its own teleport was flipping: a self-sustaining 6 cm buzz for 23
+frames, under a `vx` that stayed smooth at 0.5 m/s, which is why `scan` read the
+run as clean and the digest table - every fourth frame, to a tenth of a metre -
+showed nothing (see [**The steered ball's grip**](ball-rolling.md#the-steered-balls-grip)).
+It is a RUN rather than a magnitude because a grip resuming or a contact hopping
+to the next face of a compound body earns a real correction for a frame or two,
+where this one is re-earned every frame for as long as the grip holds - the same
+distinction `roll-unfunded` draws, for the same reason.
+
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
 may not rise beyond a tolerance.

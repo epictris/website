@@ -86,6 +86,23 @@ chains instead of by the ground - and it measures the ball against the SLAB,
 because the rig is a pendulum and a ball riding a swinging slab is the ball doing
 its job.
 
+The fourth is that the anchor holds an **along-surface position and nothing else**, so its normal offset is re-seated to the ball's own every frame.
+The pin projects that component straight back out (`d - n(d.n)`), which is why nothing reads it - and for a long time nothing kept it honest either.
+The anchor is a material point of the SURFACE and a rolling ball is not one: it rides the surface at its own radius while the anchor goes wherever the surface's rotation carries the point it names, so against a turning rigid body the two separate along the normal by a couple of millimetres a frame, for as long as the grip holds, with nothing anywhere reconciling them.
+Against a static that never happens, which is why every static case was blind to this one too.
+
+A stale normal offset is harmless exactly while the contact normal is still, and a contact normal is never still for long.
+`d - n(d.n)` resolves the offset against THIS frame's normal, so a wobble of `dtheta` hands back `|d|` times that wobble as **tangent**, and the pin applies it in full, as a position, with no velocity change to show for it.
+On the tilting stool of `session-214f` the offset had reached 314 mm after 170 gripped frames; the ball then crossed a seam in the seat and the normal began alternating about 0.1 rad a frame, which bought a 30 mm teleport a frame - and since the teleport moved the ball, it flipped the contact back, so the buzz sustained itself.
+Six centimetres peak to peak for 23 frames, out of a `vx` that read a smooth 0.5 m/s the whole way through, which is why nothing velocity-shaped saw it: `cli scan` called the run clean, and the digest table samples every fourth frame at a tenth of a metre, which is the alternation's own period and twice its amplitude.
+It was reported from the game as the ball jittering side to side for a third of a second.
+
+`grip-pin-buzz` is the detector, and it reads the teleport rather than the offset behind it.
+The offset is the tempting quantity - it is the state that goes wrong - but its honest one-frame value is whatever the ball's own normal motion is, which over the corpus reaches the ball's full radius on a contact hopping to the next face, so a bar on it is a bar on nothing.
+The teleport is what the pin *did*, and its legitimate size is the one frame of gravity creep the pin exists to remove: a fraction of a millimetre.
+It is measured as a RUN (5 mm, 8 frames running) because that is what separates the buzz from the honest one-frame events around it - a grip resuming, a face changing under the contact.
+A correction earned once is over in a frame or two; this one is re-earned every frame for as long as the grip holds, which is the same shape `roll-unfunded` is written in and for the same reason.
+
 ## Spin traction on a fresh contact
 
 The steered spin is an infinite reservoir - `kinematicRotation` means no impulse can despin it - and the friction cone is written on the understanding that the normal impulse scaling it is a real load.

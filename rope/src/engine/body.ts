@@ -1009,6 +1009,23 @@ export class RigidBody2D extends PhysicsBody2D {
   // does not work: it is a geometric point that slides along the contacting face
   // as the body settles, so it drifts even when nothing is sliding.
   stickLocal: Vec2 = Vec2.ZERO;
+  // What the steered grip's position pin moved this body by ALONG the surface
+  // this frame (`World.applySteeringGrip`), as a world displacement, and zero on
+  // any frame it did not run.
+  //
+  // A VECTOR rather than a distance, because the size of this is not what says
+  // anything is wrong with it - a ball rolling fast has the pin making up a real
+  // centimetre-scale mismatch every frame, which is the mechanism working. What
+  // says it is wrong is the DIRECTION reversing frame on frame: work done and
+  // immediately undone, which is a buzz and never a correction (see
+  // `GripPinMonitor`).
+  //
+  // Diagnostic only - written by the grip, read by `GripPinMonitor` and by
+  // nothing else, so it cannot reach the sim. It exists because the quantity is
+  // unmeasurable anywhere else: the pin is a teleport, so it leaves no trace in
+  // any velocity, and by the end of the frame the chain phase and the
+  // depenetration sweep have moved the body again for reasons of their own.
+  gripPinCorrection: Vec2 = Vec2.ZERO;
   // The surface normal the grip took hold along, or null when not gripped. It is
   // what splits the depenetration sweep's correction into the part the anchor
   // must follow (out of the surface) and the part it must not (along it, which
