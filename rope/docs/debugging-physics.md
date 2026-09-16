@@ -399,12 +399,12 @@ Remove an entry when tooling closes it - `plans/tooling-improvements.md` is the 
   Whether a rotation or settle looks convincing is judged only by a human or a render; corpus numbers stayed green through three re-reports of unconvincing rotation.
 - **Recorded bundles cannot confirm fixes.**
   After a physics change the recorded tail legitimately diverges, so only `cli compare`, `cli ab --ref` or a scripted scenario shows a fix landed.
-- **A pump against a LIGHT free anchor is still reachable, and nothing in the suite runs the rig that finds it.**
-  `cli rig playtests/rigs/light-box-anchor.json` - a 1 kg free box on the floor, chained point-blank, the aim whirling at 24 frames a revolution - drives ball and anchor together from 0.5 m/s to 37 m/s, with `pushRun 9` against a bar of 6, `maxSolveKick 20.5 m/s` against a bar of 4 and 198 `rope-over-length` violations from f63.
-  It is the `session-324f` anchor-pump signature (the pair leaving together, credit re-earned every frame) against a body far lighter than the 12.6 kg hung weight that pump was found and fixed on.
-  It survives the whole mass range tested: 5 kg still gives `pushRun 7` and 12.9 m/s.
-  Found by the rig tooling on the day it landed, and **not diagnosed** - it needs a measured cause before anything is edited (see **Debugging discipline**).
-  Nothing gates it: rigs are instruments and `bun run test` does not run them.
+- **A pump against a LIGHT free anchor was reachable, and nothing in the suite runs the rig that found it.**
+  `cli rig playtests/rigs/light-box-anchor.json` - a 1 kg free box on the floor, chained point-blank, the aim whirling at 24 frames a revolution - drove ball and anchor together from 0.5 m/s to 37 m/s when the rig landed, with `pushRun 9` against a bar of 6, `maxSolveKick 20.5 m/s` against a bar of 4 and 198 `rope-over-length` violations from f63.
+  It was the `session-324f` anchor-pump signature (the pair leaving together, credit re-earned every frame) against a body far lighter than the 12.6 kg hung weight that pump was found and fixed on, and it survived the whole mass range tested: 5 kg still gave `pushRun 7` and 12.9 m/s.
+  It was never diagnosed as itself; re-measured on 2026-09-16 the rig reads 4.5 m/s peak, `pushRun 1`, `solveKick 0.32` and no violations at `1bfefd1`, and 4.9 / 9.2 m/s (the 1 kg box whipped harder by a braced ball that keeps the haul, see [ball-chain](ball-chain.md)) with the same zeros after the braced change - the 400-frame whirl of a light box is a hammer, not a pump.
+  Driven for 1500 frames the pair walks off the arena and free-falls on both trees, which is the rig's floor and not the solver.
+  Nothing gates it: rigs are instruments and `bun run test` does not run them, so the number above is the last time someone looked.
 - **The A/B cannot reach far back.**
   `cli compare` runs current tooling against old physics, which works only while the tooling's imports exist in that revision: it breaks at anything older than `bodyOverlapCircle` and `World.collectContacts`, which is exactly where several of the historical defects live.
   Re-introducing such a defect locally is then the only way to prove a detector catches it.

@@ -201,6 +201,12 @@ export interface ChainDigest {
   // body's digest is how the first divergence was attributed to the wrong body
   // on 2026-09-04; this is the pointer at the other one.
   anchorBody?: number | null;
+  // 1 while the ball was braced this frame (`BallLevel.chainBraced`): a
+  // load-bearing contact off the chain's path, so the spin's reaction is the
+  // world's and the holder keeps the haul. 0 in free air, and for the grapple
+  // rope. The same ask against the same holder is a refused turn in one and
+  // a haul in the other, and the refund alone cannot say which.
+  braced?: number;
 }
 
 export interface WorldDigest {
@@ -220,6 +226,7 @@ interface ChainPhaseState {
   unwindRefund: number;
   winchBudget: number;
   pushCredit: number;
+  braced: boolean;
 }
 
 // The strongest contact a body carried this frame: the one with the largest
@@ -298,6 +305,7 @@ function worldDigestOf(
           winchBudget: phase?.winchBudget ?? 0,
           pushCredit: phase?.pushCredit ?? 0,
           anchorBody: anchorBodyOf(rope),
+          braced: phase?.braced ? 1 : 0,
         }
       : null,
   };
@@ -322,6 +330,7 @@ export function worldDigestBall(level: BallLevel): WorldDigest {
     unwindRefund: level.chainUnwindRefund,
     winchBudget: level.chainWinchSpeedBudget,
     pushCredit: level.chainPushOutCredit,
+    braced: level.chainBraced,
   });
 }
 
@@ -400,6 +409,7 @@ const CHAIN_FIELDS = [
   "geometryPush",
   "winchBudget",
   "pushCredit",
+  "braced",
 ] as const;
 
 // A field the RECORDING does not carry is not compared. A bundle from before a

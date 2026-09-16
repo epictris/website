@@ -342,7 +342,9 @@ function chainDigestLine(c: ChainDigest): string {
       winchBudget: c.winchBudget ?? 0,
       pushCredit: c.pushCredit ?? 0,
       anchorBody: c.anchorBody ?? null,
-    })
+    }) +
+    // Recorded since 2026-09-16; a bundle from before has no opinion about it.
+    (c.braced === undefined ? "" : ` braced=${c.braced}`)
   );
 }
 

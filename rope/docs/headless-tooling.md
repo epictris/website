@@ -275,8 +275,11 @@ out "circle the aim once every 24 frames".
 The five shipped rigs are the five from that session: the hung trapezoid on a
 1.6 m chain (`hung-trapezoid-whirl`), the steady ceiling hold (`ceiling-hold`),
 the static and rigid crush slabs (`crush-static-slab`, `crush-rigid-slab`) and
-the free box on the floor (`light-box-anchor`).
+the free box on the floor (`light-box-anchor`); `hung-plank-wind` (the free
+chain-hung holder) and `braced-box-wind` (a 25 kg box on the floor wound into
+and over a grounded ball, see [ball-chain](ball-chain.md)) came later.
 A rig is an **instrument, not a test**: `bun run test` does not run them (the
 runner's playtest glob is not recursive), and a rig that comes back red is a
-finding to chase rather than a build to fix. `light-box-anchor` is red today -
+finding to chase rather than a build to fix. `light-box-anchor` was red when
+it landed and reads clean today -
 see [**What the verification suite cannot see**](debugging-physics.md#what-the-verification-suite-cannot-see).

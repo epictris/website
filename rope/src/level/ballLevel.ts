@@ -232,6 +232,13 @@ export class BallLevel {
   // digest there was showed a ball sitting perfectly still (`session-154f`,
   // `session-477f`, `session-726f`).
   chainUnwindRefund = 0;
+  // Whether the ball was BRACED this frame: carrying a load-bearing contact
+  // against something off its chain's path, so the spin's reaction is the
+  // world's rather than the anchor's (see `keepsHaul`). It is the gate on the
+  // spin rollback and on the wind-stall latch, and a wind-up read off a bundle
+  // is not legible without it: the same ask against the same holder is a
+  // refused turn in free air and a haul with the ground under it.
+  chainBraced = false;
   private endWasFixed = false;
 
   // Push-out credit above which a frame counts toward `chainPushCreditFrames`.
@@ -456,6 +463,7 @@ export class BallLevel {
     // A frame's refund is the frame's; a frame whose unwind does not run
     // refunded nothing rather than whatever the last one did.
     this.chainUnwindRefund = 0;
+    this.chainBraced = false;
 
     this.ball.resolveInput(input, delta);
     // The aim steering overwrites the ball's angular velocity outright, so it is
@@ -715,8 +723,9 @@ export class BallLevel {
       // no spin, or one whose over-length is real motion, leaves `spinShare` at
       // zero and nothing here happens at all.
       //
-      // Off every body but the ball - save the free chain-hung holder, which
-      // keeps its share (see `keepsHaul` above) - and what the frame then does
+      // Off every body but the ball - save the free holder the ball is not
+      // riding, and every holder of a BRACED ball, which keep their share (see
+      // `keepsHaul` below) - and what the frame then does
       // with the length that rollback re-creates is the whole of the
       // difficulty. Rolling a body back re-breaks a constraint the solve had
       // just satisfied, and the over-length that reappears has to be answered
@@ -787,6 +796,9 @@ export class BallLevel {
         RigidBody2D,
         { position: Vec2; velocity: Vec2; rotation: number; spin: number }
       >();
+      // Where the ball stood before the solve, for the one case its own share
+      // is rolled back too (an unsupported holder in free air, below).
+      const ballAtSolve = this.ball.globalPosition;
       if (spinShare > 0) {
         for (const body of this.bodies) {
           // A sleeping body is not in the solve and cannot be hauled.
@@ -857,26 +869,41 @@ export class BallLevel {
       // swing stops and reverses under the ball's haul, and the ball, sharing
       // its angular momentum with the plank, is not whipped.
       //
-      // So a free rigid body a scene chain holds keeps its coupled share, and
-      // neither the rollback nor the winch pass touches it. What separates it
-      // from the holders the rollback still reaches is what answers the haul:
-      // a PIVOT stores it in a frictionless bearing and a SPRING mount in its
-      // spring, both of which the whirl governor and `applyHangLoad` are
-      // written for; a body held by nothing answers only through contacts the
-      // rope solve cannot see, and its share stays the unwind's to refuse; a
-      // VINE LINK is the limit case of a light holder (~0.05 kg against the
+      // So a free rigid body keeps its coupled share, and neither the
+      // rollback nor the winch pass touches it. What separates it from the
+      // holders the rollback still reaches is what answers the haul: a PIVOT
+      // stores it in a frictionless bearing and a SPRING mount in its spring,
+      // both of which the whirl governor and `applyHangLoad` are written for;
+      // a VINE LINK is the limit case of a light holder (~0.05 kg against the
       // ball) whose whole vine the coupled sweep has to be left to apportion
       // (`session-1260f`, `cli vines` `ball-steer`), and it stays the winch
-      // pass's. A chain-hung body answers the haul the way the plank does -
-      // by moving - and the pair push-out (`separateBallFromPathBodies`) is
-      // what keeps the wound-tight regime honest for it: both bodies hauled
-      // into each other are pushed back by the shares they were hauled by, so
-      // the length the unwind then refuses is the whole of the winding, and
+      // pass's. A free body answers the haul the way the plank does - by
+      // moving - and the pair push-out (`separateBallFromPathBodies`) is what
+      // keeps the wound-tight regime honest for it: both bodies hauled into
+      // each other are pushed back by the shares they were hauled by, so the
+      // length the unwind then refuses is the whole of the winding, and
       // neither is credited a thing. `cli contacts` `hung-anchor` holds the
       // slingshot side of this line, `cli spring` `winch-anchor-load-hung` the
       // load side (red on purpose until this landed), `session-149f` is the
       // recorded artifact and `playtests/rigs/hung-plank-wind.json` the
       // instrument.
+      //
+      // Held by a scene chain or held by nothing. The first cut kept the
+      // share only for the chain-held holder, on the argument that a body
+      // held by nothing answers only through contacts the rope solve cannot
+      // see, and `session-155f` is what that argument costs: a 25 kg stool
+      // thrown up and over a grounded ball at rim speed (the braced haul,
+      // below) and then, the moment the ball's own share lifted it off the
+      // floor, the stool rolled back and the ball hauled ALONE after a 25 kg
+      // body flying at 4 m/s as though it were bolted to the sky - 9.7 m/s in
+      // sixteen frames, 500 kg m/s from nowhere, the stool's own speed
+      // untouched (f110-126). The contacts the solve cannot see are answered
+      // where they were answered for the chain-held plank: statics by
+      // `refuseRopeBodiesIntoStatics` on the same `pathBefore` snapshot, and
+      // another dynamic body by next frame's contact solve. What the kept
+      // share buys is the momentum the pair actually has: the ball hauling on
+      // a free body across open air closes on it at the share the masses say,
+      // not at the winch's whole rate.
       //
       // And only in FREE AIR - while nothing on the chain's path is touching
       // the ball. Riding the body it is wound up to, the ball's winding is
@@ -897,25 +924,56 @@ export class BallLevel {
       // by this frame's contact solve, or by the pair separation that has just
       // run - is rolled back exactly as it always was, and only a holder the
       // ball is hauling on across open air keeps the reaction.
+      //
+      // Open air is the premise of all of that. Every runaway above is a ball
+      // with nothing to push against but the chain's own far end: the spin's
+      // reaction can only reach the anchor through the chain, so whatever the
+      // anchor keeps of it is momentum from nowhere. A ball BRACED - carrying
+      // a load-bearing contact this frame against something that is not on
+      // the chain's path - has a reaction the world supplies, and there the
+      // premise is simply false: the same kinematic spin that the contact
+      // solve already lets drive the ball along the ground at rim speed
+      // (a gripping contact drives the centre until the contact point stands
+      // still, whatever the load) drives the chain onto the rim against the
+      // same ground, and a free body on the far end of that chain is hauled
+      // by it. It is bounded the way a winch is bounded: the solve's
+      // correction is the frame's winding, so nothing on the path is credited
+      // more than rim speed, and the pair push-out and the statics refusal
+      // stand between the haul and any overlap it creates. `session-427f` is
+      // the recording: the ball resting on a slope beside a 25 kg stool it is
+      // hooked to, winding on with the stool against it, and the rollback
+      // stripped the stool's share on every taut frame (rope-solve +0.35 m/s,
+      // spin-rollback -0.35 at f352, whole at f353-357) - the stool crept at
+      // the creditless frames' leftovers, then the ball wound tight, stalled
+      // at zero spin for 36 frames with 6 cm on lease, and the stool rocked
+      // back where it was. Kept, the same wind hauls the stool up and over
+      // the ball. So a free holder keeps the coupled share while the ball is
+      // braced, riding it or not - the ball hauling on across open air is the
+      // only regime the riding gate is about. Pivots, spring mounts and vine
+      // links keep their own governors either way.
       const pathBodies = new Set<CollisionObject2D>();
       for (const node of this.ball.chain.path()) pathBodies.add(node.contact.obj);
-      const ridingPath =
-        pushedOutOf.length > 0 ||
-        this.world.frameContacts.some(
-          (c) =>
-            c.normalImpulse > 0 &&
-            ((c.a === this.ball && pathBodies.has(c.b)) ||
-              (c.b === this.ball && pathBodies.has(c.a))),
-        );
+      let ridingPath = pushedOutOf.length > 0;
+      let braced = false;
+      for (const c of this.world.frameContacts) {
+        if (c.normalImpulse <= 0) continue;
+        const other = c.a === this.ball ? c.b : c.b === this.ball ? c.a : null;
+        if (other === null) continue;
+        if (pathBodies.has(other)) ridingPath = true;
+        else braced = true;
+      }
+      this.chainBraced = braced;
+      const freeHolder = (body: RigidBody2D): boolean =>
+        !body.pivot && body.spring === null && !(body instanceof VineLink);
+      const chainHeld = (body: RigidBody2D): boolean => solveChains.some((c) => c.holds(body));
       const keepsHaul = (body: RigidBody2D): boolean =>
-        !ridingPath &&
-        !body.pivot &&
-        body.spring === null &&
-        !(body instanceof VineLink) &&
-        solveChains.some((c) => c.holds(body));
-      // A FREE rigid holder that a scene chain holds is NOT rolled back: it
-      // keeps the coupled solve's share of the haul, which is the reaction to
-      // the tension that hauled the ball (see `keepsHaul`).
+        freeHolder(body) && (braced || !ridingPath);
+      // A FREE rigid holder the ball is hauling on across open air, or that a
+      // braced ball is hauling on at all, is NOT rolled back: it keeps the
+      // coupled solve's share of the haul, which is the reaction to the
+      // tension that hauled the ball (see `keepsHaul`). Rolled back: the
+      // holder a ball in free air is riding, and every pivot, spring mount and
+      // vine link.
       const rolledBack = new Set<RigidBody2D>();
       for (const [body, before] of haulAtSolve) {
         if (keepsHaul(body)) continue;
@@ -928,6 +986,45 @@ export class BallLevel {
         );
         body.globalRotation -= (body.globalRotation - before.rotation) * spinShare;
         body.angularVelocity -= (body.angularVelocity - before.spin) * spinShare;
+      }
+      // And the BALL's own share goes with it when the holder it is riding is
+      // held by nothing at all - not the ground, not a scene chain, not
+      // another body - and the ball has no brace of its own. The rollback
+      // restores such a holder to the digit and leaves the ball's share of
+      // the winding standing, which is the ball winching itself toward a body
+      // that never answers: `session-325f`, a 25 kg stool thrown up by the
+      // braced haul with the ball wound point-blank onto it, both in the air
+      // for 36 frames, the stool in plain free fall (its solve share +12 mm a
+      // frame, rolled back whole) while the ball was hauled 5.5 mm a frame
+      // toward it and credited 0.33 m/s for each - rising 0.9 m against
+      // gravity, swinging round the stool at 3.7 m/s and landing at 5.7
+      // (f144-182). Keeping the holder's share instead was measured first and
+      // pumps the same way `session-215f` does (the stool thrown at 5.3 m/s,
+      // the ball still lifted 0.7 m). Nothing in the air can wind against a
+      // body that nothing holds, so the winding is refused whole: the ball's
+      // position goes back to where the solve found it, the phase-end credit
+      // reads the displacement that survived (none), and the unwind hands the
+      // frame's turn back. A holder resting on the floor, hanging from a
+      // scene chain or leaning on anything else still gives the ball its
+      // winch, exactly as before - that support is what a wind-up onto a
+      // crate on a ledge is pulling against.
+      const holder = this.ball.chain.end.contact.obj;
+      if (
+        spinShare > 0 &&
+        !braced &&
+        holder instanceof RigidBody2D &&
+        rolledBack.has(holder) &&
+        freeHolder(holder) &&
+        !chainHeld(holder) &&
+        !this.world.frameContacts.some(
+          (c) =>
+            c.normalImpulse > 0 &&
+            ((c.a === holder && c.b !== this.ball) || (c.b === holder && c.a !== this.ball)),
+        )
+      ) {
+        this.ball.globalPosition = this.ball.globalPosition.sub(
+          this.ball.globalPosition.sub(ballAtSolve).mul(spinShare),
+        );
       }
       // The rollback has taken the spin's share off the anchor, and the length
       // that share was paying for is still OWED. The winch is what pays it, and
@@ -961,9 +1058,25 @@ export class BallLevel {
       // it by hauling the ball instead re-feeds the orbit the whirl governor
       // exists to starve, and `cli spring` `whirl-anchor` goes from 8.6 m/s to
       // 27.3 with the gate removed.
+      //
+      // And owed only for a holder ON THE PATH. The gate used to ask whether
+      // any rolled-back chain-held body existed at all, and `haulAtSolve` is
+      // every rigid body in the level: in an arena with eleven scene chains
+      // the answer was yes on every frame the ball rode its anchor in free
+      // air, whatever it was anchored to, and the winch pass then hauled the
+      // ball alone with the path held immovable - a 25 kg stool the ball was
+      // riding, already thrown at 4 m/s, treated as bolted to the sky for the
+      // length its rollback re-created, and the ball hauled after it by 44 mm
+      // a frame to 9.7 m/s while the stool's own speed never changed
+      // (`session-155f` f110-126). A hung lamp on the far side of the level
+      // is not what makes the stool's re-broken length the winch's to pay.
       const winchOwed = [...haulAtSolve.keys()].some(
         (b) =>
-          !keepsHaul(b) && !b.pivot && b.spring === null && solveChains.some((c) => c.holds(b)),
+          pathBodies.has(b) &&
+          !keepsHaul(b) &&
+          !b.pivot &&
+          b.spring === null &&
+          solveChains.some((c) => c.holds(b)),
       );
       if (spinShare > 0 && winchOwed) {
         const heldForWinch = new Set<CollisionObject2D>();
@@ -1269,6 +1382,37 @@ export class BallLevel {
         // so is the hammer; what sits under it is the last degree or two of a
         // turn the chain will not give, which the steering may go on asking
         // for and being refused, since a refused micrometre costs nothing.
+        //
+        // And only in FREE AIR - never while the ball is braced (see `braced`
+        // above). The latch is a statement about a ball held by nothing but
+        // the body it is wound up to: there a refused turn will be refused
+        // again next frame by the same geometry, and asking on is churn.
+        // Braced, the ball has the leverage to haul, the holder keeps the
+        // haul, and a turn refunded whole is the frame the haul JAMMED - the
+        // free body dragged up against the ball, its base stopped by the
+        // ball's own side while the chain pulls its top over - not the frame
+        // it ended. Each frame from there the solve lifts the holder a few
+        // millimetres up the rim, the pair push-out and the statics refusal
+        // take the rest back, and the unwind refunds the ask less that
+        // progress; latched on the first such frame, the spin is dead for as
+        // long as the two touch and the holder never climbs (`session-427f`,
+        // the stool jammed against the grounded ball with the aim turning;
+        // `rig-braced-box-wind` reproduces it on a flat floor, the box
+        // dragged at 0.57 m/s up to the ball and the latch closing on the
+        // frame it arrives, f72). A static anchor point-blank has never
+        // latched - `windStallHeld` asks for a rigid body - and runs its
+        // wound-tight unwind for hundreds of resting frames (`session-726f`);
+        // a braced ball against a rigid holder is that case with a holder
+        // that can move.
+        //
+        // Released by bracing, not merely withheld: a haul up a slope hops
+        // the ball off the floor for a frame or two (the ball's own share of
+        // the correction has an upward component the floor does not answer
+        // while the ball is in the air), the latch closed on that frame, and
+        // it then held for as long as the stool was touched - the ball back
+        // on the ground with its leverage and its spin dead (the `session-427f`
+        // continuation, f497). The latch is a statement about a ball with no
+        // leverage, so the frame the ball has some is the frame it ends.
         const asked = Math.abs(this.aimSpin) * delta;
         const refunded = Math.abs(this.ball.globalRotation - rotationBeforeUnwind);
         this.chainUnwindRefund = refunded;
@@ -1279,9 +1423,11 @@ export class BallLevel {
           return other instanceof RigidBody2D && path.some((n) => n.contact.obj === other);
         });
         const spool = Math.abs(this.ball.chain.lengthPerRadian(this.ball));
+        if (braced) this.ball.windStall = 0;
         if (
           asked * spool >= BallLevel.STALL_EPSILON &&
           this.ball.windStallHeld &&
+          !braced &&
           refunded >= BallLevel.STALL_REFUND_SHARE * asked &&
           spool >= BallPlayer.STALL_LATCH_SPOOL_SHARE * this.ball.radius
         ) {
