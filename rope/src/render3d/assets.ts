@@ -2454,6 +2454,33 @@ export const MESH_ASSETS: Record<string, MeshAsset> = {
     author: "FuzerGamesTV",
     license: "CC BY 4.0",
   },
+  // A four-legged wooden stool with a round seat and a square stretcher, the
+  // kind that dresses a cellar or a hut interior. Rendered through `loadMesh`
+  // it measures 0.344 x 0.523 x 0.344 m, a real stool's size, so it wears
+  // no `scale`, and it stands upright about its own y with nothing to face, so
+  // it wears no rotation either.
+  //
+  // Its origin is at the CENTRE OF ITS BASE - the point the legs stand on -
+  // which is the pivot a level wants for a prop that sits on a floor, so it is
+  // not `center`ed: centring would move the origin half a stool up into the air
+  // and every placement would have to subtract that back out.
+  //
+  // No `simplify`: 544 triangles is already a background prop's budget, and at
+  // that density the decimator's 1% error budget would stop early anyway. What
+  // its 3.03 MB raw was is three 1024² PNGs - albedo, normal and a packed
+  // AO/metallic-roughness - 209 KB once they are WebP, so this is the ordinary
+  // case the texture ceiling is for rather than a prop that needed an argument.
+  "wooden-stool": {
+    file: "/meshes/wooden-stool.glb",
+    sha256: "8d0ebb3a81af469bbb87d67b7d3ba083ab82aefaf49392dcb6294d231fd1da9f",
+    bytes: 209464,
+    // CC BY, so the credit names the person rather than the page (see
+    // "Provenance, in the manifest" in docs/asset-store.md).
+    source:
+      "https://sketchfab.com/3d-models/wooden-stool-528f72346b2f4a1096c1d5104b731d04",
+    author: "yoyo83710",
+    license: "CC BY 4.0",
+  },
   yellow_barrel: {
     file: "/meshes/yellow_barrel.glb",
     sha256: "90038a5e6bedf98d2c791669c81bdaeb5ee3b29814ece05ad51024f5a4296597",

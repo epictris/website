@@ -9,6 +9,8 @@
 - Things that detach your anchor when they touch it (eg. hanging onto a horizontal cable and a wheel rolls on top of it, detaching your hook)
 - Electrically charged scenery - creating a short circuit between a piece of electrically charged scenery and a ground results in you being electrocuted (detach anchor + stun for a couple of seconds). Forces precise movement without clipping floor/wall.
 - Swing your way up to the highest point in the level, then jump off ledge to generate enough momentum to smash through the ground at the start, landing in an underground chamber.
+- Start with a clean ball and accumulate muck/marks whenever you hit a surface
+- Track run time & number of collisions and show this to players who complete the level
 
 # Underground:
 - fast-moving subway train requiring you to precisely time falls and move quickly to land on top of train
@@ -19,3 +21,4 @@
 **mine exit**
 - https://media.mymythos.org/The-Mine-Archetype-Featured.webp
 - https://media.mymythos.org/The-Mine-Archetype-Mythic-Body.webp
+
