@@ -17,6 +17,7 @@ import {
 import { Debug } from "../engine/debug";
 import { PIXELS_PER_METER, PX } from "../engine/units";
 import type { SparkSystem } from "./sparks";
+import type { DebrisSystem } from "./debris";
 import { Player } from "../classes/player";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
@@ -69,6 +70,13 @@ const KILLZONE = "rgba(220,60,80,0.35)";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
+// Breakable bodies: a broken red fringe UNDER the body's own edges, since
+// breaking is a property of the body and those are properties of its pieces
+// (see `drawGeometry`). The same mark the editor draws, so a wall authored as
+// breakable looks breakable in both.
+const BREAK_EDGE = "#c96a6a";
+const BREAK_DASH = [3 * PX, 5 * PX];
+const BREAK_WIDTH = 3 * PX;
 const RAIL_LINE = "#9db8c6"; // a rail's centreline: the same steel, drawn down the bar
 const ANCHOR_FILL = "rgba(122,140,155,0.38)"; // hook-only scenery with no authored colour
 const FORCE_FILL = "rgba(101,189,219,0.16)"; // force areas with no authored colour
@@ -152,6 +160,22 @@ function drawBody(ctx: CanvasRenderingContext2D, body: CollisionObject2D, alpha:
   // is exactly the body's real outline. Areas and hook-only scenery stay
   // per-shape: their fill is a glyph lattice punched out of each piece, and a
   // lattice has no union form.
+  // BREAKABLE: a broken red fringe round the whole body, under the fills and
+  // borders below (see `BREAK_EDGE`). It is per BODY, and the edges below are
+  // per PIECE, so it cannot be one of them - a cracked wall with one mud patch
+  // has to read as both - and it is drawn first so nothing about a piece is
+  // hidden by it. A player who cannot tell which wall gives way cannot plan a
+  // route through one.
+  if (body.breakForce > 0) {
+    ctx.strokeStyle = BREAK_EDGE;
+    ctx.lineWidth = BREAK_WIDTH;
+    ctx.setLineDash(BREAK_DASH);
+    for (const s of shapes) {
+      pathShape(ctx, s);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
   if (shapes.length > 1 && !(body instanceof Area2D) && !body.passable) {
     drawCompoundGeometry(ctx, body, shapes, pieces);
     return;
@@ -577,6 +601,10 @@ export function render(
   // emissive, screen-thin flat mark over the scene, which is exactly what this
   // canvas keeps in 3D. Absent everywhere that has no spark system to hand.
   sparks: SparkSystem | null = null,
+  // The chunks a breakable body came apart into (see `render/debris.ts`), drawn
+  // where the sparks are and for the same reason: a chunk is a flat mark on the
+  // gameplay plane, which is the plane both canvases agree on.
+  debris: DebrisSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -669,6 +697,8 @@ export function render(
   drawBody(ctx, level.player, alpha);
   drawPlayerRigFront(ctx);
 
+  // Under the sparks: a chunk is a piece of the level and an ember is light.
+  debris?.draw(ctx);
   sparks?.draw(ctx);
 
   // Aim crosshair — drawn only when nothing else on screen shows aim: the right
@@ -946,6 +976,8 @@ export function renderBall(
   // drawn where the chain is, so with the chain it belongs to the 3D scene
   // under `overlayOnly`.
   retract: ChainRetract | null = null,
+  // See `render`: the chunks of a body that broke, drawn in both render modes.
+  debris: DebrisSystem | null = null,
 ): void {
   const { width: viewWidth, height: viewHeight } = view;
   ctx.setTransform(view.scale, 0, 0, view.scale, view.originX, view.originY);
@@ -1058,6 +1090,7 @@ export function renderBall(
     ctx.stroke();
   }
 
+  debris?.draw(ctx);
   sparks?.draw(ctx);
 
   if (aimWorld) drawAimReticle(ctx, aimWorld);

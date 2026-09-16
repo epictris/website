@@ -37,6 +37,11 @@ import mudTestJson from "../../levels/mud-test.json";
 // priority island at the end that takes the camera outright. Hand-authored,
 // like the rail and mud sandboxes, so `levels/ball.json` is left alone.
 import cameraTestJson from "../../levels/camera-test.json";
+// The breakable sandbox: a stair up to a ceiling to swing from, and a row of
+// breakable ledges under it at a few thresholds and durabilities, over a drop
+// to the stone floor (see `level/breakable.ts`). Hand-authored, like the rail,
+// mud and camera sandboxes.
+import breakTestJson from "../../levels/break-test.json";
 
 export const LEVELS: Record<string, LevelSpec> = {
   LEVEL_2: {
@@ -81,6 +86,10 @@ export const LEVELS: Record<string, LevelSpec> = {
   RAIL_TEST: { data: railTestJson as RawLevelData, controller: "ball", file: "rail-test" },
   // Mud to bite into and creep through, driven with the ball (see `lib/viscous.ts`).
   MUD_TEST: { data: mudTestJson as RawLevelData, controller: "ball", file: "mud-test" },
+  // Geometry that gives way: swing off the ceiling and drop through it (see
+  // `docs/breakable.md`). The three ledges are 2.5 kN, 5 kN, and 4 kN three
+  // times over; the L at the end is one body of two pieces, so it goes as one.
+  BREAK_TEST: { data: breakTestJson as RawLevelData, controller: "ball", file: "break-test" },
   // Camera regions that blend, and a priority island that does not (see
   // `docs/camera.md`). Nothing to grapple: roll right and watch the framing.
   CAMERA_TEST: { data: cameraTestJson as RawLevelData, controller: "ball", file: "camera-test" },

@@ -24,6 +24,7 @@
 // costs the shipped app nothing.
 import { render, renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
+import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
@@ -167,6 +168,9 @@ if (scene3d) {
 // draw the same shower - which is what keeps `--diff` and the filmstrip's
 // changed-pixel counts meaningful with sparks on screen.
 const sparks = new SparkSystem();
+// ...and the debris of anything that broke, on the same clock and with its own
+// seed, for the same reason (see render/debris.ts).
+const debris = new DebrisSystem();
 // The released chain reeling back in (see render/chainRetract.ts), driven at
 // the fixed step for the same reason.
 // Behind `?retract=1` as it is in the game (`cli shot ... --retract`).
@@ -177,6 +181,8 @@ const advanceTo = (target: number): void => {
     level.physicsProcess(de(rec.frames[simFrame]!), 1 / 60);
     sparks.ingest(level.sparkEvents);
     sparks.advance(1 / 60);
+    debris.ingest(level.breakEvents);
+    debris.advance(1 / 60);
     chainRetract?.observe(level instanceof BallLevel ? level : null, 1 / 60);
   }
 };
@@ -268,9 +274,34 @@ function drawFrame(frame: number): void {
     }
   }
   if (isBall) {
-    renderBall(ctx, view, level, camera, 60, null, 1, scene3d !== null, sparks, chainRetract);
+    renderBall(
+      ctx,
+      view,
+      level,
+      camera,
+      60,
+      null,
+      1,
+      scene3d !== null,
+      sparks,
+      chainRetract,
+      debris,
+    );
   } else {
-    render(ctx, view, level as Level, camera, 60, false, null, 1, null, scene3d !== null, sparks);
+    render(
+      ctx,
+      view,
+      level as Level,
+      camera,
+      60,
+      false,
+      null,
+      1,
+      null,
+      scene3d !== null,
+      sparks,
+      debris,
+    );
   }
 }
 

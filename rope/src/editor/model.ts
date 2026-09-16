@@ -417,6 +417,13 @@ export interface EdItem {
   // a compound one: half a pad is not a thing a level can mean.
   bounce: number;
   launch: number;
+  // Breakable (see `LevelBodyData.breakForce`): the newtons a hit has to carry
+  // to hurt this body, and how many such hits it survives before it comes
+  // apart. 0 is unbreakable, which is every body that authors nothing. Per BODY
+  // like the trampoline pair above - breaking destroys the whole thing, so
+  // `syncBodyProps` carries both across a compound one.
+  breakForce: number;
+  durability: number;
   // There is no body depth here, and none on a collision item either: a body is
   // a thing in the gameplay plane and so is the shape it collides as (see
   // `LevelBodyData`). Depth is `EdVisual.offsetZ`, on the geometry objects and
@@ -1205,6 +1212,8 @@ function fromLevelData(data: LevelData): EdModel {
       friction: b.friction ?? DEFAULT_SURFACE_FRICTION,
       bounce: b.bounce ?? DEFAULT_BOUNCE,
       launch: b.launch ?? DEFAULT_LAUNCH,
+      breakForce: b.breakForce ?? 0,
+      durability: b.durability ?? 1,
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
@@ -1345,6 +1354,8 @@ function fromLevelData(data: LevelData): EdModel {
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
+    breakForce: 0,
+    durability: 1,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1436,6 +1447,8 @@ function fromLevelData(data: LevelData): EdModel {
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
+    breakForce: 0,
+    durability: 1,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1523,6 +1536,8 @@ function lightItem(
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
+    breakForce: 0,
+    durability: 1,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -1590,6 +1605,8 @@ function lightItem(
     friction: DEFAULT_SURFACE_FRICTION,
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
+    breakForce: 0,
+    durability: 1,
     impermeable: false,
     mask: MASK_ALL,
     rail: false,
@@ -2053,6 +2070,12 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // property nothing has chosen.
             ...(lead.bounce ? { bounce: lead.bounce } : {}),
             ...(lead.launch ? { launch: lead.launch } : {}),
+            // Breakable, and only when it is: the durability rides with the
+            // threshold rather than on its own, because a count with nothing to
+            // count is a field that means nothing (see `LevelBodyData.breakForce`).
+            ...(lead.breakForce > 0
+              ? { breakForce: lead.breakForce, durability: lead.durability }
+              : {}),
             // Only force areas carry a magnitude; omitting it elsewhere keeps
             // saved levels free of a field that would read as meaningful.
             ...(lead.kind === "force" ? { force: lead.force } : {}),
@@ -3135,6 +3158,8 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.friction = lead.friction;
     m.bounce = lead.bounce;
     m.launch = lead.launch;
+    m.breakForce = lead.breakForce;
+    m.durability = lead.durability;
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
@@ -3639,6 +3664,8 @@ export function emptyModel(): EdModel {
         friction: DEFAULT_SURFACE_FRICTION,
         bounce: DEFAULT_BOUNCE,
         launch: DEFAULT_LAUNCH,
+        breakForce: 0,
+        durability: 1,
         impermeable: false,
         mask: MASK_ALL,
         rail: false,

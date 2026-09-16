@@ -111,6 +111,7 @@ Rope geometry and surfaces
 - [hook-surfaces](docs/hook-surfaces.md) - hook-proof and chain-through pieces, hook-only bodies.
 - [rails](docs/rails.md) - authored curves the cuff clamps around and slides along.
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.
+- [breakable](docs/breakable.md) - geometry that gives way: the force a hit carries, the hit count, and the debris it leaves.
 - [scene-chains](docs/scene-chains.md) - authored chains, the coupled sweep, the settle, anchors and wrap points.
 - [vines](docs/vines.md) - pass-through link chains, the load rope, stiffness, spans, sleep, drawing, authoring.
 - [vine-ring](docs/vine-ring.md) - the manacle threaded onto a vine as a creeping ring.

@@ -1,0 +1,59 @@
+{
+  "level": "ball-break-floor",
+  "controller": "ball",
+  "frames": 240,
+  "spawn": {
+    "x": 0,
+    "y": -2
+  },
+  "data": {
+    "player": {
+      "x": 0,
+      "y": -200,
+      "radius": 8
+    },
+    "bodies": [
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "friction": 1,
+        "breakForce": 2000,
+        "durability": 1,
+        "objects": [
+          {
+            "type": "collision",
+            "shape": { "kind": "rect", "w": 400, "h": 30 }
+          }
+        ]
+      },
+      {
+        "kind": "static",
+        "x": 0,
+        "y": 400,
+        "rot": 0,
+        "friction": 1,
+        "objects": [
+          {
+            "type": "collision",
+            "shape": { "kind": "rect", "w": 4000, "h": 100 }
+          }
+        ]
+      }
+    ]
+  },
+  "asserts": [
+    {
+      "frame": 239,
+      "minY": 3.0
+    },
+    {
+      "window": {
+        "from": 180,
+        "to": 240
+      },
+      "maxDrift": 0.05
+    }
+  ]
+}

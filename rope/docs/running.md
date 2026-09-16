@@ -50,6 +50,7 @@ and `TEST_SPRING` is the spring-body one (a leaf over a chasm to hang off - see
 [**Spring bodies**](pivot-and-spring-bodies.md#spring-bodies)); `TEST_VINES` hangs three vines over a chasm to swing across
 (see [**Vines**](vines.md)).
 `CAMERA_TEST` is the camera sandbox: two rooms overlapping by exactly the width of their `falloff` band, so the hand-over is an exact cross-fade, and a priority island past them that takes the camera outright (see [**Camera**](camera.md#blending)).
+`BREAK_TEST` is the breakable sandbox: a stair up to a ceiling to swing from, and under it a row of ledges at a few thresholds and durabilities over a drop to the stone floor (see [**Breakable geometry**](breakable.md)).
 `LEVEL_2` is the grapple arena (the Godot-extracted scene).
 
 ## Starting a run

@@ -156,6 +156,16 @@ export interface BodyDigest {
   // 1e-17 m from a slab; only the impulse says whether the slab is holding it up.
   contactWith?: number | null;
   contactPn?: number;
+  // Hits a BREAKABLE body has taken so far (`CollisionObject2D.impactHits`), and
+  // absent on a body that cannot break - which is every body of every level that
+  // authors no threshold, so the digest of one is unchanged to the byte.
+  //
+  // Optional, and a missing one is "not recorded" rather than zero, for the
+  // reason `contactPn` gives: a bundle from before the field has no opinion
+  // about it. It is the one number a break leaves behind that a pose cannot
+  // show - a floor two hits into three looks exactly like a floor - and the
+  // break itself is visible as the body leaving the digest entirely.
+  hits?: number;
 }
 
 // What the chain phase DECIDED this frame, not only what the chain measured.
@@ -271,6 +281,25 @@ function worldDigestOf(
         w: body.angularVelocity,
         contactWith: contact.with,
         contactPn: contact.pn,
+        ...(body.breakForce > 0 ? { hits: body.impactHits } : {}),
+      });
+    } else if (body.breakForce > 0) {
+      // A BREAKABLE static, which is the one static that carries state: it
+      // cannot move, but it can count hits and it can leave the world, and
+      // neither of those shows anywhere else in the digest. Every other static
+      // stays out for the reason given above - a body that cannot change is a
+      // body no regression can hide in.
+      bodies.push({
+        id: body.buildIndex,
+        px: body.globalPosition.x,
+        py: body.globalPosition.y,
+        rot: body.globalRotation,
+        vx: 0,
+        vy: 0,
+        w: 0,
+        contactWith: null,
+        contactPn: 0,
+        hits: body.impactHits,
       });
     } else if (body instanceof CharacterBody2D) {
       // A CharacterBody2D is swept rather than solved, so it appears in no
@@ -396,7 +425,7 @@ export interface DigestFieldDelta {
 
 // Numeric fields compared on every body, in the order they are reported before
 // sorting by magnitude.
-const BODY_FIELDS = ["px", "py", "rot", "vx", "vy", "w", "contactPn"] as const;
+const BODY_FIELDS = ["px", "py", "rot", "vx", "vy", "w", "contactPn", "hits"] as const;
 // ...and on the chain. `anchorBody` and `contactWith` are identities rather than
 // quantities and are compared separately.
 const CHAIN_FIELDS = [
@@ -1477,10 +1506,46 @@ export function kineticEnergy(world: World): number {
 // Ball & chain invariants: NaN, runaway speed, chain-over-length once
 // anchored, ball embedded in static geometry. No stuck detector — the ball
 // has no direct locomotion input to freeze.
+// Breakable geometry, on both drivers (see `level/breakable.ts`).
+//
+// Two things, and they are the two ways the feature can be quietly wrong rather
+// than visibly wrong. A body whose count has run out is a body that should not
+// be in the world: the scan breaks it on the frame it earns it, so one left
+// standing means the level driver stopped calling the scan or stopped acting on
+// what it returned - and nothing else would notice, because a floor that no
+// longer breaks looks exactly like a floor. A rope anchored to a body that HAS
+// left is the other half: the break has to reach whoever was holding on, or the
+// player hangs from geometry that is not there.
+function checkBreakables(
+  frame: number,
+  world: World,
+  anchor: CollisionObject2D | null,
+): Violation[] {
+  const out: Violation[] = [];
+  for (const body of world.bodies) {
+    if (body.breakForce <= 0 || body.removed) continue;
+    if (body.impactHits < body.durability) continue;
+    out.push({
+      frame,
+      kind: "break-late",
+      detail: `body ${body.buildIndex} has taken ${body.impactHits} of ${body.durability} hits and is still in the world`,
+    });
+  }
+  if (anchor?.removed) {
+    out.push({
+      frame,
+      kind: "break-ghost",
+      detail: `the rope is anchored to body ${anchor.buildIndex}, which has left the world`,
+    });
+  }
+  return out;
+}
+
 export function checkBallInvariants(level: BallLevel): Violation[] {
   const out: Violation[] = [];
   const b = level.ball;
   const frame = level.frame;
+  out.push(...checkBreakables(frame, level.world, b.anchoredTo));
 
   if (!b.globalPosition.isFinite() || !b.linearVelocity.isFinite()) {
     out.push({ frame, kind: "nan", detail: `pos=${b.globalPosition} vel=${b.linearVelocity}` });
@@ -1747,6 +1812,7 @@ export function checkInvariants(level: Level): Violation[] {
   const out: Violation[] = [];
   const p = level.player;
   const frame = level.frame;
+  out.push(...checkBreakables(frame, level.world, p.rope?.end.contact.obj ?? null));
 
   if (!p.globalPosition.isFinite() || !p.velocity.isFinite()) {
     out.push({ frame, kind: "nan", detail: `pos=${p.globalPosition} vel=${p.velocity}` });

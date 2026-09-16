@@ -15,6 +15,7 @@ import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
 import { drawPerfHud } from "./render/perfHud";
 import { SparkSystem } from "./render/sparks";
+import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
 import { NO_ORBIT } from "./render3d/space";
 import { DEFAULT_LEVEL, LEVELS } from "./level/registry";
@@ -190,6 +191,10 @@ let level = makeLevel();
 // fed the sim's per-frame events, advanced on the render clock, and cleared
 // with the level.
 const sparks = new SparkSystem();
+// The chunks breakable geometry comes apart into (see render/debris.ts): the
+// same shape as the sparks, and for the same reason - the sim hands it one fact
+// per break and it owns everything else.
+const debris = new DebrisSystem();
 // The released chain reeling back in (see render/chainRetract.ts): the same
 // shape as the sparks - it watches the sim each step, runs on the render
 // clock, and is cleared with the level.
@@ -204,8 +209,10 @@ let resets = 0;
 function reset(): void {
   level = makeLevel();
   resets++;
-  // A restart must not carry the dead level's embers.
+  // A restart must not carry the dead level's embers, nor the rubble of a wall
+  // that is standing again.
   sparks.reset();
+  debris.reset();
   chainRetract?.reset();
   level.onReset = reset;
   // A reset builds a new level, so it builds a new scene: every extrusion in it
@@ -443,6 +450,7 @@ if (replayName) {
     level = levelFromRecording(rec);
     level.onReset = reset;
     sparks.reset();
+    debris.reset();
     chainRetract?.reset();
     buildScene();
     cameraCtl.snap();
@@ -532,6 +540,9 @@ function frame(now: number): void {
     // Drained inside the catch-up loop rather than after it: a frame that runs
     // several steps would otherwise silently drop every caught-up step's events.
     sparks.ingest(level.sparkEvents);
+    // Per step for the same reason: a break that happens on a caught-up step is
+    // the only frame its event exists on (see `BallLevel.breakEvents`).
+    debris.ingest(level.breakEvents);
     // Likewise per step, so a chain let go and re-thrown across two steps of
     // one render frame is seen as both rather than as nothing having changed.
     chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
@@ -573,6 +584,7 @@ function frame(now: number): void {
   // Once per rendered frame, on the render clock: the sparks are outside the
   // fixed step entirely, like the camera ease.
   sparks.advance(dt);
+  debris.advance(dt);
 
   // Camera: eased follow of the avatar, reshaped by the level's camera regions.
   // Driven by the render dt, so it is frame-rate independent and outside the
@@ -613,6 +625,7 @@ function frame(now: number): void {
       scene3d !== null,
       sparks,
       chainRetract,
+      debris,
     );
   } else {
     render(
@@ -627,6 +640,7 @@ function frame(now: number): void {
       cameraCtl.held,
       scene3d !== null,
       sparks,
+      debris,
     );
   }
   const draw2dMs = performance.now() - draw2dT0;

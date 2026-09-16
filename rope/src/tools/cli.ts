@@ -2222,6 +2222,9 @@ switch (cmd) {
   case "viscous":
     void cmdViscous();
     break;
+  case "breaks":
+    void cmdBreaks();
+    break;
   case "render3d":
     void cmdRender3d();
     break;
@@ -2233,7 +2236,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2575,6 +2578,34 @@ async function cmdViscous(): Promise<void> {
   }
   const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
   console.log(`[viscous] ${results.length - failed}/${results.length} cases passed${x}`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// Breakable-geometry cases (src/sim/breakCases.ts). A breakable body counts the
+// hits it takes over its threshold and comes apart when its durability runs
+// out. Like a rail and like mud it reaches no invariant - a floor that stopped
+// counting renders identically and plays differently - so this is the whole of
+// its coverage, and its first case is the force table a threshold is authored
+// against.
+async function cmdBreaks(): Promise<void> {
+  const { runBreakCases } = await import("../sim/breakCases");
+  const results = runBreakCases();
+  let failed = 0;
+  let xfail = 0;
+  for (const r of results) {
+    const stale = r.passed && r.expectedFail;
+    const bad = stale || (!r.passed && !r.expectedFail);
+    const tag = stale ? "STALE" : r.expectedFail ? "XFAIL" : r.passed ? "PASS " : "FAIL ";
+    console.log(`  ${tag} ${r.name}`);
+    for (const d of r.details) console.log(`        ${d}`);
+    if (stale) {
+      console.log(`        this case is marked expectedFail but PASSED — delete the marker`);
+    }
+    if (bad) failed++;
+    if (r.expectedFail && !r.passed) xfail++;
+  }
+  const x = xfail > 0 ? ` (${xfail} expected-fail)` : "";
+  console.log(`[breaks] ${results.length - failed}/${results.length} cases passed${x}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

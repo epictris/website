@@ -86,6 +86,17 @@ const PLAYER = "#65bddb";
 const IMPERMEABLE_EDGE = "#9db8c6"; // hook-proof surfaces: dashed steel border
 const VISCOUS_EDGE = "#c9a066"; // viscous (mud) surfaces: dash-dot ochre border
 const VISCOUS_DASH = [8 * PX, 3 * PX, 2 * PX, 3 * PX];
+// Breakable bodies: a broken red under-stroke, drawn BEHIND the piece border
+// rather than instead of it.
+//
+// The marks above are per PIECE and exclusive - a face is hook-proof or mud or
+// passed through - and breakable is per BODY, so it cannot be one of them: a
+// breakable wall with one mud patch has to read as both. Under the border, at
+// three times its width, it shows as a broken fringe around whatever the piece
+// already draws.
+const BREAK_EDGE = "#c96a6a";
+const BREAK_DASH = [3 * PX, 5 * PX];
+const BREAK_HALO = 3;
 export const SELECT = "#f4a460";
 // Marks a shape whose 3D visual is NOT its own outline (see the badge pass): a
 // muted violet, distinct from the selection orange and the hook-proof steel, and
@@ -1921,6 +1932,16 @@ export function drawEditor(
         ctx.setLineDash([]);
       });
     }
+    // Breakable: the body's own mark, under the per-piece borders below (see
+    // `BREAK_EDGE`). Round the whole body, because that is what breaks.
+    if (body.breakForce > 0) {
+      strokeCompoundOutline(ctx, members, () => {
+        ctx.strokeStyle = BREAK_EDGE;
+        ctx.lineWidth = worldLine * BREAK_HALO;
+        ctx.setLineDash(BREAK_DASH);
+      });
+      ctx.setLineDash([]);
+    }
     // The border is per PIECE, because hook-proof is: a compound wall may be
     // attachable on the ledge the player aims at and repel the hook everywhere
     // else, and one border for the body would draw only one of those.
@@ -2001,6 +2022,16 @@ export function drawEditor(
       ctx.strokeStyle = SELECT;
       ctx.lineWidth = worldLine * 5;
       ctx.stroke();
+    }
+    if (body.breakForce > 0 && body.object === "collision") {
+      // Breakable: a broken red fringe under whatever border the piece draws
+      // (see `BREAK_EDGE`), since breaking is the BODY's property and the
+      // borders below are the piece's.
+      ctx.strokeStyle = BREAK_EDGE;
+      ctx.lineWidth = worldLine * BREAK_HALO;
+      ctx.setLineDash(BREAK_DASH);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
     if (body.impermeable) {
       // Hook-proof: dashed steel border so it's distinct from a plain static

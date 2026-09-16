@@ -55,6 +55,12 @@ import {
 } from "./chains";
 import { buildCameraRules, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
+import {
+  BreakTracker,
+  guardBreakables,
+  removeBrokenBody,
+  type BreakEvent,
+} from "./breakable";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
 
@@ -129,6 +135,15 @@ export class BallLevel {
   // The BALL's spark event for this frame, pending the spin term the frame turns
   // out to have realised (see `settleBallSparkSpin`). Cleared with `sparkEvents`.
   private ballSparkSpin: { at: number; lever: Vec2; commanded: number } | null = null;
+  // Render-only, and the same rule as the sparks above: the bodies that came
+  // apart this frame, for the debris system to throw chunks from (see
+  // `level/breakable.ts`). Cleared at the top of every `physicsProcess`, so a
+  // headless replay that never drains it accumulates nothing.
+  breakEvents: BreakEvent[] = [];
+  // ...and the SIM's side of the same feature, which is the part that is not
+  // render-only: what each breakable body has taken so far, and the per-pair
+  // accounting that decides when a load is a fresh hit.
+  private readonly breaker = new BreakTracker();
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -292,6 +307,11 @@ export class BallLevel {
     // lantern comes to rest.
     settleChainsAtBuild(this.world, this.sceneChains);
     this.vines = buildVines(this.world, data, built);
+    // Both are built, so both can be asked what they hang from: a breakable
+    // body under a chain or a vine anchor is one the file got wrong, and it
+    // loses its threshold here rather than taking a constraint down with it
+    // mid-play (see `guardBreakables`).
+    guardBreakables(this.sceneChains, this.vines);
     for (const vine of this.vines) this.bodies.push(...vine.links);
     // A hook that strikes a link threads onto the whole vine (see
     // `lib/vineClamp.ts`), and the level is what knows which vine a link is.
@@ -423,6 +443,7 @@ export class BallLevel {
     this.frame++;
     this.sparkEvents.length = 0;
     this.sparkEventIndex.clear();
+    this.breakEvents.length = 0;
     this.ballSparkSpin = null;
     Debug.clear();
     PhysTrace.frame = this.frame;
@@ -1761,7 +1782,31 @@ export class BallLevel {
     this.world.settleSleep();
     sleepChains(this.sceneChains);
 
+    // ...and then what the frame's contacts destroyed (see `level/breakable.ts`).
+    // After every phase, because a body taken out of the world mid-frame is one
+    // taken out from under whatever was holding a reference to it - the chain
+    // phase, the drape, the sleep pass. The contacts this reads are the frame's
+    // own and nothing above touches them, so waiting costs the measurement
+    // nothing and costs the reader one frame of scenery that was already broken.
+    this.breakBodies(delta);
+
     this.cameraPosition = this.ball.globalPosition;
+  }
+
+  // Break whatever this frame's contacts finished off: the chain lets go of it,
+  // the world loses it, and the render side is handed the one fact it needs to
+  // throw the debris.
+  //
+  // The chain DETACHES rather than following the piece down. A hook that rode
+  // the fragment would be an anchor on a body the sim no longer has, and the
+  // break is loud enough to read without it: the surface the player was hanging
+  // from is gone, and so is the chain.
+  private breakBodies(delta: number): void {
+    for (const event of this.breaker.scan(this.world, delta)) {
+      if (this.ball.anchoredTo === event.body) this.ball.releaseChain();
+      removeBrokenBody(this.world, this.bodies, event.body);
+      this.breakEvents.push(event);
+    }
   }
 
   // Rewrite the ball's spark event with the spin the frame actually REALISED,

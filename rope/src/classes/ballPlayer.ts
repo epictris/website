@@ -176,6 +176,14 @@ export class BallPlayer extends RigidBody2D {
   // midline once it has bitten at an angle. Render-only, like the facing.
   private anchorNormalLocal: Vec2 | null = null;
   private anchorBody: PhysicsBody2D | null = null;
+
+  // The body the chain is bolted to, for a caller that has to ask whether an
+  // attachment is still good - a piece of scene geometry breaking apart under
+  // it (`level/breakable.ts`). Read-only: what the chain holds is settled by
+  // the attach and release paths and by nothing outside them.
+  get anchoredTo(): PhysicsBody2D | null {
+    return this.anchorBody;
+  }
   // The clamped cuff as a solid piece of the body it bit (see `onHookAttached`),
   // to be unmounted when the chain lets go. Null while there is none: no
   // anchor, a rail, or a bite the ball was already standing on.

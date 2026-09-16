@@ -513,6 +513,35 @@ export abstract class CollisionObject2D {
   restitution = 0;
   launchSpeed = 0;
 
+  // BREAKABLE: how hard a hit has to be to hurt this body, in newtons, and how
+  // many such hits it survives. `breakForce` 0 - every body in every level
+  // authored before the pair - is a body nothing can break, and the whole
+  // mechanism costs it one `=== 0` test a frame (see `level/breakable.ts`).
+  //
+  // A force rather than an impulse because it is what an author is choosing:
+  // "this crust holds a resting ball and gives way to a slam" is a statement
+  // about how hard the thing is pushed, and the step it is pushed for is the
+  // sim's business, not the level's. What is measured against it is the
+  // solver's own accumulated normal impulse over the step (`ContactConstraint.
+  // normalImpulse / dt`), summed over the pieces one other body is pressing on.
+  //
+  // Per BODY and not per shape, unlike `impermeable` and `viscosity`. Those
+  // answer "which surface did the hook reach", which is a question about one
+  // face; this one destroys the whole thing, and a body half broken is not
+  // something a level can mean - a compound crate's pieces are one crate. A hit
+  // on any piece therefore counts toward the one tally.
+  breakForce = 0;
+  // Hits at or over `breakForce` this body survives. 1 is the honest default:
+  // a threshold with no durability beside it means "breaks when hit that hard".
+  // Only read when `breakForce` is set.
+  durability = 1;
+  // How many distinct hits it has taken so far. SIM STATE, written only by the
+  // per-frame scan and reset by nothing: a body that has been cracked twice
+  // stays cracked. What counts as distinct is the scan's to decide - a body
+  // resting on this one presses on it every frame and hit it once (see
+  // `level/breakable.ts`).
+  impactHits = 0;
+
   // How much of this body is inside a `WaterArea`, 0 (dry) .. 1 (under). Written
   // once per frame by `World.applyWaterDrag` and never read by anything the sim
   // does not run: it is 0 for every body in a level with no water areas, so the

@@ -921,6 +921,34 @@ export interface LevelBodyData {
   // level authored before these fields has.
   bounce?: number;
   launch?: number;
+  // BREAKABLE: how hard a hit has to be to hurt this body, in NEWTONS, and how
+  // many such hits it takes before the body comes apart. A rotten plank, a
+  // crust of ice over a chasm, a wall the player has to work at.
+  //
+  // Absent or 0 = unbreakable, which is every body in every level authored
+  // before the pair. `durability` is only read where a `breakForce` is set, and
+  // absent it is 1: a threshold with no durability beside it means "breaks when
+  // something hits it that hard".
+  //
+  // What is measured against the threshold is the solver's own contact load
+  // over one step, summed over the pieces ONE other body is pressing on
+  // (`level/breakable.ts`), and a strike is counted once however many frames it
+  // takes: a body resting on a breakable floor hit it once, and a body sliding
+  // along it is not hitting it at all.
+  //
+  // NEWTONS, and they do NOT scale. The file's lengths are pixels because the
+  // editor draws in pixels and a force is not drawn - it is stated in the sim's
+  // own units, exactly as `drag` is a reciprocal time and `pivotFreq` a
+  // frequency. What makes it authorable is the editor's readout, which turns
+  // the number into the two an author is actually choosing: the resting mass
+  // the surface holds, and the speed the ball has to arrive at to break it.
+  //
+  // Per BODY, unlike `impermeable` and `viscosity`, which are per collision
+  // object: those say which SURFACE the rope met, and this destroys the whole
+  // thing. A compound crate's pieces are one crate, so a hit on any of them
+  // counts toward the one tally.
+  breakForce?: number;
+  durability?: number;
   // Force areas only: acceleration magnitude in pixels/s² (metres/s² once
   // scaled), applied along the body's own rotation — rot 0 flows right, so
   // rotating the area steers the current. Negative reverses it.
@@ -3042,6 +3070,12 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // pad a hundred times too strong.
       ...(b.bounce !== undefined ? { bounce: b.bounce } : {}),
       ...(b.launch !== undefined ? { launch: b.launch * factor } : {}),
+      // A force in newtons and a count, so neither is a length and neither
+      // converts - the rule `drag` follows above, and stated once more here
+      // because the failure is the same silent kind: a threshold scaled by 100
+      // is a floor that nothing in the level can ever break.
+      ...(b.breakForce !== undefined ? { breakForce: b.breakForce } : {}),
+      ...(b.durability !== undefined ? { durability: b.durability } : {}),
       ...(b.force !== undefined ? { force: b.force * factor } : {}),
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),

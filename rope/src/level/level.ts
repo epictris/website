@@ -16,6 +16,12 @@ import { Density, ShapeGeometry } from "../lib/shapeGeometry";
 import { Player } from "../classes/player";
 import { Hook } from "../classes/hook";
 import type { SparkEvent } from "./sparkEvents";
+import {
+  BreakTracker,
+  guardBreakables,
+  removeBrokenBody,
+  type BreakEvent,
+} from "./breakable";
 import type { FrameInput } from "../input/frameInput";
 import {
   scaleLevelData,
@@ -119,6 +125,17 @@ export class Level {
   // by it, so this level only ever produces the impact burst - there is no hook
   // left to slide.
   sparkEvents: SparkEvent[] = [];
+  // Render-only, on the same rule as the sparks above: the bodies this frame's
+  // contacts destroyed, for the debris system (see `level/breakable.ts`).
+  breakEvents: BreakEvent[] = [];
+  // The sim's side of the same feature: what each breakable body has taken, and
+  // what counts as a fresh hit.
+  //
+  // The grapple AVATAR cannot break anything, and that is the engine's answer
+  // rather than a rule stated here: a `CharacterBody2D` is swept rather than
+  // solved, so it appears in no contact constraint at all. What breaks geometry
+  // on a grapple level is the rigid scenery - a crate dropped down a shaft.
+  private readonly breaker = new BreakTracker();
 
   constructor(rawData: RawLevelData, init?: (level: Level) => void) {
     const data = scaleLevelData(rawData, PX);
@@ -141,6 +158,9 @@ export class Level {
     this.sceneChains = buildSceneChains(data, built);
     settleChainsAtBuild(this.world, this.sceneChains);
     this.vines = buildVines(this.world, data, built);
+    // A breakable body with a chain or a vine hanging off it loses its
+    // threshold, loudly (see `guardBreakables`).
+    guardBreakables(this.sceneChains, this.vines);
     // The links go in the rope's candidate list like every other body. They are
     // never wrapped - `isPassThrough` drops a non-solid body from the wrap scan -
     // so what this buys is that the list is what the world holds, rather than a
@@ -205,6 +225,7 @@ export class Level {
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
     this.sparkEvents.length = 0;
+    this.breakEvents.length = 0;
     Debug.clear();
     PhysTrace.frame = this.frame;
     PhaseTrace.begin(this.frame, this.world);
@@ -302,6 +323,27 @@ export class Level {
     this.world.settleSleep();
     sleepChains(this.sceneChains);
 
+    // ...and then what the frame's contacts destroyed. Last, for the reason
+    // BallLevel gives: a body taken out of the world mid-frame is taken out
+    // from under whatever was holding a reference to it.
+    this.breakBodies(delta);
+
     this.cameraPosition = this.player.globalPosition;
+  }
+
+  // Break whatever this frame's contacts finished off: the rope lets go of it,
+  // the world loses it, and the render side is handed the fact it needs to
+  // throw the debris (see `level/breakable.ts`).
+  private breakBodies(delta: number): void {
+    for (const event of this.breaker.scan(this.world, delta)) {
+      // A rope whose far end sat on this body has nothing left to hold. The
+      // rope's own wrap nodes need no such statement - it drops nodes on a
+      // removed body itself (`Rope.dropWrapsOnGoneBodies`) - but its END is an
+      // anchor rather than a wrap, and an anchor on a body the world no longer
+      // has is a player hanging from nothing.
+      if (this.player.rope?.end.contact.obj === event.body) this.player.rope = null;
+      removeBrokenBody(this.world, this.bodies, event.body);
+      this.breakEvents.push(event);
+    }
   }
 }

@@ -16,8 +16,13 @@ import {
 } from "../render/cameraController";
 import { render, renderBall } from "../render/renderer";
 import { SparkSystem } from "../render/sparks";
+import { DebrisSystem } from "../render/debris";
 import { Level } from "../level/level";
 import { BallLevel } from "../level/ballLevel";
+// The ball's density, for the panel's "what speed breaks this" readout: the
+// number an author is choosing is a speed, and only the ball's own mass turns
+// a threshold in newtons into one (see `addBreakFields`).
+import { BallPlayer } from "../classes/ballPlayer";
 import { LiveInputSource } from "../input/liveInput";
 import { BallInputSource } from "../input/ballInput";
 import { BUTTON_BITS, InputTrace } from "../input/inputTrace";
@@ -1479,6 +1484,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   // the editor's life, cleared at every ▶ Test, so a test never opens carrying
   // the embers of the last one.
   const testSparks = new SparkSystem();
+  // ...and the debris of whatever breaks in it (see render/debris.ts), on the
+  // same terms: a level whose breakable geometry is being authored has to be
+  // seen breaking from inside the editor.
+  const testDebris = new DebrisSystem();
   let liveInput: LiveInputSource | null = null;
   let ballInput: BallInputSource | null = null;
   let savedCam: { pos: Vec2; zoom: number } | null = null;
@@ -1582,6 +1591,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     accumulator = 0;
     lastNow = -1;
     testSparks.reset();
+    testDebris.reset();
     mode = "test";
     // AFTER the mode flips, because that is the thing `gizmoSpec` asks about.
     // The gizmo lives in the SCENE rather than on the overlay, so it is still
@@ -2969,6 +2979,91 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     const hint = el("div", "ed-hint");
     hint.textContent =
       "A trampoline. Bounce is the fraction of an impact given back, so what lands gently leaves gently (0 is a dead surface, 1 a perfect bounce). Launch is the spring stored in the pad itself: a floor under the speed anything leaves at, whatever speed it arrived with, so a short drop onto it throws as far as a long one. It fades out on the gentlest touches, so a body that has come to rest on the pad stays put instead of humming. Both are read off both surfaces meeting and the bouncier wins.";
+    g.appendChild(hint);
+  }
+
+  // Breakable geometry (see `LevelBodyData.breakForce`): what it takes to
+  // destroy this body, and how many of those it survives.
+  //
+  // Beside the trampoline pair because it is the same sort of property - what
+  // this surface is like to meet - and per BODY for the reason stated there: a
+  // hit on any piece counts toward the one tally, because a compound crate's
+  // pieces are one crate.
+  //
+  // THE READOUT IS THE POINT OF THE PANEL, exactly as the launch's height is. A
+  // threshold in newtons is unauthorable on its own: nobody is choosing 6,000.
+  // What an author is choosing is one of two things - "it holds a crate this
+  // heavy" or "the ball has to come in this fast" - and both are one division
+  // away, because a contact reports the weight it carries plus `m·Δv/dt` of
+  // arrival (`cli breaks`, case `break-load`). So the panel says both, for the
+  // ball this level is actually authored around.
+  function addBreakFields(g: HTMLElement, num: GroupNum, leads: EdItem[]): void {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = leads.every((b) => b.breakForce > 0);
+    box.indeterminate = !box.checked && leads.some((b) => b.breakForce > 0);
+    box.addEventListener("change", () => {
+      beginAction();
+      for (const b of leads) {
+        // A fresh threshold is 6 kN: the ball arriving at about 6.4 m/s, or a
+        // 600 kg resting load. Breakable but not fragile, and a number to tune
+        // from rather than one that gives way to the first thing that touches
+        // it (the readouts below say what it means as it is typed).
+        b.breakForce = box.checked ? 6000 : 0;
+        b.durability = 1;
+      }
+      markDirty();
+      rebuildInspector();
+    });
+    const wrap = el("label", "ed-field");
+    wrap.textContent = "breakable";
+    wrap.appendChild(box);
+    g.appendChild(wrap);
+    if (leads.every((b) => b.breakForce > 0)) {
+      num("threshold", (b) => b.breakForce, (b, v) => (b.breakForce = Math.max(1, v)), 1000);
+      num(
+        "durability",
+        (b) => b.durability,
+        (b, v) => (b.durability = Math.max(1, Math.round(v))),
+        1,
+      );
+      // Live, and re-derived from the items rather than from the values the
+      // panel was built with, for the reason the launch's height is: typing a
+      // threshold has to move the numbers it was typed FOR.
+      const ballMass = () => {
+        const r = model.player.radius;
+        return (4 / 3) * Math.PI * r * r * r * BallPlayer.DENSITY;
+      };
+      const holds = (): string => {
+        const f = shared(leads, (b) => b.breakForce);
+        if (f === null) return "mixed";
+        return `${(f / 9.8).toFixed(0)} kg`;
+      };
+      const arrives = (): string => {
+        const f = shared(leads, (b) => b.breakForce);
+        if (f === null) return "mixed";
+        const m = ballMass();
+        // The ball's own weight is already on the face while it lands, so what
+        // the arrival has to find is the rest.
+        const v = (f - m * 9.8) / (m * 60);
+        return v <= 0 ? "its own weight" : `${v.toFixed(1)} m/s`;
+      };
+      for (const [label, get] of [
+        ["holds", holds],
+        ["ball breaks it at", arrives],
+      ] as const) {
+        const row = el("label", "ed-field");
+        row.textContent = label;
+        const val = document.createElement("span");
+        val.textContent = get();
+        row.appendChild(val);
+        g.appendChild(row);
+        readouts.push({ el: val, get });
+      }
+    }
+    const hint = el("div", "ed-hint");
+    hint.textContent =
+      "Geometry that gives way. The threshold is how hard something has to hit this body to hurt it, in newtons, and the durability is how many such hits it survives before it breaks apart and is gone - in a shower of chunks that fade out, not as rubble you can stand on. Only impacts count: a body resting on it presses once, however long it sits there, and one sliding along it is not hitting it at all. Anything the chain is anchored to when it goes lets go of the chain. A body a scene chain or a vine hangs from cannot be breakable.";
     g.appendChild(hint);
   }
 
@@ -4553,6 +4648,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // says nothing about one.
       if (leads.every((b) => b.kind === "static" || b.kind === "rigid")) {
         addPassableField(g, leads);
+        // Offered for the kinds that build a BODY, like hook-only above: an
+        // area is a region rather than a thing anything can hit.
+        addBreakFields(g, num, leads);
       }
       if (leads.every((b) => b.kind === "rigid")) {
         addPivotField(g, leads);
@@ -6528,6 +6626,11 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // hook-proofing below is.
       bounce: DEFAULT_BOUNCE,
       launch: DEFAULT_LAUNCH,
+      // ...and a fresh body is unbreakable, for the same reason: what it takes
+      // to destroy a piece of scenery is a decision about the level, and 0 is
+      // the "nothing can" every body has until one is made.
+      breakForce: 0,
+      durability: 1,
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
       // ...and so is standing out of something's way: a fresh shape is in
@@ -8877,6 +8980,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // Drained inside the catch-up loop, as `main.ts` does: a frame that
         // runs several steps must not drop the caught-up steps' events.
         testSparks.ingest(testLevel.sparkEvents);
+        testDebris.ingest(testLevel.breakEvents);
         recFrames.push(serializeInput(fi));
         recDigests.push(
           testLevel instanceof BallLevel ? digestBall(testLevel) : digest(testLevel),
@@ -8897,6 +9001,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       const alpha = Math.min(1, accumulator / STEP);
       // Once per rendered frame, on the render clock (see main.ts).
       testSparks.advance(dt);
+      testDebris.advance(dt);
       testCameraCtl.update(
         camera,
         dt,
@@ -8949,6 +9054,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           alpha,
           testIn3d,
           testSparks,
+          null,
+          testDebris,
         );
       } else {
         render(
@@ -8963,6 +9070,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           testCameraCtl.held,
           testIn3d,
           testSparks,
+          testDebris,
         );
       }
     } else {

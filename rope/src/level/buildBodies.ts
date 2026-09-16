@@ -125,6 +125,15 @@ function applyStyle(body: CollisionObject2D, b: LevelBodyData): void {
   // saves the build a branch that would have to be kept in step with the kinds.
   body.restitution = b.bounce ?? DEFAULT_BOUNCE;
   body.launchSpeed = b.launch ?? DEFAULT_LAUNCH;
+  // ...and what it takes to destroy it (see `LevelBodyData.breakForce`), for
+  // the same reason in the same place: it is a fact about the surface, stated
+  // by the body and read by whatever hits it. A body that authors no threshold
+  // gets 0, which is the unbreakable every level has.
+  body.breakForce = Math.max(0, b.breakForce ?? 0);
+  // Rounded, and never below one: half a hit is not a thing a level can mean,
+  // and a durability of 0 would be a body that breaks before anything touches
+  // it - the one value an author who typed it did not mean.
+  body.durability = Math.max(1, Math.round(b.durability ?? 1));
 }
 
 // Where an object actually is, in world metres: its own placement composed
