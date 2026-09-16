@@ -7,8 +7,8 @@ import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import {
   CharacterBody2D,
-  LAYER_ANCHOR,
-  LAYER_SOLID,
+  LAYER_HOOK,
+  MASK_ALL,
   type PhysicsBody2D,
 } from "../engine/body";
 import { circleShape } from "../engine/shapes";
@@ -25,6 +25,10 @@ export class Hook extends CharacterBody2D {
   constructor() {
     super();
     this.name = "Hook";
+    // The chain end is its own collision category, so a piece of scenery can
+    // leave `LAYER_HOOK` out of its mask and be geometry the hook flies through
+    // while still stopping everything else (`CollisionShape2D.mask`).
+    this.collisionLayer = LAYER_HOOK;
     if (!this.hasShape()) this.setShape(circleShape(PX));
   }
 
@@ -46,11 +50,17 @@ export class Hook extends CharacterBody2D {
     if (this.velocity.lengthSquared() < 0.0001 * PX * PX) return;
 
     const ray = new Segment(this.globalPosition, this.globalPosition.add(this.velocity));
-    // Solid geometry plus `passable` scenery: the hook is the one query that
-    // sees LAYER_ANCHOR, which is exactly what makes a grate attachable while
-    // the avatar (and every other mask-1 query) passes through it.
+    // Every category there is: the hook is the one query that sees
+    // LAYER_ANCHOR, which is exactly what makes a grate attachable while the
+    // avatar (and every other `MASK_SOLID` query) passes through it.
+    //
+    // ...and it asks AS the hook, so a piece that has left `LAYER_HOOK` out of
+    // its mask - a stool's legs, geometry set back in z from the gameplay plane
+    // - is flown straight through rather than caught on, exactly as it is
+    // walked through and passed through by the chain.
     const result = this.world.intersectRay(ray.start, ray.end, {
-      collisionMask: LAYER_SOLID | LAYER_ANCHOR,
+      collisionMask: MASK_ALL,
+      collisionLayer: LAYER_HOOK,
       exclude: [this],
     });
 

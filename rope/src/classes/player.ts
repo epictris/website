@@ -4,7 +4,7 @@
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { Mathf } from "../engine/mathf";
-import { CharacterBody2D, type PhysicsBody2D } from "../engine/body";
+import { CharacterBody2D, LAYER_PLAYER, type PhysicsBody2D } from "../engine/body";
 import { circleShape } from "../engine/shapes";
 import { ShapeGeometry } from "../lib/shapeGeometry";
 import { RopeContact, RopeWrap } from "../lib/ropeContact";
@@ -100,6 +100,11 @@ export class Player extends CharacterBody2D {
   constructor(radius = 0.05) {
     super();
     this.name = "Player";
+    // The avatar is its own collision category, so a piece of scenery can be in
+    // everything's way but his (`CollisionShape2D.mask`). Not also
+    // `LAYER_SCENERY`: the categories are disjoint, and his queries ask for
+    // `MASK_SOLID`, which is the union that bit 1 used to stand for.
+    this.collisionLayer = LAYER_PLAYER;
     this.pushesRigidBodies = true;
     if (!this.hasShape()) this.setShape(circleShape(radius));
   }

@@ -41,7 +41,7 @@ import { buildMoveRoute, moveAngleAt, type MoveRoute } from "../level/movers";
 import { DEFAULT_SPRING_DAMPING, buildLevelBodies, worldPlacement } from "../level/buildBodies";
 import { World } from "../engine/world";
 import { wrapAngle } from "../engine/mathf";
-import { RigidBody2D } from "../engine/body";
+import { MASK_ALL, RigidBody2D } from "../engine/body";
 import {
   DEFAULT_MATERIAL,
   DEFAULT_THICKNESS,
@@ -58,6 +58,8 @@ import {
   DEFAULT_SURFACE_FRICTION,
   DEFAULT_VIEWPORT_SCALE,
   NOTE_ARROW_THICKNESS,
+  maskFromPasses,
+  passesFromMask,
   moveModeCloses,
   moveModeOf,
   moveNodesOf,
@@ -424,12 +426,17 @@ export interface EdItem {
   // among the properties `syncBodyProps` leaves alone - a compound wall with
   // one attachable ledge among hook-proof faces is what it is for.
   impermeable: boolean;
-  // Rope geometry or not (see `CollisionObjectData.wrappable`): false and every
-  // chain and rope passes straight through this piece, nothing wraps or winds
-  // on it, and a chain cannot be tied to it. Per SHAPE like `impermeable`, and
-  // the case it exists for is one body of two pieces - a wheel whose rim the
-  // player turns and whose hub winds the chain.
-  wrappable: boolean;
+  // What this piece collides with (see `CollisionObjectData.passes`), as the
+  // engine's own bitmask. `MASK_ALL` - everything - is the default and what
+  // every piece authored before masks existed loads as; the inspector's
+  // "collides with" group is the three bits a level may clear.
+  //
+  // Per SHAPE like `impermeable`, and the cases it exists for are one body
+  // whose pieces answer differently: a wheel whose rim the player turns and
+  // whose hub winds the chain, a stool whose seat stops the avatar and whose
+  // legs, set back in z to either side of the gameplay plane, are geometry he
+  // walks between and the chain hangs past.
+  mask: number;
   // A rail (see `CollisionObjectData.rail`): a thin bar the manacle clamps
   // around and slides along. Per SHAPE like the two above, and mutually
   // exclusive with `impermeable` in the inspector - a hook-proof rail is a bar
@@ -1240,7 +1247,10 @@ function fromLevelData(data: LevelData): EdModel {
           rot: w.rot,
           shape: edShape(o.shape),
           impermeable: o.impermeable === true,
-          wrappable: o.wrappable !== false,
+          // The authored list as the mask itself. `normalizeLevelData` has
+          // already folded the retired `wrappable: false` into it, so there is
+          // one spelling by the time the editor sees a level.
+          mask: maskFromPasses(o.passes),
           rail: o.rail === true,
           viscosity: typeof o.viscosity === "number" && o.viscosity > 0 ? o.viscosity : 0,
           material: materialName(o.material),
@@ -1264,7 +1274,7 @@ function fromLevelData(data: LevelData): EdModel {
           // than a small one it can.
           shape: o.shape ? edShape(o.shape) : { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
           impermeable: false,
-          wrappable: true,
+          mask: MASK_ALL,
           rail: false,
           viscosity: 0,
           material: DEFAULT_MATERIAL,
@@ -1290,7 +1300,7 @@ function fromLevelData(data: LevelData): EdModel {
           // click has to land on, and it is the same one a dressing gets.
           shape: { kind: "rect", w: DRESSING_GIZMO, h: DRESSING_GIZMO },
           impermeable: false,
-          wrappable: true,
+          mask: MASK_ALL,
           rail: false,
           viscosity: 0,
           material: DEFAULT_MATERIAL,
@@ -1336,7 +1346,7 @@ function fromLevelData(data: LevelData): EdModel {
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
-    wrappable: true,
+    mask: MASK_ALL,
     rail: false,
     viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
@@ -1427,7 +1437,7 @@ function fromLevelData(data: LevelData): EdModel {
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
-    wrappable: true,
+    mask: MASK_ALL,
     rail: false,
     viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
@@ -1514,7 +1524,7 @@ function lightItem(
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
-    wrappable: true,
+    mask: MASK_ALL,
     rail: false,
     viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
@@ -1581,7 +1591,7 @@ function lightItem(
     bounce: DEFAULT_BOUNCE,
     launch: DEFAULT_LAUNCH,
     impermeable: false,
-    wrappable: true,
+    mask: MASK_ALL,
     rail: false,
     viscosity: 0,
     // Unused off the geometry layer; keeps the field total.
@@ -1977,8 +1987,10 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
           shape: shapeOf(i),
           // Absent means "an ordinary surface", so only a hook-proof one says so.
           ...(i.impermeable ? { impermeable: true } : {}),
-          // Absent means rope geometry, so only a piece the rope ignores says so.
-          ...(i.wrappable ? {} : { wrappable: false }),
+          // Absent means a piece everything collides with, so only one that
+          // something passes through says so - and it says it in the fixed
+          // category order, so an edit that changes nothing writes nothing.
+          ...(passesFromMask(i.mask).length > 0 ? { passes: passesFromMask(i.mask) } : {}),
           // Absent means a face the hook bites, so only a rail says so - and
           // only a CURVE can be one, so a flag left on a shape of any other
           // kind (a level authored before rails were curves) is dropped rather
@@ -3628,7 +3640,7 @@ export function emptyModel(): EdModel {
         bounce: DEFAULT_BOUNCE,
         launch: DEFAULT_LAUNCH,
         impermeable: false,
-        wrappable: true,
+        mask: MASK_ALL,
         rail: false,
         viscosity: 0,
         material: DEFAULT_MATERIAL,

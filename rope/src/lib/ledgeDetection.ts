@@ -10,7 +10,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
-import { PhysicsBody2D, RigidBody2D } from "../engine/body";
+import { LAYER_PLAYER, PhysicsBody2D, RigidBody2D } from "../engine/body";
 import { circleOverlap } from "../engine/collision";
 import { CORNER_EPSILON, isExposedCorner, type ShapeTransform } from "../engine/shapes";
 import { PhysTrace } from "../engine/physTrace";
@@ -150,6 +150,9 @@ export const LedgeDetection = {
       // Only geometry actually reaching the vertex can fill its corner in, and
       // the whole level is scanned per candidate, so this cheap reject stays.
       for (const shape of body.getShapes()) {
+        // ...and a piece that is not in his way cannot bury a corner for him
+        // either: the union this builds is the geometry he would actually meet.
+        if ((shape.mask & LAYER_PLAYER) === 0) continue;
         if (circleOverlap(vertex, CORNER_EPSILON, shape)) shapes.push(shape);
       }
     }
@@ -174,6 +177,12 @@ export const LedgeDetection = {
       const shapes = body.getShapes();
       for (let si = 0; si < shapes.length; si++) {
         const t = shapes[si]!;
+        // A corner on a piece the avatar walks straight through is no more a
+        // ledge than a corner of hook-only scenery is: if he is not stopped by
+        // it he cannot hang off it (`CollisionShape2D.mask`). Per PIECE, since
+        // that is what a mask is per - one stool, a seat he can pull onto and
+        // legs he cannot.
+        if ((t.mask & LAYER_PLAYER) === 0) continue;
         if (t.shape.kind === "circle") continue;
         const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;
 

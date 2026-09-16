@@ -11,7 +11,7 @@ import { dmath } from "../engine/dmath";
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
 import { wrapAngle } from "../engine/mathf";
-import { PhysicsBody2D, RigidBody2D, VineLink, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
+import { LAYER_PLAYER, PhysicsBody2D, RigidBody2D, VineLink, type CollisionObject2D, type CollisionShape2D } from "../engine/body";
 import { circleShape, nearestShapeIndex, type ShapeTransform } from "../engine/shapes";
 import { outwardDirection } from "../engine/collision";
 import { shapeContacts } from "../engine/manifold";
@@ -229,6 +229,12 @@ export class BallPlayer extends RigidBody2D {
     // KillZone reset and the hook's don't-attach-to-the-avatar check both
     // match by name.
     this.name = "Player";
+    // The avatar is its own collision category, ball and mounting loop alike:
+    // scenery a level wants the player to pass through says so by leaving
+    // `LAYER_PLAYER` out of its mask (`CollisionShape2D.mask`). Not also
+    // `LAYER_SCENERY` - the categories are disjoint, and `MASK_SOLID` is the
+    // union every query that used to ask for bit 1 asks for now.
+    this.collisionLayer = LAYER_PLAYER;
     this.setShape(circleShape(radius));
     // The mounting loop is solid: a second collision circle fixed to the rim,
     // so the ball can rest, tip, and catch edges on the loop as it rotates.

@@ -17,6 +17,7 @@ import {
   KinematicCollision2D,
   PhysicsBody2D,
   RigidBody2D,
+  shapesCollide,
   StaticBody2D,
   VineLink,
   WaterArea,
@@ -255,7 +256,17 @@ export interface RayResult {
 }
 
 export interface RayOptions {
+  // Which categories the ray may hit: the piece's `layer` is tested against it.
+  // Absent means every piece, which is what a caller with nothing to say about
+  // layers has always got.
   collisionMask?: number;
+  // The category the ray is cast ON BEHALF of - `LAYER_PLAYER` for the avatar's
+  // wall and ledge probes, `LAYER_HOOK` for the grapple hook's flight. It is
+  // tested against each piece's `mask`, which is the half that lets a piece
+  // decline the query: a stool leg is scenery to every ray and still not
+  // something the avatar's own probes may find. Absent means no piece declines,
+  // so a diagnostic query sees the world whatever it is authored as.
+  collisionLayer?: number;
   exclude?: CollisionObject2D[];
   hitFromInside?: boolean;
 }
@@ -689,8 +700,14 @@ export class World {
     return body instanceof RigidBody2D && body.asleep;
   }
 
-  private matchesMask(body: PhysicsBody2D, mask: number | undefined): boolean {
-    return mask === undefined || (body.collisionLayer & mask) !== 0;
+  // The pair rule of `shapesCollide`, for an asker that is not a shape: the
+  // piece must be in the query's mask, and the query's own category must be in
+  // the piece's. Both halves are optional, and a query that states neither sees
+  // every piece - which is what every call site got before either existed.
+  private matchesFilter(shape: CollisionShape2D, opts: RayOptions): boolean {
+    if (opts.collisionMask !== undefined && (shape.layer & opts.collisionMask) === 0) return false;
+    if (opts.collisionLayer !== undefined && (shape.mask & opts.collisionLayer) === 0) return false;
+    return true;
   }
 
   // ---- CharacterBody2D.moveAndCollide -----------------------------------
@@ -700,7 +717,8 @@ export class World {
     motion: Vec2,
     testOnly: boolean,
   ): KinematicCollision2D | null {
-    const shape = body.primaryShape().shape;
+    const self = body.primaryShape();
+    const shape = self.shape;
     if (shape.kind !== "circle") return null; // characters are circles here
     const r = shape.radius;
     const start = body.globalPosition;
@@ -729,6 +747,10 @@ export class World {
       // straight through.
       if (!target.isSolid) continue;
       if (body.exceptions.has(target.id)) continue;
+      // ...and the piece has to be in the avatar's way, not merely its body:
+      // a stool's seat stops the walker while its legs, set back in z to either
+      // side of the gameplay plane, are geometry it walks between.
+      if (!shapesCollide(self, ts)) continue;
       // Every shape the target carries arrives as its own candidate. A
       // compound body (a concave form built from convex pieces) blocks with
       // all of them; a single-shape body is the one-iteration case this has
@@ -799,6 +821,10 @@ export class World {
           // avatar would be depenetrated out of a vine it is standing in.
           if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
+          // Nothing is pushed out of a piece it was never stopped by either:
+          // the sweep above and this recovery have to answer the same way or
+          // the avatar walks between the legs and is then shoved out of one.
+          if (!shapesCollide(self, ts)) continue;
           {
             const ov = circleOverlap(finalPos, r, ts);
             if (!ov) continue;
@@ -902,7 +928,7 @@ export class World {
       const body = s.owner;
       if (!(body instanceof PhysicsBody2D)) continue;
       if (body.removed || excludeIds.has(body.id)) continue;
-      if (!this.matchesMask(body, opts.collisionMask)) continue;
+      if (!this.matchesFilter(s, opts)) continue;
       {
         const hit = rayVsShape(from, to, s, opts.hitFromInside ?? false);
         if (hit && hit.t < bestT) {
@@ -1113,6 +1139,11 @@ export class World {
           // by geometry no other path admits exists.
           if (!target.isSolid) continue;
           if (body.exceptions.has(target.id)) continue;
+          // A piece this body does not collide with cannot stop it here either.
+          // The swept step is the one path that can halt a body against geometry
+          // no discrete pass would have reported, so a filter missing from it is
+          // a body stopped dead by something it is meant to pass through.
+          if (!shapesCollide(bs, ts)) continue;
           {
             // The same conservative box reject the contact gather uses, widened
             // by the step: anything further than the whole motion plus the
@@ -1504,6 +1535,9 @@ export class World {
         // supposed to pass through whips a metre out of its way as it goes.
         if (!body.isSolid && !(other instanceof StaticBody2D)) continue;
         if (accept && !accept(other)) continue;
+        // Being pushed out of a piece IS being blocked by it, so the pair rule
+        // that decided the contact decides the recovery (see `shapesCollide`).
+        if (!shapesCollide(bshape, oshape)) continue;
         {
           // The same conservative box reject as before the broadphase - kept
           // because the tree answers on FAT boxes, and this exact test on the
@@ -1733,6 +1767,10 @@ export class World {
             //
             // On session-1618f it takes 99.9% of the narrowphase calls out and
             // `World.integrate` from 1.475 ms a frame to 0.087.
+            // The pair rule, before the geometry: which pieces are in each
+            // other's way is settled by two integers, and a pair that is not
+            // has no manifold to gather (see `shapesCollide`).
+            if (!shapesCollide(sa, sb)) continue;
             const eb = sb.extents();
             const dx = sa.globalPosition.x - sb.globalPosition.x;
             if (Math.abs(dx) > ea.x + eb.x + CONTACT_SLOP) continue;

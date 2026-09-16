@@ -160,8 +160,11 @@ leaves the wrap solver armed on every span reaching the anchor (`session-284f`).
 A body may carry **several shapes** (`addShape`, `getShapes()`) — a compound body. Every
 scanning path iterates them: the character sweep, raycasts, area overlap, ledge candidacy
 and the rope's wrap scan (whose candidates are shapes, not bodies, so a `RopeContact`
-carries a `shapeIndex`). `CollisionShape2D.wrappable` is the one opt-out: solid, but not
-rope geometry (the ball's mounting loop).
+carries a `shapeIndex`). Each of those scans can be opted out of per piece, by the piece's
+own collision **mask** (`CollisionShape2D.mask`): a stool's seat stops the avatar while the
+legs it is welded to are geometry he walks between, and `wrappable` - solid, but not rope
+geometry (the ball's mounting loop) - is one bit of that same mask. See
+[**Collision layers and masks**](collision-layers.md).
 A `RopeContact`'s `shapeIndex` must name the piece it actually sits on, and an **attachment** to scene geometry has to resolve it from the contact point (`RopeContact.at`) rather than defaulting to the primary.
 Defaulting was invisible while every attachable body had one shape, and silently wrong the moment compound bodies became authorable: `resolveSelfIntersectionAtStart`/`AtEnd` test the span against `contact.shape`, so a hook anchored on piece 1 but indexed at piece 0 tested a piece the span never touches, found no overlap, and let the chain run **straight through** the polygon it was anchored to instead of bending around its corner (`session-234f`).
 The failure has no velocity signature at all - the run is healthy on every invariant - so it is only visible through `cli render` / `cli chainpath`.

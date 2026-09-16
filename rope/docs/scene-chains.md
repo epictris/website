@@ -179,4 +179,4 @@ In the editor a wrap point is drawn as a **hollow ring** on the chain's route wh
 Deleting a wrap point's body drops it from the route and keeps the chain (`pruneChains`); a copy that did not take the body along drops it the same way; `pruneAnchors` counts a wrap point as used.
 
 `cli contacts` `chain-wrap-point` is the crane: a two-piece pivot wheel (chain-through rim, winding hub), a beam with one authored corner, a stone box - the route builds as hub, both top corners, box; the box hangs plumb under the far corner; 4 rad of hub hauls it up by hub radius × angle; unwinding lowers it; the rim is never on the path; and a dead wrap point is skipped.
-`cli render3d` checks `via` and `wrappable` through the scale every load applies and through the editor round trip.
+`cli render3d` checks `via` and the rim's collision mask through the scale every load applies and through the editor round trip - the rim authored in the retired `wrappable: false` spelling, so the fold into `passes: ["chain"]` ([collision-layers](collision-layers.md)) is asserted on the one gate it runs in.

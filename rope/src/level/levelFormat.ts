@@ -77,8 +77,53 @@
 // be switched back and forth while a level is authored and silently losing the
 // kind on the way through would be a field that forgets.
 import { dmath } from "../engine/dmath";
+import { LAYER_HOOK, LAYER_PLAYER, LAYER_ROPE, MASK_ALL } from "../engine/body";
 
 export type BodyKind = "static" | "killzone" | "rigid" | "force" | "water";
+
+// The collision categories a LEVEL may name (`CollisionObjectData.passes`).
+//
+// Only the three a piece of scenery can meaningfully stand out of the way of.
+// `LAYER_SCENERY` and `LAYER_ANCHOR` are not authorable: a piece that collided
+// with no scenery would be a piece that falls through the floor, which is what
+// `passable` on the BODY already says and says better, and a piece is never in
+// the way of hook-only scenery in the first place. Keeping them out means the
+// mask a level can write is always a mask that leaves the level standing.
+export type CollisionCategoryName = "player" | "hook" | "chain";
+
+export const COLLISION_CATEGORY_BITS: Record<CollisionCategoryName, number> = {
+  player: LAYER_PLAYER,
+  hook: LAYER_HOOK,
+  chain: LAYER_ROPE,
+};
+
+// The order the inspector offers them in and the order a level file lists them
+// in - one order, so a mask that has been round-tripped through the editor
+// diffs against the file it came from.
+export const COLLISION_CATEGORIES: readonly CollisionCategoryName[] = [
+  "player",
+  "hook",
+  "chain",
+];
+
+// The authored list as the shape's mask: everything, minus what passes through.
+// An unknown name in a hand-edited file is ignored rather than fatal - it can
+// only ever mean "collides with one more thing than intended", which is the
+// direction a level survives.
+export function maskFromPasses(passes: readonly string[] | undefined): number {
+  let mask = MASK_ALL;
+  for (const name of passes ?? []) {
+    const bit = COLLISION_CATEGORY_BITS[name as CollisionCategoryName];
+    if (bit !== undefined) mask &= ~bit;
+  }
+  return mask;
+}
+
+// ...and back, for the editor and the writer: the categories this mask has
+// dropped, in the fixed order above so a level file's diff is stable.
+export function passesFromMask(mask: number): CollisionCategoryName[] {
+  return COLLISION_CATEGORIES.filter((name) => (mask & COLLISION_CATEGORY_BITS[name]) === 0);
+}
 
 // How a moving body spends a traverse of an OPEN route (see
 // `LevelBodyData.moveEase`). The trip takes the same time under all of them -
@@ -383,7 +428,31 @@ export interface CollisionObjectData extends ObjectPlacement {
   // winds a chain. They must be ONE body so they turn together, the chain must
   // wind on the hub and not the rim, and only the piece can say which is which
   // (`CollisionShape2D.wrappable`).
+  //
+  // RETIRED in favour of `passes` below, which says the same thing about the
+  // chain that it says about the avatar and the hook. `normalizeLevelData`
+  // folds `wrappable: false` into `passes: ["chain"]`; nothing downstream of
+  // `scaleLevelData` reads this key.
   wrappable?: boolean;
+  // What passes straight THROUGH this piece, by collision category. A piece
+  // that names one is not in that thing's way at all: it is not swept into, not
+  // depenetrated out of, it forms no contact, it is not raycast, it is not a
+  // ledge to grab and it is not a corner to wrap. Absent - every piece authored
+  // before masks existed - is a piece everything collides with.
+  //
+  // The case it exists for is the STOOL. Its seat is in the gameplay plane and
+  // stops the avatar; its four legs are offset in z to either side of that
+  // plane, so the avatar walks between them and the chain hangs past them - and
+  // yet they stand on the floor, take the stool's weight and tip it over. Seat
+  // and legs are one rigid body because a stool is one thing, so nothing but
+  // the PIECE can say which of them is in the player's way.
+  //
+  // A list of what is EXCLUDED rather than of what is included, for the same
+  // reason `wrappable` was a `false` and not a `true`: absent has to mean "the
+  // ordinary case", and a positive list would silently drop whatever category
+  // is added to the engine after a level was written. It is turned into the
+  // shape's `mask` at build (`makePiece`), which is where the engine reads it.
+  passes?: CollisionCategoryName[];
   // A RAIL: a thin bar the manacle clamps AROUND rather than bites into, and
   // then slides along under the chain's pull against the body's `friction` -
   // a zipline, a pipe, the handle of a hanging lantern. Solid for everything
@@ -2350,10 +2419,47 @@ function finish(
   const out = bodies.map((b, i) => {
     const extra = added.get(i);
     const withAnchors = extra ? { ...b, objects: [...b.objects, ...extra] } : b;
-    return withoutConflictingSpring(withAnchors);
+    return withoutConflictingSpring(withMigratedMask(withAnchors));
   });
   const { backgrounds: _panels, lights: _lights, chains: _chains, ...rest } = raw;
   return { ...rest, bodies: out, ...(chains ? { chains } : {}) };
+}
+
+// The retired `wrappable: false`, folded into the mask it is now one bit of
+// (`CollisionObjectData.passes`). "Chains and ropes pass straight through this
+// piece" is what both spellings say; there is one mechanism behind them now
+// (`CollisionShape2D.wrappable` is the `LAYER_ROPE` bit), and this is what stops
+// a level on disk having to be rewritten to get it.
+//
+// It runs inside `normalizeLevelData`'s `finish` for the reason the retired
+// `kind: "impermeable"` does: that is the one gate a level cannot reach the sim
+// or the editor without passing through, and a migration a loader can forget is
+// missing wherever the next loader is added. The failure would be silent - the
+// wheel's rim simply starts catching the chain it has been ignored by since the
+// level was drawn.
+//
+// Written to return the body UNCHANGED unless a piece actually holds the retired
+// key, so every level that predates it and every level written since is the same
+// object it went in as.
+function withMigratedMask(b: LevelBodyData): LevelBodyData {
+  if (!b.objects.some((o) => o.type === "collision" && o.wrappable !== undefined)) return b;
+  return {
+    ...b,
+    objects: b.objects.map((o) => {
+      if (o.type !== "collision" || o.wrappable === undefined) return o;
+      const { wrappable, ...rest } = o;
+      // `wrappable: true` is the ordinary piece and says nothing; only the
+      // opt-out carries over, and it joins whatever `passes` already names
+      // rather than replacing it - a file part-way through the migration is
+      // exactly the hand-edit this has to survive. Round-tripped through the
+      // mask so the list comes out deduplicated and in the fixed order.
+      const mask = maskFromPasses(
+        wrappable === false ? [...(rest.passes ?? []), "chain"] : rest.passes,
+      );
+      const passes = passesFromMask(mask);
+      return passes.length > 0 ? { ...rest, passes } : rest;
+    }),
+  };
 }
 
 // `pivot` and a spring are mutually exclusive (see `LevelBodyData.springFreqX`):
@@ -2657,7 +2763,14 @@ export function scaleObject(o: SceneObjectData, factor: number): SceneObjectData
       ...placed,
       shape: scaleShape(o.shape, factor),
       ...(o.impermeable !== undefined ? { impermeable: o.impermeable } : {}),
+      // The retired key is carried through so `scaleObject` stays the pure
+      // length pass it says it is - `normalizeLevelData` is what folds it into
+      // `passes`, and it has already run by the time anything scales.
       ...(o.wrappable !== undefined ? { wrappable: o.wrappable } : {}),
+      // A category list names things and scales by nothing. Copied rather than
+      // shared: a scaled level is a second level, and two levels sharing one
+      // array is an edit in the editor reaching into the sim's copy.
+      ...(o.passes !== undefined ? { passes: [...o.passes] } : {}),
       ...(o.rail !== undefined ? { rail: o.rail } : {}),
       // A viscosity is a ratio and scales by nothing.
       ...(o.viscosity !== undefined ? { viscosity: o.viscosity } : {}),

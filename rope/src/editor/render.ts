@@ -58,6 +58,7 @@ import {
   DEFAULT_VIEWPORT_SCALE,
   moveModeCloses,
 } from "../level/levelFormat";
+import { MASK_ALL } from "../engine/body";
 import {
   pathOutline,
   pathCorridorSweepInto,
@@ -1933,9 +1934,10 @@ export function drawEditor(
         ctx.strokeStyle = VISCOUS_EDGE;
         ctx.lineWidth = worldLine * 2;
         ctx.setLineDash(VISCOUS_DASH);
-      } else if (!m.wrappable) {
-        // Chain-through: dotted, as a piece the rope passes through - the mark
-        // hook-only bodies wear, which are passed through by everything.
+      } else if (m.mask !== MASK_ALL) {
+        // Something passes through this piece - the player, the hook, the
+        // chain, or any mix of them: dotted, the mark hook-only bodies wear,
+        // which are passed through by everything.
         ctx.strokeStyle = body.color;
         ctx.lineWidth = worldLine;
         ctx.setLineDash([PX, 2 * PX]);
@@ -2016,9 +2018,10 @@ export function drawEditor(
       ctx.setLineDash(VISCOUS_DASH);
       ctx.stroke();
       ctx.setLineDash([]);
-    } else if (body.passable || !body.wrappable) {
+    } else if (body.passable || body.mask !== MASK_ALL) {
       // Hook-only: dotted edge, as in game — nothing about it reads as solid.
-      // Chain-through wears the same mark: a piece the rope passes through.
+      // A piece something passes through wears the same mark, for the same
+      // reason: whatever it is, it is not in everything's way.
       ctx.strokeStyle = body.color;
       ctx.lineWidth = worldLine;
       ctx.setLineDash([PX, 2 * PX]);

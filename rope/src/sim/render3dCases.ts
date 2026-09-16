@@ -2645,12 +2645,17 @@ function chainAnchors(): CaseResult[] {
   ];
 }
 
-// A chain's WRAP POINTS (`ChainData.via`) and a piece's `wrappable` flag are
-// both content the format has to carry unchanged: through the pixel-to-metre
-// scale every load applies, and through the editor, where a wrap point is an
-// anchor item like the ends and the flag is a per-piece checkbox. Neither
+// A chain's WRAP POINTS (`ChainData.via`) and a piece's collision MASK are both
+// content the format has to carry unchanged: through the pixel-to-metre scale
+// every load applies, and through the editor, where a wrap point is an anchor
+// item like the ends and the mask is a row of per-piece checkboxes. Neither
 // failing is loud - a dropped `via` is a chain that hangs straight, a dropped
-// flag is a rim the chain suddenly winds onto.
+// mask is a rim the chain suddenly winds onto.
+//
+// The rim is authored in the RETIRED spelling (`wrappable: false`), so the
+// migration to `passes: ["chain"]` is asserted at the same time and on the one
+// gate it runs in (`normalizeLevelData`). A level on disk still carries the old
+// key; what comes out of the gate never does.
 function chainWrapPoints(): CaseResult[] {
   const raw: RawLevelData = {
     player: { x: 0, y: 0, radius: 8 },
@@ -2693,7 +2698,10 @@ function chainWrapPoints(): CaseResult[] {
   const scaled = scaleLevelData(raw, 0.01);
   const viaScaled = JSON.stringify(scaled.chains?.[0]?.via) === "[2]";
   const rim = scaled.bodies[0]!.objects[0]!;
-  const flagScaled = rim.type === "collision" && rim.wrappable === false;
+  const flagScaled =
+    rim.type === "collision" &&
+    JSON.stringify(rim.passes) === '["chain"]' &&
+    rim.wrappable === undefined;
 
   const round = modelToDisk(modelFromDisk(raw));
   const rc = round.chains?.[0];
@@ -2709,20 +2717,20 @@ function chainWrapPoints(): CaseResult[] {
   const roundHub = round.bodies[0]!.objects[1]!;
   const flagKept =
     roundRim.type === "collision" &&
-    roundRim.wrappable === false &&
+    JSON.stringify(roundRim.passes) === '["chain"]' &&
     roundHub.type === "collision" &&
-    roundHub.wrappable === undefined;
+    roundHub.passes === undefined;
 
   return [
     {
-      name: "chains: a wrap point and a chain-through flag survive the scale every load applies",
+      name: "chains: a wrap point and a piece's mask survive the scale every load applies",
       pass: viaScaled && flagScaled,
-      detail: viaScaled && flagScaled ? "via [2], rim wrappable: false" : JSON.stringify({ via: scaled.chains?.[0]?.via, rim }),
+      detail: viaScaled && flagScaled ? 'via [2], rim passes ["chain"]' : JSON.stringify({ via: scaled.chains?.[0]?.via, rim }),
     },
     {
       name: "chains: ...and the editor round trip, the wrap point as an anchor on the beam",
       pass: viaKept && flagKept,
-      detail: viaKept && flagKept ? "1 chain, via on body 1, rim flagged, hub not" : JSON.stringify({ chain: rc, rim: roundRim, hub: roundHub }),
+      detail: viaKept && flagKept ? "1 chain, via on body 1, rim masked, hub not" : JSON.stringify({ chain: rc, rim: roundRim, hub: roundHub }),
     },
   ];
 }

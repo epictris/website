@@ -35,7 +35,7 @@ Controls, gamepad and touch mapping, the level list and the aim modes: [docs/run
 - **The sim never calls platform `Math` transcendentals.** Everything under `src/engine`, `classes`, `lib`, `level`, `input`, `playtest` and the replay path of `sim` goes through `engine/dmath.ts` (`Mathf`, `Vec2`); `cli dmath` scans for the banned members and `**`.
 - **Bit-identity is the contract.** `replay selftest` must stay bit-identical, and every bundle in `playtests/regressions/` replays; a change that diverges recordings does so on purpose and says so. Mobile-body behaviour is gated behind `isMobile`/`isRotating` branches so the static path never moves.
 - **Render-side state never reaches the sim**: the camera, render interpolation, sparks, the slack drape and the perf probe read the world and write nothing back.
-- **A body has many shapes.** `primaryShape()` is only for a body asking about itself; whole-body geometry goes through `bodyOverlapCircle` / `bodySweepCircle` / `bodySweepConvex` / `bodyContainsPoint`. `obj` identity answers "moves as one piece", `shape` identity answers "same surface", and every collision question is the second.
+- **A body has many shapes.** `primaryShape()` is only for a body asking about itself; whole-body geometry goes through `bodyOverlapCircle` / `bodySweepCircle` / `bodySweepConvex` / `bodyContainsPoint`. `obj` identity answers "moves as one piece", `shape` identity answers "same surface", and every collision question is the second - including *which things is this surface in the way of*, which is the per-shape mask ([collision-layers](docs/collision-layers.md)).
 - **`rect` stays its own kind** beside `poly` - its closed-form paths are what every recorded replay went through.
 - **New physics state ships with detectors** (digests and invariants) in the same change, before playtesting.
 - **`expectedFail` is a lie the moment it passes**: the runner fails on a marker whose case goes green, so the fix that closes a gap removes the marker.
@@ -107,6 +107,7 @@ The ball and chain
 
 Rope geometry and surfaces
 
+- [collision-layers](docs/collision-layers.md) - per-shape layers and masks: the stool whose legs the player walks between, and every path that asks.
 - [hook-surfaces](docs/hook-surfaces.md) - hook-proof and chain-through pieces, hook-only bodies.
 - [rails](docs/rails.md) - authored curves the cuff clamps around and slides along.
 - [viscous-surfaces](docs/viscous-surfaces.md) - mud: the cuff sinks, creeps and drops out.

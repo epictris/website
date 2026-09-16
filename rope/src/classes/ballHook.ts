@@ -13,6 +13,7 @@
 // which nothing else in the sim collides with.
 
 import {
+  LAYER_HOOK,
   RigidBody2D,
   StaticBody2D,
   type CollisionShape2D,
@@ -105,6 +106,10 @@ export class BallHook extends RigidBody2D {
     //
     // +x is the hinge end, where the chain is shackled; -x the mouth, which
     // leads the throw and bites.
+    // The chain end is its own collision category, so a piece of scenery can
+    // leave `LAYER_HOOK` out of its mask and be geometry the cuff neither
+    // strikes nor bites while it still stops everything else.
+    this.collisionLayer = LAYER_HOOK;
     this.setShape(manacleShape());
     // Solid, but not rope geometry - the same opt-out the ball's mounting loop
     // takes. The chain ENDS on this cuff, so a span reaching it is inside it by
@@ -205,9 +210,19 @@ export class BallHook extends RigidBody2D {
     for (const piece of pieces) this.shed.add(piece);
   }
 
-  // Attachable to this hook: not hook-proof, and not a face it has shed.
+  // Is this piece in the hook's way at all? A piece whose mask leaves
+  // `LAYER_HOOK` out is geometry the cuff is not there to meet - a stool's
+  // legs, set back in z to either side of the gameplay plane - so it is neither
+  // bitten nor bounced off, which is the one distinction `bites` alone cannot
+  // draw: a hook-proof face still deflects.
+  private reaches(piece: CollisionShape2D): boolean {
+    return (piece.mask & LAYER_HOOK) !== 0;
+  }
+
+  // Attachable to this hook: in its way, not hook-proof, and not a face it has
+  // shed.
   private bites(piece: CollisionShape2D): boolean {
-    return !piece.impermeable && !this.shed.has(piece);
+    return this.reaches(piece) && !piece.impermeable && !this.shed.has(piece);
   }
 
   // The throw is over — the hook falls from here on. Idempotent, and safe to
@@ -428,7 +443,12 @@ export class BallHook extends RigidBody2D {
       if (hit && hit.t <= 1 && (!anchor || hit.t < anchor.t)) {
         anchor = { t: hit.t, normal: hit.normal, point: hit.point, collider: body, shape: hit.shape };
       }
-      const off = bodySweepConvex(body, bar, motion, (s) => s.impermeable === true);
+      const off = bodySweepConvex(
+        body,
+        bar,
+        motion,
+        (s) => s.impermeable === true && this.reaches(s),
+      );
       if (off && off.t <= 1 && (!proof || off.t < proof.t)) {
         proof = { t: off.t, normal: off.normal, point: off.point, collider: body, shape: off.shape };
       }
@@ -645,6 +665,11 @@ export class BallHook extends RigidBody2D {
       let deepest: { shape: CollisionShape2D; normal: Vec2; depth: number; point: Vec2 } | null = null;
       for (const s of body.getShapes()) {
         if (this.shed.has(s)) continue;
+        // ...and a piece the cuff is not in the way of is not a candidate
+        // either, hook-proof or not: `intersectCircle` answers with whole
+        // bodies, so the stool the legs belong to arrives here even when only
+        // its seat is something the hook may rest on.
+        if (!this.reaches(s)) continue;
         for (const c of shapeContacts(bar, s, margin)) {
           if (!deepest || c.depth > deepest.depth) {
             deepest = { shape: s, normal: c.normal, depth: c.depth, point: c.point };

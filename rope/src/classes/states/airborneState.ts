@@ -3,7 +3,7 @@
 import { Vec2 } from "../../engine/vec2";
 import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
-import type { PhysicsBody2D } from "../../engine/body";
+import { LAYER_PLAYER, MASK_SOLID, type PhysicsBody2D } from "../../engine/body";
 import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
@@ -77,7 +77,9 @@ export class AirborneState extends PlayerState {
       const hit = world.intersectRay(
         player.globalPosition,
         player.globalPosition.add(new Vec2(reach * dir, 0)),
-        { collisionMask: 1, exclude: [player] },
+        // Everything in the way, asked as the avatar - see the same pair in
+        // `onWallState`.
+        { collisionMask: MASK_SOLID, collisionLayer: LAYER_PLAYER, exclude: [player] },
       );
       if (!hit) continue;
       if (Surface.getSurfaceType(hit.normal, hit.collider.isRotating) === SurfaceType.WALL) {

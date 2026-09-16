@@ -38,6 +38,8 @@ import {
   DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
   type BodyKind,
+  COLLISION_CATEGORIES,
+  COLLISION_CATEGORY_BITS,
   MOVE_EASES,
   MOVE_MODES,
   moveModeCloses,
@@ -45,6 +47,7 @@ import {
   type MoveEase,
   type MoveMode,
 } from "../level/levelFormat";
+import { LAYER_ROPE, MASK_ALL } from "../engine/body";
 import { moveAngleAt } from "../level/movers";
 import { smoothTangents, splitCubicAtHalf } from "../lib/path";
 import { keyValueAt } from "../lib/keyframes";
@@ -289,13 +292,13 @@ const LAYER_TOOLS: Record<EdLayer, Tool[]> = {
 const CHAINABLE_KINDS: BodyKind[] = ["static", "rigid"];
 // Decoration is excluded for the plainer reason that it builds no body at all:
 // a chain tied to one would have nothing to constrain, and the loader drops it.
-// ...and a piece the rope passes through (`wrappable` off) cannot hold a chain
-// either: the loader lands an anchor authored on one on the nearest piece the
-// rope CAN hold (`tieablePieces` in level/chains.ts), so the editor offers only
-// what the level will actually build - which for a wheel is its hub, not its
-// rim.
+// ...and a piece the rope passes through (the `chain` box unticked) cannot hold
+// a chain either: the loader lands an anchor authored on one on the nearest
+// piece the rope CAN hold (`tieablePieces` in level/chains.ts), so the editor
+// offers only what the level will actually build - which for a wheel is its
+// hub, not its rim.
 const chainable = (b: EdItem): boolean =>
-  b.object === "collision" && CHAINABLE_KINDS.includes(b.kind) && b.wrappable;
+  b.object === "collision" && CHAINABLE_KINDS.includes(b.kind) && (b.mask & LAYER_ROPE) !== 0;
 
 // What the inspector says when nothing is selected: what the active layer is
 // for, and how to put something on it.
@@ -2808,28 +2811,52 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(hint);
   }
 
-  // Rope geometry or not (see `CollisionObjectData.wrappable`). Per shape and
-  // not collapsed onto the body, exactly as hook-proof is, because the case it
-  // exists for is two pieces of ONE body that answer differently: a wheel whose
-  // rim the player rolls and whose hub winds the chain.
-  function addWrappableField(g: HTMLElement, items: EdItem[]): void {
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = items.every((b) => !b.wrappable);
-    box.indeterminate = !box.checked && items.some((b) => !b.wrappable);
-    box.addEventListener("change", () => {
-      beginAction();
-      for (const b of items) b.wrappable = !box.checked;
-      markDirty();
-      rebuildInspector();
-    });
-    const wrap = el("label", "ed-field");
-    wrap.textContent = "chain-through";
-    wrap.appendChild(box);
+  // What this piece collides with (see `CollisionObjectData.passes`), as one
+  // ticked box per category. Per shape and not collapsed onto the body,
+  // exactly as hook-proof is, because the cases it exists for are two pieces of
+  // ONE body that answer differently: a wheel whose rim the player rolls and
+  // whose hub winds the chain, a stool whose seat stops the player and whose
+  // legs he walks between.
+  //
+  // Stated POSITIVELY here and negatively in the file (`passes` is the list of
+  // what goes through) because the two readers want opposite things. An author
+  // is looking at a piece and asking what it is in the way of, and three ticked
+  // boxes is that question answered; a level file needs absent to mean the
+  // ordinary case, or every piece ever authored would have to be rewritten each
+  // time the engine gains a category.
+  //
+  // The `chain` box is what the "chain-through" checkbox was, inverted: one
+  // mechanism now says both (`CollisionShape2D.wrappable` is the rope bit of
+  // the mask), so it belongs beside its siblings rather than on its own.
+  function addMaskFields(g: HTMLElement, items: EdItem[]): void {
+    const wrap = el("div", "ed-field");
+    wrap.textContent = "collides with";
     g.appendChild(wrap);
+    for (const name of COLLISION_CATEGORIES) {
+      const bit = COLLISION_CATEGORY_BITS[name];
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = items.every((b) => (b.mask & bit) !== 0);
+      // A mixed selection says so rather than reporting one piece's answer as
+      // the group's, exactly as hook-proof does.
+      box.indeterminate = !box.checked && items.some((b) => (b.mask & bit) !== 0);
+      box.addEventListener("change", () => {
+        beginAction();
+        for (const b of items) b.mask = box.checked ? b.mask | bit : b.mask & ~bit;
+        markDirty();
+        // The edge style is what says something passes through a piece, and it
+        // is drawn from the item, so the canvas is already right; the panel is
+        // rebuilt so the box loses its indeterminate state.
+        rebuildInspector();
+      });
+      const cell = el("label", "ed-field ed-sub");
+      cell.textContent = name;
+      cell.appendChild(box);
+      g.appendChild(cell);
+    }
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Chains and ropes pass straight through this piece: nothing wraps its corners or winds onto it, and a chain cannot be tied to it - drawn with a dotted edge. It stays solid for everything else. Per shape, so a wheel's hub can wind a chain while the rim it is welded to is ignored.";
+      "What this piece is in the way of. Untick one and it passes straight through: the player walks between unticked legs, the hook flies past them, chains and ropes neither wrap their corners nor tie to them - drawn with a dotted edge. It still collides with the level, so it stands on the floor and carries its share of the body's weight. Per shape, so a stool's seat can stop the player while the legs it is welded to do not, and a wheel's hub can wind a chain while its rim is ignored.";
     g.appendChild(hint);
   }
 
@@ -4365,7 +4392,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // `CollisionObjectData.rail`). Offered elsewhere it is a checkbox that
       // writes a field the loader ignores.
       if (bodies.every((b) => b.shape.kind === "path")) addRailField(g, bodies);
-      addWrappableField(g, bodies);
+      addMaskFields(g, bodies);
     }
     // Material and thickness are what a shape WEIGHS, and decoration weighs
     // nothing - its extrusion depth is `visual.depth` instead.
@@ -6434,7 +6461,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   const anchorHost = (a: EdItem): EdItem | null => {
     const members = bodyMembers(model.items, a.bodyId);
     return (
-      members.find((m) => m.object === "collision" && m.wrappable) ??
+      members.find((m) => m.object === "collision" && (m.mask & LAYER_ROPE) !== 0) ??
       members.find((m) => m.object === "collision") ??
       null
     );
@@ -6503,7 +6530,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       launch: DEFAULT_LAUNCH,
       // Hook-proof is opt-in: a fresh shape is one the hook can catch.
       impermeable: false,
-      wrappable: true,
+      // ...and so is standing out of something's way: a fresh shape is in
+      // everyone's.
+      mask: MASK_ALL,
       // A fresh CURVE is a rail, and every other fresh shape is a face. Drawing
       // a bar is what the curve tool is for - a curved wall is the same shape
       // with the box unticked, one click away either way - and it is the one
@@ -9170,6 +9199,13 @@ function injectStyles(): void {
      179px panel, overlapping the row above it and running off the edge. The
      option list still opens at full width, which is where the name is read. */
   .ed-field > select { min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
+  /* A field that belongs to the one above it rather than to the group: the
+     three categories under "collides with". Indented so the heading reads as
+     theirs, and stacked one per row like every other field rather than laid out
+     across - three labelled boxes side by side need 171px of a 176px content
+     column, so they wrapped after the second and read as "player, hook" and
+     then "chain" on its own. */
+  .ed-sub { padding-left: 10px; }
   .ed-hint { color: #6b7280; line-height: 1.4; }
   /* A hint about a value the author can still legitimately want. Amber rather
      than red: nothing here is invalid, it is a number with a consequence. */

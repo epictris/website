@@ -19,14 +19,20 @@ import { wrapAngle } from "../engine/mathf";
 import {
   CharacterBody2D,
   ForceArea,
-  LAYER_ANCHOR,
-  LAYER_SOLID,
+  LAYER_HOOK,
+  LAYER_PLAYER,
+  LAYER_ROPE,
+  LAYER_SCENERY,
+  MASK_ALL,
+  MASK_SOLID,
   WaterArea,
   PhysicsBody2D,
   RigidBody2D,
   StaticBody2D,
   type CollisionObject2D,
+  type CollisionShape2D,
 } from "../engine/body";
+import { LedgeDetection } from "../lib/ledgeDetection";
 import { circleOverlap } from "../engine/collision";
 import { Mathf } from "../engine/mathf";
 import { PX } from "../engine/units";
@@ -5159,6 +5165,304 @@ function caseImpermeableShape(): ContactResult {
 }
 
 // ---------------------------------------------------------------------------
+// collision-mask — which things a piece is in the way of is a property of the
+// PIECE, and every path that can stop something honours it.
+//
+// The scene is the case it exists for: a STOOL, one rigid body of a seat and a
+// leg. The seat is in the gameplay plane and stops everything; the leg is
+// offset in z to the side of that plane, so the avatar walks past it, the hook
+// flies past it and the chain hangs past it - and yet the leg is what the stool
+// stands on, takes its weight and topples it. Seat and leg are one body because
+// a stool is one thing, so nothing but the piece can say which is which.
+//
+// Every path a body can be stopped by is asked, for the reason `passable-body`
+// asks them all: each is written separately, and a mask honoured by four paths
+// out of six is a leg the avatar walks through and is then shoved out of. The
+// character sweep, the character's own depenetration, the contact gather, the
+// rigid depenetration sweep, the continuous sweep and the raycast - plus ledge
+// detection, since a corner you cannot be stopped by is not a corner you can
+// hang off.
+//
+// The SEAT is the control in all of it. A case that reported "passed through"
+// for both pieces would be asserting that the stool had been deleted.
+//
+// And the last two are the point: the chain-through fold (a piece's `wrappable`
+// IS the rope bit of its mask, so there is one mechanism and it cannot disagree
+// with itself), and the stool STANDING - the leg holds the body up on the floor
+// it is not in the avatar's way on.
+// ---------------------------------------------------------------------------
+function caseCollisionMask(): ContactResult {
+  // Seat at y=0 (a 0.34 m round top seen edge-on), leg hanging below it to the
+  // floor at y=0.5. The leg is the piece the mask is on.
+  const stool = (): LevelBodyData => ({
+    kind: "rigid",
+    x: 0,
+    y: 0,
+    rot: 0,
+    objects: [
+      { type: "collision", shape: { kind: "rect", w: 0.34, h: 0.06 } },
+      // ...standing exactly on the floor's face at y=0.5, so "the stool
+      // stands" is a statement about the leg holding it up rather than about
+      // how far it had to fall first.
+      {
+        type: "collision",
+        y: 0.265,
+        shape: { kind: "rect", w: 0.05, h: 0.47 },
+        passes: ["player", "hook", "chain"],
+      },
+    ],
+  });
+  const floor: LevelBodyData = {
+    kind: "static",
+    x: 0,
+    y: 0.75,
+    rot: 0,
+    objects: [{ type: "collision", shape: { kind: "rect", w: 8, h: 0.5 } }],
+  };
+
+  const build = () => {
+    const world = new World();
+    const data = scaleLevelData({ player: { x: 0, y: 0, radius: 0.08 }, bodies: [floor, stool()] }, 1);
+    const built = buildLevelBodies(world, data, () => {});
+    const floorBody = built.bodies[0]!.body as PhysicsBody2D;
+    const stoolBody = built.bodies[1]!.body as RigidBody2D;
+    return {
+      world,
+      built,
+      floorBody,
+      stoolBody,
+      seat: stoolBody.getShapes()[0]!,
+      leg: stoolBody.getShapes()[1]!,
+    };
+  };
+
+  const rig = build();
+  const legMask = MASK_ALL & ~(LAYER_PLAYER | LAYER_HOOK | LAYER_ROPE);
+  // 1. The authored list, as the mask the engine reads - and the fold: the
+  // rope's own flag is the `LAYER_ROPE` bit of it and nothing else, so a piece
+  // the chain passes through and a piece that is not rope geometry are the same
+  // piece by construction.
+  const maskOk =
+    rig.seat.mask === MASK_ALL &&
+    rig.leg.mask === legMask &&
+    rig.seat.wrappable &&
+    !rig.leg.wrappable &&
+    // ...and the layer, which the pieces take from the body they are on: a
+    // stool is scenery in both of its halves.
+    rig.leg.layer === LAYER_SCENERY;
+
+  // 2. The character sweep, and 3. its depenetration pass: a walker driven
+  // sideways through the leg reports nothing and one standing inside it is not
+  // pushed out, while the same walk into the seat stops on it.
+  const walker = new CharacterBody2D();
+  walker.collisionLayer = LAYER_PLAYER;
+  walker.setShape(circleShape(0.06));
+  rig.world.add(walker);
+  const sweepThrough = (y: number): CollisionObject2D | null => {
+    walker.globalPosition = new Vec2(-1, y);
+    return rig.world.moveAndCollide(walker, new Vec2(2, 0), true)?.getCollider() ?? null;
+  };
+  const sweepOk = sweepThrough(0.25) === null;
+  const sweepControl = sweepThrough(0) === rig.stoolBody;
+  walker.globalPosition = new Vec2(0, 0.25);
+  const insideOk = rig.world.moveAndCollide(walker, new Vec2(0.01, 0), true) === null;
+  rig.world.remove(walker);
+
+  // 4. The contact gather, from both ends: no pair with the ball against the
+  // leg, a pair against the seat, and - the half that says the leg is still
+  // geometry - a pair between the leg and the FLOOR.
+  const ball = new BallPlayer(0.08);
+  ball.globalPosition = new Vec2(0, 0.25);
+  rig.world.add(ball);
+  const contacts = rig.world.collectContacts();
+  const pairOn = (shape: CollisionShape2D, other: PhysicsBody2D): boolean =>
+    contacts.some(
+      (c) =>
+        (c.a === rig.stoolBody && c.b === other && c.a.getShapes()[c.shapeA] === shape) ||
+        (c.b === rig.stoolBody && c.a === other && c.b.getShapes()[c.shapeB] === shape),
+    );
+  const contactOk = !pairOn(rig.leg, ball) && pairOn(rig.leg, rig.floorBody);
+  rig.world.remove(ball);
+
+  // 5. The rigid depenetration sweep: a ball standing in the leg is not pushed
+  // out of it, and one standing in the seat is.
+  const pushedOutOf = (y: number): number => {
+    const w = build();
+    const b = new BallPlayer(0.08);
+    b.globalPosition = new Vec2(0, y);
+    w.world.add(b);
+    const before = b.globalPosition;
+    w.world.depenetrateRigid(b, 2);
+    return b.globalPosition.distanceTo(before);
+  };
+  const depenOk = pushedOutOf(0.25) === 0 && pushedOutOf(0) > 0;
+
+  // 6. The continuous sweep, which is the one path that can halt a body against
+  // geometry no discrete pass admits exists. The ball is thrown across the leg
+  // fast enough to cross it inside one step, so a filter missing here is a ball
+  // stopped dead in mid-air. Only STATICS are swept against, so the stool is
+  // made one for this half - the mask is the same question either way.
+  const sweptPast = (y: number): boolean => {
+    const world = new World();
+    const data = scaleLevelData(
+      { player: { x: 0, y: 0, radius: 0.08 }, bodies: [floor, { ...stool(), kind: "static" }] },
+      1,
+    );
+    buildLevelBodies(world, data, () => {});
+    const b = new BallPlayer(0.08);
+    b.globalPosition = new Vec2(-0.6, y);
+    b.gravityScale = 0;
+    b.linearVelocity = new Vec2(60, 0);
+    world.add(b);
+    world.integrate(DT);
+    return b.globalPosition.x > 0.2;
+  };
+  const ccdOk = sweptPast(0.25) && !sweptPast(0);
+
+  // 7. The raycast, asked as each of the three things a level may exclude. The
+  // unlayered ray is the control: the leg is there, and it is only the ASKER
+  // that it is not there for.
+  const rayWorld = build();
+  const ray = (layer: number | undefined): PhysicsBody2D | null => {
+    const from = new Vec2(-1, 0.25);
+    const to = new Vec2(1, 0.25);
+    return (
+      rayWorld.world.intersectRay(from, to, {
+        collisionMask: MASK_ALL,
+        ...(layer !== undefined ? { collisionLayer: layer } : {}),
+      })?.collider ?? null
+    );
+  };
+  const rayOk =
+    ray(undefined) === rayWorld.stoolBody && ray(LAYER_PLAYER) === null && ray(LAYER_HOOK) === null;
+
+  // 8. Ledge detection: the leg's corners are not ledges. Its top corners are
+  // buried in the seat in any case, so the query is aimed at the BOTTOM pair,
+  // which are exposed and which the avatar would otherwise be able to hang off
+  // in mid-air. The seat's own corner is the control.
+  const grabAt = (y: number): boolean =>
+    LedgeDetection.findGrab([rayWorld.floorBody, rayWorld.stoolBody], {
+      path: [new Vec2(0.4, y), new Vec2(0.2, y)],
+      reach: 0.3,
+      wallNormalXSign: 1,
+    }) !== null;
+  const ledgeOk = !grabAt(0.47) && grabAt(0.03);
+
+  // 9. The ball's hook, which reaches a surface by neither of the paths above:
+  // a swept bar and a resting probe. Thrown level at the leg it flies past;
+  // thrown level at the seat it catches.
+  const thrownAt = (y: number): boolean => {
+    const w = build();
+    const hook = new BallHook();
+    hook.globalPosition = new Vec2(-0.6, y);
+    hook.linearVelocity = new Vec2(BallPlayer.HOOK_SPEED, 0);
+    let attached = false;
+    hook.registerAttachmentCallback(() => {
+      attached = true;
+    });
+    w.world.add(hook);
+    for (let f = 0; f < 30 && !attached; f++) {
+      hook.physicsStep(DT);
+      if (attached) break;
+      w.world.integrate(DT);
+      hook.physicsStep(DT);
+    }
+    return attached;
+  };
+  const hookOk = !thrownAt(0.25) && thrownAt(0);
+
+  // 10. The chain phase's own pair separation, which is the one positional
+  // recovery outside `World` and the one path the mask was first missing from
+  // (`session-369f`): the ball anchored to the SEAT has the stool on its chain
+  // path, and `separateBallFromPathBodies` picks its partners by body, so it
+  // was shoving the ball back out of the legs it had just been let through -
+  // 21 mm a frame, and a 15-frame chain stall while it fought the winch.
+  //
+  // End to end through `BallLevel`, because that is the only way to have a
+  // chain path at all: the ball starts inside the leg with the seat overhead,
+  // throws straight up, catches the seat, and must still be where it was.
+  const chainLevel = new BallLevel({
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      { kind: "static", x: 0, y: 100, rot: 0, objects: [{ type: "collision", shape: { kind: "rect", w: 800, h: 50 } }] },
+      {
+        kind: "rigid",
+        x: 0,
+        y: 0,
+        rot: 0,
+        objects: [
+          { type: "collision", y: -40, shape: { kind: "rect", w: 100, h: 10 } },
+          {
+            type: "collision",
+            y: 15,
+            shape: { kind: "rect", w: 10, h: 120 },
+            passes: ["player", "hook", "chain"],
+          },
+        ],
+      },
+    ],
+  } as RawLevelData);
+  let prevInput = emptyFrameInput();
+  const feedUp = (fire: boolean): void => {
+    const input: FrameInput = {
+      ...emptyFrameInput(),
+      fire: button(fire, prevInput.fire),
+      mouseWorldPosition: new Vec2(0, -4),
+    };
+    prevInput = input;
+    chainLevel.physicsProcess(input, DT);
+  };
+  feedUp(false);
+  const ballX = chainLevel.ball.globalPosition.x;
+  let worstX = 0;
+  for (let f = 0; f < 120; f++) {
+    feedUp(true);
+    worstX = Math.max(worstX, Math.abs(chainLevel.ball.globalPosition.x - ballX));
+  }
+  // The ball hangs from the seat with the leg through it, and has not been
+  // pushed sideways out of it. The bound is a centimetre and the measurement is
+  // sub-millimetre, because what a separated ball does is clear the leg's own
+  // half-width and then some: 704 mm with the filter removed, which is where
+  // the bound comes from rather than from the number this happens to produce.
+  const separationOk = chainLevel.ball.chainAnchored && worstX < 0.01;
+
+  // 11. ...and the point of all of it: the stool STANDS. The leg is the only
+  // piece that reaches the floor, so a mask that had switched the leg off
+  // rather than narrowed it would be a stool sinking through the ground.
+  const standWorld = build();
+  const startY = standWorld.stoolBody.globalPosition.y;
+  for (let f = 0; f < 120; f++) standWorld.world.integrate(DT);
+  const sank = standWorld.stoolBody.globalPosition.y - startY;
+  const standOk = Math.abs(sank) < 0.01;
+
+  const passed =
+    maskOk &&
+    sweepOk &&
+    sweepControl &&
+    insideOk &&
+    contactOk &&
+    depenOk &&
+    ccdOk &&
+    rayOk &&
+    ledgeOk &&
+    hookOk &&
+    separationOk &&
+    standOk;
+  return ok("collision-mask — a stool whose legs the player walks between and stands on", passed, [
+    `${maskOk ? "ok  " : "BAD "} the leg's mask drops player/hook/chain and nothing else; \`wrappable\` is its rope bit`,
+    `${sweepOk && sweepControl ? "ok  " : "BAD "} the character sweep walks through the leg and still stops on the seat`,
+    `${insideOk ? "ok  " : "BAD "} a character standing inside the leg is not pushed out`,
+    `${contactOk ? "ok  " : "BAD "} no ball-vs-leg contact pair, and the leg still has one against the floor`,
+    `${depenOk ? "ok  " : "BAD "} depenetration leaves the ball in the leg and pushes it out of the seat`,
+    `${ccdOk ? "ok  " : "BAD "} the continuous sweep flies the ball through the leg and stops it on the seat`,
+    `${rayOk ? "ok  " : "BAD "} an unlayered ray finds the leg; the avatar's and the hook's miss it`,
+    `${ledgeOk ? "ok  " : "BAD "} the leg's bottom corner is no ledge; the seat's corner still is`,
+    `${hookOk ? "ok  " : "BAD "} the ball's hook flies past the leg and catches on the seat`,
+    `${separationOk ? "ok  " : "BAD "} a ball anchored to the seat is not separated out of the leg (${(worstX * 1000).toFixed(2)} mm, anchored=${chainLevel.ball.chainAnchored})`,
+    `${standOk ? "ok  " : "BAD "} the stool stands on the leg it is not in the way with (${(sank * 1000).toFixed(1)} mm in 2 s)`,
+  ]);
+}
+
 // passable-body — hook-only geometry is a FLAG on the body, and the hook is the
 // only thing in the sim that may find it.
 //
@@ -5278,10 +5582,8 @@ function casePassableBody(): ContactResult {
   const rayTarget = rayWorld.built.bodies[0]!.body as PhysicsBody2D;
   const from = new Vec2(0, -1);
   const to = new Vec2(0, 3);
-  const playerRay = rayWorld.world.intersectRay(from, to, { collisionMask: LAYER_SOLID });
-  const hookRay = rayWorld.world.intersectRay(from, to, {
-    collisionMask: LAYER_SOLID | LAYER_ANCHOR,
-  });
+  const playerRay = rayWorld.world.intersectRay(from, to, { collisionMask: MASK_SOLID });
+  const hookRay = rayWorld.world.intersectRay(from, to, { collisionMask: MASK_ALL });
   const rayOk = playerRay === null && hookRay?.collider === rayTarget;
 
   // 6. ...and the point of all of it: both hooks still catch on it. The grapple
@@ -6708,6 +7010,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseWoundTight());
   results.push(caseConvergedAimHang());
   results.push(caseHookSeam());
+  results.push(caseCollisionMask());
   results.push(casePassableBody());
   results.push(caseDecorGroup());
   results.push(caseAreaReach());

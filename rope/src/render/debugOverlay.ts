@@ -5,7 +5,7 @@
 
 import { Vec2 } from "../engine/vec2";
 import { PX } from "../engine/units";
-import { PhysicsBody2D } from "../engine/body";
+import { LAYER_PLAYER, PhysicsBody2D } from "../engine/body";
 import { Player } from "../classes/player";
 import { GroundedState } from "../classes/states/groundedState";
 import { OnWallState } from "../classes/states/onWallState";
@@ -79,6 +79,10 @@ function drawLedgeOverlay(ctx: CanvasRenderingContext2D, level: Level): void {
     // piece it is made of, and the overlay has to show exactly the set
     // LedgeDetection walks.
     body.getShapes().forEach((t, si) => {
+      // ...and neither is a piece the avatar is not stopped by, for the same
+      // reason (`CollisionShape2D.mask`): the overlay has to show exactly the
+      // set `LedgeDetection.findGrab` walks, or it is drawing a different game.
+      if ((t.mask & LAYER_PLAYER) === 0) return;
       if (t.shape.kind === "circle") return;
 
       const vertexCount = ShapeGeometry.getLocalVertices(t.shape).length;

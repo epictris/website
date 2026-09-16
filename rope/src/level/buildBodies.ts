@@ -45,6 +45,7 @@ import {
   DEFAULT_BOUNCE,
   DEFAULT_LAUNCH,
   DEFAULT_SURFACE_FRICTION,
+  maskFromPasses,
   type CollisionObjectData,
   type LevelBodyData,
   type LevelData,
@@ -278,10 +279,10 @@ interface Piece {
   // may be attachable on one face and repel the hook on the next, which is why
   // the flag lives on the mounted `CollisionShape2D` rather than on a body kind.
   impermeable: boolean;
-  // Rope geometry or not (`CollisionObjectData.wrappable`), per piece for the
-  // same reason: a wheel's rim and its hub are one body and only one of them
-  // winds the chain.
-  wrappable: boolean;
+  // What this piece collides with (`CollisionObjectData.passes`), per piece for
+  // the same reason: a wheel's rim and its hub are one body and only one of
+  // them winds the chain, a stool's seat stops the avatar and its legs do not.
+  mask: number;
   // The RAIL this piece is part of (`CollisionObjectData.rail` on a curve), or
   // null. Per piece for the same reason again - a lantern's handles are rails
   // and its lid is not, and they are one body - and the record is SHARED by
@@ -365,7 +366,7 @@ function makePiece(
     pos: world.pos.add(made.offset.rotated(world.rot)),
     rot: world.rot,
     impermeable: o.impermeable === true,
-    wrappable: o.wrappable !== false,
+    mask: maskFromPasses(o.passes),
     // Filled in by `makePieces` for the pieces of a rail curve; a rail flag on
     // any other shape kind means nothing (see `CollisionObjectData.rail`).
     rail: null,
@@ -408,7 +409,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
     body.globalRotation = only.rot;
     const shape = body.setShape(only.shape);
     shape.impermeable = only.impermeable;
-    shape.wrappable = only.wrappable;
+    shape.mask = only.mask;
     shape.viscosity = only.viscosity;
     return;
   }
@@ -418,7 +419,7 @@ function mountPieces(body: CollisionObject2D, pieces: Piece[]): void {
   for (const p of pieces) {
     const shape = body.addShape(p.shape, p.pos.sub(centre), p.rot);
     shape.impermeable = p.impermeable;
-    shape.wrappable = p.wrappable;
+    shape.mask = p.mask;
     shape.viscosity = p.viscosity;
   }
 }

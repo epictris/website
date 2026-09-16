@@ -3,7 +3,7 @@
 import { Vec2 } from "../../engine/vec2";
 import { PX } from "../../engine/units";
 import { Mathf } from "../../engine/mathf";
-import type { PhysicsBody2D } from "../../engine/body";
+import { LAYER_PLAYER, MASK_SOLID, type PhysicsBody2D } from "../../engine/body";
 import { GRAB_REACH_MARGIN, LedgeDetection } from "../../lib/ledgeDetection";
 import { Surface } from "../../lib/surface";
 import { Slide } from "../../lib/slide";
@@ -233,7 +233,11 @@ export class OnWallState extends PlayerState {
         const raycast = world.intersectRay(
           player.globalPosition,
           player.globalPosition.sub(onWallState.surfaceNormal.mul(12 * PX)),
-          { collisionMask: 1, exclude: [player] },
+          // Everything in the way, asked as the avatar: `MASK_SOLID` is the
+          // set bit 1 alone used to stand for (the hook and the avatar now have
+          // categories of their own), and `LAYER_PLAYER` is what lets a piece
+          // he walks through decline to be a wall (`CollisionShape2D.mask`).
+          { collisionMask: MASK_SOLID, collisionLayer: LAYER_PLAYER, exclude: [player] },
         );
         if (!raycast) return new AirborneState();
       }

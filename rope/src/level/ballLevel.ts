@@ -7,6 +7,7 @@ import { Vec2 } from "../engine/vec2";
 import {
   AnimatableBody2D,
   RigidBody2D,
+  shapesCollide,
   VineLink,
   type CollisionObject2D,
   type PhysicsBody2D,
@@ -1863,6 +1864,15 @@ export class BallLevel {
           const centre = ballShape.globalPosition;
           const radius = ballShape.shape.radius;
           for (const shape of body.getShapes()) {
+            // Only the pieces the ball is actually stopped by. The partner is
+            // picked by BODY - whatever the chain's path touches - and a body
+            // is not one answer: the stool the chain is anchored to by its seat
+            // has legs the ball passes between, and separating it from those
+            // put back exactly the block the mask had taken out. Being pushed
+            // out of a piece IS being blocked by it, which is the rule the
+            // engine's own recovery passes are written to (`shapesCollide`),
+            // and this is the one recovery outside the engine.
+            if (!shapesCollide(ballShape, shape)) continue;
             const overlap = circleOverlap(centre, radius, shape);
             if (
               overlap &&

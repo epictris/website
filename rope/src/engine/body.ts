@@ -7,11 +7,78 @@ import { computeWorldVertices, isExposedCorner, shapeExtents, shapeVertices } fr
 import type { RailCurve, Shape, ShapeTransform } from "./shapes";
 import type { World } from "./world";
 
+// Collision CATEGORIES. Every piece of geometry belongs to one or more of them
+// (its `layer`) and collides with the ones it names (its `mask`); two pieces
+// meet only when each is in the other's mask (`shapesCollide`). Queries that
+// are not a shape at all - a raycast, the rope's wrap scan - carry the pair as
+// two numbers instead (`RayOptions`), so the same rule answers them.
+//
+// The categories are DISJOINT, and deliberately: the avatar is `LAYER_PLAYER`
+// and not also `LAYER_SCENERY`, because a mask is read one bit at a time and a
+// piece that says "not the player" would otherwise still meet the player on the
+// scenery bit they shared. What was `collisionMask: 1` therefore reads
+// `MASK_SOLID` below, which is the union of the three - the same set, named.
+//
+// Bit 1 is ordinary scene geometry; every level, every body and every recorded
+// replay is on it. Bit 2 is geometry only the hook may find (a `passable` body,
+// a vine link), which is why the avatar's queries miss it by construction.
+export const LAYER_SCENERY = 1;
+export const LAYER_ANCHOR = 2;
+// The avatar - `Player` on the grapple levels, `BallPlayer` on the ball ones.
+export const LAYER_PLAYER = 4;
+// The chain end: the grapple `Hook`, the ball's `BallHook` and its cuff.
+export const LAYER_HOOK = 8;
+// The rope/chain PATH. It has no body, so nothing is ever on this layer - it
+// exists as the asker's half of a mask test, which is what `wrappable` is (see
+// there): a piece that does not name it is one ropes pass straight through.
+export const LAYER_ROPE = 16;
+
+// Everything in the way: what `collisionMask: 1` meant before the avatar and
+// the hook had categories of their own, and the mask every query the avatar
+// makes still asks for.
+export const MASK_SOLID = LAYER_SCENERY | LAYER_PLAYER | LAYER_HOOK;
+// Every category there is - the default a piece is born with, so a level that
+// authors nothing collides with everything exactly as it always has.
+export const MASK_ALL = MASK_SOLID | LAYER_ANCHOR | LAYER_ROPE;
+
 // Live view of a body's collision shape (position/rotation track the body).
 // `localOffset` mounts the shape away from the body origin in the body's local
 // frame (rotates with the body); the default zero keeps single-shape bodies
 // centred, exactly as before.
 export class CollisionShape2D implements ShapeTransform {
+  // Which categories this PIECE collides with. The default is everything, so a
+  // shape that says nothing behaves exactly as every shape did before masks
+  // existed - which is what keeps the recorded corpus bit-identical.
+  //
+  // Per SHAPE, and it has to be: the case it exists for is one body whose
+  // pieces answer differently - a stool whose SEAT stops the avatar while its
+  // LEGS, set back in z to either side of the gameplay plane, are geometry the
+  // avatar walks between and the chain passes through, but which still stand on
+  // the floor. A body-level mask cannot say that, and moving the legs to a body
+  // of their own would make them a separate thing to place, weigh and knock
+  // over. It is the rule the rest of the engine already states: "`obj` identity
+  // answers 'does this move as one rigid piece with that', `shape` identity
+  // answers 'is this the same surface'", and which things a surface is in the
+  // way of is the second question.
+  mask = MASK_ALL;
+
+  // Which categories this piece BELONGS to, or null to answer with its body's
+  // (`CollisionObject2D.collisionLayer`). Null is every piece of every level:
+  // membership is what a thing IS, and a body's pieces are all the same thing -
+  // it is `passable` that moves a whole body onto `LAYER_ANCHOR`, and it does so
+  // without knowing what pieces the body has or when they were mounted. The
+  // override is here for the few code-built bodies that carry a piece of another
+  // category, and so that the layer and the mask are read off the same object.
+  private ownLayer: number | null = null;
+
+  get layer(): number {
+    return this.ownLayer ?? this.owner.collisionLayer;
+  }
+
+  set layer(value: number) {
+    this.ownLayer = value;
+  }
+
   // May the rope catch on this shape? True for scene geometry — a compound
   // body's pieces are all real corners the rope wraps. False is for a shape
   // that exists as a *contact* proxy rather than as rope geometry: the ball &
@@ -23,7 +90,19 @@ export class CollisionShape2D implements ShapeTransform {
   // can legitimately be both at once — which is exactly the ball's case, and
   // a level's too: `CollisionObjectData.wrappable` authors it per piece, for
   // the wheel whose rim is turned and whose hub winds the chain.
-  wrappable = true;
+  //
+  // It is the `LAYER_ROPE` bit of the mask and nothing else, so the two cannot
+  // drift apart: "solid, but not rope geometry" and "collides with everything
+  // except the rope" are the same sentence, and a piece that has opted out of
+  // the avatar and the hook has almost always opted out of the chain too (the
+  // legs above). The name stays because every rope path is written in it.
+  get wrappable(): boolean {
+    return (this.mask & LAYER_ROPE) !== 0;
+  }
+
+  set wrappable(value: boolean) {
+    this.mask = value ? this.mask | LAYER_ROPE : this.mask & ~LAYER_ROPE;
+  }
 
   // Is this surface hook-proof? A hook that reaches it is destroyed (the grapple
   // hook) or deflected (the ball's), instead of anchoring. It blocks motion
@@ -231,12 +310,21 @@ export class CollisionShape2D implements ShapeTransform {
 
 let nextId = 1;
 
-// Collision layers. Bit 1 is solid scene geometry — everything the project has
-// ever had, so every existing `collisionMask: 1` query keeps its meaning. Bit 2
-// is geometry only the hook may find - a `passable` body, a vine link - which
-// those queries therefore miss by construction; only the hook asks for both.
-export const LAYER_SOLID = 1;
-export const LAYER_ANCHOR = 2;
+// Do these two pieces collide? The Box2D rule: each must be in the other's
+// mask, so either side alone can decline the pair and neither can force it.
+//
+// Every narrowphase in the engine goes through this one function - the contact
+// gather, the depenetration passes, the character sweep and the continuous
+// sweep - rather than each testing the bits its own way, because the class of
+// bug the shape-versus-body rule exists to stop is precisely a filter applied
+// to one path and forgotten on the next: a leg the avatar walks between and is
+// then depenetrated out of is a leg that has not been excluded from anything.
+//
+// The default pair (`LAYER_SCENERY`, `MASK_ALL`) is true on both halves, so a
+// world that authors no mask is one this function never says no in.
+export function shapesCollide(a: CollisionShape2D, b: CollisionShape2D): boolean {
+  return (a.layer & b.mask) !== 0 && (b.layer & a.mask) !== 0;
+}
 
 // Monotonic count of transform writes across ALL bodies in the process - the
 // per-body `transformVersion`s summed, effectively. One integer comparison
@@ -315,8 +403,12 @@ export abstract class CollisionObject2D {
     transformEpoch++;
     if (!this.broadphaseDirty) this.world?.markBroadphaseDirty(this);
   }
-  // Bitmask of layers this body occupies (default layer 1, matching the project).
-  collisionLayer = LAYER_SOLID;
+  // Which categories this body's pieces belong to, unless a piece says
+  // otherwise (`CollisionShape2D.layer`). Membership is what a thing IS, and a
+  // body is one thing: the avatar is the avatar in all of its pieces. Its
+  // MASK is not here for the opposite reason - which things a surface is in the
+  // way of is a question about that surface.
+  collisionLayer = LAYER_SCENERY;
   // The hook's mirror image of `CollisionShape2D.impermeable`: the hook reaches
   // this body and anchors to it, and everything else passes straight through.
   // The avatar walks and swings through it, loose debris falls through it, the
@@ -334,17 +426,17 @@ export abstract class CollisionObject2D {
   // with every kind instead, exactly as `impermeable` and `pivot` do.
   //
   // Setting it moves the body onto `LAYER_ANCHOR`, which is what makes every
-  // mask-1 query (the player's raycasts, ledge detection) miss it while the
-  // hook, which asks for both layers, still finds it. The two always agree
-  // because one writes the other; a caller that set the layer by hand and the
-  // flag not at all is what the pairing removes.
+  // `MASK_SOLID` query (the player's raycasts, ledge detection) miss it while
+  // the hook, which asks for every category, still finds it. The two always
+  // agree because one writes the other; a caller that set the layer by hand and
+  // the flag not at all is what the pairing removes.
   get passable(): boolean {
     return this.isPassable;
   }
 
   set passable(value: boolean) {
     this.isPassable = value;
-    this.collisionLayer = value ? LAYER_ANCHOR : LAYER_SOLID;
+    this.collisionLayer = value ? LAYER_ANCHOR : LAYER_SCENERY;
   }
 
   private isPassable = false;

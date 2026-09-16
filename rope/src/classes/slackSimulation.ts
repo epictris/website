@@ -242,6 +242,12 @@ export class SlackSimulation {
         // convex shapes, and pushing a slack node out of only the first left the
         // drawn rope lying through the rest of it.
         for (const bodyShape of body.getShapes()) {
+          // ...but only the pieces a rope is in the way of. The drawn slack is
+          // the same rope the wrap solver holds, so it has to drape over the
+          // same geometry: pushed out of a piece the taut path runs straight
+          // through, it lies along a surface the rope is not on (see
+          // `CollisionShape2D.wrappable`, which is this bit of the mask).
+          if (!bodyShape.wrappable) continue;
           if (
             Intersections.intersectsPoint(bodyShape, slackNode.position) !==
             IntersectionStatus.Overlap

@@ -30,6 +30,8 @@ import { Vec2 } from "../engine/vec2";
 import { wrapAngle } from "../engine/mathf";
 import {
   CharacterBody2D,
+  MASK_ALL,
+  MASK_SOLID,
   RigidBody2D,
   StaticBody2D,
   VineLink,
@@ -325,10 +327,10 @@ function caseLinkContacts(): VineResult {
   const target = new VineLink();
   target.setShape(circleShape(0.09));
   lone.add(target);
-  const hookRay = lone.intersectRay(new Vec2(-1, 0), new Vec2(1, 0), { collisionMask: 1 | 2 });
-  const solidRay = lone.intersectRay(new Vec2(-1, 0), new Vec2(1, 0), { collisionMask: 1 });
-  check(`a hook ray (mask 1|2) reaches a link`, hookRay?.collider === target);
-  check(`a mask-1 ray - every other query in the game - does not`, solidRay === null);
+  const hookRay = lone.intersectRay(new Vec2(-1, 0), new Vec2(1, 0), { collisionMask: MASK_ALL });
+  const solidRay = lone.intersectRay(new Vec2(-1, 0), new Vec2(1, 0), { collisionMask: MASK_SOLID });
+  check(`a hook ray (every category) reaches a link`, hookRay?.collider === target);
+  check(`a MASK_SOLID ray - every other query in the game - does not`, solidRay === null);
 
   return ok("link-contacts — a vine link blocks nothing and is blocked by nothing", passed, details);
 }

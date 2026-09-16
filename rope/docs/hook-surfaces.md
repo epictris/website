@@ -27,13 +27,14 @@ Both hooks, because they reach a surface by different means - a raycast that des
 
 ### Chain-through pieces
 
-**`wrappable`** is the other per-shape rope flag, and the mirror of hook-proof: `CollisionObjectData.wrappable: false` (absent = true) sets `CollisionShape2D.wrappable` off, which the engine already had for the ball's mounting loop - **solid, but not rope geometry**.
+**`wrappable`** is the other per-shape rope flag, and the mirror of hook-proof: it is the `LAYER_ROPE` bit of the piece's collision mask (`CollisionObjectData.passes: ["chain"]`, and the retired `wrappable: false` that `normalizeLevelData` folds into it), which the engine already had for the ball's mounting loop - **solid, but not rope geometry**.
+It is one bit of the general mechanism rather than a flag of its own because "chains pass straight through this piece" is the same sentence the avatar and the hook get their own bits for - see [collision-layers](collision-layers.md), where the stool the rule was generalised for lives.
 Every rope path honours it in one place each: `wrappableSurfaces` drops the piece from the scan, the self-intersection resolvers decline it, `syncCoil` will not wind onto it, and a chain end authored on it is re-tied to the nearest piece of the body the rope *can* hold (`tieablePieces`).
 The avatar stands on it, bodies collide with it and the hook still bites it.
 
 The case it exists for is the **treadwheel crane**: a wheel whose rim the player rolls and whose hub winds the chain, which must be one body so they turn together, with a chain that leaves the hub straight through the rim.
 A rope that starts inside a piece has no consistent wrap of it in any case - the straight span leaves the rim without bending, so there is nothing for the scan to hold - which is why the flag is per shape and not something the solver could infer.
-The editor authors it as a `chain-through` checkbox beside `hook-proof` and draws the piece with the dotted edge a hook-only body wears; `chainable` refuses it as a chain host, and `anchorHost` prefers a wrappable sibling, so a chain dropped on the wheel lands on its hub.
+The editor authors it as the `chain` box of the **collides with** row beside `hook-proof` - unticked, since the row is stated positively - and draws the piece with the dotted edge a hook-only body wears; `chainable` refuses it as a chain host, and `anchorHost` prefers a wrappable sibling, so a chain dropped on the wheel lands on its hub.
 
 ## Hook-only bodies
 
@@ -52,7 +53,7 @@ Four mechanisms keep it out of the sim, none of them a per-call-site special cas
 - It goes **further** than `isSolid` in the one place a vine deliberately does not: a vine link is blocked by statics, which is how a vine drapes over a ledge, while a `passable` body is blocked by nothing at all.
   `gatherDepenetration` answers with no overlaps for one and `collectContacts` drops its pairs against statics too, which is what stops the scenery a leaf hangs in front of shoving the leaf out of itself.
 - Setting it moves the body onto its own collision layer (`LAYER_ANCHOR`), which the setter does rather than the caller, so the two cannot disagree.
-  Every existing raycast asks for `LAYER_SOLID`, so they all miss it; the grapple `Hook` is the one query that asks for both, which is exactly what makes it attachable.
+  Every other raycast asks for `MASK_SOLID` - scenery, the avatar and the hook, everything in the way (see [collision-layers](collision-layers.md)) - so they all miss it; the grapple `Hook` is the one query that asks for `MASK_ALL`, which is exactly what makes it attachable.
   `BallHook`'s swept and probe contacts test no `isSolid` at all, for the same reason.
 - `buildLevelBodies` adds it to the world but keeps it **out of the returned wrap list** (the list is exactly the solid bodies), so a passing span has nothing to catch on, and `Rope` itself refuses to wrap a body whose `isSolid` is false (the `isPassThrough` gate in `regeneratePath` *and* in both self-intersection resolvers).
   The second half is not redundant: the wrap list is only the *scan* list, whereas the self-intersection resolvers wrap whatever a rope node is **already attached to**, list or no list.
