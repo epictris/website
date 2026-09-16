@@ -1008,19 +1008,37 @@ export class BallLevel {
       // scene chain or leaning on anything else still gives the ball its
       // winch, exactly as before - that support is what a wind-up onto a
       // crate on a ledge is pulling against.
+      //
+      // And with it when the ball is BRACED and the free holder is riding it
+      // (or it the holder): a winch drum bolted to the ground by its brace
+      // does not move toward the load it is hauling over itself. The solve
+      // splits the winding by inverse mass, so the ball takes a third of it
+      // toward the holder's anchor and the holder two thirds toward the
+      // ball's rim; the pair push-out then splits their overlap along the
+      // CONTACT normal, and where the chain and the contact are not
+      // collinear - a stool sitting on the ball, hooked at a corner - the
+      // difference leaks out as motion every frame: 3.4 mm right and 6.8 mm
+      // up on the ball, 1.2 and 2.8 back, net a hop of 4 mm a frame that
+      // outran gravity, unloaded the floor, and let a 52 kg ball creep 7 cm
+      // to the right under the stool going over it with friction reading
+      // nothing to hold (`session-179f` f134-170, felt as the ball being
+      // pushed back). The holder keeps its share and climbs; the ball's own
+      // share is re-broken length the unwind hands back; the ground supplies
+      // what the drum needed, which it always could.
       const holder = this.ball.chain.end.contact.obj;
-      if (
-        spinShare > 0 &&
-        !braced &&
+      const holderUnsupported =
         holder instanceof RigidBody2D &&
-        rolledBack.has(holder) &&
-        freeHolder(holder) &&
         !chainHeld(holder) &&
         !this.world.frameContacts.some(
           (c) =>
             c.normalImpulse > 0 &&
             ((c.a === holder && c.b !== this.ball) || (c.b === holder && c.a !== this.ball)),
-        )
+        );
+      if (
+        spinShare > 0 &&
+        holder instanceof RigidBody2D &&
+        freeHolder(holder) &&
+        ((!braced && rolledBack.has(holder) && holderUnsupported) || (braced && ridingPath))
       ) {
         this.ball.globalPosition = this.ball.globalPosition.sub(
           this.ball.globalPosition.sub(ballAtSolve).mul(spinShare),
@@ -1428,11 +1446,20 @@ export class BallLevel {
         // runs after the contacts, so the frame that refuses a turn has
         // already sold it; the next frame does not. Floored the way the latch
         // is: an ask under `STALL_EPSILON` of chain is a converged aim's
-        // residual, not a refusal (`session-379f`), and buys its drive whole.
-        this.ball.spinDriveShare =
-          asked * spool >= BallLevel.STALL_EPSILON
-            ? Math.max(0, 1 - refunded / asked)
-            : 1;
+        // residual, not a refusal (`session-379f`) - and it is no information
+        // either way, so the share HOLDS across it rather than resetting. The
+        // share is a fact about the jam, not about the ask: reset to 1 on
+        // every quiet frame, a proportional aim that toggles between nothing
+        // and a 24 rad/s snap had every snap's first frame funded whole, and
+        // each bought the ball rim speed on the floor before the refund came
+        // - 2.8 m/s in one frame from a standing start, with the stool going
+        // over the top lifting the floor load off it so nothing braked the
+        // coast (`session-141f` f77, f82). Held, a snap into a standing jam
+        // buys what the jam last allowed, and the first frame the chain does
+        // let a turn stand re-earns the drive whole.
+        if (asked * spool >= BallLevel.STALL_EPSILON) {
+          this.ball.spinDriveShare = Math.max(0, 1 - refunded / asked);
+        }
         if (braced) this.ball.windStall = 0;
         if (
           asked * spool >= BallLevel.STALL_EPSILON &&
