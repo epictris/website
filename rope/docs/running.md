@@ -39,6 +39,7 @@ deliberately historical, and `cli bundles` therefore does not repeat it per row.
 level plays in 3D by default and the grapple levels stay 2D, and `?render=2d` is
 the escape hatch anywhere. `?probe3d=1` draws the alignment probe.
 `?retract=1` turns on the released chain reeling back in ([chain-retract](chain-retract.md)); off, a let-go chain vanishes as it always did. `cli shot --retract` is the same switch for a filmstrip.
+`?paint=0` turns off the painted light ([lighting-and-surfaces](lighting-and-surfaces.md#painted-light)) for the session, which is how a change to it is judged: the same frame painted and not. `cli shot --query paint=0` is the same switch headless.
 
 Pick a level with `?level=NAME` (see `src/level/registry.ts`); `TEST_MOVERS` /
 `TEST_WINDMILL` are hand-written mover test levels (sliding platform, windmill),

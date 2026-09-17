@@ -16,6 +16,7 @@
     "assets:optimize-texture": "bun run scripts/optimize-texture.ts",
     "assets:optimize-hdri": "bun run scripts/optimize-hdri.ts",
     "assets:publish": "bun run scripts/publish-asset.ts",
+    "assets:paint": "bun run scripts/paint-textures.ts",
     "assets:fetch": "bun run scripts/fetch-assets.ts",
     "assets:credits": "bun run scripts/credits.ts"
   },

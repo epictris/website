@@ -36,6 +36,7 @@ import { WaterArea } from "../engine/body";
 import type { GeometryObjectData, LevelBodyData } from "../level/levelFormat";
 import { RAW_ASSETS, trackPending } from "./assets";
 import { withDownload } from "./download";
+import { paintMaterial } from "./paint";
 
 // ---------------------------------------------------------------------------
 // The flipbook
@@ -1081,6 +1082,10 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
   // Different flows compile different uniforms but share the program cache key
   // unless told apart.
   mat.customProgramCacheKey = () => "water";
+  // The painted light over the water's own painting (paint.ts composes with
+  // the hook and the key above): the same terminator and the same soft sheen
+  // as the rock beside it, which is what keeps the two one picture.
+  paintMaterial(mat);
   return mat;
 }
 

@@ -1011,6 +1011,11 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       // `--retract` turns on the released chain's reel-in, as `?retract=1`
       // does in the game (see docs/chain-retract.md).
       (o.retract ? "&retract=1" : "") +
+      // `--query a=1&b=2` passes any other URL parameters through to the page
+      // as typed, for the switches the game reads that have no flag of their
+      // own - `paint=0` is the one this was added for (see render3d/paint.ts):
+      // the same frame painted and not is how the painted light is judged.
+      (o.query ? `&${o.query}` : "") +
       // `--probe` (with `--3d`) skips the precompile and logs, per drawn frame,
       // the programs and textures three has built and the meshes whose program
       // was compiled on THAT frame - the mid-play compile a stutter is made of.
@@ -2116,7 +2121,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--query k=v] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":

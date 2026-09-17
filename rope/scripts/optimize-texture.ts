@@ -59,6 +59,50 @@
 //                              on a wall seen at this camera distance are bytes
 //                              nobody sees.
 //
+//   --paint <px>               PAINT the map: the photographic detail is
+//                              flattened into brush-sized patches so the surface
+//                              reads as a digital painting rather than a photo
+//                              (see "Painted surfaces" in docs/asset-store.md).
+//                              <px> is the brush, in OUTPUT pixels: the window
+//                              of a mean shift (see `paintArgs`) that collapses
+//                              every region of near-one-colour into exactly one
+//                              colour, a PLATEAU, with the edge between two
+//                              plateaus left exactly where it was. On the
+//                              albedo that is flat planes of tone with crisp
+//                              breaks and no grain; on the normal map it is
+//                              FACETS - regions of one normal with a sharp turn
+//                              between them - which is most of the look, since
+//                              in a lit scene the facets are what a painter's
+//                              flat planes of tone are; on roughness, metallic
+//                              and AO it is a facet matte or glossy as one
+//                              plane. 30 is the brush in use on rock and
+//                              ground, 20 on the avatar's iron, 40 on a fibrous
+//                              source (marble) that 30 leaves as dots.
+//                              The bake happens AFTER the resize, at the output
+//                              size, so the brush is a size on screen and not a
+//                              fraction of whatever the source's resolution was.
+//   --cavity <file> [--cavity-channel r|g|b]
+//                              base only, with --paint: multiply the albedo by
+//                              the CRACKS of this ambient-occlusion source - its
+//                              deepest tenth pushed to black, the rest to white
+//                              - so a rock face carries its fissures as the
+//                              crisp dark lines a painter draws them as. The
+//                              channel is the AO's, as for a scalar map.
+//   --saturate <pct>           base only, with --paint: saturation, 100 = as
+//                              shot. A photo texture is duller than a painting
+//                              of the same thing; 125-140 is the usual range.
+//   --tint <hex>@<pct>         base only, with --paint: pull the whole map
+//                              <pct> of the way toward a colour, which is how a
+//                              ground whose dirt reads orange once saturated is
+//                              brought back to olive without touching its moss.
+//
+//                              All four are recorded on the map's manifest entry
+//                              (`TextureMap.paint`) beside its sha256, for the
+//                              reason a prop's `--simplify` is: a painted map and
+//                              a map painted by hand are the same file, and
+//                              without the record the raw cannot be optimised
+//                              into the same asset again.
+//
 // ImageMagick rather than a Node image library, because it is what this repo
 // already asks for when it converts an SVG snapshot to a PNG (see the debugging
 // loop in docs/debugging-physics.md), it is on any machine that authors assets, and adding a
@@ -73,7 +117,11 @@ const MAP_SLOTS = ["base", "normal", "roughness", "metallic", "ao", "emissive"] 
 type MapSlot = (typeof MAP_SLOTS)[number];
 
 const args = process.argv.slice(2);
-const positional = args.filter((a) => !a.startsWith("--"));
+// Flags that take a value, so the value is not mistaken for a path.
+const VALUED = ["map", "size", "channel", "paint", "cavity", "cavity-channel", "saturate", "tint"];
+const positional = args.filter(
+  (a, i) => !a.startsWith("--") && !(i > 0 && VALUED.includes(args[i - 1]!.slice(2))),
+);
 const flag = (name: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
   return i === -1 ? undefined : args[i + 1];
@@ -82,12 +130,36 @@ const flag = (name: string): string | undefined => {
 const [input, output] = positional;
 const slot = (flag("map") ?? "base") as MapSlot;
 const size = Number(flag("size") ?? 1024);
+const brush = flag("paint") === undefined ? undefined : Number(flag("paint"));
+const cavity = flag("cavity");
+const cavityChannel = (flag("cavity-channel") ?? "r").toUpperCase();
+const saturate = flag("saturate") === undefined ? undefined : Number(flag("saturate"));
+const tint = flag("tint");
+const tintMatch = tint === undefined ? null : /^(#[0-9a-fA-F]{6})@(\d+(?:\.\d+)?)$/.exec(tint);
 
-if (!input || !output || !MAP_SLOTS.includes(slot) || !Number.isFinite(size)) {
+const usage = (): never => {
   console.error(
     `usage: bun run assets:optimize-texture <input> <public/textures/out.webp> ` +
-      `[--map ${MAP_SLOTS.join("|")}] [--size 1024]`,
+      `[--map ${MAP_SLOTS.join("|")}] [--size 1024] [--channel r|g|b]\n` +
+      `       [--paint <px> [--cavity <ao-file> [--cavity-channel r|g|b]] [--saturate <pct>] [--tint <#hex>@<pct>]]`,
   );
+  process.exit(2);
+};
+if (!input || !output || !MAP_SLOTS.includes(slot) || !Number.isFinite(size)) usage();
+if (brush !== undefined && !(Number.isFinite(brush) && brush >= 1)) usage();
+if (saturate !== undefined && !Number.isFinite(saturate)) usage();
+if (tint !== undefined && !tintMatch) usage();
+if (!["R", "G", "B"].includes(cavityChannel)) usage();
+// The albedo treatments mean nothing on a data map, and a brush is what they are
+// treatments OF: asking for them without one, or on the wrong map, is a typo
+// rather than a request.
+const albedoOnly = cavity !== undefined || saturate !== undefined || tint !== undefined;
+if (albedoOnly && (brush === undefined || slot !== "base")) {
+  console.error("--cavity, --saturate and --tint apply to `--map base` with `--paint` only");
+  process.exit(2);
+}
+if (cavity !== undefined && !existsSync(cavity)) {
+  console.error(`no such file: ${cavity}`);
   process.exit(2);
 }
 if (!existsSync(input)) {
@@ -132,6 +204,80 @@ if (scalar && !["R", "G", "B"].includes(channel)) {
 const lossySource = /\.jpe?g$/i.test(input);
 const lossless =
   !args.includes("--lossy") && !colour && (args.includes("--lossless") || !lossySource);
+
+// The paint stage, as ImageMagick operators applied at the output size.
+//
+// The flattening is a MEAN SHIFT (`-mean-shift WxH+tol%`): every pixel walks
+// to the mean of the pixels within its window whose colour is within the
+// tolerance of its own, and keeps walking until it stops moving - so a region
+// of near-one-colour collapses to exactly one colour, a PLATEAU, and the edge
+// between two plateaus stays exactly where it was. On an albedo that is flat
+// planes of tone with crisp breaks; on a normal map it is FACETS - regions of
+// one normal turning sharply into the next - which under the sun are the flat
+// planes of tone a painter lays down, and are most of the look.
+//
+// It is not a Kuwahara, which is what this was first. A Kuwahara's patches are
+// its own window - soft dabs the size of the radius wherever the picture is,
+// regardless of the picture's structure - and run cheaply (over the map shrunk
+// and grown back) its every edge is blurred too. That read as blotchy and flat
+// in the game: the facets in the reference art are large and sharp-edged, and a
+// dab is neither. The mean shift finds the picture's own regions, at whatever
+// size they are, and draws their edges sharp.
+//
+// It runs at HALF the output size: its cost is the window area times the
+// pixels times the iterations, and at full size a brush this big is minutes
+// per map. The half-size result is grown back with a Catmull-Rom resize, which
+// is sharp across a plateau edge (two pixels) where the default filter would
+// soften it back into the blur the Kuwahara had. `%[sz]` carries the pre-shrink
+// geometry through so the grow-back lands on exactly the pixels the shrink
+// left, whatever the source's size was (it may be under `--size`).
+function paintArgs(px: number): string[] {
+  const win = Math.max(3, Math.round(px / 2));
+  const smooth = (tolerance: number): string[] => [
+    "-set", "option:sz", "%wx%h",
+    "-resize", "50%",
+    "-mean-shift", `${win}x${win}+${tolerance}%`,
+    "-filter", "Catrom", "-resize", "%[sz]!",
+  ];
+  switch (slot) {
+    case "base":
+    case "emissive": {
+      // The tones pushed apart a little after flattening, so two facets that
+      // were a shade apart in the photograph are a stroke apart in the paint.
+      const out = [...smooth(10), "-sigmoidal-contrast", "2x50%"];
+      if (saturate !== undefined) out.push("-modulate", `100,${saturate}`);
+      if (tintMatch) out.push("-fill", tintMatch[1]!, "-colorize", `${tintMatch[2]}%`);
+      if (cavity !== undefined) {
+        // The AO's darkest tenth or so is the bottom of a crack; everything
+        // above the knee is open face and must stay white, or the multiply
+        // darkens the whole rock rather than drawing lines on it. The lines are
+        // then smoothed at a small brush so they are painted strokes, not
+        // photographed pores.
+        out.push(
+          "(", resolve(cavity),
+          "-set", "colorspace", "sRGB", "-alpha", "off",
+          "-channel", cavityChannel, "-separate", "+channel",
+          "-resize", "%[sz]!",
+          "-level", "20%,70%", "-gamma", "0.6",
+          "-resize", "50%", "-kuwahara", "2", "-resize", "%[sz]!",
+          ")",
+          "-compose", "multiply", "-composite",
+        );
+      }
+      return out;
+    }
+    case "normal":
+      return smooth(10);
+    case "ao":
+    case "roughness":
+    case "metallic":
+      // Plateaus of sheen too, so a facet is matte or glossy as one plane
+      // rather than a blur of both - the wash this was first is what made every
+      // surface look wet.
+      return smooth(10);
+  }
+}
+
 const r = spawnSync(
   "magick",
   [
@@ -144,6 +290,7 @@ const r = spawnSync(
     // `>` shrinks only: a 512 map authored small is not upscaled into bytes
     // that carry no more detail than it had.
     `${size}x${size}>`,
+    ...(brush === undefined ? [] : paintArgs(brush)),
     ...(lossless ? ["-define", "webp:lossless=true"] : ["-quality", colour ? "90" : "95"]),
     "-strip",
     resolve(output),
@@ -159,5 +306,15 @@ console.log(
   `[assets] ${slot}: ${kb(before)} -> ${kb(after)} (${((after / before) * 100).toFixed(0)}%)` +
     `  ${lossless ? "lossless" : `q${colour ? 90 : 95}`}${scalar ? `  ${channel}->grey` : ""}  ${output}`,
 );
+if (brush !== undefined) {
+  // The record the manifest entry wants, in the shape `TextureMap.paint` takes.
+  const record = [
+    `brush: ${brush}`,
+    ...(cavity !== undefined ? ["cavity: true"] : []),
+    ...(saturate !== undefined ? [`saturate: ${saturate}`] : []),
+    ...(tintMatch ? [`tint: "${tint}"`] : []),
+  ];
+  console.log(`[assets] painted; record it on the map's entry:  paint: { ${record.join(", ")} },`);
+}
 console.log(`[assets] next: \`bun run assets:publish ${output}\` uploads it and prints its`);
 console.log(`[assets] TEXTURE_ASSETS map entry, sha256 included.`);

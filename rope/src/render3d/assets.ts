@@ -36,6 +36,7 @@
 
 import * as THREE from "three";
 import { withDownload } from "./download";
+import { paintMaterial, paintTree } from "./paint";
 import { MATERIAL_NAMES, type MaterialName } from "../lib/shapeGeometry";
 
 // How a surface looks. `tile` is the size of one texture repeat in METRES, which
@@ -140,6 +141,24 @@ export interface TextureMap {
   // `cli assets`, exactly as `sha256` is - it is the same kind of fact, and one
   // nobody should be typing by hand.
   bytes: number;
+  // WHERE THIS MAP CAME FROM: the source image under `assets-src/`, and for a
+  // scalar map (roughness, metallic, AO) which of its channels carries the
+  // number (default red - Poly Haven's packed ARM is AO in R, roughness in G,
+  // metallic in B). With these two and `paint` below, `bun run assets:paint`
+  // rebuilds the shipped file from the raw with nothing typed by hand, and
+  // that is the whole reason they are here: a map that cannot be re-baked is
+  // a map whose recipe is lost the day it needs changing. Absent on the older
+  // sets, which predate the record; `assets:paint` names them as such.
+  raw?: string;
+  channel?: "r" | "g" | "b";
+  // How the map was PAINTED on its way through `assets:optimize-texture`: the
+  // brush in output pixels, and for an albedo whether its cracks were baked in
+  // from the set's own AO map, its saturation and its tint (see "Painted
+  // surfaces" in docs/asset-store.md). Recorded for the reason a prop's
+  // `simplify` is: a painted map and one painted by hand are the same file, so
+  // without this the raw cannot be optimised into the same asset again.
+  // Absent = as shot.
+  paint?: { brush: number; cavity?: true; saturate?: number; tint?: string };
 }
 
 // A surface made of AUTHORED images rather than generated noise. The five maps
@@ -296,13 +315,17 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/rock-wall-base.webp",
-        sha256: "dc7e2bb63a22f71aa629b7c46cff57818e902c6a88e7abc6f28ba7bab31c4875",
-        bytes: 280814,
+        raw: "rock-wall/textures/rock_wall_08_diff_2k.jpg",
+        sha256: "158d2213a7616a6a1876aac186fc4315efe93f9a89b6c540743d822d38a42dc2",
+        bytes: 59346,
+        paint: { brush: 30, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/rock-wall-normal.webp",
-        sha256: "7641c194d6b94261bd36e1fab4b782fbbf896bd5d7428e41e51543c65f09aa7f",
-        bytes: 626036,
+        raw: "rock-wall/textures/rock_wall_08_nor_gl_2k.jpg",
+        sha256: "d0e75a14680162136410ddf5d6e4929c1148c74918ed31f82fab71d9803f9be4",
+        bytes: 270318,
+        paint: { brush: 30 },
       },
       // Poly Haven ships roughness, metallic and AO packed into one ARM image -
       // R ambient occlusion, G roughness, B metallic - so the two maps this set
@@ -311,13 +334,19 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // zero and is stated below rather than shipped as a black image.
       roughness: {
         file: "/textures/rock-wall-roughness.webp",
-        sha256: "0874e41efdaa9ba52803358fa7370bd0732a687339a4202297a50872dda022ae",
-        bytes: 142454,
+        raw: "rock-wall/textures/rock_wall_08_arm_2k.jpg",
+        channel: "g",
+        sha256: "d0765a68e5bcdd869622eb578b8e52a159212e1c54c86816d346fdc3061db4f3",
+        bytes: 18710,
+        paint: { brush: 30 },
       },
       ao: {
         file: "/textures/rock-wall-ao.webp",
-        sha256: "d24e98a7701f3aa60e269f22528f568c3f6f1ed02f635ad73a8cd7da067cc148",
-        bytes: 280940,
+        raw: "rock-wall/textures/rock_wall_08_arm_2k.jpg",
+        channel: "r",
+        sha256: "9be116de9094e9fb775a9759a46545781c8589957b092b74a9e124222714b093",
+        bytes: 109832,
+        paint: { brush: 30 },
       },
     },
     // Poly Haven's own captured size, 1800 mm square
@@ -326,6 +355,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     tile: 1.8,
     metalness: 0,
     fallback: "stone",
+    normalScale: 1.6, // as `dark rock`: the painted facets pushed apart in tone
     source: "https://polyhaven.com/a/rock_wall_08",
     author: "Amal Kumar",
     license: "CC0",
@@ -344,13 +374,17 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/dark-rock-base.webp",
-        sha256: "17c8e322a4ad77197dbed067cac872ea4096ffbe1bd04bf26ff03d530b115abe",
-        bytes: 130738,
+        raw: "dark-rock/textures/dark_rock_02_diff_2k.jpg",
+        sha256: "929b8b70d470e2d6196153b1fe49dd351415b2e4a4df35697a2c15c47fdb0cd6",
+        bytes: 21124,
+        paint: { brush: 30, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/dark-rock-normal.webp",
-        sha256: "27625b2f60e4647cc540c47b766dfe56db6fb2802a6fa47aee22ba29ab3a2bee",
-        bytes: 498022,
+        raw: "dark-rock/textures/dark_rock_02_nor_gl_2k.jpg",
+        sha256: "6414c29693ce99fdb907154f0206bff19d09203aaf2fbc38c810aec1e247e117",
+        bytes: 149292,
+        paint: { brush: 30 },
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
       // B metallic - so these two are the same download read on two channels,
@@ -359,13 +393,19 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // as a black image.
       roughness: {
         file: "/textures/dark-rock-roughness.webp",
-        sha256: "136c1614ba24f4282374516b027ff341929e7c2079445f86963351b3f228623a",
-        bytes: 194424,
+        raw: "dark-rock/textures/dark_rock_02_arm_2k.jpg",
+        channel: "g",
+        sha256: "8953f1e49363398f3dc23970f3615023d30bada625dd5d8684f96963860c835b",
+        bytes: 17246,
+        paint: { brush: 30 },
       },
       ao: {
         file: "/textures/dark-rock-ao.webp",
-        sha256: "1757cd680741e9aa39c2495ef3858447bc81fb0ab500b4b6d9c927309a996baf",
-        bytes: 249702,
+        raw: "dark-rock/textures/dark_rock_02_arm_2k.jpg",
+        channel: "r",
+        sha256: "629afa2c9141d266fe4203c7bd4f093729740d2f691cab60de989ae2b39e18d2",
+        bytes: 90332,
+        paint: { brush: 30 },
       },
     },
     // Poly Haven's own captured size, 2000.9 mm square
@@ -374,6 +414,11 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     tile: 2,
     metalness: 0,
     fallback: "stone",
+    // The painted facets (see `TextureMap.paint`) are plateaus of the scan's
+    // own normals, which on a plate this flat tilt only a few degrees from
+    // each other: pushed further apart so two facets are a stroke apart in
+    // tone under the sun, the way the reference art draws them.
+    normalScale: 1.6,
     source: "https://polyhaven.com/a/dark_rock_02",
     author: "Amal Kumar",
     license: "CC0",
@@ -394,13 +439,17 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/marble-cliff-base.webp",
-        sha256: "91aa212e6a19c22808f9b47fa71c861515f7f4727e1f25630f3a1c353f789d8c",
-        bytes: 398972,
+        raw: "marble-cliff/textures/marble_cliff_05_diff_2k.jpg",
+        sha256: "3f7c41a26da93d11aff5e95c3d221c1d6f45aa9d331125058298db8de5902126",
+        bytes: 101048,
+        paint: { brush: 40, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/marble-cliff-normal.webp",
-        sha256: "134407287f0c84b0b4354b9216c2c8cfe0f668b8166462bba460572eb3528489",
-        bytes: 454628,
+        raw: "marble-cliff/textures/marble_cliff_05_nor_gl_2k.jpg",
+        sha256: "bef68645851d4b33161adfa97277c3b011134636bdc812bfee83c930603d5fad",
+        bytes: 153074,
+        paint: { brush: 30 },
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
       // B metallic - so these two are the same download read on two channels,
@@ -409,13 +458,19 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // as a black image.
       roughness: {
         file: "/textures/marble-cliff-roughness.webp",
-        sha256: "b9914949526d43247728e8e0dd0092964a4b724a92c7b8efeefa60c2a24c1e44",
-        bytes: 234502,
+        raw: "marble-cliff/textures/marble_cliff_05_arm_2k.jpg",
+        channel: "g",
+        sha256: "5334824d2c7b3cae1efe4727a0f1dc7a801a282882fb98c7468a862da97da0e8",
+        bytes: 20132,
+        paint: { brush: 30 },
       },
       ao: {
         file: "/textures/marble-cliff-ao.webp",
-        sha256: "2ec77e9f92fa93125d81b0aee3eb0f13ae940c63c53bff40d0ac38abe68a6667",
-        bytes: 144110,
+        raw: "marble-cliff/textures/marble_cliff_05_arm_2k.jpg",
+        channel: "r",
+        sha256: "ca3302e580b4bc5b99c5149cebfad3ab17cf8262ed29ef07823beaa29d05132b",
+        bytes: 40058,
+        paint: { brush: 30 },
       },
     },
     // 2.5 m, and this is the ONE set where that is not the captured size: Poly
@@ -439,6 +494,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     tile: 2.5,
     metalness: 0,
     fallback: "stone",
+    normalScale: 1.6, // as `dark rock`: the painted facets pushed apart in tone
     source: "https://polyhaven.com/a/marble_cliff_05",
     author: "Amal Kumar",
     license: "CC0",
@@ -765,8 +821,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/mossy-ground-base.webp",
-        sha256: "af3d4fba2b97e607a37b6911a54d9d9facfdcfc2ef1df7e551fcbddce76beae6",
-        bytes: 335850,
+        raw: "mossy-ground/Ground047_2K-PNG_Color.png",
+        sha256: "8e07bc6feec70af71b4f90511106206af88d8a5b35db60fdda151289b95aa094",
+        bytes: 31764,
+        paint: { brush: 30, saturate: 140, tint: "#5a6a28@12" },
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
       // ambientCG ships. It arrives as a 16-bit PNG and stays lossless at 2.3 MB
@@ -775,8 +833,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // carries detail the albedo's two flat tones do not.
       normal: {
         file: "/textures/mossy-ground-normal.webp",
-        sha256: "69ca639aac80766a059fd11d7defefc6dc920f8e448208c6367465b9adfe106d",
-        bytes: 2409710,
+        raw: "mossy-ground/Ground047_2K-PNG_NormalGL.png",
+        sha256: "e09c25bcb153fffb23ebe40adcc83773a780cbf47a60efdb06e274c778e46252",
+        bytes: 922212,
+        paint: { brush: 30 },
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. No
@@ -784,13 +844,17 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // rather than shipped as an image.
       roughness: {
         file: "/textures/mossy-ground-roughness.webp",
-        sha256: "71982d6cbcae79d2c9845ec7863ddb59bd3e729026958ea8264918dcf38ec332",
-        bytes: 663162,
+        raw: "mossy-ground/Ground047_2K-PNG_Roughness.png",
+        sha256: "12b204999ec767fac479cb29962e7d0dfb2f69c1f7e571822f492f996b739a0f",
+        bytes: 277488,
+        paint: { brush: 30 },
       },
       ao: {
         file: "/textures/mossy-ground-ao.webp",
-        sha256: "3811325d773f83cf4e2af46a0fcd2967fe7b321913ccbe17e5be5429f7b32444",
-        bytes: 882340,
+        raw: "mossy-ground/Ground047_2K-PNG_AmbientOcclusion.png",
+        sha256: "489b42db2ba0030da786ba7081e636a9b7925e294717171d2647351c225d44a8",
+        bytes: 550918,
+        paint: { brush: 30 },
       },
     },
     // 3 m, and unlike the other ambientCG sets here that is the CAPTURED size
@@ -909,8 +973,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/moss-dark-base.webp",
-        sha256: "94851a08c9ae3cb2b10166f121db6bc699dcad92117f7f0b275604602af10828",
-        bytes: 484414,
+        raw: "moss-003/Moss003_2K-PNG_Color.png",
+        sha256: "052ca8d3354c9670b6110a4064bda73954ffae1a988b45ee3617284483264c15",
+        bytes: 145882,
+        paint: { brush: 30, saturate: 130 },
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
       // two ambientCG ships. Relief in the middle of the organic band - B mean
@@ -927,8 +993,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // nothing on.
       normal: {
         file: "/textures/moss-dark-normal.webp",
-        sha256: "018eee3510803aa77966baffeb77859377acac62241740e1a044e57ade3675f8",
-        bytes: 2683936,
+        raw: "moss-003/Moss003_2K-PNG_NormalGL.png",
+        sha256: "8fb8ec6228739c1459d7802a88b70a2f5c8a058a863389166640bcccfc6f981c",
+        bytes: 1119674,
+        paint: { brush: 30 },
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
       // are, flattened to grey by `assets:optimize-texture --channel r`. Means
@@ -938,8 +1006,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // the 0 below is a dielectric's, stated rather than shipped as an image.
       roughness: {
         file: "/textures/moss-dark-roughness.webp",
-        sha256: "108fa166bdb1a7d71708a9414267074bd549857d1568a3788fe70e23e042c5c9",
-        bytes: 761386,
+        raw: "moss-003/Moss003_2K-PNG_Roughness.png",
+        sha256: "1c0b91cd1da8ac856cd5a4ca890b203a91606b11da59c0628c801f7db21c2bb7",
+        bytes: 276808,
+        paint: { brush: 30 },
       },
       // Shipped rather than left to the generated surface. Mean .529 - darker
       // than every set here but `moss`'s .474, and for the same reason a step
@@ -948,8 +1018,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // sheet, which on a surface this low in albedo is the whole look gone.
       ao: {
         file: "/textures/moss-dark-ao.webp",
-        sha256: "282d538ed81c82438f13a12bd3ca41f465615bf00d20bdaac22cf0930236a47b",
-        bytes: 954344,
+        raw: "moss-003/Moss003_2K-PNG_AmbientOcclusion.png",
+        sha256: "a5aa2694e2d27e9390916bc8a6dfd2243c8cd9dd772140ec380628f3a4ef417a",
+        bytes: 565034,
+        paint: { brush: 30 },
       },
     },
     // ambientCG states no captured size (`dimensionX: 0`,
@@ -1330,8 +1402,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     maps: {
       base: {
         file: "/textures/rusted-iron-base.webp",
-        sha256: "3a2a9b67cea9f1111d1ac400f37857f60da0da6bb359e5eb519e5b202ca42606",
-        bytes: 195456,
+        raw: "rusted-iron/Metal053B_2K-JPG_Color.jpg",
+        sha256: "c857690f20dac9efcd1f22242614de73f1a8be351063857eef9af68c5d2f3e34",
+        bytes: 118722,
+        paint: { brush: 20, saturate: 140 },
       },
       // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
       // this renderer wants. It is nearly flat (channel means .50/.50/1.00,
@@ -1340,8 +1414,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // also why it costs 23 KB.
       normal: {
         file: "/textures/rusted-iron-normal.webp",
-        sha256: "5a8dd07b7b5dbd56860a4288ef05ebe10269a6e3b3f045eb85ae2da6379b1622",
-        bytes: 23312,
+        raw: "rusted-iron/Metal053B_2K-JPG_NormalGL.jpg",
+        sha256: "1d3efeca10c730ca369cdb3b527dd3331b2ebfb175cbe2e30a2735ddc482234d",
+        bytes: 2158,
+        paint: { brush: 20 },
       },
       // The pair that carries the whole look: bare metal is smooth and fully
       // metallic, rust is rough and not metal at all, and having both maps is
@@ -1350,13 +1426,17 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       // `assets:optimize-texture`.
       roughness: {
         file: "/textures/rusted-iron-roughness.webp",
-        sha256: "ecd27be47a577056258dac3d8618e6741d9f2a82b6aa1324ed984da2560f0e05",
-        bytes: 285942,
+        raw: "rusted-iron/Metal053B_2K-JPG_Roughness.jpg",
+        sha256: "c21230c8d5a65a3ce0ec23397d621b5a4dee5e9e52f670304957a643d9155048",
+        bytes: 152488,
+        paint: { brush: 20 },
       },
       metallic: {
         file: "/textures/rusted-iron-metallic.webp",
-        sha256: "c8ea41878743e6e285cffe02ffdba4ea16bd6f22209bf4a3ee14494bd213ede4",
-        bytes: 179180,
+        raw: "rusted-iron/Metal053B_2K-JPG_Metalness.jpg",
+        sha256: "170662adf13d756a0daf756e33b62b0381df82957961eb4addb1c014e5a401b2",
+        bytes: 147420,
+        paint: { brush: 20 },
       },
       // No AO map in the set, and nothing to derive one from: an almost flat
       // surface occludes almost nothing.
@@ -1449,6 +1529,111 @@ export function noiseField(cells: number, octaves = 4): Float32Array {
   return out;
 }
 
+// A PAINTED height field: patches rather than grain. The surface is tiled into
+// `cells` x `cells` irregular patches (a jittered lattice, nearest-point cells,
+// wrapped so the map tiles), and each patch is one tone with a gentle gradient
+// across it - the flat planes of tone a painter lays down, which under the sun
+// are facets, each turned a little from its neighbours. A little low-frequency
+// drift crosses the patches so the tiling does not read as a grid of chips.
+//
+// `seam` is returned beside the height, 1 on a boundary and 0 inside a patch, so
+// the albedo can darken its seams the way a painting DRAWS the line between two
+// facets. The SLOPE the normal map is built from is returned as well, and it is
+// NOT the height's finite difference: the height steps at every seam (two
+// patches, two levels), and a step differenced is a spike - a bevel under the
+// normal map, lit on one side and dark on the other, which makes a surface of
+// patches read as paving rather than paint (the first version did this and the
+// wood came out as chocolate tiles). The slope is each patch's own tilt, one
+// direction per patch, plus the drift's gentle gradient: facets that meet at an
+// angle with no rim, which is what a painter's flat planes of tone are under a
+// light.
+//
+// This replaced the fractal value noise `noiseField` alone gave the generated
+// surfaces on 2026-09-17, when every surface went painterly (see "Painted
+// surfaces" in docs/asset-store.md): noise at four octaves IS grain, and grain
+// is exactly what the authored sets are baked to remove.
+const SEAM_WIDTH = 0.07; // in cells; how far a seam's darkening reaches
+const PATCH_TILT = 0.15; // the tone gradient across a patch, per cell
+const PATCH_SLOPE = 0.05; // a patch's tilt as a slope, before the set's relief
+export interface PaintField {
+  height: Float32Array;
+  seam: Float32Array;
+  slopeX: Float32Array;
+  slopeY: Float32Array;
+}
+export function paintField(cells: number): PaintField {
+  const n = Math.max(2, Math.round(cells));
+  const px = new Float32Array(n * n);
+  const py = new Float32Array(n * n);
+  const level = new Float32Array(n * n);
+  const gx = new Float32Array(n * n);
+  const gy = new Float32Array(n * n);
+  // The same deterministic lattice rule as `noiseField`, for the same reason.
+  let seed = 0x7f4a7c15 ^ (n * 2654435761);
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0xffffffff;
+  };
+  for (let i = 0; i < n * n; i++) {
+    px[i] = rand();
+    py[i] = rand();
+    level[i] = rand();
+    const a = rand() * Math.PI * 2;
+    gx[i] = Math.cos(a);
+    gy[i] = Math.sin(a);
+  }
+  const drift = noiseField(Math.max(2, Math.round(n / 2)), 2);
+  const driftAt = (x: number, y: number) =>
+    drift[((y + MAP_SIZE) % MAP_SIZE) * MAP_SIZE + ((x + MAP_SIZE) % MAP_SIZE)]!;
+  const height = new Float32Array(MAP_SIZE * MAP_SIZE);
+  const seam = new Float32Array(MAP_SIZE * MAP_SIZE);
+  const slopeX = new Float32Array(MAP_SIZE * MAP_SIZE);
+  const slopeY = new Float32Array(MAP_SIZE * MAP_SIZE);
+  for (let y = 0; y < MAP_SIZE; y++) {
+    const fy = (y / MAP_SIZE) * n;
+    const cy = Math.floor(fy);
+    for (let x = 0; x < MAP_SIZE; x++) {
+      const fx = (x / MAP_SIZE) * n;
+      const cx = Math.floor(fx);
+      let f1 = Infinity;
+      let f2 = Infinity;
+      let id = 0;
+      let dx = 0;
+      let dy = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const wx = (((cx + ox) % n) + n) % n;
+          const wy = (((cy + oy) % n) + n) % n;
+          const j = wy * n + wx;
+          const ex = cx + ox + px[j]! - fx;
+          const ey = cy + oy + py[j]! - fy;
+          const d = Math.hypot(ex, ey);
+          if (d < f1) {
+            f2 = f1;
+            f1 = d;
+            id = j;
+            dx = ex;
+            dy = ey;
+          } else if (d < f2) {
+            f2 = d;
+          }
+        }
+      }
+      const i = y * MAP_SIZE + x;
+      const t = Math.min(1, (f2 - f1) / SEAM_WIDTH);
+      const inside = t * t * (3 - 2 * t);
+      seam[i] = 1 - inside;
+      // The patch's own level, a gradient across it and the drift: clamped to
+      // the unit range the albedo mixes over.
+      const tone = level[id]! * 0.25 + (dx * gx[id]! + dy * gy[id]!) * PATCH_TILT + drift[i]! * 0.5;
+      height[i] = Math.max(0, Math.min(1, tone));
+      slopeX[i] = gx[id]! * PATCH_SLOPE + (driftAt(x + 1, y) - driftAt(x - 1, y)) * 0.5;
+      slopeY[i] = gy[id]! * PATCH_SLOPE + (driftAt(x, y + 1) - driftAt(x, y - 1)) * 0.5;
+    }
+  }
+  return { height, seam, slopeX, slopeY };
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -1470,44 +1655,47 @@ export function canvasTexture(write: (data: Uint8ClampedArray) => void): THREE.T
 }
 
 // Albedo, normal and roughness from one height field, which is what makes the
-// three agree: a dark patch of grain is also a dip and also a rougher spot,
-// exactly as it is on the real material.
+// three agree: a dark patch is also a dip and also a rougher spot, exactly as it
+// is on the real material. The field is `paintField`'s: patches with a crease
+// between them, so the albedo is flat tones with drawn seams and the normal is
+// facets - the same look the authored sets are baked to.
+const SEAM_DARKEN = 0.12; // how dark the albedo goes on a seam, 0..1
 function buildMaps(set: TextureSet): {
   map: THREE.Texture;
   normalMap: THREE.Texture;
   roughnessMap: THREE.Texture;
 } {
-  const h = noiseField(set.cells);
+  const { height: h, seam, slopeX, slopeY } = paintField(set.cells);
   const [br, bg, bb] = hexToRgb(set.base);
   const [gr, gg, gb] = hexToRgb(set.grain);
   const map = canvasTexture((d) => {
     for (let i = 0; i < h.length; i++) {
       const t = h[i]!;
-      d[i * 4] = br * (1 - t) + gr * t;
-      d[i * 4 + 1] = bg * (1 - t) + gg * t;
-      d[i * 4 + 2] = bb * (1 - t) + gb * t;
+      // A seam is a line drawn over the patch, not a shift toward the grain.
+      const k = 1 - SEAM_DARKEN * seam[i]!;
+      d[i * 4] = (br * (1 - t) + gr * t) * k;
+      d[i * 4 + 1] = (bg * (1 - t) + gg * t) * k;
+      d[i * 4 + 2] = (bb * (1 - t) + gb * t) * k;
       d[i * 4 + 3] = 255;
     }
   });
   map.colorSpace = THREE.SRGBColorSpace;
 
   const normalMap = canvasTexture((d) => {
-    const at = (x: number, y: number) =>
-      h[((y + MAP_SIZE) % MAP_SIZE) * MAP_SIZE + ((x + MAP_SIZE) % MAP_SIZE)]!;
+    // The field's own slope (a patch's tilt, not the height differenced - see
+    // `paintField`), scaled by how pronounced this surface's relief is.
     const strength = set.relief * 4;
-    for (let y = 0; y < MAP_SIZE; y++) {
-      for (let x = 0; x < MAP_SIZE; x++) {
-        const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
-        const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
-        // The gradient as a tangent-space normal, renormalised so a flat area is
-        // exactly (0,0,1) rather than merely near it.
-        const len = Math.hypot(-dx, -dy, 1);
-        const i = (y * MAP_SIZE + x) * 4;
-        d[i] = ((-dx / len) * 0.5 + 0.5) * 255;
-        d[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
-        d[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
-        d[i + 3] = 255;
-      }
+    for (let p = 0; p < h.length; p++) {
+      const dx = slopeX[p]! * strength;
+      const dy = slopeY[p]! * strength;
+      // The slope as a tangent-space normal, renormalised so a flat area is
+      // exactly (0,0,1) rather than merely near it.
+      const len = Math.hypot(-dx, -dy, 1);
+      const i = p * 4;
+      d[i] = ((-dx / len) * 0.5 + 0.5) * 255;
+      d[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
+      d[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
+      d[i + 3] = 255;
     }
   });
 
@@ -1917,7 +2105,9 @@ function buildSurface(
   // A flat fill: no maps at all. The colour itself is applied by `surfaceFor`
   // like every other tint, so this is only the absence of a pattern.
   if (name === SOLID_SURFACE) {
-    return new THREE.MeshStandardMaterial({ roughness: SOLID_ROUGHNESS, metalness: 0 });
+    const flat = new THREE.MeshStandardMaterial({ roughness: SOLID_ROUGHNESS, metalness: 0 });
+    paintMaterial(flat);
+    return flat;
   }
   const set = TEXTURE_SETS[name as MaterialName];
   let maps = mapsCache.get(name);
@@ -1931,7 +2121,7 @@ function buildSurface(
     roughnessMap: maps.roughnessMap.clone(),
   };
   for (const t of [maps.map, maps.normalMap, maps.roughnessMap]) applyTiling(t, tile, ox, oy);
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     map: maps.map,
     normalMap: maps.normalMap,
     roughnessMap: maps.roughnessMap,
@@ -1939,6 +2129,10 @@ function buildSurface(
     metalness: set.metalness,
     normalScale: new THREE.Vector2(1, 1),
   });
+  // The painted light (paint.ts) is worn here, at the one place a surface is
+  // built, so an authored set dressed into this material later wears it too.
+  paintMaterial(mat);
+  return mat;
 }
 
 // ---------------------------------------------------------------------------
@@ -2809,6 +3003,9 @@ function loadFile(file: string, bytes: number): Promise<THREE.Object3D | null> {
         mesh.receiveShadow = true;
         wakeEmission(mesh.material);
       });
+      // A prop arrives with its own materials, and they wear the painted light
+      // like every surface built here (paint.ts).
+      paintTree(gltf.scene);
       return gltf.scene as THREE.Object3D;
     })
     .catch((err: unknown) => {

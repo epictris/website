@@ -25,6 +25,7 @@ import * as THREE from "three";
 import { Vec2 } from "../engine/vec2";
 import { VINE_VISUAL_RADIUS, type VineCord } from "../level/vines";
 import { VINE_COLOR } from "../render/vines";
+import { paintMaterial } from "./paint";
 import { threeY } from "./space";
 
 // White: the instance colour MULTIPLIES the shared material, so the default has
@@ -69,6 +70,7 @@ export class VineLayer {
       roughness: 0.85,
       metalness: 0,
     });
+    paintMaterial(this.material);
     this.mesh = this.makeMesh(this.capacity);
     scene.add(this.mesh);
   }
