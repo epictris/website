@@ -28,6 +28,17 @@
 //    sun that hits the wall nearly face-on that put every facet at the same
 //    tone, and the painted facets that step one made were flattened away.
 //
+//    The ENVIRONMENT a surface reflects is taken at its roughest: a soft tone
+//    from the sky, never a picture of it. A reflection sits where the view
+//    and the normal put it, so on the rolling ball the sky's bright region
+//    was an oval that never moved. (Banding it by brightness was tried first
+//    and only gave the oval a crisp edge.)
+//
+//    THE SUN MAKES NO HIGHLIGHT. It is a light at infinity and the camera rides
+//    the avatar, so its glint sat at the same spot on the ball however the
+//    ball rolled - a sticker rather than a shine. The sun lights diffusely
+//    only; the lamps, which the ball moves past, keep their highlights.
+//
 // 2. NOTHING IS GLOSSY. A painting has no pinpoint highlights; a sheen is a
 //    broad soft light on the lit side. Roughness is given a floor, which
 //    widens every highlight into a wash and blurs the environment a metal
@@ -58,13 +69,24 @@ export const PAINT_WRAP = 0.15;
 // The width of the terminator itself, in cosine units: the wrap fades out
 // over this much of the turn so a normal facing away from a lamp gets none.
 export const PAINT_TERMINATOR = 0.08;
-// How many bands the wrapped cosine is cut into, shadow to full light.
-export const PAINT_BANDS = 4;
+// How many bands the wrapped cosine is cut into, shadow to full light. Three
+// is a painter's sphere - a lit side, a mid tone and a shadow side; four cut
+// the ball into stripes.
+export const PAINT_BANDS = 3;
 // The soft edge between two bands, as a fraction of a band: 0 is a cel cut,
 // 0.5 turns the bands back into a straight line.
-export const PAINT_BAND_SOFTNESS = 0.2;
-// The roughness floor: 0.0525 is three's own (a mirror), 1 is chalk.
-export const PAINT_ROUGHNESS_FLOOR = 0.5;
+export const PAINT_BAND_SOFTNESS = 0.25;
+// The roughness floor for the lamps' highlights: 0.0525 is three's own (a
+// mirror), 1 is chalk.
+export const PAINT_ROUGHNESS_FLOOR = 0.42;
+// The roughness the ENVIRONMENT is reflected at, at least: a medium value
+// keeps the sky-to-ground horizon as a soft division on a metal and loses
+// the detail of the sky.
+export const PAINT_REFLECTION_ROUGHNESS = 0.45;
+// The ceiling on the reflection's luminance, in linear radiance: the sky's
+// mean is well under 1, its sun is thousands. The knee is soft, so a bright
+// sky reaches most of this and the sun no more.
+export const PAINT_REFLECTION_CEILING = 3.0;
 
 const PARAM = "paint";
 
@@ -84,6 +106,8 @@ const f = (x: number) => x.toFixed(4);
 // edges; `paintLambert` wraps a cosine first.
 const BANDS_GLSL = `
 #define PAINT_ROUGHNESS_FLOOR ${f(PAINT_ROUGHNESS_FLOOR)}
+#define PAINT_REFLECTION_ROUGHNESS ${f(PAINT_REFLECTION_ROUGHNESS)}
+#define PAINT_REFLECTION_CEILING ${f(PAINT_REFLECTION_CEILING)}
 float paintBands( float x ) {
   float b = clamp( x, 0.0, 1.0 ) * ${f(PAINT_BANDS)};
   float i = floor( b );
@@ -118,16 +142,68 @@ const PAINTED_LIGHTS =
     "float hemiDiffuseWeight = 0.5 * dotNL + 0.5;",
     "float hemiDiffuseWeight = paintBands( 0.5 * dotNL + 0.5 );",
   );
-const PAINTED_PHYSICAL = patched(
-  "lights_physical_pars_fragment",
-  "float dotNL = saturate( dot( geometryNormal, directLight.direction ) );",
-  "float dotNL = paintLambert( dot( geometryNormal, directLight.direction ) );",
-);
+const PAINTED_PHYSICAL =
+  patched(
+    "lights_physical_pars_fragment",
+    "float dotNL = saturate( dot( geometryNormal, directLight.direction ) );",
+    "float dotNL = paintLambert( dot( geometryNormal, directLight.direction ) );",
+  ) +
+  // The SUN's contribution: diffuse only. A directional light is at infinity
+  // and the camera rides the avatar, so the sun's highlight sits at the same
+  // spot on the ball however it rolls - a sticker, not a shine. The lamps keep
+  // their highlights, which move as the ball moves past them.
+  `
+void RE_Direct_Matte( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
+  float dotNL = paintLambert( dot( geometryNormal, directLight.direction ) );
+  reflectedLight.directDiffuse += dotNL * directLight.color * BRDF_Lambert( material.diffuseContribution );
+}
+`;
+
+// The directional-light loop of three's light gathering, calling the matte
+// form above instead of RE_Direct. Only that loop: the point and spot loops
+// keep their highlights. The block is located by its own guard so the
+// replacement cannot land in another loop's identical call.
+const PAINTED_GATHER = (() => {
+  const src = THREE.ShaderChunk.lights_fragment_begin;
+  const start = src.indexOf("#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )");
+  const end = src.indexOf("#pragma unroll_loop_end", start);
+  if (start < 0 || end < 0) throw new Error("paint: three's lights_fragment_begin no longer has the directional loop");
+  const call = "RE_Direct( directLight,";
+  const block = src.slice(start, end);
+  if (!block.includes(call)) throw new Error("paint: three's directional loop no longer calls RE_Direct");
+  return src.slice(0, start) + block.replace(call, "RE_Direct_Matte( directLight,") + src.slice(end);
+})();
 const PAINTED_MATERIAL = patched(
   "lights_physical_fragment",
   "material.roughness = max( roughnessFactor, 0.0525 );",
   "material.roughness = max( roughnessFactor, PAINT_ROUGHNESS_FLOOR );",
 );
+// The environment a surface REFLECTS: soft, and with its peak clipped. A
+// painted metal is still a reflection - a bright sky half, a dark band at the
+// horizon, a little ground bounce below - and without one the ball is a grey
+// rubber sphere. What it must not have is the SUN in that reflection: an oval
+// far brighter than anything else, sitting where the view puts it and so
+// never moving as the ball rolls - a sticker. (Banding the reflection by
+// brightness only gave the oval a crisp edge; reflecting at the roughest mip
+// removed the horizon with it.) So the reflection is sampled no sharper than
+// a medium roughness, which keeps the horizon as a soft division, and its
+// luminance is soft-clipped at a few times the mean of the sky, which is what
+// removes the sun and nothing else.
+const PAINTED_REFLECTION = patched(
+  "lights_fragment_maps",
+  "radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );",
+  `radiance += paintRadiance( getIBLRadiance( geometryViewDir, geometryNormal, max( material.roughness, PAINT_REFLECTION_ROUGHNESS ) ) );`,
+);
+const RADIANCE_GLSL = `
+vec3 paintRadiance( vec3 c ) {
+  float l = luminance( c );
+  if ( l <= 0.0 ) return c;
+  // A soft knee: unchanged well below the ceiling, never above it.
+  float k = PAINT_REFLECTION_CEILING;
+  float lc = k * l / ( k + l );
+  return c * ( lc / l );
+}
+`;
 
 // Wear the painted light. Idempotent, and a no-op for a material with no
 // lighting to paint (a basic or a depth material) and for the session that
@@ -153,9 +229,11 @@ export function paintMaterial(material: THREE.Material): void {
   material.onBeforeCompile = (shader, renderer) => {
     previous.call(material, shader, renderer);
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <lights_pars_begin>", PAINTED_LIGHTS)
+      .replace("#include <lights_pars_begin>", PAINTED_LIGHTS + RADIANCE_GLSL)
       .replace("#include <lights_physical_pars_fragment>", PAINTED_PHYSICAL)
-      .replace("#include <lights_physical_fragment>", PAINTED_MATERIAL);
+      .replace("#include <lights_physical_fragment>", PAINTED_MATERIAL)
+      .replace("#include <lights_fragment_begin>", PAINTED_GATHER)
+      .replace("#include <lights_fragment_maps>", PAINTED_REFLECTION);
   };
 }
 

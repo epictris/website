@@ -24,11 +24,12 @@ import { orientTo, placeAt, threeY } from "./space";
 const LOOP_TUBE = BallPlayer.LOOP_RADIUS * 0.42;
 
 // What the whole assembly - ball, loop, every chain link, the manacle - is made
-// of: one authored, photographed set of pitted and rust-bloomed iron
-// (`TEXTURE_ASSETS`, keyed "rusted iron"), rather than the generated `cast iron`
-// and `steel` noise it wore before. The generated pair stay its fallback, so the
-// avatar looks like itself from the first frame and the maps swap in when they
-// land.
+// of: one set of OIL STROKES on steel (`TEXTURE_ASSETS`, keyed "painted steel",
+// baked by `scripts/bake-strokes.ts`), since 2026-09-17 when the game became a
+// painting. Before that it was a photographed set of rust-bloomed iron, and
+// before that generated `cast iron` and `steel` noise, which stays its
+// fallback, so the avatar looks like itself from the first frame and the maps
+// swap in when they land.
 //
 // One surface for all of it because it IS one forged assembly: the ball and the
 // chain hanging off it reading as the same metal is most of what makes them look
@@ -39,28 +40,26 @@ const LOOP_TUBE = BallPlayer.LOOP_RADIUS * 0.42;
 // module (it would drag the avatar, the sim and three into a build step).
 export const FORGED = IRON_SURFACE;
 
-// How large that surface is worn on the assembly's SMALL parts. The set's own
-// tile is one repeat over the ball (see its manifest entry), which along the
-// sphere's equator is one repeat per ~0.75 m of surface; a 4 cm link at that
-// same tile would wear the entire 1 m capture - every rust bloom in it - inside
-// one link, so a chain would read as a run of differently-coloured beads. This
-// is the multiple that puts the small parts at roughly the ball's own grain
-// instead, which is what makes them look forged from the same bar.
+// How large that surface is worn on the assembly's SMALL parts. The set's tile
+// (see its manifest entry) sizes a stroke to an eighth of the ball; a 4 cm link
+// at the same tile would wear a fraction of one stroke and every link would be
+// a different flat tone, a run of beads. This multiple puts the small parts at
+// roughly the ball's own grain instead, which is what makes them look forged
+// from the same bar. The ball itself wears the set at its own tile.
 export const FORGED_SMALL = 5;
 
-// How dark. The scan is of a light, near-polished plate (albedo mean 0.71), and
-// a ball & chain is a dark object - the generated `cast iron` this replaced was
-// #4a4a4e. Multiplied into the albedo this lands the assembly at about that
-// value while keeping every bit of the map's variation, rust included, which is
-// what a darker capture would have given and a darker capture of this surface
-// does not exist.
+// How dark, and how warm. The strokes are baked at the steel's own value (a
+// mid grey, a little cool, as the reference paints it), and this pulls the
+// assembly a shade darker and toward the warm: nearly white read pale and
+// cool in the game, and a warm grey is the reference's steel under a warm
+// room.
 //
-// It is NOT the authored-fill tint the surfaces rule keeps off photographed sets
+// It is NOT the authored-fill tint the surfaces rule keeps off authored sets
 // (see `TEXTURE_ASSETS`): that one is a level's flat colour leaking onto a
-// photograph. This is the avatar's own material saying what shade of iron it is,
+// picture. This is the avatar's own material saying what shade of steel it is,
 // stated once here rather than baked into the shipped bytes, so it can be
-// changed by editing a constant instead of re-optimising and re-publishing.
-const FORGED_TINT = "#71716f";
+// changed by editing a constant instead of re-baking and re-publishing.
+const FORGED_TINT = "#b8ac9e";
 
 // The assembly's surface, at the ball's own scale or a small part's.
 export function forgedMetal(tileScale?: number): THREE.MeshStandardMaterial {

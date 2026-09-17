@@ -48,7 +48,18 @@ Full detail, including every flag and why each map is treated differently: [**Pa
 `render3d/paint.ts` is one shader patch, `paintMaterial`, worn by every lit material at the one place each kind is built: generated and authored surfaces, a prop's own materials, the vine, and the water over its own painting.
 It makes three edits inside three's physically-based shading and leaves everything else alone.
 
-- **Light falls in bands.** The wrapped cosine of the sun and of the hemisphere fill's sky-to-ground blend is cut into four bands with soft edges. A painted facet lands wholly in one band and is one tone; the ball crosses the bands as a lit crescent, a mid tone and a shadow tone.
+- **Light falls in bands.** The wrapped cosine of the sun and of the hemisphere fill's sky-to-ground blend is cut into three bands with soft edges. A painted facet lands wholly in one band and is one tone; the ball crosses the bands as a painter's sphere, a lit side, a mid tone and a shadow side.
+- **Nothing that stays put on a rolling ball.** The sun makes no highlight, and the environment is reflected softly with its sun clipped out, because a highlight or a hot reflection sits where the view puts it rather than where the ball's rotation does, and reads as a sticker. The horizon of the reflection stays, since a metal is its reflection. Sheens come from the lamps, which the ball moves past.
+
+## The ball and chain: painted steel
+
+The avatar wears its own set, **`painted steel`**, and it is the one surface in the game that is strokes rather than a photograph flattened: `scripts/bake-strokes.ts` lays a few thousand soft, part-opacity dabs over a steel-grey ground on a wrapped canvas, with a faint ridge along each stroke for the normal map and a dab-by-dab roughness, and writes the result into `assets-src/painted-steel/` as the set's raw, from where the ordinary pipeline (`bun run assets:paint "painted steel"`) optimises and hashes it like any other.
+The reference is an oil painting of a clean polished steel ball on a chain: a mid grey covered in broad low-contrast strokes that follow the form, and a shine that is the room reflected softly - warm ground below, pale sky above, a soft horizon.
+The strokes are paint on the object and turn with it; the reflection is the scene's own, soft and with its sun clipped (above), so the ball has a sheen and no sticker.
+Two numbers carry the read and both were wrong first: the **tile** is 2 m, so a stroke is a third of the ball (at half a metre the strokes were three pixels at play size - grain again), and the **metalness** is 0.6, so the strokes' own mid grey carries the ball's value in a dark level, where a mirror of a dark cave is a dark ball.
+The chain wears the same set at a multiple (`FORGED_SMALL`) that puts a link at the ball's grain, and the tint (`FORGED_TINT`) is nearly white since the strokes are baked at the steel's own value.
+
+Before this the avatar wore the photographed `rusted iron`, and everything tried on it is in the list below: its rust flecks were photographic detail on a painted ball whatever brush flattened them, and no treatment of its reflection was both metal and free of a fixed patch.
 - **The wrap stops at the terminator**, so a normal turned away from a lamp gets none of it.
 - **Nothing is glossy**: roughness has a floor, so highlights are washes and a metal reflects a soft tone rather than the sky.
 
@@ -64,7 +75,9 @@ Full detail: [**Painted light**](lighting-and-surfaces.md#painted-light).
 | A set's brush, cracks, saturation, tint | its `paint` records in `TEXTURE_ASSETS`, then `bun run assets:paint "<set>"` |
 | How far apart facets shade | the set's `normalScale` (no re-bake) |
 | The generated patch look | `SEAM_WIDTH`, `SEAM_DARKEN`, `PATCH_TILT`, `PATCH_SLOPE` in `render3d/assets.ts` |
-| Number and softness of the light bands, the wrap, the gloss floor | the constants at the top of `render3d/paint.ts` |
+| Number and softness of the light bands, the wrap, the gloss floor, the reflection's roughness and ceiling | the constants at the top of `render3d/paint.ts` |
+| The ball: stroke size, how metal, how dark | `painted steel`'s `tile`, `metalness` and `normalScale` in `TEXTURE_ASSETS`; `FORGED_TINT` in `render3d/ballVisual.ts` |
+| The strokes themselves: palette, size, opacity, count, ridge depth | the constants at the top of `scripts/bake-strokes.ts`, then `bun run scripts/bake-strokes.ts` and `bun run assets:paint "painted steel"` |
 | The water's own painting | `render3d/water.ts` (see [water](water.md)) |
 
 ## What was tried and is not the answer
@@ -77,6 +90,12 @@ Each of these looked plausible and was rejected on a picture; the reasons are ke
 - **A saturating light ramp** - a wrap and a smoothstep that lights every facet facing the sun fully. Under a sun that hits the wall nearly face-on it put every facet at one tone and flattened away exactly the facets the maps had made. Bands separate them.
 - **A wrap that crosses the terminator.** It fed sun to normals just past the geometric edge, where the shadow map's grazing depth test is least reliable, and drew white speckles along every crack of a face turned from the sun.
 - **A scale on the specular term** for the gloss. A metal's whole colour is its specular; scaled down, the ball goes black. A roughness floor is the same metal, matte.
+- **Bands on the diffuse alone.** They painted every dielectric and left the ball and chain, 85% metal, as a smooth sky reflection sliding over a sphere; the avatar's metalness had to come down so the diffuse had something to carry.
+- **Banding the reflection by brightness.** It turned the sky's bright region on the ball from a soft gradient into a crisp oval that never moved as the ball rolled. The reflection is a soft tone now, and the sun's highlight went for the same reason.
+- **Four bands.** Right for facets, wrong for a sphere, which four cut into stripes; three is a painter's sphere.
+- **Painting the photographed iron.** Its rust flecks survived every brush (a mean shift never merges a small island of another colour), a blur made them blooms that still read as a photograph at play size, and its reflection was either a fixed oval or, flattened, a grey rubber ball. The avatar needed a surface that was strokes to begin with.
+- **A heavily dabbed dark cannonball** as that surface. The first stroke bake followed a darker reference; the one settled on is a clean polished steel, mid grey with low-contrast strokes.
+- **Strokes at 2 cm.** Three pixels at play size is grain, whatever it is made of; a painter's stroke on this ball is a third of it.
 
 ## What is not done
 

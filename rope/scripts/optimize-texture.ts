@@ -81,6 +81,19 @@
 //                              The bake happens AFTER the resize, at the output
 //                              size, so the brush is a size on screen and not a
 //                              fraction of whatever the source's resolution was.
+//   --soften <sigma>           with --paint: a Gaussian blur of this sigma (in
+//                              output pixels) BEFORE the flattening, for a map
+//                              whose small detail must go rather than be kept
+//                              flat. A mean shift never merges a small island
+//                              whose colour is far from its surroundings,
+//                              however wide the window: the avatar's rust
+//                              flecks survived a brush of 50 exactly as they
+//                              had a brush of 20. Blurred first, the flecks
+//                              dissolve into the plate and the blooms - the
+//                              rust a painter draws - are what is left to
+//                              flatten. 12 is the rust; rock wants none, its
+//                              detail being the facets the brush is there to
+//                              keep.
 //   --cavity <file> [--cavity-channel r|g|b]
 //                              base only, with --paint: multiply the albedo by
 //                              the CRACKS of this ambient-occlusion source - its
@@ -118,7 +131,7 @@ type MapSlot = (typeof MAP_SLOTS)[number];
 
 const args = process.argv.slice(2);
 // Flags that take a value, so the value is not mistaken for a path.
-const VALUED = ["map", "size", "channel", "paint", "cavity", "cavity-channel", "saturate", "tint"];
+const VALUED = ["map", "size", "channel", "paint", "soften", "cavity", "cavity-channel", "saturate", "tint"];
 const positional = args.filter(
   (a, i) => !a.startsWith("--") && !(i > 0 && VALUED.includes(args[i - 1]!.slice(2))),
 );
@@ -131,6 +144,7 @@ const [input, output] = positional;
 const slot = (flag("map") ?? "base") as MapSlot;
 const size = Number(flag("size") ?? 1024);
 const brush = flag("paint") === undefined ? undefined : Number(flag("paint"));
+const soften = flag("soften") === undefined ? undefined : Number(flag("soften"));
 const cavity = flag("cavity");
 const cavityChannel = (flag("cavity-channel") ?? "r").toUpperCase();
 const saturate = flag("saturate") === undefined ? undefined : Number(flag("saturate"));
@@ -141,12 +155,17 @@ const usage = (): never => {
   console.error(
     `usage: bun run assets:optimize-texture <input> <public/textures/out.webp> ` +
       `[--map ${MAP_SLOTS.join("|")}] [--size 1024] [--channel r|g|b]\n` +
-      `       [--paint <px> [--cavity <ao-file> [--cavity-channel r|g|b]] [--saturate <pct>] [--tint <#hex>@<pct>]]`,
+      `       [--paint <px> [--soften <sigma>] [--cavity <ao-file> [--cavity-channel r|g|b]] [--saturate <pct>] [--tint <#hex>@<pct>]]`,
   );
   process.exit(2);
 };
 if (!input || !output || !MAP_SLOTS.includes(slot) || !Number.isFinite(size)) usage();
 if (brush !== undefined && !(Number.isFinite(brush) && brush >= 1)) usage();
+if (soften !== undefined && !(Number.isFinite(soften) && soften > 0)) usage();
+if (soften !== undefined && brush === undefined) {
+  console.error("--soften applies with --paint only");
+  process.exit(2);
+}
 if (saturate !== undefined && !Number.isFinite(saturate)) usage();
 if (tint !== undefined && !tintMatch) usage();
 if (!["R", "G", "B"].includes(cavityChannel)) usage();
@@ -224,18 +243,28 @@ const lossless =
 // dab is neither. The mean shift finds the picture's own regions, at whatever
 // size they are, and draws their edges sharp.
 //
-// It runs at HALF the output size: its cost is the window area times the
-// pixels times the iterations, and at full size a brush this big is minutes
-// per map. The half-size result is grown back with a Catmull-Rom resize, which
-// is sharp across a plateau edge (two pixels) where the default filter would
-// soften it back into the blur the Kuwahara had. `%[sz]` carries the pre-shrink
-// geometry through so the grow-back lands on exactly the pixels the shrink
-// left, whatever the source's size was (it may be under `--size`).
+// It runs on the map SHRUNK: its cost is the window area times the pixels
+// times the iterations, and at full size a brush this big is minutes per map.
+// The shrink is half size up to a brush of 30 and smaller beyond it, so the
+// window the shift runs with never exceeds 15 pixels - and so that the shrink
+// itself, a box average, removes the detail smaller than the brush. That
+// second job matters: a mean shift never merges a small island whose colour is
+// far from its surroundings, however wide its window, so a rust fleck survived
+// a brush of 50 as it had a brush of 20, and the avatar's iron stayed a
+// speckle of photographed rust on a painted ball. Averaged away first, the
+// flecks are gone and the blooms - the rust a painter draws - are what is left
+// to flatten. The result is grown back with a Catmull-Rom resize, which is
+// sharp across a plateau edge where the default filter would soften it back
+// into the blur the Kuwahara had. `%[sz]` carries the pre-shrink geometry
+// through so the grow-back lands on exactly the pixels the shrink left,
+// whatever the source's size was (it may be under `--size`).
 function paintArgs(px: number): string[] {
-  const win = Math.max(3, Math.round(px / 2));
+  const scale = Math.min(0.5, 15 / px);
+  const win = Math.max(3, Math.round(px * scale));
   const smooth = (tolerance: number): string[] => [
     "-set", "option:sz", "%wx%h",
-    "-resize", "50%",
+    ...(soften === undefined ? [] : ["-blur", `0x${soften}`]),
+    "-resize", `${(scale * 100).toFixed(4)}%`,
     "-mean-shift", `${win}x${win}+${tolerance}%`,
     "-filter", "Catrom", "-resize", "%[sz]!",
   ];
@@ -310,6 +339,7 @@ if (brush !== undefined) {
   // The record the manifest entry wants, in the shape `TextureMap.paint` takes.
   const record = [
     `brush: ${brush}`,
+    ...(soften !== undefined ? [`soften: ${soften}`] : []),
     ...(cavity !== undefined ? ["cavity: true"] : []),
     ...(saturate !== undefined ? [`saturate: ${saturate}`] : []),
     ...(tintMatch ? [`tint: "${tint}"`] : []),

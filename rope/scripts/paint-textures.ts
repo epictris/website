@@ -64,6 +64,7 @@ function jobFor(set: string, asset: TextureAsset, slot: Slot, map: TextureMap): 
   const paint = map.paint;
   if (paint) {
     argv.push("--paint", String(paint.brush));
+    if (paint.soften !== undefined) argv.push("--soften", String(paint.soften));
     if (paint.cavity) {
       const ao = asset.maps.ao;
       if (!ao?.raw) return `${set}/${slot}: paint.cavity needs the set's \`ao\` map to record its raw`;
