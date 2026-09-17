@@ -221,6 +221,13 @@ export interface TextureAsset {
   // 1 for both, which is the map as authored.
   normalScale?: number;
   aoIntensity?: number;
+  // BRUSH STROKES over the whole set, laid on after every map is flattened
+  // (`scripts/stroke-textures.ts`, run by `assets:paint`): one dab layout the
+  // albedo, the normal and the rest all wear, each sampling its own value, so
+  // a stroke is one plane of colour, one facet and one sheen. `width` is the
+  // stroke in output pixels. A set-level record because the layout is shared,
+  // which is what makes the strokes on the three maps the same strokes.
+  strokes?: { width: number };
   // The generated surface to wear until the images load, and to fall back to on
   // a load failure. A missing texture is then a wall that looks like ordinary
   // stone rather than a hole in the level - the same rule the prop placeholder
@@ -316,15 +323,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rock-wall-base.webp",
         raw: "rock-wall/textures/rock_wall_08_diff_2k.jpg",
-        sha256: "158d2213a7616a6a1876aac186fc4315efe93f9a89b6c540743d822d38a42dc2",
-        bytes: 59346,
+        sha256: "e26eb3eae2959815f55eb0ea86a634da32498abae4082817832c8c2b5b81fefd",
+        bytes: 92704,
         paint: { brush: 30, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/rock-wall-normal.webp",
         raw: "rock-wall/textures/rock_wall_08_nor_gl_2k.jpg",
-        sha256: "d0e75a14680162136410ddf5d6e4929c1148c74918ed31f82fab71d9803f9be4",
-        bytes: 270318,
+        sha256: "461d0c5e990f9a9d8f6f59b116c6b280003aee26a538f46102d78297122c0be2",
+        bytes: 1000622,
         paint: { brush: 30 },
       },
       // Poly Haven ships roughness, metallic and AO packed into one ARM image -
@@ -336,16 +343,16 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
         file: "/textures/rock-wall-roughness.webp",
         raw: "rock-wall/textures/rock_wall_08_arm_2k.jpg",
         channel: "g",
-        sha256: "d0765a68e5bcdd869622eb578b8e52a159212e1c54c86816d346fdc3061db4f3",
-        bytes: 18710,
+        sha256: "89913fa600839c51a36eb71f6a032487e051a3639d23935734c9cf88dbe175d1",
+        bytes: 216166,
         paint: { brush: 30 },
       },
       ao: {
         file: "/textures/rock-wall-ao.webp",
         raw: "rock-wall/textures/rock_wall_08_arm_2k.jpg",
         channel: "r",
-        sha256: "9be116de9094e9fb775a9759a46545781c8589957b092b74a9e124222714b093",
-        bytes: 109832,
+        sha256: "243a7020d573c8d749c9738f74003f4f9ffcf2103e958c95f28308e486dcfd0f",
+        bytes: 343460,
         paint: { brush: 30 },
       },
     },
@@ -356,6 +363,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     metalness: 0,
     fallback: "stone",
     normalScale: 1.6, // as `dark rock`: the painted facets pushed apart in tone
+    strokes: { width: 14 },
     source: "https://polyhaven.com/a/rock_wall_08",
     author: "Amal Kumar",
     license: "CC0",
@@ -375,15 +383,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/dark-rock-base.webp",
         raw: "dark-rock/textures/dark_rock_02_diff_2k.jpg",
-        sha256: "929b8b70d470e2d6196153b1fe49dd351415b2e4a4df35697a2c15c47fdb0cd6",
-        bytes: 21124,
+        sha256: "4413cb6834f8bfa25fa747b33c4e9c8c8445d87962da8221d86090f9e4d442ca",
+        bytes: 49362,
         paint: { brush: 30, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/dark-rock-normal.webp",
         raw: "dark-rock/textures/dark_rock_02_nor_gl_2k.jpg",
-        sha256: "6414c29693ce99fdb907154f0206bff19d09203aaf2fbc38c810aec1e247e117",
-        bytes: 149292,
+        sha256: "b23966a458ae88c39b5b90fc864a15a603eb6539da2081087e6deb75b0790a3a",
+        bytes: 618326,
         paint: { brush: 30 },
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
@@ -395,16 +403,16 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
         file: "/textures/dark-rock-roughness.webp",
         raw: "dark-rock/textures/dark_rock_02_arm_2k.jpg",
         channel: "g",
-        sha256: "8953f1e49363398f3dc23970f3615023d30bada625dd5d8684f96963860c835b",
-        bytes: 17246,
+        sha256: "fbcedab76cfd7ef4e488cb756c4c079339959374e1046108f9d12fabe087a347",
+        bytes: 217758,
         paint: { brush: 30 },
       },
       ao: {
         file: "/textures/dark-rock-ao.webp",
         raw: "dark-rock/textures/dark_rock_02_arm_2k.jpg",
         channel: "r",
-        sha256: "629afa2c9141d266fe4203c7bd4f093729740d2f691cab60de989ae2b39e18d2",
-        bytes: 90332,
+        sha256: "9115d591931d1daec734deeac9d5496fda7d4598a8b72648555ef8edac0778f3",
+        bytes: 294924,
         paint: { brush: 30 },
       },
     },
@@ -419,6 +427,10 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     // each other: pushed further apart so two facets are a stroke apart in
     // tone under the sun, the way the reference art draws them.
     normalScale: 1.6,
+    // Brush strokes over the flattened set (see `TextureAsset.strokes`): at a
+    // 2 m tile a 14 px stroke is 3 cm wide and 5-16 cm long, the stroke the
+    // reference cave is painted with (28 was asked to be halved).
+    strokes: { width: 14 },
     source: "https://polyhaven.com/a/dark_rock_02",
     author: "Amal Kumar",
     license: "CC0",
@@ -440,15 +452,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/marble-cliff-base.webp",
         raw: "marble-cliff/textures/marble_cliff_05_diff_2k.jpg",
-        sha256: "fca53ef405c74dba21356ff1cf718aca20090fc86299a39cc9725c04d6f7979b",
-        bytes: 88046,
+        sha256: "d3d16df042d2168c6ca51f9a439c858f67b3fce10f44ec79034f19c83002203f",
+        bytes: 138520,
         paint: { brush: 40, cavity: true, saturate: 125 },
       },
       normal: {
         file: "/textures/marble-cliff-normal.webp",
         raw: "marble-cliff/textures/marble_cliff_05_nor_gl_2k.jpg",
-        sha256: "bef68645851d4b33161adfa97277c3b011134636bdc812bfee83c930603d5fad",
-        bytes: 153074,
+        sha256: "f8c550d21ae1440d455e69a0ff01650c68927c4ada447b038b9d29e7ad31a4ac",
+        bytes: 634084,
         paint: { brush: 30 },
       },
       // Poly Haven's packed ARM image again - R ambient occlusion, G roughness,
@@ -460,16 +472,16 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
         file: "/textures/marble-cliff-roughness.webp",
         raw: "marble-cliff/textures/marble_cliff_05_arm_2k.jpg",
         channel: "g",
-        sha256: "5334824d2c7b3cae1efe4727a0f1dc7a801a282882fb98c7468a862da97da0e8",
-        bytes: 20132,
+        sha256: "2b143816cfe95427f54150ba9b32b32690c2e8b6f78806743095568d8fc8c4fa",
+        bytes: 216878,
         paint: { brush: 30 },
       },
       ao: {
         file: "/textures/marble-cliff-ao.webp",
         raw: "marble-cliff/textures/marble_cliff_05_arm_2k.jpg",
         channel: "r",
-        sha256: "ca3302e580b4bc5b99c5149cebfad3ab17cf8262ed29ef07823beaa29d05132b",
-        bytes: 40058,
+        sha256: "5b9a4c24b41059bad5c3e5c5fae404eaaed11f5a1d2789593eb13be069678fd3",
+        bytes: 218532,
         paint: { brush: 30 },
       },
     },
@@ -495,6 +507,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     metalness: 0,
     fallback: "stone",
     normalScale: 1.6, // as `dark rock`: the painted facets pushed apart in tone
+    strokes: { width: 14 },
     source: "https://polyhaven.com/a/marble_cliff_05",
     author: "Amal Kumar",
     license: "CC0",
@@ -822,8 +835,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/mossy-ground-base.webp",
         raw: "mossy-ground/Ground047_2K-PNG_Color.png",
-        sha256: "8e07bc6feec70af71b4f90511106206af88d8a5b35db60fdda151289b95aa094",
-        bytes: 31764,
+        sha256: "550c1dd6a5def781c1df07f18b413ba56977ebfbd76a3c4e39bfc34d242bbe5c",
+        bytes: 70364,
         paint: { brush: 30, saturate: 140, tint: "#5a6a28@12" },
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the two
@@ -834,8 +847,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/mossy-ground-normal.webp",
         raw: "mossy-ground/Ground047_2K-PNG_NormalGL.png",
-        sha256: "e09c25bcb153fffb23ebe40adcc83773a780cbf47a60efdb06e274c778e46252",
-        bytes: 922212,
+        sha256: "4bb450a14f6fc9b84b999245c39cb3217f7b818cbddd6cfae1290b526b67d7ec",
+        bytes: 626802,
         paint: { brush: 30 },
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
@@ -845,15 +858,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/mossy-ground-roughness.webp",
         raw: "mossy-ground/Ground047_2K-PNG_Roughness.png",
-        sha256: "12b204999ec767fac479cb29962e7d0dfb2f69c1f7e571822f492f996b739a0f",
-        bytes: 277488,
+        sha256: "37115862a70a3b2daba9247f72620d0537f9d6b5b91c288a4fc518d8d2584312",
+        bytes: 259858,
         paint: { brush: 30 },
       },
       ao: {
         file: "/textures/mossy-ground-ao.webp",
         raw: "mossy-ground/Ground047_2K-PNG_AmbientOcclusion.png",
-        sha256: "489b42db2ba0030da786ba7081e636a9b7925e294717171d2647351c225d44a8",
-        bytes: 550918,
+        sha256: "ee04806439bf82a0366b16f9fc18c55f768dcb986ec62b8ca12ecdb3803fdf4f",
+        bytes: 367508,
         paint: { brush: 30 },
       },
     },
@@ -866,6 +879,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     tile: 3,
     metalness: 0,
     fallback: "stone",
+    strokes: { width: 14 },
     source: "https://ambientcg.com/view?id=Ground047",
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
@@ -974,8 +988,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/moss-dark-base.webp",
         raw: "moss-003/Moss003_2K-PNG_Color.png",
-        sha256: "052ca8d3354c9670b6110a4064bda73954ffae1a988b45ee3617284483264c15",
-        bytes: 145882,
+        sha256: "23c023d4d65319482f7a29eba79bbaced20cb66c171bbd6ab21a0e3c819bb87f",
+        bytes: 116866,
         paint: { brush: 30, saturate: 130 },
       },
       // `NormalGL`, the OpenGL convention (+Y up) this renderer wants, of the
@@ -994,8 +1008,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/moss-dark-normal.webp",
         raw: "moss-003/Moss003_2K-PNG_NormalGL.png",
-        sha256: "8fb8ec6228739c1459d7802a88b70a2f5c8a058a863389166640bcccfc6f981c",
-        bytes: 1119674,
+        sha256: "fc399d1ed9487d79959031a5120943dae1e6de45efb21970be0a4d9b0e115ad7",
+        bytes: 870980,
         paint: { brush: 30 },
       },
       // Red channel alone (G and B exactly 0) as ambientCG's scalar maps always
@@ -1007,8 +1021,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/moss-dark-roughness.webp",
         raw: "moss-003/Moss003_2K-PNG_Roughness.png",
-        sha256: "1c0b91cd1da8ac856cd5a4ca890b203a91606b11da59c0628c801f7db21c2bb7",
-        bytes: 276808,
+        sha256: "fbaf9f615d13b6ccdfe42dcb80ff02e088961fa19cf967de9cfb775768c014da",
+        bytes: 262448,
         paint: { brush: 30 },
       },
       // Shipped rather than left to the generated surface. Mean .529 - darker
@@ -1019,8 +1033,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       ao: {
         file: "/textures/moss-dark-ao.webp",
         raw: "moss-003/Moss003_2K-PNG_AmbientOcclusion.png",
-        sha256: "a5aa2694e2d27e9390916bc8a6dfd2243c8cd9dd772140ec380628f3a4ef417a",
-        bytes: 565034,
+        sha256: "f2a227688ba1af8686989c246406582dcda86c14028fb4b7c109c15851cffd3f",
+        bytes: 413638,
         paint: { brush: 30 },
       },
     },
@@ -1037,6 +1051,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     tile: 1,
     metalness: 0,
     fallback: "stone",
+    strokes: { width: 12 },
     source: "https://ambientcg.com/view?id=Moss003",
     author: "ambientCG (Lennart Demes)",
     license: "CC0",
@@ -1450,8 +1465,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       base: {
         file: "/textures/rusted-iron-base.webp",
         raw: "rusted-iron/Metal053B_2K-JPG_Color.jpg",
-        sha256: "f2d37b54a5a9f277af8462092da7bbfe9a1cb66592d1dda57e59bda0176df7d1",
-        bytes: 24178,
+        sha256: "2f474b701b33eabae7b576514e064c90869b3eac8f49422ae91cc94d69870207",
+        bytes: 156178,
         paint: { brush: 50, soften: 12, saturate: 160 },
       },
       // ambientCG ships both conventions; `NormalGL` is the OpenGL one (+Y up)
@@ -1462,8 +1477,8 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       normal: {
         file: "/textures/rusted-iron-normal.webp",
         raw: "rusted-iron/Metal053B_2K-JPG_NormalGL.jpg",
-        sha256: "7ad07c58c94e642ebcea106eade406b5031c7a3f14bc07e7614042f59bc799cb",
-        bytes: 1946,
+        sha256: "1caaa02b24145ee04eda98afe6ccd1c0b1c66e63ac32380663d8268ee8377bcc",
+        bytes: 283324,
         paint: { brush: 50, soften: 12 },
       },
       // The pair that carries the whole look: bare metal is smooth and fully
@@ -1474,15 +1489,15 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
       roughness: {
         file: "/textures/rusted-iron-roughness.webp",
         raw: "rusted-iron/Metal053B_2K-JPG_Roughness.jpg",
-        sha256: "61a58d6ab5dbc6aa12ec6e393e73e751faf8f4620dd27429b49f21a6bfe69b34",
-        bytes: 31480,
+        sha256: "5e8a0c57ca2236dd78ce2decf8132b27c6ae70975599074b062c53092b12ac51",
+        bytes: 248542,
         paint: { brush: 50, soften: 12 },
       },
       metallic: {
         file: "/textures/rusted-iron-metallic.webp",
         raw: "rusted-iron/Metal053B_2K-JPG_Metalness.jpg",
-        sha256: "08913d09d114771a736d71fd6d7e23a9f14b72e5f299b8000a1cf360da1df383",
-        bytes: 32376,
+        sha256: "c446a612fc940e5b8e2b156912f2bfb964563bfe507cd7d130184e45361aae69",
+        bytes: 239564,
         paint: { brush: 50, soften: 12 },
       },
       // No AO map in the set, and nothing to derive one from: an almost flat
@@ -1525,6 +1540,7 @@ export const TEXTURE_ASSETS: Record<string, TextureAsset> = {
     // and at 0.15 the ball was a grey rubber sphere with a lit side.
     metalness: 0.75,
     fallback: "cast iron",
+    strokes: { width: 12 },
     source: "https://ambientcg.com/view?id=Metal053B",
     author: "ambientCG (Lennart Demes)",
     license: "CC0",

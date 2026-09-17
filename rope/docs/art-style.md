@@ -30,7 +30,9 @@ The facets are most of the look: dark rock's albedo is nearly flat brown, and ev
 A rock's albedo also gets its cracks multiplied in from the set's own AO map (`cavity`), a saturation lift, and for mossy ground an olive tint; the rock sets carry `normalScale: 1.6` so neighbouring facets are a stroke apart in tone.
 Brushes in use: 30 on rock and ground, 40 on marble cliff, 20 on the avatar's rusted iron.
 
-The generated surfaces (wood, the metals) are painted at source instead: `paintField` in `render3d/assets.ts` is a lattice of irregular patches, each one tone with a gentle gradient across it, a dark seam drawn between them, and a normal built from each patch's own tilt.
+Then the set is **brushed**: `scripts/stroke-textures.ts` lays a few thousand dabs over the flattened maps, each the colour of what is under it with a painter's variation, along the picture's edges and clipped where the colour changes, one layout shared by the albedo, the normal and the roughness so a stroke is one plane, one facet and one sheen. That is the handwriting the reference cave is painted in; the facets and cracks under it are the picture.
+
+The generated surfaces (wood, the metals) are painted at source instead: `paintField` in `render3d/assets.ts` is a lattice of irregular patches, each one tone with a gentle gradient across it, a dark seam drawn between them, and a normal built from each patch's own tilt. They are not brushed yet.
 
 The whole store is **reproducible from the manifest alone**: each map records `raw`, `channel` and `paint` beside its hash, and `bun run assets:paint` rebuilds every map from `assets-src/` by that recipe and prints the hash and size to paste for any that changed.
 Re-baking all six painted sets reproduced every byte.
@@ -73,6 +75,7 @@ Full detail: [**Painted light**](lighting-and-surfaces.md#painted-light).
 | What | Where |
 |---|---|
 | A set's brush, cracks, saturation, tint | its `paint` records in `TEXTURE_ASSETS`, then `bun run assets:paint "<set>"` |
+| A set's stroke width; the strokes' opacity, variation, clipping, flow | `strokes` on the set in `TEXTURE_ASSETS`; the constants at the top of `scripts/stroke-textures.ts` |
 | How far apart facets shade | the set's `normalScale` (no re-bake) |
 | The generated patch look | `SEAM_WIDTH`, `SEAM_DARKEN`, `PATCH_TILT`, `PATCH_SLOPE` in `render3d/assets.ts` |
 | Number and softness of the light bands, the wrap, the gloss floor, the reflection's roughness and ceiling | the constants at the top of `render3d/paint.ts` |

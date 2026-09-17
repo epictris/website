@@ -30,11 +30,12 @@
 // map is a few seconds, and there are four maps to a set.
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { cpus } from "node:os";
 import { resolve } from "node:path";
 import { TEXTURE_ASSETS, type TextureAsset, type TextureMap } from "../src/render3d/assets";
 import { sha256 } from "./assetStore";
+import { strokeSet } from "./stroke-textures";
 
 const ROOT = resolve(import.meta.dir, "..");
 const RAW_DIR = resolve(ROOT, "assets-src");
@@ -52,14 +53,23 @@ interface Job {
   slot: Slot;
   map: TextureMap;
   argv: string[];
+  // Where optimize-texture writes. The shipped file, or - for a set that
+  // records `strokes` - a lossless intermediate the stroke pass reads, so the
+  // albedo is encoded lossy once, after the strokes, not before as well.
+  out: string;
+  final: string;
 }
+
+const shipped = (map: TextureMap) => resolve(ROOT, "public", map.file.replace(/^\//, ""));
 
 // The optimize-texture command line for one map, from its record alone.
 function jobFor(set: string, asset: TextureAsset, slot: Slot, map: TextureMap): Job | string {
   if (!map.raw) return `${set}/${slot}: no \`raw\` recorded, cannot be re-baked`;
   const raw = resolve(RAW_DIR, map.raw);
   if (!existsSync(raw)) return `${set}/${slot}: raw missing: assets-src/${map.raw}`;
-  const argv = [raw, resolve(ROOT, "public", map.file.replace(/^\//, "")), "--map", slot];
+  const final = shipped(map);
+  const out = asset.strokes ? final.replace(/\.webp$/, ".flat.png") : final;
+  const argv = [raw, out, "--map", slot];
   if (map.channel) argv.push("--channel", map.channel);
   const paint = map.paint;
   if (paint) {
@@ -73,7 +83,7 @@ function jobFor(set: string, asset: TextureAsset, slot: Slot, map: TextureMap): 
     if (paint.saturate !== undefined) argv.push("--saturate", String(paint.saturate));
     if (paint.tint !== undefined) argv.push("--tint", paint.tint);
   }
-  return { set, slot, map, argv };
+  return { set, slot, map, argv, out, final };
 }
 
 function run(argv: string[]): Promise<{ code: number; out: string }> {
@@ -134,10 +144,26 @@ if (failed.length) {
   process.exit(1);
 }
 
+// The stroke pass, once per set that records it, over that set's flattened
+// intermediates; the shipped files are what it writes.
+for (const [key, asset] of sets) {
+  if (!asset.strokes) continue;
+  const mine = jobs.filter((j) => j.set === key);
+  if (mine.length === 0) continue;
+  const inputs: Partial<Record<Slot, string>> = {};
+  const outputs: Partial<Record<Slot, string>> = {};
+  for (const j of mine) {
+    inputs[j.slot] = j.out;
+    outputs[j.slot] = j.final;
+  }
+  strokeSet(inputs, outputs, asset.strokes);
+  for (const j of mine) rmSync(j.out);
+}
+
 // What changed, as the lines to paste.
 const changed: Job[] = [];
 for (const job of jobs) {
-  const path = resolve(ROOT, "public", job.map.file.replace(/^\//, ""));
+  const path = job.final;
   const bytes = readFileSync(path);
   const hash = sha256(bytes);
   const size = statSync(path).size;
@@ -163,7 +189,7 @@ console.log(
 
 if (publish) {
   for (const job of changed) {
-    const file = resolve(ROOT, "public", job.map.file.replace(/^\//, ""));
+    const file = job.final;
     console.log(`\n[paint] publishing ${job.set}/${job.slot}`);
     const p = Bun.spawnSync(["bun", "run", resolve(ROOT, "scripts/publish-asset.ts"), file], {
       cwd: ROOT,
