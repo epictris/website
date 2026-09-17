@@ -357,7 +357,7 @@ export class BodyVisual {
         // The render controls live on the body's geometry object (water is a
         // visual effect); flow and drag stay on the body. Every water body has
         // one - `withGeometryTwin` gives a body that authors none its twin.
-        const water = buildWater(this.root, body, data.objects.find(isGeometryObject));
+        const water = buildWater(this.root, body, data, data.objects.find(isGeometryObject));
         this.owned.push(...water.geometries);
         this.ownedMaterials.push(...water.materials);
       }

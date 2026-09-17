@@ -2320,6 +2320,8 @@ function waterFormat(): CaseResult[] {
         friction: 1,
         flow: -150,
         drag: 5,
+        spill: 200,
+        spillSpeed: 100,
         objects: [
           { type: "collision", shape: { kind: "rect", w: 2430, h: 46 } },
           { type: "geometry" },
@@ -2333,9 +2335,18 @@ function waterFormat(): CaseResult[] {
   );
   const inMetres = normalizeLevelData(authored);
   const scaled = scaleLevelData(inMetres, PX);
-  const units = scaled.bodies[0]!.flow === -1.5 && scaled.bodies[0]!.drag === 5;
+  // The spill is a drop and a speed - two more lengths that convert.
+  const units =
+    scaled.bodies[0]!.flow === -1.5 &&
+    scaled.bodies[0]!.drag === 5 &&
+    scaled.bodies[0]!.spill === 2 &&
+    scaled.bodies[0]!.spillSpeed === 1;
   const saved = modelToDisk(modelFromDisk(authored));
-  const kept = saved.bodies[0]!.flow === -150 && saved.bodies[0]!.drag === 5;
+  const kept =
+    saved.bodies[0]!.flow === -150 &&
+    saved.bodies[0]!.drag === 5 &&
+    saved.bodies[0]!.spill === 200 &&
+    saved.bodies[0]!.spillSpeed === 100;
 
   return [
     {

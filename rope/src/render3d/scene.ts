@@ -794,7 +794,9 @@ export class Scene3D {
     this.env.follow(camera);
     const clock = this.pinnedClock ?? performance.now() / 1000;
     this.lights.update(clock);
-    updateWater(clock);
+    // The spray's point sprites are sized in metres and need the viewport's
+    // pixel height to stay that size (see water.ts `updateWater`).
+    updateWater(clock, rect ? rect.h : this.size.y);
 
     // Bodies come and go at runtime (the hook is destroyed and rebuilt on every
     // throw, the sandbox spawns rocks), so the visual set is reconciled rather

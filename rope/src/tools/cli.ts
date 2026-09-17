@@ -1000,6 +1000,10 @@ async function cmdShot(first: string, o: Record<string, string>, extra: string[]
       // `--at X,Y` pins the camera on a world point instead of the avatar, which
       // is the only way to photograph something the avatar has swung away from.
       (o.at ? `&at=${encodeURIComponent(o.at)}` : "") +
+      // `--orbit YAW,PITCH` (degrees) turns the 3D view about the point it is
+      // looking at, the editor's orbit: for photographing a shape rather than
+      // a frame of play.
+      (o.orbit ? `&orbit=${encodeURIComponent(o.orbit)}` : "") +
       // `--3d` grabs the frame through the WebGL renderer instead of the 2D one.
       // Headless chromium has no GPU, so it needs SwiftShader spelled out; the
       // grab is otherwise identical and the two can be diffed against each other.
@@ -2112,7 +2116,7 @@ switch (cmd) {
     cmdQuery(arg, opts(rest));
     break;
   case "shot":
-    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
+    if (!arg) fail("usage: cli shot <bundle.json> [--frame N | --frames A..B [--every K]] [--zoom Z] [--3d] [--retract] [--at X,Y] [--orbit YAW,PITCH] [--out f.png] [--allow-errors]  |  cli shot --diff a.png b.png [--out d.png]");
     await cmdShot(arg, opts([arg, ...rest]), [arg, ...rest]);
     break;
   case "record":

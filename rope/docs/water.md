@@ -65,11 +65,55 @@ broken.
 
 ## Drawing a body of water
 
-**There is no 3D water renderer. Water is an area like every other one**: nothing is drawn for it in the 3D scene, and the 2D overlay's flow-streak glyphs are the whole of what the player sees, in both renderers.
+A `water` body is drawn in 3D by `render3d/water.ts` as a **digital painting** of water, tuned on 2026-09-17 against two reference pictures: a river of smooth saturated teal with soft tonal drift and thin wispy highlight hairlines running with the flow, and a fall of long soft vertical ribbons under a bright brow, sparkling, into a wide soft cloud of white.
+Soft everywhere: no outlines, no hard bands, no lace.
+A cel-shaded cut into flat bands with inked edges was the first reading of "painterly" and was not it; the flat-plane and half-ellipse-column falls before that were 2D images on bent planes, and every fall as a separate body had a seam at the lip (see **A fall**).
+The 2D overlay's flow-streak glyphs are what the 2D renderer shows, and what the 3D renderer shows for the shapes the water renderer does not draw (anything but a rect or a circle).
 
-There was one - an extruded slab with a displaced waterline wearing a transmissive material - and it was removed because it never looked like water.
-`buildWater` and `render3d/water.ts` are gone; `bodyVisuals` skips a `water` body explicitly rather than letting it fall through to `buildAuthored`, which would extrude its collision outline and dress it as ordinary stone.
-A copy of the removed file is kept at `assets-src/water-removed/water.ts` with the two normal maps it used, since none of it was ever committed.
+The water stays **lit by the scene** - a `MeshStandardMaterial` with a little gloss and a touch of the environment, so the same lamps, fog and tone mapping fall on it as on the rock beside it - and its normal is left the plane's own, so the sheen is a soft wash rather than glints.
+That is what keeps a painted surface in a photo-textured scene from reading as a sticker: the colours are stylised, the light is not.
+
+A channel's colour is a smooth **tone field** mapped continuously through deep, body and light (`toneRamp`), a weighted sum of the things that move: the travelling vertex waves, the flipbook's churn (the along-flow component of its normal, which is which side of a ripple the pixel is on), and the strokes.
+The strokes are the baked cellular web (`scripts/bake-foam.ts`) sampled with its tile stretched seven times along the flow, so every cell edge is a long thin line running with the current; thresholded high, only the strongest survive, and a second finer sample breaks each along its length into a wisp with soft ends.
+Those wisps are the reference's hairline highlights, painted in the pale.
+The flipbook does not perturb the lighting normal; it drives the tone field and distorts the strokes, played at half speed so its shapes swell rather than flicker.
+The front sheet darkens smoothly into the deep below the waterline under a soft pale line at the seam, and a run pales softly toward its ends the way the reference river pales at its banks.
+The palette derives from the authored `color` alone - the deep leans blue and is only moderately darker, never black - so a level tunes its water through the one colour field it tunes everything else with.
+
+### A fall
+
+A channel with a **`spill`** pours off its downstream end - the end `flow` points at - as a fall dropping `spill` metres to the pool it lands in, leaving the lip at `spillSpeed` (the current's own speed when absent), which sets how far the arc swings out.
+Both live on the water BODY beside `flow` and `drag`, because where the current goes is a fact about the current; both are lengths and both convert.
+It is drawn only: the physics of a fall, if a level wants one, is a second water area turned to point down.
+
+**A channel and its fall are one mesh under one shader**, and that is what makes the join seamless.
+Every earlier fall was a separate body whose tube tried to meet the channel's end and never quite did - a step where the waves lifted the surface above a flat brow, an end cap standing exposed under a thin pour, a second translucent surface showing the first through it - so the fall became the channel's own water leaving its end, built into the same `BufferGeometry` (`appendFall`) with the same attributes.
+The tube's first slice IS the channel's end rectangle: the same positions, and the same lit, alpha and texture-frame attributes by face, so the top face and the front sheet run over the lip into the tube with no step and no cap.
+Three things make the seam exact rather than close.
+The waves die out over `WAVE_END_TAPER` before a run's ends, so the surface meets the tube's flat first slice; a brink goes glassy anyway.
+The texture frame of a tube vertex is taken from the lip point it descends from (`aFrozen`), plus the metres travelled past the lip (`aArc`), so the strokes are continuous at the lip and constant down the fall.
+And every fall-only term in the shader - the ribbon weights, the brow, the white base - is zero at the lip and eases in over `FALL_BLEND_IN`, while the channel's own terms (the front sheet's murk, the pale bank) carry over it.
+
+The pour is a **volume** whose cross-sections are **vertical slices**, not planes perpendicular to the travel: every layer of the slab leaving the lip follows the same parabola from its own height, so a slice at time t is the lip's rectangle carried along the arc unturned.
+That is the physics - the perpendicular thickness then thins by exactly `v0 / v` - and it is what keeps a thick slab from bulging under the lip, which a rigid ring turning with the tangent did.
+The rectangle rounds into a superellipse over `FALL_CORNER_BLEND`, the z-width contracts a little by the base, the samples are uniform in time (packed into the brow, spread down the drop), and the tube's inside is culled in the fragment shader.
+The surface **draws down** into the brink over `DRAWDOWN_REACH` before the lip, by `DRAWDOWN` of the depth: water approaching a drop speeds up and its surface dips, and that dip is the taper into the fall that a level surface running to a hard edge never has.
+
+Its shading is the channel's on the volume: the strokes stretched along the flow are the fall's long soft **ribbons** through the same tone ramp, the strongest edges its hairlines, a bump of light over the brow, and the base dissolving into white above the cloud.
+The texture's along coordinate is **time from the lip at the lip's speed**, so a scrolling texture stretches exactly as the water accelerates.
+The water's front face sits `FRONT_INSET` behind the slab's nominal front, because a bank authored to the same depth has its face exactly there and two coplanar faces z-fight; behind by a hair, the bank wins, which is what a channel sunk into rock means.
+
+Spray is one point cloud (`sprayPoints`) whose every particle is a pure function of the clock and its own seed: no CPU update, and a pinned clock draws the same spray twice.
+Three populations share it by `aKind`: **mist**, soft airbrushed puffs of white born low and wide around the impact and drifting up and out - the reference's cloud; **splash**, small droplets thrown up from the impact and falling back under gravity; and **sparkle**, tiny white dots riding the sheet's front face down the arc, placed on the tube by solving its superellipse for z in the vertex shader.
+Point sprites are sized in pixels, so `updateWater` takes the viewport's height beside the clock to keep a droplet authored in metres the same size when the window changes.
+A channel has end caps where nothing pours off it, because an open box was the first thing an orbit view showed.
+
+`levels/ball.json`'s upper channel spills 2 m at 1 m/s onto the lower one.
+
+### The photographic renderer this replaced
+
+The first 3D water was photographic - flipbook normals feeding specular under the lamps, an environment reflection, a smooth murk gradient - and it was a dark glossy surface with sparkle on it, the opposite of the look wanted.
+Before it there was a transmissive slab that never looked like water at all; a copy of that one is kept at `assets-src/water-removed/water.ts` with the two normal maps it used.
 
 What follows is what that attempt learned, because every one of these was expensive to find and none of it is visible in the code any more.
 

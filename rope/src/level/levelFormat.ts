@@ -965,6 +965,16 @@ export interface LevelBodyData {
   // seconds to notice a body is in it.
   flow?: number;
   drag?: number;
+  // Water areas only: the water SPILLS off the downstream end of the run (the
+  // end `flow` points at) as a fall, dropping `spill` pixels (metres once
+  // scaled) from the waterline to the pool it lands in. Absent or 0 = the run
+  // ends against its bank and nothing pours. `spillSpeed` is the speed the
+  // water leaves the lip at in pixels/s, which sets how far the arc swings
+  // out; absent = the current's own speed. Both are lengths (per second, for
+  // the speed) and both convert. Drawn only - the physics of a fall, if a
+  // level wants one, is a second water area turned to point down.
+  spill?: number;
+  spillSpeed?: number;
   // Hook-only: the hook attaches to this body and everything else passes
   // straight through it. The avatar walks and swings through it, loose debris
   // falls through it, the rope never wraps it - a background leaf the hook can
@@ -3080,6 +3090,9 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       // A speed scales; a rate does not. See `LevelBodyData.flow`/`drag`.
       ...(b.flow !== undefined ? { flow: b.flow * factor } : {}),
       ...(b.drag !== undefined ? { drag: b.drag } : {}),
+      // A drop and a speed: both lengths, both convert.
+      ...(b.spill !== undefined ? { spill: b.spill * factor } : {}),
+      ...(b.spillSpeed !== undefined ? { spillSpeed: b.spillSpeed * factor } : {}),
       ...(b.passable !== undefined ? { passable: b.passable } : {}),
       ...(b.pivot !== undefined ? { pivot: b.pivot } : {}),
       // The bearing is a POINT, so both halves are lengths and both convert;

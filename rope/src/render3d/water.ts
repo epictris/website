@@ -1,12 +1,14 @@
-// Flowing sewer water, drawn from a captured animated normal-map sequence.
+// Flowing water as a soft digital painting - smooth teal with wispy hairline
+// highlights - lit by the scene (see "The look" below and docs/water.md). A
+// channel with a `spill` pours off its downstream end as a fall, built into
+// the same mesh under the same shader so the two are seamless by
+// construction.
 //
-// The look is built around one asset: a 60-layer flipbook of tangent-space
-// normal maps (a looping capture of real choppy water), played by crossfading
+// The motion comes from one asset: a 60-layer flipbook of tangent-space normal
+// maps (a looping capture of real choppy water), played by crossfading
 // consecutive layers and scrolled along the flow. Two samples at different
-// scales and rates are blended per pixel, so the surface has structure at two
-// sizes that never settles into a repeating pattern. Everything else - foam,
-// murk, glow - is derived from those same samples, which keeps the whole
-// surface moving as one body of water rather than as stacked effects.
+// scales and rates drive the band field per pixel and distort the strokes, so
+// the whole surface moves as one body of water rather than as stacked effects.
 //
 // WHAT WAS LEARNED FROM THE REMOVED RENDERER (assets-src/water-removed) and is
 // kept here:
@@ -31,7 +33,7 @@
 
 import * as THREE from "three";
 import { WaterArea } from "../engine/body";
-import type { GeometryObjectData } from "../level/levelFormat";
+import type { GeometryObjectData, LevelBodyData } from "../level/levelFormat";
 import { RAW_ASSETS, trackPending } from "./assets";
 import { withDownload } from "./download";
 
@@ -180,6 +182,11 @@ function ensureFoam(): THREE.Texture {
 // one level can never drift apart. Written once per frame by `Scene3D`, from
 // the same clock (pinnable) the light flicker reads.
 const waterTime = { value: 0 };
+// The viewport's height in device pixels, for the spray: a point sprite's size
+// is set in pixels, and a droplet authored in metres needs the projection's
+// pixels-per-metre at its depth to stay the same size when the window
+// changes. Written beside the clock.
+const waterViewHalfHeight = { value: 540 };
 
 // The textures the water shader samples, for the prewarm (see
 // `Scene3D.prewarm`): they ride the material as uniforms rather than as map
@@ -192,13 +199,42 @@ export function waterTextures(): THREE.Texture[] {
   return out;
 }
 
-export function updateWater(seconds: number): void {
+export function updateWater(seconds: number, viewportHeight: number): void {
   waterTime.value = seconds;
+  waterViewHalfHeight.value = viewportHeight / 2;
 }
 
 // ---------------------------------------------------------------------------
 // The look
 // ---------------------------------------------------------------------------
+
+// A DIGITAL PAINTING of water, after the two reference pictures this was
+// tuned against (2026-09-17): a river of smooth saturated teal with soft
+// tonal drift and thin wispy highlight hairlines running with the flow, and
+// a fall of long soft vertical ribbons under a bright brow, sparkling, into
+// a wide soft cloud of white at its base. Soft everywhere: no outlines, no
+// hard bands, no lace. (A cel-shaded cut into flat bands with inked edges was
+// the first reading of "painterly" and was not it.)
+//
+// The water stays LIT BY THE SCENE - the same lamps, fog and tone mapping as
+// the rock beside it - with a little gloss but no normal perturbation, so the
+// sheen is a soft wash rather than glints. The flipbook does not light the
+// water; it drives the tone field and distorts the strokes, so the painting
+// moves like water.
+//
+// The palette is derived from the authored `color` so a level tunes the
+// water by its one colour field, the way it tunes everything else.
+//
+// A CHANNEL AND ITS FALL ARE ONE MESH UNDER ONE SHADER. The fall is the
+// channel's own water leaving its downstream end, and it is built that way:
+// the tube's first ring IS the channel's end rectangle - the same vertices'
+// positions, the same lit/alpha/frame attributes by face - so the top face
+// and the front sheet run over the lip into the tube with no step, no cap,
+// no second material and no second set of texture coordinates to line up.
+// Every earlier fall was a separate body whose tube tried to meet the
+// channel's end and never quite did: a step where the waves lifted the
+// surface above a flat brow, a cap standing under a thin pour, a second
+// translucent surface showing the first through it.
 
 // Where the water sits through z, in metres - EXACTLY the extruder's own
 // convention (see extrude.ts): `depth` is centred on the gameplay plane,
@@ -242,83 +278,75 @@ const WAVE_CHURN = [0.7, -1.3, 2.4, -3.8];
 // grid's rows (SURFACE_ROWS across the depth) still resolve the finest one.
 const WAVE_CROSS = [0.7, -1.9, 4.2, -7.3];
 const WAVE_HEIGHT = 0.05;
+// The waves die out over this many metres before a run's ends: a brink goes
+// glassy as the water accelerates over it, and it is what lets the fall's
+// flat first ring meet the surface exactly.
+const WAVE_END_TAPER = 0.5;
 // How far below the waterline the front sheet keeps waving before it hangs
-// still, and how far down the murk swallows the light.
+// still, and how far down the light gets.
 const WAVE_FALLOFF = 0.22;
 const LIGHT_FALLOFF = 0.5;
-const DEPTH_FADE = 0.3;
-// The two normal-map layers: metres per repeat, and how fast each pattern
-// drifts as a fraction of the authored current. Under 1 on purpose - surface
-// texture visibly lags the water carrying it, and at the current's full speed a
+// The two flipbook layers: metres per repeat, and how fast each pattern drifts
+// as a fraction of the authored current. Under 1 on purpose - surface texture
+// visibly lags the water carrying it, and at the current's full speed a
 // scrolling pattern starts strobing.
-const TILE_COARSE = 2.4;
-const TILE_FINE = 0.95;
+const TILE_COARSE = 3.2;
+const TILE_FINE = 1.3;
 const DRIFT_COARSE = 0.55;
 const DRIFT_FINE = 0.8;
-// Foam: where the two layers' combined steepness crosses the cut, the surface
-// is torn white. The product of two independent fields is what makes the foam
-// sparse ribbons rather than an even mottle.
-// Surface foam. The baked mask is sampled twice - different tiles, different
-// drift rates - and each sample's UVs are distorted by the flipbook normals,
-// so the foam churns with the water carrying it instead of sliding past as a
-// printed sheet. Where it appears is the PLACEMENT mask: a base coverage dial,
-// denser on wave crests, and collecting against the channel's ends.
-const FOAM_TILE_A = 2.6;
-const FOAM_TILE_B = 1.35;
-// The mask is sampled STRETCHED ACROSS the flow, because the top face is
-// foreshortened vertically on screen: an isotropic world-space pattern shows
-// up squashed into horizontal streaks. Stretching the across axis by roughly
-// the foreshortening puts the lace back to reading round. (The bake itself is
-// now near-isotropic; the compensation lives here, where the viewing angle
-// that causes it lives.)
-const FOAM_ACROSS = 2.4;
-// EXACTLY the current's speed, both layers. Foam is a floating object and is
-// CARRIED: any other rate visibly outruns (or lags) the surface, especially
-// against the ripple patterns, which deliberately drift slower than the flow
-// (DRIFT_COARSE/DRIFT_FINE) the way surface texture reads naturally. The two
-// layers differing in SPEED also sheared against each other, which read as
-// foam sliding over the water instead of riding it - they differ only in tile
-// and phase now, and the vertex waves already travel at the flow speed, so
-// foam, the troughs it pools in, and the water all move as one.
-const FOAM_DRIFT_A = 1.0;
-const FOAM_DRIFT_B = 1.0;
-// Gentle: the flipbook normals wobble the lace so it churns with the water,
-// and past this amplitude the jiggle marches near-threshold pixels across the
-// cut and reads as flicker.
-const FOAM_DISTORT_A = 0.03;
-const FOAM_DISTORT_B = 0.04;
-// Coverage weights feeding the threshold. PLACEMENT COMES FROM THE VISIBLE
-// SURFACE: the wave crests the silhouette shows and the steep patches of the
-// very flipbook samples the lighting shades by - so foam sits on the agitation
-// the player can see, and the baked mask only textures its interior. A large
-// independent base coverage is what reads as random white patches.
-// The web is PERSISTENT, and its placement varies only with things that move
-// slowly and coherently: the travelling vertex waves and the fixed bank band.
-// Every fast-varying term that ever fed the threshold (the flipbook's own
-// steepness) made bits of foam flash in and out at the animation's frame
-// rate, so none do now.
-//
-// The wave bias is toward the TROUGHS (-vCrest): on running water the foam
-// collects in the convergence hollows between waves, not on the crest tops -
-// and crest-white reads as a specular highlight anyway.
-const FOAM_BASE = 0.4;
-const FOAM_TROUGH_W = 0.4;
-const FOAM_BANK_W = 0.5;
-// How far from a channel end the bank foam reaches, in metres.
-const FOAM_BANK_REACH = 0.75;
-const FOAM_CUT = 0.45;
-const FOAM_SOFT = 0.3;
-// Dirty olive-beige, never white: sewer scum under dim lamps. Bright white is
-// read by the eye as shine, which is exactly the misread foam keeps risking.
-const FOAM_COLOR = "#8a8776";
+// Playback rate of the flipbook as a fraction of its captured speed: at half
+// speed its shapes swell and drift the way painted water is animated.
+const PAINT_RATE = 0.5;
 
-// The murk itself, and the faint self-glow that keeps unlit stretches of
-// channel readable (a trace, not the look - lamps light the water). The deep
-// is an olive-BROWN, and the authored fill is pulled far enough toward it
-// that the water reads as silty murk with a trace of the authored hue rather
-// than as green.
-const WATER_DEEP = "#1a140d";
-const GLOW_INTENSITY = 0.14;
+// THE STROKES. The baked cellular web (see scripts/bake-foam.ts) sampled with
+// its tile stretched along the flow, so every cell edge is a long thin line
+// running with the current: those lines ARE the reference's hairline
+// highlights, once thresholded high enough that only the strongest survive.
+// A second, finer sample breaks each line along its length so it is a wisp
+// with soft ends rather than a rule. Distorted by the flipbook normals so the
+// strokes churn with the water; carried at the current's speed. Down a fall
+// the same lines are its ribbons, which is what keeps them continuous over
+// the lip.
+const STROKE_TILE = 1.4;
+const STROKE_STRETCH = 8.0;
+const STROKE_DISTORT = 0.04;
+const STROKE_BREAK_TILE = 0.5;
+const LINE_LO = 0.62;
+const LINE_HI = 0.92;
+const LINE_STRENGTH = 0.7;
+
+// THE TONE. A smooth field, centred on the body colour, drifting toward the
+// deep in the troughs and the light on the crests: the reference's soft
+// tonal variation. Weights on the vertex waves, the flipbook's churn and the
+// strokes; the field is mapped through deep -> body -> light continuously.
+const TONE_CREST_W = 0.18;
+const TONE_CHURN_W = 0.25;
+const TONE_STROKE_W = 0.2;
+// The front sheet darkens smoothly into the deep below the waterline, and a
+// soft pale line sits AT the waterline, where painted water meets its bank.
+const FRONT_DEEP_W = 0.7;
+const WATERLINE_WIDTH = 0.06;
+const WATERLINE_W = 0.45;
+// Water lightens toward a run's ends, softly, the way the reference's river
+// pales toward its banks; metres of reach. A fall is past the end, so it is
+// pale all the way down, which is the reference's paler sheet.
+const BANK_REACH = 0.9;
+const BANK_W = 0.3;
+// The palette, as mixes of the authored colour: the deep leans blue and is
+// only moderately darker (saturated, never black), the lights lean toward
+// the paper.
+const RAMP_DEEP_DARKEN = 0.4;
+const RAMP_DEEP_BLUE = 0.35;
+const RAMP_BODY_DARKEN = 0.12;
+const RAMP_LIGHT_WHITEN = 0.32;
+const RAMP_PALE_WHITEN = 0.72;
+// Sheen: a little gloss and a touch of the environment, as a soft wash.
+const WATER_ROUGHNESS = 0.6;
+const WATER_ENV = 0.2;
+
+// The faint self-glow that keeps an unlit stretch of channel readable (a
+// trace, not the look - lamps light the water).
+const GLOW_INTENSITY = 0.1;
 
 // Alpha: the surface is nearly solid, the front sheet is murky glass so the
 // submerged ball stays a visible silhouette (an opaque front is better water
@@ -326,6 +354,103 @@ const GLOW_INTENSITY = 0.14;
 const ALPHA_SURFACE = 0.97;
 const ALPHA_FRONT_TOP = 0.94;
 const ALPHA_FRONT_BED = 0.8;
+// The front sheet, and everything that meets it, sits this far behind the
+// slab's nominal front. A bank authored to the same depth as the water has
+// its face exactly there too, and two coplanar faces z-fight: the water won
+// on some builds and the bank on others. Behind by a hair, the bank wins,
+// which is what a channel sunk into rock means.
+const FRONT_INSET = 0.002;
+
+// The DRAWDOWN. Water approaching a brink speeds up and its surface dips
+// into the drop - the taper into a fall that a level surface running to a
+// hard edge never has. Over the last DRAWDOWN_REACH metres before the lip
+// the surface lowers by DRAWDOWN of the channel's depth, smoothly, and the
+// fall leaves from that lowered surface.
+const DRAWDOWN = 0.3;
+const DRAWDOWN_REACH = 0.8;
+
+// ---------------------------------------------------------------------------
+// The fall
+// ---------------------------------------------------------------------------
+
+// A channel with a `spill` pours off its downstream end, and the pour is a
+// VOLUME: the slab leaving the channel's end goes where a thrown thing goes -
+// level off the lip, then over, then down - thinning as it speeds up because
+// the same water is passing every point per second. The geometry is a closed
+// tube swept along that parabola. Its first ring is the channel's end
+// rectangle exactly (see the note at the top), rounding into a superellipse
+// over the brow the way a free surface does, and shrinking by v0/v(t) down
+// the arc. A flat sheet with a picture of a waterfall on it was the first
+// attempt, and it read as exactly that from any angle but the game's.
+//
+// Painted like the reference: the strokes become long soft ribbons down the
+// sheet, a bright brow where the sheet curves over the lip, sparkle dots
+// riding the surface, and the base dissolving into a wide soft white cloud
+// (see `sprayPoints`).
+const FALL_GRAVITY = 9.81;
+// Samples along the arc and around a cross-section. Along is uniform in TIME,
+// which packs the samples into the brow where the curve is and spreads them
+// down the straight drop.
+const FALL_STEPS = 48;
+// A MULTIPLE OF EIGHT: the slice's vertices are sampled by angle, and the
+// lip's rectangle has its corners at 45 degrees. A count that skips them
+// cuts each corner to a chamfer, and the channel's sharp corner then stands
+// off the tube's - a black triangle at every corner of the lip.
+const FALL_RING = 32;
+// How far past the pool's surface the tube keeps going.
+const FALL_OVERSHOOT = 0.2;
+// The cross-section rounds from the channel's rectangle at the lip into a
+// superellipse (exponent: 2 an ellipse, higher squarer) over this fraction
+// of the fall.
+const FALL_CORNER = 3.5;
+const FALL_CORNER_BLEND = 0.35;
+// The tube's z-width contracts to this fraction by the base. Its thickness
+// needs no rule: every layer of the slab follows the same parabola from its
+// own height, so the sheet thins by v0/v exactly as continuity says (see
+// `appendFall`).
+const FALL_WIDTH_CONTRACT = 0.85;
+// Over this fraction of the fall the channel's own attributes (its front
+// sheet's murk and alpha, its top's) ease into the fall's, and the strokes'
+// weights ease from the channel's into the ribbons'.
+const FALL_BLEND_IN = 0.7;
+const FALL_RIBBON_W = 0.6;
+const FALL_CHURN_W = 0.12;
+const FALL_LINE_STRENGTH = 0.7;
+// The brow: a bump of light over the first fraction of the fall, where the
+// sheet curves over the lip - zero AT the lip, so the channel's tone carries
+// straight over it.
+const FALL_BROW = 0.2;
+const FALL_BROW_W = 0.5;
+// Where (fraction) the sheet starts dissolving into white toward the base.
+const FALL_WHITE_FROM = 0.72;
+// The sheet's translucency down the drop, and solid where it goes white.
+const FALL_ALPHA = 0.9;
+const FALL_ALPHA_WHITE = 0.97;
+const FALL_WHITE = "#eef6f8";
+
+// SPRAY. One point cloud at the fall; three populations by `aKind`:
+//   0 MIST     large soft white puffs born around the impact, drifting up and
+//              out - the reference's cloud, wide and bright
+//   1 SPLASH   small bright droplets thrown up from the impact, falling back
+//   2 SPARKLE  tiny white dots riding the sheet's front face down the arc
+const SPRAY_COUNT = 260;
+const SPRAY_SPLASH_EVERY = 5;
+const SPRAY_SPARKLE_EVERY = 7;
+const MIST_RISE = 0.25;
+const MIST_DRIFT = 0.4;
+const MIST_SIZE = [0.2, 0.45];
+const MIST_ALPHA = 0.35;
+const MIST_LIFE = [1.8, 3.2];
+// The mist is born low and wide: metres across the impact, and up.
+const MIST_SPREAD_ACROSS = 0.5;
+const MIST_SPREAD_UP = 0.2;
+const SPLASH_UP = [1.2, 2.6];
+const SPLASH_OUT = 1.2;
+const SPLASH_SIZE = [0.015, 0.04];
+const SPLASH_ALPHA = 0.7;
+const SPLASH_LIFE = [0.35, 0.7];
+const SPARKLE_SIZE = [0.012, 0.024];
+const SPARKLE_ALPHA = 0.8;
 
 const fmt = (n: number): string => n.toFixed(4);
 
@@ -340,24 +465,104 @@ function waveSumGlsl(phase: string, across: string): string {
 // Geometry
 // ---------------------------------------------------------------------------
 
-// Both grids in one BufferGeometry, in the body's local frame (three's y-up):
-// the raked surface strip, and the front sheet hanging from its front edge down
-// to the bed. They share the front-edge vertices' displacement (same aWave, same
-// x sampling), so the waterline cannot crack open between them.
-//
-// Attributes beyond position/normal:
-//   aWave  - how much of the wave displacement this vertex takes (1 at the
-//            waterline, fading down the front sheet)
-//   aLit   - how far the light gets: 1 at the surface, ~0 at the bed
-//   aAlpha - opacity
-//   aUp    - 1 on the surface (plan-view texture frame), 0 on the front sheet
-//            (elevation frame). The two faces need different "across"
-//            coordinates or every feature smears into bars (see the removed
-//            renderer's notes).
+// The fall's arc, in the channel's local frame (three's y-up: local +X is
+// the flow axis, +Y up, +Z toward the camera). The water leaves the lip at
+// `xEnd` travelling `side` along x at `v0` and falls under gravity.
+interface FallArc {
+  tEnd: number;
+  // Centre of the cross-section at time t.
+  centre: (t: number) => { x: number; y: number };
+  velocity: (t: number) => { x: number; y: number };
+}
+
+function fallArc(xEnd: number, side: number, v0: number, halfY: number, drop: number): FallArc {
+  const length = drop + halfY + FALL_OVERSHOOT;
+  return {
+    tEnd: Math.sqrt((2 * length) / FALL_GRAVITY),
+    centre: (t) => ({ x: xEnd + side * v0 * t, y: -0.5 * FALL_GRAVITY * t * t }),
+    velocity: (t) => ({ x: side * v0, y: -FALL_GRAVITY * t }),
+  };
+}
+
+// Everything in one BufferGeometry, in the body's local frame: the surface
+// strip, the front sheet hanging from its front edge down to the bed, a cap
+// at the upstream end (and at the downstream end when nothing pours off it),
+// and the fall's tube. Attributes beyond position/normal:
+//   aWave   - how much of the wave displacement this vertex takes (1 at the
+//             waterline, fading down the front sheet, 0 on the tube)
+//   aLit    - how far the light gets: 1 at the surface, ~0 at the bed; on the
+//             tube, the value of the channel face it continues, easing to 1
+//   aAlpha  - opacity, by the same rule
+//   aUp     - 1 on the surface (plan-view texture frame), 0 on the front
+//             sheet (elevation frame); on the tube, by face, blended at the
+//             corners. The two faces need different "across" coordinates or
+//             every feature smears into bars.
+//   aFrozen - the point whose world position the texture frame is taken
+//             from: the vertex itself on the channel, and on the tube the
+//             point of the LIP ring it descends from, so the frame is
+//             constant down the fall and continuous at the lip
+//   aArc    - metres of texture travelled past the lip: time from the lip at
+//             the lip's speed, so a scrolling texture stretches exactly as
+//             the water accelerates; 0 on the channel
+//   aFall   - 0 at the lip (and on the channel), 1 at the tube's end
+//   aFallOn - 1 on the tube
+interface GridArrays {
+  pos: number[];
+  nor: number[];
+  wave: number[];
+  lit: number[];
+  alpha: number[];
+  up: number[];
+  frozen: number[];
+  arc: number[];
+  fall: number[];
+  fallOn: number[];
+  index: number[];
+}
+
+function channelVertex(
+  g: GridArrays,
+  x: number,
+  y: number,
+  z: number,
+  n: [number, number, number],
+  wave: number,
+  lit: number,
+  alpha: number,
+  up: number,
+): void {
+  g.pos.push(x, y, z);
+  g.nor.push(n[0], n[1], n[2]);
+  g.wave.push(wave);
+  g.lit.push(lit);
+  g.alpha.push(alpha);
+  g.up.push(up);
+  g.frozen.push(x, y, z);
+  g.arc.push(0);
+  g.fall.push(0);
+  g.fallOn.push(0);
+}
+
+function quadIndices(index: number[], base: number, rows: number, cols: number, flip = false): void {
+  const stride = cols + 1;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const a = base + r * stride + c;
+      const b = a + 1;
+      const d = a + stride;
+      const e = d + 1;
+      if (flip) index.push(a, b, d, b, e, d);
+      else index.push(a, d, b, b, d, e);
+    }
+  }
+}
+
 interface GridSpec {
   halfX: number;
-  y0: number; // top edge y
-  y1: number; // bottom edge y
+  // Top and bottom edge y AT x: the surface draws down toward a lip, so the
+  // top face and the front sheet's top row follow it.
+  y0: (x: number) => number;
+  y1: (x: number) => number;
   z0: number; // top edge z
   z1: number; // bottom edge z
   rows: number;
@@ -367,131 +572,252 @@ interface GridSpec {
   alpha: (t: number) => number;
 }
 
-function appendGrid(
-  spec: GridSpec,
-  pos: number[],
-  nor: number[],
-  wave: number[],
-  lit: number[],
-  alpha: number[],
-  up: number[],
-  index: number[],
-): void {
+function appendGrid(spec: GridSpec, g: GridArrays): void {
   const cols = Math.max(2, Math.ceil((spec.halfX * 2) / WAVE_SEG));
-  const base = pos.length / 3;
+  const base = g.pos.length / 3;
   // One normal for the whole grid: the plane's own, perpendicular to the row
-  // direction (0, y1-y0, z1-z0) and the flow axis (1, 0, 0). The flipbook
-  // perturbs it per pixel, which is where all the real shape lives.
-  const n = new THREE.Vector3(0, spec.z1 - spec.z0, spec.y0 - spec.y1).normalize();
+  // direction (0, y1-y0, z1-z0) and the flow axis (1, 0, 0). The drawdown's
+  // slope is gentle enough that the surface keeps the flat plane's normal.
+  const n = new THREE.Vector3(0, spec.z1 - spec.z0, spec.y0(0) - spec.y1(0)).normalize();
   for (let r = 0; r <= spec.rows; r++) {
     const t = r / spec.rows;
-    const y = spec.y0 + (spec.y1 - spec.y0) * t;
     const z = spec.z0 + (spec.z1 - spec.z0) * t;
     for (let c = 0; c <= cols; c++) {
       const x = -spec.halfX + (c / cols) * spec.halfX * 2;
-      pos.push(x, y, z);
-      nor.push(n.x, n.y, n.z);
-      wave.push(spec.wave(t));
-      lit.push(spec.lit(t));
-      alpha.push(spec.alpha(t));
-      up.push(spec.up);
+      const y = spec.y0(x) + (spec.y1(x) - spec.y0(x)) * t;
+      channelVertex(g, x, y, z, [n.x, n.y, n.z], spec.wave(t), spec.lit(t), spec.alpha(t), spec.up);
     }
   }
-  const stride = cols + 1;
-  for (let r = 0; r < spec.rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const a = base + r * stride + c;
-      const b = a + 1;
-      const d = a + stride;
-      const e = d + 1;
-      index.push(a, d, b, b, d, e);
+  quadIndices(g.index, base, spec.rows, cols);
+}
+
+// An end cap: waterline to bed, back to front, at one end of the run, facing
+// out along the flow axis. Without it a channel is an open box from any view
+// but the game's own.
+function appendCap(
+  x: number,
+  sign: number,
+  yTop: number,
+  halfY: number,
+  frontZ: number,
+  backZ: number,
+  lit: (t: number) => number,
+  alpha: (t: number) => number,
+  g: GridArrays,
+): void {
+  const base = g.pos.length / 3;
+  const cols = 4;
+  for (let r = 0; r <= FRONT_ROWS; r++) {
+    const t = r / FRONT_ROWS;
+    const y = yTop + (-halfY - yTop) * t;
+    for (let c = 0; c <= cols; c++) {
+      const z = backZ + (frontZ - backZ) * (c / cols);
+      channelVertex(g, x, y, z, [sign, 0, 0], 0, lit(t), alpha(t), 0);
     }
   }
+  quadIndices(g.index, base, FRONT_ROWS, cols, sign > 0);
+}
+
+// The tube. `side` is the direction the water leaves in along x (the sign of
+// the flow), `xEnd` the lip's x, `yTop` the drawn-down surface at the lip.
+//
+// Its cross-sections are VERTICAL SLICES, not planes perpendicular to the
+// travel: every layer of the slab leaving the lip follows the same parabola
+// from its own height, so a slice at time t is the lip's rectangle carried
+// along the arc unturned. That is the physics - the perpendicular thickness
+// then thins by exactly v0/v - and it is what keeps a thick slab from
+// bulging under the lip, which a rigid ring turning with the tangent did:
+// the slab's bottom swung out around a bend tighter than its own depth.
+function appendFall(
+  arc: FallArc,
+  xEnd: number,
+  side: number,
+  v0: number,
+  yTop: number,
+  halfY: number,
+  frontZ: number,
+  backZ: number,
+  lit: (t: number) => number,
+  alpha: (t: number) => number,
+  g: GridArrays,
+): void {
+  const base = g.pos.length / 3;
+  const zMid = (frontZ + backZ) / 2;
+  const halfW = (frontZ - backZ) / 2;
+  // The slice: from the drawn-down surface to the bed, about its own centre.
+  const yc0 = (yTop - halfY) / 2;
+  const a = (yTop + halfY) / 2;
+  const k = FALL_CORNER;
+  const sgnPow = (v: number, e: number): number => Math.sign(v) * Math.abs(v) ** e;
+  for (let i = 0; i <= FALL_STEPS; i++) {
+    const f = i / FALL_STEPS;
+    const t = arc.tEnd * f;
+    const c = arc.centre(t);
+    const v = arc.velocity(t);
+    const speed = Math.hypot(v.x, v.y);
+    // The top and bottom surfaces' outward normal: perpendicular to the
+    // parabola here, pointing up-and-out.
+    const upx = (-v.y / speed) * side;
+    const upy = (v.x / speed) * side;
+    const b = halfW * (1 - (1 - FALL_WIDTH_CONTRACT) * f);
+    const round = Math.min(1, f / FALL_CORNER_BLEND);
+    const w = round * round * (3 - 2 * round);
+    for (let j = 0; j <= FALL_RING; j++) {
+      const phi = (2 * Math.PI * j) / FALL_RING;
+      const cs = Math.cos(phi);
+      const sn = Math.sin(phi);
+      // The rectangle's point on this ray, and the superellipse's; the slice
+      // is the first at the lip and eases into the second.
+      const m = Math.max(Math.abs(cs), Math.abs(sn));
+      const rn = cs / m;
+      const rz = sn / m;
+      const sN = sgnPow(cs, 2 / k);
+      const sZ = sgnPow(sn, 2 / k);
+      const un = rn + (sN - rn) * w;
+      const uz = rz + (sZ - rz) * w;
+      g.pos.push(c.x, c.y + yc0 + a * un, zMid + b * uz);
+      // Normals: the rectangle's face normal and the superellipse's
+      // gradient in the slice, blended the same way; the vertical component
+      // is then the parabola's own normal rather than straight up.
+      const onTop = Math.abs(cs) >= Math.abs(sn);
+      const rgn = onTop ? Math.sign(cs) : 0;
+      const rgz = onTop ? 0 : Math.sign(sn);
+      const sgn = (k * sgnPow(sN, k - 1)) / a ** k;
+      const sgz = (k * sgnPow(sZ, k - 1)) / b ** k;
+      const sl = Math.hypot(sgn, sgz) || 1;
+      const gn = rgn + (sgn / sl - rgn) * w;
+      const gz = rgz + (sgz / sl - rgz) * w;
+      const gl = Math.hypot(gn, gz) || 1;
+      g.nor.push((upx * gn) / gl, (upy * gn) / gl, gz / gl);
+      // Which channel face this point of the slice continues: the top where
+      // the ray points up, the front sheet everywhere else that shows,
+      // blended over the corner. And its depth below the surface at the
+      // lip, for the front sheet's murk and alpha there.
+      const up = Math.max(0, Math.min(1, (cs - Math.abs(sn)) * 3 + 0.5));
+      const below = (1 - rn) / 2;
+      const lit0 = lit(below) + (1 - lit(below)) * up;
+      const alpha0 = alpha(below) + (ALPHA_SURFACE - alpha(below)) * up;
+      const ease = Math.min(1, f / FALL_BLEND_IN);
+      const e = ease * ease * (3 - 2 * ease);
+      g.wave.push(0);
+      g.lit.push(lit0 + (1 - lit0) * e);
+      g.alpha.push(alpha0 + (FALL_ALPHA - alpha0) * e);
+      g.up.push(up);
+      // The lip slice's point on this ray, frozen: the frame the texture is
+      // painted in down the whole fall.
+      g.frozen.push(xEnd, yc0 + a * rn, zMid + halfW * rz);
+      g.arc.push(side * v0 * t);
+      g.fall.push(f);
+      g.fallOn.push(1);
+    }
+  }
+  // Wound outward whichever way the water leaves: the sweep runs along
+  // `side`, which mirrors the winding, so the first quad's face is checked
+  // against the vertex normal it should agree with.
+  const p = (i: number): THREE.Vector3 =>
+    new THREE.Vector3(g.pos[3 * i]!, g.pos[3 * i + 1]!, g.pos[3 * i + 2]!);
+  const a0 = base;
+  const b0 = base + 1;
+  const d0 = base + FALL_RING + 1;
+  const face = p(d0).sub(p(a0)).cross(p(b0).sub(p(a0)));
+  const n0 = new THREE.Vector3(g.nor[3 * a0]!, g.nor[3 * a0 + 1]!, g.nor[3 * a0 + 2]!);
+  quadIndices(g.index, base, FALL_STEPS, FALL_RING, face.dot(n0) < 0);
+}
+
+interface WaterGeometry {
+  geometry: THREE.BufferGeometry;
+  // Where the fall meets the pool, in the body's frame, or null without one.
+  impact: THREE.Vector3 | null;
 }
 
 function waterGeometry(
   halfX: number,
   halfY: number,
-  horizontal: boolean,
   frontZ: number,
   backZ: number,
-): THREE.BufferGeometry {
-  const pos: number[] = [];
-  const nor: number[] = [];
-  const wave: number[] = [];
-  const lit: number[] = [];
-  const alpha: number[] = [];
-  const up: number[] = [];
-  const index: number[] = [];
+  spill: { side: number; v0: number; drop: number } | null,
+): WaterGeometry {
+  const g: GridArrays = {
+    pos: [], nor: [], wave: [], lit: [], alpha: [], up: [], frozen: [], arc: [], fall: [], fallOn: [], index: [],
+  };
+  // See FRONT_INSET: the water's front is a hair behind the slab's.
+  frontZ -= FRONT_INSET;
+  const depth = halfY * 2;
+  const frontWave = (t: number): number => Math.max(0, 1 - (t * depth) / WAVE_FALLOFF) ** 2;
+  const frontLit = (t: number): number => Math.max(0, 1 - (t * depth) / LIGHT_FALLOFF);
+  const frontAlpha = (t: number): number =>
+    ALPHA_FRONT_TOP + (ALPHA_FRONT_BED - ALPHA_FRONT_TOP) * t;
+  // The surface: the waterline, drawing down into the brink before a lip.
+  const surface = (x: number): number => {
+    if (!spill) return halfY;
+    const toLip = halfX - spill.side * x;
+    const s = Math.max(0, Math.min(1, 1 - toLip / DRAWDOWN_REACH));
+    return halfY * (1 - DRAWDOWN * (s * s * (3 - 2 * s)));
+  };
+  const bed = (): number => -halfY;
 
-  if (horizontal) {
-    // The top face: horizontal, AT the waterline, back of the scene to the
-    // front of the slab. The camera sits above it, so perspective shows it as
-    // a band whose height grows the further the water is below the view
-    // centre - the same way every other slab's top face reads.
-    appendGrid(
-      {
-        halfX,
-        y0: halfY,
-        y1: halfY,
-        z0: backZ,
-        z1: frontZ,
-        rows: SURFACE_ROWS,
-        up: 1,
-        wave: () => 1,
-        lit: () => 1,
-        alpha: () => ALPHA_SURFACE,
-      },
-      pos, nor, wave, lit, alpha, up, index,
-    );
-    // The front face, waterline to bed. Its top row coincides with the top
-    // face's front row - same position, same wave weight - so the waterline
-    // cannot crack open between the two.
-    const depth = halfY * 2;
-    appendGrid(
-      {
-        halfX,
-        y0: halfY,
-        y1: -halfY,
-        z0: frontZ,
-        z1: frontZ,
-        rows: FRONT_ROWS,
-        up: 0,
-        wave: (t) => Math.max(0, 1 - (t * depth) / WAVE_FALLOFF) ** 2,
-        lit: (t) => Math.max(0, 1 - (t * depth) / LIGHT_FALLOFF),
-        alpha: (t) => ALPHA_FRONT_TOP + (ALPHA_FRONT_BED - ALPHA_FRONT_TOP) * t,
-      },
-      pos, nor, wave, lit, alpha, up, index,
-    );
-  } else {
-    // A vertical run (the outfall): one sheet, no waterline to rake. The
-    // flipbook streaming along local +X is the whole look.
-    appendGrid(
-      {
-        halfX,
-        y0: halfY,
-        y1: -halfY,
-        z0: frontZ,
-        z1: frontZ,
-        rows: FRONT_ROWS,
-        up: 0,
-        wave: () => 0,
-        lit: () => 1,
-        alpha: () => ALPHA_FRONT_TOP,
-      },
-      pos, nor, wave, lit, alpha, up, index,
-    );
+  // The top face: horizontal, AT the waterline, back of the scene to the
+  // front of the slab. The camera sits above it, so perspective shows it as
+  // a band whose height grows the further the water is below the view
+  // centre - the same way every other slab's top face reads.
+  appendGrid(
+    {
+      halfX,
+      y0: surface,
+      y1: surface,
+      z0: backZ,
+      z1: frontZ,
+      rows: SURFACE_ROWS,
+      up: 1,
+      wave: () => 1,
+      lit: () => 1,
+      alpha: () => ALPHA_SURFACE,
+    },
+    g,
+  );
+  // The front face, waterline to bed. Its top row coincides with the top
+  // face's front row - same position, same wave weight - so the waterline
+  // cannot crack open between the two.
+  appendGrid(
+    {
+      halfX,
+      y0: surface,
+      y1: bed,
+      z0: frontZ,
+      z1: frontZ,
+      rows: FRONT_ROWS,
+      up: 0,
+      wave: frontWave,
+      lit: frontLit,
+      alpha: frontAlpha,
+    },
+    g,
+  );
+  let impact: THREE.Vector3 | null = null;
+  const spillSide = spill ? spill.side : 0;
+  if (spillSide <= 0) appendCap(halfX, 1, surface(halfX), halfY, frontZ, backZ, frontLit, frontAlpha, g);
+  if (spillSide >= 0) appendCap(-halfX, -1, surface(-halfX), halfY, frontZ, backZ, frontLit, frontAlpha, g);
+  if (spill) {
+    const xEnd = spill.side * halfX;
+    const arc = fallArc(xEnd, spill.side, spill.v0, halfY, spill.drop);
+    appendFall(arc, xEnd, spill.side, spill.v0, surface(xEnd), halfY, frontZ, backZ, frontLit, frontAlpha, g);
+    const tPool = Math.sqrt((2 * spill.drop) / FALL_GRAVITY);
+    impact = new THREE.Vector3(arc.centre(tPool).x, halfY - spill.drop, (frontZ + backZ) / 2);
   }
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-  geo.setAttribute("aWave", new THREE.Float32BufferAttribute(wave, 1));
-  geo.setAttribute("aLit", new THREE.Float32BufferAttribute(lit, 1));
-  geo.setAttribute("aAlpha", new THREE.Float32BufferAttribute(alpha, 1));
-  geo.setAttribute("aUp", new THREE.Float32BufferAttribute(up, 1));
-  geo.setIndex(index);
-  return geo;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(g.pos, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(g.nor, 3));
+  geometry.setAttribute("aWave", new THREE.Float32BufferAttribute(g.wave, 1));
+  geometry.setAttribute("aLit", new THREE.Float32BufferAttribute(g.lit, 1));
+  geometry.setAttribute("aAlpha", new THREE.Float32BufferAttribute(g.alpha, 1));
+  geometry.setAttribute("aUp", new THREE.Float32BufferAttribute(g.up, 1));
+  geometry.setAttribute("aFrozen", new THREE.Float32BufferAttribute(g.frozen, 3));
+  geometry.setAttribute("aArc", new THREE.Float32BufferAttribute(g.arc, 1));
+  geometry.setAttribute("aFall", new THREE.Float32BufferAttribute(g.fall, 1));
+  geometry.setAttribute("aFallOn", new THREE.Float32BufferAttribute(g.fallOn, 1));
+  geometry.setIndex(g.index);
+  return { geometry, impact };
 }
 
 // ---------------------------------------------------------------------------
@@ -503,12 +829,12 @@ function waterGeometry(
 interface WaterLook {
   color: string | undefined;
   flow: number;
-  // Half-length of the run along its local flow axis, for the bank-foam band
-  // at its two ends.
+  // Half-length of the run along its local flow axis, for the pale band at
+  // its two ends.
   halfX: number;
-  // Dimensionless multiple over the ripple tiling, the same meaning `tileScale`
-  // has on every other surface: 1 (and absent) is the tuned size, 2 twice as
-  // large.
+  // Dimensionless multiple over the stroke and ripple tiling, the same meaning
+  // `tileScale` has on every other surface: 1 (and absent) is the tuned size,
+  // 2 twice as large.
   tileScale: number;
   // Glow override: the geometry object's `emissive`/`emissiveIntensity`, when
   // authored, replace the default trace derived from the water's own colour.
@@ -516,32 +842,51 @@ interface WaterLook {
   emissiveIntensity: number | undefined;
 }
 
+interface Palette {
+  deep: THREE.Color;
+  body: THREE.Color;
+  light: THREE.Color;
+  pale: THREE.Color;
+}
+
+// The ramp, all from the one authored colour.
+function paletteOf(color: string | undefined): Palette {
+  const tint = new THREE.Color(color ?? "#3d6b52");
+  const white = new THREE.Color(1, 1, 1);
+  const black = new THREE.Color(0, 0, 0);
+  const blue = new THREE.Color(0.1, 0.2, 0.55);
+  return {
+    deep: tint.clone().lerp(blue, RAMP_DEEP_BLUE).lerp(black, RAMP_DEEP_DARKEN),
+    body: tint.clone().lerp(black, RAMP_BODY_DARKEN),
+    light: tint.clone().lerp(white, RAMP_LIGHT_WHITEN),
+    pale: tint.clone().lerp(white, RAMP_PALE_WHITEN),
+  };
+}
+
 // A MeshStandardMaterial rather than a raw ShaderMaterial, so the water is lit
 // by the same lamps, environment and tone mapping as everything around it - the
-// custom parts (flipbook normals, waves, foam, murk) are injected around the
-// standard lighting rather than reimplementing it.
+// custom parts (tone, hairlines, waterline, the fall's ribbons and brow) are
+// injected around the standard lighting rather than reimplementing it. The
+// normal is left the surface's own: the sheen is a wash, not glints.
 function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
-  const tint = new THREE.Color(look.color ?? "#3d6b52");
-  // The authored colour is a flat-renderer fill; the water's body is that hue
-  // pulled far down toward murk, because foam only reads bright on dark water.
-  const deep = new THREE.Color(WATER_DEEP);
-  tint.lerp(deep, 0.9);
-
+  const palette = paletteOf(look.color);
   const mat = new THREE.MeshStandardMaterial({
-    color: tint,
-    roughness: 0.16,
+    color: palette.body,
+    roughness: WATER_ROUGHNESS,
     metalness: 0,
     transparent: true,
     depthWrite: false,
-    side: THREE.FrontSide,
+    // The channel's sheets are seen from either side in the editor's orbit;
+    // the tube is closed and culls its own inside in the fragment shader.
+    side: THREE.DoubleSide,
   });
-  mat.envMapIntensity = 0.55;
+  mat.envMapIntensity = WATER_ENV;
 
   const flip = ensureFlipbook();
   // Both loads start HERE, at material build, not inside onBeforeCompile:
   // that hook first runs at first render, which is after `assetsSettled` has
   // already been awaited - a load kicked off there is invisible to the settle
-  // point and a headless grab photographs foamless water.
+  // point and a headless grab photographs strokeless water.
   const foam = ensureFoam();
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = waterTime;
@@ -551,16 +896,17 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
     // Tiling as UNIFORMS rather than baked into the shader text: every water
     // material shares one program (see customProgramCacheKey), and a baked
     // constant would hand every body whichever tiling compiled first.
-    shader.uniforms.uTileCoarse = { value: TILE_COARSE * look.tileScale };
-    shader.uniforms.uTileFine = { value: TILE_FINE * look.tileScale };
+    shader.uniforms.uTileScale = { value: look.tileScale };
     shader.uniforms.uFoam = { value: foam };
     shader.uniforms.uFoamReady = foamReady;
-    shader.uniforms.uFoamColor = { value: new THREE.Color(FOAM_COLOR) };
     shader.uniforms.uHalfX = { value: look.halfX };
-    // The glow takes the murked tint, not the raw authored fill - a green glow
-    // over brown water would paint the green right back on.
+    shader.uniforms.uDeep = { value: palette.deep };
+    shader.uniforms.uBody = { value: palette.body };
+    shader.uniforms.uLight = { value: palette.light };
+    shader.uniforms.uPale = { value: palette.pale };
+    shader.uniforms.uWhite = { value: new THREE.Color(FALL_WHITE) };
     shader.uniforms.uGlowColor = {
-      value: (look.emissive ? new THREE.Color(look.emissive) : tint.clone()).multiplyScalar(
+      value: (look.emissive ? new THREE.Color(look.emissive) : palette.body.clone()).multiplyScalar(
         look.emissiveIntensity ?? GLOW_INTENSITY,
       ),
     };
@@ -570,51 +916,48 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       attribute float aLit;
       attribute float aAlpha;
       attribute float aUp;
+      attribute vec3 aFrozen;
+      attribute float aArc;
+      attribute float aFall;
+      attribute float aFallOn;
       uniform float uTime;
       uniform float uFlow;
+      uniform float uHalfX;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
       varying float vCrest;
-      varying float vWaveW;
       varying float vLocalX;
+      varying float vFall;
+      varying float vFallOn;
       varying vec2 vAlongAcross;
-      varying vec3 vTanV;
-      varying vec3 vBitanV;
-    ${shader.vertexShader}`
-      .replace(
-        "#include <beginnormal_vertex>",
-        `#include <beginnormal_vertex>
-      // Tangent frame for the flipbook: u runs along the body's local +X (the
-      // flow axis), v along the grid's own "across" direction. Constant per
-      // face, which is exact for these planes.
-      vTanV = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));
-      vBitanV = normalize(cross(vTanV, normalize(normalMatrix * objectNormal)));`,
-      )
-      .replace(
-        "#include <begin_vertex>",
-        `#include <begin_vertex>
+    ${shader.vertexShader}`.replace(
+      "#include <begin_vertex>",
+      `#include <begin_vertex>
       vLit = aLit;
       vAlpha = aAlpha;
       vUp = aUp;
-      vWaveW = aWave;
       vLocalX = position.x;
+      vFall = aFall;
+      vFallOn = aFallOn;
       // Phase measured along the body's OWN flow axis in world space, so two
-      // stretches of one channel share a continuous surface and a rotated run
-      // (the outfall) streams down itself rather than across.
-      vec4 wWp = modelMatrix * vec4(transformed, 1.0);
+      // stretches of one channel share a continuous surface. Taken from the
+      // FROZEN point - the vertex itself on the channel, the lip point a tube
+      // vertex descends from - plus the metres travelled past the lip.
+      vec4 wWp = modelMatrix * vec4(aFrozen, 1.0);
       vec2 wFlowAxis = normalize((modelMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xy);
-      float wAlong = dot(wWp.xy, wFlowAxis);
+      float wAlong = dot(wWp.xy, wFlowAxis) + aArc;
       // The waves ride the current: their phase translates at the authored flow
-      // speed, and each harmonic churns at its own rate on top.
+      // speed, and each harmonic churns at its own rate on top. They die out
+      // toward the run's ends, where a brink goes glassy - and where the fall's
+      // flat first ring has to meet the surface exactly.
       float wPhase = wAlong - uFlow * uTime;
-      // The across coordinate is the UNDISPLACED z, shared by both faces: the
-      // front sheet sits at the same z as the top face's front row, so the
-      // waterline seam stays watertight by construction.
       float wWave = ${waveSumGlsl("wPhase", "wWp.z")};
       wWave = sign(wWave) * pow(abs(wWave), 0.75);
-      vCrest = wWave * aWave;
-      float wDisp = aWave * ${fmt(WAVE_HEIGHT)} * wWave;
+      float wTaper = smoothstep(0.0, ${fmt(WAVE_END_TAPER)}, uHalfX - abs(position.x));
+      float wW = aWave * wTaper;
+      vCrest = wWave * wW;
+      float wDisp = wW * ${fmt(WAVE_HEIGHT)} * wWave;
       transformed.y += wDisp;
       wWp.y += wDisp;
       // Texture coordinates anchored to the WATER (they carry the displacement)
@@ -622,7 +965,7 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       // front sheet.
       float wAcross = mix(dot(wWp.xy, vec2(-wFlowAxis.y, wFlowAxis.x)), wWp.z, aUp);
       vAlongAcross = vec2(wAlong, wAcross);`,
-      );
+    );
 
     shader.fragmentShader = `
       precision highp sampler2DArray;
@@ -630,134 +973,273 @@ function waterMaterial(look: WaterLook): THREE.MeshStandardMaterial {
       uniform float uFlipReady;
       uniform float uTime;
       uniform float uFlow;
-      uniform float uTileCoarse;
-      uniform float uTileFine;
+      uniform float uTileScale;
       uniform vec3 uGlowColor;
       uniform sampler2D uFoam;
       uniform float uFoamReady;
-      uniform vec3 uFoamColor;
+      uniform vec3 uDeep;
+      uniform vec3 uBody;
+      uniform vec3 uLight;
+      uniform vec3 uPale;
+      uniform vec3 uWhite;
       uniform float uHalfX;
       varying float vLit;
       varying float vAlpha;
       varying float vUp;
       varying float vCrest;
-      varying float vWaveW;
       varying float vLocalX;
+      varying float vFall;
+      varying float vFallOn;
       varying vec2 vAlongAcross;
-      varying vec3 vTanV;
-      varying vec3 vBitanV;
-
       // One crossfaded flipbook fetch: the two layers either side of the play
       // head, mixed, unpacked to a tangent-space normal.
       vec3 waterFlipNormal(vec2 uv) {
-        float f = mod(uTime * ${fmt(FLIP_FPS)}, ${fmt(FLIP_FRAMES)});
+        float f = mod(uTime * ${fmt(FLIP_FPS * PAINT_RATE)}, ${fmt(FLIP_FRAMES)});
         float f0 = floor(f);
         float f1 = mod(f0 + 1.0, ${fmt(FLIP_FRAMES)});
         vec3 a = texture(uFlip, vec3(uv, f0)).xyz;
         vec3 b = texture(uFlip, vec3(uv, f1)).xyz;
         return mix(a, b, f - f0) * 2.0 - 1.0;
       }
+      // The continuous ramp: deep below the middle of the tone field, light
+      // above it, the body colour at the centre.
+      vec3 toneRamp(float t) {
+        t = clamp(t, 0.0, 1.0);
+        return t < 0.5 ? mix(uDeep, uBody, t * 2.0) : mix(uBody, uLight, (t - 0.5) * 2.0);
+      }
     ${shader.fragmentShader}`
-      .replace(
-        "#include <normal_fragment_maps>",
-        `
-      // Perturb by the flipbook layers sampled in <color_fragment> above (that
-      // include runs earlier in the assembled shader, so the samples are
-      // declared there and every later stage shares them).
-      vec3 wMapN = normalize(vec3(wNa.xy + wNb.xy * 0.75, wNa.z * wNb.z));
-      wMapN = mix(vec3(0.0, 0.0, 1.0), wMapN, uFlipReady);
-      // THE FOAM BLANKET FLATTENS THE RIPPLES UNDER IT. Without this the
-      // water's specular glints continue straight through the foam and it
-      // reads as extra shine on the same surface; matte, ripple-free patches
-      // against glinting water is what reads as a different substance ON it.
-      wMapN.xy *= 1.0 - 0.85 * wFoam;
-      wMapN = normalize(wMapN);
-      normal = normalize(
-        vTanV * wMapN.x + vBitanV * wMapN.y + normal * wMapN.z);`,
-      )
       .replace(
         "#include <color_fragment>",
         `#include <color_fragment>
+      // The tube is closed: its inside is never water anyone should see.
+      if (vFallOn > 0.5 && !gl_FrontFacing) discard;
+      // How far into the fall's own look this pixel is: 0 at the lip and on
+      // the channel, so the channel's tone carries straight over the brink.
+      float wFb = smoothstep(0.0, ${fmt(FALL_BLEND_IN)}, vFall) * vFallOn;
+
+      // ---- the moving fields ------------------------------------------
       // Two scales of the same animated water, drifting with the current at
-      // different rates. Sampled here - the earliest of the stages that need
-      // them - and used again for the normal perturbation and the emissive
-      // shimmer below.
+      // different rates.
       vec2 wUvA = vec2(
-        (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_COARSE)}) / uTileCoarse,
-        vAlongAcross.y / uTileCoarse);
+        (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_COARSE)}),
+        vAlongAcross.y) / (${fmt(TILE_COARSE)} * uTileScale);
       vec2 wUvB = vec2(
-        (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_FINE)}) / uTileFine,
-        vAlongAcross.y / uTileFine + 0.37);
-      vec3 wNa = waterFlipNormal(wUvA);
-      vec3 wNb = waterFlipNormal(wUvB);
-      // The murk: darker with depth down the front sheet, so the one face the
-      // player mostly sees is a gradient into the water rather than a flat bar.
-      diffuseColor.rgb *= mix(${fmt(DEPTH_FADE)}, 1.0, vLit);
-      // SURFACE FOAM, from the baked mask - and on the surface only (vUp):
-      // foam floats, and painted down the cross-section it reads as noise on a
-      // wall. Two samples at different tiles and drift rates, each with its
-      // UVs distorted by the flipbook normals so the foam churns with the
-      // water carrying it rather than sliding past as a printed sheet.
-      vec2 wFoamBaseA = vec2(
-        vAlongAcross.x - uFlow * uTime * ${fmt(FOAM_DRIFT_A)}, vAlongAcross.y);
-      vec2 wFoamBaseB = vec2(
-        vAlongAcross.x - uFlow * uTime * ${fmt(FOAM_DRIFT_B)}, vAlongAcross.y);
-      float wFa = texture(uFoam,
-        wFoamBaseA / vec2(${fmt(FOAM_TILE_A)}, ${fmt(FOAM_TILE_A * FOAM_ACROSS)})
-          + wNa.xy * ${fmt(FOAM_DISTORT_A)}).r;
-      float wFb = texture(uFoam,
-        wFoamBaseB / vec2(${fmt(FOAM_TILE_B)}, ${fmt(FOAM_TILE_B * FOAM_ACROSS)})
-          + vec2(0.5, 0.41) + wNb.xy * ${fmt(FOAM_DISTORT_B)}).r;
-      // A BLEND, not max(): two drifting samples united by max flicker where
-      // the loser overtakes the winner, and everything feeding the threshold
-      // has to move slowly.
-      float wFoamTex = wFa * 0.7 + wFb * 0.55;
-      // WHERE foam sits: the persistent drifting web, biased into the wave
-      // TROUGHS (foam collects in the convergence hollows between waves) and
-      // against the run's two ends. Nothing fast-varying in here.
-      float wBank = 1.0 - smoothstep(0.0, ${fmt(FOAM_BANK_REACH)}, uHalfX - abs(vLocalX));
-      float wCover = ${fmt(FOAM_BASE)}
-        + ${fmt(FOAM_TROUGH_W)} * clamp(-vCrest, 0.0, 1.0)
-        + ${fmt(FOAM_BANK_W)} * wBank;
-      // A soft shoulder: wide enough that the lace fades into the water at its
-      // edges rather than sitting on it as a cut-out.
-      float wFoamV = wCover * (0.3 + 0.9 * wFoamTex);
-      float wFoam = smoothstep(${fmt(FOAM_CUT)}, ${fmt(FOAM_CUT + 0.45)}, wFoamV)
-        * vUp * uFoamReady;
-      // Matte, dirty, with bubbly internal variation from the mask - and the
-      // water tint bleeding through, so it sits IN the scene's palette.
-      vec3 wFoamCol = uFoamColor * (0.62 + 0.24 * wFa);
-      diffuseColor.rgb = mix(diffuseColor.rgb, wFoamCol, wFoam * 0.65);
-      // A whisper of contact rim just OUTSIDE the foam edge, grounding the
-      // lace on the surface without outlining it.
-      float wRim = smoothstep(${fmt(FOAM_CUT - 0.12)}, ${fmt(FOAM_CUT)}, wFoamV)
-        - smoothstep(${fmt(FOAM_CUT)}, ${fmt(FOAM_CUT + 0.45)}, wFoamV);
-      diffuseColor.rgb *= 1.0 - 0.18 * wRim * vUp * uFoamReady;
-      // Foam is churned air: not glassy and not transparent.
-      diffuseColor.a = vAlpha + (1.0 - vAlpha) * wFoam;`,
-      )
-      .replace(
-        "#include <roughnessmap_fragment>",
-        `#include <roughnessmap_fragment>
-      roughnessFactor = mix(roughnessFactor, 0.95, wFoam);`,
+        (vAlongAcross.x - uFlow * uTime * ${fmt(DRIFT_FINE)}),
+        vAlongAcross.y) / (${fmt(TILE_FINE)} * uTileScale) + vec2(0.0, 0.37);
+      vec3 wNa = waterFlipNormal(wUvA) * uFlipReady;
+      vec3 wNb = waterFlipNormal(wUvB) * uFlipReady;
+      // The strokes: the cellular web stretched along the flow, carried by
+      // the current, churned by the ripples - and the finer sample that
+      // breaks the hairlines along their length.
+      vec2 wCarried = vec2(vAlongAcross.x - uFlow * uTime, vAlongAcross.y);
+      float wStroke = texture(uFoam,
+        wCarried / (vec2(${fmt(STROKE_STRETCH)}, 1.0) * ${fmt(STROKE_TILE)} * uTileScale)
+          + wNa.xy * ${fmt(STROKE_DISTORT)}).r * uFoamReady;
+      float wBreak = texture(uFoam,
+        wCarried / (${fmt(STROKE_BREAK_TILE)} * uTileScale) + vec2(0.5, 0.41)
+          + wNb.xy * 0.02).r * uFoamReady;
+
+      // ---- the tone ----------------------------------------------------
+      float wChurn = wNa.x * 0.7 + wNb.x * 0.5;
+      float wTone = 0.5
+        + ${fmt(TONE_CREST_W)} * vCrest
+        + mix(${fmt(TONE_CHURN_W)}, ${fmt(FALL_CHURN_W)}, wFb) * wChurn
+        + mix(${fmt(TONE_STROKE_W)}, ${fmt(FALL_RIBBON_W)}, wFb) * (wStroke - 0.4);
+      vec3 wCol = toneRamp(wTone);
+      // Hairline highlights: the strongest stroke edges, wisped; the fall's
+      // ribbons are the same lines.
+      float wLine = smoothstep(${fmt(LINE_LO)}, ${fmt(LINE_HI)}, wStroke * (0.55 + 0.7 * wBreak));
+      wCol = mix(wCol, uPale, wLine * mix(${fmt(LINE_STRENGTH)}, ${fmt(FALL_LINE_STRENGTH)}, wFb));
+      // Paler toward the run's ends, softly - and the fall is past an end.
+      float wEndDist = mix(uHalfX - abs(vLocalX), 0.0, vFallOn);
+      float wBank = 1.0 - smoothstep(0.0, ${fmt(BANK_REACH)}, wEndDist);
+      wCol = mix(wCol, uLight, ${fmt(BANK_W)} * wBank);
+      // The brow: a bump of light over the lip, zero at the lip itself.
+      float wBrow = sin(3.14159 * clamp(vFall / ${fmt(FALL_BROW)}, 0.0, 1.0)) * vFallOn;
+      wCol = mix(wCol, uLight, ${fmt(FALL_BROW_W)} * wBrow);
+      // The front sheet: a soft pale waterline, then down into the deep. On
+      // the tube both carry over the lip and ease out with the fall's blend.
+      float wBelow = (1.0 - vLit) * ${fmt(LIGHT_FALLOFF)};
+      float wFront = (1.0 - vUp) * (1.0 - wFb);
+      wCol = mix(wCol, uDeep, wFront * ${fmt(FRONT_DEEP_W)} * smoothstep(0.0, ${fmt(LIGHT_FALLOFF)}, wBelow));
+      wCol = mix(wCol, uPale, wFront * ${fmt(WATERLINE_W)} * (1.0 - smoothstep(0.0, ${fmt(WATERLINE_WIDTH)}, wBelow)));
+      // The base dissolves into white, into the cloud below it.
+      float wWhite = smoothstep(${fmt(FALL_WHITE_FROM)}, 1.0, vFall) * vFallOn;
+      wCol = mix(wCol, uWhite, wWhite);
+      diffuseColor.rgb = wCol;
+      diffuseColor.a = mix(vAlpha, ${fmt(FALL_ALPHA_WHITE)}, wWhite);`,
       )
       .replace(
         "#include <emissivemap_fragment>",
         `#include <emissivemap_fragment>
-      // A trace of glow so an unlit stretch is not a black hole, modulated by
-      // the animation's own churn so it shimmers as the water moves; the foam
-      // carries a whisper of its own so it stays legible in the dark.
-      float wChurn = length(wNa.xy) * length(wNb.xy) * 4.0;
-      totalEmissiveRadiance += uGlowColor * (0.4 + 0.6 * wChurn) * vLit;
-      // A whisper only: emission is glow, and glow is the "extra shiny"
-      // misread - the matte albedo under the lamps is what carries the foam.
-      totalEmissiveRadiance += uFoamColor * wFoam * 0.02;`,
+      // A trace of glow so an unlit stretch is not a black hole; white water
+      // is bright in any light.
+      totalEmissiveRadiance += uGlowColor * vLit;
+      totalEmissiveRadiance += uWhite * wWhite * 0.04;`,
       );
   };
   // Different flows compile different uniforms but share the program cache key
   // unless told apart.
-  mat.customProgramCacheKey = () => "water-flipbook";
+  mat.customProgramCacheKey = () => "water";
   return mat;
+}
+
+// ---------------------------------------------------------------------------
+// Spray
+// ---------------------------------------------------------------------------
+
+// The fall's spray - mist, splash and sparkle - as one point cloud whose every
+// particle is a pure function of the clock and its own seed: no CPU update,
+// nothing to reset, and a pinned clock draws the same spray twice. In the
+// channel's frame: +y is up.
+interface SprayShape {
+  // The arc, so sparkles can ride the sheet.
+  xEnd: number;
+  side: number;
+  v0: number;
+  tEnd: number;
+  // The lip's vertical slice: its centre y and half-height (the drawn-down
+  // surface to the bed), which every slice down the arc carries unturned.
+  sliceY0: number;
+  sliceHalf: number;
+  halfW: number;
+  zMid: number;
+  // Where the arc meets the pool.
+  impact: THREE.Vector3;
+}
+
+function sprayPoints(
+  shape: SprayShape,
+  color: THREE.Color,
+): { points: THREE.Points; geometry: THREE.BufferGeometry; material: THREE.ShaderMaterial } {
+  const pos: number[] = [];
+  const seed: number[] = [];
+  const kind: number[] = [];
+  // A fixed pseudo-random sequence, so the cloud is the same every build.
+  let s = 1234567;
+  const rnd = (): number => {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+  for (let i = 0; i < SPRAY_COUNT; i++) {
+    const k = i % SPRAY_SPARKLE_EVERY === 0 ? 2 : i % SPRAY_SPLASH_EVERY === 0 ? 1 : 0;
+    // Mist and splash are born around the impact; a sparkle's position is
+    // computed on the arc from its seed, so its stored position is unused.
+    pos.push(
+      shape.impact.x + (rnd() - 0.5) * MIST_SPREAD_ACROSS * (k === 0 ? 2 : 0.5),
+      shape.impact.y + rnd() * MIST_SPREAD_UP,
+      shape.impact.z + (rnd() - 0.5) * shape.halfW * 2,
+    );
+    seed.push(rnd(), rnd(), rnd(), rnd());
+    kind.push(k);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute("aSeed", new THREE.Float32BufferAttribute(seed, 4));
+  geometry.setAttribute("aKind", new THREE.Float32BufferAttribute(kind, 1));
+  geometry.boundingSphere = new THREE.Sphere(shape.impact.clone(), 6);
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.merge([
+      THREE.UniformsLib.fog,
+      {
+        uTime: waterTime,
+        uViewHalfHeight: waterViewHalfHeight,
+        uColor: { value: color },
+        uXEnd: { value: shape.xEnd },
+        uSide: { value: shape.side },
+        uV0: { value: shape.v0 },
+        uTEnd: { value: shape.tEnd },
+        uSliceY0: { value: shape.sliceY0 },
+        uSliceHalf: { value: shape.sliceHalf },
+        uHalfW: { value: shape.halfW },
+        uZMid: { value: shape.zMid },
+      },
+    ]),
+    vertexShader: `
+      #include <common>
+      #include <fog_pars_vertex>
+      uniform float uTime;
+      uniform float uViewHalfHeight;
+      uniform float uXEnd;
+      uniform float uSide;
+      uniform float uV0;
+      uniform float uTEnd;
+      uniform float uSliceY0;
+      uniform float uSliceHalf;
+      uniform float uHalfW;
+      uniform float uZMid;
+      attribute vec4 aSeed;
+      attribute float aKind;
+      varying float vFade;
+      varying float vKind;
+      void main() {
+        float isSplash = step(0.5, aKind) * (1.0 - step(1.5, aKind));
+        float isSparkle = step(1.5, aKind);
+        float isMist = 1.0 - isSplash - isSparkle;
+        float life = isMist * mix(${fmt(MIST_LIFE[0]!)}, ${fmt(MIST_LIFE[1]!)}, aSeed.w)
+          + isSplash * mix(${fmt(SPLASH_LIFE[0]!)}, ${fmt(SPLASH_LIFE[1]!)}, aSeed.w)
+          + isSparkle * uTEnd;
+        float ph = fract(uTime / life + aSeed.x);
+        float tau = ph * life;
+        // Mist drifts up and out; splash is thrown up and falls back; a
+        // sparkle rides the arc on the sheet's front face.
+        vec3 p = position;
+        vec3 vel = isMist * vec3((aSeed.y - 0.5) * ${fmt(MIST_DRIFT)}, ${fmt(MIST_RISE)}, (aSeed.z - 0.5) * ${fmt(MIST_DRIFT)})
+          + isSplash * vec3((aSeed.z - 0.5) * ${fmt(SPLASH_OUT * 2)},
+              mix(${fmt(SPLASH_UP[0]!)}, ${fmt(SPLASH_UP[1]!)}, aSeed.y), (aSeed.x - 0.5) * ${fmt(SPLASH_OUT)});
+        p += vel * tau;
+        p.y -= 0.5 * ${fmt(FALL_GRAVITY)} * tau * tau * isSplash;
+        if (isSparkle > 0.5) {
+          float b = uHalfW * (1.0 - ${fmt(1 - FALL_WIDTH_CONTRACT)} * ph);
+          // Up the lip's slice, carried along the arc unturned like every
+          // slice of the sheet, and the front face's z there (the
+          // superellipse solved for z), a hair proud of it.
+          float n = (aSeed.y - 0.5) * 1.6;
+          float zf = b * pow(max(1.0 - pow(abs(n), ${fmt(FALL_CORNER)}), 0.0), ${fmt(1 / FALL_CORNER)});
+          vec2 c = vec2(uXEnd + uSide * uV0 * tau, -0.5 * ${fmt(FALL_GRAVITY)} * tau * tau);
+          p = vec3(c.x, c.y + uSliceY0 + n * uSliceHalf, uZMid + zf + 0.01);
+        }
+        vFade = sin(ph * 3.14159) * (isMist + isSplash) + isSparkle * sin(fract(ph * 3.0 + aSeed.z) * 3.14159);
+        vKind = aKind;
+        float size = isMist * mix(${fmt(MIST_SIZE[0]!)}, ${fmt(MIST_SIZE[1]!)}, aSeed.z) * (0.5 + ph)
+          + isSplash * mix(${fmt(SPLASH_SIZE[0]!)}, ${fmt(SPLASH_SIZE[1]!)}, aSeed.z)
+          + isSparkle * mix(${fmt(SPARKLE_SIZE[0]!)}, ${fmt(SPARKLE_SIZE[1]!)}, aSeed.z);
+        vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = size * projectionMatrix[1][1] * uViewHalfHeight / -mvPosition.z;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `
+      #include <common>
+      #include <fog_pars_fragment>
+      uniform vec3 uColor;
+      varying float vFade;
+      varying float vKind;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        float isMist = 1.0 - step(0.5, vKind);
+        // Mist is a soft airbrushed puff; droplets and sparkles are small
+        // soft-edged dots.
+        float soft = mix(smoothstep(0.5, 0.25, d), smoothstep(0.5, 0.18, d), isMist);
+        float alpha = isMist * ${fmt(MIST_ALPHA)}
+          + step(0.5, vKind) * (1.0 - step(1.5, vKind)) * ${fmt(SPLASH_ALPHA)}
+          + step(1.5, vKind) * ${fmt(SPARKLE_ALPHA)};
+        float a = soft * vFade * alpha;
+        if (a < 0.003) discard;
+        gl_FragColor = vec4(uColor, a);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`,
+    transparent: true,
+    depthWrite: false,
+    fog: true,
+  });
+  const points = new THREE.Points(geometry, material);
+  points.frustumCulled = false;
+  points.renderOrder = 11;
+  return { points, geometry, material };
 }
 
 // ---------------------------------------------------------------------------
@@ -775,14 +1257,18 @@ export interface WaterBuild {
 //
 // Water is a visual effect, so its RENDER controls live on the body's geometry
 // object like every other look in the format - `z`/`depth` place the slab
-// through z, `color` overrides the tint, `tileScale` scales the ripples,
+// through z, `color` overrides the tint, `tileScale` scales the strokes,
 // `emissive`/`emissiveIntensity` override the glow - while the physics (flow,
-// drag) stays on the body. The fields a geometry object aims at extrusions
-// (`kind`, `mesh`, `texture`, `bevel`) mean nothing here and are ignored:
-// water is the one body whose look is not a surface worn over an outline.
+// drag) stays on the body, and so does the SPILL (`data.spill`, the drop off
+// the downstream end, and `spillSpeed`, the lip speed): where the current goes
+// is a fact about the current. The fields a geometry object aims at
+// extrusions (`kind`, `mesh`, `texture`, `bevel`) mean nothing here and are
+// ignored: water is the one body whose look is not a surface worn over an
+// outline.
 export function buildWater(
   root: THREE.Group,
   body: WaterArea,
+  data: LevelBodyData,
   visual: GeometryObjectData | undefined,
 ): WaterBuild {
   const shape = body.primaryShape();
@@ -790,29 +1276,66 @@ export function buildWater(
   if (s.kind !== "circle" && s.kind !== "rect") return { geometries: [], materials: [] };
   const halfX = s.kind === "rect" ? s.size.x / 2 : s.radius;
   const halfY = s.kind === "rect" ? s.size.y / 2 : s.radius;
-  // A run is "horizontal" when its flow axis lies along the world x axis; only
-  // then does the waterline slab-with-top-face form mean anything.
-  const horizontal = Math.abs(Math.sin(body.globalRotation)) < 0.05;
   // The slab through z, in the extruder's convention: depth centred on the
   // plane, shifted by `z`.
   const depth = visual?.depth ?? DEFAULT_WATER_DEPTH;
   const frontZ = (visual?.z ?? 0) + depth / 2;
   const backZ = frontZ - depth;
-  const geo = waterGeometry(halfX, halfY, horizontal, frontZ, backZ);
-  const mat = waterMaterial({
+  // The spill: off the end the flow points at, at the flow's own speed unless
+  // told otherwise. A run with no current spills off its +x end.
+  const drop = data.spill ?? 0;
+  const spill =
+    drop > 0
+      ? {
+          side: body.flow < 0 ? -1 : 1,
+          v0: Math.max(data.spillSpeed ?? Math.abs(body.flow), 0.3),
+          drop,
+        }
+      : null;
+  const look: WaterLook = {
     color: visual?.color ?? body.fillColor ?? undefined,
     flow: body.flow,
     halfX,
     tileScale: visual?.tileScale ?? 1,
     emissive: visual?.emissive,
     emissiveIntensity: visual?.emissiveIntensity,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
+  };
+  const geometries: THREE.BufferGeometry[] = [];
+  const materials: THREE.Material[] = [];
+
+  const built = waterGeometry(halfX, halfY, frontZ, backZ, spill);
+  const mat = waterMaterial(look);
+  const mesh = new THREE.Mesh(built.geometry, mat);
   mesh.castShadow = false;
   mesh.receiveShadow = true;
-  // Transparent, so drawn after the opaque scene; the high renderOrder keeps it
-  // after other transparent scenery it might share pixels with.
+  // Transparent, so drawn after the opaque scene; the high renderOrder keeps
+  // it after other transparent scenery it might share pixels with.
   mesh.renderOrder = 10;
   root.add(mesh);
-  return { geometries: [geo], materials: [mat] };
+  geometries.push(built.geometry);
+  materials.push(mat);
+
+  if (spill && built.impact) {
+    const xEnd = spill.side * halfX;
+    const arc = fallArc(xEnd, spill.side, spill.v0, halfY, spill.drop);
+    const spray = sprayPoints(
+      {
+        xEnd,
+        side: spill.side,
+        v0: spill.v0,
+        tEnd: arc.tEnd,
+        // The lip's slice runs from the drawn-down surface to the bed.
+        sliceY0: (halfY * (1 - DRAWDOWN) - halfY) / 2,
+        sliceHalf: (halfY * (1 - DRAWDOWN) + halfY) / 2,
+        halfW: (frontZ - backZ) / 2,
+        zMid: (frontZ + backZ) / 2,
+        impact: built.impact,
+      },
+      new THREE.Color(FALL_WHITE),
+    );
+    root.add(spray.points);
+    geometries.push(spray.geometry);
+    materials.push(spray.material);
+  }
+  return { geometries, materials };
 }

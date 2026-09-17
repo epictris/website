@@ -472,6 +472,11 @@ export interface EdItem {
   // how hard the water takes hold in 1/s (see `LevelBodyData.flow` / `drag`).
   flow: number;
   drag: number;
+  // Water areas only: the fall off the downstream end - its drop in metres
+  // (0 = none) and the lip speed in m/s (null = the current's own). See
+  // `LevelBodyData.spill` / `spillSpeed`.
+  spill: number;
+  spillSpeed: number | null;
   // Hook-only (see `LevelBodyData.passable`): the hook catches on it and
   // everything else - the avatar, the rope, loose debris - passes through. Per
   // BODY, so `syncBodyProps` carries it across a group: a body half in the way
@@ -1217,6 +1222,8 @@ function fromLevelData(data: LevelData): EdModel {
       force: b.force ?? 0,
       flow: b.flow ?? 0,
       drag: b.drag ?? 0,
+      spill: b.spill ?? 0,
+      spillSpeed: b.spillSpeed ?? null,
       passable: b.passable === true,
       pivot: b.pivot === true,
       pivotAt,
@@ -1367,6 +1374,8 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    spill: 0,
+    spillSpeed: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -1460,6 +1469,8 @@ function fromLevelData(data: LevelData): EdModel {
     force: 0,
     flow: 0,
     drag: 0,
+    spill: 0,
+    spillSpeed: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -1549,6 +1560,8 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    spill: 0,
+    spillSpeed: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -1618,6 +1631,8 @@ function lightItem(
     force: 0,
     flow: 0,
     drag: 0,
+    spill: 0,
+    spillSpeed: null,
     passable: false,
     pivot: false,
     pivotAt: null,
@@ -2082,6 +2097,14 @@ export function toLevelData(model: EdModel, itemOf?: Map<SceneObjectData, number
             // Water carries a current and a rate for the same reason, and only
             // where it means something.
             ...(lead.kind === "water" ? { flow: lead.flow, drag: lead.drag } : {}),
+            // A fall only where one is authored: a drop of 0 is the bank, and
+            // a lip speed is only meaningful beside a drop.
+            ...(lead.kind === "water" && lead.spill > 0
+              ? {
+                  spill: lead.spill,
+                  ...(lead.spillSpeed !== null ? { spillSpeed: lead.spillSpeed } : {}),
+                }
+              : {}),
             // Hook-only geometry, and only when set: an absent field is the
             // colliding body every level authored before the flag has. Written
             // for every kind that builds a body - a static one is the retired
@@ -3163,6 +3186,8 @@ export function syncBodyProps(members: readonly EdItem[]): void {
     m.force = lead.force;
     m.flow = lead.flow;
     m.drag = lead.drag;
+    m.spill = lead.spill;
+    m.spillSpeed = lead.spillSpeed;
     m.passable = lead.passable;
     m.pivot = lead.pivot;
     m.pivotAt = lead.pivotAt;
@@ -3676,6 +3701,8 @@ export function emptyModel(): EdModel {
         force: 0,
         flow: 0,
         drag: 0,
+        spill: 0,
+        spillSpeed: null,
         passable: false,
         pivot: false,
         pivotAt: null,

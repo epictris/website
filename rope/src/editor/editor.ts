@@ -4642,6 +4642,22 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         // ...and the rate it takes hold at, in 1/s. NOT a length: it is a
         // reciprocal time, so it is authored and stored as the same number.
         num("drag", (b) => b.drag, (b, v) => (b.drag = Math.max(0, v)), 0.5);
+        // The fall off the downstream end: its drop in px (0 = none, the run
+        // ends against its bank), and the lip speed in px/s, which is the
+        // current's own unless said otherwise (see `LevelBodyData.spill`).
+        num("spill", (b) => b.spill * M2PX, (b, v) => (b.spill = Math.max(0, v) * PX), 10);
+        num(
+          "spill v",
+          (b) => (b.spillSpeed ?? 0) * M2PX,
+          (b, v) => (b.spillSpeed = Math.max(0, v) * PX),
+          10,
+          {
+            placeholder: leads.length > 1 ? "mixed" : "flow",
+            onEmpty: () => {
+              for (const b of leads) b.spillSpeed = null;
+            },
+          },
+        );
       }
       // Offered for the kinds that build a BODY: an area is a region the sim
       // walks through already, so "the hook is the only thing that finds it"
@@ -6656,6 +6672,9 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       // fresh one runs and drags rather than sitting there as a coloured box.
       flow: DEFAULT_WATER_FLOW * PX,
       drag: DEFAULT_WATER_DRAG,
+      // A fresh run ends against its bank; a fall is opted into on the panel.
+      spill: 0,
+      spillSpeed: null,
       // A fresh body is free; the bearing and the spring are both opted into on
       // the panel, and a spring of no frequency is no spring at all.
       // Hook-only is opt-in: a fresh body is one that collides.

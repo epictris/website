@@ -26,7 +26,7 @@ import { render, renderBall } from "./render/renderer";
 import { SparkSystem } from "./render/sparks";
 import { DebrisSystem } from "./render/debris";
 import { ChainRetract } from "./render/chainRetract";
-import { NO_ORBIT } from "./render3d/space";
+import { NO_ORBIT, type CameraOrbit } from "./render3d/space";
 import { Scene3D } from "./render3d/scene";
 import { assetsSettled, pendingAssets } from "./render3d/assets";
 import { BallLevel } from "./level/ballLevel";
@@ -111,6 +111,20 @@ const pinned = ((): Vec2 | null => {
     return null;
   }
   return new Vec2(x, y);
+})();
+// `orbit=YAW,PITCH` (degrees) turns the 3D view about what it is looking at,
+// the way the editor's orbit does. The game's own view is always head-on, so
+// this is for photographing a shape - a seam the front view hides is the
+// first thing an orbit shows.
+const orbit = ((): CameraOrbit => {
+  const raw = q.get("orbit");
+  if (raw === null) return NO_ORBIT;
+  const [yaw, pitch] = raw.split(",").map(Number);
+  if (yaw === undefined || pitch === undefined || !Number.isFinite(yaw) || !Number.isFinite(pitch)) {
+    console.error(`orbit=${raw} is not a YAW,PITCH pair in degrees; head-on`);
+    return NO_ORBIT;
+  }
+  return { yaw: (yaw * Math.PI) / 180, pitch: (pitch * Math.PI) / 180 };
 })();
 const camera: Camera = {
   position: pinned ?? level.cameraRenderPosition(1),
@@ -259,7 +273,7 @@ function drawFrame(frame: number): void {
     // Measured from the first frame rather than from frame 0, so a single grab
     // pins it at exactly 0 as it always has and its PNG is unchanged.
     scene3d.pinClock((frame - frames[0]!) / 60);
-    scene3d.render(level, camera, 1, NO_ORBIT, chainRetract);
+    scene3d.render(level, camera, 1, orbit, chainRetract);
     if (q.get("probe") !== null) {
       console.log(`probe ${JSON.stringify({ frame, ...scene3d.programProbe() })}`);
     }

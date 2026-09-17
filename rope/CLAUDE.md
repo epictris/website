@@ -120,7 +120,7 @@ Bodies and the solver
 
 - [contact-solver](docs/contact-solver.md) - positional recovery, the sequential-impulse solver, resting contacts, the position pin.
 - [areas-and-friction](docs/areas-and-friction.md) - force areas, surface friction, stiction on scenery, the stall tolerance, area glyphs.
-- [water](docs/water.md) - the drag law, traction loss, and why there is no 3D water renderer.
+- [water](docs/water.md) - the drag law, traction loss, the painted 3D water and the fall.
 - [pivot-and-spring-bodies](docs/pivot-and-spring-bodies.md) - pivots, authored bearings with torsion springs, spring mounts, spawn at rest.
 - [movers](docs/movers.md) - scripted pendulums, rotors and routed platforms, with keys and the contact-speed bar.
 - [sleep](docs/sleep.md) - the displacement-window rest rule, what wakes a body, settle at build.
