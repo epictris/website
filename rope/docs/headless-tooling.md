@@ -22,6 +22,7 @@ bun run src/tools/cli.ts render3d             # 3D camera correspondence, extrus
 bun run src/tools/cli.ts assets               # prop + texture budget, stale bytes, orphans, licences (see The asset store)
 bun run src/tools/cli.ts latch                # the button latch that carries a sub-step click into the next sample, and the click audit
 bun run src/tools/cli.ts clicks session.json  # the DOM button story a P bundle carries, laid against its frames (see The input latch)
+bun run src/tools/cli.ts transport            # the replay transport: play, pause, speed, and which frame a seek lands on (see Watching a replay)
 bun run src/tools/cli.ts play  playtests/grapple-swing.json
 bun run src/tools/cli.ts record playtests/ball-wind-up.json --out session.json  # script → real bundle
 bun run src/tools/cli.ts replay session.json  # replay a P-exported bundle, run invariants

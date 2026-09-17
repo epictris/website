@@ -50,6 +50,7 @@ const steps: Step[] = [
   { name: "assets", cmd: ["bun", "run", CLI, "assets"] },
   { name: "playtest", cmd: ["bun", "run", CLI, "playtest"] },
   { name: "latch", cmd: ["bun", "run", CLI, "latch"] },
+  { name: "transport", cmd: ["bun", "run", CLI, "transport"] },
   { name: "ledges", cmd: ["bun", "run", CLI, "ledges"] },
   ...playtests,
   { name: "bundles", cmd: ["bun", "run", CLI, "bundles"] },

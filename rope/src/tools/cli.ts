@@ -2191,6 +2191,9 @@ switch (cmd) {
   case "latch":
     void cmdLatch();
     break;
+  case "transport":
+    void cmdTransport();
+    break;
   case "clicks":
     if (!arg) fail("usage: cli clicks bundle.json [--all] [--evdev log] [--wayland log]");
     void cmdClicks(arg, rest.includes("--all"), opts(rest).evdev, opts(rest).wayland);
@@ -2245,7 +2248,7 @@ switch (cmd) {
     break;
   default:
     fail(
-      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets> [file] [options]",
+      "usage: cli <play|record|replay|dump|query|scan|trace|settle|compare|continue|render|shot|chainpath|fork|bundles|pull|playtest|restamp|selftest|latch|transport|clicks|ledges|corners|tangents|decompose|dmath|contacts|spring|movers|vines|rails|viscous|breaks|render3d|camera|assets> [file] [options]",
     );
 }
 
@@ -2260,6 +2263,22 @@ async function cmdLatch(): Promise<void> {
     if (!r.pass) failed++;
   }
   console.log(`[latch] ${results.length - failed}/${results.length} cases passed`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// The replay transport's cases (src/sim/transportCases.ts): play, pause, speed
+// and - the part worth a suite - which recorded frame a seek lands on, and how
+// much of the recording it had to re-simulate to get there.
+async function cmdTransport(): Promise<void> {
+  const { runTransportCases } = await import("../sim/transportCases");
+  const results = runTransportCases();
+  let failed = 0;
+  for (const r of results) {
+    console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+    if (!r.pass || process.env.VERBOSE) console.log(`        ${r.detail}`);
+    if (!r.pass) failed++;
+  }
+  console.log(`[transport] ${results.length - failed}/${results.length} cases passed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

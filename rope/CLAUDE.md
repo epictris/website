@@ -27,6 +27,7 @@ bun run test       # THE suite: typecheck + every case suite + every playtest + 
 `?checkpoint=NAME` starts (and restarts) at an authored named spawn instead of the level's own - placed on the editor's notes layer, recorded into every bundle so a replay starts where the run did.
 `/editor` is the level editor.
 **P** downloads a replayable session bundle stamped with the served tree.
+`?replay=NAME` watches one back on a transport - space pauses, `[`/`]` change speed, the arrows and the bar seek, and seeking re-simulates rather than rewinding ([docs/running.md](docs/running.md#watching-a-replay)).
 Controls, gamepad and touch mapping, the level list and the aim modes: [docs/running.md](docs/running.md).
 
 ## Rules that hold everywhere

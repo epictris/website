@@ -63,6 +63,41 @@ Nothing is waiting on the press but the press: the level is downloaded, warmed a
 
 A test run from the editor has no loading screen and no gate - it is the editor's canvas and the editor's cursor, and starts the moment ▶ Test is pressed.
 
+## Watching a replay
+
+`?replay=NAME` plays a recorded session's input stream through the real frame loop instead of live input: same fixed step, same renderer, same digests.
+It is how a recorded complaint is reproduced on the live page - with `?hud=1` reading where the frames go - and how a production run is watched (`?replay=prod/<id>` for a pulled one, `?replay=run:<id>` straight from the store, which is what `/admin`'s **Watch** button opens; see [**Production recording**](production-recording.md)).
+Any bundle works, including every one recorded before the transport existed: a recording is a flat list of frames, and that is all the transport reads.
+
+The page is a transport, drawn along the bottom of the frame (`render/replayHud.ts`):
+
+| | |
+|---|---|
+| **space** | play / pause |
+| **←** / **→** | seek a second back or forward (**shift**: ten seconds) |
+| **,** / **.** | step one frame back or forward, pausing |
+| **[** / **]** | slower / faster, through 0.1x 0.25x 0.5x 1x 2x 4x 8x 16x |
+| **home** / **end** | the first frame / the last |
+| click or drag the bar | seek to the frame under the pointer |
+
+Under 1x the renderer interpolates between steps rather than showing each one several times; over it the loop takes several steps per rendered frame, up to five more than the speed itself asks for, past which a machine that cannot keep up plays slower than it was asked to rather than banking the debt (the same trade the live loop makes).
+The bar also carries the frame under the pointer, and a tick for every **run boundary** it has passed through (see below).
+
+**Seeking is re-simulation, not rewinding** (`sim/replayTransport.ts`).
+The sim has no reverse step and no state snapshot, so the only way to be at frame N is to have stepped N times from a build - exactly what `cli render --frame N` does headlessly, which is why a seek lands bit-identically on the frame the recording played and on the frame the tools describe.
+Forward is therefore free and backward costs the frames between a build and the target, paid off across rendered frames under a budget (24 ms each) so the page keeps answering the pointer while it rewinds; a 2500-frame bundle re-simulates in well under a second.
+A run that ended in a reset is a fresh build, so the transport remembers where each run began and a seek inside the current run never pays for the runs before it.
+Nothing about this reaches the sim: the recorded inputs are fed in the recorded order whatever the transport is doing, and speed, pausing and seeking only decide *when* a step runs.
+
+While a seek passes through frames, the sparks, the debris and the reeling chain are not fed, and the scene is not rebuilt: they are of the frames being skipped, not of the frame being landed on, and they are put back where the seek lands.
+
+A replay keeps the OS cursor and takes no pointer lock - the reticle on screen is the *recorded* player's aim, and the pointer is the hand on the bar.
+`window.__replay` is a live handle on the transport, the way `window.__perf` is one on the perf probe, so a script can pause, seek and read where it landed without going through the keyboard.
+
+Every build during a replay is the **recording's**, including the one a reset makes: a bundle that carries its own geometry (an editor export) or started from a checkpoint would otherwise carry on against whatever level the URL named, and the frames after the reset would be evidence about nothing.
+
+`cli transport` is the transport's case suite (which frame a seek lands on, and how much it had to re-simulate to get there).
+
 ## Checkpoints
 
 `?checkpoint=NAME` starts the run at a **named spawn** in the level instead of at its own spawn (`CheckpointData` in `levelFormat.ts`), which is how an area halfway through a level is playtested without swinging out to it first.

@@ -10,7 +10,7 @@ import { BUTTON_BITS, InputTrace } from "./input/inputTrace";
 import { drawProbeOutline, render, renderBall } from "./render/renderer";
 import { Scene3D } from "./render3d/scene";
 import { BALL_ZOOM, GRAPPLE_ZOOM, type Camera } from "./render/camera";
-import { fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
+import { clientToView, fitCanvas, VIEW_HEIGHT, VIEW_WIDTH, viewTransform } from "./render/viewport";
 import { CameraController } from "./render/cameraController";
 import { PerfProbe } from "./render/perfProbe";
 import { drawPerfHud } from "./render/perfHud";
@@ -35,6 +35,8 @@ import {
 import type { FrameInput } from "./input/frameInput";
 import type { IInputSource } from "./input/frameInput";
 import { levelFromRecording } from "./sim/replay";
+import { handleReplayKey, ReplayTransport, type ReplayHost } from "./sim/replayTransport";
+import { drawReplayHud, replayBarFrame, replayBarFrameAtX } from "./render/replayHud";
 import { PlaytestRecorder } from "./playtest/recorder";
 import {
   ADMIN_API,
@@ -149,8 +151,23 @@ const loading = new LoadingScreen();
 // `?hud=1`/`window.__perf` reading where the frames go. After the last recorded
 // frame the final input repeats for ever, holding the end pose steady for a
 // settled reading.
-let replayFrames: FrameInput[] | null = null;
-let replayIndex = 0;
+//
+// The transport (play/pause, speed, seeking) is `sim/replayTransport.ts`; it
+// owns WHEN a step runs and nothing else, so the sim sees the recorded inputs in
+// the recorded order however the bar is being dragged. Null until the recording
+// has landed, which is also what holds the loop still while it is in flight: a
+// page that spent the fetch simulating the URL's level on live input would open
+// on a run nobody recorded and then throw it away.
+let replay: ReplayTransport | null = null;
+// The recording being watched. Every level built for the rest of the session
+// comes from it (see `makeLevel`): a replayed run that resets mid-way - a jump
+// press, a kill zone - has to rebuild the level the RECORDING was played on,
+// and the URL's level is not it for a bundle that carries its own geometry or
+// started from a checkpoint.
+let replayRec: Recording | null = null;
+// A build happened while a seek was passing through it, so the 3D scene is of
+// bodies that no longer exist (see `buildRun`).
+let sceneStale = false;
 const replayName = params.get("replay");
 // The aim the RECORDED player had on the frame being replayed, drawn where the
 // live reticle would be: a replay watched without it shows a ball steering
@@ -182,6 +199,13 @@ const checkpoint = params.get("checkpoint");
 const levelData = spawnAtCheckpoint(levelSpec.data, checkpoint);
 
 function makeLevel(): Level | BallLevel {
+  // While a recording is being watched, every build in the session is the
+  // recording's - the first one and every one a reset makes. Built from the URL
+  // instead, a replay that crossed a kill zone carried on against the level the
+  // page was opened with, which for a self-contained bundle (editor export) or
+  // a run played from a checkpoint is a different level entirely, and the frames
+  // after the reset were then evidence about nothing.
+  if (replayRec) return levelFromRecording(replayRec);
   return isBall ? new BallLevel(levelData) : new Level(levelData, levelSpec.init);
 }
 
@@ -206,23 +230,43 @@ const chainRetract = params.get("retract") !== null ? new ChainRetract() : null;
 // click can be laid beside the frames of the run it landed in.
 let resets = 0;
 
-function reset(): void {
+// A fresh level to play, and everything that watched the dead one cleared.
+//
+// The reset path and the replay transport's rebuild are the same act - a run
+// starting from a build - so they are one function: a transport that built its
+// levels its own way would be replaying a session the page cannot produce.
+function buildRun(): void {
   level = makeLevel();
-  resets++;
   // A restart must not carry the dead level's embers, nor the rubble of a wall
   // that is standing again.
   sparks.reset();
   debris.reset();
   chainRetract?.reset();
   level.onReset = reset;
-  // A reset builds a new level, so it builds a new scene: every extrusion in it
-  // belongs to bodies that no longer exist.
-  buildScene();
-  // Easing in from wherever the camera died would be a swoop across the level.
-  cameraCtl.snap();
   recFrames.length = 0;
   recDigests.length = 0;
   recWorldDigests.length = 0;
+  // A reset builds a new level, so it builds a new scene: every extrusion in it
+  // belongs to bodies that no longer exist. Held off while a seek is passing
+  // through a build on its way somewhere - the scene it would build is of a
+  // frame nobody is going to look at, and rebuilding it is the most expensive
+  // thing on the page - and paid once where the seek lands (see `seekEnded`).
+  if (replay?.seeking) {
+    sceneStale = true;
+    return;
+  }
+  buildScene();
+  // Easing in from wherever the camera died would be a swoop across the level.
+  cameraCtl.snap();
+}
+
+function reset(): void {
+  buildRun();
+  resets++;
+  // The recording's runs are not written down in it (a bundle is a flat frame
+  // list), so the transport learns their boundaries from the resets it steps
+  // through - which is what makes a seek back into the current run cheap.
+  replay?.noteReset();
 }
 level.onReset = reset;
 
@@ -244,14 +288,19 @@ const ballInput = isBall
       canvas,
       camera,
       () => (level as BallLevel).ball.globalPosition,
-      // Always the one driving: the game has no second mode to be idle in, which
-      // is the editor's case and not this one.
-      () => true,
+      // Always the one driving, EXCEPT while a recording is being watched: the
+      // aim on screen there is the recorded player's, this source steers
+      // nothing, and a source that believes it is driving would take the
+      // pointer lock off the first click on the transport bar (see
+      // `AimPointer.requestLock`). The game otherwise has no second mode to be
+      // idle in, which is the editor's case and not this one.
+      () => replayName === null,
       // The canvas hides the OS pointer here (below) and the reticle stands in
       // for it, so the aim may be born above the avatar and travel from there
       // (see `AimPointer`). A test run from the editor passes nothing here: the
-      // arrow is still on screen there, and the aim has to stay under it.
-      true,
+      // arrow is still on screen there, and the aim has to stay under it - and
+      // nor does a replay, which keeps the desktop cursor for the bar.
+      replayName === null,
     )
   : null;
 // The ball controller draws its own aim reticle (clamped to the chain's reach),
@@ -259,7 +308,11 @@ const ballInput = isBall
 // CANVAS only: the rest of the page keeps the desktop cursor, because the
 // loading screen ends at a button and a button is aimed at with the pointer the
 // player can see (see `index.html`).
-if (isBall) canvas.style.cursor = "none";
+//
+// Never while a recording is being watched: the reticle there is the RECORDED
+// player's aim and the pointer is the hand on the transport bar, so taking the
+// cursor away would leave the scrub bar to be dragged blind.
+if (isBall && replayName === null) canvas.style.cursor = "none";
 const liveInput = isBall
   ? null
   : new LiveInputSource(canvas, camera, () => (level as Level).player.globalPosition);
@@ -418,6 +471,82 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// What the replay transport drives. It decides when a step runs; the level, the
+// scene, the particles and the bundle buffers are all the page's, and this is
+// the whole of what it is allowed to do to them.
+const replayHost: ReplayHost = {
+  rebuild: buildRun,
+  step: stepLevel,
+  seekEnded: () => {
+    // The sparks and the debris are of the frames the seek passed through, not
+    // of the one it landed on, and the reeling chain watched a run cross the
+    // level in a handful of rendered frames.
+    sparks.reset();
+    debris.reset();
+    chainRetract?.reset();
+    if (sceneStale) {
+      buildScene();
+      sceneStale = false;
+    }
+    // The camera has been following an avatar that teleported. Easing in from
+    // where it was left would be the swoop a reset avoids for the same reason.
+    cameraCtl.snap();
+  },
+};
+
+// The frame under the pointer on the scrub bar, or null when the pointer is
+// elsewhere: what a click would seek to, drawn under the pointer so the click
+// can be aimed before it is made.
+let replayHover: number | null = null;
+
+// The transport's keys, and its scrub bar. Installed only while a recording is
+// being watched: they are the replay page's interface and they must not exist on
+// the played one, where space is a button and the arrows are movement.
+if (replayName) {
+  window.addEventListener("keydown", (e) => {
+    if (!replay) return;
+    // The page scrolls on space and the arrows, and a scrolled page is a game
+    // canvas sliding out of the window.
+    if (handleReplayKey(replay, e)) e.preventDefault();
+  });
+  let scrubbing = false;
+  const barFrameAt = (e: PointerEvent): number | null => {
+    if (!replay) return null;
+    const at = clientToView(canvas, e.clientX, e.clientY);
+    return replayBarFrame(view, at.x, at.y, replay.frames.length);
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    const frame = barFrameAt(e);
+    if (frame === null || !replay) return;
+    scrubbing = true;
+    canvas.setPointerCapture(e.pointerId);
+    replay.seek(frame);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    replayHover = barFrameAt(e);
+    if (!scrubbing || !replay) return;
+    // A drag that has grabbed the bar follows the pointer's HORIZONTAL wherever
+    // it goes: a hand dragging a scrubber wanders off it, and a drag that let go
+    // the moment it left the panel would be a scrubber that fights back.
+    //
+    // A seek per pointer move, and the transport takes the newest target: a
+    // rewind that has not landed yet is abandoned for wherever the hand has got
+    // to, rather than queueing up every frame it passed over.
+    const at = clientToView(canvas, e.clientX, e.clientY);
+    replay.seek(replayBarFrameAtX(view, at.x, replay.frames.length));
+  });
+  const endScrub = (e: PointerEvent): void => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    canvas.releasePointerCapture(e.pointerId);
+  };
+  canvas.addEventListener("pointerup", endScrub);
+  canvas.addEventListener("pointercancel", endScrub);
+  canvas.addEventListener("pointerleave", () => {
+    replayHover = null;
+  });
+}
+
 // Three places a replay can come from: a file under `public/` (the original,
 // for a bundle copied there by hand), `prod/<name>` for a pulled production run
 // the dev server serves out of `playtests/prod/`, and `run:<id>` for a run
@@ -446,16 +575,15 @@ if (replayName) {
     const deserialize = recordingDeserializer(rec);
     const frames = rec.frames.map(deserialize);
     // A self-contained recording (level-editor export) carries its own
-    // geometry; play it on that, not on the registry level the URL named.
-    level = levelFromRecording(rec);
-    level.onReset = reset;
-    sparks.reset();
-    debris.reset();
-    chainRetract?.reset();
-    buildScene();
-    cameraCtl.snap();
-    replayFrames = frames;
-    replayIndex = 0;
+    // geometry; play it on that, not on the registry level the URL named. Set
+    // before the build, because it is what the build reads (see `makeLevel`).
+    replayRec = rec;
+    buildRun();
+    replay = new ReplayTransport(frames, replayHost);
+    // A live handle on the transport, like `window.__perf` is on the probe: a
+    // script driving the page (a grab, a headless check) can pause it, seek it
+    // and read where it landed without going through the keyboard.
+    (window as unknown as { __replay: ReplayTransport }).__replay = replay;
   })();
 }
 
@@ -504,6 +632,67 @@ function pollHeap(now: number): void {
   heapLimitMb = memory.jsHeapSizeLimit / (1024 * 1024);
 }
 
+// What the steps of the rendered frame being built have cost, and how many
+// there were, for the perf panel. Module level because `stepLevel` is: it runs
+// a few times in a played frame, a couple of dozen in a fast-forwarded one and
+// as many as the budget buys in a seeking one, and a closure minted per
+// rendered frame to carry two numbers is allocation the loop does not need.
+let frameSimMs = 0;
+let frameSteps = 0;
+
+// One sim step on one input, plus everything outside the sim that watches it.
+// The live loop and the replay transport both come through here, so a replayed
+// frame is stepped by the same code as a played one.
+//
+// `seeking` is a replay passing through this frame on its way to another (see
+// ReplayTransport): the step is real and the sim sees exactly what it saw the
+// first time, but the sparks, the debris and the reeling chain belong to a run
+// being watched, and a seek is not watching - fed them, a rewind across a run
+// would land holding every ember it had ever thrown.
+function stepLevel(frameInput: FrameInput, seeking: boolean): void {
+  if (replay) replayAim = recordedAim(level, frameInput);
+  const simT0 = performance.now();
+  const stepped = level;
+  level.physicsProcess(frameInput, STEP);
+  frameSimMs += performance.now() - simT0;
+  frameSteps++;
+  if (!seeking) {
+    // Drained inside the catch-up loop rather than after it: a frame that runs
+    // several steps would otherwise silently drop every caught-up step's events.
+    sparks.ingest(level.sparkEvents);
+    // Per step for the same reason: a break that happens on a caught-up step is
+    // the only frame its event exists on (see `BallLevel.breakEvents`).
+    debris.ingest(level.breakEvents);
+    // Likewise per step, so a chain let go and re-thrown across two steps of
+    // one render frame is seen as both rather than as nothing having changed.
+    chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
+  }
+  // The bundle buffers are fed whether or not anyone is watching, so that they
+  // hold exactly what has been simulated since the current build: a P download
+  // taken after a seek is then the frames from that build to here, which is a
+  // bundle that replays, rather than a run with a hole in it.
+  const serialized = serializeInput(frameInput);
+  lastHeld = serialized.h;
+  if (level !== stepped) {
+    // The step reset the level (a jump press, or the kill zone). The input
+    // belongs to the run that just ended - the old level stepped it - and the
+    // fresh level has not seen it, so it is not the first frame of the new run.
+    // Recording it as one is what made runs after a reset replay a frame out.
+    recorder?.frame(serialized);
+    recorder?.digest(worldDigestOf(stepped));
+    recorder?.endRun(frameInput.jump.pressed ? "reset" : "kill");
+    recHeldAtStart = serialized.h;
+    recorder?.startRun(levelId, serialized.h);
+  } else {
+    recFrames.push(serialized);
+    recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
+    const wd = worldDigestOf(level);
+    recWorldDigests.push(wd);
+    recorder?.frame(serialized);
+    if (level.frame % DIGEST_EVERY === 0) recorder?.digest(wd);
+  }
+}
+
 function frame(now: number): void {
   // The whole callback's wall time, which is the HUD's "cpu": the share of each
   // frame the main thread is actually busy in. Everything below is inside it,
@@ -526,60 +715,35 @@ function frame(now: number): void {
   // Exponential moving average of the render frame rate.
   if (dt > 0) fps += ((1 / dt) - fps) * 0.1;
 
-  let steps = 0;
-  let simMs = 0;
-  while (accumulator >= STEP && steps < MAX_STEPS_PER_FRAME) {
-    const frameInput: FrameInput = replayFrames
-      ? replayFrames[Math.min(replayIndex++, replayFrames.length - 1)]!
-      : input.sample();
-    if (replayFrames) replayAim = recordedAim(level, frameInput);
-    const simT0 = performance.now();
-    const stepped = level;
-    level.physicsProcess(frameInput, STEP);
-    simMs += performance.now() - simT0;
-    // Drained inside the catch-up loop rather than after it: a frame that runs
-    // several steps would otherwise silently drop every caught-up step's events.
-    sparks.ingest(level.sparkEvents);
-    // Per step for the same reason: a break that happens on a caught-up step is
-    // the only frame its event exists on (see `BallLevel.breakEvents`).
-    debris.ingest(level.breakEvents);
-    // Likewise per step, so a chain let go and re-thrown across two steps of
-    // one render frame is seen as both rather than as nothing having changed.
-    chainRetract?.observe(level instanceof BallLevel ? level : null, STEP);
-    const serialized = serializeInput(frameInput);
-    lastHeld = serialized.h;
-    if (level !== stepped) {
-      // The step reset the level (a jump press, or the kill zone). The input
-      // belongs to the run that just ended - the old level stepped it - and the
-      // fresh level has not seen it, so it is not the first frame of the new run.
-      // Recording it as one is what made runs after a reset replay a frame out.
-      recorder?.frame(serialized);
-      recorder?.digest(worldDigestOf(stepped));
-      recorder?.endRun(frameInput.jump.pressed ? "reset" : "kill");
-      recHeldAtStart = serialized.h;
-      recorder?.startRun(levelId, serialized.h);
-    } else {
-      recFrames.push(serialized);
-      recDigests.push(level instanceof BallLevel ? digestBall(level) : digest(level));
-      const wd = worldDigestOf(level);
-      recWorldDigests.push(wd);
-      recorder?.frame(serialized);
-      if (level.frame % DIGEST_EVERY === 0) recorder?.digest(wd);
+  frameSteps = 0;
+  frameSimMs = 0;
+  if (replay) {
+    // A replay's steps are the transport's to schedule: it may run none
+    // (paused), sixteen (fast-forward) or fifty-five (paying off a seek).
+    replay.pump(dt);
+  } else if (replayName === null) {
+    while (accumulator >= STEP && frameSteps < MAX_STEPS_PER_FRAME) {
+      stepLevel(input.sample(), false);
+      accumulator -= STEP;
     }
-    accumulator -= STEP;
-    steps++;
+    // Debt beyond what the capped loop repaid is dropped, keeping only the
+    // sub-step remainder for interpolation. Banking it is what turned overload
+    // into a death spiral (see MAX_STEPS_PER_FRAME); dropping it means a machine
+    // that cannot run 60 sim steps a second plays slightly slowed down instead of
+    // at a slideshow frame rate. Recorded bundles are untouched - they capture
+    // executed steps, and shedding executes none.
+    if (accumulator >= STEP) accumulator %= STEP;
   }
-  // Debt beyond what the capped loop repaid is dropped, keeping only the
-  // sub-step remainder for interpolation. Banking it is what turned overload
-  // into a death spiral (see MAX_STEPS_PER_FRAME); dropping it means a machine
-  // that cannot run 60 sim steps a second plays slightly slowed down instead of
-  // at a slideshow frame rate. Recorded bundles are untouched - they capture
-  // executed steps, and shedding executes none.
-  if (accumulator >= STEP) accumulator %= STEP;
+  // A replay page before its recording has landed steps nothing at all: the
+  // frames it would run are of the URL's level on live input, and the recording
+  // replaces the level the moment it arrives.
+  const steps = frameSteps;
+  const simMs = frameSimMs;
   // Render interpolation: how far past the last completed physics step this
   // frame lands. The sim runs at a fixed 60 Hz; drawing its raw state on a
-  // faster display repeats and skips frames, which reads as jitter.
-  const alpha = Math.min(1, accumulator / STEP);
+  // faster display repeats and skips frames, which reads as jitter. The
+  // transport keeps its own remainder, because its step clock runs at a speed.
+  const alpha = replay ? replay.alpha : Math.min(1, accumulator / STEP);
 
   // Once per rendered frame, on the render clock: the sparks are outside the
   // fixed step entirely, like the camera ease.
@@ -620,7 +784,7 @@ function frame(now: number): void {
       level,
       camera,
       fps,
-      replayFrames ? replayAim : ballInput!.aimPoint(),
+      replay ? replayAim : ballInput!.aimPoint(),
       alpha,
       scene3d !== null,
       sparks,
@@ -635,7 +799,7 @@ function frame(now: number): void {
       camera,
       fps,
       showDebug,
-      replayFrames ? replayAim : liveInput!.crosshairAim(),
+      replay ? replayAim : liveInput!.crosshairAim(),
       alpha,
       cameraCtl.held,
       scene3d !== null,
@@ -650,6 +814,21 @@ function frame(now: number): void {
   // The panel reads the readings the LAST frame produced, which is what lets the
   // sample below cover this frame's own drawing of it.
   if (showPerfHud) drawPerfHud(ctx, view, perf.snapshot, perf.history);
+
+  // The transport bar, over everything, for as long as a recording is being
+  // watched (see render/replayHud.ts).
+  if (replay) {
+    drawReplayHud(ctx, view, {
+      index: replay.index,
+      total: replay.frames.length,
+      paused: replay.paused,
+      speed: replay.speed,
+      target: replay.target,
+      runStarts: replay.runStarts,
+      atEnd: replay.atEnd,
+      hover: replayHover,
+    });
+  }
 
   // After the frame is drawn, so the draw-call and triangle counts are this
   // frame's rather than the last one's, and so the CPU figure covers all of it.
@@ -760,8 +939,9 @@ function enterFullscreen(): void {
 // The ball controller only: the grapple controller aims with the OS pointer
 // itself and draws no reticle, so hiding it there would leave nothing to aim
 // with.
+// A replay keeps its pointer for the same reason the canvas does (see there).
 function hidePointer(): void {
-  if (isBall) document.documentElement.style.cursor = "none";
+  if (isBall && replayName === null) document.documentElement.style.cursor = "none";
 }
 
 // Play once the level's assets are in - or once the loading screen has run out
@@ -811,7 +991,10 @@ async function boot(): Promise<void> {
     // this same press is about to start - Chrome refuses it outright (see
     // `BallInputSource.takePointerLock`). Fullscreen follows in the same
     // handler, and hands the lock back if it is refused.
-    ballInput?.takePointerLock();
+    //
+    // A replay takes no lock: nothing on the page is aimed, and a locked
+    // pointer is one that cannot reach the transport bar.
+    if (replayName === null) ballInput?.takePointerLock();
     enterFullscreen();
     hidePointer();
   });

@@ -9,7 +9,9 @@ fifteen idle minutes), and verifies it in a subprocess. A run is attributed by a
 server-set `pid` cookie, with the address as corroboration only.
 
 - `/admin` (password: Caddy `basic_auth`, hash from the `ROPE_ADMIN_HASH` secret)
-  lists runs, live sessions, players and storage; **watch** opens `/?replay=run:<id>`.
+  lists runs, live sessions, players and storage; **watch** opens `/?replay=run:<id>`,
+  which plays the run on the transport - paused, scrubbed and stepped a frame at a
+  time (see [**Watching a replay**](running.md#watching-a-replay)).
 - `bun run replay pull` downloads new runs into `playtests/prod/` (gitignored)
   and replays each against its digests; `cli scan --all` includes that directory.
   Credentials: `ROPE_ADMIN_USER` / `ROPE_ADMIN_PASSWORD` in `rope/.env`.
