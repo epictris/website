@@ -129,8 +129,27 @@ const scene3d = ((): Scene3D | null => {
 })();
 if (!scene3d) sceneCanvas.style.display = "none";
 
+// `?dpr=N` draws the frame at a device pixel ratio this display does not have,
+// so the fill cost a 4K or HiDPI player pays can be read on a 1080p desk (see
+// `fitCanvas`). Everything above the canvas is unaffected: the frame is still
+// 1920x1080 view pixels, so the picture is identical and only the number of
+// fragments behind it changes. Debug only, and never set in production.
+//
+// Clamped to 4 because the buffer grows with its SQUARE: at 4 a 1080p window is
+// already drawing 33 MP a frame, and a fat-fingered `?dpr=40` would ask for a
+// buffer no driver will allocate and lose the context instead of reporting a
+// number.
+const dprOverride = ((): number | null => {
+  const raw = params.get("dpr");
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 4) : null;
+})();
+
 function resize(): void {
-  view = scene3d ? fitCanvas([sceneCanvas, canvas]) : fitCanvas(canvas);
+  view = scene3d
+    ? fitCanvas([sceneCanvas, canvas], dprOverride)
+    : fitCanvas(canvas, dprOverride);
   scene3d?.resize(view);
 }
 

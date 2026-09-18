@@ -15,7 +15,10 @@
 // window instead, a tall monitor saw further up and down than a laptop, and a
 // phone in landscape saw a different level again.
 //
-// The window decides one thing: how large that frame is drawn. It is centred and
+// The window decides one thing: how large that frame is drawn - and only how
+// large it is DRAWN, since the pixels behind it are capped at the frame's own
+// 1920x1080 (see `fitCanvas`). A larger display is shown a larger picture, not
+// charged for a more expensive one. It is centred and
 // scaled by the tighter of the two axes, and whatever is left over on the other
 // axis is background — letterbox bars above and below on a 4:3 display,
 // pillarbox bars either side on a phone.
@@ -76,9 +79,23 @@ export function viewTransform(width: number, height: number): ViewTransform {
 // render3d/scene.ts). They must be sized by one arithmetic rather than two, or
 // an outline drawn on the overlay lands a device pixel off the geometry it
 // describes at some window sizes and not others.
-export function fitCanvas(canvas: HTMLCanvasElement | HTMLCanvasElement[]): ViewTransform {
+// `dprOverride` draws the frame at a device pixel ratio the display does not
+// have, which is the only way to measure the renderer's FILL cost from a
+// machine that is not the one complaining.
+//
+// It is also the escape hatch from the 1080p cap below, since a reading taken
+// at the cap would be a reading of the cap.
+//
+// Chromium's `--force-device-scale-factor` cannot stand in for it: it scales
+// CSS pixels too, so `window.innerWidth` halves as the DPR doubles, the fit
+// shrinks by exactly as much as the DPR grows, and the backing store comes out
+// the same size. The override has to be applied where the multiply happens.
+export function fitCanvas(
+  canvas: HTMLCanvasElement | HTMLCanvasElement[],
+  dprOverride?: number | null,
+): ViewTransform {
   const canvases = Array.isArray(canvas) ? canvas : [canvas];
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = dprOverride ?? (window.devicePixelRatio || 1);
   const scale = Math.min(window.innerWidth / VIEW_WIDTH, window.innerHeight / VIEW_HEIGHT);
   const cssWidth = VIEW_WIDTH * scale;
   const cssHeight = VIEW_HEIGHT * scale;
@@ -87,7 +104,29 @@ export function fitCanvas(canvas: HTMLCanvasElement | HTMLCanvasElement[]): View
   // rounded width rather than rounded on its own: the frame is drawn under a
   // single uniform scale, so the two dimensions have to agree about what that
   // scale is or the bottom of the frame is drawn a pixel outside it.
-  const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
+  //
+  // It is CAPPED at the frame's own size. The scene is authored, framed and
+  // tuned as 1920x1080 view pixels, so beyond that a player is not being shown
+  // any more of the world and not being shown it in any more detail - only
+  // paying for more fragments carrying the same picture. Uncapped, that bill
+  // arrived entirely at random: a 4K panel drew 8.3 MP where a 1080p desk drew
+  // 2.1, and a HiDPI laptop at DPR 2 up to about 14, so the same scene cost some
+  // players seven times what it cost the machine it was tuned on, and the
+  // difference was invisible from that machine.
+  //
+  // What the cap spends is sharpness on a display with the pixels to spare: the
+  // frame is drawn at 1080p and the browser scales it up to the window, so both
+  // canvases - the scene and the 2D overlay on top of it - are resampled there.
+  // That is the same trade every resolution-scale slider makes, taken by
+  // default, and `?dpr=` is how it is measured either way.
+  //
+  // Below the cap nothing changes: a window smaller than the frame still draws
+  // at its own size rather than supersampling up to 1920.
+  const requestedWidth = Math.round(cssWidth * dpr);
+  const pixelWidth = Math.max(
+    1,
+    dprOverride == null ? Math.min(requestedWidth, VIEW_WIDTH) : requestedWidth,
+  );
   const pixelHeight = Math.max(1, Math.round((pixelWidth * VIEW_HEIGHT) / VIEW_WIDTH));
 
   for (const c of canvases) {

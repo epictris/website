@@ -29,6 +29,56 @@ The renderer now has one for the same reason: the 2026-08-04 water sessions viol
   Draw-call and triangle counts ARE transferable and are worth quoting; label them as what they are.
   FPS comes from the live page (below).
 
+## Testing a weaker GPU
+
+A frame time read on the development machine is a number about the development
+machine, and the gap to a player's is usually bigger than a tuning pass can
+close: this desk has an RTX 4070 SUPER, and a run reported at 10 fps against 144
+here is a 14x difference, which is a category difference rather than a
+regression.
+
+Three axes reproduce one, and they are worth separating because the HUD already
+says which one is biting - a high `gpu` row is fill or the GPU, a high `cpu` row
+with a low `gpu` row is the main thread, and `sim` splits the physics out of both.
+
+- **Fill rate: `?dpr=N`.** `fitCanvas` used to size the backing store at the
+  window's fit times the display's full DPR with no cap, so a 4K panel drew 8.3
+  MP of the same scene where a 1080p desk drew 2.1 MP, and a HiDPI laptop at DPR
+  2 drew up to about 14 MP - the same picture, at up to seven times the fragment
+  cost, decided entirely by whose display it landed on.
+  It is now **capped at the frame's own 1920x1080** (a window smaller than that
+  still draws at its own size; nothing supersamples), which makes the renderer's
+  fill cost the same number for every player and is the ceiling every other
+  reading in this doc should be taken under.
+  `?dpr=N` is the escape hatch from the cap, and the way the trade is measured:
+  `?dpr=2` on a 1080p display pays exactly what the uncapped 4K path used to.
+  Chromium's `--force-device-scale-factor` does NOT do this: it scales CSS pixels
+  as well, `window.innerWidth` halves as the DPR doubles, and the backing store
+  comes out the same size.
+- **The GPU itself: this box has a second one.** Alongside the 4070 is the Ryzen
+  iGPU, and a headless chromium given `--use-gl=angle --use-angle=gl-egl` lands
+  on it by default (`ANGLE (AMD, AMD Radeon Graphics (radeonsi raphael_mendocino
+  ...))`), which is worth knowing because the runner's flag list tries
+  `--enable-unsafe-swiftshader --disable-gpu` first and therefore never gets
+  there. It is a real driver on real silicon, which SwiftShader is not.
+  A headless page still does not run its loop, though - pointed at the live
+  server for 14 s it reports `window.__perf` all zeros with `visibilityState`
+  `visible` - so this gives a weak GPU to a GRAB, and fps still comes from the
+  live page below.
+- **No acceleration at all: `--use-gl=swiftshader --enable-unsafe-swiftshader`.**
+  The floor, and a real case rather than a hypothetical: a player whose driver
+  Chrome has blocklisted falls back to software, and 10 fps is that class of
+  number whatever the level does. Nothing tuned makes it back.
+- **The main thread: CDP `Emulation.setCPUThrottlingRate`.** 4-6x for a low-end
+  laptop. It is the right knob only once the `cpu` row says the wall is there.
+
+Before emulating any of it, check what the players actually have. A run streamed
+to the store carries `ua`, `device`, `dpr`, `viewport` and `render` (see
+[**Production recording**](production-recording.md)) but no GPU string and no frame times, and a
+14x gap is large enough that the profile names the cause outright - software
+fallback, four times the fragments, or the 2D path - where a week of emulation
+only narrows it.
+
 ## The live-verification workflow
 
 `cli shot` is the channel for reproducible geometry and shading evidence.
