@@ -78,7 +78,15 @@ The strokes are the baked cellular web (`scripts/bake-foam.ts`) sampled with its
 Those wisps are the reference's hairline highlights, painted in the pale.
 The flipbook does not perturb the lighting normal; it drives the tone field and distorts the strokes, played at half speed so its shapes swell rather than flicker.
 The front sheet darkens smoothly into the deep below the waterline under a soft pale line at the seam, and a run pales softly toward its ends the way the reference river pales at its banks.
-The palette derives from the authored `color` alone - the deep leans blue and is only moderately darker, never black - so a level tunes its water through the one colour field it tunes everything else with.
+The palette derives from the authored `color` alone, so a level tunes its water through the one colour field it tunes everything else with - and it derives as four LIGHTNESSES of that one colour, taken in HSL, hue kept and saturation carried nearly whole up the ramp.
+The stops are k-means clusters of a third reference picture's own water (2026-09-18, a turquoise gorge, masked to the water by hue): `#1b4657` in the deep, `#1e6c86` and `#3391aa` through the body, `#6ecad9` on the crests, `#a1dce7` going into the foam - one teal at six lightnesses, hue 186-197 throughout.
+Saturation is the thing that reference settles.
+It does not fall as the water lightens the way a blue pool's does (0.53 at the deepest cluster, 0.58 at the brightest), so the light stop keeps the tint's own saturation outright and only the near-white pale eases off; a ramp that desaturates upward turns a teal's crests grey.
+The ramp before it mixed the tint toward black and toward white in linear RGB, and both ends of that greyed.
+A whiten in linear space lifts a teal's weak red channel fastest, so the crests desaturated to paper; the deep went a third of the way to near-black.
+A teal channel drew as wet concrete with white scum on it, and swapping the authored colour did not help, because the ramp greyed whatever it was given.
+`body` is now the tint itself: a level authors the colour its water reads as, not a colour it is derived from.
+`levels/ball.json`'s channels are `#2c8896`, which is also what water with no authored colour draws as.
 
 ### A fall
 

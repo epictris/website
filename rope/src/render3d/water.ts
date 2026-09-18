@@ -333,14 +333,36 @@ const WATERLINE_W = 0.45;
 // pale all the way down, which is the reference's paler sheet.
 const BANK_REACH = 0.9;
 const BANK_W = 0.3;
-// The palette, as mixes of the authored colour: the deep leans blue and is
-// only moderately darker (saturated, never black), the lights lean toward
-// the paper.
-const RAMP_DEEP_DARKEN = 0.4;
-const RAMP_DEEP_BLUE = 0.35;
-const RAMP_BODY_DARKEN = 0.12;
-const RAMP_LIGHT_WHITEN = 0.32;
-const RAMP_PALE_WHITEN = 0.72;
+// Water with no authored colour: the reference river's own body teal, so a
+// water body dropped into a level is the right water before anyone tunes it.
+const WATER_DEFAULT_COLOR = "#2c8896";
+// The palette: the authored colour at four LIGHTNESSES, its hue kept and its
+// saturation carried nearly whole up the ramp.
+// The stops are k-means clusters of the reference river's own water (a
+// turquoise gorge, masked to the water by hue): #1b4657 in the deep, #1e6c86
+// and #3391aa through the body, #6ecad9 on the crests, #a1dce7 going into the
+// foam - one teal at six lightnesses, hue 186-197 throughout.
+// Saturation is the thing that reference settles. It does not fall as the
+// water lightens the way a blue pool's does (0.53 at the deepest cluster,
+// 0.58 at the brightest), so the light stop keeps the tint's own saturation
+// outright and only the near-white pale eases off. A ramp that desaturates
+// upward turns a teal's crests grey, which is the same failure as below by a
+// different route.
+// The ramp this replaced mixed the tint toward black and toward white in
+// linear RGB, and both ends of that greyed: a whiten in linear space lifts a
+// teal's weak red channel fastest, so the crests desaturated to paper, and
+// the deep lerped a third of the way to near-black. A teal channel drew as
+// wet concrete with white scum on it. Moving the stops in HSL instead keeps
+// every one of them the same water.
+// The deep as a fraction of the tint's own lightness; the light and the pale
+// as how far the tint is lifted toward white. `body` IS the tint: the level
+// authors the colour its water reads as, not a colour it is derived from.
+const RAMP_DEEP_L = 0.62;
+const RAMP_DEEP_S = 1.0;
+const RAMP_LIGHT_L = 0.42;
+const RAMP_LIGHT_S = 1.0;
+const RAMP_PALE_L = 0.82;
+const RAMP_PALE_S = 0.85;
 // Sheen: a little gloss and a touch of the environment, as a soft wash.
 const WATER_ROUGHNESS = 0.6;
 const WATER_ENV = 0.2;
@@ -850,17 +872,23 @@ interface Palette {
   pale: THREE.Color;
 }
 
-// The ramp, all from the one authored colour.
+// The ramp, all from the one authored colour: the same hue at four
+// lightnesses (see the RAMP_ constants). The stops are taken and rebuilt in
+// SRGB rather than the working space, because HSL is a statement about the
+// colour as authored - the hex a level types - and the same lightness step
+// taken in linear space lands somewhere else entirely.
 function paletteOf(color: string | undefined): Palette {
-  const tint = new THREE.Color(color ?? "#3d6b52");
-  const white = new THREE.Color(1, 1, 1);
-  const black = new THREE.Color(0, 0, 0);
-  const blue = new THREE.Color(0.1, 0.2, 0.55);
+  const tint = new THREE.Color(color ?? WATER_DEFAULT_COLOR);
+  const hsl = { h: 0, s: 0, l: 0 };
+  tint.getHSL(hsl, THREE.SRGBColorSpace);
+  const stop = (s: number, l: number) =>
+    new THREE.Color().setHSL(hsl.h, Math.min(hsl.s * s, 1), l, THREE.SRGBColorSpace);
+  const lift = (t: number) => hsl.l + (1 - hsl.l) * t;
   return {
-    deep: tint.clone().lerp(blue, RAMP_DEEP_BLUE).lerp(black, RAMP_DEEP_DARKEN),
-    body: tint.clone().lerp(black, RAMP_BODY_DARKEN),
-    light: tint.clone().lerp(white, RAMP_LIGHT_WHITEN),
-    pale: tint.clone().lerp(white, RAMP_PALE_WHITEN),
+    deep: stop(RAMP_DEEP_S, hsl.l * RAMP_DEEP_L),
+    body: tint.clone(),
+    light: stop(RAMP_LIGHT_S, lift(RAMP_LIGHT_L)),
+    pale: stop(RAMP_PALE_S, lift(RAMP_PALE_L)),
   };
 }
 
