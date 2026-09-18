@@ -4039,8 +4039,7 @@
                 "y": 93.51123771272745
               }
             ]
-          },
-          "viscosity": 0.6
+          }
         },
         {
           "type": "anchor",
@@ -5603,8 +5602,7 @@
                 "y": -0.26470288561909483
               }
             ]
-          },
-          "viscosity": 0.6
+          }
         },
         {
           "type": "anchor",
@@ -5685,8 +5683,7 @@
                 "y": 36.87371012088576
               }
             ]
-          },
-          "viscosity": 0.6
+          }
         },
         {
           "type": "anchor",
@@ -11201,8 +11198,7 @@
                 "y": 158.50147492625368
               }
             ]
-          },
-          "viscosity": 0.6
+          }
         },
         {
           "type": "geometry",
@@ -13555,7 +13551,7 @@
           },
           "matchCollision": true,
           "depth": 30,
-          "texture": "mossy ground"
+          "texture": "moss-dark"
         }
       ]
     },
