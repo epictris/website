@@ -86,7 +86,8 @@ The ramp before it mixed the tint toward black and toward white in linear RGB, a
 A whiten in linear space lifts a teal's weak red channel fastest, so the crests desaturated to paper; the deep went a third of the way to near-black.
 A teal channel drew as wet concrete with white scum on it, and swapping the authored colour did not help, because the ramp greyed whatever it was given.
 `body` is now the tint itself: a level authors the colour its water reads as, not a colour it is derived from.
-`levels/ball.json`'s channels are `#2c8896`, which is also what water with no authored colour draws as.
+`levels/ball.json`'s channels are `#0a4247`: a deep, faintly green cave-pool teal, dark enough that the lamps and the crests are what read on it rather than the sheet itself.
+Water with no authored colour draws as `#2c8896`, much the same hue a good deal lighter.
 
 ### A fall
 
