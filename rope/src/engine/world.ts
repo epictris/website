@@ -2874,7 +2874,9 @@ export class World {
       // By the roll the integrator SPENT, which is the one the grip wrote last
       // frame, and not the one being written now: a frame of phase, and on a
       // steered ball a frame of phase is the aim's own ripple applied as
-      // position (see `RigidBody2D.gripRollTan`).
+      // position (see `RigidBody2D.gripRollTan`). With the chain's credit in
+      // it, and the anchor standing where the chain phase left the ball
+      // (`carryStickAnchor`): the haul is the ball's, not a creep.
       const advanced =
         held === null ? body.globalPosition : held.add(body.gripRollTan.mul(dt));
       body.gripRollTan = rollRelTan;

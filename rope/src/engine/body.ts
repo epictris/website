@@ -1056,8 +1056,9 @@ export class RigidBody2D extends PhysicsBody2D {
   // depenetration sweep have moved the body again for reasons of their own.
   gripPinCorrection: Vec2 = Vec2.ZERO;
   // The along-surface roll the steered grip wrote LAST frame, relative to the
-  // surface (`World.applySteeringGrip`), and the displacement the integrator
-  // then actually applied.
+  // surface (`World.applySteeringGrip`), plus whatever the chain phase then
+  // credited the ball along the surface (`carryStickAnchor`): the velocity the
+  // integrator actually spends, and so the displacement it applied.
   //
   // The anchor advances by this rather than by the roll the grip is writing now,
   // and the difference is a whole frame of phase. The grip writes a velocity at
@@ -1104,6 +1105,55 @@ export class RigidBody2D extends PhysicsBody2D {
     this.stickAnchor = null;
     this.stickBody = null;
     this.stickNormal = null;
+  }
+
+  // Where `worldPoint` is in the gripped surface's frame - the coordinates
+  // `stickAnchor` itself is held in - or null when nothing is gripped.
+  stickLocalOf(worldPoint: Vec2): Vec2 | null {
+    if (this.stickBody === null) return null;
+    return worldPoint.sub(this.stickBody.globalPosition).rotated(-this.stickBody.globalRotation);
+  }
+
+  // The chain phase moved this body by `displacement` IN THE SURFACE'S FRAME
+  // and changed its velocity relative to the surface by `velocity` after the
+  // grip ran, and the steered grip is to take both as its own: the anchor rides
+  // along with the whole of the displacement, and the roll the integrator is
+  // about to spend (`gripRollTan`) gains the along-surface part of the
+  // velocity, so next frame's pin measures gravity's creep against where the
+  // chain left the ball and how fast, and nothing else.
+  //
+  // Relative to the surface, because the chain phase moves the surface too
+  // when the surface is a body on the chain's path - a hung platform the ball
+  // is riding (`session-599f`) - and the anchor, held in that body's frame, is
+  // already carried by that; counting the ball's world displacement on top
+  // would leave the anchor behind by exactly the platform's own share.
+  //
+  // The whole displacement, where the depenetration sweep carries its normal
+  // part alone (`World.depenetrate`): the sweep's tangential leftovers are a
+  // creep the pin exists to cancel, and the chain's haul is the ball's own
+  // winding paid for. The two pins disagreed about that for a long time - the
+  // anchor walked off by the roll, the solve hauled the ball back by the roll
+  // and the winding, the pin teleported it out to the anchor again - and a ball
+  // wound against a taut chain to a static hovered off the floor on the sum of
+  // their normal parts and dropped 2 cm every 12 to 33 frames
+  // (`session-367f`; `grip-anchor-behind` is the detector). The winding wins:
+  // a grounded ball winding chain onto itself climbs toward its anchor at rim
+  // speed, slipping on the floor, and the pin lets it.
+  //
+  // A zero is skipped outright rather than added, so the frame the chain phase
+  // leaves a gripped ball exactly where it found it is bit-identical to one
+  // that never ran this.
+  carryStickAnchor(displacement: Vec2, velocity: Vec2): void {
+    if (this.stickAnchor === null || this.stickBody === null) return;
+    if (displacement.x !== 0 || displacement.y !== 0) {
+      this.stickAnchor = this.stickAnchor.add(displacement);
+    }
+    if (velocity.x !== 0 || velocity.y !== 0) {
+      const n = this.stickNormal;
+      this.gripRollTan = this.gripRollTan.add(
+        n === null ? velocity : velocity.sub(n.mul(velocity.dot(n))),
+      );
+    }
   }
 
   override get isMobile(): boolean {

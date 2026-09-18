@@ -23,6 +23,7 @@ import {
   checkInvariants,
   EnergyMonitor,
   GripPinMonitor,
+  GripAnchorMonitor,
   recordingDeserializer,
   RollMonitor,
   TunnelMonitor,
@@ -91,6 +92,7 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
   const gripPin = new GripPinMonitor();
+  const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
   const stuck = new StuckDetector();
   let violations = 0;
@@ -111,6 +113,7 @@ export function bundleMetrics(rec: Recording, name: string): BundleMetrics {
       if (energy.push(level, input)) violations++;
       if (roll.push(level)) violations++;
       if (gripPin.push(level)) violations++;
+      if (gripAnchor.push(level)) violations++;
       if (tunnel.push(level)) violations++;
       const ball = level.ball;
       peakV = keepMax(peakV, num(ball.linearVelocity.length()));

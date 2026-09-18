@@ -13,6 +13,7 @@ import {
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
+  GripAnchorMonitor,
   RollMonitor,
   TunnelMonitor,
   digestsEqual,
@@ -157,6 +158,7 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
   const gripPin = new GripPinMonitor();
+  const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
   let divergedAtFrame: number | null = null;
   let divergedByStateFork: boolean | null = null;
@@ -184,6 +186,8 @@ export function replayRecording(rec: Recording, options: ReplayOptions = {}): Re
       if (rv) violations.push(rv);
       const gv = gripPin.push(level);
       if (gv) violations.push(gv);
+      const av = gripAnchor.push(level);
+      if (av) violations.push(av);
       const tv = tunnel.push(level);
       if (tv) violations.push(tv);
     } else {

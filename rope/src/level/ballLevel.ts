@@ -645,6 +645,16 @@ export class BallLevel {
       const speedBefore = this.ball.linearVelocity.length();
       const positionBeforeChain = this.ball.globalPosition;
       const velocityBeforeChain = this.ball.linearVelocity;
+      // Where the steered grip's surface sees the ball as the phase begins, so
+      // the grip can be handed what the phase did to it, in the surface's own
+      // terms (see `carryStickAnchor` at the end of the phase). The steered
+      // grip alone: a ball that is not aiming holds the crate's pin
+      // (`applyStaticGrip`), whose anchor IS its stiction, and that one keeps
+      // its stand against the chain as it does against everything else.
+      const gripSurface = this.ball.kinematicRotation ? this.ball.stickBody : null;
+      const gripLocalBefore = gripSurface === null ? null : this.ball.stickLocalOf(positionBeforeChain);
+      const gripSurfaceVelocityBefore =
+        gripSurface === null ? Vec2.ZERO : gripSurface.velocityAtPoint(positionBeforeChain);
 
       // How much of the over-length the solve is about to see is the ball's own
       // kinematic aim spin, which `unwindOverLength` will refuse below. The rest
@@ -1751,6 +1761,22 @@ export class BallLevel {
       const gain = this.ball.linearVelocity.length() - speedBefore;
       this.anchorKickSpeedGain = anchoredThisFrame ? gain : null;
       this.chainSolveSpeedGain = gain;
+      // The steered grip takes the whole of what this phase did to the ball as
+      // its own, so next frame's pin does not undo the haul (see
+      // `RigidBody2D.carryStickAnchor`). After every term above, because every
+      // one of them moved the ball or its velocity and the pin measures against
+      // the frame's end. Relative to the surface, which this phase may have
+      // moved as well, and only while the grip still names that surface.
+      if (gripSurface !== null && gripLocalBefore !== null && this.ball.stickBody === gripSurface) {
+        const gripLocalAfter = this.ball.stickLocalOf(this.ball.globalPosition)!;
+        const surfaceVelocityAfter = gripSurface.velocityAtPoint(this.ball.globalPosition);
+        this.ball.carryStickAnchor(
+          gripLocalAfter.sub(gripLocalBefore),
+          this.ball.linearVelocity
+            .sub(velocityBeforeChain)
+            .sub(surfaceVelocityAfter.sub(gripSurfaceVelocityBefore)),
+        );
+      }
     } else {
       this.anchorKickSpeedGain = null;
       this.chainSolveSpeedGain = null;

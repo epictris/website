@@ -1124,6 +1124,75 @@ export class GripPinMonitor {
   }
 }
 
+// ---- grip-anchor-behind ----------------------------------------------------
+const GRIP_ANCHOR_BEHIND = 0.005;
+const GRIP_ANCHOR_BEHIND_FRAMES = 6;
+
+// A gripped ball may not END a frame away from its grip anchor along the
+// surface.
+//
+// The pin drags the ball to the anchor at the top of the frame, so where the
+// two stand apart at the END of one is whatever moved the ball along the
+// surface AFTER the pin ran: the depenetration sweep, which carries the anchor
+// by its normal part alone on purpose (`World.depenetrate`, sub-millimetre),
+// and the chain phase. The chain's haul is the ball's own winding paid for, and
+// the pin has no business undoing it - but for a long time it did: the anchor
+// walked off by the roll, the solve hauled the ball back by the roll and the
+// winding, and the pin teleported it out to the anchor again next frame. Two
+// pins with nothing in common but the ball, each a teleport, growing by twice
+// the rim speed a frame (17 to 27 mm over twelve frames on `session-367f`), and
+// their normal parts - the floor's slope, the chain's elevation - summed to a
+// lift that a one-sided contact cannot cancel: the ball hovered off the floor
+// 1.5 mm a frame until the contact let go, dropped 2 cm, re-seeded the anchor
+// and went round again, every 12 to 33 frames, HEALTHY.
+//
+// `grip-pin-buzz` cannot see it: the pin pulled the same way on every frame,
+// and it was the length solve doing the reversing. This reads the state
+// instead: the gap the pin is about to close, which is zero by construction
+// once the chain phase carries the anchor with it, and the sweep's tangential
+// leftovers otherwise. Read only on a frame the STEERED grip actually held:
+// an anchor outliving its grip (`STICK_RELEASE_FRAMES`) says nothing about
+// the surface it has left, and a ball that is not aiming holds the crate's pin
+// instead (`applyStaticGrip`), whose anchor is a contact point on the surface
+// and not the centre - a radius away from the ball by construction.
+export class GripAnchorMonitor {
+  private run = 0;
+  private worst = 0;
+
+  push(level: BallLevel): Violation | null {
+    const ball = level.ball;
+    const anchor = ball.stickAnchorWorld();
+    const n = ball.stickNormal;
+    if (anchor === null || n === null || ball.ungrippedFrames !== 0 || !ball.kinematicRotation) {
+      this.run = 0;
+      this.worst = 0;
+      return null;
+    }
+    const d = ball.globalPosition.sub(anchor);
+    const behind = d.sub(n.mul(d.dot(n))).length();
+    if (behind <= GRIP_ANCHOR_BEHIND) {
+      this.run = 0;
+      this.worst = 0;
+      return null;
+    }
+    this.run++;
+    this.worst = Math.max(this.worst, behind);
+    if (this.run <= GRIP_ANCHOR_BEHIND_FRAMES) return null;
+    const run = this.run;
+    const worst = this.worst;
+    this.run = 0;
+    this.worst = 0;
+    return {
+      frame: level.frame,
+      kind: "grip-anchor-behind",
+      detail:
+        `the ball ended ${run} gripped frames running away from its grip anchor along ` +
+        `the surface, worst ${(worst * 1000).toFixed(1)} mm - the chain phase moved it ` +
+        `and the pin will teleport it straight back`,
+    };
+  }
+}
+
 // ---- chain-tunnel detector -------------------------------------------------
 // The chain may not pass THROUGH a body it could have wrapped. Between the end
 // of one frame and the end of the next, every span of the chain sweeps a

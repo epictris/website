@@ -14,6 +14,7 @@ import {
   digestBall,
   EnergyMonitor,
   GripPinMonitor,
+  GripAnchorMonitor,
   RollMonitor,
   TunnelMonitor,
   kineticEnergy,
@@ -512,6 +513,7 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
   const energy = new EnergyMonitor();
   const roll = new RollMonitor();
   const gripPin = new GripPinMonitor();
+  const gripAnchor = new GripAnchorMonitor();
   const tunnel = new TunnelMonitor();
   const stateFirstFrame = new Map<string, number>();
 
@@ -531,6 +533,8 @@ function runBallScript(script: PlaytestScript, spec: LevelSpec): PlaytestResult 
     if (rv) violations.push(rv);
     const gv = gripPin.push(level);
     if (gv) violations.push(gv);
+    const av = gripAnchor.push(level);
+    if (av) violations.push(av);
     const tv = tunnel.push(level);
     if (tv) violations.push(tv);
   }

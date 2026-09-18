@@ -194,6 +194,11 @@ the anchor advancing by the roll being written this frame instead of the one the
 integrator spent last frame, a frame of phase that turns the aim's own ripple
 into +-9 mm a frame on a flat static floor (`ball-roll-wall`).
 
+Its blind spot is a pin that pulls the same way every frame while something ELSE reverses it, and **`grip-anchor-behind`** (`GripAnchorMonitor`) is what covers that: a gripped ball may not END a frame more than 5 mm from its grip anchor along the surface for more than 6 frames running.
+The pin closes that gap at the top of every frame, so at the end of one it is whatever moved the ball along the surface after the pin ran - the depenetration sweep's tangential leftovers (sub-millimetre by design) and the chain phase.
+For a long time the chain phase was not carried: a ball on the floor winding onto a taut chain to a static had its anchor walk off by the roll while the length solve hauled it back by the roll and the winding, two teleports growing by twice the rim speed a frame, and their normal parts summed to a lift no one-sided contact could cancel - the ball hovered off the floor 1.5 mm a frame until the contact let go and dropped 2 cm, every 12 to 33 frames, HEALTHY (`session-367f`; eleven more bundles in the corpus carried the same gap).
+It reads the state rather than the teleport because here the state is honest: the chain phase now carries the anchor with everything it did to the ball (`RigidBody2D.carryStickAnchor`), so the gap is zero by construction on every gripped frame.
+
 Ball runs also carry the **energy invariant** (`energy-gained`): over any span
 with no forced input and no kinematic spin, total kinetic plus potential energy
 may not rise beyond a tolerance.
