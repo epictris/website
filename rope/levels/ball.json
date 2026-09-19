@@ -109,8 +109,8 @@
           "viewportScale": 0.65
         },
         {
-          "x": 92.66014395062285,
-          "y": 577.2529895256093,
+          "x": 132.66014395062342,
+          "y": 477.25298952560956,
           "inX": -185.51394729860746,
           "inY": 65.1249321639284,
           "outX": 185.51394729860746,
@@ -119,7 +119,7 @@
         },
         {
           "x": 842.6601439506236,
-          "y": 437.25298952560934,
+          "y": 337.2529895256094,
           "inX": 0.7267822243509414,
           "inY": 195.81386667068335,
           "outX": -0.7267822243509414,
@@ -11489,27 +11489,27 @@
               },
               {
                 "x": -111.2456316721719,
-                "y": -853.1750682177217
+                "y": -913.1750682177214
               },
               {
                 "x": -396.5297461184935,
-                "y": -854.9754004610829
+                "y": -924.9754004610827
               },
               {
                 "x": -531.8101176645552,
-                "y": -865.5904785041988
+                "y": -925.5904785041986
               },
               {
                 "x": -549.0402975334348,
-                "y": -852.3806739380575
+                "y": -912.3806739380573
               },
               {
                 "x": -567.0362631742652,
-                "y": -861.7615496444478
+                "y": -921.7615496444475
               },
               {
                 "x": -566.4619238453024,
-                "y": -934.5111979797183
+                "y": -994.5111979797181
               },
               {
                 "x": -558.6766078916775,
@@ -11871,27 +11871,27 @@
               },
               {
                 "x": -111.2456316721719,
-                "y": -853.1750682177217
+                "y": -913.1750682177214
               },
               {
                 "x": -396.5297461184935,
-                "y": -854.9754004610829
+                "y": -924.9754004610827
               },
               {
                 "x": -531.8101176645552,
-                "y": -865.5904785041988
+                "y": -925.5904785041986
               },
               {
                 "x": -549.0402975334348,
-                "y": -852.3806739380575
+                "y": -912.3806739380573
               },
               {
                 "x": -567.0362631742652,
-                "y": -861.7615496444478
+                "y": -921.7615496444475
               },
               {
                 "x": -566.4619238453024,
-                "y": -934.5111979797183
+                "y": -994.5111979797181
               },
               {
                 "x": -558.6766078916775,
@@ -12951,118 +12951,6 @@
       "kind": "static",
       "x": 5020.225871528912,
       "y": -313.93184551723294,
-      "rot": 0.0055450078978648565,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": -62.3601820265582,
-                "y": 6.789034247138467
-              },
-              {
-                "x": -62.046083989575074,
-                "y": -14.918345130548014
-              },
-              {
-                "x": -26.92376095423145,
-                "y": -32.6598758986462
-              },
-              {
-                "x": 37.916157755793556,
-                "y": -32.06117240676161
-              },
-              {
-                "x": 55.261506036110774,
-                "y": -23.038798264268596
-              },
-              {
-                "x": 65.37225189058994,
-                "y": -3.094555529430835
-              },
-              {
-                "x": 65.53860127506228,
-                "y": 26.904983265062153
-              },
-              {
-                "x": 44.241235669766255,
-                "y": 31.34020382615521
-              },
-              {
-                "x": -54.24926327637998,
-                "y": 31.942592198914532
-              },
-              {
-                "x": -59.79553859606689,
-                "y": 21.9557634255032
-              }
-            ]
-          },
-          "impermeable": true
-        },
-        {
-          "type": "geometry",
-          "kind": "mesh",
-          "mesh": "rock-14",
-          "shape": {
-            "kind": "poly",
-            "verts": [
-              {
-                "x": -62.3601820265582,
-                "y": 6.789034247138467
-              },
-              {
-                "x": -62.046083989575074,
-                "y": -14.918345130548014
-              },
-              {
-                "x": -26.92376095423145,
-                "y": -32.6598758986462
-              },
-              {
-                "x": 37.916157755793556,
-                "y": -32.06117240676161
-              },
-              {
-                "x": 55.261506036110774,
-                "y": -23.038798264268596
-              },
-              {
-                "x": 65.37225189058994,
-                "y": -3.094555529430835
-              },
-              {
-                "x": 65.53860127506228,
-                "y": 26.904983265062153
-              },
-              {
-                "x": 44.241235669766255,
-                "y": 31.34020382615521
-              },
-              {
-                "x": -54.24926327637998,
-                "y": 31.942592198914532
-              },
-              {
-                "x": -59.79553859606689,
-                "y": 21.9557634255032
-              }
-            ]
-          },
-          "matchCollision": true,
-          "depth": 20
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2520.2258715289113,
-      "y": -733.931845517233,
       "rot": 0.0055450078978648565,
       "color": "#555555",
       "opacity": 0.5,
@@ -16248,598 +16136,18 @@
     },
     {
       "kind": "static",
-      "x": 2392.999999999998,
-      "y": -524.9999999999994,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2512.9999999999986,
-      "y": -524.9999999999998,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -30.000000000000426,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 80,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -30.000000000000426,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 80,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2512.9999999999986,
-      "y": -280.00000000000006,
+      "x": 2105.0000000000014,
+      "y": -325.00000000000006,
       "rot": -5.551115123125783e-17,
       "objects": [
         {
           "type": "geometry",
+          "x": -4.996003610813204e-15,
+          "y": 89.99999999999999,
           "shape": {
             "kind": "rect",
             "w": 14.000000000000002,
-            "h": 490.00000000000006
-          },
-          "z": 50,
-          "color": "#555555",
-          "opacity": 0.5
-        },
-        {
-          "type": "geometry",
-          "x": 2.465190328815662e-30,
-          "y": -4.440892098500626e-14,
-          "shape": {
-            "kind": "rect",
-            "w": 14.000000000000002,
-            "h": 490.00000000000006
-          },
-          "z": -50,
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2512.9999999999977,
-      "y": -287.0000000000002,
-      "rot": 2.220446049250313e-16,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          },
-          "matchCollision": true,
-          "depth": 160,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2263.0000000000005,
-      "y": -279.99999999999983,
-      "rot": -5.551115123125783e-17,
-      "objects": [
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 14.000000000000002,
-            "h": 490.00000000000006
-          },
-          "z": 50,
-          "color": "#555555",
-          "opacity": 0.5
-        },
-        {
-          "type": "geometry",
-          "x": 2.465190328815662e-30,
-          "y": -4.440892098500626e-14,
-          "shape": {
-            "kind": "rect",
-            "w": 14.000000000000002,
-            "h": 490.00000000000006
-          },
-          "z": -50,
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2263,
-      "y": -286.99999999999994,
-      "rot": 2.220446049250313e-16,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          },
-          "matchCollision": true,
-          "depth": 160,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2002.9999999999998,
-      "y": -286.99999999999994,
-      "rot": 2.220446049250313e-16,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          }
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 26,
-            "h": 26
-          },
-          "matchCollision": true,
-          "depth": 160,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2776.000000000003,
-      "y": -279.00000000000017,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": 60.0000000000005,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": 60.0000000000005,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2649.89087296526,
-      "y": -393.0380592228741,
-      "rot": 0.7853981633974483,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -60.000000000000384,
-          "y": -5.000000000000249,
-          "shape": {
-            "kind": "rect",
-            "w": 260,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -60.000000000000384,
-          "y": -5.000000000000249,
-          "shape": {
-            "kind": "rect",
-            "w": 260,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2724.7106781186562,
-      "y": -325.68272016354564,
-      "rot": 0.7853981633974484,
-      "objects": [
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 130,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron",
-          "color": "#555555",
-          "opacity": 0.5
-        },
-        {
-          "type": "geometry",
-          "x": 5.000000000000242,
-          "y": 5.02028973947688e-13,
-          "shape": {
-            "kind": "rect",
-            "w": 120.00000000000001,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron",
-          "color": "#555555",
-          "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2263.000000000001,
-      "y": -525.0000000000001,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2133.000000000001,
-      "y": -525.0000000000001,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2003.000000000001,
-      "y": -525.0000000000001,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 2002.9999999999993,
-      "y": -275.00000000000006,
-      "rot": -5.551115123125783e-17,
-      "objects": [
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 14.000000000000002,
-            "h": 490.00000000000006
+            "h": 310
           },
           "z": 50,
           "color": "#555555",
@@ -16855,62 +16163,6 @@
           "z": -50,
           "color": "#555555",
           "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1873.0000000000007,
-      "y": -525.0000000000001,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
         }
       ]
     },
@@ -16945,62 +16197,6 @@
           "z": -50,
           "color": "#555555",
           "opacity": 0.5
-        }
-      ]
-    },
-    {
-      "kind": "static",
-      "x": 1743.0000000000007,
-      "y": -524.9999999999999,
-      "rot": 0,
-      "color": "#555555",
-      "opacity": 0.5,
-      "friction": 1,
-      "objects": [
-        {
-          "type": "collision",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          }
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": 50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "x": -3.552713678800501e-13,
-          "y": -5.000000000000071,
-          "shape": {
-            "kind": "rect",
-            "w": 140,
-            "h": 10
-          },
-          "z": -50,
-          "depth": 10,
-          "texture": "rusted iron"
-        },
-        {
-          "type": "geometry",
-          "shape": {
-            "kind": "rect",
-            "w": 20,
-            "h": 10
-          },
-          "matchCollision": true,
-          "depth": 120,
-          "texture": "wood"
         }
       ]
     },
@@ -17332,6 +16528,488 @@
           "matchCollision": true,
           "depth": 50,
           "texture": "moss-dark"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2235.0000000000027,
+      "y": -390,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2105.0000000000027,
+      "y": -390,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2365.0000000000023,
+      "y": -390,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1975.0000000000025,
+      "y": -390,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2365.0000000000014,
+      "y": -324.99999999999994,
+      "rot": -5.551115123125783e-17,
+      "objects": [
+        {
+          "type": "geometry",
+          "x": -4.996003610813204e-15,
+          "y": 89.99999999999999,
+          "shape": {
+            "kind": "rect",
+            "w": 14.000000000000002,
+            "h": 310
+          },
+          "z": 50,
+          "color": "#555555",
+          "opacity": 0.5
+        },
+        {
+          "type": "geometry",
+          "x": 2.465190328815662e-30,
+          "y": -4.440892098500626e-14,
+          "shape": {
+            "kind": "rect",
+            "w": 14.000000000000002,
+            "h": 490.00000000000006
+          },
+          "z": -50,
+          "color": "#555555",
+          "opacity": 0.5
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2475.9999999999986,
+      "y": -435.99999999999994,
+      "rot": -0.7853981633974483,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0678957718113224e-12,
+          "y": -5.0000000000001785,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0678957718113224e-12,
+          "y": -5.0000000000001785,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2567.535533905931,
+      "y": -527.464466094068,
+      "rot": -0.7853981633974483,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0678957718113224e-12,
+          "y": -5.0000000000001785,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0678957718113224e-12,
+          "y": -5.0000000000001785,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 1845.000000000001,
+      "y": -389.99999999999994,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.0000000000001155,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.0000000000001155,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
+        }
+      ]
+    },
+    {
+      "kind": "static",
+      "x": 2671.0000000000005,
+      "y": -569.9999999999999,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          }
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": 50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "x": -1.0658141036401503e-12,
+          "y": -5.000000000000071,
+          "shape": {
+            "kind": "rect",
+            "w": 130,
+            "h": 10
+          },
+          "z": -50,
+          "depth": 10,
+          "texture": "rusted iron"
+        },
+        {
+          "type": "geometry",
+          "shape": {
+            "kind": "rect",
+            "w": 20,
+            "h": 10
+          },
+          "matchCollision": true,
+          "depth": 120,
+          "texture": "wood"
         }
       ]
     }
