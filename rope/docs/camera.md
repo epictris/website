@@ -272,6 +272,30 @@ Where it leaves the camera becomes the pin, so the forward half of the next swin
 The episode ends with the anchor: the pin is dropped and the gap it leaves is frozen into the **hand-off delta** and blended out over `CAMERA_BLEND_TIME`, rather than eased across at the follow lag - a pinned camera is at rest and metres from its target, so 0.15 s of ease across that is a lurch.
 Aiming the blend at the camera's own position is the one thing the hand-off machinery warns against, and it is right here for the reason it is wrong there: there is no velocity to preserve.
 
+### The wind release
+
+**The pin also lets go when the avatar winds themselves up the line along the route** (`CameraController.windProgress`, against the path's `windBuffer`).
+
+A pin is the answer to a swing: the return half of an oscillation says nothing about where the player is going, so the camera is held where the guarantee left it rather than rocked back.
+Winding up the line is not a swing.
+The player is hauling themselves toward the anchor, and when the anchor lies ahead on the route that is the level's own direction - a camera still pinned to the backswing then trails them up the climb, until the far edge of the frame drags it after them a shove at a time.
+
+What is counted is the line taken in since the pin was born, each frame's shortening projected onto the direction the route runs where the avatar is (`Level.cameraHang` hands the controller the line's length and the direction it leaves the avatar along).
+So winding straight up under a horizontal route counts for nothing, winding toward an anchor behind counts for nothing, and paying line back out counts against it, down to zero.
+Once the sum passes the path's `windBuffer` (0.5 m unless the path says otherwise, keyable like every other path field, read at the avatar's projection) the pin is dropped and its gap goes through the same frozen-delta hand-off the anchor's release uses, for the same reason.
+The lead origin keeps what the episode has ratcheted; what is given back is the pin alone.
+It is a path's release and nobody else's: a pin under a locked room has no route to be ahead on.
+
+It is measured from the pin's birth rather than the anchor's, because it is the pin's release: a turn of the spool taken before any pin existed is no reason to drop one later.
+
+**While the winding goes on, no pin is recorded.**
+Dropped on its own, the pin came straight back: the camera leaves it toward a target the avatar is still behind, the guarantee is asking again on the very next frame, and the pin recorded then is the old one with its count reset - measured, a camera that catches the climb up in steps of the buffer, a blend at a time.
+So the guarantee carries the camera up after them unlatched, at the pace they wind (it is asking every frame, and unlatched it answers every frame), and the pin is armed again a quarter second (`WIND_REARM_DELAY`) after the last frame that took line in along the route faster than `WIND_REST_RATE` (5 cm/s).
+A rate rather than any take-up at all, because a taut line's solve breathes by microns a frame and a swing must not read as a wind.
+The price is that a wide swing made WHILE winding rocks the camera the way an unlatched one always did, for as long as the winding lasts.
+
+Unplayed as of 2026-09-19, and the cases wait on the play (see [**Validate the behaviour before writing the cases**](../CLAUDE.md)); the shape was measured with a bun script driving `CameraController.update` through a pinned backswing and a 1 m/s wind toward an anchor ahead.
+
 `cli camera` asserts it as four cases, each red without it: the swing that holds (metres of unshoved drift, 0 latched against >5 rolling, with the guarantee itself still never violated), the per-axis half (y pinned while x goes on tracking the avatar at the plain follow lag), the release (the pin dropped, the camera back at the lock, and no single frame moving it more than the blend's own rate), and the meeting with the ratchet.
 
 The debug overlay draws the keep-out box **only on the frames it is binding** (amber, not the camera layer's violet): a camera that has stopped following has no on-screen cause otherwise, and drawing it every frame would make it furniture rather than a diagnosis.

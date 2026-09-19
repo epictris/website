@@ -40,7 +40,7 @@ The pair is resolved through `ellipseReach` - the same helper `pathLookahead` us
 
 ## The anchored episode
 
-While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraAnchored`, `BallLevel.cameraAnchored`) - the camera does not walk back down the track.
+While the avatar is **anchored** - hanging on a taut line rather than moving under their own feet (`Level.cameraHang`, `BallLevel.cameraHang`) - the camera does not walk back down the track.
 
 The reason is that a swing is an oscillation, so half of it is travel the level did not mean: the forward half says something about where the player is going and the return half says nothing, and a camera that answers both equally spends the whole arc rocking.
 The band above absorbs an oscillation narrower than itself and can do nothing about a wider one - past the band the committed point is dragged by whichever edge it reaches, and a swing reaches both.
@@ -54,6 +54,9 @@ The two are the same one-sided statement made at the two levels it happens on, a
 
 The episode ends when the anchor is released.
 The lead origin is handed back to the band in one frame - a step of everything the ratchet had earned - and that step goes through the frozen-delta hand-off, exactly as a branch jump does and for the same reason.
+
+The pin alone also lets go mid-episode, once the avatar has wound themselves `windBuffer` metres up their line along the route - see [**The wind release**](camera.md#the-wind-release).
+The ratchet is untouched by it: winding toward an anchor ahead is travel the level meant, and the origin it has earned stays earned.
 
 It is gated on the anchor rather than applied always because that is the distinction it is about: a player rolling along the route does not oscillate, so there is nothing one-sided to say about them, and a ratchet with no episode boundary would have no moment at which it could ever be given back.
 
@@ -73,7 +76,7 @@ Inserting on an edge is a **de Casteljau split at t = 1/2**, so a bowed edge gai
 
 ## Keys
 
-A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `rangeX/Y`, `falloffX/Y` and `buffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out.
+A node may **key** any of the path's tuning fields - `viewportScale`, `lookaheadX/Y`, `lookaheadBufferX/Y`, `rangeX/Y`, `falloffX/Y`, `buffer` and `windBuffer`, as optionals on `CameraPathVert` - so the framing and the grip change along the route: a tighter view through a corridor, a longer lead down a drop, a wider corridor where the level opens out.
 A node that carries a value is a keyframe for THAT field only, and a node that carries none is transparent to it.
 Per field, `pathParamsAt` holds the first key's value before it and the last key's after it, smoothsteps between two by arc length (flat at each key, for the same reason the falloff band is smoothstepped: a kink in the target is a step in the camera's velocity), and interpolates the view scale geometrically like every other zoom blend here.
 That rule is `lib/keyframes.ts` (`buildKeyTrack`, `keyValueAt`) rather than the controller's own, since a mover's route keys its pose and its pace along exactly the same lines; `pathParamsAt` is the camera's ten fields run through it.

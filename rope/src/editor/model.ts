@@ -308,6 +308,10 @@ export interface EdCamera {
   // camera (see DEFAULT_PATH_LOOKAHEAD_BUFFER_X/_Y). null = those defaults.
   lookaheadBufferX: number | null; // metres
   lookaheadBufferY: number | null; // metres
+  // How far along the route a hanging player winds themselves up their line
+  // before the frame-edge latch lets the camera go (see
+  // DEFAULT_PATH_WIND_BUFFER). null = that default.
+  windBuffer: number | null; // metres
 }
 
 // Lights-layer properties (see LightData for the semantics).
@@ -886,6 +890,7 @@ export const defaultCamera = (): EdCamera => ({
   lookaheadY: null,
   lookaheadBufferX: null,
   lookaheadBufferY: null,
+  windBuffer: null,
 });
 
 export const defaultLight = (): EdLight => ({
@@ -1417,6 +1422,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadY: null,
       lookaheadBufferX: null,
       lookaheadBufferY: null,
+      windBuffer: null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1514,6 +1520,7 @@ function fromLevelData(data: LevelData): EdModel {
       lookaheadY: c.lookaheadY ?? null,
       lookaheadBufferX: c.lookaheadBufferX ?? null,
       lookaheadBufferY: c.lookaheadBufferY ?? null,
+      windBuffer: c.windBuffer ?? null,
     },
     light: defaultLight(),
     note: defaultNote(),
@@ -1803,6 +1810,7 @@ export function pathDataOf(i: EdItem): CameraPathData {
       : {}),
     ...(i.cam.blend !== null ? { blend: i.cam.blend } : {}),
     ...(i.cam.buffer !== null ? { buffer: i.cam.buffer } : {}),
+    ...(i.cam.windBuffer !== null ? { windBuffer: i.cam.windBuffer } : {}),
     ...(i.cam.priority !== 0 ? { priority: i.cam.priority } : {}),
   };
 }

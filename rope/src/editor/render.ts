@@ -966,6 +966,8 @@ export function cameraRegionLabel(r: EdItem): string {
     else if (r.cam.viewportScale !== DEFAULT_VIEWPORT_SCALE) {
       parts.push(`view ×${Number(r.cam.viewportScale.toFixed(2))}`);
     }
+    if (keyed("windBuffer")) parts.push("wind keyed");
+    else if (r.cam.windBuffer !== null) parts.push(`wind ${px(r.cam.windBuffer)}`);
     const keys = nodeKeys.filter(isKeyed).length;
     if (keys) parts.push(`${keys} key${keys === 1 ? "" : "s"}`);
     if (r.cam.blend !== null) parts.push(`${Number(r.cam.blend.toFixed(2))}s`);

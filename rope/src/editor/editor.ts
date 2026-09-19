@@ -36,6 +36,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_X,
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
+  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_PATH_RANGE_Y,
   DEFAULT_WATER_DRAG,
   DEFAULT_WATER_FLOW,
@@ -5469,6 +5470,26 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       },
     );
     if (bufKeyed) bufInput.title = bufKeyed;
+    // How far along the route a hanging player has to wind themselves up their
+    // line before the frame-edge latch lets the camera go. A backswing out of
+    // the frame pins the camera for the rest of the hang; winding toward an
+    // anchor AHEAD on the route is the player going the level's way, and this
+    // is how much of that says so. Blank = the controller's default.
+    const windKeyed = keyedAt("windBuffer");
+    const windInput = num(
+      "wind buf",
+      (b) => (windKeyed ? NaN : (b.cam.windBuffer ?? NaN) * M2PX),
+      (b, v) => (b.cam.windBuffer = Math.max(0, v * PX)),
+      10,
+      {
+        placeholder: windKeyed ? "keyed" : String(Math.round(DEFAULT_PATH_WIND_BUFFER * M2PX)),
+        disabled: windKeyed !== null,
+        onEmpty: () => {
+          for (const b of paths) b.cam.windBuffer = null;
+        },
+      },
+    );
+    if (windKeyed) windInput.title = windKeyed;
     num("priority", (b) => b.cam.priority, (b, v) => (b.cam.priority = Math.round(v)), 1);
 
     // Three whole-path actions, because each is miserable to do node by node.
@@ -5527,7 +5548,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     g.appendChild(heading(picked.length === 1 ? `Node ${picked[0]}` : `${picked.length} nodes`));
     const hint = el("div", "ed-hint");
     hint.textContent =
-      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View and lead are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff and buffer are read at the player's projection, and the corridor is drawn as they vary. Blank drops the key.";
+      "Keys: the path's fields, said at these nodes. A keyed field is interpolated along the route between its keyed nodes and held beyond the first and last; a node with no key is transparent to it, and a field no node keys is the path's own. View and lead are read where the lead is measured from, so a swing across a change does not pump the camera; range, falloff, buffer and wind buf are read at the player's projection, and the corridor is drawn as they vary. Blank drops the key.";
     g.appendChild(hint);
 
     // What each picked node is effectively at, through the SAME rule the game
@@ -5575,6 +5596,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     field("lead buf y", "lookaheadBufferY", M2PX, 10);
     field("view ×", "viewportScale", 1, 0.1);
     field("buffer", "buffer", M2PX, 10);
+    field("wind buf", "windBuffer", M2PX, 10);
   }
 
   // Lights-layer panel. The two fields that matter most are at the top and in
@@ -9027,7 +9049,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         testLevel.cameraRenderPosition(alpha),
         testLevel.cameraRules,
         testController === "ball" ? BALL_ZOOM : GRAPPLE_ZOOM,
-        testLevel.cameraAnchored,
+        testLevel.cameraHang,
       );
       // Render-rate refresh of stick aim (see LiveInputSource.pollAim).
       ballInput?.pollAim();

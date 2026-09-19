@@ -53,7 +53,7 @@ import {
   type SceneChain,
   type SceneConstraint,
 } from "./chains";
-import { buildCameraRules, type CameraRule } from "../render/cameraController";
+import { buildCameraRules, type CameraHang, type CameraRule } from "../render/cameraController";
 import type { SparkEvent } from "./sparkEvents";
 import {
   BreakTracker,
@@ -431,12 +431,23 @@ export class BallLevel {
     return this.ball.renderPosition(alpha);
   }
 
-  // Whether the camera treats this frame as a SWING (see
-  // `Level.cameraAnchored`). A chain still in flight is not one: the ball is
-  // rolling or falling until the hook bites, and it is the bite that starts the
+  // What the camera treats this frame as a SWING on (see `Level.cameraHang`),
+  // or null. A chain still in flight is not one: the ball is rolling or
+  // falling until the hook bites, and it is the bite that starts the
   // oscillation the anchored episode is about.
-  get cameraAnchored(): boolean {
-    return this.ball.chainAnchored;
+  //
+  // The pull is the first span off the ball's own rim - past the coil, which
+  // is chain the ball is wearing rather than chain it hangs from - and the
+  // length is what is left past the coil (`Rope.hangingLength`), for the same
+  // reason: winding takes chain from the free span onto the rim and the path's
+  // TOTAL never changes (session-269f: 1.127 m for a whole hang the ball
+  // climbed 40 cm of). It is the free span the winch shortens by hauling the
+  // ball up it (see `Rope.solveLengthHolding`), and that is what the wind
+  // release watches.
+  get cameraHang(): CameraHang | null {
+    const chain = this.ball.chain;
+    if (chain === null || !this.ball.chainAnchored) return null;
+    return { pull: chain.startPull() ?? Vec2.ZERO, length: chain.hangingLength() };
   }
 
   physicsProcess(input: FrameInput, delta: number): void {

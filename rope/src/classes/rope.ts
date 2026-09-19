@@ -655,6 +655,32 @@ export class Rope {
     return this.calculateRopePathLength();
   }
 
+  // The rope from where it leaves the start body to the far end: the path less
+  // whatever is coiled on the start body. `getCurrentLength` counts the coil,
+  // so a spool winding in changes it by nothing - the chain goes from the
+  // free span onto the rim and the total is the total. This is what winding
+  // shortens, and so what a caller asking "how much line is the body hanging
+  // by" wants.
+  hangingLength(): number {
+    return this.calculateRopePathLength() - this.leadingCoilRun().length;
+  }
+
+  // The unit direction the rope LEAVES its start body along: the first span
+  // off that body, which is the line the body is hauled along when the rope
+  // is taken in. Past the coil, for a body the rope spools onto - a coil span
+  // has both ends on the body and says nothing about where the rope goes. Null
+  // while every node is on the start body, which is a rope with nowhere to go.
+  startPull(): Vec2 | null {
+    const body = this.start.contact.obj;
+    for (const span of this.regenerateSpans()) {
+      if (span.to.contact.obj === body) continue;
+      const d = span.span.end.sub(span.span.start);
+      const len = d.length();
+      return len > 0 ? d.div(len) : null;
+    }
+    return null;
+  }
+
   // How fast the rope path grows per radian `body` spins about its own centre,
   // in metres per radian: positive winds rope *onto* the body, negative unwinds
   // it. The spool picture, for a body the rope winds onto itself — the ball and

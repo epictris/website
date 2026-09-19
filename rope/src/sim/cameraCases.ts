@@ -40,6 +40,7 @@ import {
   pathParamsAt,
   pathParamsOf,
   pathRangeAxes,
+  type CameraHang,
   type CameraRule,
   type CameraInfluence,
 } from "../render/cameraController";
@@ -197,6 +198,10 @@ const ROOM: CameraRegionData = {
 const BASE_ZOOM = 2;
 const DT = 1 / 60;
 
+// A hang with nothing to say about its line: no pull and no length, so the
+// wind release accrues nothing and the case is about the episode alone.
+const STILL_HANG: CameraHang = { pull: Vec2.ZERO, length: 0 };
+
 // Run the controller over a scripted walk, one entry per frame, and answer the
 // camera's aim point and the rule in force at each.
 function ride(
@@ -206,8 +211,10 @@ function ride(
   // Whether the avatar is ANCHORED on each frame - hanging on a taut line
   // rather than rolling, which is what opens the episode the lead ratchet and
   // the frame-edge latch belong to. A walk that says nothing is a roll from end
-  // to end, which is what every case written before the episode existed is.
-  anchored: (i: number) => boolean = () => false,
+  // to end, which is what every case written before the episode existed is;
+  // `true` is a hang that says nothing about its line, and a `CameraHang` is
+  // one whose length and pull the wind release can read.
+  anchored: (i: number) => boolean | CameraHang = () => false,
 ): {
   pos: Vec2;
   zoom: number;
@@ -220,12 +227,14 @@ function ride(
   leadS: number;
   edge: { centre: Vec2; reach: Vec2 } | null;
   latch: { x: number | null; y: number | null };
+  wind: number;
 }[] {
   const ctl = new CameraController();
   ctl.edgeClamp = edgeClamp;
   const cam = stubCamera();
   return walk.map((p, i) => {
-    ctl.update(cam, DT, p, rules, BASE_ZOOM, anchored(i));
+    const a = anchored(i);
+    ctl.update(cam, DT, p, rules, BASE_ZOOM, a === true ? STILL_HANG : a === false ? null : a);
     const held = ctl.held;
     return {
       pos: cam.position,
@@ -236,6 +245,7 @@ function ride(
       leadS: held.leadS,
       edge: held.edge,
       latch: held.latch,
+      wind: held.wind,
     };
   });
 }

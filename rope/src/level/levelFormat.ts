@@ -1566,6 +1566,22 @@ export const DEFAULT_PATH_LOOKAHEAD_Y = 1.4;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_X = 1;
 export const DEFAULT_PATH_LOOKAHEAD_BUFFER_Y = 0.55;
 
+// How far along the route a hanging avatar has to WIND themselves up their line
+// before the frame-edge latch lets the camera go, in metres: line taken in,
+// projected onto the direction the route runs where they are (see
+// `CameraController.update`, the wind release).
+//
+// A swing that carries the avatar out of the frame pins the camera where the
+// guarantee left it, for the rest of the hang - the pin is what stops the
+// return half of every swing rocking the camera back. Winding up the line
+// toward an anchor AHEAD on the route is not a swing: it is the player going
+// where the level wants them, and a camera still pinned to the backswing then
+// trails them until the far edge of the frame drags it. This is how much of
+// that travel says so. Small enough that a climb frees the camera early;
+// large enough that the wobble of a taut line's solve, and a turn or two of
+// the spool taken up mid-swing, does not.
+export const DEFAULT_PATH_WIND_BUFFER = 0.5;
+
 // A camera region: a volume that reshapes the camera while the avatar is inside
 // it. Deliberately NOT a body — it has no collision, nothing wraps it and the
 // sim never sees it, so it lives in its own list rather than gaining a
@@ -1705,9 +1721,11 @@ export interface CameraPathVert {
   // lengths are pixels on disk like everything else here.
   //
   // The first five shape the TARGET and are read at the committed lead origin;
-  // the last five shape the GRIP - the corridor, its falloff band and the
+  // the next five shape the GRIP - the corridor, its falloff band and the
   // release hysteresis - and are read at the player's projection, since that
-  // is where the range is measured from (see `pathParamsAt`).
+  // is where the range is measured from (see `pathParamsAt`). `windBuffer` is
+  // read at the player's projection too: it is about the route where they
+  // hang.
   viewportScale?: number;
   lookaheadX?: number;
   lookaheadY?: number;
@@ -1718,6 +1736,7 @@ export interface CameraPathVert {
   falloffX?: number;
   falloffY?: number;
   buffer?: number;
+  windBuffer?: number;
 }
 
 export interface CameraPathData {
@@ -1758,6 +1777,10 @@ export interface CameraPathData {
   blend?: number;
   // Extra release hysteresis outside `range`; absent = REGION_EXIT_MARGIN.
   buffer?: number;
+  // How far along the route a hanging avatar winds themselves up their line
+  // before the frame-edge latch lets the camera go (see
+  // DEFAULT_PATH_WIND_BUFFER, which is what it falls back to).
+  windBuffer?: number;
   // Which rule wins against regions and other paths: the LOWEST number in force
   // wins, and rules tied at that number blend. Absent = 0, so a path and a
   // region that overlap at the default blend rather than one silencing the
@@ -2950,6 +2973,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
         ...(v.falloffX !== undefined ? { falloffX: v.falloffX * factor } : {}),
         ...(v.falloffY !== undefined ? { falloffY: v.falloffY * factor } : {}),
         ...(v.buffer !== undefined ? { buffer: v.buffer * factor } : {}),
+        ...(v.windBuffer !== undefined ? { windBuffer: v.windBuffer * factor } : {}),
       })),
       // The retired scalar range/falloff were one circular radius each: folded
       // into both axes here, at the one gate, so a level that authored a
@@ -2986,6 +3010,7 @@ export function scaleLevelData(rawData: RawLevelData, factor: number): LevelData
       ...(p.viewportScale !== undefined ? { viewportScale: p.viewportScale } : {}),
       ...(p.blend !== undefined ? { blend: p.blend } : {}),
       ...(p.buffer !== undefined ? { buffer: p.buffer * factor } : {}),
+      ...(p.windBuffer !== undefined ? { windBuffer: p.windBuffer * factor } : {}),
       ...(p.priority !== undefined ? { priority: p.priority } : {}),
     }));
   // A note's placement, box and glyph height are lengths; its text is not.

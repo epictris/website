@@ -58,6 +58,7 @@ import {
   DEFAULT_PATH_LOOKAHEAD_Y,
   DEFAULT_PATH_RANGE_X,
   DEFAULT_PATH_RANGE_Y,
+  DEFAULT_PATH_WIND_BUFFER,
   DEFAULT_VIEWPORT_SCALE,
 } from "../level/levelFormat";
 import type { Camera } from "./camera";
@@ -367,6 +368,13 @@ export const CAMERA_EDGE_SMOOTHING = 0.3;
 // nothing to do.
 export const CAMERA_LATCH_BUFFER = 0.02;
 
+// The wind release's re-arm (see `CameraController.windArmed`): how long the
+// avatar has to have stopped winding up their line before a swing may pin the
+// camera again, and what "winding" is - metres per second of line taken in
+// along the route, above which a frame counts.
+const WIND_REARM_DELAY = 0.25;
+const WIND_REST_RATE = 0.05;
+
 // How long the pin's buffer takes to open, in seconds - machinery rather than a
 // knob, and the reason is in `latchOpenX`: it exists so the buffer arrives as a
 // ramp instead of as a step. Half a second is long enough that a pin born deep
@@ -529,11 +537,12 @@ export function buildCameraRules(
 // The fields a node may key (see `CameraPathVert`). The first five shape the
 // path's TARGET - how much world is on screen, how far ahead the camera looks
 // and how much slack that lead is measured with - and are read at the
-// committed lead origin. The last five shape the GRIP - the corridor, its
+// committed lead origin. The next five shape the GRIP - the corridor, its
 // falloff band and the release hysteresis - and are read at the player's
-// projection, the arc length the range is measured from. `pathParamsAt`
-// resolves all ten at whatever `s` it is given; the caller knows which `s` a
-// field is about.
+// projection, the arc length the range is measured from. The last is the WIND
+// RELEASE (see `windProgress`), read at the player's projection too.
+// `pathParamsAt` resolves all eleven at whatever `s` it is given; the caller
+// knows which `s` a field is about.
 export const PATH_KEY_FIELDS = [
   "viewportScale",
   "lookaheadX",
@@ -545,6 +554,7 @@ export const PATH_KEY_FIELDS = [
   "falloffX",
   "falloffY",
   "buffer",
+  "windBuffer",
 ] as const;
 export type PathKeyField = (typeof PATH_KEY_FIELDS)[number];
 
@@ -568,6 +578,7 @@ const PATH_PARAM_DEFAULTS: PathParams = {
   falloffX: DEFAULT_PATH_FALLOFF_X,
   falloffY: DEFAULT_PATH_FALLOFF_Y,
   buffer: REGION_EXIT_MARGIN,
+  windBuffer: DEFAULT_PATH_WIND_BUFFER,
 };
 
 // The path-level values: what every field is with no keys at all, and what a
@@ -767,7 +778,7 @@ export function pathLookaheadBuffer(p: PathParams, dir: Vec2): number {
 // on genuine forward travel the lead is short by the band, which is what the
 // buffer means and what the author is choosing when they widen it.
 //
-// `anchored` is the swing regime (see `Level.cameraAnchored`), and there the
+// `anchored` is the swing regime (see `Level.cameraHang`), and there the
 // band is a RATCHET: only its rear edge may drag the origin, so the lead runs
 // forward with the swing and is never hauled back by the return. That is the
 // bias down the track this whole regime is for - a swing that reaches further
@@ -1319,6 +1330,19 @@ export interface HeldCamera {
   // Non-null on an axis means the camera is PINNED there rather than aiming at
   // the rule's target, which the overlay is otherwise unable to explain.
   latch: { x: number | null; y: number | null };
+  // Metres the wind release has accrued toward the path's `windBuffer` (see
+  // `CameraController.windProgress`) - 0 whenever nothing is pinned.
+  wind: number;
+}
+
+// What the avatar is hanging on, for the anchored episode (see
+// `CameraController.update`): the unit direction their line leaves them along
+// - toward its first wrap or its anchor - and how much line is out. Null when
+// they are moving under their own feet. The length is what the wind release
+// watches; the pull is what says which way winding it in carries them.
+export interface CameraHang {
+  pull: Vec2;
+  length: number;
 }
 
 export class CameraController {
@@ -1393,6 +1417,47 @@ export class CameraController {
   private latchOpenX = 0;
   private latchOpenY = 0;
 
+  // The WIND RELEASE: the one thing besides the anchor letting go that drops
+  // the pin.
+  //
+  // A pin is the answer to a SWING - the return half of an oscillation says
+  // nothing about where the player is going, so the camera is held where the
+  // guarantee left it rather than rocked back. Winding up the line is not a
+  // swing. The player is hauling themselves toward the anchor, and when the
+  // anchor lies ahead on the route that is the level's own direction: a camera
+  // still pinned to the backswing then trails them, until the far edge of the
+  // frame drags it forward a shove at a time. So the pin is dropped once the
+  // winding has carried them `windBuffer` metres along the route (the path's
+  // field, read where they hang), and the camera goes back to its rule through
+  // the hand-off blend, exactly as it does when the anchor lets go. A path's
+  // release and nobody else's: a pin under a locked room has no route to be
+  // ahead on.
+  //
+  // `windProgress` is what has been taken in since the pin was born, each
+  // frame's shortening projected onto the route's direction where the avatar
+  // is - so winding straight up under a horizontal route counts for nothing,
+  // and paying line back out counts against it, down to zero. Measured from
+  // the pin's birth rather than the anchor's, because it is the pin's release,
+  // and a turn of the spool taken before any pin existed is no reason to drop
+  // one later.
+  //
+  // `windArmed` is what stops the release re-pinning on the spot. The camera
+  // leaves the pin toward a target the avatar is still behind, so the
+  // guarantee is asking on the very next frame, and a pin recorded then is the
+  // old pin back with its progress reset - which, measured, is a camera that
+  // catches the climb up in steps of the buffer, a blend at a time. So while
+  // the winding goes on no pin is recorded at all, and the guarantee carries
+  // the camera up after them at the pace they wind (it is asking every frame,
+  // and unlatched it answers every frame). The pin is armed again
+  // `WIND_REARM_DELAY` after the last frame that took line in along the route
+  // faster than `WIND_REST_RATE` - a rate rather than any take-up at all,
+  // because a taut line's solve breathes by a few microns a frame and a swing
+  // must not read as a wind.
+  private windProgress = 0;
+  private hangLength: number | null = null;
+  private windArmed = true;
+  private sinceWind = Infinity;
+
   // How far the band moved the AIM on this frame, per axis, in metres. A
   // record of what just happened rather than carried state - the override has
   // none, which is the whole of why it cannot go stale (see `edgeTakeUp`) -
@@ -1442,6 +1507,7 @@ export class CameraController {
       leadS: this.pathLeadS,
       edge: this.edge,
       latch: { x: this.latchX, y: this.latchY },
+      wind: this.windProgress,
     };
   }
 
@@ -1470,9 +1536,9 @@ export class CameraController {
     return projectOntoPolylineWindow(rule.index, follow, this.pathS - maxStep, this.pathS + maxStep);
   }
 
-  // `anchored` is whether the avatar is hanging on a taut line rather than
-  // moving under their own feet (see `Level.cameraAnchored`), and it opens an
-  // EPISODE in which the camera does not walk back down the track.
+  // `hang` is what the avatar is hanging on - a taut line rather than their
+  // own feet (see `Level.cameraHang`) - and having one opens an EPISODE in
+  // which the camera does not walk back down the track.
   //
   // A swing is an oscillation, so half of it is travel the level did not mean:
   // the forward half says where the player is going and the return half says
@@ -1495,14 +1561,18 @@ export class CameraController {
   // The episode ends when the anchor is released, and the camera returns to
   // whatever its rule wants through the frozen-delta hand-off below, since by
   // then the gap is arbitrary and a 0.15 s ease across it would be a lurch.
+  // The pin alone also lets go mid-episode, once the avatar has wound
+  // themselves far enough up the line along the route (see `windProgress`),
+  // through the same hand-off and for the same reason.
   update(
     camera: Camera,
     dt: number,
     follow: Vec2,
     rules: readonly CameraRule[],
     baseZoom: number,
-    anchored: boolean,
+    hang: CameraHang | null,
   ): void {
+    const anchored = hang !== null;
     if (!this.started) {
       // A snap is history-free: there is no incumbent to keep a grip, and no
       // tracked projection or committed lead to continue from.
@@ -1516,6 +1586,10 @@ export class CameraController {
       this.aimPullY = 0;
       this.latchOpenX = 0;
       this.latchOpenY = 0;
+      this.windProgress = 0;
+      this.hangLength = null;
+      this.windArmed = true;
+      this.sinceWind = Infinity;
       this.lastFollow = follow;
     }
 
@@ -1598,6 +1672,26 @@ export class CameraController {
     }
     const s = proj?.s ?? 0;
 
+    // The wind release (see `windProgress`): what this frame's take-up of the
+    // line is worth along the route where the avatar hangs, whether the sum
+    // since the pin was born has reached the path's buffer there, and how long
+    // it has been since they were winding at all. Read before the hand-off
+    // decision, since the release IS one.
+    let takeUp = 0;
+    if (hang && this.hangLength !== null && nextSeat) {
+      // `tangentAt` is a chord, not a unit vector; the projection wants one.
+      const chord = tangentAt(nextSeat.index, s);
+      const span = chord.length();
+      const along = span > 0 ? Math.max(0, chord.dot(hang.pull) / span) : 0;
+      takeUp = (this.hangLength - hang.length) * along;
+    }
+    this.hangLength = hang?.length ?? null;
+    const pinned = this.latchX !== null || this.latchY !== null;
+    if (pinned) this.windProgress = Math.max(0, this.windProgress + takeUp);
+    if (dt > 0) this.sinceWind = takeUp / dt > WIND_REST_RATE ? 0 : this.sinceWind + dt;
+    const unpinning =
+      pinned && nextSeat !== null && this.windProgress > pathParamsAt(nextSeat, s).windBuffer;
+
     // Acquiring a path commits the lead to the projection outright - entering
     // (a branch jump included) is history-free, so the band starts centred on
     // the avatar rather than holding an offset earned somewhere else on the
@@ -1653,7 +1747,12 @@ export class CameraController {
       return;
     }
 
-    if (!sameRules(nextRules, this.members.map((m) => m.rule)) || branchJump || releasing) {
+    if (
+      !sameRules(nextRules, this.members.map((m) => m.rule)) ||
+      branchJump ||
+      releasing ||
+      unpinning
+    ) {
       // The discrepancy is measured between the two *targets*, not against
       // where the camera is: aiming at the camera's own position would drop its
       // velocity to nothing for an instant, which reads as a hitch. Taken this
@@ -1678,7 +1777,9 @@ export class CameraController {
       // taken with the episode's constraints still on - the ratcheted lead
       // origin, and the pin over the top of it - so the delta frozen here is
       // exactly what the release gave up, and the camera leaves the pin at the
-      // blend's pace rather than the follow lag's.
+      // blend's pace rather than the follow lag's. A WIND release is the same
+      // step without the ratchet's half: the lead origin stays where the
+      // episode has walked it, and what is frozen is the pin alone.
       //
       // The OUTGOING set is re-weighted here rather than reusing last frame's
       // weights, for the same reason its targets are re-evaluated: both sides
@@ -1714,10 +1815,14 @@ export class CameraController {
     this.s = this.dur > 0 ? Math.min(1, this.s + dt / this.dur) : 1;
     // Read by the hand-off above and dropped here: outside an episode there is
     // nothing pinning the camera, and the gap the pin leaves behind is already
-    // frozen into the delta that is now decaying.
-    if (!anchored) {
+    // frozen into the delta that is now decaying. A wind release drops it the
+    // same way and DISARMS the next pin (see `windArmed`); the anchor letting
+    // go re-arms it, since the next episode starts with a clean slate.
+    if (!anchored || unpinning) {
       this.latchX = null;
       this.latchY = null;
+      this.windProgress = 0;
+      this.windArmed = !anchored;
     }
     this.wasAnchored = anchored;
 
@@ -1755,9 +1860,16 @@ export class CameraController {
     // episode: the aim where the soft half shaped it, and the camera's own
     // position where the floor had to catch it, the floor being the stronger
     // demand of the two.
-    if (anchored) {
+    //
+    // Not while a wind release has the pin DISARMED, which lasts until the
+    // avatar has stopped winding (see `windArmed`). A pin born here starts the
+    // wind release's count from zero.
+    if (!this.windArmed && this.sinceWind >= WIND_REARM_DELAY) this.windArmed = true;
+    if (anchored && this.windArmed) {
+      const was = this.latchX !== null || this.latchY !== null;
       if (this.aimPullX > 0) this.latchX = aimPos.x;
       if (this.aimPullY > 0) this.latchY = aimPos.y;
+      if (!was && (this.latchX !== null || this.latchY !== null)) this.windProgress = 0;
     }
 
     camera.position = this.pos;

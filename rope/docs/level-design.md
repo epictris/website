@@ -82,8 +82,13 @@ A swing's forward half says something about where the player is going and its re
 So a swing wider than the band no longer rocks the camera either - it ratchets it a little further down the route each arc and holds there - and what the band is really tuning is how much of a *roll* it absorbs.
 Letting go hands the point back to the middle of the band, blended, so the camera eases back to the lead it would have had all along.
 
-If a swing carries the player right off the edge of the frame, the screen-edge guarantee (below) takes over, and it too holds where it put the camera until the line is released.
-Neither is authorable, and neither needs to be: they are about the difference between swinging and travelling rather than about this route.
+If a swing carries the player right off the edge of the frame, the screen-edge guarantee (below) takes over, and it too holds where it put the camera until the line is released - or until the player winds themselves up the line toward where the route goes.
+Neither hold is authorable, and neither needs to be: they are about the difference between swinging and travelling rather than about this route.
+
+`wind buf` is the one thing about them that is: how far along the route the player has to wind themselves up their line before the frame-edge hold lets the camera go (0.5 m unless the path says otherwise).
+A player climbing toward an anchor ahead on the route is travelling, not swinging, and without this the camera stays pinned to their last backswing while they climb away from it.
+Winding straight up under a horizontal route counts for nothing, nor does winding toward an anchor behind, and paying line back out counts against it.
+Tune it up if a turn of the spool taken mid-swing frees the camera when you did not mean it to, and down if a climb has to go on too long before the camera comes with it.
 
 `range x` and `range y` are the corridor: how far off the route the player may be while the camera still narrates it.
 Two numbers for the same 16:9 reason the lead is two: the pair is read as an ellipse around the route, resolved along the direction the player actually left in, so the corridor is screen-shaped.

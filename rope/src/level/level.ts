@@ -50,7 +50,7 @@ import {
   vineChainSet,
   type Vine,
 } from "./vines";
-import { buildCameraRules, type CameraRule } from "../render/cameraController";
+import { buildCameraRules, type CameraHang, type CameraRule } from "../render/cameraController";
 import { PX } from "../engine/units";
 
 // The scripted-mover contract lives with the scripts (`level/movers.ts`), and is
@@ -210,16 +210,20 @@ export class Level {
     return this.player.renderPosition(alpha);
   }
 
-  // Is the avatar hanging on a taut line rather than moving under their own
-  // feet? It opens the camera's ANCHORED EPISODE (see `CameraController.update`)
+  // What the avatar is hanging on, or null while they move under their own
+  // feet. It opens the camera's ANCHORED EPISODE (see `CameraController.update`)
   // - the camera does not walk back down the track while they swing, because a
-  // swing is an oscillation and running under their own feet is not.
+  // swing is an oscillation and running under their own feet is not - and the
+  // line's length and direction feed the episode's wind release.
   //
   // The grapple's rope is taut from the frame it is fired - there is no hook in
   // flight - so having one at all is the whole condition, which is the same
-  // reading `sim/playtest.ts` takes.
-  get cameraAnchored(): boolean {
-    return this.player.rope !== null;
+  // reading `sim/playtest.ts` takes. It is never reeled, so the length is the
+  // same every frame and the wind release never fires for it.
+  get cameraHang(): CameraHang | null {
+    const rope = this.player.rope;
+    if (rope === null) return null;
+    return { pull: rope.startPull() ?? Vec2.ZERO, length: rope.hangingLength() };
   }
 
   physicsProcess(input: FrameInput, delta: number): void {
