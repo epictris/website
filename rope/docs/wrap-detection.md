@@ -47,6 +47,23 @@ The path was 2 cm over length through a corner the rope never touched, the hangi
 Only the `--dump` of `cli shot` could show it - the bundle diverges in bun from f859 on the libm knife-edge, and the tail is chaotic in that - and the fixed page reproduces the recording bit for bit up to f2633, where the rule first bites.
 `cli contacts` `chain-sweep-slide-off` is the detector: the recording's polygon and its two spans exactly, played forwards (the slide-off, no crossing) and backwards (the rope arriving from clear onto the corner: a clockwise crossing at the corner itself), so a rule that silenced the sweep outright fails the second half.
 
+## A corner the span's own start slid past is not a pass-through
+
+A crossing that happened within the **start-proximity gate** of the span's start (`Rope.WRAP_START_GATE`, 5 cm, measured along the span at the moment of the crossing) is discarded (`startGate` in `pointCrossesSpan`).
+The gate is the same number the sample already applies from the other side: a corner within 5 cm of a span's start is never wrapped, because that region belongs to the start node's own body - the rim the coil exits from, the corner a wrap sits on - and a corner standing in it is tolerated rather than bent round.
+A point that passed through the first 5 cm of a span did not pass through the chain; the span's start slid past it, and reading that as the body arriving from a side puts the wrap wherever the tangent-vertex construction lands.
+
+`session-391f` f250 is the finding.
+The ball rolled up the face of a small block that sits in a pocket of the ground - its base on the flat, its right face leaning back over the slope that rises from the pocket's bottom corner - with the coil's exit on that face 3 mm below its top corner, and the span from the exit to the anchor leaving 45 um off the corner, which the last look read as `Touching`: a chain lying against a corner.
+One frame of rolling carried the exit 1.9 cm up the face, past the corner.
+The span pivots about its start, so the corner changed sides at u = 0.002, 2.8 mm from the start, and the sweep reported the block passing through the chain clockwise, from a corner 1.6 cm from the start that the sample's gate would have refused to wrap.
+The start stood clear of the block, so the block was wrapped at its tangent vertex from there in that hand: the bottom of the pocket, 24 cm down the face, a corner the chain never touched and one the ground fills the outside of.
+The path was 24 cm over length, the solve hauled the ball 24 cm to fit it (6.5 m/s in one frame, `rope-solve-kick`), and the phantom then held for the remaining 140 frames, because the bend at it reads clockwise, which is the hand it was recorded with, and the release test knows nothing else: the ball sat leashed 18 cm from the pocket, every turn the aim asked was refused as wound tight, and the player reported the rolling input as blocked.
+The touching band would have caught this instance but not the class - a faster roll leaves the old span millimetres clear of the corner while the crossing still sits at the start, since the exit's path along the face meets the anchor-corner line only at the corner itself - so the rule is about where the crossing is, not what the last look touched.
+The same reasoning applies at a span's END, where a corner near the end node has the same pivot to exploit (`session-1052f` was that at zero distance, caught by the noise floor); no recording has shown it at a finite distance, so no end gate exists yet.
+`cli contacts` `chain-sweep-start-gate` is the detector: the recording's block and its two spans exactly, ungated (the crossing where the finding says it, relocated to the pocket corner) and gated (none), with a span raised through the pocket corner mid-span as the control that the gate silences nothing deeper in.
+`playtests/regressions/session-391f.json.gz` is the recording, diverging at f250 where the phantom no longer forms; the ball rolls on up the face and swings home to its anchor.
+
 ## A corner two statics share is the span's own end
 
 A point that stood within a nanometre of the old span's line was **on** it, not on a side of it (`NO_SIDE` in `lib/spanSweep.ts`), and a crossing is only reported for a point that had a side to come from.

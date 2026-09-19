@@ -76,7 +76,37 @@ const DEGENERATE_SPAN = 1e-12;
 const NO_SIDE = 1e-9;
 
 // Did `p` (moving p0 -> p1) pass through the span (moving s0e0 -> s1e1)?
-export function pointCrossesSpan(span: SpanMotion, p0: Vec2, p1: Vec2): Crossing | null {
+//
+// `startGate` is how far along the span, in metres, a crossing must sit to be
+// the SPAN's business rather than its start node's. A point that passed through
+// the first few centimetres of a span passed through the body the span starts
+// on - the ball's rim the coil exits from, the corner a wrap sits on - or
+// something pressed against it, and the sample declines to wrap a corner that
+// close to the start for the same reason (`Rope.WRAP_START_GATE`). It is
+// measured AT the crossing, so it does not scale with how fast the start moved.
+//
+// `session-391f` f250: the ball rolling up a block's face with the coil's exit
+// on that face, 3 mm below its top corner and the span leaving to the anchor
+// 45 um off the corner - a chain lying against a corner, which the last look
+// read as touching. One frame of rolling carried the exit 1.9 cm up the face,
+// past the corner. The span pivots about its start, so the corner changed
+// sides at u = 0.002, 2.8 mm from the start, and the sweep read it as the
+// block passing through the chain clockwise: the start stood clear, so the
+// block was wrapped at its tangent vertex from there in that hand, which is
+// the corner 24 cm down the face - the bottom of the pocket the block's face
+// makes with the slope it sits on. The path was 24 cm over length through a
+// corner the chain never touched, the solve hauled the ball 24 cm to fit
+// (6.5 m/s in one frame), and the phantom held for the rest of the run: the
+// ball leashed 18 cm from the pocket, every turn asked refused, reported as
+// the rolling input being blocked. The corner that crossed is 1.6 cm from the
+// start, which the sample's gate would have refused to wrap; the relocation to
+// the tangent vertex is what let the crossing out from under it.
+export function pointCrossesSpan(
+  span: SpanMotion,
+  p0: Vec2,
+  p1: Vec2,
+  startGate = 0,
+): Crossing | null {
   const a0 = p0.sub(span.s0);
   const a1 = p1.sub(span.s1).sub(a0);
   const b0 = span.e0.sub(span.s0);
@@ -114,6 +144,7 @@ export function pointCrossesSpan(span: SpanMotion, p0: Vec2, p1: Vec2): Crossing
   if (bb < DEGENERATE_SPAN) return null;
   const u = a.dot(b) / bb;
   if (u < 0 || u > 1) return null;
+  if (u * Math.sqrt(bb) <= startGate) return null;
   return {
     t,
     u,
@@ -196,25 +227,28 @@ function cutAtLastLook(shape: CollisionShape2D, pose: Pose | null, span: SpanMot
 // direction is least ambiguous about.
 //
 // `pose` is the body's transform at the last look, or null for a body that did
-// not move. `exposed` filters the polygon's vertex loop.
+// not move. `exposed` filters the polygon's vertex loop. `startGate` is the
+// length of span from its start that belongs to the start node (see
+// `pointCrossesSpan`).
 export function shapeCrossesSpan(
   shape: CollisionShape2D,
   pose: Pose | null,
   span: SpanMotion,
   exposed: (vertexIndex: number) => boolean,
+  startGate = 0,
 ): Crossing | null {
   const body = shape.owner as PhysicsBody2D;
   const before = (p: Vec2): Vec2 => (pose ? pointAtPose(body, pose, p) : p);
   let best: Crossing | null = null;
   if (shape.shape.kind === "circle") {
     const c = shape.globalPosition;
-    best = pointCrossesSpan(span, before(c), c);
+    best = pointCrossesSpan(span, before(c), c, startGate);
   } else {
     const corners = ShapeGeometry.getGlobalCorners(shape);
     for (let i = 0; i < corners.length; i++) {
       if (!exposed(i)) continue;
       const v = corners[i]!;
-      const crossing = pointCrossesSpan(span, before(v), v);
+      const crossing = pointCrossesSpan(span, before(v), v, startGate);
       if (crossing && (best === null || crossing.commitment > best.commitment)) best = crossing;
     }
   }

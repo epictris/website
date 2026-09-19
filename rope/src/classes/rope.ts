@@ -301,6 +301,17 @@ export class Rope {
   // chain only: the sample is what every scene chain was recorded through, and
   // a scene chain is not the thing moving at 15 m/s.
   continuous = false;
+  // The start-proximity gate, in metres: how close to a span's start a corner
+  // may stand and still not be a wrap. It is one number for both halves of the
+  // wrap scan. The sample declines to wrap a corner this close to the start
+  // (the region is the start node's own - the rim the coil exits from, the
+  // corner a wrap sits on - and a corner in it is tolerated rather than bent
+  // round), and the sweep declines a crossing that happened this close to the
+  // start (`pointCrossesSpan`), because a crossing there is the start sliding
+  // past a corner, and the tangent-vertex relocation would otherwise turn a
+  // corner the sample refuses into a wrap on the body's far side
+  // (`session-391f`, docs/wrap-detection.md).
+  static readonly WRAP_START_GATE = 5 * PX;
   // The baseline the sweep measures from - the path as the last regeneration
   // left it. Nodes are placed by ROLE rather than by identity, because the
   // node objects at the rope's two ends are not stable: the coil re-derives its
@@ -1865,7 +1876,7 @@ export class Rope {
             );
           } else continue;
 
-          if (tangentPoint.distanceTo(span.span.start) > 5 * PX && !inCuff(body, tangentPoint)) {
+          if (tangentPoint.distanceTo(span.span.start) > Rope.WRAP_START_GATE && !inCuff(body, tangentPoint)) {
             newNodes.push(
               new RopeWrap(
                 new RopeContact(body, tangentPoint.sub(body.globalPosition), shapeIndex),
@@ -1915,7 +1926,7 @@ export class Rope {
           }
           if (
             vertexIndex !== null &&
-            corners[vertexIndex]!.distanceTo(span.span.start) > 5 * PX &&
+            corners[vertexIndex]!.distanceTo(span.span.start) > Rope.WRAP_START_GATE &&
             !inCuff(body, corners[vertexIndex]!) &&
             // Grazing-contact gate: a corner this close to the span line
             // bends the rope sub-visibly and adds no physical constraint,
@@ -2019,7 +2030,13 @@ export class Rope {
       if (cand.body === startObj || cand.body === endObj) continue;
       if (cand.shape === span.from.contact.shape || cand.shape === span.to.contact.shape) continue;
       const pose = cand.body.isMobile ? this.sweepPose(cand.body) : null;
-      const crossing = shapeCrossesSpan(cand.shape, pose, motion, (i) => !isSeamVertex(cand.shape, i));
+      const crossing = shapeCrossesSpan(
+        cand.shape,
+        pose,
+        motion,
+        (i) => !isSeamVertex(cand.shape, i),
+        Rope.WRAP_START_GATE,
+      );
       if (crossing) (out ??= new Map()).set(cand, crossing);
     }
     return out;

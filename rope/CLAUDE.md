@@ -103,7 +103,7 @@ The ball and chain
 - [manacle](docs/manacle.md) - the edge-on ring, its hinge pin, driven rotation, the bite and the mounted cuff.
 - [slack-chain-drape](docs/slack-chain-drape.md) - the visual-only drape of a chain with length to spare.
 - [chain-retract](docs/chain-retract.md) - the released chain reeling back in: the drape carrying on, render-side, deleted by the next throw.
-- [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its two exclusions, and how a corner two bodies share lets go.
+- [wrap-detection](docs/wrap-detection.md) - the continuous span sweep and its three exclusions, and how a corner two bodies share lets go.
 - [sparks](docs/sparks.md) - hook and ball sparks on hook-proof steel, render-side by construction.
 
 Rope geometry and surfaces

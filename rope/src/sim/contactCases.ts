@@ -61,6 +61,7 @@ import { CHAIN_TOLERANCE, SceneChain, buildSceneChains, stepSceneChains } from "
 import { modelFromDisk, modelToDisk } from "../editor/model";
 import { Rope } from "../classes/rope";
 import { RopeAttachment, RopeContact, RopeWrap } from "../lib/ropeContact";
+import { RopeGeneration } from "../lib/ropeGeneration";
 import { cullDetachedNodes, MIN_WRAP_DEFLECTION } from "../lib/nodeDetachment";
 import { shapeCrossesSpan } from "../lib/spanSweep";
 import { Intersections } from "../lib/intersections";
@@ -6576,6 +6577,137 @@ function caseChainSweepSlideOff(): ContactResult {
   );
 }
 
+// chain-sweep-start-gate - a corner the span's own start slid past is not a
+// body passing through the span.
+//
+// `session-391f` f250: the ball rolling up the face of a small block that sits
+// in a pocket of the ground, with the coil's exit ON that face 3 mm below its
+// top corner and the span to the anchor leaving 45 um off the corner - a chain
+// lying against a corner. One frame of rolling carried the exit 1.9 cm up the
+// face past the corner; the span pivots about its start, so the corner changed
+// sides 2.8 mm from the start (u = 0.002) and `shapeCrossesSpan` reported the
+// block passing through the chain clockwise. The start stood clear of the
+// block, so `regeneratePath` wrapped it at its tangent vertex from there in
+// that hand: the block's bottom corner, 24 cm down the face at the bottom of
+// the pocket. 24 cm of phantom path, a 6.5 m/s haul to fit it, and the ball
+// leashed 18 cm from the pocket for the rest of the run with every turn refused
+// - reported as the rolling input being blocked. The corner that crossed
+// stands 1.6 cm from the start, inside the gate the sample would have refused
+// it under; the relocation is what let the crossing out from under that gate.
+//
+// The rule: a crossing that happened within `Rope.WRAP_START_GATE` of the
+// span's start, measured at the crossing, is the start node's business and is
+// not a crossing. The case is the recording's polygon and its two spans
+// exactly. Ungated, the crossing is reported where the finding says and the
+// tangent vertex it relocates to is the pocket corner; gated, there is none.
+// The control is a span deep enough in the scene to be the span's own affair:
+// drawn under the block and raised through its pocket corner mid-span, which
+// the gate must still report, from below, at that corner.
+function caseChainSweepStartGate(): ContactResult {
+  const world = new World();
+  const data = scaleLevelData(
+    {
+      player: { x: 0, y: 0, radius: 8 },
+      bodies: [
+        {
+          kind: "static",
+          x: 1785.7664697474097,
+          y: -93.39167353808222,
+          rot: 1.308996938995747,
+          friction: 1,
+          objects: [
+            {
+              type: "collision",
+              shape: {
+                kind: "poly",
+                verts: [
+                  { x: 49.38642064438101, y: 60.61398751967724 },
+                  { x: 32.656094569624806, y: 45.778348354736345 },
+                  { x: 30.761407659809763, y: 14.212383115039021 },
+                  { x: 43.0088563737257, y: 7.141315303173414 },
+                  { x: 64.91556335053221, y: 2.6584379423333555 },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as RawLevelData,
+    PX,
+  );
+  const shape = buildLevelBodies(world, data, () => {}).bodies[0]!.body!.primaryShape();
+  const topCorner = new Vec2(17.9, -0.5);
+  const pocketCorner = new Vec2(18, -0.3);
+  // The coil's exit and the anchor at the regeneration before (f249's baseline)
+  // and at f250's first, the one before the length solve.
+  const slide = {
+    s0: new Vec2(17.901532977128944, -0.49747403022991454),
+    e0: new Vec2(17.1694636199662, -1.6633914986844422),
+    s1: new Vec2(17.897122553545707, -0.5156368233372356),
+    e1: new Vec2(17.1694636199662, -1.6633914986844422),
+  };
+  const gate = Rope.WRAP_START_GATE;
+  const status = (s: IntersectionStatus): string => IntersectionStatus[s]!;
+  const before = Intersections.intersectsSegment(shape, new Segment(slide.s0, slide.e0));
+  const after = Intersections.intersectsSegment(shape, new Segment(slide.s1, slide.e1));
+  const ungated = shapeCrossesSpan(shape, null, slide, () => true);
+  const gated = shapeCrossesSpan(shape, null, slide, () => true, gate);
+
+  const details: string[] = [];
+  let passed = true;
+  const check = (claim: string, got: boolean): void => {
+    if (!got) passed = false;
+    details.push(`${got ? "ok  " : "BAD "} ${claim}`);
+  };
+  const where = (c: { side: WrapDirection; point: Vec2 } | null): string =>
+    c ? `${WrapDirection[c.side]} at ${c.point}` : "none";
+  check(
+    `the chain lay against the corner at the last look (${status(before)}) and stands clear now (${status(after)})`,
+    before === IntersectionStatus.Touching && after === IntersectionStatus.Separate,
+  );
+  const along = ungated ? ungated.u * slide.s1.distanceTo(slide.e1) : NaN;
+  check(
+    `ungated, the corner reads as crossing clockwise ${(along * 1000).toFixed(1)} mm from the start (got ${where(ungated)})`,
+    ungated !== null &&
+      ungated.side === WrapDirection.Clockwise &&
+      ungated.point.distanceTo(topCorner) < 1e-6 &&
+      along < gate,
+  );
+  check(
+    `...a corner ${(ungated ? ungated.point.distanceTo(slide.s1) * 100 : NaN).toFixed(1)} cm from the start, which the sample's gate (${(gate * 100).toFixed(0)} cm) refuses to wrap`,
+    ungated !== null && ungated.point.distanceTo(slide.s1) < gate,
+  );
+  const relocated = ungated === null ? null : RopeGeneration.calculateTangentVertexIndex(shape, ungated.side, slide.s1);
+  const relocatedTo = relocated === null ? null : ShapeGeometry.getGlobalCorners(shape)[relocated]!;
+  check(
+    `...and the tangent vertex it relocates the wrap to is the pocket corner ${(relocatedTo ? relocatedTo.distanceTo(slide.s1) * 100 : NaN).toFixed(0)} cm away (got ${relocatedTo ?? "none"})`,
+    relocatedTo !== null && relocatedTo.distanceTo(pocketCorner) < 1e-6 && relocatedTo.distanceTo(slide.s1) > gate,
+  );
+  check(`gated, the start sliding past the corner is not a crossing (got ${where(gated)})`, gated === null);
+
+  // The control: a level span 41 cm wide drawn 10 cm under the block's base,
+  // raised 20 cm so the pocket corner passes up through its middle.
+  const raise = {
+    s0: new Vec2(17.6, -0.2),
+    e0: new Vec2(18.2, -0.2),
+    s1: new Vec2(17.6, -0.4),
+    e1: new Vec2(18.2, -0.4),
+  };
+  const control = shapeCrossesSpan(shape, null, raise, () => true, gate);
+  check(
+    `a corner crossing mid-span is still reported, from below, at the corner (got ${where(control)}, ${(control ? control.u * raise.s1.distanceTo(raise.e1) * 100 : NaN).toFixed(0)} cm from the start)`,
+    control !== null &&
+      control.side === WrapDirection.CounterClockwise &&
+      control.point.distanceTo(pocketCorner) < 1e-6 &&
+      control.u * raise.s1.distanceTo(raise.e1) > gate,
+  );
+  return ok(
+    "chain-sweep-start-gate - a corner the span's own start slid past is not a body passing through the span",
+    passed,
+    details,
+  );
+}
+
 // chain-graze-gate - a body the sweep watched pass through a span is wrapped
 // however little it has passed by.
 //
@@ -7170,6 +7302,7 @@ export function runContactCases(): ContactResult[] {
   results.push(caseChainPostCatch());
   results.push(caseChainSweep());
   results.push(caseChainSweepSlideOff());
+  results.push(caseChainSweepStartGate());
   results.push(caseChainGrazeGate());
   results.push(caseChainOwnCorner());
   results.push(caseChainFaceRelease());
