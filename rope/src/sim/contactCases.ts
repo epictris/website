@@ -1483,65 +1483,135 @@ function caseGripRollPhase(sims: Sim[]): ContactResult {
 // margin is a sub-millimetre band whose position moves with any change to the
 // manifold - a fixed offset would stop straddling it silently, and pass by
 // missing the geometry rather than by handling it.
+//
+// Thrown by a `BallPlayer`, through the frame order the game runs, and that is
+// load-bearing rather than tidiness. The backstop is one frame late by
+// construction, so what decides whether it ever reads its contact is what else
+// happens to the throw in between - and driving a bare hook skips the half of
+// the frame where that is decided. `session-401f` is the throw this missed: the
+// solver stopped a 12 m/s shot 8.84 mm off an attachable wall (the sweep wanted
+// 210.262 mm of a 210.000 mm reach - the `1/cos` shortfall above, at cos
+// 0.8616), `deploySpent` read the stopped hook after integrate on that same
+// frame and ended the throw, and `attachToBlockingContact` then declined on the
+// frame it was written for because the hook was no longer flying. The chain
+// dangled at the 1.027 m it had reached, the winch reeled it back in, and every
+// invariant reported HEALTHY. Driven bare, the case stayed green throughout.
+//
+// Two fans, because a block has two endings and the tilt is what picks one. Off
+// a steep face the throw keeps most of its speed as tangent, stays a throw, and
+// is anchored by the backstop on the frame after; off a shallow one the normal
+// impulse is large enough for the friction cone to eat the tangent too, the hook
+// stops dead, and `deploySpent` ends the throw on the blocking frame itself.
+// Only the second shape is `session-401f`, and a one-tilt fan can hold every
+// other part of this property while missing it entirely.
 // ---------------------------------------------------------------------------
 function caseHookBlockedAttaches(): ContactResult {
-  const OFFSETS = 240;
-  // Across the slab's end and well past its corner, so the fan covers head-on
-  // hits, the corner, and clean misses in one sweep.
-  const FROM = -0.35;
-  const TO = 0.15;
+  const FANS = [
+    // The hanging plank of `session-1154f`, pinned: a 2.4 x 0.8 slab at 60°,
+    // thrown at from above so the fan crosses its end face, its corner, and
+    // clean misses past it. A hit here is glancing: the throw survives it.
+    { rot: 1.05, y: -2, offsets: 240, from: -0.35, to: 0.15 },
+    // `session-401f`'s wall: a face ~30° off the throw, where the block kills
+    // the shot outright. The fan is 1200 wide because what it is hunting is the
+    // ~1.6 mm of path the sweep's reach under-covers, once per 200 mm step.
+    { rot: 0.52, y: -1.6, offsets: 1200, from: -0.7, to: 0.6 },
+  ];
 
   let blocked = 0;
+  let spentOnBlock = 0;
   let unattached = 0;
   let firstBad = "";
-  for (let i = 0; i < OFFSETS; i++) {
-    const x = FROM + ((TO - FROM) * i) / (OFFSETS - 1);
-    const world = new World();
-    // The hanging plank of `session-1154f`, pinned: a 2.4 x 0.8 slab at 60°,
-    // thrown at from below so the shot meets its lower end face near head-on.
-    const slab = new StaticBody2D();
-    slab.globalPosition = new Vec2(0, -2);
-    slab.globalRotation = 1.05;
-    slab.setShape(rectShape(2.4, 0.8));
-    world.add(slab);
+  let throws = 0;
+  for (const fan of FANS) {
+    for (let i = 0; i < fan.offsets; i++) {
+      throws++;
+      const x = fan.from + ((fan.to - fan.from) * i) / (fan.offsets - 1);
+      const world = new World();
+      const slab = new StaticBody2D();
+      slab.globalPosition = new Vec2(0, fan.y);
+      slab.globalRotation = fan.rot;
+      slab.setShape(rectShape(2.4, 0.8));
+      world.add(slab);
 
-    const hook = new BallHook();
-    hook.globalPosition = new Vec2(x, 0);
-    hook.linearVelocity = new Vec2(0, -BallPlayer.HOOK_SPEED);
-    let attached = false;
-    hook.registerAttachmentCallback(() => {
-      attached = true;
-    });
-    world.add(hook);
+      // The thrower sits where the bare hook used to start, and throws straight
+      // down: the same fan, now with a deploy behind it. Held still, so what
+      // varies across the fan is the geometry and nothing else.
+      const ball = new BallPlayer(0.12);
+      ball.globalPosition = new Vec2(x, 0);
+      ball.gravityScale = 0;
+      ball.spawnBody = (b) => world.add(b);
+      world.add(ball);
 
-    // The level's own order: every body's physicsStep, then one integrate.
-    for (let f = 0; f < 20 && !attached; f++) {
-      hook.physicsStep(DT);
-      if (attached) break;
-      world.integrate(DT);
-      const pushed = world.frameContacts.some(
-        (c) => (c.a === hook || c.b === hook) && c.normalImpulse > 0,
-      );
-      if (!pushed) continue;
+      let attached = false;
+      let watched: BallHook | null = null;
+      let pushedAt = -1;
+      let atMaxWhenPushed = false;
+      let stoppedDead = false;
+      for (let f = 0; f < 20 && !attached; f++) {
+        const input = emptyFrameInput();
+        input.mouseWorldPosition = ball.globalPosition.add(new Vec2(0, -1));
+        input.fire = { held: true, pressed: f === 0, released: false };
+        ball.resolveInput(input);
+        ball.sceneBodies = world.bodies;
+        const hook = ball.hookInFlight;
+        if (hook !== null && hook !== watched) {
+          watched = hook;
+          hook.registerAttachmentCallback(() => {
+            attached = true;
+          });
+        }
+        hook?.physicsStep(DT);
+        if (attached) break;
+        world.integrate(DT);
+        if (hook !== null && ball.hookInFlight === hook && pushedAt < 0) {
+          const pushed = world.frameContacts.some(
+            (c) => (c.a === hook || c.b === hook) && c.normalImpulse > 0,
+          );
+          if (pushed) {
+            pushedAt = f;
+            // Which kind of block this was, read where `deploySpent` reads it -
+            // off the hook's own motion after integrate, before anything has
+            // converted the throw. A property of the HIT, so it goes on saying
+            // what the fan covers whatever the throw then ends as.
+            stoppedDead = hook.linearVelocity.length() < BallPlayer.DEPLOY_MIN_SPEED;
+            // The chain ending the throw is a different question, and one the
+            // backstop is deliberately not allowed to answer: an anchor past
+            // the chain's own reach is the dishonest forgiveness
+            // `hook-mouth-band` keeps out. Not this case's business.
+            atMaxWhenPushed =
+              (ball.chain?.getCurrentLength() ?? 0) > BallPlayer.CHAIN_MAX_LENGTH - 0.02;
+          }
+        }
+        ball.checkChainReach(world.bodies);
+        if (ball.chainAnchored && ball.chain) ball.chain.physicsStep(world.bodies, DT);
+        // The sweep anchors on the frame of contact, a spent throw on that same
+        // frame's reach check, and the backstop on the frame after: one more
+        // frame is all any of them may take.
+        if (pushedAt >= 0 && f > pushedAt) break;
+      }
+
+      if (pushedAt < 0 || atMaxWhenPushed) continue;
       blocked++;
-      // One more physicsStep is all it may take: the sweep anchors on the frame
-      // of contact, the backstop on the frame after.
-      hook.physicsStep(DT);
+      if (stoppedDead) spentOnBlock++;
       if (!attached) {
         unattached++;
-        if (!firstBad) firstBad = `x=${x.toFixed(4)} f${f + 1}`;
+        if (!firstBad) firstBad = `rot=${fan.rot} x=${x.toFixed(4)} f${pushedAt + 1}`;
       }
-      break;
     }
   }
 
-  // A fan that never gets blocked would pass the check above by testing nothing.
+  // A fan that never gets blocked would pass the check above by testing nothing,
+  // and one that is never blocked to a STANDSTILL passes it while testing only
+  // half of it - which is how this case watched `session-401f` go by.
   const enough = blocked >= 10;
+  const bothKinds = spentOnBlock >= 3 && blocked - spentOnBlock >= 3;
   const good = unattached === 0;
-  return ok("hook-blocked-attaches — a hook the solver pushes on is a hook that anchors", good && enough, [
+  return ok("hook-blocked-attaches — a hook the solver pushes on is a hook that anchors", good && enough && bothKinds, [
     `${good ? "ok  " : "BAD "} ${unattached} of ${blocked} blocked throws failed to anchor` +
       `${firstBad ? ` (first at ${firstBad})` : ""} (want 0)`,
-    `${enough ? "ok  " : "BAD "} ${blocked} of ${OFFSETS} throws were blocked at all (want >=10)`,
+    `${enough ? "ok  " : "BAD "} ${blocked} of ${throws} throws were blocked at all (want >=10)`,
+    `${bothKinds ? "ok  " : "BAD "} ${spentOnBlock} of those stopped the throw dead and` +
+      ` ${blocked - spentOnBlock} left it flying (want >=3 of each)`,
   ]);
 }
 

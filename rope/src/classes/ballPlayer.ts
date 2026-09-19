@@ -971,8 +971,21 @@ export class BallPlayer extends RigidBody2D {
       // wrapped path length (longer than the straight span was).
       this.deployTip(this.chain.getCurrentLength());
     } else if (this.deploySpent(this.hookInFlight)) {
-      // The throw is over on its own account: freeze at the length it reached.
-      this.deployTip(this.chain.getCurrentLength());
+      // What stops a throw dead is nearly always the solver blocking it against
+      // a surface the sweep's reach did not quite cover, and that surface is
+      // what the throw was aimed at. Ask the hook's own blocking-contact test
+      // before ending the flight: it reads `World.frameContacts`, which here is
+      // THIS frame's set, and it declines for anything not flying, so the
+      // conversion below would silently take away the one frame it was written
+      // to run on (`session-401f`: a 12 m/s shot stopped 8.84 mm off an
+      // attachable wall, dangling ever after, HEALTHY). It is refused an anchor
+      // out of the chain's reach by the snap backstop in `onHookAttached`, the
+      // same gate that answers `probeContact`.
+      if (!this.hookInFlight.attachToBlockingContact()) {
+        // Nothing to anchor to: the throw is over on its own account, and
+        // freezes at the length it reached.
+        this.deployTip(this.chain.getCurrentLength());
+      }
     }
   }
 

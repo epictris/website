@@ -134,10 +134,21 @@ The solver is also blind to the contact point sliding off the feature within the
 Reading the solver's own contacts needs no second copy of its predicate and cannot drift from it, and `normalImpulse > 0` is what separates a contact that pushed from a speculative one that asked for nothing - so a hook coasting parallel to a wall a few millimetres clear still does not anchor to it.
 It is one frame late by construction (physicsStep runs before integrate), which is why the sweep exists and runs first: the sweep catches the head-on case on the right frame with the shot's velocity intact, and this catches everything else on the right surface.
 
+Being late means the frame after has to exist, and it does not when the same contact **ends the throw**.
+A block hard enough to stop the hook dead is a spent deploy, read off the hook's motion after integrate on that very frame, and the conversion to a dangling tip un-flies the hook before its next `physicsStep` - so this declines, on the one frame it was written for.
+`session-401f` is that miss: a 12 m/s shot at an attachable wall, blocked 8.84 mm off the face by a 2.68 N·s impulse (the sweep wanted 210.262 mm of its 210.000 mm reach - the `1/cos` shortfall above, at cos 0.8616), the tangent eaten by the friction cone, 12 m/s down to 0.246 against a `DEPLOY_MIN_SPEED` of 0.5.
+The throw ended on f307 and nothing ever anchored: the chain dangled at the 1.027 m it had reached, the winch reeled the hook back in over the next eighty frames, and the run replayed HEALTHY.
+So `BallPlayer.checkChainReach` asks this **before** it converts a spent throw, where `World.frameContacts` is the current frame's set and the hook is still the deploying one.
+Only on that branch: the chain running out and a scene catch are the chain ending the flight rather than a surface, and an anchor past the chain's own reach is the dishonest forgiveness `hook-mouth-band` exists to keep out (the snap backstop in `onHookAttached` refuses it in any case, exactly as it does for `probeContact`).
+
 It rescues a **throw** only. A dangling tip hangs at exactly `CHAIN_MAX_LENGTH`, so anchoring it on a contact reported while the hook is still millimetres clear buys the chain that much extra path, and a chain going taut-to-slack in one frame drops the ball it had been braking - 0.7 m/s of `rope-anchor-kick` on `session-576f` f60.
 A tip drifts into its surface slowly and the probe catches it on real contact, which is what keeps the anchored length honest.
-The `hook-blocked-attaches` contact case is the general statement, asserted over a fan of 240 throws past a tilted slab's end rather than at one placed near-miss: **every throw the solver pushes on must anchor**.
+The `hook-blocked-attaches` contact case is the general statement, asserted over fans of throws past a tilted slab rather than at one placed near-miss: **every throw the solver pushes on must anchor**.
 A single fixed offset would stop straddling the sub-millimetre margin the moment the manifold changed, and then pass by missing the geometry instead of by handling it.
+The throws are made by a `BallPlayer`, through the frame order the game runs, because a backstop that is a frame late is a claim about the whole frame and not about the hook: driven bare, the case held every other part of this property while `session-401f` went by underneath it.
+It runs **two tilts** for the same reason, and counts them separately.
+Off a steep face a block is glancing, the throw keeps its speed as tangent and stays a throw, and the backstop anchors it on the frame after; off a shallow one the normal impulse is large enough for the friction cone to take the tangent too, the hook stops dead, and the throw is spent on the blocking frame itself.
+The case fails unless it finds at least three of each, so a fan that drifts off the second shape says so instead of quietly testing half the property.
 
 Whichever surface the hook reaches first decides, and where two are reached at once **an attach beats a bounce**.
 Attachable and hook-proof geometry are therefore swept as two separate questions (`bodySweepConvex`'s `only` filter) rather than as one earliest hit.
@@ -206,6 +217,10 @@ So the throw stayed "in flight" for as long as the button was held, the deploy p
 The rule is read off the hook's own motion on every frame of the deploy, after integrate: under `DEPLOY_MIN_SPEED` (0.5 m/s, 4% of `HOOK_SPEED`) it has been stopped by something, and a velocity with any component back toward the player is a throw coming home.
 One question then covers the rebound, the wedge in the corner the rebound leaves it sitting in, and the solver's own cancellation of an approach that was never reported as a bounce at all.
 A throw into a hook-proof wall 1 m out now ends on the frame it rebounds, at the 0.78 m it reached, and the hook swings there as the tip it has become - armed, so the surface it drops onto is still bitten.
+
+The same reading is the last word on an **attachable** surface too, and there ending the throw is not the answer: what stopped the hook is what it was thrown at.
+So the spent branch asks `BallHook.attachToBlockingContact` first and only converts if nothing answers (`session-401f`, under the blocking contact above).
+Ordering, not a second attach rule: the deploy is what that test reads, and ending the deploy first took away the frame it runs on.
 
 Measured on the hook's velocity and the player's **position**, not on the rate the span between them grows.
 The span's rate is the same statement about a hook in flight and a wrong one on the frame it is fired: a ball already travelling faster than `HOOK_SPEED` along its own aim is separating from a hook that is flying perfectly well, and a payout-rate test kills that throw at the muzzle.

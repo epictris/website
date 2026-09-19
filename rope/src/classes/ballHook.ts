@@ -597,7 +597,16 @@ export class BallHook extends RigidBody2D {
   // `rope-anchor-kick` (`session-576f` f60). A tip drifts into its surface
   // slowly and `probeContact` catches it on real contact, which is what keeps
   // the anchored length honest; nothing is missed by leaving it to that.
-  private attachToBlockingContact(): boolean {
+  //
+  // Public because the frame after is not always available. The same contact
+  // that blocks the hook can also END the throw - a shot stopped dead is a
+  // spent deploy (`BallPlayer.deploySpent`), read after integrate on the
+  // blocking frame itself - and this declines once the hook is no longer
+  // flying, so the reading that would have anchored it never happens.
+  // `BallPlayer.checkChainReach` therefore asks HERE, where `frameContacts` is
+  // the current frame's and the hook is still the deploying one, before it
+  // converts the throw to a tip (`session-401f`).
+  attachToBlockingContact(): boolean {
     if (!this.world || !this.flying) return false;
     for (const c of this.world.frameContacts) {
       if (c.normalImpulse <= 0) continue;
