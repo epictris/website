@@ -167,6 +167,7 @@ import {
   routeOf,
   routeWorldPoints,
 } from "./model";
+import { readClipboard, writeClipboard } from "./clipboard";
 import {
   computeChainHandles,
   computeVineHandles,
@@ -6327,9 +6328,21 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   function cloneBodies(
     bodies: readonly EdItem[],
     offset: Vec2,
-  ): { items: EdItem[]; idOf: Map<number, number> } {
+    // Where the SOURCE's bodies had their frames (see `EdModel.bodyFrames`).
+    // The model's own for a duplicate; the parsed payload's for a paste out of
+    // the clipboard, which is a different model entirely.
+    sourceFrames: ReadonlyMap<number, EdBodyFrame> = model.bodyFrames,
+  ): { items: EdItem[]; idOf: Map<number, number>; frames: Map<number, EdBodyFrame> } {
     const groups = new Map<number, number>();
     const idOf = new Map<number, number>();
+    // A body's frame is NOT in its items, so a copy that does not carry it gets
+    // one re-derived from whichever object was written first - and every
+    // frame-local field then points somewhere else. `pivotAt` is the one that
+    // shows: a compound pivot body whose origin was deliberately put at its
+    // bearing came out of a duplicate turning about a corner of one of its
+    // pieces. Carried, the copy is the original moved by `offset` and nothing
+    // else.
+    const frames = new Map<number, EdBodyFrame>();
     const items = bodies.map((b) => {
       const id = newBodyId();
       idOf.set(b.id, id);
@@ -6339,6 +6352,8 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
         if (mapped === undefined) {
           mapped = newBodyId();
           groups.set(group, mapped);
+          const frame = sourceFrames.get(group);
+          if (frame) frames.set(mapped, { pos: frame.pos.add(offset), rot: frame.rot });
         }
         group = mapped;
       }
@@ -6371,7 +6386,7 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     for (const it of items) {
       if (it.object === "anchor") it.anchorId = nextAnchorId++;
     }
-    return { items, idOf };
+    return { items, idOf, frames };
   }
 
   // Copies of the chains whose BOTH ends landed in the copied set. A chain with
@@ -6420,10 +6435,18 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
 
   // Add freshly created bodies to the model and leave them selected, so the
   // group can immediately be dragged or pasted again.
-  function addAndSelect(bodies: EdItem[], chains: EdChain[] = [], vines: EdVine[] = []): void {
+  function addAndSelect(
+    bodies: EdItem[],
+    chains: EdChain[] = [],
+    vines: EdVine[] = [],
+    // The frames the arriving bodies were authored against, for the ones whose
+    // frame is somewhere no object sits (see `cloneBodies`).
+    frames?: ReadonlyMap<number, EdBodyFrame>,
+  ): void {
     model.items.push(...bodies);
     model.chains.push(...chains);
     model.vines.push(...vines);
+    if (frames) for (const [id, f] of frames) model.bodyFrames.set(id, f);
     selectedIds.clear();
     selectedVerts.clear();
     selectedChainIds.clear();
@@ -7246,40 +7269,38 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
       copy.items,
       cloneChainsWithin(model.chains, copy.idOf),
       cloneVinesWithin(model.vines, copy.idOf),
+      copy.frames,
     );
   }
 
   // --- clipboard ------------------------------------------------------------
-  // Copies detached from the model (so later edits or an undo can't mutate
-  // them); paste re-centres the group's bounding box on the cursor.
-  let clipboard: EdItem[] = [];
-  // Chains whose two ends are both inside `clipboard`, so a copied assembly
-  // (two bodies and the chain between them) pastes as the assembly.
-  let clipboardChains: EdChain[] = [];
-  // ...and vines whose anchor is inside it, so copying a wall with a vine on it
-  // pastes the vine too.
-  let clipboardVines: EdVine[] = [];
+  //
+  // THE CLIPBOARD IS TEXT, and its text is a fragment of a LEVEL FILE (see
+  // `editor/clipboard.ts`). That is what makes Ctrl+C in one tab and Ctrl+V in
+  // another work at all: the system clipboard is the only thing two tabs share
+  // without a server, and an assembly built once - the bell and its toll rope,
+  // a lamp, a rail rig - has to be able to reach the other levels.
+  //
+  // What was here before was three arrays of live `EdItem`s, which a reload
+  // emptied and a second tab never saw.
 
-  function copySelection(): void {
-    const sel = operandItems();
-    if (!sel.length) return;
-    clipboard = sel.map((b) => ({
-      ...b,
-      shape: cloneShape(b.shape),
-      // Every per-layer property object is mutated in place by the inspector, so
-      // a clipboard sharing one would paste whatever the ORIGINAL was edited to
-      // after the copy rather than what was copied.
-      cam: { ...b.cam },
-      light: { ...b.light },
-      note: { ...b.note },
-      visual: { ...b.visual },
-    }));
-    const copied = new Set(sel.map((b) => b.id));
-    clipboardChains = model.chains
-      .filter((c) => copied.has(c.a) && copied.has(c.b))
-      .map(cloneChain);
-    clipboardVines = model.vines.filter((v) => copied.has(v.anchor)).map(cloneVine);
+  // The last payload this tab produced, as a fallback for two cases the system
+  // clipboard cannot cover: a browser that refuses to read it, and a clipboard
+  // that has since been overwritten by something that is not a payload.
+  let lastCopied: string | null = null;
+
+  // Whether a keyboard shortcut may act at all: the same test the keydown
+  // handler makes, since a `copy` or `paste` event fires wherever the caret is
+  // and the inspector's fields have their own editing to do.
+  function clipboardUsable(target: EventTarget | null): boolean {
+    if (mode !== "edit") return false;
+    return !(
+      (target instanceof HTMLInputElement && target.type !== "checkbox" && target.type !== "radio") ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    );
   }
+
   // The body a paste JOINS, or null for a paste that brings bodies of its own.
   //
   // It is the rule `newDrawnItem` follows, one gesture along: with a body
@@ -7290,47 +7311,72 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
   //
   // Both sides have to be able to share one. The selected body is refused on the
   // same terms merging refuses it (an area is single-shape wherever it is used),
-  // and so is the clipboard - a copied camera region or note is not a piece of
+  // and so is the arriving payload - a camera region or a note is not a piece of
   // anything and keeps the body of its own that `cloneBodies` mints.
   //
-  // ...and the clipboard has to BE one body. A copy spanning several is an
+  // ...and the payload has to BE one body. A copy spanning several is an
   // assembly rather than a part: folding it into one would collapse the chains
   // and vine spans between its pieces, which need two bodies to hold on to and
   // are dropped at load when they have one (see `addChain`). That pastes as it
   // always did, and Ctrl+G is there to merge it afterwards on purpose.
-  function pasteHostBody(): number | null {
+  function pasteHostBody(items: readonly EdItem[]): number | null {
     const host = soleBodyId();
     if (host === null) return null;
     if (!bodyMembers(model.items, host).every(canShareBody)) return null;
-    if (!clipboard.every(canShareBody)) return null;
-    if (!clipboard.every((i) => i.bodyId === clipboard[0]!.bodyId)) return null;
+    if (!items.every(canShareBody)) return null;
+    if (!items.every((i) => i.bodyId === items[0]!.bodyId)) return null;
     return host;
   }
 
-  function pasteClipboard(): void {
-    if (!clipboard.length) return;
+  // Ctrl+C. Returns the payload, or null when there is nothing to copy.
+  function copySelection(): string | null {
+    const sel = operandItems();
+    if (!sel.length) return null;
+    lastCopied = writeClipboard(model, sel);
+    return lastCopied;
+  }
+
+  // Ctrl+V. `text` is whatever the system clipboard had; anything that is not a
+  // payload falls back to this tab's own last copy, and a paste with neither
+  // does nothing rather than throwing - the input is whatever happened to be on
+  // the clipboard, and a sentence is not an error the author made.
+  function pasteClipboard(text: string | null): void {
+    const data = (text !== null ? readClipboard(text) : null) ?? (lastCopied ? readClipboard(lastCopied) : null);
+    if (!data) return;
+    // The payload is on-disk pixel level data, so it comes back in through the
+    // SAME loader a level does - page-fresh ids and all. That is what makes the
+    // round trip lossless by the cases that already hold a save lossless, and
+    // what lets a payload be hand-written or pasted out of a text editor.
+    const arrived = modelFromDisk(data);
+    if (!arrived.items.length) return;
     // Pasted items keep the layer they were copied from — a camera region can't
     // become a body — so a paste reveals and unlocks any layer it lands on
     // rather than dropping items where they can be neither seen nor clicked.
-    for (const l of new Set(clipboard.map((i) => i.layer))) {
+    for (const l of new Set(arrived.items.map((i) => i.layer))) {
       setLayerVisible(l, true);
       setLayerLocked(l, false);
     }
-    const box = bodyBounds(clipboard);
+    const box = bodyBounds(arrived.items);
     let delta = pointerWorld().sub(box.min.add(box.max).mul(0.5));
     // Land the group's top-left corner on the grid, as a move does.
     if (snapOn) delta = snapVec(box.min.add(delta)).sub(box.min);
-    const host = pasteHostBody();
+    const host = pasteHostBody(arrived.items);
     beginAction();
-    const copy = cloneBodies(clipboard, delta);
+    // Through `cloneBodies` even though the parse already minted fresh ids, and
+    // it is not redundant: this is what remints the ANCHOR ids, which are
+    // CONTENT in the file rather than page state, so a paste into a level that
+    // already holds anchor 1 does not end up with two of them and a chain that
+    // names either.
+    const copy = cloneBodies(arrived.items, delta, arrived.bodyFrames);
     // Into the selected body rather than the fresh one `cloneBodies` minted for
     // the copy. Placement is untouched: the paste still lands under the cursor,
     // and what joining a body changes is what it is PART of.
     if (host !== null) for (const it of copy.items) it.bodyId = host;
     addAndSelect(
       copy.items,
-      cloneChainsWithin(clipboardChains, copy.idOf),
-      cloneVinesWithin(clipboardVines, copy.idOf),
+      cloneChainsWithin(arrived.chains, copy.idOf),
+      cloneVinesWithin(arrived.vines, copy.idOf),
+      copy.frames,
     );
     // A body has one kind, one fill, one friction: a shape pasted into an
     // existing body takes them rather than bringing the copy's and disagreeing
@@ -7339,6 +7385,24 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
     // body that wins, not the arrival.
     if (host !== null) syncBodyProps(bodyMembers(model.items, host));
   }
+
+  // THE DOM'S OWN EVENTS rather than the keydown switch, and that is what the
+  // system clipboard costs: `copy` and `paste` are the only places a page may
+  // read or write it without a permission prompt, and neither fires when
+  // keydown has already cancelled the key. So the two cases moved out of the
+  // Ctrl block (`Ctrl+D`, duplicate, is untouched - it touches no clipboard).
+  document.addEventListener("copy", (e) => {
+    if (!clipboardUsable(e.target)) return;
+    const payload = copySelection();
+    if (payload === null) return;
+    e.clipboardData?.setData("text/plain", payload);
+    e.preventDefault();
+  });
+  document.addEventListener("paste", (e) => {
+    if (!clipboardUsable(e.target)) return;
+    pasteClipboard(e.clipboardData?.getData("text/plain") ?? null);
+    e.preventDefault();
+  });
 
   // --- disk -----------------------------------------------------------------
   async function refreshLevelList(): Promise<void> {
@@ -9020,12 +9084,10 @@ export function startEditor(canvas: HTMLCanvasElement, sceneCanvas?: HTMLCanvasE
           if (e.shiftKey) splitIntoBodies();
           else mergeIntoBody();
           break;
-        case "KeyC":
-          copySelection();
-          break;
-        case "KeyV":
-          pasteClipboard();
-          break;
+        // Ctrl+C and Ctrl+V are NOT here. They are `copy` and `paste`
+        // listeners on the document, because those are the only events that
+        // may touch the system clipboard - and neither fires when a keydown
+        // handler has already cancelled the key (see the clipboard section).
         default:
           return;
       }

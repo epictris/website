@@ -83,6 +83,7 @@ import {
   type EdItem,
 } from "../editor/model";
 import { lightPlaneReach } from "../editor/render";
+import { readClipboard, writeClipboard } from "../editor/clipboard";
 import { FOG_REFERENCE_DISTANCE, fogDensity } from "../render3d/environment";
 import { HDRI_ASSETS, hdriNames } from "../render3d/assets";
 import { PIXELS_PER_METER, PX } from "../engine/units";
@@ -2977,6 +2978,145 @@ function levelMetaFormat(): CaseResult[] {
   ];
 }
 
+// THE EDITOR'S CLIPBOARD (see `editor/clipboard.ts`): a fragment of a level
+// file, as text, so Ctrl+C in one tab reaches Ctrl+V in another.
+//
+// What is asserted here is that the payload is LOSSLESS, because that is where
+// the failure is silent: a copy is a save of a sub-model, so anything the
+// serialisation forgets - a chain, a vine, a wrap point, a matched outline, a
+// body's own frame - comes back as an assembly that is missing a piece, with
+// nothing to report. It is the same trap the format's own round trips cover,
+// one scope down.
+//
+// What is NOT asserted here is the id REMINTING, which happens inside the
+// editor's `cloneBodies` against the target model and cannot be reached from a
+// pure case. That half is checked in a real browser, two tabs, which is the
+// only place the system clipboard exists at all.
+function clipboardPayload(): CaseResult[] {
+  // A beam with a chain to a crate, a vine off the beam, a matched geometry
+  // object, and a wrap point on a third body - one of everything a payload has
+  // to carry.
+  const authored: RawLevelData = {
+    player: { x: 0, y: 0, radius: 8 },
+    bodies: [
+      {
+        kind: "static",
+        x: 100,
+        y: -300,
+        rot: 0.2,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 200, h: 20 } },
+          { type: "geometry", shape: { kind: "rect", w: 200, h: 20 }, matchCollision: true, texture: "brick" },
+          { type: "anchor", id: 1, x: -90, y: 0 },
+          { type: "anchor", id: 4, x: 90, y: 0 },
+        ],
+      },
+      {
+        kind: "rigid",
+        x: 300,
+        y: -100,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "rect", w: 60, h: 60 } },
+          { type: "anchor", id: 2, x: 0, y: -30 },
+        ],
+      },
+      {
+        kind: "static",
+        x: 200,
+        y: -200,
+        rot: 0,
+        objects: [
+          { type: "collision", shape: { kind: "circle", r: 20 } },
+          { type: "anchor", id: 3, x: 0, y: -20 },
+        ],
+      },
+    ],
+    chains: [{ a: 1, b: 2, via: [3], length: 400 }],
+    vines: [{ anchor: 4, length: 250, stiffness: 0 }],
+  };
+
+  const source = modelFromDisk(authored);
+  const payload = writeClipboard(source, source.items);
+  const parsed = readClipboard(payload);
+  const back = parsed ? modelToDisk(modelFromDisk(parsed)) : null;
+  const saved = modelToDisk(source);
+
+  // Everything is there, and the relations still name anchors that exist.
+  const anchorIds = (d: LevelData): number[] =>
+    d.bodies.flatMap((b) => b.objects.filter(isAnchorObject).map((o) => o.id)).sort((x, y) => x - y);
+  const whole =
+    back !== null &&
+    back.bodies.length === saved.bodies.length &&
+    back.chains?.length === 1 &&
+    back.vines?.length === 1 &&
+    JSON.stringify(anchorIds(back)) === JSON.stringify(anchorIds(saved)) &&
+    JSON.stringify(back.chains![0]!.via) === JSON.stringify(saved.chains![0]!.via) &&
+    back.vines![0]!.anchor === saved.vines![0]!.anchor;
+
+  // ...and it is the SAME serialisation a save performs, which is what makes
+  // the round-trip cases above hold a copy as well as a save.
+  //
+  // To within float noise rather than byte for byte, and the distinction is the
+  // payload's own: a copy crosses the pixel-to-metre conversion twice where a
+  // save crosses it once, so a vertex authored at -90 px comes back at
+  // -90.00000000000003. A nanometre is not a difference an author can author,
+  // and a byte comparison here would be a case that fails on arithmetic
+  // associativity rather than on anything a copy lost.
+  const near = (x: unknown, y: unknown): boolean => {
+    if (typeof x === "number" && typeof y === "number") return Math.abs(x - y) <= 1e-9;
+    if (Array.isArray(x) && Array.isArray(y)) return x.length === y.length && x.every((v, i) => near(v, y[i]));
+    if (typeof x === "object" && x !== null && typeof y === "object" && y !== null) {
+      const kx = Object.keys(x).sort();
+      const ky = Object.keys(y).sort();
+      return JSON.stringify(kx) === JSON.stringify(ky) && kx.every((k) => near((x as Record<string, unknown>)[k], (y as Record<string, unknown>)[k]));
+    }
+    return x === y;
+  };
+  const same = back !== null && near(back.bodies, saved.bodies);
+
+  // The level-wide blocks are NOT in it: none of them is a thing in the level,
+  // and a paste that brought a spawn would move the target level's.
+  const parsedRaw = parsed as (RawLevelData & { meta?: unknown; environment?: unknown }) | null;
+  const fragment =
+    parsedRaw !== null &&
+    parsedRaw.meta === undefined &&
+    parsedRaw.environment === undefined &&
+    !payload.includes('"environment"');
+
+  // A paste of something that is not a payload does nothing rather than
+  // throwing: the input is whatever happened to be on the system clipboard.
+  const junk =
+    readClipboard("not json at all") === null &&
+    readClipboard('{"hello":1}') === null &&
+    readClipboard(JSON.stringify({ "rope-clipboard": 99, bodies: [] })) === null;
+
+  return [
+    {
+      name: "clipboard: a copied assembly carries its chains, its vines and its wrap points",
+      pass: whole,
+      detail: whole
+        ? `${back!.bodies.length} bodies, 1 chain (via ${JSON.stringify(back!.chains![0]!.via)}), 1 vine, anchors ${anchorIds(back!).join(",")}`
+        : JSON.stringify({ bodies: back?.bodies.length, chains: back?.chains, vines: back?.vines }),
+    },
+    {
+      name: "clipboard: ...and the payload is the same serialisation a save writes",
+      pass: same,
+      detail: same ? "the same bodies, to within a nanometre" : "the copy and the save disagree",
+    },
+    {
+      name: "clipboard: the spawn, the level block and the environment stay out of it",
+      pass: fragment,
+      detail: fragment ? "a fragment, not a level" : JSON.stringify({ meta: parsedRaw?.meta, env: parsedRaw?.environment }),
+    },
+    {
+      name: "clipboard: text that is not a payload is ignored rather than fatal",
+      pass: junk,
+      detail: junk ? "a sentence, a stray object and a future version all decline" : "something that is not a payload was accepted",
+    },
+  ];
+}
+
 export function runRender3dCases(): CaseResult[] {
   return [
     ...renderNeedsGeometry(),
@@ -3008,5 +3148,6 @@ export function runRender3dCases(): CaseResult[] {
     ...bounceFormat(),
     ...checkpointFormat(),
     ...levelMetaFormat(),
+    ...clipboardPayload(),
   ];
 }

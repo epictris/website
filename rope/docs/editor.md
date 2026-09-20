@@ -82,10 +82,29 @@ A property the bodies disagree on shows blank with a `mixed` placeholder and onl
 something is typed into it; the kind picker gains a `mixed` entry for the same reason.
 Selected bodies draw an orange halo *under* their own border,
 so a hook-proof piece's dashed steel edge stays legible while selected.
-**Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor: the clipboard holds copies
-detached from the model, and paste re-centres the group's bounding box on the pointer (with
-snap on, its top-left corner lands on the grid), leaving the new bodies selected so it can be
-repeated. `Ctrl+D` duplicates in place at a 2-cell offset.
+**Ctrl+C / Ctrl+V** copy the selection and paste it at the cursor, and they go through the
+**system clipboard**, so a copy in one tab pastes into another - and into another LEVEL, which is
+how an assembly built once (the end bell and its toll rope, a lamp, a rail rig) reaches the rest
+of the game. What is on the clipboard is a fragment of a level file in the on-disk pixel form
+(`src/editor/clipboard.ts`), produced by the same `toLevelData` a save runs, so the round-trip
+cases that hold a save lossless hold a copy lossless too - and a payload can be read, edited or
+written by hand.
+Paste re-centres the group's bounding box on the pointer (with snap on, its top-left corner lands
+on the grid), leaving the new bodies selected so it can be repeated. `Ctrl+D` duplicates in place
+at a 2-cell offset and touches no clipboard.
+
+Two things fall out of it being the system clipboard. The shortcuts are `copy` and `paste`
+listeners on the document rather than cases in the keydown switch, because those are the only
+events that may touch it and neither fires when a keydown handler has already cancelled the key.
+And a paste of text that is not a payload does nothing rather than failing - what is on the
+clipboard is whatever was last copied anywhere, and a sentence is not a mistake the author made;
+this tab's own last copy is the fallback.
+
+A paste **remints anchor ids**, which are content in the file rather than page state: pasting into
+a level that already holds anchor 1 would otherwise leave two of them and a chain naming either.
+It also carries each body's **frame** (`EdModel.bodyFrames`), so a compound body whose origin was
+deliberately put at its bearing arrives turning about that bearing rather than about a corner of
+whichever piece was written first - which `Ctrl+D` got wrong until the frames were carried too.
 **Arrow keys** nudge the whole selection one grid cell (10 cm), or 1 cm with **Ctrl** held; the
 nudge is a pure translation (never snapped), so a body keeps any sub-cell offset it has and the
 fine step still works with snap on. A run of nudges collapses into one undo step, ending when the
