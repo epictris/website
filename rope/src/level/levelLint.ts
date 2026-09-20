@@ -12,10 +12,6 @@
 //                  `buildLevelBodies`), so the gantry is drawn and the level
 //                  cannot be finished - the one failure that looks exactly like
 //                  success right up until the player reaches it.
-//   TOO SMALL    - a finish line the ball can pass without touching. The
-//                  crossing is an overlap test, so a region thinner than the
-//                  ball travels in a frame is one a fast run tunnels through
-//                  (see `MIN_FINISH_SPAN`).
 //   TWO INTROS   - or none. The menu shows the intro first and the rest after a
 //                  rule, so the set has to have exactly one.
 //   TWIN TITLES  - two listed levels reading the same in the list, which is a
@@ -25,65 +21,23 @@
 // built and no frame stepped, in the spirit of `cli assets`. Its answers are
 // about the files as they are ON DISK, since a file-backed level's `data` is
 // its JSON import.
+//
+// There was a fourth check here and it is worth saying why it went. A finish
+// line thinner than the ball's own travel in one step can be passed through
+// untouched by a SAMPLED overlap test, so this held one to 60 px across - and
+// the first line anybody authored was 10 px, drawn to match the gantry marking
+// it. The rule was right about the hazard and wrong about where to fix it: the
+// crossing is swept now (see `BallLevel.physicsProcess`), so a level may draw
+// its line as thin as the gate it stands in, and the lint has nothing to say
+// about the size of one.
 
-import {
-  collides,
-  isCollisionObject,
-  normalizeLevelData,
-  type LevelBodyData,
-  type LevelData,
-  type ShapeData,
-} from "./levelFormat";
+import { collides, normalizeLevelData, type LevelData } from "./levelFormat";
 import { LEVELS, listedLevels } from "./registry";
 
 export interface LevelCheck {
   name: string;
   pass: boolean;
   detail: string;
-}
-
-// The smallest a finish line may be across its narrow axis, in SCENE PIXELS
-// (the unit the files are authored in), which is 60 cm.
-//
-// The crossing is an overlap test run once a frame, so a region the ball can be
-// on both sides of within one step is one it can pass through untouched. The
-// ball is 24 cm across and the fastest thing in the game is the ball itself: at
-// the ~14 m/s a long hang reaches it travels 23 cm in a frame, so 60 cm is the
-// ball plus a frame of its own travel and a little over. It is a floor on the
-// AUTHORING rather than a fix for tunnelling - a gate is drawn to be swung
-// through and is metres across in both directions - and what it actually
-// catches is a line drawn as a line: a 2-pixel strip laid on the floor, which
-// looks right in the editor and is not there at 14 m/s.
-export const MIN_FINISH_SPAN = 60;
-
-// How wide and how tall a shape is in its own frame, in the units it is
-// authored in. A curve's `width` is its THICKNESS rather than a span, so it is
-// measured across its own stroke and along its vertices like a polyline.
-function shapeSpan(s: ShapeData): { w: number; h: number } {
-  if (s.kind === "rect") return { w: s.w, h: s.h };
-  if (s.kind === "circle") return { w: s.r * 2, h: s.r * 2 };
-  const verts = s.verts;
-  const xs = verts.map((v) => v.x);
-  const ys = verts.map((v) => v.y);
-  const pad = s.kind === "curve" ? s.width : 0;
-  return {
-    w: Math.max(...xs) - Math.min(...xs) + pad,
-    h: Math.max(...ys) - Math.min(...ys) + pad,
-  };
-}
-
-// The narrowest axis of the WIDEST collision shape a body carries: the piece
-// the player is meant to cross is the one that has to be thick enough to catch
-// them, and a gate may also carry small pieces (a post's footing) that have
-// nothing to do with it.
-function narrowestSpanOf(body: LevelBodyData): number {
-  let best = 0;
-  for (const o of body.objects) {
-    if (!isCollisionObject(o)) continue;
-    const { w, h } = shapeSpan(o.shape);
-    best = Math.max(best, Math.min(w, h));
-  }
-  return best;
 }
 
 // The checks one listed level answers for itself.
@@ -104,7 +58,6 @@ function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
   // either of them, and the first crossing is the one that counts (see
   // `BallLevel.finish`). What is not allowed is none.
   const built = lines.filter(collides);
-  const narrow = built.filter((b) => narrowestSpanOf(b) < MIN_FINISH_SPAN);
   return [
     {
       name: `levels: ${where} has a finish line`,
@@ -118,16 +71,6 @@ function checkLevel(id: string, title: string, data: LevelData): LevelCheck[] {
         built.length === lines.length
           ? `${built.length} with collision geometry`
           : `${lines.length - built.length} of ${lines.length} carry no collision object, so they build no area at all and can never be entered.`,
-    },
-    {
-      name: `levels: ${where}'s finish line is thick enough to catch the ball`,
-      pass: narrow.length === 0,
-      detail:
-        narrow.length === 0
-          ? `every piece is at least ${MIN_FINISH_SPAN} px across`
-          : `${narrow.length} finish line(s) are under ${MIN_FINISH_SPAN} px across their narrow axis (${narrow
-              .map((b) => `${Math.round(narrowestSpanOf(b))} px`)
-              .join(", ")}). A fast run passes through one in a single frame.`,
     },
   ];
 }

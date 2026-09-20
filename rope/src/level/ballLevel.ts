@@ -16,7 +16,7 @@ import { Debug } from "../engine/debug";
 import { PhaseTrace } from "../engine/phaseTrace";
 import { PhysTrace } from "../engine/physTrace";
 import { GRAVITY, PUSH_OUT_MIN_DEPTH, World, isRealPush, type PushOut } from "../engine/world";
-import { circleOverlap } from "../engine/collision";
+import { bodySweepCircle, circleOverlap } from "../engine/collision";
 import { BallPlayer } from "../classes/ballPlayer";
 import { BallHook } from "../classes/ballHook";
 import { FinishLine } from "../classes/finishLine";
@@ -166,11 +166,21 @@ export class BallLevel {
   // frame. It never goes back to null - a line that has been crossed has been
   // crossed, and a RESET builds a fresh level, which is what starts it over.
   completedFrame: number | null = null;
+  // The level's finish lines, if it has any (see `classes/finishLine.ts`).
+  //
+  // Held rather than looked up each frame because the swept crossing at the end
+  // of `physicsProcess` needs their shapes, and because the list being EMPTY is
+  // what makes a level without one run none of the arithmetic - which is what
+  // keeps every recording of every other level bit-identical.
+  private readonly finishAreas: readonly FinishLine[];
+
   // Whether this level has a finish line at all, which is a fact about the FILE
   // rather than about the run. It is what the digest asks before writing
   // `finished`: a level with no finish line digests exactly what it always did,
   // so every bundle of one compares as it always did (see `WorldDigest`).
-  readonly hasFinish: boolean;
+  get hasFinish(): boolean {
+    return this.finishAreas.length > 0;
+  }
 
   // Diagnostic for the anchor-kick invariant. On the frame the chain first
   // anchors to a fixed body, this holds the speed the length solve added to
@@ -332,7 +342,9 @@ export class BallLevel {
       () => this.onReset?.(),
       () => this.finish(),
     );
-    this.hasFinish = built.bodies.some((b) => b.body instanceof FinishLine);
+    this.finishAreas = built.bodies
+      .map((b) => b.body)
+      .filter((b): b is FinishLine => b instanceof FinishLine);
     this.bodies.push(...built.wrapBodies);
     this.movers.push(...built.movers);
     this.sceneChains = buildSceneChains(data, built);
@@ -502,6 +514,12 @@ export class BallLevel {
 
   physicsProcess(input: FrameInput, delta: number): void {
     this.frame++;
+    // Where the ball stands as the frame BEGINS, for the swept finish test at
+    // the bottom of this method. A local rather than a field because that is
+    // the whole of its life, and deliberately not the render interpolation's
+    // snapshot beside it (`captureRenderTransforms`), which is render-side
+    // state the sim may not read.
+    const ballWasAt = this.ball.globalPosition;
     this.sparkEvents.length = 0;
     this.sparkEventIndex.clear();
     this.breakEvents.length = 0;
@@ -1876,6 +1894,42 @@ export class BallLevel {
     // own and nothing above touches them, so waiting costs the measurement
     // nothing and costs the reader one frame of scenery that was already broken.
     this.breakBodies(delta);
+
+    // THE CROSSING, SWEPT (see `classes/finishLine.ts`). Last, on the frame's
+    // final poses, so what is asked about is the step the player just took.
+    //
+    // The area's own entry test (`World.notifyAreas`) is a SAMPLE: it asks
+    // where the ball is now, once a frame. That is right for a killzone, which
+    // is a volume you fall into and stay in, and wrong for a finish line, which
+    // is a plane you cross - a region W metres thick is passed through
+    // untouched by a ball that travels more than W + its own diameter in one
+    // step, which at 1/60 s is 24 m/s through a 16 cm gate. The corpus has the
+    // ball at 24.8 m/s in a real session and 34.5 m/s in a rig, so this is a
+    // speed the game reaches rather than a theoretical one.
+    //
+    // So the segment the ball actually travelled is swept against every finish
+    // area, with the ball's own radius, exactly as the chain sweeps the spans
+    // between its regenerations (see docs/wrap-detection.md). What it buys is
+    // that a level may draw its line as thin as the gate it is marking: the
+    // promise is "touch the line and the level is over", and a sampled test
+    // keeps that promise only below a speed nobody authoring a level is
+    // thinking about.
+    //
+    // The sample stays as well, because the two answer different questions:
+    // the sweep catches the ball that crossed, `notifyAreas` catches the ball
+    // that was PUT there - a spawn or a checkpoint inside the gate, which moves
+    // no distance at all.
+    if (this.completedFrame === null && this.finishAreas.length > 0) {
+      const motion = this.ball.globalPosition.sub(ballWasAt);
+      if (motion.lengthSquared() > 0) {
+        for (const area of this.finishAreas) {
+          if (bodySweepCircle(area, ballWasAt, motion, this.ball.radius)) {
+            this.finish();
+            break;
+          }
+        }
+      }
+    }
 
     this.cameraPosition = this.ball.globalPosition;
   }

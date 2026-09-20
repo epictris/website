@@ -28,6 +28,7 @@
 // Bodies are rigs of plain rects in level pixels (100 to the metre), on a
 // `BallLevel`, as the sleep and rail suites are.
 
+import { Vec2 } from "../engine/vec2";
 import { BallLevel } from "../level/ballLevel";
 import { emptyFrameInput } from "../input/frameInput";
 import type { LevelBodyData, RawLevelData } from "../level/levelFormat";
@@ -185,6 +186,73 @@ function caseMissed(): FinishResult {
   return c.done("finish-missed — a gate the ball does not touch finishes nothing");
 }
 
+// A gate as thin as the prop that marks it, crossed at the speed the corpus
+// says this game actually reaches.
+//
+// This is the case the swept crossing exists for. The area's own entry test is
+// a sample taken once a frame, so a region W across is passed through untouched
+// by a ball that travels more than W plus its own diameter in one step - and
+// the first finish line anybody authored was 10 px (`levels/ball.json`, Tris,
+// 2026-09-20), drawn to match a gantry seen edge-on, which a 21 m/s swing jumps.
+//
+// It asserts the miss as well as the catch: the ball's positions on the frames
+// either side of the crossing are both clear of the gate, so a sampled test
+// looking at those two frames would have found nothing. Without that half the
+// case would pass on a mechanic that never needed the sweep at all.
+function caseThinGateAtSpeed(): FinishResult {
+  const c = new Checks();
+  const THIN = 10; // px across, which is what ball.json's own gate is
+  const SPEED = 30; // m/s; the corpus tops out at 34.5 in a rig, 24.8 in a session
+  const level = new BallLevel({
+    // Started off a whole number of steps from the gate, so the crossing
+    // straddles it rather than landing on it: a ball that stops exactly on the
+    // line is a ball a sampled test catches, and then this case is asserting
+    // nothing.
+    player: { x: -275, y: -400, radius: 8 },
+    bodies: [
+      {
+        kind: "finish",
+        x: 0,
+        y: -400,
+        rot: 0,
+        objects: [{ type: "collision", shape: { kind: "rect", w: THIN, h: 300 } }],
+      },
+    ],
+  });
+  // Fired flat across the gate, with gravity's drop over a handful of frames
+  // being neither here nor there against 30 m/s sideways.
+  level.ball.linearVelocity = new Vec2(SPEED, 0);
+
+  let before: number | null = null;
+  let after: number | null = null;
+  const clear = (x: number): boolean => Math.abs(x) > THIN / 200 + level.ball.radius;
+  for (let f = 0; f < 60 && after === null; f++) {
+    const was = level.ball.globalPosition.x;
+    // The velocity is re-asserted each frame: what is being measured is a
+    // crossing at a speed, not how long the ball holds one.
+    level.ball.linearVelocity = new Vec2(SPEED, level.ball.linearVelocity.y);
+    level.physicsProcess(emptyFrameInput(), DT);
+    const now = level.ball.globalPosition.x;
+    if (was < 0 && now > 0) {
+      before = was;
+      after = now;
+    }
+  }
+  c.check(
+    `the ball crosses the gate in one step (${before?.toFixed(2)} m -> ${after?.toFixed(2)} m)`,
+    before !== null && after !== null,
+  );
+  c.check(
+    `...and is clear of a ${THIN} px gate on BOTH of those frames, so a sampled test sees nothing`,
+    before !== null && after !== null && clear(before) && clear(after),
+  );
+  c.check(
+    `the level is finished anyway (f${level.completedFrame})`,
+    level.completedFrame !== null,
+  );
+  return c.done(`finish-swept — a ${THIN} px gate crossed at ${SPEED} m/s is not jumped`);
+}
+
 function caseInert(): FinishResult {
   const c = new Checks();
   const FRAMES = 400;
@@ -213,5 +281,5 @@ function caseInert(): FinishResult {
 }
 
 export function runFinishCases(): FinishResult[] {
-  return [caseCrossed(), caseOnce(), caseMissed(), caseInert()];
+  return [caseCrossed(), caseOnce(), caseMissed(), caseThinGateAtSpeed(), caseInert()];
 }

@@ -16962,6 +16962,39 @@
           "texture": "moss-dark"
         }
       ]
+    },
+    {
+      "kind": "finish",
+      "x": 1739.5000000000002,
+      "y": -30.00000000000005,
+      "rot": 0,
+      "color": "#555555",
+      "opacity": 0.5,
+      "friction": 1,
+      "objects": [
+        {
+          "type": "collision",
+          "x": 2.9999999999997584,
+          "y": -29.999999999999982,
+          "shape": {
+            "kind": "rect",
+            "w": 10,
+            "h": 60.00000000000001
+          }
+        },
+        {
+          "type": "geometry",
+          "kind": "mesh",
+          "mesh": "finish-line",
+          "shape": {
+            "kind": "rect",
+            "w": 259,
+            "h": 247.00000000000003
+          },
+          "rotY": 1.5707963267948966,
+          "scale": 0.1
+        }
+      ]
     }
   ]
 }

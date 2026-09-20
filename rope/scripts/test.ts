@@ -49,6 +49,7 @@ const steps: Step[] = [
   { name: "camera", cmd: ["bun", "run", CLI, "camera"] },
   { name: "render3d", cmd: ["bun", "run", CLI, "render3d"] },
   { name: "assets", cmd: ["bun", "run", CLI, "assets"] },
+  { name: "levels", cmd: ["bun", "run", CLI, "levels"] },
   { name: "playtest", cmd: ["bun", "run", CLI, "playtest"] },
   { name: "latch", cmd: ["bun", "run", CLI, "latch"] },
   { name: "transport", cmd: ["bun", "run", CLI, "transport"] },

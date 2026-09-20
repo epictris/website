@@ -58,7 +58,7 @@ bun run src/tools/cli.ts ab      session.json --metrics peakV,pushRun  # the sam
 ```
 
 `bun run test` is what "all green" means: typecheck, `dmath`, `selftest`, `contacts`,
-`spring`, `movers`, `vines`, `rails`, `viscous`, `breaks`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `ledges`, every `playtests/*.json`,
+`spring`, `movers`, `vines`, `rails`, `viscous`, `breaks`, `finish`, `corners`, `tangents`, `decompose`, `camera`, `render3d`, `assets`, `levels`, `ledges`, every `playtests/*.json`,
 then the bundle corpus, in that order and under one exit code.
 A case that is red on purpose carries `expectedFail` (see `sim/contactCases.ts`),
 which the runner counts as a pass and, crucially, **fails on if it ever passes**:

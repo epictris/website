@@ -24,7 +24,7 @@ It is the lesson `SpawnData.hang` and the `environment` block each paid for sepa
 File-backed and ball-driven are both deliberate - the hand-written `TEST_*` specs are rigs with no file to hash and no finish line to cross, and the grapple levels are a controller the completion flow has never been through.
 Both stay reachable by `?level=`.
 
-`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body carrying only decoration and so building no region at all, a region too thin to catch a fast ball, no introduction or two, and two levels the player cannot tell apart in the list.
+`cli levels` is the lint over all of it, and every failure it names is one that is silent in play: a listed level with no finish line, a finish body carrying only decoration and so building no region at all, no introduction or two, and two levels the player cannot tell apart in the list.
 It is pure and fast - no world is built and no frame is stepped - in the spirit of `cli assets`.
 The mechanic those files are checked against is stepped by `cli finish` instead.
 
@@ -43,13 +43,14 @@ A line you touch needs none of it, reads from across the level, and cannot be ar
 
 ### Authoring one
 
-- The **region** is the piece the player crosses, and it is drawn across the way out: wide enough that a swing cannot miss it, and tall enough that a run along the ground and a run through the air both meet it.
-  `cli levels` holds it to at least `MIN_FINISH_SPAN` (60 px) across its narrow axis.
-  The crossing is an overlap test run once a frame and the ball travels 23 cm in a frame at the ~14 m/s a long hang reaches, so a line drawn as a *line* - a 2 px strip on the floor - is one a fast run passes clean through, and it looks perfectly right in the editor.
+- The **region** is the piece the player crosses, and it is drawn across the way out: tall and wide enough that a swing cannot miss it.
+  It may be as **thin** as you like - `ball.json`'s own is 10 px, the width of the gantry it marks seen edge-on - because the crossing is swept rather than sampled (below).
 - The **gantry** is a geometry object on the same body: `mesh: "finish-line"`, a chequered arch whose origin sits on the ground between its posts, so the body is placed where the gate stands.
-  It is 6.5 x 6.2 m in the file's own metres - a real gantry beside real people, and enormous beside a 24 cm ball - so a level states its own `scale`; the sandbox uses 0.4, a 2.6 m arch.
-- Nothing about the region collides.
+  It is 6.5 x 6.2 m in the file's own metres - a real gantry beside real people, and enormous beside a 24 cm ball - so a level states its own `scale`, and `rotY` turns it to be run through in depth rather than across.
+- Nothing about the region collides, and **nothing draws it in play**.
   An area is not a `PhysicsBody2D` at all, so the player, the hook and the chain pass through it with no mask to author and nothing to get wrong - which is what `cli finish`'s `finish-inert` holds to, bit for bit.
+  It is the one area with no glyph on it in the game: every other one is stamped because it must not be mistaken for solid geometry, and a region that does nothing to what is inside it cannot be misread (see [**Area glyphs**](areas-and-friction.md#area-glyphs)).
+  The author still sees it, in the editor and in `cli render`'s snapshot, which is where an invisible volume has to be visible.
 
 A level may carry **several**, and the first crossing is the one that counts: a course with two ways down ends at either of them.
 (Two bells could not be allowed, because the second was inert with nothing to say so. Two lines are two ways to finish.)
@@ -65,6 +66,13 @@ if (completedFrame === null) completedFrame = frame;
 ```
 
 The frame it names is the one being stepped: `this.frame` is taken at the top of `physicsProcess`, and the areas are notified inside `World.integrate`.
+
+**And the segment the ball travelled is swept as well**, at the end of the same step, with the ball's own radius (`bodySweepCircle`).
+The area's own test is a SAMPLE - where is the ball now, once a frame - which is right for a killzone, a volume you fall into and stay in, and wrong for a finish line, a plane you cross.
+A region W thick is passed through untouched by a ball that moves more than W plus its own diameter in one step: through a 16 cm gate that is 24 m/s, and the committed corpus has the ball at **24.8 m/s in a real session and 34.5 m/s in a rig**.
+That is the same answer the chain already gives about the spans between its regenerations (see [**wrap-detection**](wrap-detection.md)), and what it buys is that a level may draw its line as thin as the gate it is marking - the promise is "touch it and the level is over", and a sampled test keeps that promise only below a speed nobody authoring a level is thinking about.
+
+Both stay, because they answer different questions: the sweep catches the ball that **crossed**, and `notifyAreas` catches the ball that was **put** there - a spawn or a `?checkpoint=` inside the gate, which moves no distance at all.
 
 Three properties hold it together:
 
@@ -83,6 +91,7 @@ Its detectors ship with it.
 | `finish-crossed` | entering the region finishes the level, on the frame it is entered |
 | `finish-once` | a second crossing does not re-date the finish, and the invariant stays silent |
 | `finish-missed` | the same gate moved aside finishes nothing, however long the run |
+| `finish-swept` | a 10 px gate crossed at 30 m/s finishes, and the ball is clear of it on both frames - so a sampled test would have seen nothing |
 | `finish-inert` | the ball's whole path is identical with and without the gate in the level |
 
 The player's own half is `playtests/finish-roll.json`, which drives the ball along the ground into a gate through the real input stream and asserts `finishesBy`.
@@ -121,9 +130,13 @@ Cross-device progress is a separate feature and is not this.
 
 ## The feedback form
 
-`render/feedbackForm.ts`: five stars, a comment, **Submit** and **Skip**, over the frozen level or over the menu's own list.
+`render/feedbackForm.ts`: **How fun was this level?** over five stars, a comment, **Submit** and **Skip**, shown over the frozen level or over the menu's own list.
+The question is on the panel because a row of stars on its own is a rating of something unstated - the level, the run, the game - and five stars for "how fun" is a different answer from five stars for "how hard".
+
 Both fields are optional and that is the point rather than a convenience - a form that insists on a rating collects a rating from people who did not have one, which is worse than no answer.
 Skip is a first-class outcome: the level was finished and nothing was said.
+**Submit is dark until one of the two is filled in**, which follows from that rather than contradicting it: an empty submission and a skip are the same act, so the empty one was the same button twice over, and the version of it that POSTs is the one that costs a round trip to say nothing.
+It is disabled rather than hidden, with Skip lit beside it, so the way out of an empty form is always visible.
 Esc is Skip, the first star takes the focus so the keyboard works without a click, and pressing the star that is already the rating clears it.
 
 It comes up from two places and says which: **Finished** from a run that has just crossed the line, **Rate** from a completed row's `rate` link on the menu, where nothing was played.
